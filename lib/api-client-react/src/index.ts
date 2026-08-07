@@ -33,6 +33,7 @@ export * from "./quotations";
 export * from "./warehouse-lifecycle";
 export * from "./attendance-correction";
 export * from "./attendance-punches";
+export * from "./company-holidays";
 export * from "./employee-password";
 export * from "./imports";
 export * from './generated/api';

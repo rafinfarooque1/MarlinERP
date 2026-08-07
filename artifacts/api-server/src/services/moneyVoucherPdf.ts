@@ -6,18 +6,25 @@
  * touched, the reference, and the signatures. The account itself is the
  * instrument — no separate "mode" is printed. Rendered only from the stored
  * row (never client JSON) so the print can never disagree with the books.
+ *
+ * Styled to match the tax invoice: the ISSUING LOCATION (warehouse/outlet) is
+ * the letterhead, exactly as it is the seller on an invoice — company settings
+ * only ever appear through the issuer's own fallback rules. Receipts keep the
+ * green accent, payments the house navy, so the two kinds are told apart in a
+ * stack of printouts without reading a word.
  */
 import { jsPDF } from "jspdf";
+import { FONT, registerFonts } from "@workspace/pdf-kit";
+import type { InvoiceIssuer } from "../lib/billingProfile";
 
 type RGB = [number, number, number];
 
 export interface MoneyVoucherPdfInput {
   kind: "receipt" | "payment";
-  cs?: {
-    companyName?: string;
-    address?: string; city?: string; state?: string; pincode?: string;
-    gstNumber?: string; phone?: string; email?: string;
-  };
+  /** The issuing location's identity — same resolution as the invoice seller. */
+  issuer: InvoiceIssuer;
+  /** Company logo as a data URI, or null for the lettermark fallback. */
+  logoDataUrl?: string | null;
   voucherNumber: string;
   voucherDate: string;
   amount: number;
@@ -69,75 +76,164 @@ function fmtDate(v: string | null | undefined): string {
   } catch { return String(v); }
 }
 
-export function generateMoneyVoucherPdf(data: MoneyVoucherPdfInput): Buffer {
-  const doc = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
-  const PW = 210, M = 14, CW = PW - M * 2;
+export async function generateMoneyVoucherPdf(data: MoneyVoucherPdfInput): Promise<Buffer> {
+  const doc = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait", compress: true });
+  await registerFonts(doc);
+
+  const PW = 210, M = 12, CW = PW - M * 2;
   const isReceipt = data.kind === "receipt";
-  // Receipts in green, payments in the house navy — tells the two apart in a
-  // stack of printouts without reading a word.
-  const ACCENT: RGB = isReceipt ? [22, 101, 52] : [25, 72, 140];
-  const ACCENT_SOFT: RGB = isReceipt ? [240, 250, 244] : [240, 244, 255];
+  // Receipt green / payment navy — matched to the invoice's tonal system.
+  const ACCENT: RGB = isReceipt ? [22, 101, 52] : [23, 42, 92];
+  const SOFT:   RGB = isReceipt ? [240, 250, 244] : [242, 245, 251];
+  const INK:    RGB = [32, 44, 74];
+  const MUT:    RGB = [104, 116, 140];
+  const BORDER: RGB = [201, 213, 229];
+  const WHITE:  RGB = [255, 255, 255];
 
   const txt = (
     s: string, x: number, y: number,
-    o: { size?: number; bold?: boolean; align?: "left" | "center" | "right"; color?: RGB } = {},
+    o: { size?: number; bold?: boolean; align?: "left" | "center" | "right"; color?: RGB; maxWidth?: number } = {},
   ) => {
+    doc.setFont(FONT, o.bold ? "bold" : "normal");
     doc.setFontSize(o.size ?? 9);
-    doc.setFont("helvetica", o.bold ? "bold" : "normal");
-    const c = o.color ?? [0, 0, 0];
+    const c = o.color ?? INK;
     doc.setTextColor(c[0], c[1], c[2]);
-    doc.text(s, x, y, { align: o.align ?? "left" });
+    const tOpts: { align?: "left" | "center" | "right"; maxWidth?: number } = {};
+    if (o.align) tOpts.align = o.align;
+    if (o.maxWidth) tOpts.maxWidth = o.maxWidth;
+    doc.text(s, x, y, tOpts);
+  };
+  /** Shrink a one-line cell until it fits — never draw over a neighbour. */
+  const cell = (s: string, x: number, y: number, w: number, o: {
+    size?: number; bold?: boolean; align?: "left" | "center" | "right"; color?: RGB;
+  } = {}) => {
+    let size = o.size ?? 8;
+    doc.setFont(FONT, o.bold ? "bold" : "normal");
+    doc.setFontSize(size);
+    let t = s;
+    while (size > 5 && doc.getTextWidth(t) > w) { size -= 0.25; doc.setFontSize(size); }
+    while (t.length > 1 && doc.getTextWidth(`${t}\u2026`) > w && doc.getTextWidth(t) > w) t = t.slice(0, -1);
+    if (t !== s) t = `${t}\u2026`;
+    txt(t, x, y, { ...o, size });
   };
   const fillRect = (x: number, y: number, w: number, h: number, rgb: RGB) => {
     doc.setFillColor(rgb[0], rgb[1], rgb[2]); doc.rect(x, y, w, h, "F");
   };
-  const outlineRect = (x: number, y: number, w: number, h: number, lw = 0.3) => {
-    doc.setDrawColor(0); doc.setLineWidth(lw); doc.rect(x, y, w, h);
+  const rfill = (x: number, y: number, w: number, h: number, rgb: RGB, r = 1.2) => {
+    doc.setFillColor(rgb[0], rgb[1], rgb[2]); doc.roundedRect(x, y, w, h, r, r, "F");
   };
-  const vline = (x: number, y1: number, y2: number) => {
-    doc.setDrawColor(200); doc.setLineWidth(0.2); doc.line(x, y1, x, y2);
+  const line = (x1: number, y1: number, x2: number, y2: number, rgb: RGB = BORDER, lw = 0.2) => {
+    doc.setDrawColor(rgb[0], rgb[1], rgb[2]); doc.setLineWidth(lw); doc.line(x1, y1, x2, y2);
   };
+  const wrap = (s: string, w: number, size: number, bold = false): string[] => {
+    doc.setFont(FONT, bold ? "bold" : "normal");
+    doc.setFontSize(size);
+    return doc.splitTextToSize(s || "", w) as string[];
+  };
+  // Real rupee sign — safe because the TrueType face is embedded.
   const money = (n: number) =>
-    `Rs. ${Math.abs(n).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    `\u20B9${Math.abs(n).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-  let y = M;
+  const issuer = data.issuer;
+  let y = M + 2;
 
-  // ── Header ────────────────────────────────────────────────────────────────
-  fillRect(M, y, CW, 16, ACCENT);
-  txt(data.cs?.companyName || "Company", PW / 2, y + 7, { size: 13, bold: true, align: "center", color: [255, 255, 255] });
-  const addr = [data.cs?.address, data.cs?.city, data.cs?.state, data.cs?.pincode].filter(Boolean).join(", ");
-  if (addr) txt(addr, PW / 2, y + 11.5, { size: 6.5, align: "center", color: [220, 235, 225] });
-  const contact = [
-    data.cs?.gstNumber ? `GSTIN: ${data.cs.gstNumber}` : "",
-    data.cs?.phone ? `Ph: ${data.cs.phone}` : "",
-    data.cs?.email || "",
-  ].filter(Boolean).join("   ");
-  if (contact) txt(contact, PW / 2, y + 15, { size: 6.5, align: "center", color: [220, 235, 225] });
-  y += 19;
+  // ══════════════════════════════════════════════════════════════════════════
+  // 1. HEADER — logo + issuing-location identity left | badge + meta right
+  // ══════════════════════════════════════════════════════════════════════════
+  const BADGE_W = 64;
+  const badgeX  = M + CW - BADGE_W;
+  const nameX   = M + 23;
+  const nameW   = badgeX - nameX - 9;
 
-  txt(isReceipt ? "RECEIPT VOUCHER" : "PAYMENT VOUCHER", PW / 2, y, { size: 11, bold: true, align: "center", color: ACCENT });
-  y += 5;
+  const LOGO_S = 19;
+  const drawLettermark = () => {
+    rfill(M, y, LOGO_S, LOGO_S, ACCENT, 2);
+    txt((issuer.tradeName[0] || "M").toUpperCase(), M + LOGO_S / 2, y + LOGO_S / 2 + 4,
+        { bold: true, size: 16, color: WHITE, align: "center" });
+  };
+  if (data.logoDataUrl) {
+    try {
+      const props = doc.getImageProperties(data.logoDataUrl);
+      const s = Math.min(LOGO_S / (props.width || 1), LOGO_S / (props.height || 1));
+      const lw = (props.width || 1) * s;
+      const lh = (props.height || 1) * s;
+      doc.addImage(data.logoDataUrl, M + (LOGO_S - lw) / 2, y + (LOGO_S - lh) / 2, lw, lh, undefined, "FAST");
+    } catch { drawLettermark(); }
+  } else {
+    drawLettermark();
+  }
 
-  // ── Voucher meta ──────────────────────────────────────────────────────────
-  outlineRect(M, y, CW, 18);
-  vline(M + CW / 2, y, y + 18);
-  txt("Voucher No.", M + 3, y + 5, { size: 6.5, color: [100, 100, 100] });
-  txt(data.voucherNumber || "—", M + 3, y + 11, { size: 10, bold: true });
-  txt(`Location: ${data.locationName || "—"}`, M + 3, y + 16, { size: 7, color: [80, 80, 80] });
+  // Issuing location's name — large, wrapping instead of colliding with meta.
+  const nameLines = wrap((issuer.tradeName || "—").toUpperCase(), nameW, 15.5, true).slice(0, 2);
+  let ly = y + 7;
+  for (const nl of nameLines) {
+    txt(nl, nameX, ly, { bold: true, size: 15.5, color: ACCENT });
+    ly += 6.4;
+  }
+  ly -= 0.8;
 
-  txt("Date", M + CW / 2 + 3, y + 5, { size: 6.5, color: [100, 100, 100] });
-  txt(fmtDate(data.voucherDate), M + CW / 2 + 3, y + 11, { size: 10, bold: true });
-  if (data.referenceNumber) txt(`Ref: ${data.referenceNumber}`, M + CW / 2 + 3, y + 16, { size: 7, color: [80, 80, 80] });
-  y += 21;
+  for (const l of issuer.addressLines.slice(0, 4)) {
+    cell(l, nameX, ly, nameW, { size: 7.4, color: INK });
+    ly += 3.9;
+  }
+  const contactBits = [
+    issuer.phone ? `Ph: +91 ${issuer.phone}`.replace(/\+91 \+/, "+") : "",
+    issuer.email || "",
+  ].filter(Boolean).join("    ");
+  if (contactBits) {
+    ly += 1;
+    cell(contactBits, nameX, ly, nameW, { size: 7.4, color: INK });
+    ly += 4.2;
+  }
+  if (issuer.gstin) {
+    ly += 0.6;
+    txt(`GSTIN: ${issuer.gstin}`, nameX, ly + 1.4, { bold: true, size: 8.6, color: ACCENT });
+    ly += 5.4;
+  }
+  if (issuer.fssai) {
+    txt(`FSSAI Lic. No.: ${issuer.fssai}`, nameX, ly + 0.6, { bold: true, size: 7.6, color: ACCENT });
+    ly += 4.6;
+  }
 
-  // ── Detail table ──────────────────────────────────────────────────────────
-  fillRect(M, y, CW, 7, ACCENT_SOFT);
-  outlineRect(M, y, CW, 7, 0.2);
-  txt("PARTICULARS", M + 3, y + 5, { size: 7.5, bold: true, color: ACCENT });
-  txt("AMOUNT", M + CW - 3, y + 5, { size: 7.5, bold: true, align: "right", color: ACCENT });
-  y += 7;
+  // Right: document badge + meta rows.
+  rfill(badgeX, y, BADGE_W, 9.5, ACCENT, 1);
+  txt(isReceipt ? "RECEIPT VOUCHER" : "PAYMENT VOUCHER", badgeX + BADGE_W / 2, y + 6.3,
+      { bold: true, size: 10.5, color: WHITE, align: "center" });
 
-  // Dr first, Cr second — the double-entry order an auditor expects.
+  type MetaRow = [label: string, value: string];
+  const metaRows: MetaRow[] = [
+    ["Voucher No.", data.voucherNumber || "—"],
+    ["Voucher Date", fmtDate(data.voucherDate)],
+  ];
+  // Which branch raised it — only worth a line when the location is named
+  // something other than the letterhead above.
+  if (data.locationName && data.locationName !== issuer.tradeName) {
+    metaRows.push(["Location", data.locationName]);
+  }
+  if (data.referenceNumber) metaRows.push(["Reference", data.referenceNumber]);
+
+  let my = y + 14.6;
+  for (const [label, value] of metaRows) {
+    txt(label, badgeX + 0.5, my, { size: 7.4, color: MUT });
+    cell(`:  ${value}`, badgeX + 22.5, my, BADGE_W - 23, { size: 7.4, bold: true, color: INK });
+    my += 5.6;
+  }
+  my -= 2;
+
+  const headerBottom = Math.max(ly + 1, my, y + LOGO_S + 1);
+  line(badgeX - 4.5, y + 1, badgeX - 4.5, headerBottom - 1, BORDER, 0.35);
+  line(M, headerBottom + 2, M + CW, headerBottom + 2, BORDER, 0.4);
+  y = headerBottom + 7;
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // 2. PARTICULARS — Dr first, Cr second: the double-entry order an auditor
+  //    expects. The amount rides the first (Dr) row.
+  // ══════════════════════════════════════════════════════════════════════════
+  fillRect(M, y, CW, 8, ACCENT);
+  txt("PARTICULARS", M + 3, y + 5.4, { size: 8, bold: true, color: WHITE });
+  txt("AMOUNT", M + CW - 3, y + 5.4, { size: 8, bold: true, align: "right", color: WHITE });
+  y += 8;
+
   const rows: Array<[string, string]> = isReceipt
     ? [
         ["Received Into (Debit)", data.cashBankName || "—"],
@@ -148,40 +244,49 @@ export function generateMoneyVoucherPdf(data: MoneyVoucherPdfInput): Buffer {
         ["Paid From (Credit)", data.cashBankName || "—"],
       ];
   rows.forEach(([label, value], i) => {
-    if (i % 2 === 1) fillRect(M, y, CW, 8, [248, 250, 252]);
-    doc.setDrawColor(220); doc.setLineWidth(0.2); doc.rect(M, y, CW, 8);
-    txt(label, M + 3, y + 5.5, { size: 7.5, color: [90, 90, 90] });
-    txt(value, M + 62, y + 5.5, { size: 8, bold: true });
-    if (i === 0) txt(money(data.amount), M + CW - 3, y + 5.5, { size: 8, bold: true, align: "right" });
-    y += 8;
+    if (i % 2 === 1) fillRect(M, y, CW, 9, SOFT);
+    doc.setDrawColor(BORDER[0], BORDER[1], BORDER[2]); doc.setLineWidth(0.2); doc.rect(M, y, CW, 9);
+    txt(label, M + 3, y + 5.8, { size: 7.6, color: MUT });
+    cell(value, M + 58, y + 5.8, CW - 100, { size: 8.6, bold: true, color: INK });
+    if (i === 0) txt(money(data.amount), M + CW - 3, y + 5.8, { size: 8.6, bold: true, align: "right", color: INK });
+    y += 9;
   });
 
-  // Narration — wrapped, so a long note is fully readable rather than clipped.
+  // Narration — wrapped so a long note is readable, but capped: a voucher is a
+  // one-page instrument, and an unbounded note would push the signature block
+  // into the footer. Ten lines is ~600 characters; beyond that it ellipsizes.
   const narration = (data.narration || "—").trim();
-  doc.setFontSize(7.5); doc.setFont("helvetica", "normal");
-  const lines = doc.splitTextToSize(narration, CW - 66) as string[];
-  const nh = Math.max(8, lines.length * 3.6 + 4);
-  doc.setDrawColor(220); doc.setLineWidth(0.2); doc.rect(M, y, CW, nh);
-  txt("Narration", M + 3, y + 5.5, { size: 7.5, color: [90, 90, 90] });
-  lines.forEach((ln, i) => txt(ln, M + 62, y + 5.5 + i * 3.6, { size: 7.5 }));
+  const allNLines = wrap(narration, CW - 64, 7.6);
+  const nLines = allNLines.slice(0, 10);
+  if (allNLines.length > 10) nLines[9] = `${nLines[9]}\u2026`;
+  const nh = Math.max(9, nLines.length * 3.8 + 4.5);
+  doc.setDrawColor(BORDER[0], BORDER[1], BORDER[2]); doc.setLineWidth(0.2); doc.rect(M, y, CW, nh);
+  txt("Narration", M + 3, y + 5.8, { size: 7.6, color: MUT });
+  nLines.forEach((l, i) => txt(l, M + 58, y + 5.8 + i * 3.8, { size: 7.6, color: INK }));
   y += nh;
 
-  // ── Total ─────────────────────────────────────────────────────────────────
+  // ── Total band ────────────────────────────────────────────────────────────
   fillRect(M, y, CW, 12, ACCENT);
-  outlineRect(M, y, CW, 12, 0.5);
-  txt("TOTAL", M + 4, y + 8, { size: 10, bold: true, color: [255, 255, 255] });
-  txt(money(data.amount), M + CW - 4, y + 8, { size: 12, bold: true, align: "right", color: [255, 235, 160] });
+  txt("TOTAL", M + 4, y + 8, { size: 10, bold: true, color: WHITE });
+  txt(money(data.amount), M + CW - 4, y + 8, { size: 12.5, bold: true, align: "right", color: WHITE });
   y += 15;
 
-  txt(`Amount in words: ${amountInWords(data.amount)}`, M, y, { size: 7.5, bold: true, color: [60, 60, 60] });
-  y += 8;
+  // Amount in words — boxed like the invoice's words strip. Three lines holds
+  // any representable amount; the cap only guards the fixed layout below.
+  const wordLines = wrap(amountInWords(data.amount), CW - 40, 7.8, true).slice(0, 3);
+  const wh = Math.max(9, wordLines.length * 3.9 + 4.5);
+  fillRect(M, y, CW, wh, SOFT);
+  doc.setDrawColor(BORDER[0], BORDER[1], BORDER[2]); doc.setLineWidth(0.2); doc.rect(M, y, CW, wh);
+  txt("Amount in Words", M + 3, y + 5.8, { size: 7.2, color: MUT });
+  wordLines.forEach((l, i) => txt(l, M + 36, y + 5.8 + i * 3.9, { size: 7.8, bold: true, color: INK }));
+  y += wh + 6;
 
   // ── Audit trail ───────────────────────────────────────────────────────────
   const trail = [
     data.recordedBy ? `Recorded by: ${data.recordedBy}` : "",
     data.recordedAt ? `Recorded on: ${fmtDate(data.recordedAt)}` : "",
   ].filter(Boolean).join("      ");
-  if (trail) { txt(trail, M, y, { size: 7, color: [110, 110, 110] }); y += 8; }
+  if (trail) { txt(trail, M, y, { size: 7, color: MUT }); y += 8; }
 
   // ── Signatures ────────────────────────────────────────────────────────────
   y = Math.max(y, 235);
@@ -191,10 +296,13 @@ export function generateMoneyVoucherPdf(data: MoneyVoucherPdfInput): Buffer {
     : ["Prepared By", "Authorized Signatory", "Received By"];
   sigs.forEach((label, i) => {
     const x = M + sigW * i;
-    doc.setDrawColor(120); doc.setLineWidth(0.2);
-    doc.line(x + 4, y + 12, x + sigW - 4, y + 12);
-    txt(label, x + sigW / 2, y + 16, { size: 7, align: "center", color: [90, 90, 90] });
+    line(x + 6, y + 12, x + sigW - 6, y + 12, [120, 130, 150], 0.25);
+    txt(label, x + sigW / 2, y + 16, { size: 7, align: "center", color: MUT });
   });
+
+  // Footer rule + computer-generated note, per the invoice.
+  line(M, 285, M + CW, 285, BORDER, 0.3);
+  txt("This is a computer-generated voucher.", PW / 2, 289, { size: 6.6, align: "center", color: MUT });
 
   return Buffer.from(doc.output("arraybuffer"));
 }

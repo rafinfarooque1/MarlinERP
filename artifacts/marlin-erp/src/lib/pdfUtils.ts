@@ -155,14 +155,18 @@ function drawTable(
   return y;
 }
 
-function drawFooter(doc: jsPDF, note: string) {
+function drawFooter(doc: jsPDF, note: string, compact = false) {
+  // Height read from the document, not the module constant: payment/receipt
+  // vouchers print on A5 landscape while everything else stays A4 portrait.
+  const pageH = doc.internal.pageSize.getHeight();
+  const lineY = pageH - (compact ? 10 : 13);
   setDraw(doc, TEAL);
   doc.setLineWidth(0.5);
-  doc.line(MARGIN, PAGE_H - 13, PAGE_W - MARGIN, PAGE_H - 13);
+  doc.line(MARGIN, lineY, PAGE_W - MARGIN, lineY);
   doc.setFont('helvetica', 'italic');
   doc.setFontSize(7.5);
   setColor(doc, MUTED);
-  doc.text(note, PAGE_W / 2, PAGE_H - 9, { align: 'center' });
+  doc.text(note, PAGE_W / 2, pageH - (compact ? 6 : 9), { align: 'center' });
 }
 
 // ── Voucher (Journal / Contra / Credit Note / Debit Note / Payment / Receipt) ─
@@ -185,7 +189,15 @@ export function downloadVoucherPDF(row: {
   amount: number;
   raw: any;
 }, companySettings?: any) {
-  const doc = new jsPDF({ unit: 'mm', format: 'a4', compress: true });
+  // Payment and receipt vouchers print on A5 landscape — 210mm wide, exactly
+  // the width of A4 portrait, so every width-based measurement (header,
+  // tables, boxes) is shared as-is; only the vertical spacing is compacted
+  // to fit the 148mm height. Journal/contra/credit/debit stay on A4.
+  const isA5 = row.type === 'payment' || row.type === 'receipt';
+  const doc = isA5
+    ? new jsPDF({ unit: 'mm', format: 'a5', orientation: 'landscape', compress: true })
+    : new jsPDF({ unit: 'mm', format: 'a4', compress: true });
+  const pageH = doc.internal.pageSize.getHeight();
   const cs  = companySettings ?? {};
   const title = VOUCHER_TITLES[row.type] ?? 'VOUCHER';
   let y = drawHeader(doc, cs, title);
@@ -223,7 +235,7 @@ export function downloadVoucherPDF(row: {
     setColor(doc, i === 1 ? TEAL : DARK);
     doc.text(right[i][1], MARGIN + colW + 28, iy);
   }
-  y += infoH + 5;
+  y += infoH + (isA5 ? 3 : 5);
 
   // ── Accounting entries ────────────────────────────────────────────────────
   const isJV = !['payment', 'receipt'].includes(row.type);
@@ -264,7 +276,7 @@ export function downloadVoucherPDF(row: {
       [esc(toName),   isPayment ? 'Paid To'   : 'Received In',   fmt(row.amount)],
     ]);
   }
-  y += 5;
+  y += isA5 ? 3 : 5;
 
   // ── Amount box ────────────────────────────────────────────────────────────
   setFill(doc, TEAL);
@@ -275,7 +287,7 @@ export function downloadVoucherPDF(row: {
   doc.text('AMOUNT', MARGIN + 5, y + 8);
   doc.setFontSize(14);
   doc.text(fmt(row.amount), PAGE_W - MARGIN - 5, y + 8, { align: 'right' });
-  y += 18;
+  y += isA5 ? 14 : 18;
 
   // ── Narration ─────────────────────────────────────────────────────────────
   const narration = row.narration || row.description || '';
@@ -283,7 +295,17 @@ export function downloadVoucherPDF(row: {
     setFill(doc, LIGHT);
     setDraw(doc, [200, 200, 200]);
     doc.setLineWidth(0.2);
-    const lines = doc.splitTextToSize(esc(narration), CONTENT_W - 6);
+    let lines: string[] = doc.splitTextToSize(esc(narration), CONTENT_W - 6);
+    if (isA5) {
+      // A5 has far less height below the table — trim an over-long narration
+      // (with an ellipsis) rather than let it spill into the signatures.
+      const room = (pageH - 24) - y - 12;
+      const maxLines = Math.max(1, Math.floor(room / 4.5));
+      if (lines.length > maxLines) {
+        lines = lines.slice(0, maxLines);
+        lines[lines.length - 1] = String(lines[lines.length - 1]).replace(/\s*$/, '') + ' ...';
+      }
+    }
     const boxH  = Math.max(10, lines.length * 4.5 + 4);
     doc.rect(MARGIN, y, CONTENT_W, boxH, 'FD');
     doc.setFont('helvetica', 'italic');
@@ -293,11 +315,11 @@ export function downloadVoucherPDF(row: {
     doc.setFont('helvetica', 'normal');
     setColor(doc, DARK);
     doc.text(lines, MARGIN + 3, y + 8.5);
-    y += boxH + 6;
+    y += boxH + (isA5 ? 4 : 6);
   }
 
   // ── Signature lines ───────────────────────────────────────────────────────
-  const sigY = Math.max(y + 10, PAGE_H - 42);
+  const sigY = Math.max(y + (isA5 ? 4 : 10), pageH - (isA5 ? 24 : 42));
   setDraw(doc, [150, 150, 150]);
   doc.setLineWidth(0.3);
   doc.line(MARGIN, sigY, MARGIN + 60, sigY);
@@ -308,7 +330,7 @@ export function downloadVoucherPDF(row: {
   doc.text('Prepared by', MARGIN, sigY + 4);
   doc.text('Authorised Signatory', PAGE_W - MARGIN, sigY + 4, { align: 'right' });
 
-  drawFooter(doc, 'This is a computer-generated voucher.');
+  drawFooter(doc, 'This is a computer-generated voucher.', isA5);
   const safeNum = row.voucherNumber.replace(/[^a-zA-Z0-9-]/g, '_');
   doc.save(`${safeNum}.pdf`);
 }

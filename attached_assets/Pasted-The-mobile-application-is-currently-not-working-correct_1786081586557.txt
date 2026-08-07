@@ -1,0 +1,113 @@
+The mobile application is currently not working correctly. Perform a complete audit and fix the mobile app so it is fully production-ready.
+
+Requirements
+
+1. Mobile App Audit
+- Check every screen in the mobile application.
+- Fix any blank pages, loading issues, API errors, routing errors, authentication issues, and responsive layout problems.
+- Verify that every API used by the mobile app is working correctly.
+
+2. Authentication
+- Login works correctly.
+- Logout works correctly.
+- Session persists after reopening the app.
+- Role-based permissions work correctly.
+- Warehouse users only see their own location.
+- Head Office users can access all permitted locations.
+
+3. Dashboard
+Verify that all dashboard values match the web ERP:
+- Sales
+- Purchases
+- Receivables
+- Payables
+- Cash
+- Bank
+- Stock
+- Profit
+- Expenses
+- Production
+- Pending collections
+
+4. Modules
+Verify every mobile module works correctly:
+- Dashboard
+- Sales
+- POS
+- Customers
+- Vendors
+- Purchase Bills
+- Sales Returns
+- Purchase Returns
+- Receipt Voucher
+- Payment Voucher
+- Expenses
+- Stock
+- Production
+- Inventory
+- Cash & Bank
+- Reports
+- HR
+- Payroll
+- Attendance
+- Notifications
+- User Profile
+
+Fix any missing functionality.
+
+5. Mobile UI
+Ensure every page:
+- Is fully responsive.
+- Has no overflow.
+- Has no clipped buttons.
+- Has no hidden fields.
+- Uses mobile-friendly layouts.
+- Has correct spacing.
+- Has readable fonts.
+- Supports small screens.
+
+6. Location Behaviour
+Verify:
+- Warehouse users automatically work only in their assigned location.
+- They cannot select another warehouse.
+- Head Office users can switch locations.
+- Reports respect the selected location.
+
+7. Accounting Verification
+Verify that transactions created from the mobile app:
+- Update ledgers correctly.
+- Update dashboards correctly.
+- Update customer balances.
+- Update vendor balances.
+- Update stock.
+- Update inventory valuation.
+- Update Trial Balance.
+- Update Balance Sheet.
+- Update Profit & Loss.
+- Update Cash & Bank.
+
+The mobile app must produce exactly the same accounting result as the web ERP.
+
+8. Offline & Error Handling
+- Improve API error messages.
+- Prevent crashes.
+- Handle network failures gracefully.
+- Show loading indicators where required.
+
+9. Performance
+- Remove unnecessary API calls.
+- Improve page loading.
+- Optimize lists and tables.
+- Ensure smooth scrolling.
+
+10. Final Regression
+Run a complete regression on the mobile app and verify:
+- Every screen opens.
+- Every action works.
+- No console errors.
+- No API failures.
+- No broken navigation.
+- No permission leaks.
+- Mobile data matches the web ERP exactly.
+
+Do not stop after fixing one issue. Audit the entire mobile application and continue until every screen is working correctly. The goal is a fully functional, production-ready mobile ERP identical to the web version in functionality and accounting accuracy.

@@ -87,6 +87,20 @@ export function LocationSelectField({ locations, locKey, setLocKey }: {
   locKey: string;
   setLocKey: (k: string) => void;
 }) {
+  // Branch staff are offered exactly one location by the server — show it as
+  // a read-only fact instead of a dropdown, so the form never suggests that
+  // recording under some other location is a possibility.
+  if (locations.length <= 1) {
+    const only = locations[0];
+    return (
+      <div className="space-y-1">
+        <Label>Location</Label>
+        <div className="h-9 flex items-center px-3 rounded-md border border-border bg-muted/30 text-sm font-medium">
+          {only?.name ?? '—'}
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="space-y-1">
       <Label>Location</Label>

@@ -440,7 +440,15 @@ export async function customFetch<T = unknown>(
   if (!response.ok) {
     const errorData = await parseErrorBody(response, method);
     if (response.status === 401) {
-      try { _unauthorizedHandler?.(); } catch { /* session cleanup is best-effort */ }
+      // A 401 from the credential-validation endpoint means "wrong username or
+      // password", NOT "your token is dead". Firing the unauthorized handler
+      // there would erase a still-valid persisted session just because someone
+      // typed a bad password into the login form. Every other 401 is a
+      // confirmed token rejection and must clear the session.
+      const isCredentialCheck = requestInfo.url.includes("/auth/login");
+      if (!isCredentialCheck) {
+        try { _unauthorizedHandler?.(); } catch { /* session cleanup is best-effort */ }
+      }
     }
     throw new ApiError(response, errorData, requestInfo);
   }

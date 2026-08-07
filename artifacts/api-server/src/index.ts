@@ -3543,6 +3543,27 @@ await pool.query(`
   );
   CREATE INDEX IF NOT EXISTS idx_att_punches_emp_date ON attendance_punches (employee_id, date);
 `);
+
+// ── Company holidays, weekly offs & leave types (Aug 2026) ───────────────────
+// company_holidays: admin-defined paid holidays. A holiday pays a full day and
+// consumes no leave; a stored attendance row for that date (worked, corrected)
+// always outvotes the calendar, which is what makes admin overrides work.
+// attendance.leave_type: 'casual' | 'sick' for status = 'leave' rows. NULL on
+// rows from before the split — readers must treat NULL as casual, never drop it.
+await pool.query(`
+  CREATE TABLE IF NOT EXISTS company_holidays (
+    id           SERIAL PRIMARY KEY,
+    holiday_date DATE NOT NULL UNIQUE,
+    name         TEXT NOT NULL,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+  ALTER TABLE attendance ADD COLUMN IF NOT EXISTS leave_type TEXT;
+  -- Sick-leave snapshot on payroll runs, mirroring paid_leave_used/allowed.
+  -- NULL on rows generated before the sick-leave policy existed - readers must
+  -- omit the figure then, never show 0.
+  ALTER TABLE payroll ADD COLUMN IF NOT EXISTS sick_leave_used    NUMERIC(5,2);
+  ALTER TABLE payroll ADD COLUMN IF NOT EXISTS sick_leave_allowed NUMERIC(5,2);
+`);
 // One-time: back-fill status for records created before this column existed
 {
   const { rows: [payStatusDone] } = await pool.query(
@@ -3631,7 +3652,28 @@ await pool.query(`
   ALTER TABLE cash_bank_accounts ADD COLUMN IF NOT EXISTS ledger_id INTEGER;
   ALTER TABLE cash_bank_accounts ADD COLUMN IF NOT EXISTS location_type TEXT NOT NULL DEFAULT 'headoffice';
   ALTER TABLE cash_bank_accounts ADD COLUMN IF NOT EXISTS location_id INTEGER;
+
+  -- Per-account reconciliation switch. When TRUE, collections routed into the
+  -- account go through Electronic Clearing + Reconciliation before reaching
+  -- the bank balance; when FALSE they post straight into the account's ledger.
+  -- Meaningful for bank/upi/other only — cash never consults it.
+  ALTER TABLE cash_bank_accounts ADD COLUMN IF NOT EXISTS requires_reconciliation BOOLEAN NOT NULL DEFAULT false;
 `);
+
+// One-time: existing non-cash accounts keep today's behaviour — every
+// electronic collection passes through reconciliation — until someone
+// deliberately switches an account to direct posting.
+{
+  const { rows: [done] } = await pool.query(
+    `SELECT 1 FROM migration_log WHERE name = 'cash_bank_requires_recon_v1'`
+  );
+  if (!done) {
+    await pool.query(
+      `UPDATE cash_bank_accounts SET requires_reconciliation = true WHERE account_type <> 'cash'`
+    );
+    await pool.query(`INSERT INTO migration_log (name) VALUES ('cash_bank_requires_recon_v1')`);
+  }
+}
 
 // One-time: give every pre-existing expense an audit number in date order and
 // attribute it to Head Office, which is where all of them were recorded.

@@ -97,6 +97,10 @@ export interface SalePayment {
   createdAt: string;
   batchReference: string | null;
   reconciledOn: string | null;
+  /** The Cash & Bank account the money actually landed in (via the receipt). */
+  receivedInLedgerId: number | null;
+  /** Null on old rows without a receipt — display falls back to the method label. */
+  receivedInLedgerName: string | null;
 }
 
 export interface ReconciliationBatch {
@@ -211,7 +215,7 @@ export function useGetSalePayments(saleId: number, options?: { enabled?: boolean
 export function useCreateSalePayment() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ saleId, data }: { saleId: number; data: { method: string; amount: number; referenceNumber?: string; notes?: string; paymentDate?: string } }) =>
+    mutationFn: ({ saleId, data }: { saleId: number; data: { method?: string; receivedInLedgerId?: number; amount: number; referenceNumber?: string; notes?: string; paymentDate?: string } }) =>
       customFetch(`/api/sales/${saleId}/payments`, { method: "POST", body: JSON.stringify(data), headers: { "Content-Type": "application/json" } }),
     onSuccess: (_result: any, vars) => {
       qc.invalidateQueries({ queryKey: getSalePaymentsQueryKey(vars.saleId) });

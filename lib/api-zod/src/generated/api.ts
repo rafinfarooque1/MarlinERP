@@ -2271,7 +2271,8 @@ export const ListCashBankAccountsResponseItem = zod.object({
   "locationId": zod.number().nullish(),
   "locationName": zod.string().nullish(),
   "source": zod.enum(['module', 'location', 'system', 'ledger']).optional().describe('module = managed on this screen; location = a branch till owned by the Locations module (read-only here); system = the Cash \/ Bank Accounts head itself; ledger = another ledger in the subtree.'),
-  "readOnly": zod.boolean().optional()
+  "readOnly": zod.boolean().optional(),
+  "requiresReconciliation": zod.boolean().optional().describe('Bank\/UPI accounts only. When true, collections routed into this account land in Electronic Clearing first and reach the bank balance through Reconciliation; when false, they post straight into the account\'s ledger.')
 })
 export const ListCashBankAccountsResponse = zod.array(ListCashBankAccountsResponseItem)
 
@@ -2287,7 +2288,8 @@ export const CreateCashBankAccountBody = zod.object({
   "ifscCode": zod.string().optional(),
   "locationType": zod.enum(['headoffice', 'warehouse', 'outlet']).optional().describe('Defaults to headoffice.'),
   "locationId": zod.number().optional().describe('Required when locationType is warehouse or outlet.'),
-  "openingBalance": zod.number().optional().describe('Recorded as the backing ledger\'s opening balance (debit) through the opening-balances store — never a stored column. Absent or blank means 0.')
+  "openingBalance": zod.number().optional().describe('Recorded as the backing ledger\'s opening balance (debit) through the opening-balances store — never a stored column. Absent or blank means 0.'),
+  "requiresReconciliation": zod.boolean().optional().describe('Bank\/UPI accounts only — whether collections into this account must pass through Reconciliation before hitting the bank balance. Defaults to true for bank\/UPI\/other, ignored for cash.')
 })
 
 export const CreateCashBankAccountResponse = zod.object({
@@ -2306,7 +2308,8 @@ export const CreateCashBankAccountResponse = zod.object({
   "locationId": zod.number().nullish(),
   "locationName": zod.string().nullish(),
   "source": zod.enum(['module', 'location', 'system', 'ledger']).optional().describe('module = managed on this screen; location = a branch till owned by the Locations module (read-only here); system = the Cash \/ Bank Accounts head itself; ledger = another ledger in the subtree.'),
-  "readOnly": zod.boolean().optional()
+  "readOnly": zod.boolean().optional(),
+  "requiresReconciliation": zod.boolean().optional().describe('Bank\/UPI accounts only. When true, collections routed into this account land in Electronic Clearing first and reach the bank balance through Reconciliation; when false, they post straight into the account\'s ledger.')
 })
 
 
@@ -2324,7 +2327,8 @@ export const UpdateCashBankAccountBody = zod.object({
   "ifscCode": zod.string().optional(),
   "locationType": zod.enum(['headoffice', 'warehouse', 'outlet']).optional(),
   "locationId": zod.number().optional(),
-  "openingBalance": zod.number().optional().describe('Replaces the ledger\'s opening balance for the current financial year.')
+  "openingBalance": zod.number().optional().describe('Replaces the ledger\'s opening balance for the current financial year.'),
+  "requiresReconciliation": zod.boolean().optional().describe('Bank\/UPI accounts only — toggle the reconciliation requirement.')
 })
 
 export const UpdateCashBankAccountResponse = zod.object({
@@ -2343,7 +2347,8 @@ export const UpdateCashBankAccountResponse = zod.object({
   "locationId": zod.number().nullish(),
   "locationName": zod.string().nullish(),
   "source": zod.enum(['module', 'location', 'system', 'ledger']).optional().describe('module = managed on this screen; location = a branch till owned by the Locations module (read-only here); system = the Cash \/ Bank Accounts head itself; ledger = another ledger in the subtree.'),
-  "readOnly": zod.boolean().optional()
+  "readOnly": zod.boolean().optional(),
+  "requiresReconciliation": zod.boolean().optional().describe('Bank\/UPI accounts only. When true, collections routed into this account land in Electronic Clearing first and reach the bank balance through Reconciliation; when false, they post straight into the account\'s ledger.')
 })
 
 

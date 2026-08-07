@@ -1,6 +1,11 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { customFetch, setAuthTokenGetter, setAuthTokenSetter } from '@workspace/api-client-react';
+import {
+  customFetch,
+  setAuthTokenGetter,
+  setAuthTokenSetter,
+  setUnauthorizedHandler,
+} from '@workspace/api-client-react';
 
 export interface AuthEmployee {
   id: number;
@@ -24,6 +29,8 @@ interface AuthContextType {
   isLoading: boolean;
   login: (username: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
+  /** Clears the mustChangePassword flag after an in-app password change. */
+  markPasswordChanged: () => void;
 }
 
 const AuthContext = createContext<AuthContextType>({
@@ -32,6 +39,7 @@ const AuthContext = createContext<AuthContextType>({
   isLoading: true,
   login: async () => {},
   logout: async () => {},
+  markPasswordChanged: () => {},
 });
 
 const TOKEN_KEY = '@marlin_auth_token';
@@ -41,6 +49,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [token, setToken] = useState<string | null>(null);
   const [employee, setEmployee] = useState<AuthEmployee | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    // A confirmed 401 means the persisted token expired (8-hour server
+    // expiry) or was revoked. Without this handler the app keeps the dead
+    // session forever — every screen silently fails until the user guesses
+    // to log out. Clear the session so the root layout routes to /login.
+    setUnauthorizedHandler(() => {
+      AsyncStorage.multiRemove([TOKEN_KEY, EMPLOYEE_KEY]).catch(() => {});
+      setAuthTokenGetter(null);
+      setAuthTokenSetter(null);
+      setToken(null);
+      setEmployee(null);
+    });
+    return () => setUnauthorizedHandler(null);
+  }, []);
 
   useEffect(() => {
     async function loadPersistedAuth() {
@@ -112,8 +135,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setEmployee(null);
   };
 
+  const markPasswordChanged = (): void => {
+    setEmployee((prev) => {
+      if (!prev) return prev;
+      const updated = { ...prev, mustChangePassword: false };
+      AsyncStorage.setItem(EMPLOYEE_KEY, JSON.stringify(updated)).catch(() => {});
+      return updated;
+    });
+  };
+
   return (
-    <AuthContext.Provider value={{ token, employee, isLoading, login, logout }}>
+    <AuthContext.Provider value={{ token, employee, isLoading, login, logout, markPasswordChanged }}>
       {children}
     </AuthContext.Provider>
   );

@@ -9,7 +9,7 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { Settings2, Save, Loader2, Bell, Receipt, DollarSign, Globe, Store, ScanBarcode, Trash2, TriangleAlert, CalendarRange, FileText, ShieldCheck, ShieldOff, Upload } from 'lucide-react';
+import { Settings2, Save, Loader2, Bell, Receipt, DollarSign, Globe, Store, ScanBarcode, Trash2, TriangleAlert, CalendarRange, CalendarOff, FileText, Plus, ShieldCheck, ShieldOff, Upload } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { customFetch } from '@workspace/api-client-react';
@@ -63,7 +63,17 @@ const SETTING_GROUPS: SettingGroup[] = [
       // allowance, beyond it each leave day is deducted as Loss of Pay.
       { key: 'payrollWorkingDays', label: 'Working Days Per Month', type: 'number', defaultValue: 30 },
       { key: 'paidCasualLeavesPerMonth', label: 'Paid Casual Leaves Per Month', type: 'number', defaultValue: 4 },
+      { key: 'paidSickLeavesPerMonth', label: 'Paid Sick Leaves Per Month', type: 'number', defaultValue: 0 },
       { key: 'lopEnabled', label: 'Enable Loss of Pay (LOP)', type: 'toggle', defaultValue: true },
+      {
+        key: 'weeklyOffExhaustedAction', label: 'Weekly Off When Casual Leave Is Exhausted', type: 'select',
+        defaultValue: 'ask',
+        description: 'For weekly offs that deduct a casual leave: what happens when the month\u2019s casual leaves are used up. Either way the extra day is unpaid \u2014 this only controls whether Fix Attendance asks first.',
+        options: [
+          { value: 'ask', label: 'Ask before saving' },
+          { value: 'absent', label: 'Save as unpaid without asking' },
+        ],
+      },
     ],
   },
   {
@@ -811,6 +821,117 @@ function SecuritySection({ canEdit }: { canEdit: boolean }) {
   );
 }
 
+// ── Weekly offs editor ───────────────────────────────────────────────────────
+// Part of the Payroll leave policy: each rule is a weekday, which occurrences
+// of it in the month it covers (every week, or picked weeks like "2nd Saturday"),
+// and whether the day is paid outright or deducts a casual leave. Stored on the
+// same general-settings blob as the rest of this page, so it saves with the
+// main Save Settings button.
+interface WeeklyOffRuleValue {
+  day: number;
+  weeks: 'all' | number[];
+  policy: 'paid' | 'casual_leave';
+}
+
+const WEEKDAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const WEEK_ORDINALS = ['1st', '2nd', '3rd', '4th', '5th'];
+
+function WeeklyOffsEditor({ rules, onChange }: {
+  rules: WeeklyOffRuleValue[];
+  onChange: (rules: WeeklyOffRuleValue[]) => void;
+}) {
+  const update = (i: number, patch: Partial<WeeklyOffRuleValue>) =>
+    onChange(rules.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
+
+  const toggleWeek = (i: number, week: number) => {
+    const r = rules[i];
+    const current = r.weeks === 'all' ? [] : r.weeks;
+    const next = current.includes(week) ? current.filter(w => w !== week) : [...current, week].sort();
+    // Deselecting the last picked week flips back to every week rather than
+    // leaving a rule that matches nothing.
+    update(i, { weeks: next.length === 0 ? 'all' : next });
+  };
+
+  return (
+    <div className="bg-card border border-border rounded-xl overflow-hidden">
+      <div className="p-4 border-b border-border bg-muted/20 flex items-center gap-3">
+        <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center"><CalendarOff className="w-4 h-4 text-primary" /></div>
+        <div>
+          <h3 className="font-semibold">Weekly Offs</h3>
+          <p className="text-xs text-muted-foreground">Company off days — e.g. every Sunday, or the 2nd and 4th Saturday. Paid offs cost nothing; the other kind deducts one casual leave.</p>
+        </div>
+      </div>
+      <div className="divide-y divide-border">
+        {rules.length === 0 && (
+          <p className="p-4 text-sm text-muted-foreground">No weekly offs configured — every day of the week is a working day.</p>
+        )}
+        {rules.map((r, i) => (
+          <div key={i} className="p-4 space-y-3">
+            <div className="flex flex-wrap items-center gap-3">
+              <Select value={String(r.day)} onValueChange={v => update(i, { day: Number(v) })}>
+                <SelectTrigger className="w-36"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {WEEKDAY_NAMES.map((n, d) => <SelectItem key={d} value={String(d)}>{n}</SelectItem>)}
+                </SelectContent>
+              </Select>
+              <Select value={r.policy} onValueChange={v => update(i, { policy: v as WeeklyOffRuleValue['policy'] })}>
+                <SelectTrigger className="w-56"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="paid">Paid off (no leave used)</SelectItem>
+                  <SelectItem value="casual_leave">Deducts one casual leave</SelectItem>
+                </SelectContent>
+              </Select>
+              <Button
+                variant="ghost" size="icon"
+                aria-label={`Remove ${WEEKDAY_NAMES[r.day]} weekly off`}
+                onClick={() => onChange(rules.filter((_, idx) => idx !== i))}
+              >
+                <Trash2 className="w-4 h-4 text-destructive" />
+              </Button>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs text-muted-foreground mr-1">Applies to:</span>
+              <Button
+                type="button" size="sm"
+                variant={r.weeks === 'all' ? 'default' : 'outline'}
+                onClick={() => update(i, { weeks: 'all' })}
+              >
+                Every week
+              </Button>
+              {WEEK_ORDINALS.map((label, idx) => {
+                const week = idx + 1;
+                const active = r.weeks !== 'all' && r.weeks.includes(week);
+                return (
+                  <Button
+                    key={week} type="button" size="sm"
+                    variant={active ? 'default' : 'outline'}
+                    onClick={() => toggleWeek(i, week)}
+                  >
+                    {label}
+                  </Button>
+                );
+              })}
+              <span className="text-xs text-muted-foreground ml-1">
+                {r.weeks === 'all'
+                  ? `Every ${WEEKDAY_NAMES[r.day]}`
+                  : `${r.weeks.map(w => WEEK_ORDINALS[w - 1]).join(', ')} ${WEEKDAY_NAMES[r.day]} of the month`}
+              </span>
+            </div>
+          </div>
+        ))}
+        <div className="p-4">
+          <Button
+            type="button" variant="outline" size="sm"
+            onClick={() => onChange([...rules, { day: 0, weeks: 'all', policy: 'paid' }])}
+          >
+            <Plus className="w-4 h-4 mr-1" /> Add Weekly Off
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function Settings() {
   const perm = usePermission('page:/company/settings');
   const queryClient = useQueryClient();
@@ -936,6 +1057,15 @@ export default function Settings() {
             )}
           </div>
         ))}
+
+        {/* Weekly offs are part of the same general-settings blob, so this
+            editor saves through the same Save Settings button below. */}
+        {!loadingGeneral && (
+          <WeeklyOffsEditor
+            rules={Array.isArray(values.weeklyOffs) ? values.weeklyOffs : []}
+            onChange={(rules) => set('weeklyOffs', rules)}
+          />
+        )}
 
         {perm.canEdit && (
         <div className="flex justify-end">

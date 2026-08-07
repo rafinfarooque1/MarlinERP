@@ -10,6 +10,7 @@ import {
   Text,
   View,
 } from 'react-native';
+import { notify } from '@/lib/dialogs';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -24,7 +25,16 @@ const MONTHS = [
 ];
 const WEEK_DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 
-type AttendanceStatus = 'present' | 'absent' | 'half_day' | 'leave';
+type AttendanceStatus =
+  | 'present'
+  | 'absent'
+  | 'half_day'
+  | 'leave'
+  | 'company_holiday'
+  | 'weekly_off';
+
+/** The four statuses that count toward the monthly summary tiles. */
+const CORE_STATS: AttendanceStatus[] = ['present', 'absent', 'half_day', 'leave'];
 
 interface AttendancePunch {
   id: number;
@@ -56,10 +66,12 @@ interface StatusConfig {
 function useStatusConfig(): Record<AttendanceStatus, StatusConfig> {
   const colors = useColors();
   return {
-    present:  { bg: colors.success,     text: '#fff', label: 'Present' },
-    absent:   { bg: colors.destructive, text: '#fff', label: 'Absent' },
-    half_day: { bg: colors.warning,     text: '#fff', label: 'Half Day' },
-    leave:    { bg: colors.primary,     text: '#fff', label: 'Leave' },
+    present:         { bg: colors.success,     text: '#fff', label: 'Present' },
+    absent:          { bg: colors.destructive, text: '#fff', label: 'Absent' },
+    half_day:        { bg: colors.warning,     text: '#fff', label: 'Half Day' },
+    leave:           { bg: colors.primary,     text: '#fff', label: 'Leave' },
+    company_holiday: { bg: '#7c3aed',          text: '#fff', label: 'Holiday' },
+    weekly_off:      { bg: '#64748b',          text: '#fff', label: 'Weekly Off' },
   };
 }
 
@@ -198,12 +210,21 @@ function TodayCard() {
     ? closedHours + Math.max(0, (Date.now() - new Date(openPunchIn).getTime()) / 3_600_000)
     : (row?.workingHours ?? closedHours);
 
+  // Location is best-effort: an undecided permission prompt or a device with
+  // no GPS fix must never block the punch itself, so the whole acquisition
+  // races an 8-second deadline and the punch proceeds without coordinates.
   const getCoords = async (): Promise<{ lat: number; lng: number } | null> => {
-    try {
+    const acquire = async (): Promise<{ lat: number; lng: number } | null> => {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') return null;
       const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
       return { lat: pos.coords.latitude, lng: pos.coords.longitude };
+    };
+    try {
+      return await Promise.race([
+        acquire(),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 8000)),
+      ]);
     } catch {
       return null;
     }
@@ -223,7 +244,7 @@ function TodayCard() {
       queryClient.invalidateQueries({ queryKey: ['attendance'] });
     },
     onError: (e: any, action) => {
-      Alert.alert(
+      notify(
         action === 'in' ? 'Check-in failed' : 'Check-out failed',
         e?.data?.error || e?.message || 'Something went wrong. Please try again.',
       );
@@ -319,6 +340,12 @@ function TodayCard() {
       {row?.status === 'leave' && (
         <Text style={s.leaveNote}>You are on approved leave today.</Text>
       )}
+      {row?.status === 'company_holiday' && (
+        <Text style={s.leaveNote}>Today is a company holiday. You can still check in if you are working.</Text>
+      )}
+      {row?.status === 'weekly_off' && (
+        <Text style={s.leaveNote}>Today is your weekly off. You can still check in if you are working.</Text>
+      )}
     </View>
   );
 }
@@ -387,9 +414,11 @@ export default function AttendanceScreen() {
     return map;
   }, [records]);
 
-  // Summary stats
+  // Summary stats (holiday / weekly-off rows exist but don't get a tile)
   const stats = useMemo(() => {
-    const counts: Record<AttendanceStatus, number> = { present: 0, absent: 0, half_day: 0, leave: 0 };
+    const counts: Record<AttendanceStatus, number> = {
+      present: 0, absent: 0, half_day: 0, leave: 0, company_holiday: 0, weekly_off: 0,
+    };
     (records ?? []).forEach((r) => {
       const s = r.status as AttendanceStatus;
       if (s in counts) counts[s]++;
@@ -456,7 +485,7 @@ export default function AttendanceScreen() {
 
       {/* Stats summary */}
       <View style={styles.statsRow}>
-        {(Object.keys(statusCfg) as AttendanceStatus[]).map((key) => (
+        {CORE_STATS.map((key) => (
           <View key={key} style={styles.statItem}>
             <View style={[styles.statDot, { backgroundColor: statusCfg[key].bg }]} />
             <Text style={styles.statCount}>{stats[key] ?? 0}</Text>

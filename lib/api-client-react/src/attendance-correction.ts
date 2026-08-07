@@ -13,7 +13,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { customFetch } from "./custom-fetch";
 
-export type AttendanceStatus = "present" | "half_day" | "absent" | "leave";
+export type AttendanceStatus =
+  | "present" | "half_day" | "absent" | "leave"
+  | "company_holiday" | "weekly_off";
+
+/** Which allowance a 'leave' day draws on. NULL/legacy rows count as casual. */
+export type AttendanceLeaveType = "casual" | "sick";
 
 export interface AttendanceRangeRow {
   id: number;
@@ -53,6 +58,14 @@ export interface AttendanceCorrection {
   employeeId: number;
   date: string;
   status: AttendanceStatus;
+  /** Only meaningful with status 'leave'; the server defaults to 'casual'. */
+  leaveType?: AttendanceLeaveType;
+  /**
+   * Confirms a casual-leave-deducting weekly off after the server answered
+   * 409 CASUAL_LEAVE_EXHAUSTED (the month's casual allowance is used up, so
+   * the day will be unpaid). Never needed otherwise.
+   */
+  force?: boolean;
   /** ISO timestamps. Omit to leave as-is; null to clear. */
   checkIn?: string | null;
   checkOut?: string | null;
@@ -64,6 +77,7 @@ export interface CorrectedAttendance {
   employeeName: string;
   date: string;
   status: AttendanceStatus;
+  leaveType: AttendanceLeaveType | null;
   checkIn: string | null;
   checkOut: string | null;
 }

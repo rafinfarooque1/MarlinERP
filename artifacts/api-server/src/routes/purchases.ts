@@ -6,7 +6,7 @@ import { eq, sql } from "drizzle-orm";
 import { CreatePurchaseBody, GetPurchaseParams } from "@workspace/api-zod";
 import { logActivity } from "../lib/audit";
 import { isValidGstSlab, gstSlabErrorMessage } from "../lib/gst";
-import { creditBatch, debitBatchByNumber, updateAvgCostOnInbound, updateAvgCostOnReversal } from "../lib/batches";
+import { creditBatch, debitBatchByNumber, updateAvgCostOnInbound, updateAvgCostOnReversal, type BatchKind } from "../lib/batches";
 import { productBatchIdentity, blockedByInactiveProducts, INACTIVE_PRODUCT_CODE, isProductKind } from "../lib/productIdentity";
 import { writeStockLedger } from "../lib/stockLedger";
 import { deductMaterialAt, creditMaterialAt, isMaterialKind } from "../lib/materialStock";
@@ -67,63 +67,90 @@ const HSN_RE = /^\d{4,8}$/;
  * The message names the exact field and line so it can be fixed without guessing.
  */
 /**
- * Whether this bill's stock can still be taken back out truthfully.
+ * Whether the stock this edit needs to take back out is still on the shelf.
  *
- * An edit reverses everything the bill added and re-applies the new lines. That
- * reversal only tells the truth while the goods are still on the shelf. Once
- * some have been issued to production, sold or transferred, subtracting the
- * original quantity would drive the balance below zero — and every reversal
- * here floors at zero, so the shortfall is silently discarded and the
- * re-applied line puts the full quantity back. Buy 10, issue 8, re-save the
- * bill unchanged, and the location is holding 10 again instead of 2.
+ * Edits no longer round-trip the whole bill through a reversal: untouched
+ * lines are left alone, so only the lines being rewritten ("rewrite" — full
+ * old quantity comes out) or reduced ("reduce" — just the difference comes
+ * out) are checked. Every reversal here floors at zero, so a debit larger
+ * than what remains would silently discard the shortfall and the books would
+ * hold stock that was already sold or consumed — hence each check demands the
+ * exact quantity its write will subtract, per line, and names ONLY the line
+ * that cannot comply.
  *
- * Rather than invent that stock, refuse the edit and say what to do instead.
  * Rows are locked as they are checked, so nothing can consume the lot between
- * this check and the reversal that follows it in the same transaction.
+ * this check and the writes that follow it in the same transaction.
  */
-async function reversalBlocked(
-  c: Queryable, oldLines: any[], loc: { type: string; id: number },
+interface StockCheck { line: any; need: number; mode: "rewrite" | "reduce" }
+
+async function stockShortfall(
+  c: Queryable, checks: StockCheck[], loc: { type: string; id: number },
   purchaseId: number, maps: NameMaps,
 ): Promise<string | null> {
+  // Aggregate FIRST: two checks can hit the same lot (legacy bills with
+  // duplicate lot keys, in the ambiguous fallback) or the same product's
+  // location balance (two lines of one product). Judged one by one, each
+  // would pass against the same unreserved stock and the floored debits that
+  // follow would together invent stock — so the comparison is against the
+  // SUM this edit will withdraw, not each line's own share.
+  interface Agg { need: number; mode: "rewrite" | "reduce" }
+  const lotAgg = new Map<string, Agg>();  // kind \0 id \0 batch → total leaving that lot
+  const locAgg = new Map<string, Agg>();  // kind \0 id → total leaving this location
+  for (const chk of checks) {
+    const need = Number(chk.need);
+    if (!(need > 0)) continue;
+    const kind = String(chk.line?.materialType ?? "item");
+    const mid = Number(chk.line?.materialId);
+    const batch = String(chk.line?.batchNumber || `PUR-${purchaseId}`);
+    for (const [map, key] of [[lotAgg, `${kind}\u0000${mid}\u0000${batch}`], [locAgg, `${kind}\u0000${mid}`]] as const) {
+      const prev = map.get(key);
+      if (prev) { prev.need += need; if (chk.mode === "reduce") prev.mode = "reduce"; }
+      else map.set(key, { need, mode: chk.mode });
+    }
+  }
+
   // Deterministic order, so two concurrent edits touching the same products
   // queue up instead of deadlocking against each other.
-  const ordered = [...oldLines].sort((a, b) =>
-    String(a?.materialType).localeCompare(String(b?.materialType))
-    || Number(a?.materialId) - Number(b?.materialId));
+  for (const pk of [...locAgg.keys()].sort()) {
+    const [kind, midStr] = pk.split("\u0000");
+    const mid = Number(midStr);
+    const name = maps[kind as keyof NameMaps]?.get(mid)?.name
+      ?? `${KIND_LABEL[kind] ?? "Item"} #${mid}`;
 
-  for (const li of ordered) {
-    const kind = String(li?.materialType ?? "item");
-    const qty = Number(li?.quantity ?? 0);
-    if (!(qty > 0)) continue;
-    const name = maps[kind as keyof NameMaps]?.get(Number(li?.materialId))?.name
-      ?? `${KIND_LABEL[kind] ?? "Item"} #${li?.materialId}`;
-    const batchNumber = String(li?.batchNumber || `PUR-${purchaseId}`);
-
-    const { rows: [lot] } = await c.query(
-      `SELECT quantity::numeric AS q FROM stock_batches
-        WHERE item_id = $1 AND material_type = $2 AND branch_type = $3
-          AND branch_id = $4 AND batch_number = $5
-        FOR UPDATE`,
-      [Number(li?.materialId), kind, loc.type, loc.id, batchNumber],
-    );
-    // No lot at all means the stock was written before lots were tracked, so
-    // there is nothing to compare against — fall through to the location check.
-    if (lot && Number(lot.q) + 1e-6 < qty) {
-      return `${name}: ${fmtQty(Number(lot.q))} of the ${fmtQty(qty)} received on batch ${batchNumber} is left — the rest has already been used, sold or transferred. Reverse those movements first, or record a purchase return instead of editing this bill.`;
+    for (const lk of [...lotAgg.keys()].filter(k => k.startsWith(`${pk}\u0000`)).sort()) {
+      const { need, mode } = lotAgg.get(lk)!;
+      const batchNumber = lk.slice(pk.length + 1);
+      const { rows: [lot] } = await c.query(
+        `SELECT quantity::numeric AS q FROM stock_batches
+          WHERE item_id = $1 AND material_type = $2 AND branch_type = $3
+            AND branch_id = $4 AND batch_number = $5
+          FOR UPDATE`,
+        [mid, kind, loc.type, loc.id, batchNumber],
+      );
+      // No lot at all means the stock was written before lots were tracked, so
+      // there is nothing to compare against — fall through to the location check.
+      if (lot && Number(lot.q) + 1e-6 < need) {
+        return mode === "reduce"
+          ? `${name}: requested reduction is ${fmtQty(need)}, but only ${fmtQty(Number(lot.q))} is available to reduce on batch ${batchNumber} — the remaining quantity has already been sold, transferred or consumed.`
+          : `${name}: ${fmtQty(Number(lot.q))} of the ${fmtQty(need)} received on batch ${batchNumber} is left — the rest has already been used, sold or transferred. Reverse those movements first, or record a purchase return instead of editing this line.`;
+      }
     }
 
     // Summed in JS rather than by SUM(): Postgres refuses FOR UPDATE on an
     // aggregate, and the lock is the point — it holds the balance still until
-    // the reversal below has run.
+    // the writes below have run.
+    const { need, mode } = locAgg.get(pk)!;
     const { rows: locRows } = await c.query(
       `SELECT quantity::numeric AS q FROM stock_entries
         WHERE item_id = $1 AND material_type = $2 AND branch_type = $3 AND branch_id = $4
         FOR UPDATE`,
-      [Number(li?.materialId), kind, loc.type, loc.id],
+      [mid, kind, loc.type, loc.id],
     );
     const onLoc = locRows.reduce((sum: number, r: any) => sum + Number(r.q ?? 0), 0);
-    if (onLoc + 1e-6 < qty) {
-      return `${name}: this location is holding ${fmtQty(onLoc)}, less than the ${fmtQty(qty)} on the bill — the stock has already moved on. Reverse those movements first, or record a purchase return instead of editing this bill.`;
+    if (onLoc + 1e-6 < need) {
+      return mode === "reduce"
+        ? `${name}: requested reduction is ${fmtQty(need)}, but this location is holding only ${fmtQty(onLoc)} — the remaining quantity has already been sold, transferred or consumed.`
+        : `${name}: this location is holding ${fmtQty(onLoc)}, less than the ${fmtQty(need)} on the bill — the stock has already moved on. Reverse those movements first, or record a purchase return instead of editing this line.`;
     }
   }
   return null;
@@ -881,31 +908,31 @@ router.patch("/purchases/:id", requireModuleAction("page:/production/purchase", 
     vendorId?: number; lineItems?: any[]; otherCharges?: any[];
   };
 
-  // Bill-wise settlement guards. A bill that a payment voucher explicitly
-  // settled, or that consumed a vendor advance, cannot have its money or its
-  // vendor rewritten from under those records — dates and notes stay editable.
+  // Bill-wise settlement guards. Money already recorded against this bill no
+  // longer freezes it: the payable is derived from the row, so an edited total
+  // simply recalculates the outstanding (paid stays paid, outstanding = new
+  // total − settled). Two things remain non-negotiable — the bill cannot be
+  // handed to a DIFFERENT vendor from under that vendor's payments/advances,
+  // and the total cannot shrink below what has already been settled, or the
+  // books would show money applied to value that no longer exists.
   if (lineItems !== undefined || vendorId !== undefined || otherChargesBody !== undefined) {
     const { rows: [settled] } = await pool.query(
-      `SELECT COALESCE((SELECT COUNT(*) FROM payment_bill_allocations WHERE purchase_id = $1), 0)::int AS allocs,
+      `SELECT COALESCE((SELECT SUM(amount)::numeric FROM payment_bill_allocations WHERE purchase_id = $1), 0) AS alloc_total,
+              COALESCE((SELECT COUNT(*) FROM payment_bill_allocations WHERE purchase_id = $1), 0)::int AS allocs,
               COALESCE((SELECT SUM(amount)::numeric FROM purchase_advance_applications WHERE purchase_id = $1), 0) AS adv_applied,
               COALESCE((SELECT COUNT(*) FROM purchase_advance_applications WHERE purchase_id = $1), 0)::int AS adv_rows`,
       [id],
     );
-    if (Number(settled?.allocs ?? 0) > 0) {
+    if (vendorId !== undefined && Number(vendorId) !== Number(current.vendorId)
+        && (Number(settled?.allocs ?? 0) > 0 || Number(settled?.adv_rows ?? 0) > 0)) {
       res.status(409).json({
-        error: "A payment voucher has settled this bill. Delete that payment voucher first, then edit the bill.",
-        code: "BILL_HAS_ALLOCATIONS",
-      });
-      return;
-    }
-    if (vendorId !== undefined && Number(settled?.adv_rows ?? 0) > 0 && Number(vendorId) !== Number(current.vendorId)) {
-      res.status(409).json({
-        error: "This bill adjusted a vendor advance — it cannot be moved to a different vendor.",
-        code: "BILL_HAS_ADVANCE_APPLICATION",
+        error: "Payments or advances are already recorded against this bill — it cannot be moved to a different vendor. Delete those vouchers first.",
+        code: "BILL_HAS_SETTLEMENTS",
       });
       return;
     }
     (req as any)._advApplied = Number(settled?.adv_applied ?? 0);
+    (req as any)._allocTotal = Number(settled?.alloc_total ?? 0);
   }
 
   // An edit always REVERSES the old lines at the location that recorded the
@@ -1015,16 +1042,19 @@ router.patch("/purchases/:id", requireModuleAction("page:/production/purchase", 
     }
     const newOtherTot = otherChargesTotal(newOtherCharges);
 
-    // The advance already adjusted against this bill is spent money — the bill
-    // cannot shrink below it, or the books would show an advance consumed by
-    // value that no longer exists. Judged on what the vendor is owed: goods
-    // plus other charges, since both credit the vendor.
+    // Money already settled against this bill (payment allocations + adjusted
+    // vendor advances) is spent — the bill cannot shrink below it, or the
+    // books would show money applied to value that no longer exists. Judged on
+    // what the vendor is owed: goods plus other charges, since both credit the
+    // vendor. Any total ABOVE that floor is allowed; the outstanding simply
+    // re-derives as new total − settled.
     const advApplied = Number((req as any)._advApplied ?? 0);
+    const settledTotal = Math.round((advApplied + Number((req as any)._allocTotal ?? 0)) * 100) / 100;
     const grandPayable = Math.round((totalAmount + newOtherTot) * 100) / 100;
-    if (advApplied > 0.004 && grandPayable < advApplied - 0.005) {
+    if (settledTotal > 0.004 && grandPayable < settledTotal - 0.005) {
       res.status(409).json({
-        error: `₹${advApplied.toFixed(2)} of vendor advance was adjusted against this bill — the new total (₹${grandPayable.toFixed(2)}) cannot go below that.`,
-        code: "BILL_BELOW_ADVANCE_APPLIED",
+        error: `₹${settledTotal.toFixed(2)} has already been paid or adjusted against this bill — the new total (₹${grandPayable.toFixed(2)}) cannot go below that. Delete those payment vouchers first, or record a purchase return instead.`,
+        code: "BILL_BELOW_SETTLED_AMOUNT",
       });
       return;
     }
@@ -1067,16 +1097,115 @@ router.patch("/purchases/:id", requireModuleAction("page:/production/purchase", 
       }
       beforeTotal = Number(locked.total_amount ?? 0);
 
-      // ── Full edit: reverse old stock, then apply the new lines ──
+      // Re-check the settlement floor UNDER the row lock. The pre-transaction
+      // check is a fast fail for the common case, but a payment allocation can
+      // commit between that read and this lock — the allocation path takes
+      // FOR UPDATE on this same purchase row, so re-reading here is what
+      // actually serialises money against the edit.
+      {
+        const { rows: [s2] } = await client.query(
+          `SELECT COALESCE((SELECT SUM(amount)::numeric FROM payment_bill_allocations WHERE purchase_id = $1), 0) AS alloc_total,
+                  COALESCE((SELECT COUNT(*) FROM payment_bill_allocations WHERE purchase_id = $1), 0)::int AS allocs,
+                  COALESCE((SELECT SUM(amount)::numeric FROM purchase_advance_applications WHERE purchase_id = $1), 0) AS adv_applied,
+                  COALESCE((SELECT COUNT(*) FROM purchase_advance_applications WHERE purchase_id = $1), 0)::int AS adv_rows`,
+          [id],
+        );
+        if (vendorId !== undefined && Number(vendorId) !== Number(locked.vendor_id)
+            && (Number(s2?.allocs ?? 0) > 0 || Number(s2?.adv_rows ?? 0) > 0)) {
+          await client.query("ROLLBACK");
+          res.status(409).json({
+            error: "Payments or advances are already recorded against this bill — it cannot be moved to a different vendor. Delete those vouchers first.",
+            code: "BILL_HAS_SETTLEMENTS",
+          });
+          return;
+        }
+        const settledNow = Math.round((Number(s2?.alloc_total ?? 0) + Number(s2?.adv_applied ?? 0)) * 100) / 100;
+        const grandNow = Math.round((totalAmount + newOtherTot) * 100) / 100;
+        if (settledNow > 0.004 && grandNow < settledNow - 0.005) {
+          await client.query("ROLLBACK");
+          res.status(409).json({
+            error: `₹${settledNow.toFixed(2)} has already been paid or adjusted against this bill — the new total (₹${grandNow.toFixed(2)}) cannot go below that. Delete those payment vouchers first, or record a purchase return instead.`,
+            code: "BILL_BELOW_SETTLED_AMOUNT",
+          });
+          return;
+        }
+      }
+
+      // ── Line diff: only lines that actually change stock are rewritten ──
       const oldLines = (locked.line_items ?? []) as Array<{
         materialType: string; materialId: number; quantity: number;
         batchNumber?: string | null; costPerUnit?: number; unitCost?: number;
       }>;
 
-      // Refuse before writing anything if the goods are no longer on hand: the
-      // reversal below floors at zero, so it cannot express "8 of these are
-      // already gone" and would quietly re-create them.
-      const stuck = await reversalBlocked(client, oldLines, loc, id, maps);
+      // Pair old and new lines by identity (product kind + product + lot).
+      // An untouched line is left completely alone — it is no longer
+      // round-tripped through the floored reversal, so one consumed line
+      // cannot block edits to the REST of the bill any more.
+      const keyOf = (t: any, mid: any, batch: any) =>
+        `${String(t ?? "item")}:${Number(mid)}:${String(batch ?? "").trim().toLowerCase()}`;
+      const oldByKey = new Map<string, any>();
+      // A move re-homes every line, and duplicate lot keys (possible only on
+      // bills that predate the identity checks) make pairing unsafe — both
+      // fall back to the historical full reverse + re-apply.
+      let ambiguous = isMove;
+      for (const li of oldLines) {
+        const k = keyOf(li?.materialType, li?.materialId, li?.batchNumber || `PUR-${id}`);
+        if (oldByKey.has(k)) ambiguous = true;
+        oldByKey.set(k, li);
+      }
+      const newByKey = new Map<string, any>();
+      for (const li of enriched as any[]) {
+        const bn = String(li?.batchNumber ?? "").trim();
+        if (!bn) continue; // a brand-new line — it will draw a fresh lot number
+        const k = keyOf(li?.materialType, li?.materialId, bn);
+        if (newByKey.has(k)) ambiguous = true;
+        newByKey.set(k, li);
+      }
+
+      const sameDate = (a: any, b: any) => String(a ?? "").slice(0, 10) === String(b ?? "").slice(0, 10);
+      const toReverse: any[] = []; // old lines whose full quantity comes back out
+      const toApply: any[] = [];   // new lines applied in full
+      const deltas: Array<{ nu: any; delta: number }> = []; // quantity-only changes
+      if (ambiguous) {
+        toReverse.push(...oldLines);
+        toApply.push(...(enriched as any[]));
+      } else {
+        for (const [k, ol] of oldByKey) {
+          const nl = newByKey.get(k);
+          if (!nl) { toReverse.push(ol); continue; } // line removed from the bill
+          const oldQty = Number(ol?.quantity ?? 0);
+          const newQty = Number(nl?.quantity ?? 0);
+          const oldCost = Number(ol?.costPerUnit ?? ol?.unitCost ?? 0);
+          const newCost = Number(nl?.costPerUnit ?? 0);
+          // Stock cares about the per-unit taxable cost and the lot dates. A
+          // change in either means the line's valuation must be rebuilt from
+          // scratch — which needs its full old quantity still on hand. A
+          // quantity-only change adjusts by the difference instead.
+          const costSame = Math.abs(oldCost - newCost) <= 0.005;
+          const datesSame = sameDate(ol?.mfgDate, nl?.mfgDate) && sameDate(ol?.expiryDate, nl?.expiryDate);
+          if (costSame && datesSame) {
+            if (Math.abs(newQty - oldQty) > 0.0005) deltas.push({ nu: nl, delta: newQty - oldQty });
+            // identical line: no stock work at all
+          } else {
+            toReverse.push(ol);
+            toApply.push(nl);
+          }
+        }
+        for (const [k, nl] of newByKey) if (!oldByKey.has(k)) toApply.push(nl);
+        for (const nl of enriched as any[]) {
+          if (!String(nl?.batchNumber ?? "").trim()) toApply.push(nl);
+        }
+      }
+
+      // Refuse before writing anything if the stock this edit must take back
+      // out is no longer on hand. Rewritten/removed lines need their full old
+      // quantity; reduced lines need only the reduction. Untouched lines are
+      // not checked at all, and the error names only the line at fault.
+      const checks: StockCheck[] = [
+        ...toReverse.map(li => ({ line: li, need: Number(li?.quantity ?? 0), mode: "rewrite" as const })),
+        ...deltas.filter(d => d.delta < 0).map(d => ({ line: d.nu, need: -d.delta, mode: "reduce" as const })),
+      ];
+      const stuck = await stockShortfall(client, checks, loc, id, maps);
       if (stuck) {
         await client.query("ROLLBACK");
         res.status(409).json({ error: stuck, code: "PURCHASE_STOCK_CONSUMED" }); return;
@@ -1092,11 +1221,11 @@ router.patch("/purchases/:id", requireModuleAction("page:/production/purchase", 
         res.status(409).json({ error: racedClash }); return;
       }
 
-    // 1. Reverse stock from the old lines (mirror of the delete handler).
-    //    The average cost is unwound with the quantity — leaving it behind
-    //    would make this bill's own cost the baseline for its replacement and
-    //    drift the valuation a little further on every save.
-    for (const li of oldLines) {
+    // 1. Reverse stock from the lines being rewritten or removed (mirror of
+    //    the delete handler). The average cost is unwound with the quantity —
+    //    leaving it behind would make this bill's own cost the baseline for
+    //    its replacement and drift the valuation a little further on every save.
+    for (const li of toReverse) {
       const oldCost = Number(li.costPerUnit ?? li.unitCost ?? 0);
       if (li.materialType === "material") {
         await client.query(
@@ -1156,25 +1285,32 @@ router.patch("/purchases/:id", requireModuleAction("page:/production/purchase", 
       }
     }
 
-    // A fully-reversed line leaves its lot at zero. Delete this bill's own
-    // emptied lots so (a) a removed line leaves no orphan zero-quantity batch
-    // behind, and (b) a re-applied line re-INSERTS a fresh lot — creditBatch
-    // keeps an existing lot's mfg/expiry via COALESCE, so without this a
-    // date correction on an existing batch number would never take effect.
-    // Scoped to this bill's own purchase lots at the old location only.
-    await client.query(
-      `DELETE FROM stock_batches
-        WHERE source = 'purchase' AND source_id = $1
-          AND branch_type = $2 AND branch_id = $3
-          AND quantity::numeric <= 0.0005`,
-      [id, loc.type, loc.id],
-    );
+    // A fully-reversed line leaves its lot at zero. Delete those emptied lots
+    // so (a) a removed line leaves no orphan zero-quantity batch behind, and
+    // (b) a re-applied line re-INSERTS a fresh lot — creditBatch keeps an
+    // existing lot's mfg/expiry via COALESCE, so without this a date
+    // correction on an existing batch number would never take effect.
+    // Scoped to the REVERSED lines' own lots only — full lot identity
+    // (kind + product + batch), since a batch NUMBER alone is only unique per
+    // product: an untouched product B lot sharing product A's batch string, or
+    // any untouched line's fully-consumed lot, keeps its row and its dates.
+    for (const li of toReverse) {
+      await client.query(
+        `DELETE FROM stock_batches
+          WHERE source = 'purchase' AND source_id = $1
+            AND branch_type = $2 AND branch_id = $3
+            AND quantity::numeric <= 0.0005
+            AND material_type = $4 AND item_id = $5 AND batch_number = $6`,
+        [id, loc.type, loc.id, String(li?.materialType ?? 'item'), Number(li?.materialId),
+         String(li?.batchNumber || `PUR-${id}`)],
+      );
+    }
 
     // ── Stock ledger (purchase edit reversal) ────────────────────────────────
     // Dated on the bill's OLD business date: the reversal takes the old lines
     // out of history exactly where they entered it, so date-based stock
     // reports stay continuous (closing of D = opening of D+1).
-    await writeStockLedger(client, (oldLines as any[]).map(li => ({
+    await writeStockLedger(client, (toReverse as any[]).map(li => ({
       txnType: 'purchase_reversal', materialType: li.materialType ?? 'item',
       refId: li.materialId, itemName: '', unit: '',
       branchType: loc.type, branchId: ledgerBranchId(loc, li.materialType ?? 'item'), branchName: locName,
@@ -1183,6 +1319,108 @@ router.patch("/purchases/:id", requireModuleAction("page:/production/purchase", 
       txnDate: String(locked.purchase_date ?? '') || null,
       notes: 'Purchase edit — old lines reversed',
     })));
+
+    // ── Quantity-only changes: adjust by the difference ─────────────────────
+    // An increase is a normal inbound of the extra units at the line's own
+    // cost; a reduction was validated above against THIS line's remaining
+    // stock, so the debit cannot underflow. The lot keeps its dates — only
+    // its quantity moves.
+    for (const d of deltas) {
+      const li = d.nu;
+      const qty = Math.abs(d.delta);
+      const cost = Number(li.costPerUnit ?? 0);
+      const kind = String(li.materialType ?? "item");
+      if (d.delta > 0) {
+        if (kind === "material" || kind === "raw_material") {
+          await client.query(
+            `UPDATE ${kind === "material" ? "materials" : "raw_materials"} SET
+               avg_cost = ROUND(
+                 (current_stock::numeric * COALESCE(avg_cost, 0)::numeric + $2::numeric * $3::numeric)
+                 / NULLIF(current_stock::numeric + $2::numeric, 0),
+               4),
+               current_stock = current_stock::numeric + $2::numeric
+             WHERE id = $1`,
+            [li.materialId, qty, cost],
+          );
+          await creditMaterialAt(client, kind, li.materialId, loc.type, loc.id, qty, cost);
+        } else {
+          await client.query(
+            `UPDATE items SET production_stock = production_stock::numeric + $2::numeric WHERE id = $1`,
+            [li.materialId, qty],
+          );
+          await client.query(
+            `INSERT INTO stock_entries (item_id, material_type, branch_type, branch_id, quantity, cost_price)
+             VALUES ($1, 'item', $4, $5, $2, $3)
+             ON CONFLICT (item_id, material_type, branch_type, branch_id) DO UPDATE SET
+               quantity = stock_entries.quantity::numeric + EXCLUDED.quantity::numeric,
+               cost_price = EXCLUDED.cost_price,
+               updated_at = now()`,
+            [li.materialId, qty, cost, loc.type, loc.id],
+          );
+          await updateAvgCostOnInbound(client, li.materialId, qty, cost);
+        }
+        await creditBatch(client, {
+          itemId: li.materialId, materialType: kind as BatchKind,
+          branchType: loc.type, branchId: loc.id,
+          batchNumber: li.batchNumber!,
+          mfgDate: li.mfgDate ?? null, expiryDate: li.expiryDate ?? null,
+          quantity: qty, unitCost: cost,
+          source: "purchase", sourceId: id,
+          ...(await lineIdentity(li)),
+        });
+      } else {
+        if (kind === "material" || kind === "raw_material") {
+          await client.query(
+            `UPDATE ${kind === "material" ? "materials" : "raw_materials"} SET
+               avg_cost = CASE
+                 WHEN current_stock::numeric - $2::numeric > 0
+                   THEN GREATEST(0, ROUND(
+                     (current_stock::numeric * COALESCE(avg_cost, 0)::numeric - $2::numeric * $3::numeric)
+                     / (current_stock::numeric - $2::numeric), 4))
+                 ELSE COALESCE(avg_cost, 0)
+               END,
+               current_stock = GREATEST(0, current_stock::numeric - $2::numeric)
+             WHERE id = $1`,
+            [li.materialId, qty, cost],
+          );
+          await deductMaterialAt(client, kind, li.materialId, loc.type, loc.id, qty, { floor: true });
+        } else {
+          // Before the quantity leaves stock_entries — the unwind reads the
+          // total that still includes this reduction, mirroring the inbound.
+          await updateAvgCostOnReversal(client, li.materialId, qty, cost);
+          await client.query(
+            `UPDATE items SET production_stock = GREATEST(0, production_stock::numeric - $2::numeric) WHERE id = $1`,
+            [li.materialId, qty],
+          );
+          await client.query(
+            `UPDATE stock_entries SET quantity = GREATEST(0, quantity::numeric - $1), updated_at = now()
+             WHERE item_id = $2 AND material_type = 'item' AND branch_type = $3 AND branch_id = $4`,
+            [qty, li.materialId, loc.type, loc.id],
+          );
+        }
+        await debitBatchByNumber(client, {
+          itemId: li.materialId, materialType: kind as BatchKind, branchType: loc.type, branchId: loc.id,
+          batchNumber: li.batchNumber || `PUR-${id}`, quantity: qty,
+        });
+      }
+    }
+
+    // ── Stock ledger (quantity adjustments) ──────────────────────────────────
+    await writeStockLedger(client, deltas.map(d => {
+      const li = d.nu;
+      const kind = String(li.materialType ?? "item");
+      const master = maps[kind as keyof NameMaps]?.get(Number(li.materialId));
+      return {
+        txnType: d.delta > 0 ? 'purchase' : 'purchase_reversal',
+        materialType: kind, refId: li.materialId,
+        itemName: master?.name ?? '', unit: master?.unit ?? '',
+        branchType: loc.type, branchId: ledgerBranchId(loc, kind), branchName: locName,
+        qtyChange: d.delta, unitCost: Number(li.costPerUnit ?? 0),
+        docType: 'purchase', docId: id,
+        txnDate: String(purchaseDate ?? locked.purchase_date ?? '') || null,
+        notes: d.delta > 0 ? 'Purchase edit — quantity increased' : 'Purchase edit — quantity reduced',
+      };
+    }));
 
     // A line that already carries a lot number keeps it — an edit must not
     // silently re-issue lots and orphan the stock recorded against the old
@@ -1211,10 +1449,10 @@ router.patch("/purchases/:id", requireModuleAction("page:/production/purchase", 
       );
     }
 
-    // 3. Apply stock for the new lines (mirror of the create handler), at the
-    //    EFFECTIVE location — the new one when the bill was moved.
+    // 3. Apply stock for the rewritten and added lines (mirror of the create
+    //    handler), at the EFFECTIVE location — the new one when the bill moved.
     //    Valued at costPerUnit: net of discount, net of recoverable input GST.
-    for (const li of enriched) {
+    for (const li of toApply) {
       if (li.materialType === "material") {
         await client.query(
           `UPDATE materials SET
@@ -1286,7 +1524,7 @@ router.patch("/purchases/:id", requireModuleAction("page:/production/purchase", 
     // ── Stock ledger (purchase edit re-apply) ────────────────────────────────
     // Dated on the bill's NEW business date at the effective location, so a
     // backdated correction rewrites stock history from the date it claims.
-    await writeStockLedger(client, (enriched as any[]).map(li => {
+    await writeStockLedger(client, (toApply as any[]).map(li => {
       const master = maps[li.materialType as keyof NameMaps]?.get(Number(li.materialId));
       return {
         txnType: 'purchase', materialType: li.materialType ?? 'item',
@@ -1298,6 +1536,17 @@ router.patch("/purchases/:id", requireModuleAction("page:/production/purchase", 
         notes: 'Purchase edit — new lines applied',
       };
     }));
+
+    // Untouched lines' ledger rows are no longer rewritten, so a changed
+    // business date must move them explicitly — the same re-date a
+    // metadata-only edit performs. Every row of the bill moves together;
+    // reversal pairs cancel on any day.
+    if (purchaseDate !== undefined && String(locked.purchase_date ?? '') !== String(purchaseDate)) {
+      await client.query(
+        `UPDATE stock_ledger SET txn_date = $2::date WHERE doc_type = 'purchase' AND doc_id = $1`,
+        [id, purchaseDate],
+      );
+    }
 
     // 4. Persist the updated record (location included: after a move the
     //    vendor payable and input GST re-derive against the new location's
@@ -1360,18 +1609,19 @@ router.patch("/purchases/:id", requireModuleAction("page:/production/purchase", 
   if (notes !== undefined) updateData.notes = notes;
 
   // Other charges may change without touching the lines. They change what the
-  // vendor is owed, so the settlement guard above already vetted allocations;
-  // the advance floor is re-judged on the resulting grand total here.
+  // vendor is owed, so the settled floor is re-judged on the resulting grand
+  // total here — the bill may not shrink below what was already paid/adjusted.
   let chargesOnly: { charges: OtherCharge[]; total: number } | null = null;
   if (otherChargesBody !== undefined) {
     const ocp = await validateOtherCharges(pool, otherChargesBody);
     if ("error" in ocp) { res.status(400).json({ error: ocp.error }); return; }
     const advApplied = Number((req as any)._advApplied ?? 0);
+    const settledTotal = Math.round((advApplied + Number((req as any)._allocTotal ?? 0)) * 100) / 100;
     const grand = Math.round((Number(current.totalAmount) + ocp.total) * 100) / 100;
-    if (advApplied > 0.004 && grand < advApplied - 0.005) {
+    if (settledTotal > 0.004 && grand < settledTotal - 0.005) {
       res.status(409).json({
-        error: `₹${advApplied.toFixed(2)} of vendor advance was adjusted against this bill — the new total (₹${grand.toFixed(2)}) cannot go below that.`,
-        code: "BILL_BELOW_ADVANCE_APPLIED",
+        error: `₹${settledTotal.toFixed(2)} has already been paid or adjusted against this bill — the new total (₹${grand.toFixed(2)}) cannot go below that. Delete those payment vouchers first, or record a purchase return instead.`,
+        code: "BILL_BELOW_SETTLED_AMOUNT",
       });
       return;
     }
@@ -1381,7 +1631,39 @@ router.patch("/purchases/:id", requireModuleAction("page:/production/purchase", 
   if (Object.keys(updateData).length === 0 && !chargesOnly) { res.status(400).json({ error: "No fields to update" }); return; }
   if (chargesOnly) {
     // Raw column — a drizzle .set() cannot carry it (see raw-migration columns).
-    await pool.query(`UPDATE purchases SET other_charges = $2::jsonb WHERE id = $1`, [id, JSON.stringify(chargesOnly.charges)]);
+    // Written under the same row lock the payment-allocation path takes, and
+    // the settled floor re-checked there: a payment recorded between the
+    // fast-fail check above and this write must not be stranded above a
+    // shrunken total.
+    const c2 = await pool.connect();
+    try {
+      await c2.query("BEGIN");
+      const { rows: [lk] } = await c2.query(
+        `SELECT total_amount FROM purchases WHERE id = $1 FOR UPDATE`, [id]);
+      if (!lk) { await c2.query("ROLLBACK"); res.status(404).json({ error: "Not found" }); return; }
+      const { rows: [s2] } = await c2.query(
+        `SELECT COALESCE((SELECT SUM(amount)::numeric FROM payment_bill_allocations WHERE purchase_id = $1), 0) AS alloc_total,
+                COALESCE((SELECT SUM(amount)::numeric FROM purchase_advance_applications WHERE purchase_id = $1), 0) AS adv_applied`,
+        [id],
+      );
+      const settledNow = Math.round((Number(s2?.alloc_total ?? 0) + Number(s2?.adv_applied ?? 0)) * 100) / 100;
+      const grandNow = Math.round((Number(lk.total_amount ?? 0) + chargesOnly.total) * 100) / 100;
+      if (settledNow > 0.004 && grandNow < settledNow - 0.005) {
+        await c2.query("ROLLBACK");
+        res.status(409).json({
+          error: `₹${settledNow.toFixed(2)} has already been paid or adjusted against this bill — the new total (₹${grandNow.toFixed(2)}) cannot go below that. Delete those payment vouchers first, or record a purchase return instead.`,
+          code: "BILL_BELOW_SETTLED_AMOUNT",
+        });
+        return;
+      }
+      await c2.query(`UPDATE purchases SET other_charges = $2::jsonb WHERE id = $1`, [id, JSON.stringify(chargesOnly.charges)]);
+      await c2.query("COMMIT");
+    } catch (e) {
+      await c2.query("ROLLBACK").catch(() => {});
+      throw e;
+    } finally {
+      c2.release();
+    }
   }
   // An empty drizzle SET throws — fall back to a plain read when every field
   // that changed was the raw jsonb column.

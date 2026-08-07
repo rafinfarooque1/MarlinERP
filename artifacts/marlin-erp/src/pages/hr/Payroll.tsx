@@ -270,19 +270,27 @@ function PayslipSheet({
             leave tile shows used/allowed. Older runs have no snapshot (null,
             not zero) and keep the original three tiles. */}
         {item.paidLeaveAllowed != null ? (
-          <div className="grid grid-cols-4 gap-3 text-sm mb-4">
+          /* Runs generated since the casual/sick split also carry a sick-leave
+             snapshot (null on older runs — omitted, never shown as zero). */
+          <div className={`grid ${item.sickLeaveAllowed != null ? 'grid-cols-2 sm:grid-cols-5' : 'grid-cols-4'} gap-3 text-sm mb-4`}>
             <div className="rounded-lg bg-muted/50 p-3 text-center">
               <p className="text-xs text-muted-foreground">Working Days</p>
               <p className="font-semibold text-base">{item.workingDays}</p>
             </div>
             <div className="rounded-lg bg-muted/50 p-3 text-center">
               <p className="text-xs text-muted-foreground">Present</p>
-              <p className="font-semibold text-base">{(Number(item.presentDays ?? 0) - Number(item.paidLeaveUsed ?? 0)).toFixed(1)}</p>
+              <p className="font-semibold text-base">{(Number(item.presentDays ?? 0) - Number(item.paidLeaveUsed ?? 0) - Number(item.sickLeaveUsed ?? 0)).toFixed(1)}</p>
             </div>
             <div className="rounded-lg bg-muted/50 p-3 text-center">
-              <p className="text-xs text-muted-foreground">Paid Leave</p>
+              <p className="text-xs text-muted-foreground">Casual Leave</p>
               <p className="font-semibold text-base text-emerald-700">{Number(item.paidLeaveUsed ?? 0).toFixed(1)}<span className="text-xs text-muted-foreground font-normal"> / {Number(item.paidLeaveAllowed).toFixed(1)}</span></p>
             </div>
+            {item.sickLeaveAllowed != null && (
+              <div className="rounded-lg bg-muted/50 p-3 text-center">
+                <p className="text-xs text-muted-foreground">Sick Leave</p>
+                <p className="font-semibold text-base text-purple-700">{Number(item.sickLeaveUsed ?? 0).toFixed(1)}<span className="text-xs text-muted-foreground font-normal"> / {Number(item.sickLeaveAllowed).toFixed(1)}</span></p>
+              </div>
+            )}
             <div className="rounded-lg bg-muted/50 p-3 text-center">
               <p className="text-xs text-muted-foreground">LOP Days</p>
               <p className="font-semibold text-base text-red-600">{Number(item.lopDays ?? 0).toFixed(1)}</p>
@@ -664,7 +672,8 @@ export default function Payroll() {
     const rows = filtered.map(p => ({
       Employee: p.employeeName, Branch: p.branchName, Month: MONTHS[(p.month ?? 1) - 1],
       Year: p.year, 'Working Days': p.workingDays, 'Present Days': p.presentDays,
-      'Paid Leave Used': p.paidLeaveUsed ?? '', 'Paid Leave Allowed': p.paidLeaveAllowed ?? '',
+      'Casual Leave Used': p.paidLeaveUsed ?? '', 'Casual Leave Allowed': p.paidLeaveAllowed ?? '',
+      'Sick Leave Used': p.sickLeaveUsed ?? '', 'Sick Leave Allowed': p.sickLeaveAllowed ?? '',
       'LOP Days': p.lopDays, 'Basic Salary': p.baseSalary, 'Gross Pay': p.grossPay,
       Allowances: p.allowancesTotal, Deductions: p.deductions,
       'Advance Deduction': p.advanceDeduction ?? 0,

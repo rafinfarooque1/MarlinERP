@@ -5,6 +5,7 @@ import {
   useListLeaves, useApplyLeave, useCancelLeave, getListLeavesQueryKey,
   useGetMe, useCorrectAttendance, useAttendanceRange,
   useAttendanceMonth, useAttendanceConfig, type AttendancePunch,
+  useCompanyHolidays, useCreateCompanyHoliday, useDeleteCompanyHoliday, useLeaveBalance,
 } from '@workspace/api-client-react';
 import { useDateRange, RangeBar } from '@/pages/reports/shared';
 import { AppLayout } from '@/components/layout/AppLayout';
@@ -16,7 +17,7 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '
 import { Textarea } from '@/components/ui/textarea';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
-import { Search, Clock, Download, LogIn, LogOut, MapPin, Loader2, ShieldOff, CalendarDays, Plus, Eye, XCircle, Pencil } from 'lucide-react';
+import { Search, Clock, Download, LogIn, LogOut, MapPin, Loader2, ShieldOff, CalendarDays, CalendarOff, Plus, Eye, XCircle, Pencil, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV } from '@/lib/download';
@@ -62,7 +63,27 @@ function StatusBadge({ status }: { status: string }) {
   if (status === 'present')   return <Badge className="bg-emerald-500/10 text-emerald-600 border-emerald-500/20">Present</Badge>;
   if (status === 'half_day')  return <Badge className="bg-amber-500/10 text-amber-600 border-amber-500/20">Half Day</Badge>;
   if (status === 'leave')     return <Badge className="bg-blue-500/10 text-blue-600 border-blue-500/20">On Leave</Badge>;
+  if (status === 'company_holiday') return <Badge className="bg-purple-500/10 text-purple-600 border-purple-500/20">Holiday</Badge>;
+  if (status === 'weekly_off') return <Badge className="bg-cyan-500/10 text-cyan-600 border-cyan-500/20">Weekly Off</Badge>;
   return <Badge className="bg-red-500/10 text-red-600 border-red-500/20">Absent</Badge>;
+}
+
+/**
+ * Which configured weekly-off rule covers a date — the client-side mirror of
+ * the server's calendar rule (day of week + which occurrences in the month),
+ * used only to SHADE the calendar; every figure is priced server-side.
+ */
+function weeklyOffRuleFor(dateStr: string, rules: any[]): any | null {
+  if (!rules?.length) return null;
+  const [y, m, d] = dateStr.split('-').map(Number);
+  if (!y || !m || !d) return null;
+  const dow = new Date(Date.UTC(y, m - 1, d)).getUTCDay();
+  const nth = Math.floor((d - 1) / 7) + 1;
+  for (const r of rules) {
+    if (Number(r?.day) !== dow) continue;
+    if (r.weeks === 'all' || (Array.isArray(r.weeks) && r.weeks.map(Number).includes(nth))) return r;
+  }
+  return null;
 }
 
 function leaveStatusColor(s: string) {
@@ -167,9 +188,18 @@ export default function Attendance() {
   useClearOutletSelection(branchTypeFilter === 'outlet', () => { setBranchTypeFilter('all'); setBranchLocId('all'); });
   const [applyLeaveOpen, setApplyLeaveOpen] = useState(false);
   const [viewLeave, setViewLeave] = useState<any>(null);
-  // The row being corrected, plus the status being set on it.
+  // The row being corrected, plus the status being set on it. The dialog's
+  // status values split 'leave' into casual/sick — mapped to status+leaveType
+  // on submit.
   const [correcting, setCorrecting] = useState<any>(null);
   const [correctStatus, setCorrectStatus] = useState<string>('present');
+  // Server said the month's casual leave is used up (409) — the save needs an
+  // explicit "save anyway" confirmation, which resubmits with force.
+  const [exhaustedWarning, setExhaustedWarning] = useState<string | null>(null);
+  // Company holidays management (Head Office only).
+  const [holidaysOpen, setHolidaysOpen] = useState(false);
+  const [newHolidayDate, setNewHolidayDate] = useState('');
+  const [newHolidayName, setNewHolidayName] = useState('');
 
   const { data: attendance = [], isLoading } = useListAttendance({ date });
   // Range rows: the server scopes non-HO callers to their own records, so this
@@ -191,6 +221,23 @@ export default function Attendance() {
   const applyMutation    = useApplyLeave();
   const cancelMutation   = useCancelLeave();
   const correctMutation  = useCorrectAttendance();
+  const { data: holidays = [] } = useCompanyHolidays();
+  const createHoliday = useCreateCompanyHoliday();
+  const deleteHoliday = useDeleteCompanyHoliday();
+  // Employee view: this month's casual/sick balance — the server computes it
+  // with the same month summary payroll prices, so the figures always agree.
+  const { data: leaveBalance } = useLeaveBalance({
+    year: Number(today.slice(0, 4)),
+    month: Number(today.slice(5, 7)),
+  });
+  // Configured weekly offs travel with the attendance config so the calendar
+  // shades exactly the days the server will pay as offs.
+  const weeklyOffRules: any[] = (attCfg as any)?.weeklyOffs ?? [];
+  const holidayMap = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const h of holidays as any[]) m.set(h.date, h.name);
+    return m;
+  }, [holidays]);
 
   // Employee view: own leave history
   const myId = (user as any)?.id as number | undefined;
@@ -270,24 +317,47 @@ export default function Attendance() {
 
   const openCorrection = (row: any) => {
     setCorrecting(row);
-    setCorrectStatus(row.status ?? 'present');
+    setExhaustedWarning(null);
+    // Stored 'leave' rows split into casual/sick in the dialog. Rows from
+    // before the split have no leave type — they count as casual.
+    setCorrectStatus(
+      row.status === 'leave'
+        ? (row.leaveType === 'sick' ? 'leave_sick' : 'leave_casual')
+        : (row.status ?? 'present'),
+    );
   };
 
-  const submitCorrection = () => {
+  const submitCorrection = (force = false) => {
     if (!correcting) return;
+    const isLeave = correctStatus === 'leave_casual' || correctStatus === 'leave_sick';
     // Times are cleared explicitly so the chosen status alone decides what the
     // day earns — the server's contract is that recorded hours (including punch
     // sessions) outvote the status label unless they are cleared with it.
     correctMutation.mutate(
-      { employeeId: correcting.employeeId, date, status: correctStatus as any, checkIn: null, checkOut: null },
+      {
+        employeeId: correcting.employeeId, date,
+        status: (isLeave ? 'leave' : correctStatus) as any,
+        ...(isLeave ? { leaveType: (correctStatus === 'leave_sick' ? 'sick' : 'casual') as any } : {}),
+        ...(force ? { force: true } : {}),
+        checkIn: null, checkOut: null,
+      },
       {
         onSuccess: () => {
           toast.success(`Attendance corrected — salary for ${date} has been re-calculated`);
           setCorrecting(null);
+          setExhaustedWarning(null);
         },
         // The server refuses a signed-off month with the reason in the message,
-        // so show it rather than a generic failure.
-        onError: (e: any) => toast.error(e?.data?.error || e.message || 'Correction failed'),
+        // so show it rather than a generic failure. A casual-leave-exhausted
+        // weekly off answers 409 with a code — that one asks for confirmation
+        // in the dialog instead of failing.
+        onError: (e: any) => {
+          if (e?.data?.code === 'CASUAL_LEAVE_EXHAUSTED') {
+            setExhaustedWarning(e.data.error);
+            return;
+          }
+          toast.error(e?.data?.error || e.message || 'Correction failed');
+        },
       },
     );
   };
@@ -310,11 +380,12 @@ export default function Attendance() {
 
   // Day-register summary cards, over the same filtered rows the table shows.
   const daySummary = useMemo(() => {
-    const s = { present: 0, half_day: 0, leave: 0, absent: 0, late: 0, otHours: 0, checkedIn: 0 };
+    const s = { present: 0, half_day: 0, leave: 0, absent: 0, offday: 0, late: 0, otHours: 0, checkedIn: 0 };
     for (const a of filtered as any[]) {
       if (a.status === 'present') s.present++;
       else if (a.status === 'half_day') s.half_day++;
       else if (a.status === 'leave') s.leave++;
+      else if (a.status === 'company_holiday' || a.status === 'weekly_off') s.offday++;
       else s.absent++;
       if ((a.lateMinutes ?? 0) > 0) s.late++;
       if (a.overtimeHours) s.otHours += Number(a.overtimeHours);
@@ -326,14 +397,15 @@ export default function Attendance() {
   // Calendar: per-day status counts for the month; absent = active employees
   // with no row that day (same synthesis rule as the day register).
   const calDays = useMemo(() => {
-    const byDate = new Map<string, { present: number; half_day: number; leave: number; recorded: number }>();
+    const byDate = new Map<string, { present: number; half_day: number; leave: number; offday: number; recorded: number }>();
     for (const r of monthRows as any[]) {
       const d = String(r.date).slice(0, 10);
-      const c = byDate.get(d) ?? { present: 0, half_day: 0, leave: 0, recorded: 0 };
+      const c = byDate.get(d) ?? { present: 0, half_day: 0, leave: 0, offday: 0, recorded: 0 };
       c.recorded++;
       if (r.status === 'present') c.present++;
       else if (r.status === 'half_day') c.half_day++;
       else if (r.status === 'leave') c.leave++;
+      else if (r.status === 'company_holiday' || r.status === 'weekly_off') c.offday++;
       byDate.set(d, c);
     }
     return byDate;
@@ -474,16 +546,24 @@ export default function Attendance() {
           </div>
           <div>
             <p className="text-sm font-medium mb-1.5">Status</p>
-            <Select value={correctStatus} onValueChange={setCorrectStatus}>
+            <Select value={correctStatus} onValueChange={(v) => { setCorrectStatus(v); setExhaustedWarning(null); }}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="present">Present — earns a full day</SelectItem>
                 <SelectItem value="half_day">Half Day — earns half a day</SelectItem>
-                <SelectItem value="leave">On Leave — earns a full day</SelectItem>
+                <SelectItem value="leave_casual">Casual Leave — paid while casual leaves last</SelectItem>
+                <SelectItem value="leave_sick">Sick Leave — paid while sick leaves last</SelectItem>
+                <SelectItem value="company_holiday">Company Holiday — paid, no leave used</SelectItem>
+                <SelectItem value="weekly_off">Weekly Off — per the weekly-off policy</SelectItem>
                 <SelectItem value="absent">Absent — earns nothing</SelectItem>
               </SelectContent>
             </Select>
           </div>
+          {exhaustedWarning && (
+            <p className="text-xs text-amber-700 bg-amber-500/10 border border-amber-500/30 rounded-lg p-3">
+              {exhaustedWarning}
+            </p>
+          )}
           <p className="text-xs text-muted-foreground bg-muted/40 border border-border rounded-lg p-3">
             Saving replaces the day's recorded check-in/out sessions with this status and
             re-calculates this employee's salary for the month straight away.
@@ -492,9 +572,15 @@ export default function Attendance() {
           </p>
           <DialogFooter>
             <Button variant="outline" type="button" onClick={() => setCorrecting(null)}>Cancel</Button>
-            <Button type="button" onClick={submitCorrection} disabled={correctMutation.isPending}>
-              {correctMutation.isPending ? 'Saving…' : 'Save Correction'}
-            </Button>
+            {exhaustedWarning ? (
+              <Button type="button" variant="destructive" onClick={() => submitCorrection(true)} disabled={correctMutation.isPending}>
+                {correctMutation.isPending ? 'Saving…' : 'Save Anyway (Unpaid)'}
+              </Button>
+            ) : (
+              <Button type="button" onClick={() => submitCorrection()} disabled={correctMutation.isPending}>
+                {correctMutation.isPending ? 'Saving…' : 'Save Correction'}
+              </Button>
+            )}
           </DialogFooter>
         </div>
       </DialogContent>
@@ -592,6 +678,11 @@ export default function Attendance() {
                 <Download className="w-4 h-4 mr-2" /> Export
               </Button>
               )}
+              {perm.canEdit && (
+              <Button variant="outline" size="sm" onClick={() => setHolidaysOpen(true)}>
+                <CalendarOff className="w-4 h-4 mr-2" /> Holidays
+              </Button>
+              )}
               <div className="flex rounded-md border border-border overflow-hidden">
                 <Button variant={viewMode === 'day' ? 'secondary' : 'ghost'} size="sm" className="h-9 rounded-none text-xs px-3"
                   onClick={() => setViewMode('day')}>Day</Button>
@@ -615,6 +706,9 @@ export default function Attendance() {
                 { label: 'Present', value: daySummary.present, cls: 'text-emerald-600' },
                 { label: 'Half Day', value: daySummary.half_day, cls: 'text-amber-600' },
                 { label: 'On Leave', value: daySummary.leave, cls: 'text-blue-600' },
+                // Shown only on days that have them, so ordinary working days
+                // keep the familiar six cards.
+                ...(daySummary.offday > 0 ? [{ label: 'Holiday / Off', value: daySummary.offday, cls: 'text-purple-600' }] : []),
                 { label: 'Absent', value: daySummary.absent, cls: 'text-red-600' },
                 { label: 'Late Arrivals', value: daySummary.late, cls: 'text-amber-600' },
                 { label: 'Overtime', value: `${daySummary.otHours.toFixed(1)}h`, cls: 'text-primary' },
@@ -694,24 +788,38 @@ export default function Attendance() {
                         if (!d) return <div key={i} className="min-h-20" />;
                         const ds = `${calYear}-${String(calMonth).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
                         const c = calDays.get(ds);
-                        const absent = c ? Math.max(0, activeEmployeeCount - c.recorded) + (c.recorded - c.present - c.half_day - c.leave) : null;
+                        const absent = c ? Math.max(0, activeEmployeeCount - c.recorded) + (c.recorded - c.present - c.half_day - c.leave - c.offday) : null;
                         const isFuture = ds > today;
+                        // Company calendar shading: a holiday or configured
+                        // weekly off is a paid day, so it must not read as a
+                        // wall of "absent". Recorded rows still show on top —
+                        // someone who worked a holiday stays visible.
+                        const holidayName = holidayMap.get(ds);
+                        const weeklyOff = !holidayName ? weeklyOffRuleFor(ds, weeklyOffRules) : null;
                         return (
                           <button key={i} type="button"
                             onClick={() => { setDate(ds); setViewMode('day'); }}
                             className={`min-h-20 rounded-lg border text-left p-1.5 transition-colors hover:border-primary/50 hover:bg-muted/30
                               ${ds === today ? 'border-primary/60 bg-primary/5' : 'border-border/60'}
+                              ${holidayName ? 'bg-purple-500/5' : weeklyOff ? 'bg-cyan-500/5' : ''}
                               ${ds === date ? 'ring-1 ring-primary' : ''}`}>
                             <span className={`text-xs font-semibold ${ds === today ? 'text-primary' : ''}`}>{d}</span>
+                            {holidayName && (
+                              <div className="text-[10px] leading-tight text-purple-600 font-medium truncate" title={holidayName}>{holidayName}</div>
+                            )}
+                            {weeklyOff && (
+                              <div className="text-[10px] leading-tight text-cyan-600 font-medium">Weekly off</div>
+                            )}
                             {!isFuture && c && (
                               <div className="mt-1 space-y-0.5">
                                 {c.present > 0 && <div className="text-[10px] leading-tight text-emerald-600 font-medium">{c.present} present</div>}
                                 {c.half_day > 0 && <div className="text-[10px] leading-tight text-amber-600 font-medium">{c.half_day} half</div>}
                                 {c.leave > 0 && <div className="text-[10px] leading-tight text-blue-600 font-medium">{c.leave} leave</div>}
-                                {absent != null && absent > 0 && <div className="text-[10px] leading-tight text-red-500/80">{absent} absent</div>}
+                                {c.offday > 0 && <div className="text-[10px] leading-tight text-purple-600 font-medium">{c.offday} off</div>}
+                                {absent != null && absent > 0 && !holidayName && !weeklyOff && <div className="text-[10px] leading-tight text-red-500/80">{absent} absent</div>}
                               </div>
                             )}
-                            {!isFuture && !c && (
+                            {!isFuture && !c && !holidayName && !weeklyOff && (
                               <div className="mt-1 text-[10px] leading-tight text-muted-foreground/50">no records</div>
                             )}
                           </button>
@@ -872,6 +980,75 @@ export default function Attendance() {
         {applyLeaveDialog}
         {leaveSheet}
         {correctionDialog}
+
+        {/* ── Company holidays management (Head Office) ─────────────────── */}
+        <Sheet open={holidaysOpen} onOpenChange={setHolidaysOpen}>
+          <SheetContent className="overflow-y-auto">
+            <SheetHeader>
+              <SheetTitle>Company Holidays</SheetTitle>
+              <SheetDescription>
+                A holiday pays every employee a full day with no leave used.
+                Someone who worked that day, or whose day is corrected with Fix,
+                is paid on their record instead. Adding or removing a holiday
+                re-calculates salaries for open months straight away.
+              </SheetDescription>
+            </SheetHeader>
+            <div className="mt-6 space-y-4">
+              {perm.canEdit && (
+                <div className="space-y-2 border border-border rounded-lg p-3 bg-muted/20">
+                  <p className="text-sm font-medium">Add a holiday</p>
+                  <Input type="date" value={newHolidayDate} onChange={(e) => setNewHolidayDate(e.target.value)} />
+                  <Input placeholder="Holiday name — e.g. Diwali" value={newHolidayName} onChange={(e) => setNewHolidayName(e.target.value)} />
+                  <Button
+                    className="w-full" size="sm"
+                    disabled={!newHolidayDate || !newHolidayName.trim() || createHoliday.isPending}
+                    onClick={() => createHoliday.mutate(
+                      { date: newHolidayDate, name: newHolidayName.trim() },
+                      {
+                        onSuccess: () => {
+                          toast.success('Holiday added — salaries re-calculated');
+                          setNewHolidayDate(''); setNewHolidayName('');
+                        },
+                        onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed to add holiday'),
+                      },
+                    )}
+                  >
+                    {createHoliday.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Plus className="w-4 h-4 mr-2" />} Add Holiday
+                  </Button>
+                </div>
+              )}
+              {(holidays as any[]).length === 0 ? (
+                <p className="text-sm text-muted-foreground text-center py-6">No holidays defined yet</p>
+              ) : (
+                <div className="divide-y divide-border border border-border rounded-lg">
+                  {(holidays as any[]).map((h) => (
+                    <div key={h.id} className="flex items-center justify-between gap-2 p-3">
+                      <div>
+                        <p className="text-sm font-medium">{h.name}</p>
+                        <p className="text-xs text-muted-foreground font-mono">
+                          {new Date(h.date + 'T00:00:00').toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}
+                        </p>
+                      </div>
+                      {perm.canEdit && (
+                        <Button
+                          variant="ghost" size="icon" className="h-8 w-8"
+                          aria-label={`Remove ${h.name}`}
+                          disabled={deleteHoliday.isPending}
+                          onClick={() => deleteHoliday.mutate(h.id, {
+                            onSuccess: () => toast.success('Holiday removed — salaries re-calculated'),
+                            onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed to remove holiday'),
+                          })}
+                        >
+                          <Trash2 className="w-4 h-4 text-destructive" />
+                        </Button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </SheetContent>
+        </Sheet>
       </AppLayout>
     );
   }
@@ -911,6 +1088,25 @@ export default function Attendance() {
         </div>
 
         {viewMode === 'range' && <RangeBar range={range} />}
+
+        {/* This month's leave balance — hidden when no leave allowance is
+            configured, so companies without the policy see no empty card. */}
+        {leaveBalance && (leaveBalance.casual.allowed > 0 || leaveBalance.sick.allowed > 0) && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {([
+              ['Casual Leave', leaveBalance.casual, 'text-blue-600'],
+              ['Sick Leave', leaveBalance.sick, 'text-purple-600'],
+            ] as const).filter(([, side]) => side.allowed > 0).map(([label, side, cls]) => (
+              <div key={label} className="bg-card border border-border rounded-xl px-4 py-3">
+                <p className="text-xs text-muted-foreground">{label} — this month</p>
+                <p className={`text-xl font-bold mt-0.5 ${cls}`}>
+                  {side.remaining} <span className="text-sm font-medium text-muted-foreground">of {side.allowed} left</span>
+                </p>
+                <p className="text-xs text-muted-foreground mt-0.5">{side.taken} used</p>
+              </div>
+            ))}
+          </div>
+        )}
 
         {/* Period view — the server already limits range rows to this employee */}
         {viewMode === 'range' ? (

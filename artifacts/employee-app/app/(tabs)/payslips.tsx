@@ -12,6 +12,7 @@ import {
   Text,
   View,
 } from 'react-native';
+import { notify } from '@/lib/dialogs';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
@@ -162,14 +163,14 @@ function DetailModal({ record, visible, onClose, employeeName, branchName }: Det
             UTI: 'com.adobe.pdf',
           });
         } else {
-          Alert.alert('Download', 'Sharing is not available on this device.');
+          notify('Download', 'Sharing is not available on this device.');
         }
       } catch (e: any) {
         // expo-print not installed - show message
-        Alert.alert('Not Available', 'PDF download requires the native app. Please use the web version.');
+        notify('Not Available', 'PDF download requires the native app. Please use the web version.');
       }
     } catch (e: any) {
-      Alert.alert('Error', e?.message ?? 'Could not generate PDF');
+      notify('Error', e?.message ?? 'Could not generate PDF');
     } finally {
       setDownloading(false);
     }

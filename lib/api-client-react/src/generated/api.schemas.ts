@@ -1238,6 +1238,8 @@ export interface CashBankAccount {
   /** module = managed on this screen; location = a branch till owned by the Locations module (read-only here); system = the Cash / Bank Accounts head itself; ledger = another ledger in the subtree. */
   source?: CashBankAccountSource;
   readOnly?: boolean;
+  /** Bank/UPI accounts only. When true, collections routed into this account land in Electronic Clearing first and reach the bank balance through Reconciliation; when false, they post straight into the account's ledger. */
+  requiresReconciliation?: boolean;
 }
 
 export type CashBankInputAccountType = typeof CashBankInputAccountType[keyof typeof CashBankInputAccountType];
@@ -1274,6 +1276,8 @@ export interface CashBankInput {
   locationId?: number;
   /** Recorded as the backing ledger's opening balance (debit) through the opening-balances store — never a stored column. Absent or blank means 0. */
   openingBalance?: number;
+  /** Bank/UPI accounts only — whether collections into this account must pass through Reconciliation before hitting the bank balance. Defaults to true for bank/UPI/other, ignored for cash. */
+  requiresReconciliation?: boolean;
 }
 
 export type CashBankUpdateLocationType = typeof CashBankUpdateLocationType[keyof typeof CashBankUpdateLocationType];
@@ -1294,6 +1298,8 @@ export interface CashBankUpdate {
   locationId?: number;
   /** Replaces the ledger's opening balance for the current financial year. */
   openingBalance?: number;
+  /** Bank/UPI accounts only — toggle the reconciliation requirement. */
+  requiresReconciliation?: boolean;
 }
 
 export interface Expense {

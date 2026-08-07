@@ -1,7 +1,7 @@
 import { pool as _pool } from "@workspace/db";
 import { provisionSalaryLedgers } from "./payrollLedgers";
 import {
-  dayContribution, loadPayrollSettings, PUNCHED_HOURS_JOIN,
+  dayContribution, calendarDayInfo, loadPayrollSettings, PUNCHED_HOURS_JOIN,
   type AttendanceDay, type PayrollSettings,
 } from "./attendanceFactor";
 
@@ -339,13 +339,24 @@ async function accrueEmployee(
   // `monthHasAttendance`), and leave approved in advance puts rows on days the
   // sweep has not reached yet — both need to be visible.
   const { rows: attRows } = await q.query(
-    `SELECT a.date, a.status, a.check_in AS "checkIn", a.check_out AS "checkOut",
+    `SELECT a.date, a.status, a.leave_type AS "leaveType",
+            a.check_in AS "checkIn", a.check_out AS "checkOut",
             ap.punched_hours AS "punchedHours"
        FROM attendance a
        ${PUNCHED_HOURS_JOIN("a")}
       WHERE a.employee_id = $1 AND a.date >= $2 AND a.date <= $3`,
     [e.id, monthStart(e.startDate), monthEnd(opts.asOf)],
   );
+
+  // Company holidays for the span: a holiday (or weekly off) pays a rowless
+  // day in a TRACKED month, so the walk needs the calendar for every date.
+  const { rows: holRows } = await q.query(
+    `SELECT to_char(holiday_date, 'YYYY-MM-DD') AS d
+       FROM company_holidays
+      WHERE holiday_date >= $1 AND holiday_date <= $2`,
+    [monthStart(e.startDate), monthEnd(opts.asOf)],
+  );
+  const holidaySet = new Set<string>(holRows.map((r: any) => String(r.d)));
   const attByDate = new Map<string, AttendanceDay>();
   const trackedMonths = new Set<string>();
   for (const r of attRows) {
@@ -388,23 +399,33 @@ async function accrueEmployee(
   let changed = 0;
   let previousTotal = 0;
 
-  // Per-month running state: cumulative worked days, cumulative leave taken,
-  // the payable-day total those produced, and the rounded earned total — all
-  // reset at each month boundary. Tracking worked and leave separately is what
-  // lets the paid-leave allowance apply: min(cumLeave, allowance) is paid, the
-  // rest is loss of pay. Month totals are order-independent, so accruing day by
-  // day lands on exactly the payableDays `monthLeaveSummary` computes for the
-  // finished month.
+  // Per-month running state: cumulative worked days, cumulative leave taken by
+  // type, cumulative paid-off days (holidays / paid weekly offs), the
+  // payable-day total those produced, and the rounded earned total — all
+  // reset at each month boundary. Tracking the categories separately is what
+  // lets each paid-leave allowance apply: min(cumCasual, allowance) +
+  // min(cumSick, allowance) is paid, the rest is loss of pay. Month totals are
+  // order-independent, so accruing day by day lands on exactly the payableDays
+  // `monthLeaveSummary` computes for the finished month.
   let curMonth = "";
   let cumWork = 0;
-  let cumLeave = 0;
+  let cumCasual = 0;
+  let cumSick = 0;
+  let cumPaidOff = 0;
   let prevPayable = 0;
   let prevExpected = 0;
+
+  const monthPayable = () => Math.min(
+    workingDays,
+    cumWork + cumPaidOff
+      + Math.min(cumCasual, policy.paidCasualLeavesPerMonth)
+      + Math.min(cumSick, policy.paidSickLeavesPerMonth),
+  );
 
   for (let day = e.startDate; day <= opts.asOf; day = addDays(day, 1)) {
     const { y, m } = parse(day);
     const mk = monthKey(y, m);
-    if (mk !== curMonth) { curMonth = mk; cumWork = 0; cumLeave = 0; prevPayable = 0; prevExpected = 0; }
+    if (mk !== curMonth) { curMonth = mk; cumWork = 0; cumCasual = 0; cumSick = 0; cumPaidOff = 0; prevPayable = 0; prevExpected = 0; }
     if (locked.has(mk)) continue;
 
     // Before the cutover the old flat-calendar rows stand untouched. Their value
@@ -417,7 +438,7 @@ async function accrueEmployee(
       const old = existing.get(day);
       if (old) {
         cumWork += old.factor;
-        prevPayable = Math.min(workingDays, cumWork + Math.min(cumLeave, policy.paidCasualLeavesPerMonth));
+        prevPayable = monthPayable();
         prevExpected = round2(prevExpected + old.amount);
         previousTotal = round2(previousTotal + old.amount);
         total = round2(total + old.amount);
@@ -428,17 +449,23 @@ async function accrueEmployee(
 
     const tracked = trackedMonths.has(mk);
     const att = attByDate.get(day);
-    // An untracked month is full attendance, exactly as payroll treats it. Once
-    // any row exists for the month, a day without one is genuinely absent. With
-    // loss of pay disabled, every day is a full paid day by definition — the
-    // month must accrue to the full salary no matter what attendance says.
+    const cal = calendarDayInfo(day, policy, holidaySet);
+    // An untracked month is full attendance, exactly as payroll treats it —
+    // the calendar is NOT synthesised into it, or a holiday row would flip the
+    // month to tracked economics. Once any row exists for the month, a day
+    // without one is judged on the calendar first (holidays and weekly offs
+    // are paid without a row) and is genuinely absent otherwise. With loss of
+    // pay disabled, every day is a full paid day by definition — the month
+    // must accrue to the full salary no matter what attendance says.
     const c = !policy.lopEnabled || !tracked
-      ? { work: 1, leave: 0 }
-      : dayContribution(att, thresholds);
+      ? { work: 1, casualLeave: 0, sickLeave: 0, paidOff: 0 }
+      : dayContribution(att, thresholds, cal);
     const basis = !policy.lopEnabled ? "no_lop"
       : !tracked ? "untracked"
+      : (att?.status === "company_holiday" || (!att && cal.holiday)) ? "holiday"
+      : (att?.status === "weekly_off" || (!att && cal.weeklyOff)) ? "weekly_off"
       : !att ? "absent"
-      : att.status === "leave" ? "leave"
+      : att.status === "leave" ? (att.leaveType === "sick" ? "sick_leave" : "leave")
       : c.work === 1 ? "full_day"
       : c.work === 0.5 ? "half_day"
       : "lop";
@@ -458,8 +485,10 @@ async function accrueEmployee(
     // lasts, then earns nothing, and attendance beyond the basis earns nothing
     // extra — a 31-day month attended in full costs exactly one monthly salary.
     cumWork += c.work;
-    cumLeave += c.leave;
-    const payable = Math.min(workingDays, cumWork + Math.min(cumLeave, policy.paidCasualLeavesPerMonth));
+    cumCasual += c.casualLeave;
+    cumSick += c.sickLeave;
+    cumPaidOff += c.paidOff;
+    const payable = monthPayable();
     const lopDays = Math.max(0, workingDays - payable);
     const expected = round2(e.monthlySalary - round2(lopDays * perDayRate));
     const amount = round2(expected - prevExpected);

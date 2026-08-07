@@ -16,4 +16,6 @@ export interface CashBankUpdate {
   locationId?: number;
   /** Replaces the ledger's opening balance for the current financial year. */
   openingBalance?: number;
+  /** Bank/UPI accounts only — toggle the reconciliation requirement. */
+  requiresReconciliation?: boolean;
 }

@@ -1002,6 +1002,7 @@ router.get("/outstanding/receivables", requireModuleView(["page:/outstanding", "
     }
     const { rows: invoices } = await pool.query(
       `SELECT s.id, s.invoice_number, s.sale_date, s.customer_id,
+              s.location_type, s.location_id, s.outlet_id,
               s.total_amount::numeric AS total, ${paidSql} AS paid,
               ${credSql} AS credit_notes,
               ${outsSql} AS outstanding,
@@ -1101,6 +1102,10 @@ router.get("/outstanding/receivables", requireModuleView(["page:/outstanding", "
       cust[bucket] = r2(cust[bucket] + balance);
       cust.invoices.push({
         saleId: inv.id,
+        // The sale's own location — the collection dialogs use it to offer
+        // exactly that location's Cash & Bank accounts as the destination.
+        locationType: inv.location_type ?? 'outlet',
+        locationId: Number(inv.location_id ?? inv.outlet_id ?? 0),
         invoiceNumber: inv.invoice_number,
         saleDate: inv.sale_date,
         dueDate,
@@ -1551,7 +1556,7 @@ router.get("/outstanding/collections", requireModuleView("page:/outstanding"), a
     }
     const { rows } = await pool.query(
       `SELECT s.id, s.invoice_number, s.sale_date, s.payment_status, s.payment_mode, s.customer_id,
-              s.location_type, s.location_id,
+              s.location_type, s.location_id, s.outlet_id,
               s.total_amount::numeric AS total, COALESCE(s.amount_paid, 0)::numeric AS paid,
               ${creditAdjustmentsExpr("s")} AS credit_notes,
               ${outstandingExpr("s")} AS outstanding,
@@ -1584,8 +1589,10 @@ router.get("/outstanding/collections", requireModuleView("page:/outstanding"), a
         customerId: r.customer_id,
         customerName: r.customer_name ?? null,
         customerPhone: r.customer_phone ?? null,
-        locationType: r.location_type,
-        locationId: r.location_id,
+        // Legacy sales carry no location columns — they are outlet sales by
+        // outlet_id, and the collection dialog needs a resolvable location.
+        locationType: r.location_type ?? 'outlet',
+        locationId: Number(r.location_id ?? r.outlet_id ?? 0),
         totalAmount: r2(Number(r.total)),
         amountPaid: r2(Number(r.paid)),
         balanceDue: balance,

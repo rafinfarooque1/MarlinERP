@@ -243,7 +243,7 @@ router.get("/accounts/chart/flat", requireModuleView(["page:/accounts/vouchers",
 
 // Cash/Bank ledgers only — for Received In / Paid From dropdowns
 // Serves Cash & Bank and Expenses pages.
-router.get("/accounts/cash-bank-ledgers", requireModuleView(["page:/accounts/cash-bank", "page:/accounts/expenses", "page:/accounts/vouchers", "page:/vendors", "page:/sales/expenses", "page:/hr/payroll", "page:/hr/advances", "page:/operations/receipt-voucher", "page:/operations/payment-voucher"]), async (req, res): Promise<void> => {
+router.get("/accounts/cash-bank-ledgers", requireModuleView(["page:/accounts/cash-bank", "page:/accounts/expenses", "page:/accounts/vouchers", "page:/vendors", "page:/sales/expenses", "page:/hr/payroll", "page:/hr/advances", "page:/operations/receipt-voucher", "page:/operations/payment-voucher", "page:/sales/pos", "page:/outstanding", "page:/customers"]), async (req, res): Promise<void> => {
   const { rows } = await pool.query(`SELECT * FROM account_ledgers ORDER BY id`);
   const bankRoot = rows.find((r: any) => r.code === 'STD-BANK');
   const cashRoot = rows.find((r: any) => r.code === 'STD-CASH');
@@ -257,18 +257,27 @@ router.get("/accounts/cash-bank-ledgers", requireModuleView(["page:/accounts/cas
     }
   }
   // LBAC: this list populates the "money account" pickers on Payments and
-  // Receipts. A branch may only move its OWN cash, so it sees exactly one
-  // account: its own till. Head Office keeps the full cash + bank tree.
+  // Receipts. A branch may only move its OWN money, so it sees its own till
+  // plus the Cash & Bank accounts assigned to its location (both come from
+  // scopeCashLedgerIds) — never another branch's accounts or the company-wide
+  // tree. Head Office keeps the full cash + bank tree.
   const cbScope = ownLocationScope((req as any).employee);
   if (!cbScope.isHeadOffice) {
     const own = await scopeCashLedgerIds(cbScope);
     for (const id of Array.from(ids)) if (!own.includes(id)) ids.delete(id);
   }
+  // Cash & Bank account type (cash / bank / upi) where the ledger is backed by
+  // a cash_bank_accounts row — lets pickers tell a UPI account from a bank one.
+  const { rows: cbaRows } = await pool.query(
+    `SELECT ledger_id, account_type FROM cash_bank_accounts WHERE ledger_id IS NOT NULL`
+  );
+  const cbaType = new Map<number, string>(cbaRows.map((r: any) => [Number(r.ledger_id), String(r.account_type)]));
   // Deactivated tills and bank accounts stay out of the picker.
   res.json(rows.filter((r: any) => ids.has(r.id) && (r.is_active ?? true)).map((r: any) => ({
     id: r.id, name: r.name, type: r.type,
     parentId: r.parent_id ?? null, code: r.code ?? null,
     bankDetails: r.bank_details ?? null,
+    accountType: cbaType.get(Number(r.id)) ?? null,
   })));
 });
 
@@ -1884,6 +1893,7 @@ router.get("/accounts/cash-bank", requireModuleView("page:/accounts/cash-bank"),
       currentBalance: bal, balanceSource: lid ? ("ledger" as const) : ("unlinked" as const),
       ledgerId: lid, locationType: lt, locationId: locId, locationName: locName(lt, locId),
       source: "module", readOnly: false,
+      requiresReconciliation: c.account_type !== "cash" && c.requires_reconciliation === true,
     });
   }
 
@@ -2010,6 +2020,14 @@ router.post("/accounts/cash-bank", requireModuleAction("page:/accounts/cash-bank
   );
   if (dupe) { res.status(409).json({ error: `An account named "${name}" already exists.` }); return; }
 
+  // Reconciliation is a bank-side concept: cash never consults the flag. For
+  // bank/UPI it defaults ON — collections pass through Electronic Clearing and
+  // reach the balance via Reconciliation unless someone deliberately opts out.
+  const isCashType = parsed.data.accountType === "cash";
+  const requiresRecon = isCashType
+    ? false
+    : (parsed.data.requiresReconciliation ?? true) === true;
+
   // Account row + backing ledger are one atomic unit: a row without a ledger
   // would be exactly the unlinked legacy state this module just migrated off.
   const { provisionCashBankLedger } = await import("../lib/cashBankLedgers");
@@ -2018,10 +2036,10 @@ router.post("/accounts/cash-bank", requireModuleAction("page:/accounts/cash-bank
   try {
     await client.query("BEGIN");
     const { rows: [row] } = await client.query(
-      `INSERT INTO cash_bank_accounts (name, account_type, bank_name, account_number, ifsc_code, balance, location_type, location_id)
-       VALUES ($1, $2, $3, $4, $5, 0, $6, $7) RETURNING id`,
+      `INSERT INTO cash_bank_accounts (name, account_type, bank_name, account_number, ifsc_code, balance, location_type, location_id, requires_reconciliation)
+       VALUES ($1, $2, $3, $4, $5, 0, $6, $7, $8) RETURNING id`,
       [name, parsed.data.accountType, parsed.data.bankName ?? null, parsed.data.accountNumber ?? null,
-       ifsc ?? null, loc.locationType, loc.locationId],
+       ifsc ?? null, loc.locationType, loc.locationId, requiresRecon],
     );
     accountId = Number(row.id);
     ledgerId = await provisionCashBankLedger(client, { accountId, name, accountType: parsed.data.accountType });
@@ -2063,6 +2081,7 @@ router.post("/accounts/cash-bank", requireModuleAction("page:/accounts/cash-bank
     currentBalance: money.value, balanceSource: "ledger" as const, ledgerId,
     locationType: loc.locationType, locationId: loc.locationId,
     source: "module", readOnly: false,
+    requiresReconciliation: requiresRecon,
   });
 });
 
@@ -2103,6 +2122,14 @@ router.patch("/accounts/cash-bank/:id", requireModuleAction("page:/accounts/cash
   if (body.bankName !== undefined) push("bank_name", text(body.bankName) || null);
   if (body.accountNumber !== undefined) push("account_number", text(body.accountNumber) || null);
   if (body.ifscCode !== undefined) push("ifsc_code", text(body.ifscCode)?.toUpperCase() || null);
+
+  if (body.requiresReconciliation !== undefined) {
+    if (String(acc.account_type) === "cash") {
+      res.status(400).json({ error: "Cash accounts never go through bank reconciliation — the switch applies to bank and UPI accounts." });
+      return;
+    }
+    push("requires_reconciliation", body.requiresReconciliation === true);
+  }
 
   if (body.locationType !== undefined || body.locationId !== undefined) {
     const loc = await resolveCashBankLocation({
@@ -2163,6 +2190,7 @@ router.patch("/accounts/cash-bank/:id", requireModuleAction("page:/accounts/cash
     locationType: fresh.location_type ?? "headoffice",
     locationId: fresh.location_id != null ? Number(fresh.location_id) : null,
     source: "module", readOnly: false,
+    requiresReconciliation: fresh.account_type !== "cash" && fresh.requires_reconciliation === true,
   });
 });
 

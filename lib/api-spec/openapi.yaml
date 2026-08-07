@@ -3235,6 +3235,13 @@ components:
             Accounts head itself; ledger = another ledger in the subtree.
         readOnly:
           type: boolean
+        requiresReconciliation:
+          type: boolean
+          description: >-
+            Bank/UPI accounts only. When true, collections routed into this
+            account land in Electronic Clearing first and reach the bank
+            balance through Reconciliation; when false, they post straight
+            into the account's ledger.
 
     CashBankInput:
       type: object
@@ -3264,6 +3271,12 @@ components:
             Recorded as the backing ledger's opening balance (debit) through
             the opening-balances store — never a stored column. Absent or
             blank means 0.
+        requiresReconciliation:
+          type: boolean
+          description: >-
+            Bank/UPI accounts only — whether collections into this account
+            must pass through Reconciliation before hitting the bank balance.
+            Defaults to true for bank/UPI/other, ignored for cash.
 
     CashBankUpdate:
       type: object
@@ -3284,6 +3297,9 @@ components:
         openingBalance:
           type: number
           description: Replaces the ledger's opening balance for the current financial year.
+        requiresReconciliation:
+          type: boolean
+          description: Bank/UPI accounts only — toggle the reconciliation requirement.
 
     Expense:
       type: object

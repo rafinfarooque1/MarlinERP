@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   ActivityIndicator,
   Platform,
@@ -12,9 +12,11 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
 import { router } from 'expo-router';
+import { useQuery } from '@tanstack/react-query';
 import { useColors } from '@/hooks/useColors';
 import { useAuth } from '@/contexts/AuthContext';
-import { useListEnrichedPayroll, useListAdvances } from '@workspace/api-client-react';
+import { ChangePasswordModal } from '@/components/ChangePasswordModal';
+import { customFetch, useListEnrichedPayroll, useListAdvances } from '@workspace/api-client-react';
 
 const MONTHS = [
   'Jan','Feb','Mar','Apr','May','Jun',
@@ -38,10 +40,17 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
+interface LeaveBalance {
+  tracked: boolean;
+  casual: { allowed: number; taken: number; remaining: number };
+  sick: { allowed: number; taken: number; remaining: number };
+}
+
 export default function HomeScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { employee, logout } = useAuth();
+  const { employee, logout, markPasswordChanged } = useAuth();
+  const [showPasswordModal, setShowPasswordModal] = useState(false);
 
   const now = new Date();
   const currentYear = now.getFullYear();
@@ -60,7 +69,32 @@ export default function HomeScreen() {
     { query: { enabled: !!token } as any },
   );
 
+  // This month's paid-leave balance (casual + sick remaining).
+  const { data: leaveBal } = useQuery<LeaveBalance>({
+    queryKey: ['leave-balance', currentYear, currentMonth],
+    queryFn: () => customFetch<LeaveBalance>(`/api/hr/leave-balance?year=${currentYear}&month=${currentMonth}`),
+    enabled: !!token,
+    staleTime: 60_000,
+  });
+  const leavesLeft = leaveBal ? leaveBal.casual.remaining + leaveBal.sick.remaining : null;
+
   const myPayroll = payrollRecords?.[0] ?? null;
+
+  // Live "Days Present" fallback: a payroll record only exists once payroll is
+  // generated (usually at month end), so mid-month the tile would show a dash
+  // for everyone. When there is no payroll yet, count this month's attendance
+  // directly — same endpoint and query key as the Attendance tab, so the
+  // cache is shared.
+  const { data: monthAttendance } = useQuery<Array<{ status: string }>>({
+    queryKey: ['attendance', 'month', currentYear, currentMonth],
+    queryFn: () =>
+      customFetch<Array<{ status: string }>>(`/api/hr/attendance?year=${currentYear}&month=${currentMonth}`),
+    enabled: !!token && !payrollLoading && !myPayroll,
+    staleTime: 60_000,
+  });
+  const livePresentDays = monthAttendance
+    ? monthAttendance.filter((r) => r.status === 'present').length
+    : null;
   const pendingAdvances = advances?.filter((a) => !a.isDeducted) ?? [];
   const pendingAdvTotal = pendingAdvances.reduce((s, a) => s + a.amount, 0);
 
@@ -99,15 +133,25 @@ export default function HomeScreen() {
         </Pressable>
       </View>
 
-      {/* Password change warning */}
+      {/* Password change warning — tappable, opens the in-app change flow */}
       {employee?.mustChangePassword ? (
-        <View style={styles.warningBanner}>
+        <Pressable
+          style={({ pressed }) => [styles.warningBanner, pressed && { opacity: 0.8 }]}
+          onPress={() => setShowPasswordModal(true)}
+        >
           <Feather name="alert-triangle" size={14} color={colors.warning} />
           <Text style={styles.warningText}>
-            Please log in to the web portal to change your password.
+            Your password needs to be changed. Tap here to update it now.
           </Text>
-        </View>
+          <Feather name="chevron-right" size={14} color={colors.warning} />
+        </Pressable>
       ) : null}
+
+      <ChangePasswordModal
+        visible={showPasswordModal}
+        onClose={() => setShowPasswordModal(false)}
+        onChanged={markPasswordChanged}
+      />
 
       {/* Current month payslip card */}
       <View style={styles.section}>
@@ -185,7 +229,7 @@ export default function HomeScreen() {
             <View style={[styles.statIcon, { backgroundColor: colors.primary + '18' }]}>
               <Feather name="calendar" size={20} color={colors.primary} />
             </View>
-            <Text style={styles.statCardValue}>{myPayroll?.presentDays ?? '—'}</Text>
+            <Text style={styles.statCardValue}>{myPayroll?.presentDays ?? livePresentDays ?? '—'}</Text>
             <Text style={styles.statCardLabel}>Days Present</Text>
           </Pressable>
 
@@ -196,8 +240,8 @@ export default function HomeScreen() {
             <View style={[styles.statIcon, { backgroundColor: colors.success + '18' }]}>
               <Feather name="clock" size={20} color={colors.success} />
             </View>
-            <Text style={styles.statCardValue}>—</Text>
-            <Text style={styles.statCardLabel}>Leave Balance</Text>
+            <Text style={styles.statCardValue}>{leavesLeft ?? '—'}</Text>
+            <Text style={styles.statCardLabel}>Paid Leaves Left</Text>
           </Pressable>
 
           <View style={styles.statCard}>

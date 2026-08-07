@@ -696,10 +696,16 @@ export default function Purchases() {
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 items-start">
                 <FormField control={form.control} name="vendorId" render={({ field }) => (
                   <FormItem><FormLabel>Vendor <span className="text-destructive">*</span></FormLabel>
-                    <Select onValueChange={v => field.onChange(Number(v))} value={field.value ? String(field.value) : ''}>
-                      <FormControl><SelectTrigger><SelectValue placeholder="Select vendor" /></SelectTrigger></FormControl>
-                      <SelectContent>{vendors.map((v: any) => <SelectItem key={v.id} value={String(v.id)}>{v.name}</SelectItem>)}</SelectContent>
-                    </Select><FormMessage /></FormItem>
+                    {/* Searchable, scrollable picker — a plain dropdown outgrows
+                        the screen once the vendor master grows. */}
+                    <FormControl><SearchableItemSelect
+                      items={(vendors as any[]).map((v: any) => ({ id: Number(v.id), name: String(v.name ?? '') }))}
+                      value={field.value}
+                      onChange={id => field.onChange(id)}
+                      placeholder="Select vendor"
+                      emptyLabel="No vendors found"
+                      data-testid="input-purchase-vendor"
+                    /></FormControl><FormMessage /></FormItem>
                 )} />
                 <FormField control={form.control} name="purchaseDate" render={({ field }) => (
                   <FormItem><FormLabel>Date <span className="text-destructive">*</span></FormLabel><FormControl><Input type="date" {...field} /></FormControl><FormMessage /></FormItem>

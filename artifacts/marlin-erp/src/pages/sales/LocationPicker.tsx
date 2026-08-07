@@ -54,6 +54,20 @@ export default function LocationPicker() {
   const { nodes, orphanOutlets } = buildPickerHierarchy(visibleWarehouses, visibleOutlets);
   const totalCount = visibleWarehouses.length + visibleOutlets.length;
 
+  // ── Warehouse employees with exactly one place to sell: skip the picker ──
+  // Their location is decided by their login, so there is nothing to choose —
+  // pin the context to their warehouse and go straight to the POS.
+  const soleWarehouse =
+    isWarehouseEmployee && !isLoading && visibleWarehouses.length === 1 && visibleOutlets.length === 0
+      ? visibleWarehouses[0]
+      : null;
+  useEffect(() => {
+    if (!soleWarehouse) return;
+    setLocation({ locationType: 'warehouse', locationId: soleWarehouse.id, locationName: soleWarehouse.name });
+    navigate('/sales/pos');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [soleWarehouse?.id]);
+
   const handleSelect = (locationType: 'warehouse' | 'outlet' | 'headoffice', locationId: number, locationName: string) => {
     setLocation({ locationType, locationId, locationName });
     navigate('/sales/pos');

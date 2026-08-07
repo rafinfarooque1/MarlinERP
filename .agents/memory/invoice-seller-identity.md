@@ -54,3 +54,6 @@ its *old* invoices reprint. This was accepted rather than snapshotting, because
 back-filling a snapshot for historical sales means inventing the identity those
 invoices were issued under. If a snapshot is ever added, it must be written
 going forward only.
+
+## Money vouchers follow the same rule (Aug 2026)
+Receipt/payment voucher PDFs (`moneyVoucherPdf.ts`) now use `resolveLocationIssuer` for their letterhead — the voucher's stored location_type/location_id, company only via the resolver's own fallback (HO/null rows). Renderer is async (`registerFonts` from @workspace/pdf-kit) so ₹ prints. Variable-height blocks (narration 10 lines, words 3) are capped so the fixed signature/footer zone is never overrun — copy the caps if adding blocks. Expense vouchers still use the old company banner (follow-up proposed).

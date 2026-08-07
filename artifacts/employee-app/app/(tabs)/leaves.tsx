@@ -13,6 +13,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { confirmDialog, notify } from '@/lib/dialogs';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
@@ -333,28 +334,24 @@ export default function LeavesScreen() {
   };
 
   const handleCancel = (item: LeaveApplication) => {
-    Alert.alert(
-      'Cancel leave request?',
-      `${leaveTypeLabel[item.leaveType] ?? item.leaveType} · ${formatDate(item.fromDate)}${item.fromDate !== item.toDate ? ` → ${formatDate(item.toDate)}` : ''}\n\nThis withdraws the request before it is reviewed.`,
-      [
-        { text: 'Keep request', style: 'cancel' },
-        {
-          text: 'Cancel request',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await cancelLeave({ id: item.id });
-              await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-              refetch();
-            } catch (e: any) {
-              const msg = e?.payload?.error ?? e?.message ?? 'Could not cancel the request';
-              Alert.alert('Cancel failed', msg);
-              refetch();
-            }
-          },
-        },
-      ],
-    );
+    confirmDialog({
+      title: 'Cancel leave request?',
+      message: `${leaveTypeLabel[item.leaveType] ?? item.leaveType} · ${formatDate(item.fromDate)}${item.fromDate !== item.toDate ? ` → ${formatDate(item.toDate)}` : ''}\n\nThis withdraws the request before it is reviewed.`,
+      confirmText: 'Cancel request',
+      cancelText: 'Keep request',
+      destructive: true,
+      onConfirm: async () => {
+        try {
+          await cancelLeave({ id: item.id });
+          await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+          refetch();
+        } catch (e: any) {
+          const msg = e?.payload?.error ?? e?.message ?? 'Could not cancel the request';
+          notify('Cancel failed', msg);
+          refetch();
+        }
+      },
+    });
   };
 
   const renderItem = ({ item }: { item: LeaveApplication }) => (

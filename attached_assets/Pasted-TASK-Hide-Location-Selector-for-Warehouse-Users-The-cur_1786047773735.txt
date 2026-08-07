@@ -1,0 +1,163 @@
+TASK: Hide Location Selector for Warehouse Users
+
+The current Sales/POS/Quotation screens allow warehouse users to see all locations in the "Selling Location" dropdown.
+
+This is incorrect.
+
+==========================================================
+Required Behaviour
+==========================================================
+
+There are two user types:
+
+1. Head Office / Admin
+2. Warehouse Users
+
+----------------------------------------------------------
+Warehouse Users
+----------------------------------------------------------
+
+A warehouse user belongs to exactly one warehouse.
+
+Example
+
+Assigned Warehouse
+
+Frozen Hub - Ragiguda
+
+When the user opens:
+
+• Point of Sale
+• Sales
+• Quotations
+• Sales Return
+• Purchase
+• Purchase Return
+• Stock Transfer
+• Production
+• Receipt Voucher
+• Payment Voucher
+• Expenses
+• Cash & Bank
+• Any transaction screen
+
+The ERP must automatically use
+
+Frozen Hub - Ragiguda
+
+The user must NOT see
+
+Selling Location dropdown
+
+The location selector should be completely hidden.
+
+The location is fixed automatically.
+
+The user must not even know other warehouses exist.
+
+They cannot:
+
+• View other locations
+• Select other locations
+• Create transactions for another location
+• Edit another location's transactions
+
+==========================================================
+Admin / Head Office
+==========================================================
+
+Only Admin and Head Office users should see the location selector.
+
+They may choose
+
+• Head Office
+• Warehouse A
+• Warehouse B
+• etc.
+
+Their selected location determines where the transaction belongs.
+
+==========================================================
+Transaction Posting
+==========================================================
+
+Warehouse users
+
+Location = Assigned Warehouse
+
+Automatically.
+
+No manual selection.
+
+Every transaction must post to that warehouse.
+
+Inventory
+Ledger
+Cash
+Bank
+Dashboard
+Reports
+Stock
+Production
+
+must all belong to that warehouse.
+
+==========================================================
+Security
+==========================================================
+
+Hiding the dropdown is NOT enough.
+
+The backend must also reject attempts to submit another location.
+
+Even if someone changes the request manually,
+
+the ERP must override it with the user's assigned warehouse.
+
+Never trust the frontend.
+
+==========================================================
+Applies To
+==========================================================
+
+Hide the location selector for warehouse users in:
+
+• Point of Sale
+• Sales
+• Quotations
+• Purchases
+• Purchase Return
+• Sales Return
+• Receipt Voucher
+• Payment Voucher
+• Expenses
+• Production
+• Stock Transfer
+• Any transaction creation screen
+
+==========================================================
+Regression Testing
+==========================================================
+
+Warehouse User
+
+Assigned
+
+Frozen Hub - Ragiguda
+
+Verify:
+
+✓ Location dropdown is hidden.
+✓ Transaction automatically posts to Ragiguda.
+✓ Cannot create transactions for Calicut.
+✓ Backend rejects any modified request attempting another location.
+
+Admin
+
+Verify:
+
+✓ Location selector is visible.
+✓ Can choose any location.
+✓ Transaction posts to the selected location.
+
+The objective is that warehouse users only work within their assigned warehouse, while Admin/Head Office can operate across all locations.

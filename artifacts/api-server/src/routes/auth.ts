@@ -236,7 +236,10 @@ router.post('/auth/change-password', async (req, res): Promise<void> => {
 
   const currentValid = await PasswordService.verify(currentPassword, emp.password_hash);
   if (!currentValid) {
-    res.status(401).json({ error: 'Current password is incorrect' });
+    // 400, NOT 401: the bearer token is valid — only the typed form field is
+    // wrong. Both clients treat a confirmed 401 as an expired session and log
+    // the user out, which would eject anyone who typos their current password.
+    res.status(400).json({ error: 'Current password is incorrect' });
     return;
   }
 

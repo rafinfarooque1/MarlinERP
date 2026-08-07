@@ -106,6 +106,8 @@ export interface AccountFlat {
   description?: string | null;
   isSystemGroup?: boolean;
   bankDetails?: BankDetails | null;
+  /** cash / bank / upi when the ledger is backed by a Cash & Bank account row. */
+  accountType?: string | null;
 }
 
 // ── Payments ──────────────────────────────────────────────────────────────────

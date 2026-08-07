@@ -9,6 +9,7 @@ import { getActiveLockouts } from "../middleware/auth";
 import { requireModuleView, requireModuleAction } from "../middleware/permissions";
 import { normalizeUpiId } from "../lib/upi";
 import { createBackup } from "../lib/backup/create";
+import { runSalaryAccrual } from "../lib/salaryAccrual";
 import { objectStorageConfigured } from "../lib/backup/files";
 import { logActivity } from "../lib/audit";
 import { ensureStandardOrgTree } from "../migrations/orgHierarchyRestructure";
@@ -207,6 +208,45 @@ router.patch("/company/settings", requireModuleAction("page:/company/settings", 
     if (gsu.lopEnabled !== undefined && gsu.lopEnabled !== null && typeof gsu.lopEnabled !== 'boolean') {
       res.status(400).json({ error: 'Enable Loss of Pay must be on or off' }); return;
     }
+    if (gsu.paidSickLeavesPerMonth !== undefined && gsu.paidSickLeavesPerMonth !== null) {
+      const sl = Number(gsu.paidSickLeavesPerMonth);
+      const wdEff = Number(gsu.payrollWorkingDays ?? 30);
+      if (!Number.isFinite(sl) || sl < 0) {
+        res.status(400).json({ error: 'Paid Sick Leaves Per Month must be zero or more' }); return;
+      }
+      if (sl > wdEff) {
+        res.status(400).json({ error: 'Paid Sick Leaves Per Month cannot exceed Working Days Per Month' }); return;
+      }
+    }
+    // Weekly-off rules: each entry is a weekday (0=Sunday…6=Saturday), which
+    // occurrences of it in the month ('all' or a list of 1–5), and whether the
+    // day is paid outright or deducts a casual leave. Malformed rules are
+    // rejected here rather than silently dropped at read time — a rule the
+    // admin thinks exists but doesn't would misprice every month.
+    if (gsu.weeklyOffs !== undefined && gsu.weeklyOffs !== null) {
+      if (!Array.isArray(gsu.weeklyOffs)) {
+        res.status(400).json({ error: 'weeklyOffs must be a list of weekly-off rules' }); return;
+      }
+      for (const r of gsu.weeklyOffs) {
+        const day = Number(r?.day);
+        if (!r || typeof r !== 'object' || !Number.isInteger(day) || day < 0 || day > 6) {
+          res.status(400).json({ error: 'Each weekly off needs a valid day of the week' }); return;
+        }
+        if (r.policy !== 'paid' && r.policy !== 'casual_leave') {
+          res.status(400).json({ error: 'Each weekly off must be Paid or Deducts Casual Leave' }); return;
+        }
+        const weeksOk = r.weeks === 'all'
+          || (Array.isArray(r.weeks) && r.weeks.length > 0
+              && r.weeks.every((w: any) => Number.isInteger(Number(w)) && Number(w) >= 1 && Number(w) <= 5));
+        if (!weeksOk) {
+          res.status(400).json({ error: 'Each weekly off must apply to every week or to specific weeks (1st–5th)' }); return;
+        }
+      }
+    }
+    if (gsu.weeklyOffExhaustedAction !== undefined && gsu.weeklyOffExhaustedAction !== null
+        && gsu.weeklyOffExhaustedAction !== 'ask' && gsu.weeklyOffExhaustedAction !== 'absent') {
+      res.status(400).json({ error: 'When casual leave is exhausted, the action must be Ask or Mark Unpaid' }); return;
+    }
   }
 
   // Default production overhead % (raw column, numeric 0–100)
@@ -360,7 +400,24 @@ router.patch("/company/settings", requireModuleAction("page:/company/settings", 
     await pool.query(`UPDATE company_settings SET ${column} = $1 WHERE id = $2`, [value, row.id]);
   }
   if (generalSettingsUpdate !== undefined) {
+    const { rows: [prevRow] } = await pool.query(
+      `SELECT general_settings FROM company_settings WHERE id = $1`, [row.id]);
+    const prevGS = typeof prevRow?.general_settings === "string"
+      ? JSON.parse(prevRow.general_settings) : (prevRow?.general_settings ?? {});
     await pool.query(`UPDATE company_settings SET general_settings = $1 WHERE id = $2`, [JSON.stringify(generalSettingsUpdate), row.id]);
+    // A changed pay policy immediately changes what open days are worth — the
+    // salary books must follow now, not at the next hourly sweep. Locked
+    // (approved/paid) months are skipped by the sweep itself.
+    const PAY_POLICY_KEYS = [
+      "payrollWorkingDays", "paidCasualLeavesPerMonth", "paidSickLeavesPerMonth",
+      "lopEnabled", "weeklyOffs", "weeklyOffExhaustedAction",
+    ];
+    const policyChanged = PAY_POLICY_KEYS.some((k) =>
+      JSON.stringify(prevGS?.[k] ?? null) !== JSON.stringify(generalSettingsUpdate?.[k] ?? null));
+    if (policyChanged) {
+      await runSalaryAccrual(pool).catch((e) =>
+        console.error("[settings] accrual re-run after pay-policy change failed:", e));
+    }
   }
   res.json({ ...row, ...(await extraSettingsFields(row.id)) });
 });

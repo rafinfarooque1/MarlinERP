@@ -1,0 +1,187 @@
+TASK: Unify Customer Receipt Collection with Cash & Bank Accounts
+
+Currently, there are two different payment collection interfaces.
+
+Customer Payment Collection (Sales)
+- Shows only:
+  • Cash
+  • Bank
+  • UPI
+
+Vendor Payment
+- Shows actual Cash & Bank accounts created in the Cash & Bank module.
+
+The Customer Receipt screen must work exactly like the Vendor Payment screen.
+
+==========================================================
+Required Behaviour
+==========================================================
+
+Remove the simple payment method dropdown:
+
+Cash
+Bank
+UPI
+
+Replace it with:
+
+Receive Into (Cash / Bank Account)
+
+The dropdown must list the actual accounts created in the Cash & Bank module.
+
+Example
+
+Cash Accounts
+------------
+Cash
+Frozen Hub - Ragiguda Cash
+Frozen Hub - Calicut Cash
+
+Bank Accounts
+-------------
+HDFC Current
+ICICI Current
+Axis Bank
+UPI Collections
+etc.
+
+Exactly the same dropdown used in Vendor Payments.
+
+==========================================================
+Warehouse Filtering
+==========================================================
+
+The dropdown must only show accounts assigned to the currently selected location.
+
+Example
+
+Current Location
+
+Frozen Hub - Ragiguda
+
+Show
+
+✓ Frozen Hub - Ragiguda Cash
+✓ Ragiguda HDFC
+✓ Ragiguda ICICI
+✓ Ragiguda UPI Collections
+
+Do NOT show
+
+Frozen Hub - Calicut Cash
+Calicut HDFC
+Head Office Cash
+
+----------------------------------------------------------
+
+If Current Location = Head Office
+
+Show only Head Office accounts.
+
+----------------------------------------------------------
+
+If Current Location = All Locations
+
+Only administrators may choose from all accounts.
+
+==========================================================
+Accounting
+==========================================================
+
+When payment is collected:
+
+Debit
+
+Selected Cash/Bank Account
+
+Credit
+
+Customer Ledger
+
+Update
+
+Customer Outstanding
+Customer Ledger
+Cash Book
+Bank Book
+Cash & Bank Screen
+Dashboard
+Trial Balance
+Balance Sheet
+
+Everything must update against the selected location.
+
+Never post to the generic "Cash" account unless that account was explicitly selected.
+
+==========================================================
+Existing Receipts
+==========================================================
+
+Viewing old receipts should continue working.
+
+If an old receipt used the legacy method:
+
+Cash
+
+Display the mapped Cash account.
+
+If
+
+Bank
+
+Display the mapped Bank account.
+
+No existing data should break.
+
+==========================================================
+UI
+==========================================================
+
+Use exactly the same account selector already used in:
+
+Vendor Payment
+Payment Voucher
+Cash & Bank
+
+Do not create another payment selector.
+
+Use one common component throughout the ERP.
+
+==========================================================
+Validation
+==========================================================
+
+Only active accounts assigned to the selected warehouse/location should appear.
+
+Inactive accounts must not be selectable.
+
+Deleted accounts must not appear.
+
+==========================================================
+Regression Testing
+==========================================================
+
+Verify:
+
+✓ Customer Receipt
+✓ Vendor Payment
+✓ Receipt Voucher
+✓ Payment Voucher
+✓ POS Payment Collection
+✓ Sales Invoice Payment Collection
+
+All should use the same Cash & Bank account selector.
+
+Verify posting updates:
+
+• Customer Ledger
+• Cash/Bank Ledger
+• Trial Balance
+• Balance Sheet
+• Dashboard
+• Cash Book
+• Bank Book
+
+Everything must reconcile to the paisa.
+
+The objective is to remove the old "Cash / Bank / UPI" selector and use the real Cash & Bank accounts everywhere in the ERP so all receipts and payments post into actual accounts assigned to each warehouse.

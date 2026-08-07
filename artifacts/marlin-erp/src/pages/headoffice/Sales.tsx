@@ -34,9 +34,10 @@ import * as z from 'zod';
 import { CustomerFormDialog } from '@/components/customers/CustomerFormDialog';
 import { locationValueOf } from '@/lib/usePartyLocations';
 import {
-  STORED_SALE_MODES, PAYMENT_MODE_OPTIONS, CREATE_PAYMENT_MODE_OPTIONS, COLLECTION_METHODS,
+  STORED_SALE_MODES, PAYMENT_MODE_OPTIONS, CREATE_PAYMENT_MODE_OPTIONS,
   paymentModeLabel, storedSaleMode,
 } from '@/lib/paymentModes';
+import { ReceiveIntoSelect, useReceiveIntoOptions, isCashOption } from '@/components/receive-into-select';
 import {
   normaliseWhatsAppNumber, composeInvoiceMessage, activeInvoiceShareChannel,
 } from '@/lib/invoiceShare';
@@ -280,13 +281,19 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   const [creditWarning, setCreditWarning] = useState<{ payload: any; info: any } | null>(null);
 
   // Multi-method payment state — each row has its own method, amount and reference
-  type PRow = { id: number; method: string; amount: string; ref: string };
-  const [paymentRows, setPaymentRows] = useState<PRow[]>([{ id: 1, method: 'cash', amount: '', ref: '' }]);
+  type PRow = { id: number; ledgerId: number; amount: string; ref: string };
+  const [paymentRows, setPaymentRows] = useState<PRow[]>([{ id: 1, ledgerId: 0, amount: '', ref: '' }]);
   const [paymentDate, setPaymentDate] = useState(new Date().toISOString().split('T')[0]);
   const [showPaymentForm, setShowPaymentForm] = useState(false);
+  // Real Cash & Bank accounts of the SALE's location — the destinations the
+  // collect form offers. The server re-validates and derives cash/bank/UPI
+  // from the picked account, so no method dropdown exists anywhere.
+  const { options: receiveOptions } = useReceiveIntoOptions(
+    (viewItem as any)?.locationType, (viewItem as any)?.locationId);
+  const optionFor = (ledgerId: number) => receiveOptions.find(o => o.id === ledgerId);
   // Derived values used by the UPI QR effect below
-  const upiRow = paymentRows.find(r => r.method === 'upi');
-  const paymentMethod = upiRow ? 'upi' : (paymentRows[0]?.method ?? 'cash');
+  const upiRow = paymentRows.find(r => optionFor(r.ledgerId)?.accountType === 'upi');
+  const paymentMethod = upiRow ? 'upi' : 'cash';
   const paymentAmount = upiRow?.amount ?? paymentRows[0]?.amount ?? '';
 
   // QR shown next to the collect-payment form, for a PART amount (below).
@@ -312,9 +319,11 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   // mistaken for the bill's outstanding balance.
   useEffect(() => {
     const upiId = (viewItem as any)?.outletUpiId as string | undefined;
-    const typed = Number(paymentAmount);
+    const typed = Number(upiRow?.amount ?? 0);
     const balanceDue = Number((viewItem as any)?.balanceDue ?? 0);
-    if (!viewItem || !upiId || !showPaymentForm || !(typed > 0) || !(balanceDue > 0)) {
+    // Only when a UPI account is actually picked as the destination — a cash
+    // or bank collection must never flash a scannable QR at the customer.
+    if (!viewItem || !upiId || !upiRow || !showPaymentForm || !(typed > 0) || !(balanceDue > 0)) {
       setCollectQrUrl(null); return;
     }
     const amount = Math.min(typed, balanceDue).toFixed(2);
@@ -397,6 +406,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
     if (!viewItem) return;
     const validRows = paymentRows.filter(r => Number(r.amount) > 0);
     if (validRows.length === 0) { toast.error('Enter at least one payment amount'); return; }
+    if (validRows.some(r => !r.ledgerId)) { toast.error('Pick the Cash / Bank account for each payment'); return; }
     const totalPaying = validRows.reduce((s, r) => s + Number(r.amount), 0);
     const balanceDue = Number((viewItem as any).balanceDue ?? 0);
     if (totalPaying > balanceDue + 0.001) {
@@ -407,12 +417,12 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
       for (const row of validRows) {
         lastResult = await createPaymentMutation.mutateAsync({
           saleId: viewItem.id,
-          data: { method: row.method, amount: Number(row.amount), referenceNumber: row.ref || undefined, paymentDate },
+          data: { receivedInLedgerId: row.ledgerId, amount: Number(row.amount), referenceNumber: row.ref || undefined, paymentDate },
         });
       }
       const label = validRows.length > 1
         ? `${validRows.length} payments totalling ₹${totalPaying.toLocaleString('en-IN')}`
-        : `₹${totalPaying.toLocaleString('en-IN')} via ${validRows[0].method}`;
+        : `₹${totalPaying.toLocaleString('en-IN')} into ${optionFor(validRows[0].ledgerId)?.name ?? 'the selected account'}`;
       toast.success(`Payment collected — ${label}`);
       // Re-read the sale rather than patching the panel by hand: the server owns
       // the outstanding figure (credit notes included) and the QR built from it,
@@ -425,7 +435,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
         setViewItem((prev: any) => prev ? { ...prev, paymentStatus: lastResult.newPaymentStatus, amountPaid: lastResult.newAmountPaid } : null);
       }
       invalidateSalesData();
-      setPaymentRows([{ id: Date.now(), method: 'cash', amount: '', ref: '' }]);
+      setPaymentRows([{ id: Date.now(), ledgerId: 0, amount: '', ref: '' }]);
       setShowPaymentForm(false);
     } catch (e: any) {
       toast.error(e?.data?.error || e?.message || 'Failed to collect payment');
@@ -449,12 +459,21 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   // The opening payment mode is a Company Setting (Default Sales Payment Mode,
   // credit unless changed) — it applies to NEW sales only; openEdit always
   // carries the stored mode through untouched.
+  // Branch staff have no location choice at all — their login decides it, the
+  // same way the server (`resolveActingLocation`) will resolve it on save. The
+  // dropdown is replaced by a read-only label further down, so the defaults
+  // must already carry their pinned location.
+  const myBranchType = ((me as any)?.branchType ?? 'headoffice') as 'outlet' | 'warehouse' | 'headoffice';
+  const myBranchId = Number((me as any)?.branchId) || 0;
+  const pinnedLocation = !isHOUser && myBranchId > 0
+    ? { locationType: myBranchType, locationId: myBranchId }
+    : null;
   const effectiveDefaultValues: FormValues = useMemo(() => ({
     ...defaultFormValues,
     paymentMode: featureFlags.defaultSalesPaymentMode,
-    locationType: (forceLocationType ?? defaultFormValues.locationType) as 'outlet' | 'warehouse' | 'headoffice',
-    locationId: forceLocationId ?? defaultFormValues.locationId,
-  }), [forceLocationType, forceLocationId, featureFlags.defaultSalesPaymentMode]);
+    locationType: (forceLocationType ?? pinnedLocation?.locationType ?? defaultFormValues.locationType) as 'outlet' | 'warehouse' | 'headoffice',
+    locationId: forceLocationId ?? pinnedLocation?.locationId ?? defaultFormValues.locationId,
+  }), [forceLocationType, forceLocationId, featureFlags.defaultSalesPaymentMode, pinnedLocation?.locationType, pinnedLocation?.locationId]);
 
   const form = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: effectiveDefaultValues });
   const { fields, append, remove } = useFieldArray({ control: form.control, name: 'lineItems' });
@@ -492,6 +511,21 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [flagsLoading, isOpen, editItem, featureFlags.defaultSalesPaymentMode]);
+
+  // Cold-load guard for the pinned location: a branch user's create form opened
+  // before /api/me resolved would still hold the module defaults. Once the
+  // session arrives, pin the location — CREATE forms only; edits and quotation
+  // conversions keep their document's stored location (still within the user's
+  // scope — a warehouse user may edit a child outlet's sale).
+  useEffect(() => {
+    if (!pinnedLocation || editItem || convertFrom || !isOpen) return;
+    if (form.getValues('locationId') !== pinnedLocation.locationId ||
+        form.getValues('locationType') !== pinnedLocation.locationType) {
+      form.setValue('locationType', pinnedLocation.locationType);
+      form.setValue('locationId', pinnedLocation.locationId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pinnedLocation?.locationType, pinnedLocation?.locationId, editItem, convertFrom, isOpen]);
 
   // ── Convert-to-Sale handoff from the Quotations page ─────────────────────
   // The quotation travels via sessionStorage (survives the navigation, never
@@ -1351,6 +1385,21 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <FormField control={form.control} name="locationId" render={({ field }) => (
                   <FormItem><FormLabel>Selling Location <span className="text-destructive">*</span></FormLabel>
+                    {/* Branch staff never choose — their login decides the
+                        location (server enforces the same rule), so the
+                        dropdown is replaced by a read-only fact and other
+                        locations are never listed. */}
+                    {!isHOUser ? (
+                      <div className="h-9 flex items-center px-3 rounded-md border border-border bg-muted/30 text-sm font-medium">
+                        {(() => {
+                          const lt = form.watch('locationType');
+                          const hit = lt === 'warehouse'
+                            ? (warehouses as any[]).find((w: any) => Number(w.id) === Number(field.value))
+                            : outlets.find(o => Number(o.id) === Number(field.value));
+                          return hit?.name || (me as any)?.branchName || forceLocationName || '—';
+                        })()}
+                      </div>
+                    ) : (
                     <Select
                       onValueChange={v => {
                         const [type, idStr] = v.split(':');
@@ -1362,9 +1411,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                     >
                       <FormControl><SelectTrigger><SelectValue placeholder={outletsEnabled ? 'Select outlet or warehouse' : 'Select warehouse'} /></SelectTrigger></FormControl>
                       <SelectContent>
-                        {isHOUser && (
-                          <SelectItem value="headoffice:1">🏢 Head Office</SelectItem>
-                        )}
+                        <SelectItem value="headoffice:1">🏢 Head Office</SelectItem>
                         {(warehouses as any[]).length > 0 && (
                           <SelectGroup>
                             <SelectLabel>Warehouses</SelectLabel>
@@ -1384,7 +1431,8 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                           </SelectGroup>
                         )}
                       </SelectContent>
-                    </Select><FormMessage /></FormItem>
+                    </Select>
+                    )}<FormMessage /></FormItem>
                 )} />
                 <FormField control={form.control} name="saleDate" render={({ field }) => (
                   <FormItem><FormLabel>Date <span className="text-destructive">*</span></FormLabel><FormControl><Input type="date" {...field} {...(forceLocationId ? { 'data-kbd-first': '1' } : {})} /></FormControl><FormMessage /></FormItem>
@@ -1540,9 +1588,6 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                   <>
                     <div className="flex justify-between items-center mb-3">
                       <p className="font-semibold">Cart Items <span className="text-xs text-muted-foreground font-normal ml-1">({availableItems.length} in stock)</span></p>
-                      <Button type="button" variant="outline" size="sm" onClick={() => append({ itemId: 0, quantity: 1, unitPrice: 0, unitDiscount: 0, taxable: customerHasGstin, taxableTouched: false })}>
-                        <Plus className="w-3 h-3 mr-1" /> Add Item
-                      </Button>
                     </div>
                     <div className="overflow-x-auto"><div className="min-w-[720px] space-y-2">
                       {fields.map((field, index) => {
@@ -1739,6 +1784,9 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                         );
                       })}
                     </div></div>
+                    <Button type="button" variant="outline" size="sm" className="mt-3 w-full border-dashed" onClick={() => append({ itemId: 0, quantity: 1, unitPrice: 0, unitDiscount: 0, taxable: customerHasGstin, taxableTouched: false })}>
+                      <Plus className="w-3 h-3 mr-1" /> Add Item
+                    </Button>
                   </>
                 )}
               </div>
@@ -2088,7 +2136,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                     {viewItemPayments.map((p: any) => (
                       <div key={p.id} className="flex justify-between items-center text-xs bg-background/60 rounded px-2 py-1">
                         <div>
-                          <span>{paymentModeLabel(p.method)}</span>
+                          <span>{p.receivedInLedgerName ?? paymentModeLabel(p.method)}</span>
                           {p.referenceNumber && <span className="font-mono ml-1.5 text-muted-foreground text-[10px]">#{p.referenceNumber}</span>}
                           <span className="ml-1.5 text-muted-foreground">{p.paymentDate}</span>
                         </div>
@@ -2106,7 +2154,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                     {!showPaymentForm ? (
                       <Button size="sm" className="w-full h-8" onClick={() => {
                         const bal = Number((viewItem as any).balanceDue ?? 0).toFixed(2);
-                        setPaymentRows([{ id: Date.now(), method: 'cash', amount: bal, ref: '' }]);
+                        setPaymentRows([{ id: Date.now(), ledgerId: 0, amount: bal, ref: '' }]);
                         setPaymentDate(new Date().toISOString().split('T')[0]);
                         setShowPaymentForm(true);
                       }}>
@@ -2126,15 +2174,14 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                               <div className="flex items-center gap-1.5">
                                 <div className="flex-1 grid grid-cols-2 gap-1.5">
                                   <div>
-                                    <p className="text-[10px] text-muted-foreground mb-1">Method</p>
-                                    <Select value={row.method} onValueChange={v => setPaymentRows(rs => rs.map(r => r.id === row.id ? { ...r, method: v } : r))}>
-                                      <SelectTrigger className="h-7 text-xs"><SelectValue /></SelectTrigger>
-                                      <SelectContent>
-                                        {COLLECTION_METHODS.map(m => (
-                                          <SelectItem key={m} value={m}>{paymentModeLabel(m)}</SelectItem>
-                                        ))}
-                                      </SelectContent>
-                                    </Select>
+                                    <p className="text-[10px] text-muted-foreground mb-1">Receive Into</p>
+                                    <ReceiveIntoSelect
+                                      locationType={(viewItem as any)?.locationType}
+                                      locationId={(viewItem as any)?.locationId}
+                                      value={row.ledgerId}
+                                      onChange={v => setPaymentRows(rs => rs.map(r => r.id === row.id ? { ...r, ledgerId: v } : r))}
+                                      className="h-7 text-xs"
+                                    />
                                   </div>
                                   <div>
                                     <p className="text-[10px] text-muted-foreground mb-1">Amount (₹)</p>
@@ -2155,7 +2202,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                                   </button>
                                 )}
                               </div>
-                              {row.method !== 'cash' && (
+                              {row.ledgerId > 0 && !isCashOption(optionFor(row.ledgerId)) && (
                                 <div>
                                   <p className="text-[10px] text-muted-foreground mb-1">Reference / UTR (optional)</p>
                                   <Input
@@ -2176,10 +2223,10 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                           const remaining = bal - total;
                           return remaining > 0.001 ? (
                             <button
-                              onClick={() => setPaymentRows(rs => [...rs, { id: Date.now(), method: 'upi', amount: remaining.toFixed(2), ref: '' }])}
+                              onClick={() => setPaymentRows(rs => [...rs, { id: Date.now(), ledgerId: 0, amount: remaining.toFixed(2), ref: '' }])}
                               className="flex items-center gap-1 text-xs text-primary hover:underline"
                             >
-                              <Plus className="w-3 h-3" /> Add another payment method
+                              <Plus className="w-3 h-3" /> Split into another account
                             </button>
                           ) : null;
                         })()}
@@ -2210,9 +2257,9 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                           <p className="text-[10px] text-muted-foreground mb-1">Payment Date</p>
                           <Input type="date" value={paymentDate} onChange={e => setPaymentDate(e.target.value)} className="h-7 text-xs" />
                         </div>
-                        {paymentRows.some(r => r.method !== 'cash') && (
+                        {paymentRows.some(r => r.ledgerId > 0 && !isCashOption(optionFor(r.ledgerId))) && (
                           <div className="text-[10px] text-amber-600 bg-amber-500/5 rounded px-2 py-1">
-                            Electronic payments appear in Reconciliation until matched to a bank settlement.
+                            Bank/UPI collections into accounts with reconciliation turned on appear in Reconciliation until matched.
                           </div>
                         )}
                         <div className="flex gap-2">
@@ -2247,7 +2294,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                   </div>
                   {viewItemPayments.length > 0 ? (
                     <p className="text-[11px] text-muted-foreground mt-1">
-                      Last receipt: {paymentModeLabel(viewItemPayments[viewItemPayments.length - 1].method)} on {viewItemPayments[viewItemPayments.length - 1].paymentDate}
+                      Last receipt: {viewItemPayments[viewItemPayments.length - 1].receivedInLedgerName ?? paymentModeLabel(viewItemPayments[viewItemPayments.length - 1].method)} on {viewItemPayments[viewItemPayments.length - 1].paymentDate}
                       {viewItemPayments[viewItemPayments.length - 1].referenceNumber ? ` · #${viewItemPayments[viewItemPayments.length - 1].referenceNumber}` : ''}
                     </p>
                   ) : (

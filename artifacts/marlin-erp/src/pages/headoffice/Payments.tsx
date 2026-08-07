@@ -2,7 +2,8 @@ import { useState } from 'react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { usePermission } from '@/lib/usePermission';
 import { useOutletsEnabled, useClearOutletSelection } from '@/lib/useFeatureFlags';
-import { COLLECTION_METHODS, paymentModeLabel } from '@/lib/paymentModes';
+import { paymentModeLabel } from '@/lib/paymentModes';
+import { ReceiveIntoSelect, useReceiveIntoOptions, isCashOption } from '@/components/receive-into-select';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -43,9 +44,13 @@ function CollectPaymentPanel({ sale, onClose, onDone }: { sale: any; onClose: ()
   const { data: payments = [], isLoading } = useGetSalePayments(sale.id);
   const createPaymentMutation = useCreateSalePayment();
 
-  const [method, setMethod] = useState('cash');
+  const [ledgerId, setLedgerId] = useState(0);
   const [amount, setAmount] = useState(String(Number(sale.balanceDue ?? 0)));
   const [ref, setRef] = useState('');
+  // The picked account, for display hints only — the server derives the method.
+  const { options: receiveOptions } = useReceiveIntoOptions(sale.locationType, sale.locationId);
+  const pickedOption = receiveOptions.find(o => o.id === ledgerId);
+  const pickedNonCash = ledgerId > 0 && !isCashOption(pickedOption);
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
   const [showForm, setShowForm] = useState(Number(sale.balanceDue ?? 0) > 0);
 
@@ -61,10 +66,11 @@ function CollectPaymentPanel({ sale, onClose, onDone }: { sale: any; onClose: ()
   async function handleSubmit() {
     const parsedAmount = Number(amount);
     if (!parsedAmount || parsedAmount <= 0) { toast.error('Enter a valid amount'); return; }
+    if (!ledgerId) { toast.error('Pick the Cash / Bank account the money went into'); return; }
     try {
       const result: any = await createPaymentMutation.mutateAsync({
         saleId: sale.id,
-        data: { method, amount: parsedAmount, referenceNumber: ref || undefined, paymentDate: date },
+        data: { receivedInLedgerId: ledgerId, amount: parsedAmount, referenceNumber: ref || undefined, paymentDate: date },
       });
       toast.success(`Payment of ${fmt(parsedAmount)} collected`);
       onDone({
@@ -123,7 +129,7 @@ function CollectPaymentPanel({ sale, onClose, onDone }: { sale: any; onClose: ()
             {payments.map((p: any) => (
               <div key={p.id} className="flex justify-between items-center text-xs bg-muted/30 rounded px-3 py-2 border border-border">
                 <div className="space-y-0.5">
-                  <p className="font-medium">{paymentModeLabel(p.method)}</p>
+                  <p className="font-medium">{p.receivedInLedgerName ?? paymentModeLabel(p.method)}</p>
                   <p className="text-muted-foreground">{p.paymentDate}
                     {p.referenceNumber && <span className="font-mono ml-2">#{p.referenceNumber}</span>}
                   </p>
@@ -152,34 +158,31 @@ function CollectPaymentPanel({ sale, onClose, onDone }: { sale: any; onClose: ()
           <div className="space-y-3 bg-muted/20 rounded-lg p-3 border border-border">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
-                <p className="text-xs text-muted-foreground mb-1">Method</p>
-                <Select value={method} onValueChange={setMethod}>
-                  <SelectTrigger className="h-8 text-sm"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {COLLECTION_METHODS.map(m => (
-                      <SelectItem key={m} value={m}>{paymentModeLabel(m)}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <p className="text-xs text-muted-foreground mb-1">Receive Into (Cash / Bank)</p>
+                <ReceiveIntoSelect
+                  locationType={sale.locationType}
+                  locationId={sale.locationId}
+                  value={ledgerId}
+                  onChange={setLedgerId}
+                  compact
+                />
               </div>
               <div>
                 <p className="text-xs text-muted-foreground mb-1">Amount (₹)</p>
                 <Input type="number" min={0.01} step={0.01} value={amount} onChange={e => setAmount(e.target.value)} className="h-8 text-sm font-mono" />
               </div>
             </div>
-            {method !== 'cash' && (
-              <div>
-                <p className="text-xs text-muted-foreground mb-1">Reference / UTR (optional)</p>
-                <Input value={ref} onChange={e => setRef(e.target.value)} className="h-8 text-sm font-mono" placeholder="e.g. UTR123456" />
-              </div>
-            )}
+            <div>
+              <p className="text-xs text-muted-foreground mb-1">Reference / UTR (optional)</p>
+              <Input value={ref} onChange={e => setRef(e.target.value)} className="h-8 text-sm font-mono" placeholder="e.g. UTR123456" />
+            </div>
             <div>
               <p className="text-xs text-muted-foreground mb-1">Payment Date</p>
               <Input type="date" value={date} onChange={e => setDate(e.target.value)} className="h-8 text-sm" />
             </div>
-            {method !== 'cash' && (
+            {pickedNonCash && (
               <div className="text-xs text-amber-600 bg-amber-500/5 border border-amber-500/15 rounded px-2.5 py-1.5">
-                This payment will appear in Reconciliation until matched to a bank settlement.
+                If this account has reconciliation turned on, the payment appears in Reconciliation until matched to a bank settlement.
               </div>
             )}
             <Button className="w-full h-8 text-sm" onClick={handleSubmit} disabled={createPaymentMutation.isPending}>

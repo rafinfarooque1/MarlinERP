@@ -1,0 +1,210 @@
+TASK: Improve Purchase Bill Edit Validation
+
+The current Purchase Bill edit validation is too restrictive.
+
+Example:
+
+A Purchase Bill has 20 items.
+
+Only 1 item is edited.
+
+The ERP currently validates all 20 items.
+
+If another item has already been sold or transferred, the entire bill cannot be edited, even though that item was never modified.
+
+This is incorrect.
+
+==========================================================
+Required Behaviour
+==========================================================
+
+When editing a Purchase Bill, validate ONLY the items whose quantity is being reduced or whose stock is affected.
+
+Do NOT block editing because of another untouched item in the same bill.
+
+==========================================================
+Item-wise Validation
+==========================================================
+
+For each edited line:
+
+If Quantity is unchanged
+
+→ Skip stock validation.
+
+If Quantity is increased
+
+→ Allow normal purchase update.
+
+If Quantity is reduced
+
+→ Check ONLY that item's remaining batch stock.
+
+Example
+
+Purchased
+
+100
+
+Current Remaining
+
+80
+
+User changes Purchase Qty
+
+100 → 70
+
+Reduction = 30
+
+Since Remaining Stock = 80
+
+Reduction is possible.
+
+Allow the edit.
+
+Update batch quantity accordingly.
+
+----------------------------------------------------------
+
+Example
+
+Purchased
+
+100
+
+Remaining
+
+15
+
+User changes
+
+100 → 70
+
+Reduction Required
+
+30
+
+Only 15 are available.
+
+Reject ONLY this item.
+
+Display:
+
+"Only 15 units are available to reduce from this batch because the remaining quantity has already been sold, transferred or consumed."
+
+Do NOT mention unrelated items.
+
+==========================================================
+Vendor Payable Validation
+==========================================================
+
+If the Purchase Bill total is reduced:
+
+Recalculate
+
+Vendor Outstanding
+
+Vendor Ledger
+
+Purchase Ledger
+
+GST
+
+Inventory Value
+
+Stock Ledger
+
+Only allow the edit if accounting can be recalculated correctly.
+
+If payments have already been made against this Purchase Bill:
+
+Recalculate the payable.
+
+Examples
+
+Original Bill
+
+₹10,000
+
+Paid
+
+₹2,000
+
+Outstanding
+
+₹8,000
+
+User edits bill
+
+New Total
+
+₹8,500
+
+New Outstanding
+
+₹6,500
+
+Update Vendor Outstanding automatically.
+
+Do NOT block the edit.
+
+==========================================================
+Stock Validation
+==========================================================
+
+Only validate stock for edited items.
+
+Ignore untouched items.
+
+==========================================================
+Error Messages
+==========================================================
+
+Do NOT display errors for unrelated items.
+
+The error should identify ONLY the item that cannot be reduced.
+
+Example
+
+"MANGO ALPHONSO PULP
+
+Requested reduction: 30
+
+Available to reduce: 15
+
+The remaining quantity has already been sold, transferred or consumed."
+
+==========================================================
+Accounting Integrity
+==========================================================
+
+After saving the edited Purchase Bill, automatically update:
+
+• Vendor Outstanding
+• Vendor Ledger
+• Purchase Ledger
+• Inventory
+• Batch Stock
+• Stock Ledger
+• GST
+• Trial Balance
+• Balance Sheet
+• Profit & Loss
+
+Everything must remain balanced to the paisa.
+
+==========================================================
+Regression Testing
+==========================================================
+
+Verify these scenarios:
+
+✓ Edit one item while other items are already sold.
+✓ Reduce quantity where sufficient stock remains.
+✓ Reject only when the edited item's remaining stock is insufficient.
+✓ Vendor payable recalculates correctly.
+✓ Paid amount remains unchanged.
+✓ Outstanding updates correctly.
+✓ Inventory and accounting remain fully reconciled.
+
+The objective is to make Purchase Bill editing intelligent by validating only the affected items, not the entire bill.

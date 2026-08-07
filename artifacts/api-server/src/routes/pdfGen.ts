@@ -14,6 +14,7 @@ import { generateReportXlsx } from "../services/reportXlsx";
 import { generateExpenseVoucherPdf } from "../services/expenseVoucherPdf";
 import { generateMoneyVoucherPdf } from "../services/moneyVoucherPdf";
 import { ownLocationScope, scopeLedgerIds, scopeMoneyWhere } from "../lib/moneyScope";
+import { resolveLocationIssuer } from "../lib/billingProfile";
 import { pool } from "@workspace/db";
 
 /** Company header, read server-side so a document cannot be printed under a
@@ -33,6 +34,18 @@ async function companyHeader(): Promise<any> {
       phone: cs.phone ?? undefined, email: cs.email ?? undefined,
     };
   } catch { return undefined; }
+}
+
+/** Company logo as an inline data URI, or null — jsPDF cannot fetch URLs.
+ *  logo_url is a raw-migration column, so it is read with raw SQL. */
+async function companyLogoDataUrl(): Promise<string | null> {
+  try {
+    const { rows: [r] } = await pool.query<{ logo_url: string | null }>(
+      `SELECT logo_url FROM company_settings ORDER BY id LIMIT 1`,
+    );
+    const logo = r?.logo_url ?? null;
+    return logo && /^data:image\//i.test(logo) ? logo : null;
+  } catch { return null; }
 }
 
 const router = Router();
@@ -320,6 +333,7 @@ router.post("/pdf/money-voucher", (req, res, next) => {
       const { rows: [r] } = await pool.query<any>(`
         SELECT p.voucher_number, p.payment_date AS voucher_date, p.amount, p.narration,
                p.reference_number, p.created_by, p.created_at,
+               p.location_type, p.location_id,
                pf.name AS cash_bank_name, pt.name AS party_name,
                COALESCE(w.name, o.name) AS location_name
           FROM payments p
@@ -335,6 +349,7 @@ router.post("/pdf/money-voucher", (req, res, next) => {
       const { rows: [r] } = await pool.query<any>(`
         SELECT p.voucher_number, p.receipt_date AS voucher_date, p.amount, p.narration,
                p.reference_number, p.created_by, p.created_at,
+               p.location_type, p.location_id,
                ri.name AS cash_bank_name, rf.name AS party_name,
                COALESCE(w.name, o.name) AS location_name
           FROM receipts p
@@ -347,9 +362,18 @@ router.post("/pdf/money-voucher", (req, res, next) => {
     }
     if (!row) { res.status(404).json({ error: "Voucher not found" }); return; }
 
-    const buffer = generateMoneyVoucherPdf({
+    // The letterhead is the ISSUING LOCATION — same resolution as the invoice
+    // seller, with company settings only as the resolver's own fallback.
+    const locType = row.location_type === "warehouse" ? "warehouse"
+      : row.location_type === "outlet" ? "outlet" : null;
+    const issuer = await resolveLocationIssuer(
+      pool, locType, row.location_id != null ? Number(row.location_id) : null,
+    );
+
+    const buffer = await generateMoneyVoucherPdf({
       kind,
-      cs: await companyHeader(),
+      issuer,
+      logoDataUrl: await companyLogoDataUrl(),
       voucherNumber: row.voucher_number ?? "—",
       voucherDate: row.voucher_date,
       amount: Number(row.amount),

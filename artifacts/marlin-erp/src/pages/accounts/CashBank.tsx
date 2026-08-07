@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Link } from 'wouter';
 import {
   useListCashBankAccounts, useCreateCashBankAccount, useUpdateCashBankAccount, useDeleteCashBankAccount,
-  getListCashBankAccountsQueryKey, useListWarehouses, useListOutlets,
+  getListCashBankAccountsQueryKey, useListWarehouses, useListOutlets, useGetMe,
 } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
@@ -19,6 +19,7 @@ import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
+import { Switch } from '@/components/ui/switch';
 import { usePermission } from '@/lib/usePermission';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
 
@@ -34,6 +35,9 @@ const schema = z.object({
   accountNumber: z.string().optional(),
   bankName: z.string().optional(),
   ifscCode: z.string().optional(),
+  // Bank/UPI only: ON = collections pass through Reconciliation before the
+  // bank balance moves; OFF = they post straight into the account's ledger.
+  requiresReconciliation: z.boolean(),
   // Coercion turns the input element's string into a number, and blank into 0
   // as the business rule requires. `.finite()` is what stops 'Infinity' —
   // which Number() accepts and a bare .number() check would pass — from
@@ -56,6 +60,11 @@ function splitLocation(v: string): { locationType: LocationType; locationId?: nu
 
 export default function CashBank() {
   const perm = usePermission('page:/accounts/cash-bank');
+  // Managing accounts is a Head Office function (the server rejects everyone
+  // else), so branch staff never see the Add button — or the location list
+  // behind it, which would name other branches.
+  const { data: me } = useGetMe();
+  const isHOUser = !(me as any)?.branchType || (me as any)?.branchType === 'headoffice';
   const { data: accounts = [], isLoading } = useListCashBankAccounts();
   const { data: warehouses = [] } = useListWarehouses();
   const { data: outlets = [] } = useListOutlets();
@@ -71,7 +80,7 @@ export default function CashBank() {
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
-    defaultValues: { name: '', accountType: 'bank', location: 'headoffice', accountNumber: '', bankName: '', ifscCode: '', openingBalance: 0 },
+    defaultValues: { name: '', accountType: 'bank', location: 'headoffice', accountNumber: '', bankName: '', ifscCode: '', openingBalance: 0, requiresReconciliation: true },
   });
 
   const watchType = form.watch('accountType');
@@ -79,7 +88,7 @@ export default function CashBank() {
 
   const openAdd = () => {
     setEditing(null);
-    form.reset({ name: '', accountType: 'bank', location: 'headoffice', accountNumber: '', bankName: '', ifscCode: '', openingBalance: 0 });
+    form.reset({ name: '', accountType: 'bank', location: 'headoffice', accountNumber: '', bankName: '', ifscCode: '', openingBalance: 0, requiresReconciliation: true });
     setIsOpen(true);
   };
   const openEdit = (a: any) => {
@@ -92,6 +101,7 @@ export default function CashBank() {
       bankName: a.bankName ?? '',
       ifscCode: a.ifscCode ?? '',
       openingBalance: 0,
+      requiresReconciliation: a.requiresReconciliation === true,
     });
     setIsOpen(true);
   };
@@ -108,6 +118,8 @@ export default function CashBank() {
           name: data.name, bankName: data.bankName, accountNumber: data.accountNumber, ifscCode: data.ifscCode,
           ...loc,
           ...(dirty.openingBalance ? { openingBalance: data.openingBalance } : {}),
+          // Cash accounts never send the flag — the server rejects it for them.
+          ...(data.accountType !== 'cash' ? { requiresReconciliation: data.requiresReconciliation } : {}),
         },
       }, {
         onSuccess: () => { toast.success('Account updated'); refresh(); setIsOpen(false); },
@@ -192,7 +204,7 @@ export default function CashBank() {
               <Download className="w-4 h-4 mr-2" /> Export
             </Button>
             )}
-            {perm.canAdd && <Button onClick={openAdd}><Plus className="w-4 h-4 mr-2" /> Add Account</Button>}
+            {perm.canAdd && isHOUser && <Button onClick={openAdd}><Plus className="w-4 h-4 mr-2" /> Add Account</Button>}
           </div>
         </div>
 
@@ -223,15 +235,16 @@ export default function CashBank() {
                 <SortableHead k="location" sort={sort}>Location</SortableHead>
                 <SortableHead k="bank" sort={sort}>Bank</SortableHead>
                 <SortableHead k="accountNumber" sort={sort}>Account No.</SortableHead>
+                <TableHead>Reconciliation</TableHead>
                 <SortableHead k="balance" sort={sort} className="text-right">Balance</SortableHead>
                 <TableHead className="w-20" />
               </TableRow>
             </TableHeader>
             <TableBody>
               {isLoading ? [...Array(3)].map((_, i) => (
-                <TableRow key={i}><TableCell colSpan={7}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
+                <TableRow key={i}><TableCell colSpan={8}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
               )) : filtered.length === 0 ? (
-                <TableRow><TableCell colSpan={7} className="text-center py-16 text-muted-foreground">
+                <TableRow><TableCell colSpan={8} className="text-center py-16 text-muted-foreground">
                   <Banknote className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No accounts yet</p>
                 </TableCell></TableRow>
               ) : sorted.map(a => (
@@ -241,6 +254,30 @@ export default function CashBank() {
                   <TableCell className="text-sm text-muted-foreground">{(a as any).locationName || 'Head Office'}</TableCell>
                   <TableCell className="text-sm text-muted-foreground">{a.bankName || '—'}</TableCell>
                   <TableCell className="font-mono text-xs text-muted-foreground">{a.accountNumber || '—'}</TableCell>
+                  <TableCell>
+                    {/* The switch is the "button for reconciliation": ON = money
+                        waits in Reconciliation; OFF = posts straight to the bank. */}
+                    {(a as any).source === 'module' && a.accountType !== 'cash' ? (
+                      perm.canEdit ? (
+                        <Switch
+                          checked={(a as any).requiresReconciliation === true}
+                          disabled={updateMutation.isPending}
+                          onCheckedChange={(on) => updateMutation.mutate(
+                            { id: a.id, data: { requiresReconciliation: on } as any },
+                            {
+                              onSuccess: () => { toast.success(on ? 'Collections into this account now wait in Reconciliation' : 'Collections now post straight into this account'); refresh(); },
+                              onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
+                            },
+                          )}
+                          data-testid={`switch-recon-${a.id}`}
+                        />
+                      ) : (
+                        <Badge variant="outline" className="text-[10px] uppercase tracking-wide">{(a as any).requiresReconciliation ? 'On' : 'Off'}</Badge>
+                      )
+                    ) : (
+                      <span className="text-muted-foreground text-xs">—</span>
+                    )}
+                  </TableCell>
                   <TableCell className="text-right font-mono">
                     <span className="font-bold text-primary">{fmt(Number(a.balance ?? 0))}</span>
                   </TableCell>
@@ -309,6 +346,23 @@ export default function CashBank() {
                     </Select><FormMessage /></FormItem>
                 )} />
               </div>
+              {(watchType === 'bank' || watchType === 'upi' || watchType === 'other') && (
+                <FormField control={form.control} name="requiresReconciliation" render={({ field }) => (
+                  <FormItem className="flex items-start justify-between gap-4 rounded-lg border border-border p-3">
+                    <div className="space-y-0.5">
+                      <FormLabel>Needs bank reconciliation</FormLabel>
+                      <p className="text-xs text-muted-foreground">
+                        {field.value
+                          ? 'Collections wait in Reconciliation and reach this account\u2019s balance when the settlement is recorded.'
+                          : 'Collections post straight into this account \u2014 the balance moves immediately, nothing to reconcile.'}
+                      </p>
+                    </div>
+                    <FormControl>
+                      <Switch checked={field.value} onCheckedChange={field.onChange} data-testid="switch-requires-reconciliation" />
+                    </FormControl>
+                  </FormItem>
+                )} />
+              )}
               {(watchType === 'bank' || watchType === 'upi' || watchType === 'other') && (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <FormField control={form.control} name="bankName" render={({ field }) => (

@@ -1,0 +1,134 @@
+==========================================================
+13. Company Holidays
+==========================================================
+
+The ERP should support Company Holidays.
+
+Admin should be able to define holidays such as:
+
+• Sundays
+• Second Saturday
+• Fourth Saturday
+• National Holidays
+• Festival Holidays
+• Company Declared Holidays
+
+These holidays should automatically appear in the attendance calendar.
+
+==========================================================
+14. Attendance Fix – Holiday Option
+==========================================================
+
+In the "Fix Attendance" screen, add two new options:
+
+• Company Holiday
+• Weekly Off
+
+Current options become:
+
+Present
+Half Day
+Casual Leave
+Sick Leave
+Absent
+Company Holiday
+Weekly Off
+
+==========================================================
+15. Company Holiday Behaviour
+==========================================================
+
+If "Company Holiday" is selected:
+
+• Employee receives full salary.
+• Attendance is marked as Company Holiday.
+• No Casual Leave is deducted.
+• No Sick Leave is deducted.
+• It should not count as Absent.
+
+==========================================================
+16. Weekly Off Behaviour
+==========================================================
+
+The company should be able to configure weekly offs.
+
+Examples:
+
+Sunday
+Second Saturday
+Friday
+Any custom weekly off
+
+For each Weekly Off, the company should choose one of two payroll policies.
+
+Option A – Paid Weekly Off
+
+• Employee receives full salary.
+• No leave balance is reduced.
+
+Option B – Weekly Off Uses Casual Leave
+
+• Employee receives full salary.
+• One Casual Leave is automatically deducted.
+• If Casual Leave balance is exhausted:
+    - Ask Admin before saving, OR
+    - Automatically convert that day to Absent based on company settings.
+
+==========================================================
+17. Attendance Correction for Holidays
+==========================================================
+
+When fixing attendance for any date that is already marked as:
+
+• Company Holiday
+• Weekly Off
+
+Admin should be able to override it if required.
+
+Examples:
+
+Weekly Off → Present
+Weekly Off → Casual Leave
+Weekly Off → Sick Leave
+Weekly Off → Absent
+Company Holiday → Present
+Company Holiday → Absent
+
+The payroll should automatically recalculate after the correction.
+
+==========================================================
+18. Employee Leave Balance
+==========================================================
+
+Whenever Casual Leave is consumed through:
+
+• Attendance Fix
+• Weekly Off (if company policy uses Casual Leave)
+
+the employee's Casual Leave balance must reduce automatically.
+
+Leave Summary should always display:
+
+Casual Leave
+Allocated
+Used
+Remaining
+
+Sick Leave
+Allocated
+Used
+Remaining
+
+==========================================================
+19. Validation
+==========================================================
+
+Verify:
+
+✓ Company Holiday pays full salary.
+✓ Company Holiday does NOT reduce any leave.
+✓ Paid Weekly Off pays full salary.
+✓ Weekly Off configured to use Casual Leave reduces one Casual Leave.
+✓ If Casual Leave balance is zero, the ERP warns Admin or converts the day to Absent according to company policy.
+✓ Attendance correction updates payroll automatically.
+✓ Leave balances remain accurate after every correction.

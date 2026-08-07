@@ -1,6 +1,6 @@
 import { useState, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { useFilteredExpenses, useCreateExpense, useListCashBankAccounts, useLocationExpensesSummary, useLocationExpenses, LocationExpenseSummary, useListWarehouses, useListOutlets, attachmentViewUrl, customFetch } from '@workspace/api-client-react';
+import { useFilteredExpenses, useCreateExpense, useListCashBankAccounts, useLocationExpensesSummary, useLocationExpenses, LocationExpenseSummary, useListWarehouses, useListOutlets, attachmentViewUrl, customFetch, useGetMe } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { AccountCombobox } from '@/components/ui/account-combobox';
 import { Button } from '@/components/ui/button';
@@ -351,6 +351,11 @@ function ByLocationTab({ canDownload }: { canDownload: boolean }) {
 // ── Main Expenses page ────────────────────────────────────────────────────────
 export default function Expenses() {
   const perm = usePermission('page:/accounts/expenses');
+  // Recording a company (Head Office) expense is HO-only — the server tells
+  // branch users to use Sales → Expenses instead. Hiding the button also hides
+  // the "Attribute To" list, which would otherwise name every branch.
+  const { data: me } = useGetMe();
+  const isHOUser = !(me as any)?.branchType || (me as any)?.branchType === 'headoffice';
   const range = useDateRange('all');
   const { locationState } = useLocationContext();
   const { data: expenses = [], isLoading } = useFilteredExpenses({
@@ -495,7 +500,7 @@ export default function Expenses() {
               <Download className="w-4 h-4 mr-2" /> Export
             </Button>
             )}
-            {perm.canAdd && (
+            {perm.canAdd && isHOUser && (
             <Button onClick={() => {
               form.reset(blankForm);
               setIsOpen(true);

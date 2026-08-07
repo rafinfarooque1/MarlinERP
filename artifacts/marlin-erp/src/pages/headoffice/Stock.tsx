@@ -47,8 +47,6 @@ export default function Stock() {
   const [materialType,     setMaterialType]     = useState<string>('all');
   const [search,           setSearch]           = useState('');
   const [debouncedSearch,  setDebouncedSearch]  = useState('');
-  const [page,             setPage]             = useState(1);
-  const PAGE_SIZE = 50;
   const [expanded,         setExpanded]         = useState<Set<string>>(new Set());
   const { data: warehouses = [] } = useListWarehouses();
   const { data: outlets    = [] } = useListOutlets();
@@ -56,20 +54,19 @@ export default function Stock() {
 
   // Debounce search — runs on server
   useEffect(() => {
-    const t = setTimeout(() => { setDebouncedSearch(search.trim()); setPage(1); }, 300);
+    const t = setTimeout(() => setDebouncedSearch(search.trim()), 300);
     return () => clearTimeout(t);
   }, [search]);
-
-  // Reset page when any filter changes
-  useEffect(() => { setPage(1); }, [branchType, branchId, materialType]);
 
   const params: any = {};
   if (branchType !== 'all') params.branchType = branchType;
   if (branchId && branchId !== '0') params.branchId = Number(branchId);
   if (materialType !== 'all') params.materialType = materialType;
 
+  // limit: 0 asks the server for the whole list in one response — no paging —
+  // while keeping the envelope that carries the valuation-visibility flag.
   const { data: stockPage, isLoading, isFetching } = usePaginatedStock({
-    ...params, page, limit: PAGE_SIZE, q: debouncedSearch || undefined,
+    ...params, limit: 0, q: debouncedSearch || undefined,
   });
   const stock = stockPage?.rows ?? [];
   // Whether this role may see what the stock is WORTH is the server's call, not
@@ -81,11 +78,6 @@ export default function Stock() {
   const canSeeValue = (stockPage as any)?.canViewValuation === true;
   const COLS = canSeeValue ? 9 : 8;
   const totalRows  = stockPage?.total ?? 0;
-  const totalPages = Math.max(1, Math.ceil(totalRows / PAGE_SIZE));
-
-  useEffect(() => {
-    if (page > totalPages) setPage(totalPages);
-  }, [page, totalPages]);
 
   // Lots exist for all three product kinds. Omitting materialType returns every
   // kind; it is only passed when the page itself is filtered to one.
@@ -194,7 +186,7 @@ export default function Stock() {
             </div>
 
             {/* Item Type filter */}
-            <Select value={materialType} onValueChange={v => { setMaterialType(v); setPage(1); }}>
+            <Select value={materialType} onValueChange={v => setMaterialType(v)}>
               <SelectTrigger className="w-44"><SelectValue placeholder="All Types" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All Item Types</SelectItem>
@@ -205,7 +197,7 @@ export default function Stock() {
             </Select>
 
             {/* Location filter */}
-            <Select value={branchType} onValueChange={v => { setBranchType(v); setBranchId(''); setPage(1); }}>
+            <Select value={branchType} onValueChange={v => { setBranchType(v); setBranchId(''); }}>
               <SelectTrigger className="w-44"><SelectValue placeholder="All Locations" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All Locations</SelectItem>
@@ -216,7 +208,7 @@ export default function Stock() {
             </Select>
 
             {branchOptions.length > 0 && (
-              <Select value={branchId} onValueChange={v => { setBranchId(v); setPage(1); }}>
+              <Select value={branchId} onValueChange={v => setBranchId(v)}>
                 <SelectTrigger className="w-44"><SelectValue placeholder="All" /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="0">All</SelectItem>
@@ -405,19 +397,12 @@ export default function Stock() {
           {totalRows > 0 && (
             <div className="p-3 border-t border-border text-xs text-muted-foreground flex flex-wrap items-center justify-between gap-2">
               <span>
-                Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, totalRows)} of {totalRows} entries
+                {totalRows} {totalRows === 1 ? 'entry' : 'entries'}
                 {isFetching ? ' · refreshing…' : ''}
               </span>
-              <div className="flex items-center gap-3">
-                {canSeeValue && (
-                  <span className="font-semibold text-foreground">Page stock value: {money(totalValue)}</span>
-                )}
-                <div className="flex items-center gap-1">
-                  <Button variant="outline" size="sm" className="h-7 px-2 text-xs" disabled={page <= 1} onClick={() => setPage(p => p - 1)}>Prev</Button>
-                  <span className="px-1">Page {page}/{totalPages}</span>
-                  <Button variant="outline" size="sm" className="h-7 px-2 text-xs" disabled={page >= totalPages} onClick={() => setPage(p => p + 1)}>Next</Button>
-                </div>
-              </div>
+              {canSeeValue && (
+                <span className="font-semibold text-foreground">Total stock value: {money(totalValue)}</span>
+              )}
             </div>
           )}
         </div>

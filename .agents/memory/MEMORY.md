@@ -61,6 +61,7 @@
 - [Dashboard KPI sources](dashboard-kpi-sources.md) — never re-sum expense subtrees for a tile (the capitalisation overlay makes it disagree with the P&L); located tiles read the located posting slice.
 - [Global location context](global-location-context.md) — sidebar selector → headers on reads only; view ANDed on LBAC, never authority; query key beats header; ledger-anchored reports flip basis when located.
 - [Audit stamp fallbacks](audit-stamp-fallbacks.md) — `?? "system"` over a never-assigned request property records every row as system-generated and never fails; grep the middleware before writing created_by.
+- [Purchase edit line diff](purchase-edit-line-diff.md) — edits pair lines by kind:id:batch and touch only changed stock; aggregate debits per lot/product; settled floor (not a block) re-checked under the row lock.
 - [Purchase bill costing](purchase-bill-costing.md) — stock is valued at the TAXABLE value (net of GST+discount); floor-at-zero reversals invent stock, so refuse an edit once the goods moved; unwind avg cost with the qty.
 - [Hiding a money figure](hiding-a-money-figure.md) — the figure always has siblings behind weaker guards; omit (never zero) the key; stripping a GET a client echoes back on approve zeroes cost.
 - [PDF Unicode fonts](pdf-unicode-fonts.md) — jsPDF's built-ins are WinAnsi so ₹ prints as `¹`; only an embedded TrueType fixes it, and jsPDF subsets it for you.
@@ -119,4 +120,11 @@
 - [Shared customer form & infinite sales list](shared-customer-form.md) — ONE CustomerFormDialog for every entry point (branch payloads carry no location); infinite sales key must keep '/api/sales' as element 0.
 - [Cash & Bank ↔ Chart integration](cash-bank-chart-integration.md) — CBA- ledgers, derived balances, code-guarded heads (never is_system_group), one-sided openings need the STD-OB-ADJ counterweight; TB must fold openings.
 - [Located import compare pack](import-compare-pack.md) — pack scopes via opt-in identity sets on owning filter types; wizard location is picked at TRIAL time and approval refuses any other location.
+- [Electronic collection routing](electronic-collection-routing.md) — bank/UPI collections route by location-assigned account + recon switch; receipts are display, buildDerivedPostings is truth — teach it every new destination.
+- [Receive Into collections](receive-into-collections.md) — collect forms post receivedInLedgerId (no method dropdown); server derives cash/bank/upi from the account and validates against the SALE location's ledger set; legacy method-only body unchanged.
 - [Warehouse lifecycle](warehouse-lifecycle.md) — disabled_at raw cols; EVERY new transaction producer needs the disabled guard (effective location, ROLLBACK in-txn); permanent delete = 1 txn cascade + in-txn validation; cross-location = blocker.
+- [Company holidays & weekly offs](holidays-weekly-offs.md) — stored rows outvote the calendar; untracked months never synthesise; `until` bounds balance views only; moved cutover fakes "accrual writes ₹0" suite failures.
+- [Location selector lockdown](location-selector-lockdown.md) — branch users get read-only location labels, never dropdowns; pin via shared surfaces (useActingLocation, LocationSelectField, LocationFilter); master lists stay unscoped.
+- [Expo Metro in pnpm monorepo](expo-metro-pnpm.md) — watchFolders must include root node_modules or every import fails (blank app, JSON bundle error); it's config, not cache.
+- [RN Web dialogs](rn-web-dialogs.md) — Alert.alert is a no-op on web; all confirms/error popups in the employee app go through lib/dialogs.ts.
+- [401 = dead session contract](session-401-contract.md) — clients log out on any 401; wrong typed credentials must be 400; self-service GETs self-scope instead of 403 (a 403 zeroes mobile tiles silently).

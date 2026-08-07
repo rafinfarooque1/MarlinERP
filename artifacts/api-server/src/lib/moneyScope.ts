@@ -298,6 +298,17 @@ export async function headOfficeCashBankLedgerIds(): Promise<number[]> {
 
 export interface LedgerOwner { locationType: "warehouse" | "outlet"; locationId: number; name: string }
 
+/** All ledger ids at-or-under the given root codes (walks the CoA tree). */
+export async function ledgerIdsUnderCodes(rootCodes: string[]): Promise<Set<number>> {
+  const { rows } = await pool.query(`SELECT id, parent_id, code FROM account_ledgers`);
+  const ids = new Set<number>();
+  for (const r of rows) if (rootCodes.includes(String(r.code ?? ""))) ids.add(Number(r.id));
+  for (let i = 0; i < 6; i++) {
+    for (const r of rows) if (r.parent_id && ids.has(Number(r.parent_id))) ids.add(Number(r.id));
+  }
+  return ids;
+}
+
 /**
  * Every location-owned ledger (cash / sales / warehouse purchase), with ALL of
  * its owners. A mirror location — one place kept as both a warehouse and an

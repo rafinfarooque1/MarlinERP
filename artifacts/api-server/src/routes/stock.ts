@@ -181,11 +181,18 @@ router.get("/stock", requireModuleView(["page:/", "page:/production/item-master"
   let limit = 0;
   if (paginated) {
     page = Math.max(parseInt(String(req.query.page ?? '1'), 10) || 1, 1);
-    limit = Math.min(Math.max(parseInt(String(req.query.limit ?? '25'), 10) || 25, 1), 200);
-    const { rows: [t] } = await pool.query(
-      `${cte} SELECT COUNT(*)::int AS total FROM u ${where}`, params
-    );
-    total = Number(t?.total ?? 0);
+    // limit=0 is an explicit "everything in one list" request — the envelope
+    // (total + canViewValuation) still travels, only the LIMIT/OFFSET is gone.
+    // Only the literal string '0' qualifies: parseInt would also map '0.5' or
+    // '0abc' to zero, silently turning malformed values into an uncapped read.
+    const allRows = String(req.query.limit ?? '').trim() === '0';
+    limit = allRows ? 0 : Math.min(Math.max(parseInt(String(req.query.limit ?? '25'), 10) || 25, 1), 200);
+    if (limit) {
+      const { rows: [t] } = await pool.query(
+        `${cte} SELECT COUNT(*)::int AS total FROM u ${where}`, params
+      );
+      total = Number(t?.total ?? 0);
+    }
   }
 
   const [result, branchName] = await Promise.all([
@@ -244,7 +251,7 @@ router.get("/stock", requireModuleView(["page:/", "page:/production/item-master"
     // The flag travels with the page so the table can drop its money columns
     // and its footer total. It is a rendering hint, not the control — the
     // fields are already gone from `rows` when it is false.
-    res.json({ total, page, limit, rows: enriched, canViewValuation: showValuation });
+    res.json({ total: limit ? total : enriched.length, page, limit, rows: enriched, canViewValuation: showValuation });
   } else {
     res.json(enriched);
   }

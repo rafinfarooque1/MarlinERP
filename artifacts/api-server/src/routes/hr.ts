@@ -23,7 +23,10 @@ import {
   runSalaryAccrual, dailyAccrualRate, reaccrueForAttendanceChange,
   withEmployeeAccrualLock, DEFAULT_WORKING_DAYS, type Querier,
 } from "../lib/salaryAccrual";
-import { loadAttendanceThresholds, loadPayrollSettings, monthLeaveSummary, PUNCHED_HOURS_JOIN } from "../lib/attendanceFactor";
+import {
+  loadAttendanceThresholds, loadPayrollSettings, monthLeaveSummary,
+  loadHolidaySet, calendarDayInfo, PUNCHED_HOURS_JOIN,
+} from "../lib/attendanceFactor";
 import { ownLocationScope, scopeCashLedgerIds } from "../lib/moneyScope";
 import {
   CreateHierarchyBody, UpdateHierarchyBody, DeleteHierarchyParams,
@@ -567,6 +570,10 @@ function enrichPayroll(r: any, emp?: any) {
     // change — the UI and payslip must OMIT the leave line then, never show 0.
     paidLeaveUsed:     r.paidLeaveUsed    ?? r.paid_leave_used    ?? null,
     paidLeaveAllowed:  r.paidLeaveAllowed ?? r.paid_leave_allowed ?? null,
+    // Sick-leave snapshot: null on runs generated before the sick policy —
+    // omit, never zero, exactly like the casual pair above.
+    sickLeaveUsed:     r.sickLeaveUsed    ?? r.sick_leave_used    ?? null,
+    sickLeaveAllowed:  r.sickLeaveAllowed ?? r.sick_leave_allowed ?? null,
     // workflow
     status:            r.status ?? 'draft',
     approvedAt:        r.approvedAt   ?? r.approved_at   ?? null,
@@ -724,19 +731,25 @@ async function postSalaryApproval(opts: {
     const mStr = String(pr.month).padStart(2, "0");
     const lastDay = new Date(Number(pr.year), Number(pr.month), 0).getDate();
     const { rows: attRows } = await client.query(
-      `SELECT a.check_in AS "checkIn", a.check_out AS "checkOut", a.status,
+      `SELECT a.date, a.check_in AS "checkIn", a.check_out AS "checkOut", a.status,
+              a.leave_type AS "leaveType",
               ap.punched_hours AS "punchedHours"
          FROM attendance a
          ${PUNCHED_HOURS_JOIN("a")}
         WHERE a.employee_id = $1 AND a.date >= $2 AND a.date <= $3`,
       [employeeId, `${pr.year}-${mStr}-01`, `${pr.year}-${mStr}-${String(lastDay).padStart(2, "0")}`],
     );
+    const liveCalendar = {
+      year: Number(pr.year), month: Number(pr.month),
+      holidays: await loadHolidaySet(
+        pool, `${pr.year}-${mStr}-01`, `${pr.year}-${mStr}-${String(lastDay).padStart(2, "0")}`),
+    };
     // Recomputed with the live company leave policy. Comparing payable days
     // alone is not enough: an allowance or working-days change can leave the
     // payable count untouched (no leave taken) while the per-day rate or the
     // stored leave snapshot is now wrong — so every policy-bearing stored
     // figure is checked, and any drift forces a regenerate.
-    const liveSummary = monthLeaveSummary(attRows, livePolicy, liveThresholds);
+    const liveSummary = monthLeaveSummary(attRows, livePolicy, liveThresholds, liveCalendar);
     const livePresentDays = liveSummary.payableDays;
     const storedPresentDays = Number(pr.present_days ?? wd);
     const attendanceMoved = Math.abs(livePresentDays - storedPresentDays) > 0.005;
@@ -746,7 +759,9 @@ async function postSalaryApproval(opts: {
       drift(pr.working_days, wd) ||
       drift(pr.lop_days, liveSummary.lopDays) ||
       drift(pr.paid_leave_used, liveSummary.paidLeaveUsed) ||
-      drift(pr.paid_leave_allowed, livePolicy.paidCasualLeavesPerMonth);
+      drift(pr.paid_leave_allowed, livePolicy.paidCasualLeavesPerMonth) ||
+      drift(pr.sick_leave_used, liveSummary.paidSickLeaveUsed) ||
+      drift(pr.sick_leave_allowed, livePolicy.paidSickLeavesPerMonth);
     if (attendanceMoved || policyMoved) {
       throw Object.assign(new Error(
         (attendanceMoved
@@ -1563,12 +1578,20 @@ router.post("/hr/payroll/generate", requireModuleAction("page:/hr/payroll", "add
   // total, not the first-in→last-out span).
   const { rows: monthAttendance } = await pool.query(
     `SELECT a.employee_id AS "employeeId", a.date, a.check_in AS "checkIn", a.check_out AS "checkOut", a.status,
+            a.leave_type AS "leaveType",
             ap.punched_hours AS "punchedHours"
      FROM attendance a
      ${PUNCHED_HOURS_JOIN("a")}
      WHERE a.date >= $1 AND a.date <= $2`,
     [startDate, endDate],
   );
+
+  // Company calendar for the month: holidays and weekly offs pay rowless days
+  // in tracked months, so the summary needs to see them.
+  const monthCalendar = {
+    year: Number(year), month: Number(month),
+    holidays: await loadHolidaySet(pool, startDate, endDate),
+  };
 
   const results = [];
 
@@ -1606,7 +1629,7 @@ router.post("/hr/payroll/generate", requireModuleAction("page:/hr/payroll", "add
     // is what makes the month-end true-up a rounding difference rather than a
     // real correction.
     const empAtt = monthAttendance.filter((a: any) => Number(a.employeeId) === emp.id);
-    const leaveSummary = monthLeaveSummary(empAtt, policy, thresholds);
+    const leaveSummary = monthLeaveSummary(empAtt, policy, thresholds, monthCalendar);
     const effectivePresentDays = leaveSummary.payableDays;
 
     // Advances awaiting recovery. A draft run *claims* the advances it nets off
@@ -1682,9 +1705,11 @@ router.post("/hr/payroll/generate", requireModuleAction("page:/hr/payroll", "add
       String(computed.pfEmployee), String(computed.pfEmployer),
       String(computed.esiEmployee), String(computed.esiEmployer),
       JSON.stringify(snapshot), JSON.stringify(claimedIds), periodLabel,
-      // Leave-policy snapshot for the payslip: how much paid casual leave this
-      // run actually credited, and what the allowance was at generation time.
+      // Leave-policy snapshot for the payslip: how much paid casual and sick
+      // leave this run actually credited, and what each allowance was at
+      // generation time.
       leaveSummary.paidLeaveUsed, policy.paidCasualLeavesPerMonth,
+      leaveSummary.paidSickLeaveUsed, policy.paidSickLeavesPerMonth,
     ];
 
     if (existing) {
@@ -1696,8 +1721,9 @@ router.post("/hr/payroll/generate", requireModuleAction("page:/hr/payroll", "add
            status='draft', advance_deduction=$15,
            pf_employee=$16, pf_employer=$17, esi_employee=$18, esi_employer=$19,
            statutory_snapshot=$20, advance_ids=$21, pay_period_label=$22,
-           paid_leave_used=$23, paid_leave_allowed=$24
-         WHERE id=$25 RETURNING *`,
+           paid_leave_used=$23, paid_leave_allowed=$24,
+           sick_leave_used=$25, sick_leave_allowed=$26
+         WHERE id=$27 RETURNING *`,
         [...writeCols, existing.id],
       );
       row = updated;
@@ -1709,9 +1735,9 @@ router.post("/hr/payroll/generate", requireModuleAction("page:/hr/payroll", "add
             deductions, deductions_breakdown, net_pay, total_amount, advance_deduction,
             pf_employee, pf_employer, esi_employee, esi_employer,
             statutory_snapshot, advance_ids, pay_period_label, paid_leave_used,
-            paid_leave_allowed, bonus, status)
+            paid_leave_allowed, sick_leave_used, sick_leave_allowed, bonus, status)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$14,$15,
-                 $16,$17,$18,$19,$20,$21,$22,$23,$24,'0','draft')
+                 $16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,'0','draft')
          RETURNING *`,
         writeCols,
       );
@@ -2069,11 +2095,17 @@ router.post("/hr/payroll/:id/pay", requireModuleAction("page:/hr/payroll", "edit
 });
 
 // ── Employee Advances ──────────────────────────────────────────────────────
-router.get("/hr/advances", requireModuleView("page:/hr/advances"), async (req, res): Promise<void> => {
-  const scopeEmp = (req as any).employee as { id: number; branchType: string } | undefined;
+router.get("/hr/advances", async (req, res): Promise<void> => {
+  const scopeEmp = (req as any).employee as { id: number; branchType: string; hierarchyId?: number } | undefined;
+  if (!scopeEmp) { res.status(401).json({ error: "Authentication required" }); return; }
+  // An employee may ALWAYS read their OWN advances — the employee app's Home
+  // tile and payslip deductions depend on it. The page right gates the wider
+  // view (other employees' advances): lacking it forces self-scope instead of
+  // a 403. Non-HO callers were already self-scoped even WITH the right.
+  const canViewAllAdvances = await hasModuleAction(scopeEmp.hierarchyId, "page:/hr/advances", "view");
   const advConds: string[] = [];
   const params: unknown[] = [];
-  if (scopeEmp && scopeEmp.branchType !== 'headoffice') {
+  if (!canViewAllAdvances || scopeEmp.branchType !== 'headoffice') {
     params.push(scopeEmp.id);
     advConds.push(`ea.employee_id = $${params.length}`);
   }
@@ -2286,6 +2318,17 @@ router.get("/hr/attendance", requireModuleView("page:/hr/attendance"), async (re
     ].filter((c): c is NonNullable<typeof c> => c !== undefined);
     const rows = await db.select().from(attendanceTable).where(and(...rangeConds));
 
+    // leave_type is a raw-migration column, invisible to the drizzle row —
+    // read it by id so a stored sick day round-trips as sick, not casual.
+    const ltMap = new Map<number, string>();
+    if (rows.length) {
+      const { rows: lt } = await pool.query(
+        `SELECT id, leave_type FROM attendance WHERE id = ANY($1) AND leave_type IS NOT NULL`,
+        [rows.map((r) => r.id)],
+      );
+      for (const r of lt) ltMap.set(Number(r.id), String(r.leave_type));
+    }
+
     const ws = await loadAttendanceWorkSettings();
     const punchMap = await loadPunchMap(
       pool,
@@ -2311,6 +2354,7 @@ router.get("/hr/attendance", requireModuleView("page:/hr/attendance"), async (re
         checkOutLat: r.checkOutLat ? Number(r.checkOutLat) : null,
         checkOutLng: r.checkOutLng ? Number(r.checkOutLng) : null,
         status: r.status ?? 'absent',
+        leaveType: ltMap.get(r.id) ?? null,
         // hoursWorked keeps its historical meaning (multi-punch aware via
         // derived.workingHours — the same figure the day is paid on).
         hoursWorked: derived.workingHours,
@@ -2350,8 +2394,26 @@ router.get("/hr/attendance", requireModuleView("page:/hr/attendance"), async (re
     .where(eq(attendanceTable.date, targetDate));
   const attMap = new Map(rows.map((r) => [r.employeeId, r]));
 
+  // leave_type is a raw-migration column, invisible to the drizzle row —
+  // read it separately so a stored sick day round-trips as sick, not casual.
+  const dayLtMap = new Map<number, string>();
+  {
+    const { rows: lt } = await pool.query(
+      `SELECT id, leave_type FROM attendance WHERE date = $1 AND leave_type IS NOT NULL`,
+      [targetDate],
+    );
+    for (const r of lt) dayLtMap.set(Number(r.id), String(r.leave_type));
+  }
+
   const wsDay = await loadAttendanceWorkSettings();
   const dayPunchMap = await loadPunchMap(pool, targetDate, targetDate);
+
+  // What the company calendar says about this date: a rowless day on a holiday
+  // or configured weekly off displays as that, not as absent — matching how the
+  // pay formula prices it. A stored row still outvotes the calendar.
+  const { policy: dayPolicy } = await loadPayrollSettings(pool);
+  const dayCal = calendarDayInfo(targetDate, dayPolicy, await loadHolidaySet(pool, targetDate, targetDate));
+  const syntheticStatus = dayCal.holiday ? "company_holiday" : dayCal.weeklyOff ? "weekly_off" : "absent";
 
   const emptyDerived = {
     punches: [] as any[], workingHours: null as number | null,
@@ -2380,11 +2442,12 @@ router.get("/hr/attendance", requireModuleView("page:/hr/attendance"), async (re
         checkOutLat: r.checkOutLat ? Number(r.checkOutLat) : null,
         checkOutLng: r.checkOutLng ? Number(r.checkOutLng) : null,
         status: r.status,
+        leaveType: dayLtMap.get(r.id) ?? null,
         hoursWorked: derived.workingHours,
         ...derived,
       };
     }
-    // No record yet — synthetic absent row
+    // No record yet — synthetic row: absent, unless the calendar pays the day.
     return {
       id: null,
       employeeId: emp.id,
@@ -2396,7 +2459,8 @@ router.get("/hr/attendance", requireModuleView("page:/hr/attendance"), async (re
       checkInLng: null,
       checkOutLat: null,
       checkOutLng: null,
-      status: "absent",
+      status: syntheticStatus,
+      leaveType: null,
       hoursWorked: null,
       ...emptyDerived,
     };
@@ -2417,15 +2481,155 @@ router.get("/hr/attendance", requireModuleView("page:/hr/attendance"), async (re
 // day-start / grace / overtime settings. Read-only; the values are edited
 // through company settings' general_settings like the thresholds always were.
 router.get("/hr/attendance/config", requireModuleView("page:/hr/attendance"), async (_req, res): Promise<void> => {
-  const [thresholds, ws] = await Promise.all([
-    loadAttendanceThresholds(pool),
+  const [settings, ws] = await Promise.all([
+    loadPayrollSettings(pool),
     loadAttendanceWorkSettings(),
   ]);
   // `today` = the company's CURRENT operational date. Clients must key their
   // "today" views on this (or on `timeZone`) — a device outside the company
   // timezone that uses its own calendar asks for the wrong register day and
   // can't see the open session the server is holding for it.
-  res.json({ ...thresholds, ...ws, today: new Date().toLocaleDateString("en-CA", { timeZone: ws.timeZone }) });
+  // weeklyOffs travels along so the calendar can shade configured off days
+  // exactly as the server will price them.
+  res.json({
+    ...settings.thresholds, ...ws,
+    weeklyOffs: settings.policy.weeklyOffs,
+    today: new Date().toLocaleDateString("en-CA", { timeZone: ws.timeZone }),
+  });
+});
+
+// ── Company holidays ─────────────────────────────────────────────────────────
+// Admin-defined paid days. Every employee's tracked month pays them without an
+// attendance row; a stored row for the date (worked, or a correction) outvotes
+// the calendar per employee — that is the override mechanism, so there is no
+// per-employee holiday table. Writes re-run the salary accrual sweep, which
+// re-prices unapproved months only (signed-off months are locked and skipped).
+// Listing stays view-guarded (not HO-only) on purpose: every employee's
+// attendance calendar shades company holidays, so anyone who can see the
+// register needs the list. Only the WRITES below are Head Office actions.
+router.get("/hr/holidays", requireModuleView("page:/hr/attendance"), async (req, res): Promise<void> => {
+  const year = Number((req.query as any)?.year);
+  const params: unknown[] = [];
+  let where = "";
+  if (Number.isInteger(year) && year > 1900) {
+    params.push(year);
+    where = `WHERE EXTRACT(YEAR FROM holiday_date) = $1`;
+  }
+  const { rows } = await pool.query(
+    `SELECT id, to_char(holiday_date, 'YYYY-MM-DD') AS date, name
+       FROM company_holidays ${where} ORDER BY holiday_date`, params);
+  res.json(rows);
+});
+
+router.post("/hr/holidays", requireModuleAction("page:/hr/attendance", "edit"), async (req, res): Promise<void> => {
+  // Holidays move every employee's pay, so like attendance correction this is
+  // a Head Office action even for branch managers holding the edit right.
+  if ((req as any).employee?.branchType !== "headoffice") {
+    res.status(403).json({ error: "Only Head Office can manage company holidays." });
+    return;
+  }
+  const date = String((req.body as any)?.date ?? "").slice(0, 10);
+  const name = String((req.body as any)?.name ?? "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    res.status(400).json({ error: "date must be YYYY-MM-DD" }); return;
+  }
+  if (!name) { res.status(400).json({ error: "A holiday name is required" }); return; }
+  const { rows: [row] } = await pool.query(
+    `INSERT INTO company_holidays (holiday_date, name) VALUES ($1, $2)
+     ON CONFLICT (holiday_date) DO NOTHING
+     RETURNING id, to_char(holiday_date, 'YYYY-MM-DD') AS date, name`,
+    [date, name],
+  );
+  if (!row) {
+    res.status(409).json({ error: "That date is already a company holiday." });
+    return;
+  }
+  // Re-price unapproved salary accruals across all employees — the holiday may
+  // sit anywhere in their open months. Locked (signed-off) months are skipped
+  // by the sweep itself.
+  await runSalaryAccrual(pool).catch((e) =>
+    console.error("[holidays] accrual re-run after create failed:", e));
+  logActivity({
+    action: "CREATE", module: "hr", entityType: "company_holiday", entityId: Number(row.id),
+    description: `Company holiday added: ${name} on ${date}`,
+    user: (req as any).employee?.username ?? "system",
+    metadata: { date, name },
+  }).catch(() => {});
+  res.status(201).json(row);
+});
+
+router.delete("/hr/holidays/:id", requireModuleAction("page:/hr/attendance", "edit"), async (req, res): Promise<void> => {
+  if ((req as any).employee?.branchType !== "headoffice") {
+    res.status(403).json({ error: "Only Head Office can manage company holidays." });
+    return;
+  }
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isInteger(id) || id <= 0) { res.status(400).json({ error: "Invalid id" }); return; }
+  const { rows: [gone] } = await pool.query(
+    `DELETE FROM company_holidays WHERE id = $1
+     RETURNING to_char(holiday_date, 'YYYY-MM-DD') AS date, name`, [id]);
+  if (!gone) { res.status(404).json({ error: "Not found" }); return; }
+  await runSalaryAccrual(pool).catch((e) =>
+    console.error("[holidays] accrual re-run after delete failed:", e));
+  logActivity({
+    action: "DELETE", module: "hr", entityType: "company_holiday", entityId: id,
+    description: `Company holiday removed: ${gone.name} on ${gone.date}`,
+    user: (req as any).employee?.username ?? "system",
+    metadata: { date: gone.date, name: gone.name },
+  }).catch(() => {});
+  res.json({ ok: true });
+});
+
+// ── Leave balance ────────────────────────────────────────────────────────────
+// Casual + sick allocated / taken / remaining for one employee-month, computed
+// by the SAME summary the pay formula uses — never a hand-rolled count.
+router.get("/hr/leave-balance", requireModuleView("page:/hr/attendance"), async (req, res): Promise<void> => {
+  const caller = (req as any).employee as { id: number; branchType: string } | undefined;
+  let employeeId = Number((req.query as any)?.employeeId);
+  // Non-Head-Office callers always get their own balance, whatever they ask for.
+  if (!caller) { res.status(401).json({ error: "Authentication required" }); return; }
+  if (caller.branchType !== "headoffice" || !Number.isInteger(employeeId) || employeeId <= 0) {
+    employeeId = caller.id;
+  }
+  const now = new Date();
+  const year = Number((req.query as any)?.year) || now.getFullYear();
+  const month = Number((req.query as any)?.month) || now.getMonth() + 1;
+  if (!Number.isInteger(year) || year < 1900 || !Number.isInteger(month) || month < 1 || month > 12) {
+    res.status(400).json({ error: "Invalid year/month" }); return;
+  }
+  const mm = String(month).padStart(2, "0");
+  const first = `${year}-${mm}-01`;
+  const last = `${year}-${mm}-${String(new Date(year, month, 0).getDate()).padStart(2, "0")}`;
+  const { policy, thresholds } = await loadPayrollSettings(pool);
+  const { rows: monthRows } = await pool.query(
+    `SELECT a.date, a.status, a.leave_type AS "leaveType",
+            a.check_in AS "checkIn", a.check_out AS "checkOut",
+            ap.punched_hours AS "punchedHours"
+       FROM attendance a
+       ${PUNCHED_HOURS_JOIN("a")}
+      WHERE a.employee_id = $1 AND a.date >= $2 AND a.date <= $3`,
+    [employeeId, first, last],
+  );
+  // Synthesised calendar days (rowless weekly offs / holidays) are bounded to
+  // today: a Sunday three weeks from now is not leave already "taken". Stored
+  // rows — leave approved in advance — still count whatever their date.
+  const summary = monthLeaveSummary(monthRows, policy, thresholds, {
+    year, month, holidays: await loadHolidaySet(pool, first, last),
+    until: await businessTodayStr(),
+  });
+  res.json({
+    employeeId, year, month, tracked: summary.tracked,
+    casual: {
+      allowed: policy.paidCasualLeavesPerMonth,
+      taken: summary.leaveTaken,
+      remaining: Math.max(0, policy.paidCasualLeavesPerMonth - summary.leaveTaken),
+    },
+    sick: {
+      allowed: policy.paidSickLeavesPerMonth,
+      taken: summary.sickLeaveTaken,
+      remaining: Math.max(0, policy.paidSickLeavesPerMonth - summary.sickLeaveTaken),
+    },
+  });
 });
 
 router.post("/hr/attendance/check-in", requireModuleAction("page:/hr/attendance", "add"), async (req, res): Promise<void> => {
@@ -2791,7 +2995,7 @@ router.post("/hr/leaves/:id/approve", requireModuleAction("page:/hr/attendance",
 
   const { rows: [leave] } = await pool.query(
     `SELECT l.id, l.employee_id AS "employeeId", l.from_date AS "fromDate",
-            l.to_date AS "toDate", l.status,
+            l.to_date AS "toDate", l.status, l.leave_type AS "leaveType",
             e.name AS "employeeName", e.branch_type AS "branchType", e.branch_id AS "branchId"
        FROM leaves l JOIN employees e ON e.id = l.employee_id
       WHERE l.id = $1`, [id]);
@@ -2848,13 +3052,18 @@ router.post("/hr/leaves/:id/approve", requireModuleAction("page:/hr/attendance",
             { conflict: true },
           );
         }
+        // The stamp carries the leave TYPE so the pay formula can charge the
+        // right allowance: sick requests consume the sick allowance, everything
+        // else (casual/annual/other) consumes casual — the pre-split behaviour.
+        const stampType = leave.leaveType === "sick" ? "sick" : "casual";
         for (const dateStr of leaveDates) {
           await q.query(
-            `INSERT INTO attendance (employee_id, date, status)
-             VALUES ($1, $2, 'leave')
-             ON CONFLICT (employee_id, date) DO UPDATE SET status = 'leave'
+            `INSERT INTO attendance (employee_id, date, status, leave_type)
+             VALUES ($1, $2, 'leave', $3)
+             ON CONFLICT (employee_id, date) DO UPDATE
+               SET status = 'leave', leave_type = $3
              WHERE attendance.check_in IS NULL`,
-            [leave.employeeId, dateStr],
+            [leave.employeeId, dateStr, stampType],
           );
         }
       });
@@ -2993,7 +3202,7 @@ router.put("/hr/attendance", requireModuleAction("page:/hr/attendance", "edit"),
   const employeeId = Number((req.body as any)?.employeeId);
   const date = String((req.body as any)?.date ?? "").slice(0, 10);
   const status = String((req.body as any)?.status ?? "");
-  const VALID = ["present", "half_day", "absent", "leave"];
+  const VALID = ["present", "half_day", "absent", "leave", "company_holiday", "weekly_off"];
   if (!Number.isInteger(employeeId) || employeeId <= 0) {
     res.status(400).json({ error: "employeeId is required" }); return;
   }
@@ -3003,9 +3212,59 @@ router.put("/hr/attendance", requireModuleAction("page:/hr/attendance", "edit"),
   if (!VALID.includes(status)) {
     res.status(400).json({ error: `status must be one of ${VALID.join(", ")}` }); return;
   }
+  // Leave now has a type — sick draws on the sick allowance, casual on the
+  // casual one. Only meaningful with status 'leave'; stored NULL otherwise.
+  const leaveTypeRaw = (req.body as any)?.leaveType;
+  const leaveType = status === "leave"
+    ? (leaveTypeRaw === "sick" ? "sick" : "casual")
+    : null;
+  const force = (req.body as any)?.force === true;
 
   const [emp] = await db.select().from(employeesTable).where(eq(employeesTable.id, employeeId)).limit(1);
   if (!emp) { res.status(404).json({ error: "Employee not found" }); return; }
+
+  // Casual-leave-deducting weekly off with the month's casual allowance already
+  // exhausted: what happens is the company's choice. 'ask' makes the manager
+  // confirm the unpaid day (409, resubmit with force); 'absent' converts the
+  // day outright — the setting IS the answer, so force does not bypass it.
+  // The check guards the EFFECTIVE stored status, and it is advisory for pay
+  // (raced saves are still priced correctly), so it sits outside the write lock.
+  let effectiveStatus = status;
+  if (status === "weekly_off") {
+    const { policy, thresholds } = await loadPayrollSettings(pool);
+    const rule = calendarDayInfo(date, policy, new Set()).weeklyOff;
+    const gateApplies = rule?.policy === "casual_leave"
+      && (policy.weeklyOffExhaustedAction === "absent" || !force);
+    if (gateApplies) {
+      const [yy, mm] = date.split("-").map(Number);
+      const mFirst = `${yy}-${String(mm).padStart(2, "0")}-01`;
+      const mLast = `${yy}-${String(mm).padStart(2, "0")}-${String(new Date(yy, mm, 0).getDate()).padStart(2, "0")}`;
+      const { rows: monthRows } = await pool.query(
+        `SELECT a.date, a.status, a.leave_type AS "leaveType",
+                a.check_in AS "checkIn", a.check_out AS "checkOut",
+                ap.punched_hours AS "punchedHours"
+           FROM attendance a
+           ${PUNCHED_HOURS_JOIN("a")}
+          WHERE a.employee_id = $1 AND a.date >= $2 AND a.date <= $3 AND a.date <> $4`,
+        [employeeId, mFirst, mLast, date],
+      );
+      const proposed = [...monthRows, { date, status: "weekly_off" }];
+      const summary = monthLeaveSummary(proposed, policy, thresholds, {
+        year: yy, month: mm, holidays: await loadHolidaySet(pool, mFirst, mLast),
+      });
+      if (summary.leaveTaken > policy.paidCasualLeavesPerMonth) {
+        if (policy.weeklyOffExhaustedAction === "absent") {
+          effectiveStatus = "absent";
+        } else {
+          res.status(409).json({
+            code: "CASUAL_LEAVE_EXHAUSTED",
+            error: `${emp.name} has no casual leave left this month — this weekly off will be unpaid (loss of pay). Save anyway to confirm.`,
+          });
+          return;
+        }
+      }
+    }
+  }
 
   // Explicit hours win over the status label when supplied, because that is what
   // the day is priced on. Clearing them (null) drops the day back to being
@@ -3025,14 +3284,15 @@ router.put("/hr/attendance", requireModuleAction("page:/hr/attendance", "edit"),
   try {
     saved = await withAttendanceWrite(employeeId, [date], async (q) => {
       const { rows: [r] } = await q.query(
-        `INSERT INTO attendance (employee_id, date, status, check_in, check_out)
-         VALUES ($1, $2, $3, $4, $5)
+        `INSERT INTO attendance (employee_id, date, status, leave_type, check_in, check_out)
+         VALUES ($1, $2, $3, $4, $5, $6)
          ON CONFLICT (employee_id, date) DO UPDATE
-            SET status    = EXCLUDED.status,
-                check_in  = CASE WHEN $6 THEN EXCLUDED.check_in  ELSE attendance.check_in  END,
-                check_out = CASE WHEN $7 THEN EXCLUDED.check_out ELSE attendance.check_out END
-         RETURNING id, employee_id, date, status, check_in, check_out`,
-        [employeeId, date, status, checkIn, checkOut, hasCheckIn, hasCheckOut],
+            SET status     = EXCLUDED.status,
+                leave_type = EXCLUDED.leave_type,
+                check_in   = CASE WHEN $7 THEN EXCLUDED.check_in  ELSE attendance.check_in  END,
+                check_out  = CASE WHEN $8 THEN EXCLUDED.check_out ELSE attendance.check_out END
+         RETURNING id, employee_id, date, status, leave_type, check_in, check_out`,
+        [employeeId, date, effectiveStatus, leaveType, checkIn, checkOut, hasCheckIn, hasCheckOut],
       );
       // A correction that sets the day's times explicitly is the new truth for
       // its hours, so the punch detail must follow: multi-punch days are priced
@@ -3066,8 +3326,8 @@ router.put("/hr/attendance", requireModuleAction("page:/hr/attendance", "edit"),
   logActivity({
     action: "UPDATE", module: "hr", entityType: "attendance", entityId: Number(saved?.id ?? 0),
     user: (req as any).employee?.username ?? "system",
-    description: `Attendance corrected for ${emp.name} on ${date} → ${status}`,
-    metadata: { employeeId, date, status, checkIn, checkOut },
+    description: `Attendance corrected for ${emp.name} on ${date} → ${effectiveStatus}${leaveType ? ` (${leaveType})` : ""}${effectiveStatus !== status ? ` (requested ${status}; converted — casual leave exhausted)` : ""}`,
+    metadata: { employeeId, date, status: effectiveStatus, requestedStatus: status, leaveType, checkIn, checkOut },
   }).catch(() => {});
 
   res.json({
@@ -3075,6 +3335,7 @@ router.put("/hr/attendance", requireModuleAction("page:/hr/attendance", "edit"),
     employeeId: Number(saved?.employee_id),
     employeeName: emp.name,
     date,
+    leaveType: saved?.leave_type ?? null,
     checkIn: saved?.check_in ? new Date(saved.check_in).toISOString() : null,
     checkOut: saved?.check_out ? new Date(saved.check_out).toISOString() : null,
   });

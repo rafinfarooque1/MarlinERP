@@ -14,7 +14,7 @@
  */
 import { useEffect, useRef } from 'react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { useListWarehouses, useListOutlets } from '@workspace/api-client-react';
+import { useListWarehouses, useListOutlets, useGetMe } from '@workspace/api-client-react';
 import { Building2, Warehouse, Store } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useOutletsEnabled } from '@/lib/useFeatureFlags';
@@ -31,17 +31,37 @@ export function LocationFilter({ value, onChange, className, warehouseId }: Loca
   const { data: wh = [] } = useListWarehouses();
   const { data: ol = [] } = useListOutlets();
   const { outletsEnabled } = useOutletsEnabled();
+  const { data: me } = useGetMe();
+
+  // Branch staff only ever see their own data (LBAC), so the filter must not
+  // offer — or even name — locations outside their scope: their own branch
+  // (plus, for a warehouse, its child outlets) is the whole world here.
+  const myBranchType = (me as any)?.branchType as 'headoffice' | 'warehouse' | 'outlet' | undefined;
+  const myBranchId = Number((me as any)?.branchId) || 0;
+  const locked = (myBranchType === 'warehouse' || myBranchType === 'outlet') && myBranchId > 0;
 
   // Outlet Management off ⇒ Outlet is not offered as a filter at all. Hiding
   // the option never hides data: the default 'all' still aggregates historical
   // outlet rows, so totals stay complete — only the ability to single out an
   // outlet goes away.
-  const showOutlets = outletsEnabled;
-
-  const warehouses = wh as any[];
-  const outlets    = warehouseId
-    ? (ol as any[]).filter(o => Number(o.warehouseId) === warehouseId)
+  const scopedWh = locked
+    ? (wh as any[]).filter(w => myBranchType === 'warehouse' && Number(w.id) === myBranchId)
+    : (wh as any[]);
+  const scopedOl = locked
+    ? (ol as any[]).filter(o =>
+        myBranchType === 'outlet'
+          ? Number(o.id) === myBranchId
+          : Number(o.warehouseId) === myBranchId)
     : (ol as any[]);
+
+  const showOutlets = outletsEnabled && (!locked || scopedOl.length > 0);
+  const showHeadOffice = !locked;
+  const showWarehouses = !locked || scopedWh.length > 0;
+
+  const warehouses = scopedWh;
+  const outlets    = warehouseId
+    ? scopedOl.filter(o => Number(o.warehouseId) === warehouseId)
+    : scopedOl;
 
   // If outlets get hidden while an outlet filter is active, fall back to "All"
   // rather than leaving the report pinned to an invisible selection.
@@ -93,8 +113,8 @@ export function LocationFilter({ value, onChange, className, warehouseId }: Loca
         </SelectTrigger>
         <SelectContent>
           <SelectItem value="all">All</SelectItem>
-          <SelectItem value="headoffice">Head Office</SelectItem>
-          <SelectItem value="warehouse">Warehouse</SelectItem>
+          {showHeadOffice && <SelectItem value="headoffice">Head Office</SelectItem>}
+          {showWarehouses && <SelectItem value="warehouse">Warehouse</SelectItem>}
           {showOutlets && <SelectItem value="outlet">Outlet</SelectItem>}
         </SelectContent>
       </Select>

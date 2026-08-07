@@ -16,7 +16,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import {
   usePaginatedQuotations, useCreateQuotation, useUpdateQuotation, useDeleteQuotation,
   useSetQuotationStatus, useListItems, useListStock,
-  useGetCompanySettings, useListCoupons, customFetch,
+  useGetCompanySettings, useListCoupons, customFetch, useGetMe,
   ensureQuotationShareLink, absoluteShareUrl, checkQuotationStock, requestQuotationPdfUrl,
   type QuotationListRow, type QuotationStockShortfall,
 } from '@workspace/api-client-react';
@@ -279,8 +279,36 @@ export default function Quotations() {
   const [showNewCustomer, setShowNewCustomer] = useState(false);
   const [newCustomerName, setNewCustomerName] = useState('');
 
-  const form = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: defaultFormValues });
+  // Branch staff never choose a quoting location — their login decides it,
+  // exactly as the server enforces on save. The selector below renders as a
+  // read-only label for them, so the defaults must already carry the pin.
+  const { data: me } = useGetMe();
+  const isHOUser = !(me as any)?.branchType || (me as any)?.branchType === 'headoffice';
+  const myBranchType = ((me as any)?.branchType ?? 'headoffice') as 'outlet' | 'warehouse' | 'headoffice';
+  const myBranchId = Number((me as any)?.branchId) || 0;
+  const pinnedLocation = !isHOUser && myBranchId > 0 && (myBranchType === 'warehouse' || myBranchType === 'outlet')
+    ? { locationType: myBranchType, locationId: myBranchId }
+    : null;
+  const effectiveDefaults: FormValues = useMemo(() => ({
+    ...defaultFormValues,
+    ...(pinnedLocation ?? {}),
+  }), [pinnedLocation?.locationType, pinnedLocation?.locationId]);
+
+  const form = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: effectiveDefaults });
   const { fields, append, remove } = useFieldArray({ control: form.control, name: 'lineItems' });
+
+  // Cold-load guard: a create form opened before /api/me resolved still holds
+  // the module defaults — pin the location once the session arrives. CREATE
+  // forms only; edits keep the quotation's stored location.
+  useEffect(() => {
+    if (!pinnedLocation || editItem || !isOpen) return;
+    if (form.getValues('locationId') !== pinnedLocation.locationId ||
+        form.getValues('locationType') !== pinnedLocation.locationType) {
+      form.setValue('locationType', pinnedLocation.locationType);
+      form.setValue('locationId', pinnedLocation.locationId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pinnedLocation?.locationType, pinnedLocation?.locationId, editItem, isOpen]);
 
   // ── Keyboard Entry Mode ──
   const scopeRef = useRef<HTMLFormElement>(null);
@@ -519,7 +547,7 @@ export default function Quotations() {
           if (viewItem?.id === editItem.id) setViewItem({ ...viewItem, ...updated });
           setIsOpen(false);
           setEditItem(null);
-          form.reset(defaultFormValues);
+          form.reset(effectiveDefaults);
         },
         onError: (e: any) => {
           if (e?.status === 409) {
@@ -537,7 +565,7 @@ export default function Quotations() {
           toast.success(`Quotation ${created?.quotationNumber ?? ''} saved`);
           invalidateQuotations();
           setIsOpen(false);
-          form.reset(defaultFormValues);
+          form.reset(effectiveDefaults);
         },
         onError: (e: any) => toast.error(e?.data?.error || e.message || 'Could not save quotation'),
         onSettled: () => { submitLockRef.current = false; },
@@ -715,7 +743,7 @@ export default function Quotations() {
               </Button>
             )}
             {perm.canAdd && (
-              <Button onClick={() => { setEditItem(null); form.reset({ ...defaultFormValues, quoteDate: new Date().toISOString().split('T')[0], validTill: defaultValidTill() }); setIsOpen(true); }}>
+              <Button onClick={() => { setEditItem(null); form.reset({ ...effectiveDefaults, quoteDate: new Date().toISOString().split('T')[0], validTill: defaultValidTill() }); setIsOpen(true); }}>
                 <Plus className="w-4 h-4 mr-2" /> New Quotation
               </Button>
             )}
@@ -865,7 +893,7 @@ export default function Quotations() {
       </div>
 
       {/* Quotation Dialog */}
-      <Dialog open={isOpen} onOpenChange={v => { setIsOpen(v); if (!v) { setEditItem(null); form.reset(defaultFormValues); } }}>
+      <Dialog open={isOpen} onOpenChange={v => { setIsOpen(v); if (!v) { setEditItem(null); form.reset(effectiveDefaults); } }}>
         <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto" onOpenAutoFocus={autoFocusFirst}>
           <DialogHeader><DialogTitle>{editItem ? `Edit Quotation — ${editItem.quotationNumber}` : 'New Quotation'}</DialogTitle></DialogHeader>
           <Form {...form}>
@@ -879,6 +907,21 @@ export default function Quotations() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <FormField control={form.control} name="locationId" render={({ field }) => (
                   <FormItem><FormLabel>Selling Location <span className="text-destructive">*</span></FormLabel>
+                    {/* Branch staff never choose — their login decides the
+                        location (server enforces the same rule), so the
+                        dropdown is replaced by a read-only fact and other
+                        locations are never listed. */}
+                    {!isHOUser ? (
+                      <div className="h-9 flex items-center px-3 rounded-md border border-border bg-muted/30 text-sm font-medium">
+                        {(() => {
+                          const lt = form.watch('locationType');
+                          const hit = lt === 'warehouse'
+                            ? (warehouses as any[]).find((w: any) => Number(w.id) === Number(field.value))
+                            : outlets.find(o => Number(o.id) === Number(field.value));
+                          return hit?.name || (me as any)?.branchName || '—';
+                        })()}
+                      </div>
+                    ) : (
                     <Select
                       onValueChange={v => {
                         const [type, idStr] = v.split(':');
@@ -906,7 +949,8 @@ export default function Quotations() {
                           </SelectGroup>
                         )}
                       </SelectContent>
-                    </Select><FormMessage /></FormItem>
+                    </Select>
+                    )}<FormMessage /></FormItem>
                 )} />
                 <FormField control={form.control} name="customerId" render={({ field }) => {
                   const filteredCustomers = customers.filter(c =>
@@ -1055,9 +1099,6 @@ export default function Quotations() {
                   <>
                     <div className="flex justify-between items-center mb-3">
                       <p className="font-semibold">Quoted Items <span className="text-xs text-muted-foreground font-normal ml-1">(stock shown for reference — nothing is reserved)</span></p>
-                      <Button type="button" variant="outline" size="sm" onClick={() => append({ itemId: 0, quantity: 1, unitPrice: 0, unitDiscount: 0, taxable: customerHasGstin, taxableTouched: false })}>
-                        <Plus className="w-3 h-3 mr-1" /> Add Item
-                      </Button>
                     </div>
                     <div className="overflow-x-auto"><div className="min-w-[720px] space-y-2">
                       {fields.map((field, index) => {
@@ -1207,6 +1248,9 @@ export default function Quotations() {
                         );
                       })}
                     </div></div>
+                    <Button type="button" variant="outline" size="sm" className="mt-3 w-full border-dashed" onClick={() => append({ itemId: 0, quantity: 1, unitPrice: 0, unitDiscount: 0, taxable: customerHasGstin, taxableTouched: false })}>
+                      <Plus className="w-3 h-3 mr-1" /> Add Item
+                    </Button>
                   </>
                 )}
               </div>
@@ -1319,7 +1363,7 @@ export default function Quotations() {
                       <span className="font-mono text-primary">₹{totals.finalAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
                     </div>
                   )}
-                  <Button variant="outline" type="button" onClick={() => { setIsOpen(false); setEditItem(null); form.reset(defaultFormValues); }}>Cancel</Button>
+                  <Button variant="outline" type="button" onClick={() => { setIsOpen(false); setEditItem(null); form.reset(effectiveDefaults); }}>Cancel</Button>
                   <Button type="submit" disabled={(editItem ? updateMutation.isPending : createMutation.isPending) || !watchLocationId || totals.finalAmount === 0}>
                     {editItem
                       ? (updateMutation.isPending ? 'Saving…' : 'Save Changes')

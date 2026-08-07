@@ -20,4 +20,6 @@ export interface CashBankInput {
   locationId?: number;
   /** Recorded as the backing ledger's opening balance (debit) through the opening-balances store — never a stored column. Absent or blank means 0. */
   openingBalance?: number;
+  /** Bank/UPI accounts only — whether collections into this account must pass through Reconciliation before hitting the bank balance. Defaults to true for bank/UPI/other, ignored for cash. */
+  requiresReconciliation?: boolean;
 }

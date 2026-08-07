@@ -6,14 +6,13 @@ import {
 } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { usePermission } from '@/lib/usePermission';
-import { COLLECTION_METHODS, paymentModeLabel } from '@/lib/paymentModes';
+import { ReceiveIntoSelect } from '@/components/receive-into-select';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { HandCoins, ChevronDown, ChevronRight, Search, Wallet, Phone, ShieldOff } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -45,7 +44,7 @@ function CollectPaymentDialog({ item, onOpenChange }: { item: any | null; onOpen
   const qc = useQueryClient();
   const createPayment = useCreateSalePayment();
   const [amount, setAmount] = useState('');
-  const [method, setMethod] = useState('cash');
+  const [ledgerId, setLedgerId] = useState(0);
   const [reference, setReference] = useState('');
   const [paymentDate, setPaymentDate] = useState(today());
 
@@ -54,7 +53,7 @@ function CollectPaymentDialog({ item, onOpenChange }: { item: any | null; onOpen
   if (item && item.saleId !== lastId) {
     setLastId(item.saleId);
     setAmount(String(item.balanceDue ?? ''));
-    setMethod('cash');
+    setLedgerId(0);
     setReference('');
     setPaymentDate(today());
   }
@@ -64,8 +63,9 @@ function CollectPaymentDialog({ item, onOpenChange }: { item: any | null; onOpen
     const amt = Number(amount);
     if (!Number.isFinite(amt) || amt <= 0) { toast.error('Enter a valid amount'); return; }
     if (amt > Number(item.balanceDue) + 0.01) { toast.error(`Amount exceeds balance due (₹${fmt(item.balanceDue)})`); return; }
+    if (!ledgerId) { toast.error('Pick the Cash / Bank account the money went into'); return; }
     createPayment.mutate(
-      { saleId: item.saleId, data: { method, amount: amt, referenceNumber: reference.trim() || undefined, paymentDate } },
+      { saleId: item.saleId, data: { receivedInLedgerId: ledgerId, amount: amt, referenceNumber: reference.trim() || undefined, paymentDate } },
       {
         onSuccess: () => {
           toast.success(`₹${fmt(amt)} recorded against ${item.invoiceNumber || `Sale #${item.saleId}`}`);
@@ -101,16 +101,13 @@ function CollectPaymentDialog({ item, onOpenChange }: { item: any | null; onOpen
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-1.5">
-              <label className="text-sm font-medium">Method</label>
-              <Select value={method} onValueChange={setMethod}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {COLLECTION_METHODS.map(m => (
-                    <SelectItem key={m} value={m}>{paymentModeLabel(m)}</SelectItem>
-                  ))}
-                  <SelectItem value="other">Other (cheque, adjustment…)</SelectItem>
-                </SelectContent>
-              </Select>
+              <label className="text-sm font-medium">Receive Into <span className="text-muted-foreground font-normal">(Cash / Bank)</span></label>
+              <ReceiveIntoSelect
+                locationType={item?.locationType}
+                locationId={item?.locationId}
+                value={ledgerId}
+                onChange={setLedgerId}
+              />
             </div>
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Reference <span className="text-muted-foreground font-normal">(optional)</span></label>

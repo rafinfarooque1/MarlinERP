@@ -64,6 +64,10 @@ export interface EnrichedPayrollRecord {
   // generated before it — UIs must omit the leave line then, never show 0.
   paidLeaveUsed?: number | null;
   paidLeaveAllowed?: number | null;
+  // Sick-leave snapshot (Aug 2026 casual/sick split). Null on runs generated
+  // before the split — same omit-never-zero rule.
+  sickLeaveUsed?: number | null;
+  sickLeaveAllowed?: number | null;
 }
 
 export interface EmployeeAdvance {

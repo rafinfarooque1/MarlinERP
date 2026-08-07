@@ -475,7 +475,7 @@ router.get("/accounts/journal-vouchers", requireModuleView("page:/accounts/vouch
  * to a location other than the one selected — the same rule the server
  * enforces on save.
  */
-router.get("/accounts/voucher-locations", requireModuleView(["page:/accounts/vouchers", "page:/operations/receipt-voucher", "page:/operations/payment-voucher"]), async (req, res): Promise<void> => {
+router.get("/accounts/voucher-locations", requireModuleView(["page:/accounts/vouchers", "page:/operations/receipt-voucher", "page:/operations/payment-voucher", "page:/sales/pos", "page:/outstanding", "page:/customers"]), async (req, res): Promise<void> => {
   const employee = (req as any).employee as { branchType?: string; branchId?: number } | undefined;
   const { rows: whs } = await pool.query(
     `SELECT id, name, cash_ledger_id FROM warehouses ORDER BY name`
@@ -1143,11 +1143,16 @@ export async function buildDerivedPostings(opts: { toDate?: string; q?: Q } = {}
   const { rows: salePays } = await q.query(
     // Allocation receipts (bill-wise settlement vouchers) carry the ledger the
     // money actually landed in — their sale_payments legs must debit THAT
-    // ledger, not the method-derived cash/clearing default.
+    // ledger, not the method-derived cash/clearing default. Sale-source
+    // receipts matter too: when a location's assigned bank/UPI account has
+    // reconciliation switched off, the collection is received DIRECTLY into
+    // that account's ledger instead of Electronic Clearing, and the books must
+    // debit what the receipt actually says.
     `SELECT sp.sale_id, sp.payment_date, sp.method, sp.amount,
-            rc.received_in_ledger_id AS alloc_in
+            CASE WHEN rc.source = 'allocation' THEN rc.received_in_ledger_id END AS alloc_in,
+            CASE WHEN rc.source = 'sale'       THEN rc.received_in_ledger_id END AS sale_in
      FROM sale_payments sp
-     LEFT JOIN receipts rc ON rc.id = sp.clearing_receipt_id AND rc.source = 'allocation'
+     LEFT JOIN receipts rc ON rc.id = sp.clearing_receipt_id AND rc.source IN ('allocation', 'sale')
      WHERE 1=1${upTo("sp.payment_date", spp)}`, spp
   );
   const spBySale = new Map<number, any[]>();
@@ -1209,18 +1214,30 @@ export async function buildDerivedPostings(opts: { toDate?: string; q?: Q } = {}
     for (const p of spBySale.get(s.id) ?? []) {
       const amt = Number(p.amount);
       paidViaSp += amt;
-      // Three flavours of collection leg:
+      // Four flavours of collection leg:
       //  · 'advance' — consumption of a customer advance: Dr the advance
       //    liability (the money arrived when the advance was received).
       //  · allocation-receipt legs — Dr the ledger the voucher received into.
+      //  · direct-posted — the sale receipt landed in an explicitly chosen or
+      //    assigned account (a bank/UPI account with reconciliation off, or a
+      //    cash-type account other than the till): Dr that account's ledger.
       //  · counter collections — cash box or Electronic Clearing, as ever.
+      // The receipt's received_in is honoured whenever it names something
+      // other than the two defaults (till / clearing); legacy rows point at
+      // exactly those defaults, so their postings stay bit-identical.
       let drLedger: number;
       let legDesc: string;
+      const saleIn = p.sale_in != null ? Number(p.sale_in) : null;
+      const directIn = saleIn != null && saleIn !== elecClr && saleIn !== cashLedger
+        ? saleIn : null;
       if (p.method === "advance") {
         drLedger = (s.customer_id ? byCode.get(`CADV-${s.customer_id}`)?.id : 0) || debtors;
         legDesc = `Advance adjusted — ${inv}`;
       } else if (p.alloc_in) {
         drLedger = Number(p.alloc_in);
+        legDesc = `Received — ${inv}`;
+      } else if (directIn != null) {
+        drLedger = directIn;
         legDesc = `Received — ${inv}`;
       } else {
         drLedger = p.method === "cash" ? cashLedger : elecClr;

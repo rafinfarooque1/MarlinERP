@@ -10,9 +10,8 @@ import { Badge } from '@/components/ui/badge';
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { HandCoins } from 'lucide-react';
-import { COLLECTION_METHODS, paymentModeLabel } from '@/lib/paymentModes';
+import { ReceiveIntoSelect } from '@/components/receive-into-select';
 import { toast } from 'sonner';
 
 const fmt = (n: unknown) => Number(n ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 });
@@ -44,7 +43,7 @@ export function CollectPaymentDialog({
   // Per-invoice form state, keyed by saleId — supports full and partial amounts.
   const [selected, setSelected] = useState<number | null>(null);
   const [amount, setAmount] = useState('');
-  const [method, setMethod] = useState('cash');
+  const [ledgerId, setLedgerId] = useState(0);
   const [reference, setReference] = useState('');
   const [paymentDate, setPaymentDate] = useState(today());
 
@@ -53,7 +52,7 @@ export function CollectPaymentDialog({
   const pick = (inv: any) => {
     setSelected(inv.saleId);
     setAmount(String(inv.balance ?? ''));
-    setMethod('cash');
+    setLedgerId(0);
     setReference('');
     setPaymentDate(today());
   };
@@ -71,8 +70,9 @@ export function CollectPaymentDialog({
     if (amt > Number(activeInv.balance) + 0.01) {
       toast.error(`Amount exceeds outstanding (₹${fmt(activeInv.balance)})`); return;
     }
+    if (!ledgerId) { toast.error('Pick the Cash / Bank account the money went into'); return; }
     createPayment.mutate(
-      { saleId: activeInv.saleId, data: { method, amount: amt, referenceNumber: reference.trim() || undefined, paymentDate } },
+      { saleId: activeInv.saleId, data: { receivedInLedgerId: ledgerId, amount: amt, referenceNumber: reference.trim() || undefined, paymentDate } },
       {
         onSuccess: () => {
           toast.success(`₹${fmt(amt)} recorded against ${activeInv.invoiceNumber || `Sale #${activeInv.saleId}`}`);
@@ -164,15 +164,13 @@ export function CollectPaymentDialog({
                     <Input type="date" value={paymentDate} onChange={(e) => setPaymentDate(e.target.value)} />
                   </div>
                   <div className="space-y-1.5">
-                    <label className="text-sm font-medium">Method</label>
-                    <Select value={method} onValueChange={setMethod}>
-                      <SelectTrigger><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        {COLLECTION_METHODS.map((m) => (
-                          <SelectItem key={m} value={m}>{paymentModeLabel(m)}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    <label className="text-sm font-medium">Receive Into <span className="text-muted-foreground font-normal">(Cash / Bank)</span></label>
+                    <ReceiveIntoSelect
+                      locationType={activeInv.locationType}
+                      locationId={activeInv.locationId}
+                      value={ledgerId}
+                      onChange={setLedgerId}
+                    />
                   </div>
                   <div className="space-y-1.5">
                     <label className="text-sm font-medium">Reference <span className="text-muted-foreground font-normal">(optional)</span></label>
