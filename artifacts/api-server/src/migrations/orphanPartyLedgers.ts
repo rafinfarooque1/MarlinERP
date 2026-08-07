@@ -4,10 +4,11 @@ import type { PgPool } from "@workspace/db";
  * Self-healing sweep for orphaned party ledgers.
  *
  * Every customer/vendor master auto-provisions a ledger in account_ledgers
- * (code CUST-<id> / VEND-<id>), and taking a party advance provisions a
- * second one (CADV-<id> / VADV-<id>). The normal DELETE routes remove the
- * party ledger with the master (though NOT the advance ledger — this sweep
- * is what reaps those), but a row deleted straight in the database leaves
+ * (code CUST-<id> / VEND-<id>), and paying a vendor beyond their bills
+ * provisions a second one (VADV-<id>; customers keep ONE ledger — their
+ * advance is its credit balance). The normal DELETE routes remove the
+ * party ledger with the master (though NOT the vendor advance ledger — this
+ * sweep is what reaps those), but a row deleted straight in the database leaves
  * its ledger behind — and because voucher entry, receipts and payments build
  * their party pickers from the chart of accounts (/accounts/chart/flat),
  * the "deleted" party keeps appearing in dropdowns. That is exactly what
@@ -81,8 +82,6 @@ export async function sweepOrphanPartyLedgers(pool: PgPool): Promise<string> {
                  (SELECT 1 FROM customers c WHERE c.id = substring(l.code, 6)::int))
            OR (l.code ~ '^VADV-[0-9]+$' AND NOT EXISTS
                  (SELECT 1 FROM vendors v2 WHERE v2.id = substring(l.code, 6)::int))
-           OR (l.code ~ '^CADV-[0-9]+$' AND NOT EXISTS
-                 (SELECT 1 FROM customers c2 WHERE c2.id = substring(l.code, 6)::int))
          )
        FOR UPDATE`);
 

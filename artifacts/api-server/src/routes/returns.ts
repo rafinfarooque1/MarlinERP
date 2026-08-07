@@ -1890,17 +1890,15 @@ router.get("/outstanding/receivables", requireModuleView(["page:/outstanding", "
     const ledgerByCustomer = rcvBalIdx
       ? rcvBalIdx.partyBalances("customer")
       : new Map<number, { balance: number }>();
-    // Customer advances (CADV-*): money parked beyond bills, adjustable against
-    // the next invoice. Ledger-anchored views only — the advance ledgers carry
-    // no location, so a branch/located slice has no honest figure to show.
+    // Customer advances: a CREDIT (negative) balance on the customer's own
+    // Sundry Debtor ledger IS the advance — no separate advance ledger exists
+    // (business decision, Aug 2026). Ledger-anchored views only — postings
+    // carry no location, so a branch/located slice has no honest figure.
     const advByCustomer = new Map<number, number>();
     if (rcvBalIdx) {
-      const { rows: advLs } = await pool.query(`SELECT id, code FROM account_ledgers WHERE code LIKE 'CADV-%'`);
-      for (const l of advLs) {
-        const m = /^CADV-(\d+)$/.exec(String(l.code));
-        if (!m) continue;
-        const adv = r2(Math.max(0, -rcvBalIdx.net(Number(l.id))));
-        if (adv > 0.004) advByCustomer.set(Number(m[1]), adv);
+      for (const [cid, b] of ledgerByCustomer) {
+        const adv = r2(Math.max(0, -Number(b.balance)));
+        if (adv > 0.004) advByCustomer.set(Number(cid), adv);
       }
     }
 

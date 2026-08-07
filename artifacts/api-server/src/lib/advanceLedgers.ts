@@ -2,38 +2,43 @@ import { pool } from "@workspace/db";
 import { resolveChartParentId } from "./chartGroups";
 
 /**
- * Party advance ledgers — bill-wise settlement (Task: bill-wise settlement &
- * advances).
+ * Party advances — bill-wise settlement.
  *
- * When a customer pays more than their open bills, the excess is NOT left as
- * a negative balance on the debtor ledger — it is parked in a dedicated
- * advance ledger:
+ * CUSTOMER side (business decision, Aug 2026 — final): there is NO separate
+ * customer-advance ledger. Every customer has exactly ONE ledger,
+ * CUST-<id> under Sundry Debtors, and an advance is simply a CREDIT
+ * (negative) balance on it. "Available advance" = max(0, −net) of that
+ * ledger.
  *
- *   CADV-<customerId>  "…— Advance"  liability, under Customer Advances (SYS-CURL)
- *   VADV-<vendorId>    "…— Advance"  asset,     under Vendor Advances   (SYS-CURA)
+ * VENDOR side is unchanged: money paid beyond a vendor's bills parks in
  *
- * The codes deliberately do NOT extend the party prefixes (CUST-/VEND-):
- * several queries parse a party id straight out of those codes with
+ *   VADV-<vendorId>  "…— Advance"  asset, under Vendor Advances (SYS-CURA)
+ *
+ * The VADV code deliberately does NOT extend the VEND- prefix: several
+ * queries parse a party id straight out of party codes with
  * `SUBSTRING(code FROM 6)::int` / `code LIKE 'VEND-%'`, and a VEND-ADV-7 row
- * would make every one of them throw or mis-parse. CADV-/VADV- match nothing
- * else in the chart.
+ * would make every one of them throw or mis-parse.
  *
- * Availability is LEDGER-AUTHORITATIVE: it is the advance ledger's balance in
- * the derived posting stream, not a hand-summed pair of columns — so a manual
- * journal touching the ledger moves the figure the same way a receipt does.
+ * Availability is LEDGER-AUTHORITATIVE: it is a ledger balance in the derived
+ * posting stream, not a hand-summed pair of columns — so a manual journal
+ * touching the ledger moves the figure the same way a receipt does.
  */
 
 export type AdvanceKind = "customer" | "vendor";
 
 type Queryable = { query: (sql: string, params?: unknown[]) => Promise<any> };
 
-export const CUSTOMER_ADVANCE_CONTAINER = "STD-GRP-CUST-ADV";
 export const VENDOR_ADVANCE_CONTAINER = "STD-GRP-VEND-ADV";
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
 
+/**
+ * The ledger a party's advance lives on. For a customer that is their ONE
+ * Sundry Debtor ledger (advance = credit balance); for a vendor it is the
+ * dedicated VADV- asset ledger.
+ */
 export function advanceLedgerCode(kind: AdvanceKind, partyId: number): string {
-  return kind === "customer" ? `CADV-${partyId}` : `VADV-${partyId}`;
+  return kind === "customer" ? `CUST-${partyId}` : `VADV-${partyId}`;
 }
 
 /**
@@ -57,6 +62,10 @@ export function parsePartyLedgerCode(
  * shared pool (idempotent either way), the ledger insert rides the caller's
  * transaction. Concurrency-safe via ON CONFLICT + re-select, the same pattern
  * every other system-ledger provisioner uses.
+ *
+ * Customers never get a second ledger: their advance IS the credit side of
+ * their own CUST- ledger, which is provisioned with the customer itself, so
+ * for customers this only resolves (and refuses to invent a misparented row).
  */
 export async function ensureAdvanceLedger(
   q: Queryable,
@@ -69,14 +78,16 @@ export async function ensureAdvanceLedger(
     `SELECT id FROM account_ledgers WHERE code = $1 LIMIT 1`, [code],
   );
   if (existing) return Number(existing.id);
+  if (kind === "customer") {
+    // CUST- ledgers are created with the customer (and healed by the boot
+    // sweep); a missing one is a data problem this helper must not paper over.
+    throw new Error(`Customer ${partyId} (${partyName}) has no CUST-${partyId} ledger to hold their advance`);
+  }
 
-  const container = kind === "customer" ? CUSTOMER_ADVANCE_CONTAINER : VENDOR_ADVANCE_CONTAINER;
-  const parentId = await resolveChartParentId(pool, container);
-  const type = kind === "customer" ? "liability" : "asset";
+  const parentId = await resolveChartParentId(pool, VENDOR_ADVANCE_CONTAINER);
+  const type = "asset";
   const name = `${partyName} — Advance`;
-  const description = kind === "customer"
-    ? "Money received from the customer beyond their bills, adjustable against future invoices"
-    : "Money paid to the vendor beyond their bills, adjustable against future purchases";
+  const description = "Money paid to the vendor beyond their bills, adjustable against future purchases";
 
   const { rows: [created] } = await q.query(
     `INSERT INTO account_ledgers (name, type, code, section, parent_id, is_group, is_system_group, description)
@@ -99,11 +110,13 @@ export interface AdvancePosition {
 }
 
 /**
- * The party's usable advance, from the books. Customer advances live on a
- * liability ledger (credit balance = available); vendor advances on an asset
- * ledger (debit balance = available). Reads only COMMITTED data — callers that
- * consume an advance must serialize on the party's advisory lock
- * (see advanceLockKey) so two writers cannot both read the same balance.
+ * The party's usable advance, from the books. A customer's advance is the
+ * CREDIT (negative) balance of their single Sundry Debtor ledger — the net of
+ * everything: bills, receipts, credit notes, journals. Vendor advances live on
+ * the dedicated VADV asset ledger (debit balance = available). Reads only
+ * COMMITTED data — callers that consume an advance must serialize on the
+ * party's advisory lock (see takeAdvanceLock) so two writers cannot both read
+ * the same balance.
  */
 export async function advanceAvailable(
   kind: AdvanceKind,
@@ -126,22 +139,22 @@ export async function advanceAvailable(
 
 /**
  * Bulk form of advanceAvailable for list endpoints: partyId → usable advance,
- * from the SAME balance index the caller already holds. Parties without an
- * advance ledger (or with zero available) are simply absent from the map.
- * This exists so list endpoints never invent their own advance definition —
- * the party ledger's credit side is a credit balance, NOT an advance.
+ * from the SAME balance index the caller already holds. Parties with zero
+ * available are simply absent from the map. This exists so list endpoints
+ * never invent their own advance definition. For customers the source is the
+ * credit side of their own CUST- ledger; for vendors the VADV- ledger.
  */
 export async function advanceBalanceMap(
   kind: AdvanceKind,
   idx: { net(ledgerId: number): number },
 ): Promise<Map<number, number>> {
-  const prefix = kind === "customer" ? "CADV-" : "VADV-";
+  const prefix = kind === "customer" ? "CUST-" : "VADV-";
   const { rows } = await pool.query<{ id: number; code: string }>(
     `SELECT id, code FROM account_ledgers WHERE code LIKE $1`, [`${prefix}%`],
   );
   const map = new Map<number, number>();
   for (const r of rows) {
-    const m = /^(?:CADV|VADV)-(\d+)$/.exec(String(r.code));
+    const m = /^(?:CUST|VADV)-(\d+)$/.exec(String(r.code));
     if (!m) continue;
     const net = idx.net(Number(r.id)); // raw Dr − Cr
     const available = kind === "customer" ? r2(Math.max(0, -net)) : r2(Math.max(0, net));

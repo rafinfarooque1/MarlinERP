@@ -23,8 +23,9 @@ const router = Router();
  * side — payable for a vendor, receivable for a customer. It is deliberately
  * **not** clamped at zero. A negative figure is a real position (a credit
  * balance on the party's account) and is labelled via `balanceSide` rather
- * than swallowed. It is NOT an advance: `advanceBalance` is a separate figure
- * read from the dedicated advance ledgers (see attachPartyBalance's map param).
+ * than swallowed. For a CUSTOMER that credit balance IS their advance
+ * (single-ledger model, Aug 2026): `advanceBalance` is simply its usable
+ * (clamped-at-zero) form, from the same ledger via advanceBalanceMap.
  *
  * `hasLedger: false` means the party was never provisioned an account ledger, so
  * nothing can be attributed to it. That is reported rather than shown as a
@@ -34,18 +35,14 @@ function attachPartyBalance(
   rows: any[],
   idx: { partyBalance(kind: "vendor" | "customer", id: number): { balance: number; net: number; ledgerId: number } | null },
   kind: "vendor" | "customer",
-  // partyId → usable advance from the CADV/VADV ledgers (advanceBalanceMap).
-  // The advance figure must come from the advance ledgers — the same source
-  // as /accounts/party-advance, the ageing reports and bill settlement. The
-  // party ledger's credit side is a CREDIT BALANCE (shown via balanceSide),
-  // not an advance: deriving "advance" from it made this list contradict
-  // every other advance surface in the ERP.
+  // partyId → usable advance (advanceBalanceMap): for customers the credit
+  // side of their OWN ledger (single-ledger model), for vendors the VADV
+  // ledger. Always the same source as /accounts/party-advance, the ageing
+  // reports and bill settlement, so every advance surface agrees.
   advances: Map<number, number>,
 ): void {
   for (const row of rows) {
     const b = idx.partyBalance(kind, Number(row.id));
-    // Advance is independent of the party ledger — an advance-only party has
-    // a CADV/VADV balance and no CUST/VEND ledger activity at all.
     row.advanceBalance = advances.get(Number(row.id)) ?? 0;
     if (b == null) {
       // No ledger was ever provisioned for this party, so nothing can be
@@ -183,10 +180,7 @@ router.get("/customers", requireModuleView(["page:/sales/pos", "page:/accounts/v
   const { rows } = await pool.query<any>(`
     SELECT
       c.*,
-      COALESCE(SUM(s.total_amount), 0)  AS "totalPurchases",
-      -- Invoice-level exposure, kept as a source-document figure only. It is NOT
-      -- the customer's current balance: see the ledger balance attached below.
-      GREATEST(0, COALESCE(SUM(${outstandingExpr("s")}), 0)) AS "invoiceOutstanding"
+      COALESCE(SUM(s.total_amount), 0)  AS "totalPurchases"
     FROM customers c
     LEFT JOIN sales s ON s.customer_id = c.id
     WHERE ${conds.join(" AND ")}
@@ -208,7 +202,6 @@ router.get("/customers", requireModuleView(["page:/sales/pos", "page:/accounts/v
   res.json(applyPaging(rows as any[], paging).map((r: any) => ({
     ...r,
     totalPurchases:      Number(r.totalPurchases),
-    invoiceOutstanding:  Number(r.invoiceOutstanding),
     // Kept nullable on purpose: Number(null) is 0, which would turn "this party
     // has no ledger" back into a confident zero balance.
     outstandingBalance:  r.outstandingBalance == null ? null : Number(r.outstandingBalance),

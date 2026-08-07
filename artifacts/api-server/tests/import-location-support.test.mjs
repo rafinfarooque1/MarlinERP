@@ -112,6 +112,7 @@ async function cleanup() {
   await sql(`DELETE FROM vendors WHERE name LIKE $1`, [`${TAG}%`]);
   await sql(`DELETE FROM import_rows WHERE batch_id IN (SELECT id FROM import_batches WHERE filename LIKE $1)`, [`${TAG}%`]);
   await sql(`DELETE FROM import_batches WHERE filename LIKE $1`, [`${TAG}%`]);
+  await sql(`DELETE FROM import_mappings WHERE source_name LIKE $1`, [`${TAG}%`]);
   await sql(`DELETE FROM employees WHERE username LIKE $1`, [`${TAG.toLowerCase()}%`]);
   await sql(`DELETE FROM permissions WHERE hierarchy_id IN (SELECT id FROM hierarchies WHERE name LIKE $1)`, [`${TAG}%`]);
   await sql(`DELETE FROM hierarchies WHERE name LIKE $1 AND reports_to_id IS NOT NULL ORDER BY level DESC`, [`${TAG}%`]).catch(async () => {
@@ -124,7 +125,7 @@ async function cleanup() {
 // ───────────────────────────────────────────────────────────────────────────
 console.log('\n[0] Authentication and fixtures');
 
-const loginRes = await post('/auth/login', { username: 'admin', password: process.env.TEST_ADMIN_PASSWORD || 'marlin1458' });
+const loginRes = await post('/auth/login', { username: process.env.TEST_USERNAME || 'admin', password: process.env.TEST_PASSWORD || process.env.TEST_ADMIN_PASSWORD || 'marlin1458' });
 authToken = loginRes.data?.token ?? '';
 assert('Admin login returns a token', !!authToken, `status=${loginRes.status}`);
 if (!authToken) { console.error('FATAL: no token'); process.exit(1); }
@@ -271,7 +272,21 @@ fixtures.itemId = (await sql(
   assert('Different-location row is an error', byInv(2)?.status === 'error' && /does not match/.test(byInv(2)?.reason ?? ''), JSON.stringify(byInv(2)).slice(0, 250));
   assert('Unknown-location row is an error', byInv(3)?.status === 'error', JSON.stringify(byInv(3)).slice(0, 250));
 
-  const commit = await post(`/imports/batches/${batchIds.sales}/commit`, {});
+  // Mapping-first framework: the SQL-created item was never mapped, so the
+  // valid row holds at needs_mapping until its names are mapped explicitly.
+  const { rows: [custRow] } = await sql(`SELECT id FROM customers WHERE name = $1`, [`${TAG} HO Trader`]);
+  const mapRes = await post(`/imports/batches/${batchIds.sales}/mappings`, { mappings: [
+    { kind: 'customer', name: `${TAG} HO Trader`, targetId: Number(custRow?.id ?? 0) },
+    { kind: 'product', name: `${TAG} Import Item`, targetId: fixtures.itemId },
+  ] });
+  assert('Sales batch names mapped', mapRes.status === 200 && (mapRes.data?.errors ?? []).length === 0,
+    JSON.stringify(mapRes.data).slice(0, 250));
+
+  // Transaction imports go through the wizard now: demo → approve. Direct
+  // commit is reserved for master modules and refuses transaction batches.
+  const demo = await post(`/imports/batches/${batchIds.sales}/demo`, {});
+  assert('Sales demo runs', demo.status === 200, JSON.stringify(demo.data).slice(0, 200));
+  const commit = await post(`/imports/batches/${batchIds.sales}/approve`, {});
   assert('Sales commit imports the valid invoice', commit.status === 200 && commit.data?.batch?.importedRows === 1, JSON.stringify(commit.data).slice(0, 250));
 
   const { rows: [sale] } = await sql(

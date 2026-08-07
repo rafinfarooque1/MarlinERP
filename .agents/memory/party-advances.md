@@ -1,43 +1,43 @@
 ---
 name: Party advances & bill-wise settlement
-description: CADV/VADV advance ledger design, allocation voucher lifecycle, explicit-first settlement, and the report-visibility traps for advance-only parties.
+description: Single-ledger customer advances (credit balance on CUST-), vendor VADV ledger, allocation voucher lifecycle, explicit-first settlement, and report-visibility traps.
 ---
 
-# Advance ledgers
-- `CADV-<customerId>` (liability, under STD-GRP-CUST-ADV/SYS-CURL) and `VADV-<vendorId>` (asset, under STD-GRP-VEND-ADV/SYS-CURA). Prefix length ≠ 5 ON PURPOSE: legacy parsers do `SUBSTRING(code FROM 6)` on `VEND-`/`CUST-` codes and must never match an advance ledger.
-- **Why:** advance money must not sit on the party's payable/receivable ledger or every "what do we owe" query silently nets it in.
-- Availability is ledger-authoritative: `advanceAvailable` = max(0, ∓net) from currentBalanceIndex. It reads COMMITTED data only — any consumer must take `pg_advisory_xact_lock(hashtext('customer-advance'|'vendor-advance'), partyId)` FIRST, then re-read inside the txn.
+# Ledger model (asymmetric ON PURPOSE — owner decision, Aug 2026, final)
+- **Customer:** ONE ledger per customer (`CUST-<id>`, Sundry Debtors). An advance is that ledger's CREDIT (negative) balance. No CADV ledgers, no "Customer Advances" group — folded away by boot migration `customer_advances_fold_v1` (retries every boot until no CADV row is referenced; only then writes its marker).
+- **Vendor:** unchanged — `VADV-<vendorId>` (asset, under STD-GRP-VEND-ADV/SYS-CURA). Prefix length ≠ 5 ON PURPOSE: legacy parsers do `SUBSTRING(code FROM 6)` on `VEND-`/`CUST-` codes and must never match it.
+- **Why:** the owner wants one signed figure per customer; "we hold their money" is just the negative side of "they owe us".
+- `advanceAvailable('customer')` = max(0, −net(CUST)) — NETTED against everything owed (open bills, credit notes, journals all move it). A customer owing anything shows available 0 even with parked receipts. This is intended, and test expectations must be derived from the net, not from summed advance_amounts.
+- `ensureAdvanceLedger('customer', …)` never creates anything — it resolves CUST- or THROWS. Only vendor branch provisions.
+- Availability is ledger-authoritative and reads COMMITTED data only — consumers take `pg_advisory_xact_lock(hashtext('customer-advance'|'vendor-advance'), partyId)` FIRST, then re-read inside the txn.
+
+# Posting shape
+- Receipt (any excess included): single Cr received_from for the FULL amount. Allocation receipts: bill slices derive via sale_payments (section 5), the advance slice via the `receiptadv:` pass — both credit CUST-.
+- Sale `method='advance'` payment leg: Dr CUST- (the invoice debit eats the credit balance). Overpayment leg: Cr CUST- (fallback SYS-DEBTORS). Vendor payment split to VADV unchanged.
+- `receipts.advance_ledger_id` is NULL for customers going forward (vendor payments still store VADV). `advance_amount` still marks the parked slice — it drives FIFO attribution and delete guards, NOT the books.
 
 # Allocation vouchers
-- Receipts/payments with `allocations` get `source='allocation'`: locked for edit (PATCH refuses), deletable with a full unwind — refused 409 when the advance slice was already adjusted against a later bill.
-- Delete guard is TWO checks under the advance lock, in order: (1) precise — `advance_consumptions` rows referencing this voucher (a second advance replenishing the pool must NOT free a consumed voucher; aggregate arithmetic would); (2) aggregate `advanceAvailable >= advance_amount` as backstop for drains slice-tracking can't see (manual JVs on the advance ledger).
-- Customer side reuses `sale_payments` rows linked via `clearing_receipt_id`; vendor side has `payment_bill_allocations` + `purchase_advance_applications` (purchases have no amount_paid).
-- Deleting a purchase with an advance application restores the advance automatically — the contra is DERIVED by joining purchases, so removing the row removes the posting.
+- Receipts/payments with `allocations` get `source='allocation'`: locked for edit, deletable with a full unwind.
+- Delete guard under the advance lock: (1) precise — `advance_consumptions` rows referencing this voucher refuse 409; (2) aggregate `advanceAvailable >= advance_amount` backstop is **VENDOR-ONLY** now. The netted customer figure says nothing about whether THIS voucher's money was used (open bills legitimately absorb it), so it would wrongly block customer deletes.
+- Customer side reuses `sale_payments` via `clearing_receipt_id`; vendor side has `payment_bill_allocations` + `purchase_advance_applications`.
 
-# Consumption attribution (advance_consumptions)
-- Every consumption (sale `useAdvance`, purchase `useAdvance`) writes slice rows pinning the amount to the parking voucher(s), FIFO oldest-voucher-first (`attributeAdvanceConsumption` in advanceLedgers.ts); remainder not covered by any voucher gets a NULL-source row so totals reconcile. Must run in the consumer's txn, under the advance lock, same lock order as create (advance → item → rows).
-- **Why:** immutable source references — "which money settled which bill" must never be rewritten by later pool arithmetic.
+# Consumption attribution (advance_consumptions) — UNCHANGED by the fold
+- FIFO oldest-voucher-first over receipts keyed by received_from = CUST- ledger + advance_amount > 0; slice rows pin consumption to the parking voucher; NULL-source remainder row. Runs in the consumer's txn under the advance lock (lock order: advance → item → rows).
 - Release is symmetric and atomic: purchase delete and sale cancel call `releaseAdvanceConsumption` in the same txn.
 
-# Sale cancellation policy for advances
-- `POST /sales/:id/cancel` splits payments: any NON-advance payment → 409 PAYMENTS_RECORDED (unchanged). Advance-only → cancel proceeds: take the advance lock EARLY (before stock restoration, matching create's lock order), delete the `method='advance'` sale_payments rows + consumption rows, subtract from amount_paid. Derived postings drop the CADV debit with the row, so the advance restores automatically.
-- **Why:** an adjusted advance is the customer's money merely parked against the bill — no cash changed hands at that bill, so cancel returns the slice instead of stranding the invoice forever.
+# Sale cancellation policy for advances — UNCHANGED
+- Non-advance payment → 409 PAYMENTS_RECORDED. Advance-only → cancel proceeds: advance lock EARLY, delete `method='advance'` rows + consumption rows, subtract from amount_paid. Derived postings drop with the rows.
 
-# Explicit-first settlement rule
-- Pinned money (bill allocations + advance applications) settles its exact bill and NEVER enters the FIFO pool. Pool = billed − ledgerBal − explicit. Every consumer (payables ageing, GST purchase register, settlement-context) must carve explicit out before the oldest-first walk or the same rupee settles two bills.
+# Explicit-first settlement rule — UNCHANGED
+- Pinned money (bill allocations + advance applications) settles its exact bill and NEVER enters the FIFO pool. Every consumer must carve explicit out before the oldest-first walk.
 
-# Party-ledger credits are not advances
-- **Rule:** a credit balance on the party's CUST/VEND ledger is a CREDIT BALANCE, never an "advance" — every advance figure must come from the dedicated advance ledgers (advanceLedgers.ts helpers). The two coexist legitimately (e.g. a credit note on the party ledger plus parked money on the advance ledger).
-- **Why:** a list endpoint that derives "advance" from the party ledger's credit side silently contradicts the advance API, ageing and settlement. Such drift is found only by DIFFERENTIAL audit — comparing the same figure across every surface — never by checking one screen against expectations.
+# Reports
+- Ageing/receivables `advance` field = max(0, −CUST net), i.e. only visible when credits EXCEED all bills; `netDue` is the signed ledger balance. Advance-only customers surface via the ledger seed (their CUST balance is nonzero-negative now — the old zero-ledger seed problem dissolved).
+- Customer list `advanceBalance` = same clamped figure from `advanceBalanceMap('customer')` which now scans CUST- ledgers.
 
-# Report visibility traps (bit us twice in one session)
-A new money figure on an ageing report needs THREE hooks, not one:
-1. computed map (`advByCustomer`/`advByVendor`),
-2. the SEED loop (a party with only that figure has a zero party-ledger and no bills → never enters the row map),
-3. the final visibility FILTER (`netDue/totalDue/unallocatedCredit` predicates drop a row whose only nonzero figure is the new one).
-Seeded rows are hand-built object literals — they silently omit the new field unless added there too.
+# Report visibility traps (still apply to any NEW money figure)
+1. computed map, 2. the SEED loop, 3. the final visibility FILTER — seeded rows are hand-built literals and silently omit new fields.
 
-# Wire contract
-- Receipt: `allocations:[{saleId,amount}]`; payment: `[{purchaseId,amount}]`; optional `advanceAmount` (allocations+advance must equal voucher amount ±0.011). Sale/purchase create: `useAdvance:true` in raw body (zod strips unknown keys — read from req.body), response carries `advanceApplied`; server caps at min(available, bill total).
-- `GET /accounts/settlement-context?ledgerId=` (bills keyed saleId/purchaseId, oldest first, branch callers own-location only; non-party ledger → `{kind:null}`), `GET /accounts/party-advance?kind=&partyId=`.
-- Receipts list marks allocation vouchers `origin:'system', editable:false` (no `source` field on the wire).
+# Wire contract — UNCHANGED
+- Receipt `allocations:[{saleId,amount}]` + optional `advanceAmount` (sum ±0.011); sale/purchase `useAdvance:true` in raw body (zod strips unknown keys — read req.body), response `advanceApplied`, capped min(available, total).
+- `GET /accounts/settlement-context?ledgerId=`, `GET /accounts/party-advance?kind=&partyId=`; receipts list marks allocation vouchers `origin:'system', editable:false`.

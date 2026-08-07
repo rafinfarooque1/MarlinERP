@@ -1,0 +1,246 @@
+The customer and vendor ledgers are not functioning as the complete accounting ledger.
+
+This is a critical accounting issue.
+
+Current Problem
+
+Example:
+Customer: AHMED
+
+The customer ledger only shows the opening balance journal.
+
+However, AHMED has:
+
+• Sales invoices
+• Receipt vouchers
+• Customer payments
+• Journal entries
+
+These transactions do NOT appear in the customer ledger.
+
+This means the ledger is incomplete.
+
+====================================================
+Required Behaviour
+====================================================
+
+The ledger must be the complete accounting history for that customer.
+
+Every transaction affecting a customer must appear automatically in the customer's ledger in chronological order.
+
+This includes:
+
+✓ Opening Balance
+✓ Sales Invoice
+✓ Sales Return
+✓ Receipt Voucher
+✓ Credit Note
+✓ Debit Note
+✓ Journal Voucher
+✓ Manual Journal Entries
+✓ Advance Receipt
+✓ Advance Adjustment
+✓ Invoice Settlement
+✓ Write-off
+✓ Payment Allocation
+✓ Any future accounting transaction affecting the customer
+
+The same applies to Vendor Ledgers.
+
+====================================================
+Single Source of Truth
+====================================================
+
+The ledger must become the single accounting source.
+
+All reports must derive balances from ledger/journal postings.
+
+Never calculate balances independently.
+
+====================================================
+Every transaction must create:
+====================================================
+
+Transaction
+
+↓
+
+Journal Entry
+
+↓
+
+Customer/Vendor Ledger
+
+↓
+
+General Ledger
+
+↓
+
+Trial Balance
+
+↓
+
+Balance Sheet
+
+↓
+
+Dashboard
+
+↓
+
+Receivable/Payable Reports
+
+Every level must read from the previous level.
+
+====================================================
+Customer Ledger Layout
+====================================================
+
+Each row should display:
+
+Date
+
+Voucher Type
+
+Voucher Number
+
+Reference
+
+Description
+
+Debit
+
+Credit
+
+Running Balance
+
+Location
+
+Created By
+
+Clicking a voucher should open that transaction.
+
+====================================================
+Vendor Ledger
+====================================================
+
+Apply the same logic.
+
+Every purchase
+
+Payment
+
+Journal
+
+Debit Note
+
+Credit Note
+
+Opening Balance
+
+Advance
+
+must appear.
+
+====================================================
+General Ledger
+====================================================
+
+Every ledger in Chart of Accounts must also contain its complete transaction history.
+
+The balance must simply be the running balance of that ledger.
+
+====================================================
+Code Audit
+====================================================
+
+Search the entire codebase.
+
+Find every place where customer/vendor balances are updated.
+
+Find every place where ledger entries are created.
+
+Identify transactions that update balances without creating ledger rows.
+
+Fix them.
+
+No transaction should bypass ledger posting.
+
+====================================================
+Migration
+====================================================
+
+Rebuild missing ledger entries from existing accounting journals if possible.
+
+If journals exist but ledger rows are missing,
+
+recreate the ledger rows.
+
+Do NOT duplicate entries.
+
+====================================================
+Verification
+====================================================
+
+Verify for every customer:
+
+Opening Balance
+
++
+
+Sales
+
++
+
+Receipts
+
++
+
+Returns
+
++
+
+Journals
+
++
+
+Adjustments
+
+=
+
+Closing Balance
+
+Verify the same for vendors.
+
+====================================================
+Final Validation
+====================================================
+
+For every customer and vendor verify:
+
+Customer List
+
+Vendor List
+
+Customer Ledger
+
+Vendor Ledger
+
+General Ledger
+
+Chart of Accounts
+
+Receivable Report
+
+Payable Report
+
+Dashboard
+
+Trial Balance
+
+Balance Sheet
+
+all show identical balances.
+
+The ledger must contain every transaction that affects the party. It should be possible to reconstruct the customer's entire financial history by reading only the ledger.

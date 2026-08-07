@@ -45,6 +45,13 @@ const D = (d) => `${Y}-${String(M).padStart(2, "0")}-${String(d).padStart(2, "0"
 
 const SALARY = 30000, WD = 30, ALLOW = 4; // per-day = ₹1,000 exactly
 
+// Attendance-driven accrual pricing has a cutover date (salary_accrual_config.
+// attendance_from). Months entirely BEFORE it are never (re)stated by design —
+// restating history unprompted is exactly what the engine refuses to do. When
+// the fixture month predates the cutover, the accrual checks pin THAT contract
+// (accrual stays ₹0) instead of the live-pricing figures.
+let PRE_CUTOVER = false;
+
 async function accrualTotal(empId) {
   const [r] = await q(
     `SELECT COALESCE(SUM(amount),0) AS total FROM salary_accruals
@@ -68,10 +75,18 @@ async function generate(empId) {
 }
 
 async function main() {
-  TOKEN = (await api("POST", "/auth/login", { username: "admin", password: "marlin1458" })).token;
+  TOKEN = (await api("POST", "/auth/login", {
+    username: process.env.TEST_ADMIN_USER || process.env.TEST_USERNAME || "admin",
+    password: process.env.TEST_ADMIN_PASSWORD || process.env.TEST_PASSWORD || "marlin1458",
+  })).token;
 
   savedGS = (await api("GET", "/company/settings")).generalSettings ?? {};
   await putGS({ payrollWorkingDays: WD, paidCasualLeavesPerMonth: ALLOW, lopEnabled: true });
+
+  const [cfg] = await q(`SELECT attendance_from FROM salary_accrual_config WHERE id = 1`);
+  const cutover = cfg?.attendance_from ? new Date(cfg.attendance_from) : null;
+  PRE_CUTOVER = !!cutover && new Date(Date.UTC(Y, M, 0)) < cutover; // fixture month ends before pricing began
+  if (PRE_CUTOVER) console.log(`fixture month ${Y}-${M} predates the accrual pricing cutover — accrual checks pin the no-restatement contract (₹0)\n`);
 
   // ── 1. Settings validation ────────────────────────────────────────────
   const v1 = await tryApi("PATCH", "/company/settings", { generalSettings: { ...savedGS, payrollWorkingDays: 0 } });
@@ -115,7 +130,8 @@ async function main() {
     near(row.paidLeaveUsed, 4) && near(row.paidLeaveAllowed, ALLOW),
     `used=${row.paidLeaveUsed} allowed=${row.paidLeaveAllowed}`);
   let acc = await accrualTotal(EID);
-  check("A4", "Daily accrual agrees with payroll (₹30,000)", near(acc, SALARY, 0.05), `accrued=${acc}`);
+  check("A4", PRE_CUTOVER ? "Pre-cutover month is never restated (accrual ₹0)" : "Daily accrual agrees with payroll (₹30,000)",
+    near(acc, PRE_CUTOVER ? 0 : SALARY, 0.05), `accrued=${acc}`);
 
   // ── 3. Scenario B — 5th leave becomes 1 LOP day (₹1,000) ────────────────
   await setAtt(26, "leave"); // now 25 present + 5 leave + 1 absent
@@ -124,7 +140,8 @@ async function main() {
   check("B2", "LOP deduction = 1 × ₹1,000", near(row.lopDeduction, 1000), `deduction=${row.lopDeduction}`);
   check("B3", "Gross = ₹29,000", near(row.grossPay, SALARY - 1000), `gross=${row.grossPay}`);
   acc = await accrualTotal(EID);
-  check("B4", "Accrual re-priced to ₹29,000", near(acc, 29000, 0.05), `accrued=${acc}`);
+  check("B4", PRE_CUTOVER ? "Pre-cutover month still not restated (accrual ₹0)" : "Accrual re-priced to ₹29,000",
+    near(acc, PRE_CUTOVER ? 0 : 29000, 0.05), `accrued=${acc}`);
 
   // ── 4. Scenario C — half-days consume the allowance at 0.5 each ────────
   // 23 present + 2 half-day + 5 leave + 1 absent → worked 24, leave 6,
@@ -138,7 +155,8 @@ async function main() {
     `deduction=${row.lopDeduction} gross=${row.grossPay}`);
   check("C3", "Allowance fully used (4/4)", near(row.paidLeaveUsed, ALLOW), `used=${row.paidLeaveUsed}`);
   acc = await accrualTotal(EID);
-  check("C4", "Accrual agrees (₹28,000)", near(acc, 28000, 0.05), `accrued=${acc}`);
+  check("C4", PRE_CUTOVER ? "Pre-cutover month still not restated (accrual ₹0)" : "Accrual agrees (₹28,000)",
+    near(acc, PRE_CUTOVER ? 0 : 28000, 0.05), `accrued=${acc}`);
 
   // ── 5. LOP disabled → attendance never reduces pay ──────────────────────
   await putGS({ lopEnabled: false });

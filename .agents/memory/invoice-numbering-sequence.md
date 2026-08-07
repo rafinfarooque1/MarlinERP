@@ -28,6 +28,13 @@ happily while the write path is completely broken.
   should re-heal rather than be corrected once.
 - Only ever move the counter *forward*. Moving it back re-issues numbers that
   already exist.
+- **Tests must anchor "next expected number" on the allocator, not on
+  `MAX(invoice_number)`.** Sales counters live in `voucher_sequences` keyed
+  `<counterName>@<scope>` (e.g. `sales_invoice_counter_b2b@warehouse:1`),
+  FY-scoped, and never rewind — after a cancelled-then-deleted bill the counter
+  sits AHEAD of the max stored number, so a MAX-based expectation is off by the
+  number of deleted documents. Read `voucher_sequences.last_number`; fall back
+  to max-suffix only for a scope that has never drawn a number.
 - Restrict the "max in use" scan to rows whose number actually matches the
   current prefix/period format, and require the suffix to be all digits —
   otherwise legacy or hand-entered formats poison the maximum.

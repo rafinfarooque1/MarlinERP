@@ -42,7 +42,7 @@ const near = (a, b, tol = 0.05) => Math.abs(r2(a) - r2(b)) <= tol;
 async function login() {
   const r = await fetch(`${BASE}/auth/login`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username: 'admin', password: 'marlin1458' }),
+    body: JSON.stringify({ username: process.env.TEST_USERNAME || 'admin', password: process.env.TEST_PASSWORD || 'marlin1458' }),
   });
   const d = await r.json();
   authToken = d.token;

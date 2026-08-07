@@ -327,7 +327,7 @@ export async function permanentlyDeleteWarehouse(
           AND NOT EXISTS (SELECT 1 FROM advance_consumptions ac WHERE ac.party_kind = 'customer' AND ac.party_id = c.id)
           AND NOT EXISTS (
             SELECT 1 FROM account_ledgers al
-             WHERE al.code IN ('CUST-' || c.id, 'CADV-' || c.id)
+             WHERE al.code = 'CUST-' || c.id
                AND (EXISTS (SELECT 1 FROM journal_voucher_lines l WHERE l.ledger_id = al.id)
                  OR EXISTS (SELECT 1 FROM receipts r2 WHERE r2.received_from_ledger_id = al.id OR r2.received_in_ledger_id = al.id OR r2.advance_ledger_id = al.id)
                  OR EXISTS (SELECT 1 FROM payments p2 WHERE p2.paid_from_ledger_id = al.id OR p2.paid_to_ledger_id = al.id OR p2.advance_ledger_id = al.id)

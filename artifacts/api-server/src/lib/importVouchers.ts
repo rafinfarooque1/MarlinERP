@@ -5,8 +5,8 @@
  * allocation routes use (POST /accounts/receipts and /accounts/payments with
  * allocations): per-bill caps validated on locked rows, sale_payments legs
  * linked via clearing_receipt_id, payment_bill_allocations rows, and any
- * excess parked in the party's CADV-/VADV- advance ledger provisioned by
- * ensureAdvanceLedger — so imported vouchers reach every book (cash book,
+ * excess left as a credit balance on the customer's own ledger (or parked in
+ * the vendor's VADV- advance ledger) — so imported vouchers reach every book (cash book,
  * bank book, day book, ledgers, trial balance, dashboard) through the
  * existing derivation with no new plumbing, and their advances are
  * consumable by later sales/purchases exactly like manually created ones.
@@ -390,12 +390,11 @@ export async function importReceiptVoucher(doc: ImportReceiptVoucherInput, ext?:
       }
     }
 
-    // ── Excess → the customer's advance ledger (provisioned on first use) ────
+    // ── Excess stays as a CREDIT balance on the customer's own ledger ───────
+    // No separate advance ledger exists; advance_amount still records the
+    // unallocated slice for FIFO attribution and the voucher delete guard.
     const advance = remaining > 0.004 ? remaining : 0;
-    let advanceLedgerId: number | null = null;
-    if (advance > 0) {
-      advanceLedgerId = await ensureAdvanceLedger(client, "customer", doc.customerId, doc.customerName);
-    }
+    const advanceLedgerId: number | null = null;
 
     const method = (await isCashFamilyLedger(client, doc.accountLedgerId)) ? "cash" : "bank";
     await assertAccountMatchesLocation(doc.accountLedgerId, doc.loc);
@@ -638,9 +637,17 @@ export async function rollbackImportedReceiptVoucher(
       if (consumed > 0.004) {
         return `₹${r2(consumed).toFixed(2)} of this voucher's advance has been adjusted against invoices. Cancel those invoices first.`;
       }
-      const pos = await advanceAvailable(party.kind, party.partyId);
-      if (pos.available + EPS < advAmt) {
-        return `₹${r2(advAmt - pos.available).toFixed(2)} of this voucher's advance has already been adjusted against invoices. Remove those adjustments first.`;
+      // Aggregate backstop is vendor-only (mirrors the manual receipt DELETE
+      // guard): a customer's "available" advance is the NETTED credit on their
+      // own ledger, so unrelated open invoices legitimately absorb it — the
+      // netted figure says nothing about whether THIS voucher's money was
+      // used. The reference-based advance_consumptions guard above is the
+      // sole authority for customers.
+      if (party.kind === "vendor") {
+        const pos = await advanceAvailable(party.kind, party.partyId);
+        if (pos.available + EPS < advAmt) {
+          return `₹${r2(advAmt - pos.available).toFixed(2)} of this voucher's advance has already been adjusted against invoices. Remove those adjustments first.`;
+        }
       }
     }
   }

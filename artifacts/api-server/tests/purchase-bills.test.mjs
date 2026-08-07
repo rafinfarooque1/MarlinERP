@@ -68,13 +68,19 @@ async function snapshotTB() {
 
 const createdPurchases = [];
 const fixtures = { vendorKa: 0, vendorMh: 0, materialId: 0, itemId: 0, hierNone: 0, hierBuyer: 0, hierStock: 0, empNone: 0, empBuyer: 0, empStock: 0 };
-const WH_OK = 2;   // QA Test WH — Karnataka, GSTIN 29…
+// Receiving warehouse: derived from live data after login — warehouse names,
+// states and GSTINs are REAL business records now, never hardcode them. The
+// "same-state" vendor fixture is created to match this warehouse's state and
+// GSTIN state code; the "other-state" vendor to differ.
+let WH_OK = 0;
+let WH_STATE = '';
+let WH_CODE = '';
 const WH_OTHER = 3; // RBAC-NEG-WH — a warehouse the buyer fixture is NOT posted to
 
 // ───────────────────────────────────────────────────────────────────────────
 console.log('\n[0] Authentication and fixtures');
 
-const loginRes = await post('/auth/login', { username: 'admin', password: 'marlin1458' });
+const loginRes = await post('/auth/login', { username: process.env.TEST_USERNAME || 'admin', password: process.env.TEST_PASSWORD || 'marlin1458' });
 authToken = loginRes.data?.token ?? '';
 assert('Admin login returns a token', !!authToken, `status=${loginRes.status}`);
 if (!authToken) { console.error('FATAL: no token'); process.exit(1); }
@@ -98,13 +104,26 @@ async function cleanup() {
 }
 await cleanup(); // in case a previous run died mid-way
 
+// Receiving warehouse — first live warehouse with a state and GSTIN on file.
+{
+  const { rows: whRows } = await sql(
+    `SELECT id, state, gst_number FROM warehouses
+      WHERE COALESCE(gst_number,'') <> '' AND COALESCE(state,'') <> '' ORDER BY id`);
+  if (!whRows.length) { console.error('FATAL: no warehouse with state + GSTIN'); process.exit(1); }
+  WH_OK = Number(whRows[0].id);
+  WH_STATE = whRows[0].state;
+  WH_CODE = String(whRows[0].gst_number).slice(0, 2);
+}
+const OTHER_STATE = WH_STATE === 'Maharashtra' ? 'Karnataka' : 'Maharashtra';
+const OTHER_CODE = WH_CODE === '27' ? '29' : '27';
+
 // Vendors: one in the receiving location's state, one outside it.
 fixtures.vendorKa = (await sql(
-  `INSERT INTO vendors (name, state, gst_number) VALUES ($1,'Karnataka','29ZZTES1234F1Z5') RETURNING id`,
-  [`${TAG} Vendor KA`])).rows[0].id;
+  `INSERT INTO vendors (name, state, gst_number) VALUES ($1,$2,$3) RETURNING id`,
+  [`${TAG} Vendor KA`, WH_STATE, `${WH_CODE}ZZTES1234F1Z5`])).rows[0].id;
 fixtures.vendorMh = (await sql(
-  `INSERT INTO vendors (name, state, gst_number) VALUES ($1,'Maharashtra','27ZZTES1234F1Z5') RETURNING id`,
-  [`${TAG} Vendor MH`])).rows[0].id;
+  `INSERT INTO vendors (name, state, gst_number) VALUES ($1,$2,$3) RETURNING id`,
+  [`${TAG} Vendor MH`, OTHER_STATE, `${OTHER_CODE}ZZTES1234F1Z5`])).rows[0].id;
 
 // Item Master row with a leading-zero HSN and a 5% slab.
 fixtures.materialId = (await sql(
@@ -214,7 +233,7 @@ console.log('\n[8,9] Intra / inter-state derivation');
 {
   const intra = await createBill(bill({ vendorId: fixtures.vendorKa, lineItems: [line({ unitCost: 100, gstRate: 5 })] }));
   const iLi = intra.data?.lineItems?.[0] ?? {};
-  assert('TEST 8 — Karnataka vendor into Karnataka warehouse is intra', iLi.taxType === 'intra', `got ${iLi.taxType}`);
+  assert('TEST 8 — same-state vendor into the warehouse is intra', iLi.taxType === 'intra', `got ${iLi.taxType}`);
   assert('TEST 8 — CGST 2.50', r2(iLi.cgst) === 2.5, `got ${iLi.cgst}`);
   assert('TEST 8 — SGST 2.50', r2(iLi.sgst) === 2.5, `got ${iLi.sgst}`);
   assert('TEST 8 — no IGST', r2(iLi.igst) === 0, `got ${iLi.igst}`);
@@ -222,7 +241,7 @@ console.log('\n[8,9] Intra / inter-state derivation');
 
   const inter = await createBill(bill({ vendorId: fixtures.vendorMh, lineItems: [line({ unitCost: 100, gstRate: 5 })] }));
   const xLi = inter.data?.lineItems?.[0] ?? {};
-  assert('TEST 9 — Maharashtra vendor into Karnataka warehouse is inter', xLi.taxType === 'inter', `got ${xLi.taxType}`);
+  assert('TEST 9 — other-state vendor into the warehouse is inter', xLi.taxType === 'inter', `got ${xLi.taxType}`);
   assert('TEST 9 — IGST 5.00', r2(xLi.igst) === 5, `got ${xLi.igst}`);
   assert('TEST 9 — no CGST/SGST', r2(xLi.cgst) === 0 && r2(xLi.sgst) === 0);
 
@@ -394,7 +413,7 @@ console.log('\n[19,20] Accounting');
   // the API, because that is what provisions the VEND-<id> ledger — a raw
   // insert leaves the payable posting with no ledger to name it.
   const freshVendorRes = await post('/vendors', {
-    name: `${TAG} Vendor Fresh`, state: 'Karnataka', gstNumber: '29ZZFRE1234F1Z5',
+    name: `${TAG} Vendor Fresh`, state: WH_STATE, gstNumber: `${WH_CODE}ZZFRE1234F1Z5`,
   });
   const freshVendor = freshVendorRes.data?.id;
   assert('A vendor created through the API gets a ledger', !!freshVendor,
@@ -542,7 +561,7 @@ console.log('\n[edit] Editing a bill');
     lineItems: [{ ...line({ quantity: 3, unitCost: 50, gstRate: 5 }), batchNumber: consumedLot }],
   });
   assert('An edit is refused once the stock has been used', blocked.status === 409, `status=${blocked.status}`);
-  assert('...and says so in plain language', /already been used|already moved on/i.test(String(blocked.data?.error ?? '')),
+  assert('...and says so in plain language', /already been used|already moved on|already been sold/i.test(String(blocked.data?.error ?? '')),
     String(blocked.data?.error).slice(0, 160));
   const lotAfter = Number((await sql(
     `SELECT quantity::float8 AS q FROM stock_batches WHERE item_id=$1 AND material_type='material'

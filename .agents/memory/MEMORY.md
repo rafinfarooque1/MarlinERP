@@ -6,7 +6,7 @@
 - [Item prices date range](item-prices-dates.md) — valid_from/valid_to added as text columns via startup migration in api-server/src/index.ts; ItemPrice type from generated code lacks these fields, use (ip as any).validFrom casts.
 - [Raw-migration columns](raw-migration-columns.md) — startup-migration columns are invisible to drizzle: db.select() silently drops them (fields read as 0/undefined); read AND write them via raw SQL.
 - [Invoice PDFs & share links](invoice-pdf-links.md) — ONE renderer; 2 public paths (minutes-long in-session token vs revocable share link); never derive a link token from SESSION_SECRET; popups need the click gesture.
-- [Accounts derivation & numbering](accounts-derivation.md) — books derive from buildDerivedPostings(); sale-linked receipts stay excluded (double-count trap); ALL GST math via lineTaxHeads(); never COUNT(*)-number vouchers.
+- [Accounts derivation & numbering](accounts-derivation.md) — books derive from buildDerivedPostings(); customer legs GROSS since Aug 2026 (invoice Dr + per-payment Cr; net fallback = walk-ins only); sale-linked receipts stay excluded; ALL GST via lineTaxHeads(); never COUNT(*)-number vouchers.
 - [ERP enterprise decisions](erp-enterprise-decisions.md) — settled: labour from payroll allocation (and the double-count trap it creates), two-step transfers always, opening balances intentionally zero, sidebar frozen
 - [ERP integration conflicts](erp-integration-conflicts.md) — modules disagree: 5 stock qty stores (item-table col is STALE), materials have no location, P&L DOES see journal vouchers, transfer JVs already post tax
 - [Inventory batch layer](inventory-batches.md) — additive lot layer over stock_entries (qty truth); FEFO clamped consumption, shortfall = "Untracked"; zod strips unknown keys so optional passthrough fields read from raw body.
@@ -73,7 +73,7 @@
 - [Shared create/edit builders](shared-create-edit-builders.md) — reusing the create builder for an edit resets omitted optional fields to module defaults; pass the row's current values as defaults.
 - [Invoice seller identity](invoice-seller-identity.md) — seller = the location, never the company; bank/UPI may fall back but identity may not; judge "incomplete" on the RESOLVED issuer.
 - [Money input normalisation](money-input-normalisation.md) — number inputs post strings; zod.coerce maps ''/null/true to a number; validate the decimal STRING, reject >2dp, let NUMERIC do the maths.
-- [Dev rows are test fixtures](dev-data-as-fixtures.md) — scratch-looking dev records are pinned by id AND attributes in the regression suites; grep tests/ before editing a row's state or GSTIN.
+- [Dev rows are test fixtures](dev-data-as-fixtures.md) — pinned by id AND attributes; grep tests/ first. Dev DB now holds REAL business data: suites must derive warehouses and pin/restore billing profiles, POS flags, logo; export all four TEST_* vars.
 - [Client→server state migration](local-state-migration.md) — pushing localStorage state up must be one-shot-flagged per browser or stale copies resurrect deleted server state; server absence ≠ never existed.
 - [Blank dev error overlay](dev-error-overlay.md) — "(unknown runtime error)" = error event with no Error object (ResizeObserver loop); inline head script suppresses it — looks like broken clicks in UI tests.
 - [List vs detail casing](list-detail-casing.md) — list endpoints can return raw snake_case rows while detail reads map camelCase; generated types lie about list shape — curl before keying UI on a field.
@@ -105,7 +105,7 @@
 - [JV location & visibility](jv-location-visibility.md) — manual vouchers carry a chosen, validated location (legs checked against the stamp); routes location-scoped, not HO-only; statements gate JV lines on EFFECTIVE location.
 - [HO location convention](ho-location-convention.md) — HO sells like a branch but its placeholder id differs per table (vouchers 0, sales/stock 1): match on TYPE alone; dashboard/bi hand-rolls predicates — add new types explicitly.
 - [Ghost transfer documents](ghost-transfer-documents.md) — deleting a transfer nulls its twins' branch_transfer_id: ghost BTR invoices leak into lists/books, reservations stick; detect via BTR/% + NULL FK.
-- [Party advances & bill settlement](party-advances.md) — CADV/VADV ledgers (prefix dodges FROM-6 parsers); explicit-first vs FIFO; allocation vouchers locked+unwindable; advance-only parties need seed AND filter hooks in reports.
+- [Party advances & bill settlement](party-advances.md) — ASYMMETRIC: customer advance = credit balance on CUST- (netted, no CADV since Aug 2026 fold); vendor keeps VADV; delete-guard aggregate backstop is vendor-only.
 - [Data import framework](data-import-framework.md) — commits MUST reuse manual-creation libs; mapping-first name resolution (auto-create retired); file-order commits (avg cost); one-txn rollback.
 - [Legacy report import](legacy-report-import.md) — five old-software Excel reports auto-convert in the wizard; Amount is GST-inclusive; reused invoice/voucher numbers get /2 suffixes; day book = Journal/Contra only (real file: zero by design).
 - [Sale MRP floor](sale-mrp-floor.md) — line price ≥ master MRP (create+edit, grandfathered via stored lines); NOT in buildSaleLines (quotes exempt); test fixtures must price ≥ fixture mrp.
@@ -130,4 +130,4 @@
 - [401 = dead session contract](session-401-contract.md) — clients log out on any 401; wrong typed credentials must be 400; self-service GETs self-scope instead of 403 (a 403 zeroes mobile tiles silently).
 - [Returns edit](returns-edit.md) — full-state PATCH, delta-based stock (date-only edits never fail), numbers FY-pinned, note JV rewritten in place; lot debits clamp at zero by design.
 - [Location data wipe pattern](location-data-wipe.md) — soft-link tables found by column scan (no FKs); refuse mixed cross-location rows; rehearse on scratch DB with real prod data; backups to workspace, never a prod schema.
-- [Sale overpayment & one-sided entries](sale-overpayment-books.md) — amount_paid > total posts Cr CADV "Overpayment held"; sale EDIT is the live producer; prod-only BS gaps = data divergence, query the prod replica for clamp classes.
+- [Sale overpayment & one-sided entries](sale-overpayment-books.md) — overpayment = natural Cr remainder on CUST- (gross model; explicit leg only on walk-in fallback); sale EDIT is the live producer; prod-only BS gaps = data divergence, query the prod replica for clamp classes.

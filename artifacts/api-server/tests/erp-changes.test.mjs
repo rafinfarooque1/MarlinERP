@@ -321,7 +321,7 @@ console.log('\n[Q] Validation: duplicates, reporting-chain guards, protected roo
   // Deletion order matters: a role that others report to is refused until the
   // reports are moved.
   res = await apiReq('DELETE', `/hr/hierarchies/${roleId}`);
-  assert('Deleting a role that others report to refused (409)', res.status === 409 && /report/i.test(res.data?.error ?? ''), JSON.stringify(res.data).slice(0, 150));
+  assert('Deleting a role that others report to refused (409)', res.status === 409 && /report|child hierarch/i.test(res.data?.error ?? ''), JSON.stringify(res.data).slice(0, 150));
   res = await apiReq('DELETE', `/hr/hierarchies/${role2Id}`);
   assert('Deleting a leaf role works', res.status === 204, `status=${res.status}`);
   if (res.status === 204) createdRoleIds.splice(createdRoleIds.indexOf(role2Id), 1);

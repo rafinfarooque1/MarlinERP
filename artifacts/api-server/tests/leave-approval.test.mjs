@@ -40,9 +40,18 @@ import pg from "pg";
 const sql = new pg.Pool({ connectionString: process.env.DATABASE_URL });
 const q = async (text, params = []) => (await sql.query(text, params)).rows;
 
-const Y = 2026, M = 7;
-const D = (d) => `${Y}-${String(M).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+// Fixture month = the CURRENT month (Asia/Kolkata). The daily salary-accrual
+// sweep only prices days of the current month for a fresh employee, so a
+// hardcoded past month reads accrual ₹0 forever once the calendar rolls over.
 const TODAY = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+const Y = Number(TODAY.slice(0, 4)), M = Number(TODAY.slice(5, 7));
+const DOM = Number(TODAY.slice(8, 10));
+if (DOM < 6) {
+  // Leave days D(3)–D(5) must already be priced by the sweep.
+  console.log(`SKIP: day of month is ${DOM} (< 6); the accrual checks need D(3)–D(5) in the past.`);
+  process.exit(0);
+}
+const D = (d) => `${Y}-${String(M).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
 
 async function attRows(empId, from, to) {
   return await q(
@@ -82,7 +91,10 @@ const loginAs = async (username) =>
   (await api("POST", "/auth/login", { username, password: "marlin1458" })).token;
 
 async function main() {
-  TOKEN = (await api("POST", "/auth/login", { username: "admin", password: "marlin1458" })).token;
+  TOKEN = (await api("POST", "/auth/login", {
+    username: process.env.TEST_ADMIN_USER || process.env.TEST_USERNAME || "admin",
+    password: process.env.TEST_ADMIN_PASSWORD || process.env.TEST_PASSWORD || "marlin1458",
+  })).token;
 
   // Pay basis is COMPANY policy since the Aug 2026 LOP change. Pin what the
   // ₹1,000/day expectations assume: 30-day basis, allowance covering the 3
@@ -116,13 +128,13 @@ async function main() {
 
   // ── 1. Applying creates a PENDING request with zero payroll effect ────────
   const lv1 = await api("POST", "/hr/leaves", {
-    employeeId: empA.id, fromDate: D(6), toDate: D(8), leaveType: "casual", reason: "family event",
+    employeeId: empA.id, fromDate: D(3), toDate: D(5), leaveType: "casual", reason: "family event",
   });
   check("A1", "Apply returns a pending request with enriched fields",
     lv1.status === "pending" && lv1.days === 3 && lv1.branchName === "Head Office" && !!lv1.createdAt,
     `status=${lv1.status} days=${lv1.days} branch=${lv1.branchName} createdAt=${lv1.createdAt}`);
 
-  const att1 = await attRows(empA.id, D(6), D(8));
+  const att1 = await attRows(empA.id, D(3), D(5));
   const acc1 = await accrualJuly(empA.id);
   check("A2", "Pending leave stamps NO attendance and accrues NO salary",
     att1.length === 0 && near(acc1, 0),
@@ -143,7 +155,7 @@ async function main() {
     approved.status === "approved" && approved.approvedBy === adminId && !!approved.approvedAt && !!approved.approverName,
     `status=${approved.status} approvedBy=${approved.approvedBy} (admin=${adminId}) at=${approved.approvedAt} name=${approved.approverName}`);
 
-  const att2 = await attRows(empA.id, D(6), D(8));
+  const att2 = await attRows(empA.id, D(3), D(5));
   const acc2 = await accrualJuly(empA.id);
   check("C2", "Approval stamps exactly the leave days and accrues exactly their pay",
     att2.length === 3 && att2.every((r) => r.status === "leave") && near(acc2, 3000),

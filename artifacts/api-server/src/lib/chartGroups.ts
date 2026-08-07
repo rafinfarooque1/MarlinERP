@@ -106,18 +106,10 @@ export const CHART_CONTAINERS: ContainerSpec[] = [
     description: "Salary advances recoverable, one ledger per employee",
     childCodes: [/^ADV-EMP-\d+$/],
   },
-  {
-    // Money received from customers beyond their bills. NOT CUST-ADV-<id>:
-    // several queries parse party ids out of CUST-/VEND- codes with
-    // SUBSTRING(...)::int, which a shared prefix would break.
-    code: "STD-GRP-CUST-ADV",
-    name: "Customer Advances",
-    parentCode: "SYS-CURL",
-    type: "liability",
-    section: "balance_sheet",
-    description: "Advances received from customers, one ledger per customer",
-    childCodes: [/^CADV-\d+$/],
-  },
+  // NOTE: there is deliberately NO "Customer Advances" group. A customer
+  // advance is a CREDIT (negative) balance on the customer's single Sundry
+  // Debtor ledger (business decision, Aug 2026) — the old STD-GRP-CUST-ADV /
+  // CADV- structure was folded away by customer_advances_fold_v1.
   {
     code: "STD-GRP-VEND-ADV",
     name: "Vendor Advances",

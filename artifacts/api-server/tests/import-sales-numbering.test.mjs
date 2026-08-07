@@ -70,6 +70,7 @@ let batchId = 0;
 async function cleanup() {
   // Imported sales: batch rollback is the proper undo (reversal-equivalent).
   if (batchId) { await post(`/imports/batches/${batchId}/rollback`, {}).catch(() => {}); batchId = 0; }
+  await sql(`DELETE FROM import_mappings WHERE source_name LIKE $1`, [`${TAG}%`]).catch(() => {});
   // Any stragglers (a half-committed run): remove by legacy tag.
   const { rows: stray } = await sql(
     `SELECT id, invoice_number FROM sales WHERE legacy_invoice_number LIKE $1`, [`${TAG}%`]);
@@ -104,7 +105,7 @@ async function cleanup() {
 // ───────────────────────────────────────────────────────────────────────────
 console.log('\n[0] Authentication and fixtures');
 
-const loginRes = await post('/auth/login', { username: 'admin', password: 'marlin1458' });
+const loginRes = await post('/auth/login', { username: process.env.TEST_USERNAME || 'admin', password: process.env.TEST_PASSWORD || 'marlin1458' });
 authToken = loginRes.data?.token ?? '';
 assert('Admin login returns a token', !!authToken, `status=${loginRes.status}`);
 if (!authToken) { console.error('FATAL: no token'); process.exit(1); }
@@ -155,11 +156,23 @@ const fileBuf = Buffer.from(await wb.xlsx.writeBuffer());
   const data = await r.json();
   batchId = data.batch?.id ?? 0;
   assert('File parses into a batch', (r.status === 200 || r.status === 201) && batchId > 0, `status=${r.status} ` + JSON.stringify(data).slice(0, 200));
-  assert('Both rows validate', data.batch?.status === 'validated' && data.batch?.validRows === 2,
-    `status=${data.batch?.status} valid=${data.batch?.validRows} rows=${JSON.stringify((data.rows ?? []).map((x) => x.reason)).slice(0, 200)}`);
 }
 
-const commit = await post(`/imports/batches/${batchId}/commit`, {});
+// Mapping-first framework: resolve the fixture names, then both rows validate.
+{
+  const mapped = await post(`/imports/batches/${batchId}/mappings`, { mappings: [
+    { kind: 'customer', name: `${TAG} GST Buyer`, targetId: fixtures.custB2B },
+    { kind: 'customer', name: `${TAG} Walkin Buyer`, targetId: fixtures.custB2C },
+    { kind: 'product', name: `${TAG} Import Item`, targetId: fixtures.itemId },
+  ] });
+  assert('Both rows validate after mapping', mapped.status === 200 && mapped.data.batch?.validRows === 2,
+    `status=${mapped.status} valid=${mapped.data?.batch?.validRows} rows=${JSON.stringify((mapped.data?.rows ?? []).map((x) => x.reason)).slice(0, 200)}`);
+}
+
+// Transaction imports go through the wizard now: demo → approve.
+const demoRun = await post(`/imports/batches/${batchId}/demo`, {});
+assert('Demo run succeeds', demoRun.status === 200, JSON.stringify(demoRun.data).slice(0, 200));
+const commit = await post(`/imports/batches/${batchId}/approve`, {});
 assert('Commit succeeds for both invoices', commit.status === 200 && commit.data?.batch?.importedRows === 2,
   JSON.stringify(commit.data).slice(0, 250));
 

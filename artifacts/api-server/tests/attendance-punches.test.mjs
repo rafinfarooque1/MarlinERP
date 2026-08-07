@@ -43,7 +43,17 @@ import pg from "pg";
 const sql = new pg.Pool({ connectionString: process.env.DATABASE_URL });
 const q = async (text, params = []) => (await sql.query(text, params)).rows;
 
-const Y = 2026, M = 7;
+// Fixture month = the CURRENT company month. The accrual sweep only prices
+// from the start of the current month for a fresh employee (no resume marker),
+// so a hardcoded past month accrues nothing once the clock rolls over.
+// Caveat: the suite seeds days 1–6, so it needs today to be the 7th or later.
+const [Y, M, TODAY_DOM] = new Date()
+  .toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" })
+  .split("-").map(Number);
+if (TODAY_DOM < 7) {
+  console.log("SKIP: suite needs day-of-month >= 7 (seeds days 1-6 of the current month)");
+  process.exit(0);
+}
 const D = (d) => `${Y}-${String(M).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
 const IST = (day, hhmm) => `${D(day)}T${hhmm}:00+05:30`;
 
@@ -95,7 +105,10 @@ const reprice = (empId, day) =>
   api("PUT", "/hr/attendance", { employeeId: empId, date: D(day), status: "present" });
 
 async function main() {
-  TOKEN = (await api("POST", "/auth/login", { username: "admin", password: "marlin1458" })).token;
+  TOKEN = (await api("POST", "/auth/login", {
+    username: process.env.TEST_USERNAME || "admin",
+    password: process.env.TEST_PASSWORD || "marlin1458",
+  })).token;
 
   // This suite is about HOURS-based pricing, so pin the company policy with a
   // ZERO paid-leave allowance — otherwise the leave policy tops half days up
@@ -201,14 +214,9 @@ async function main() {
     prow && near(accrued, earnedBasic),
     `accrued ₹${accrued} vs payroll earned basic ₹${earnedBasic} (presentDays=${prow?.presentDays})`);
 
-  // ── H. Locked month still refuses corrections ──────────────────────────────
-  await api("POST", `/hr/payroll/${prow.id}/approve`, {});
-  const refused = await tryApi("PUT", "/hr/attendance", { employeeId: EID, date: D(10), status: "present" });
-  check("H", "Correction in an approved month is refused, not silently ignored",
-    !refused.ok && /already paid|already approved/i.test(refused.error),
-    refused.ok ? "correction was ACCEPTED in a locked month" : refused.error.slice(0, 140));
-
   // ── I–L. The check-in portal itself (today, real clock) ───────────────────
+  // These run BEFORE test H: the fixture month is the CURRENT month, so
+  // approving its payroll would lock today and refuse every check-in below.
   const ci1 = await tryApi("POST", "/hr/attendance/check-in", { employeeId: EID, lat: 12.9716, lng: 77.5946 });
   const ciAgain = await tryApi("POST", "/hr/attendance/check-in", { employeeId: EID, lat: 0, lng: 0 });
   check("I", "Check-in opens a session; a second check-in while open is refused",
@@ -247,6 +255,20 @@ async function main() {
   check("M", "Config exposes the company operational date and the register at that date holds the open session",
     cfgM.today === expectedToday && !!cfgM.timeZone && !!myCfgDay && myCfgDay.openPunchIn != null,
     `config.today=${cfgM.today} (tz ${cfgM.timeZone}), openPunchIn at that date=${myCfgDay?.openPunchIn ?? "MISSING"}`);
+
+  // ── H. Locked month still refuses corrections ──────────────────────────────
+  // Runs LAST: approving the current month's payroll locks today itself, so
+  // every portal test above must already be done. The portal tests changed
+  // today's attendance AFTER the payroll was generated, and approval rightly
+  // refuses a stale figure — regenerate first so it matches.
+  await api("POST", "/hr/payroll/generate", { year: Y, month: M, employeeId: EID });
+  await api("POST", `/hr/payroll/${prow.id}/approve`, {});
+  // A PAST day of the now-approved month — a future date could be refused for
+  // being in the future, which would pass the regex for the wrong reason.
+  const refused = await tryApi("PUT", "/hr/attendance", { employeeId: EID, date: D(5), status: "present" });
+  check("H", "Correction in an approved month is refused, not silently ignored",
+    !refused.ok && /already paid|already approved/i.test(refused.error),
+    refused.ok ? "correction was ACCEPTED in a locked month" : refused.error.slice(0, 140));
 
   // ── Cleanup ────────────────────────────────────────────────────────────────
   await cleanup(EID, emp.name);

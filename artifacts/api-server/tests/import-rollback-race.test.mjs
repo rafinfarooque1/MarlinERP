@@ -29,7 +29,10 @@ const ok = (label, cond, detail = "") => {
 // ── Setup: login + build a batch big enough that its commit takes a while ───
 const loginRes = await fetch(`${API}/auth/login`, {
   method: "POST", headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ username: "admin", password: "marlin1458" }),
+  body: JSON.stringify({
+    username: process.env.TEST_USERNAME || "admin",
+    password: process.env.TEST_PASSWORD || "marlin1458",
+  }),
 });
 const { token } = await loginRes.json();
 const auth = { Authorization: `Bearer ${token}` };

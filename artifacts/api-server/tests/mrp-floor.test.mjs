@@ -58,7 +58,7 @@ async function cleanup() {
 const SPEC_MESSAGE = 'MRP cannot be lower than the Item Master MRP. Use Discount if you want to reduce the selling price.';
 
 // ── Auth ─────────────────────────────────────────────────────────────────────
-const loginRes = await post('/auth/login', { username: 'admin', password: 'marlin1458' });
+const loginRes = await post('/auth/login', { username: process.env.TEST_USERNAME || 'admin', password: process.env.TEST_PASSWORD || 'marlin1458' });
 authToken = loginRes.data?.token ?? '';
 assert('Admin login returns a token', !!authToken, `status=${loginRes.status}`);
 if (!authToken) { console.error('FATAL: no token'); process.exit(1); }

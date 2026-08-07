@@ -225,8 +225,15 @@ export default function SalesDashboard() {
 
   // ── Totals ────────────────────────────────────────────────────────────────
 
-  const salesTotal   = daySales.reduce((s, x) => s + Number(x.totalAmount ?? 0), 0);
-  const salesPaid    = daySales.reduce((s, x) => s + Number(x.amountPaid ?? 0), 0);
+  // Cancelled invoices stay visible in the table (with their badge) but are
+  // excluded from the money totals: their Due is 0 by definition, so counting
+  // their billed/collected figures would make the three totals disagree.
+  const activeSales  = daySales.filter(x => !x.isCancelled);
+  const salesTotal   = activeSales.reduce((s, x) => s + Number(x.totalAmount ?? 0), 0);
+  const salesPaid    = activeSales.reduce((s, x) => s + Number(x.amountPaid ?? 0), 0);
+  // Server-derived outstanding (credit-note and cancellation aware) — never
+  // recompute total − paid locally, it diverges the moment a credit note exists.
+  const salesDue     = activeSales.reduce((s, x) => s + Number(x.balanceDue ?? 0), 0);
   const expenseTotal = dayExpenses.reduce((s, x) => s + Number(x.amount ?? 0), 0);
   const inTransit    = dayTransfers.filter(t => t.status === 'in_transit').length;
 
@@ -239,7 +246,7 @@ export default function SalesDashboard() {
     customer: (s: any) => s.customerName,
     amount: (s: any) => Number(s.totalAmount ?? 0),
     paid: (s: any) => Number(s.amountPaid ?? 0),
-    balance: (s: any) => Math.max(0, Number(s.totalAmount ?? 0) - Number(s.amountPaid ?? 0)),
+    balance: (s: any) => Number(s.balanceDue ?? 0),
     status: (s: any) => s.paymentStatus ?? 'unpaid',
   });
   const transfersSort = useTableSort(dayTransfers, {
@@ -379,20 +386,22 @@ export default function SalesDashboard() {
                 <div className="flex flex-wrap gap-4 px-4 py-3 bg-blue-500/5 text-sm border-b border-border">
                   <span className="text-muted-foreground">Total billed: <strong className="text-foreground">{fmt(salesTotal)}</strong></span>
                   <span className="text-muted-foreground">Collected: <strong className="text-emerald-600">{fmt(salesPaid)}</strong></span>
-                  <span className="text-muted-foreground">Balance due: <strong className="text-rose-600">{fmt(salesTotal - salesPaid)}</strong></span>
+                  <span className="text-muted-foreground">Balance due: <strong className="text-rose-600">{fmt(salesDue)}</strong></span>
                   {isWarehouseMode && outletsVisible && childOutlets.length > 0 && (
                     <span className="text-muted-foreground text-xs">Includes {childOutlets.length} outlet{childOutlets.length !== 1 ? 's' : ''}</span>
                   )}
                 </div>
                 {salesByLocation.map(loc => {
-                  const locTotal = loc.items.reduce((s, x) => s + Number(x.totalAmount ?? 0), 0);
-                  const locPaid  = loc.items.reduce((s, x) => s + Number(x.amountPaid ?? 0), 0);
+                  const locActive = loc.items.filter((x: any) => !x.isCancelled);
+                  const locTotal = locActive.reduce((s: number, x: any) => s + Number(x.totalAmount ?? 0), 0);
+                  const locPaid  = locActive.reduce((s: number, x: any) => s + Number(x.amountPaid ?? 0), 0);
+                  const locDue   = locActive.reduce((s: number, x: any) => s + Number(x.balanceDue ?? 0), 0);
                   return (
                     <LocationSection key={`${loc.type}-${loc.items[0]?.locationId}`} type={loc.type} name={`${loc.name} — ${fmt(locTotal)}`}>
                       <div className="flex gap-4 px-4 py-2 bg-muted/5 border-b border-border/50 text-xs text-muted-foreground">
                         <span>{loc.items.length} order{loc.items.length !== 1 ? 's' : ''}</span>
                         <span>Collected: <strong className="text-emerald-600">{fmt(locPaid)}</strong></span>
-                        <span>Due: <strong className="text-rose-600">{fmt(locTotal - locPaid)}</strong></span>
+                        <span>Due: <strong className="text-rose-600">{fmt(locDue)}</strong></span>
                       </div>
                       <Table>
                         <TableHeader>
@@ -426,7 +435,7 @@ export default function SalesDashboard() {
                 <div className="flex flex-wrap gap-4 px-4 py-3 bg-muted/10 text-sm border-b border-border">
                   <span className="text-muted-foreground">Total billed: <strong className="text-foreground">{fmt(salesTotal)}</strong></span>
                   <span className="text-muted-foreground">Collected: <strong className="text-emerald-600">{fmt(salesPaid)}</strong></span>
-                  <span className="text-muted-foreground">Balance due: <strong className="text-rose-600">{fmt(salesTotal - salesPaid)}</strong></span>
+                  <span className="text-muted-foreground">Balance due: <strong className="text-rose-600">{fmt(salesDue)}</strong></span>
                 </div>
                 <Table>
                   <TableHeader>
@@ -446,7 +455,7 @@ export default function SalesDashboard() {
                         <TableCell className="text-sm">{s.customerName ?? <span className="text-muted-foreground italic">Walk-in</span>}</TableCell>
                         <TableCell className="text-right font-mono text-sm font-semibold">{fmt(Number(s.totalAmount ?? 0))}</TableCell>
                         <TableCell className="text-right font-mono text-sm text-emerald-600">{fmt(Number(s.amountPaid ?? 0))}</TableCell>
-                        <TableCell className="text-right font-mono text-sm text-rose-600">{fmt(Math.max(0, Number(s.totalAmount ?? 0) - Number(s.amountPaid ?? 0)))}</TableCell>
+                        <TableCell className="text-right font-mono text-sm text-rose-600">{fmt(Number(s.balanceDue ?? 0))}</TableCell>
                         <TableCell><PaymentBadge status={s.paymentStatus ?? 'unpaid'} /></TableCell>
                       </TableRow>
                     ))}

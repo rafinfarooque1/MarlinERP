@@ -73,7 +73,6 @@ async function cleanup() {
     await sql(`DELETE FROM stock_entries WHERE item_id = $1 AND material_type = 'item'`, [fx.itemId]);
   }
   await sql(`DELETE FROM items WHERE name LIKE $1`, [`${TAG}%`]);
-  await sql(`DELETE FROM account_ledgers WHERE name LIKE $1 AND code LIKE 'CADV-%'`, [`%${TAG}%`]);
   await sql(`DELETE FROM account_ledgers WHERE name LIKE $1 AND (code LIKE 'CUST-%' OR code LIKE 'VEND-%')`, [`${TAG}%`]);
   await sql(`DELETE FROM customers WHERE name LIKE $1`, [`${TAG}%`]);
   await sql(`DELETE FROM vendors WHERE name LIKE $1`, [`${TAG}%`]);

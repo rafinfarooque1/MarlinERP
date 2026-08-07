@@ -2030,7 +2030,7 @@ async function validateVoucherRows(
       }
       const advance = remaining > 0.004 ? remaining : 0;
       if (advance > 0) {
-        const ledger = module === "receipts" ? "customer advance (CADV)" : "vendor advance (VADV)";
+        const ledger = module === "receipts" ? "credit balance on the customer's account" : "vendor advance (VADV)";
         s.warnings.push(
           allocations.length > 0
             ? `₹${advance.toFixed(2)} exceeds the open balance — the excess will be parked as a ${ledger}, adjustable against future ${module === "receipts" ? "invoices" : "bills"}`

@@ -26,7 +26,6 @@ import { PRODUCT_KINDS, PRODUCT_TABLE, nextProductIdentity } from "./lib/product
 import { nextVoucherNumber, financialYearLabel, salesInvoiceNumber, SALES_SERIES, type SalesSeries } from "./lib/voucherNumber";
 import { PAGE_PERM_KEYS, LEGACY_MODULE_TO_PAGES } from "./lib/pagePermissions";
 import { ensureChartStructure } from "./lib/chartGroups";
-import { ensureAdvanceLedger } from "./lib/advanceLedgers";
 import { DATE_COLUMNS } from "./lib/dateColumns";
 import { addQuotations } from "./migrations/quotations";
 import { runOrgHierarchyRestructure } from "./migrations/orgHierarchyRestructure";
@@ -669,26 +668,103 @@ async function runMigrations() {
     }
   }
 
-  // ── Advance ledgers for overpaid invoices ────────────────────────────────
-  // An invoice collected beyond its billed amount (legacy imports, or an edit
-  // that lowered a bill below what was already collected) posts its excess as
-  // a credit on the customer's advance ledger. The posting derivation is
-  // read-only and cannot provision ledgers, so this sweep heals every boot —
-  // same pattern as the orphan party-ledger sweep. Idempotent and normally a
-  // no-op: edits provision the ledger themselves at write time.
+  // ── Fold customer advances into the customer's own ledger (Aug 2026) ─────
+  // Business decision (final): the ERP keeps NO separate Customer Advances
+  // structure. A customer advance is a CREDIT (negative) balance on their
+  // single Sundry Debtor ledger. One-time fold, guarded by migration_log:
+  // stored voucher lines move to CUST-<id> (history intact, per-entry Dr=Cr
+  // unchanged), receipts stop pointing at CADV, then the empty CADV ledgers
+  // and the "Customer Advances" group are removed. If anything still
+  // references a CADV ledger the marker is NOT written, the leftovers are
+  // logged loudly, and the fold retries next boot (idempotent).
   {
-    const { rows: overpaidCusts } = await pool.query(
-      `SELECT DISTINCT s.customer_id AS id, c.name
-         FROM sales s JOIN customers c ON c.id = s.customer_id
-        WHERE s.cancelled_at IS NULL AND s.customer_id IS NOT NULL
-          AND s.amount_paid::numeric - s.total_amount::numeric > 0.004
-          AND NOT EXISTS (SELECT 1 FROM account_ledgers al WHERE al.code = 'CADV-' || s.customer_id::text)`
+    const { rows: [folded] } = await pool.query(
+      `SELECT 1 FROM migration_log WHERE name = 'customer_advances_fold_v1'`
     );
-    for (const c of overpaidCusts) {
-      await ensureAdvanceLedger(pool, "customer", Number(c.id), c.name ?? `Customer ${c.id}`);
-    }
-    if (overpaidCusts.length) {
-      console.log(`[migration] overpaid-sale advance sweep: provisioned ${overpaidCusts.length} customer advance ledgers`);
+    if (!folded) {
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        const { rows: movedLines } = await client.query(`
+          UPDATE journal_voucher_lines jvl
+             SET ledger_id = cust.id
+            FROM account_ledgers cadv
+            JOIN account_ledgers cust ON cust.code = 'CUST-' || substring(cadv.code FROM 6)
+           WHERE cadv.code ~ '^CADV-[0-9]+$' AND jvl.ledger_id = cadv.id
+           RETURNING jvl.id`);
+        // Opening balances: where the customer has no row for that financial
+        // year the CADV row is repointed; where BOTH exist they are MERGED as
+        // a signed sum into the CUST row. A skipped row would strand the CADV
+        // ledger forever (retry loop) and a later manual cleanup would lose
+        // the amount — merging or repointing must cover every row.
+        const { rows: movedOb } = await client.query(`
+          UPDATE opening_balances ob
+             SET ledger_id = cust.id
+            FROM account_ledgers cadv
+            JOIN account_ledgers cust ON cust.code = 'CUST-' || substring(cadv.code FROM 6)
+           WHERE cadv.code ~ '^CADV-[0-9]+$' AND ob.ledger_id = cadv.id
+             AND NOT EXISTS (SELECT 1 FROM opening_balances ob2
+                              WHERE ob2.ledger_id = cust.id AND ob2.financial_year = ob.financial_year)
+           RETURNING ob.id`);
+        const { rows: mergedOb } = await client.query(`
+          WITH pairs AS (
+            SELECT obc.id AS cadv_ob_id, obu.id AS cust_ob_id,
+                   (CASE WHEN obu.balance_type = 'debit' THEN obu.balance ELSE -obu.balance END)
+                 + (CASE WHEN obc.balance_type = 'debit' THEN obc.balance ELSE -obc.balance END) AS net
+              FROM opening_balances obc
+              JOIN account_ledgers cadv ON cadv.id = obc.ledger_id AND cadv.code ~ '^CADV-[0-9]+$'
+              JOIN account_ledgers cust ON cust.code = 'CUST-' || substring(cadv.code FROM 6)
+              JOIN opening_balances obu ON obu.ledger_id = cust.id AND obu.financial_year = obc.financial_year
+          ), upd AS (
+            UPDATE opening_balances ob
+               SET balance = ABS(p.net),
+                   balance_type = CASE WHEN p.net >= 0 THEN 'debit' ELSE 'credit' END,
+                   notes = COALESCE(ob.notes || ' · ', '') || 'Includes merged customer-advance opening (CADV fold)',
+                   updated_at = now()
+              FROM pairs p WHERE ob.id = p.cust_ob_id
+             RETURNING p.cadv_ob_id
+          )
+          DELETE FROM opening_balances WHERE id IN (SELECT cadv_ob_id FROM upd) RETURNING id`);
+        await client.query(`
+          UPDATE receipts SET advance_ledger_id = NULL
+           WHERE advance_ledger_id IN (SELECT id FROM account_ledgers WHERE code ~ '^CADV-[0-9]+$')`);
+        const { rows: deleted } = await client.query(`
+          DELETE FROM account_ledgers al
+           WHERE al.code ~ '^CADV-[0-9]+$'
+             AND NOT EXISTS (SELECT 1 FROM journal_voucher_lines j WHERE j.ledger_id = al.id)
+             AND NOT EXISTS (SELECT 1 FROM opening_balances ob WHERE ob.ledger_id = al.id)
+             AND NOT EXISTS (SELECT 1 FROM receipts r WHERE r.advance_ledger_id = al.id OR r.received_from_ledger_id = al.id OR r.received_in_ledger_id = al.id)
+             AND NOT EXISTS (SELECT 1 FROM payments p WHERE p.advance_ledger_id = al.id OR p.paid_from_ledger_id = al.id OR p.paid_to_ledger_id = al.id)
+             AND NOT EXISTS (SELECT 1 FROM expenses e WHERE e.ledger_account_id = al.id)
+           RETURNING al.code`);
+        const { rows: leftover } = await client.query(`
+          SELECT al.code,
+                 EXISTS (SELECT 1 FROM account_ledgers c
+                          WHERE c.code = 'CUST-' || substring(al.code FROM 6)) AS has_cust
+            FROM account_ledgers al WHERE al.code ~ '^CADV-[0-9]+$'`);
+        await client.query(`
+          DELETE FROM account_ledgers g
+           WHERE g.code = 'STD-GRP-CUST-ADV' AND g.is_group = true
+             AND NOT EXISTS (SELECT 1 FROM account_ledgers c WHERE c.parent_id = g.id)`);
+        if (leftover.length === 0) {
+          await client.query(
+            `INSERT INTO migration_log (name) VALUES ('customer_advances_fold_v1') ON CONFLICT (name) DO NOTHING`);
+        }
+        await client.query("COMMIT");
+        console.log(
+          `[migration] customer_advances_fold_v1: moved ${movedLines.length} voucher lines, ` +
+          `${movedOb.length} opening balances repointed, ${mergedOb.length} merged, ` +
+          `removed ${deleted.length} CADV ledgers` +
+          (leftover.length
+            ? `; UNRESOLVED (will retry next boot): ${leftover.map((l: any) =>
+                l.code + (l.has_cust ? " (still referenced)" : " (no matching CUST ledger — recreate the customer or repoint its rows manually)")).join(", ")}`
+            : ""));
+      } catch (e) {
+        await client.query("ROLLBACK");
+        throw e;
+      } finally {
+        client.release();
+      }
     }
   }
 
@@ -697,6 +773,15 @@ async function runMigrations() {
     ['Electronic Payment Clearing', 'asset',   'STD-ELEC-CLR', 'balance_sheet', 'SYS-CURA',   'Clearing for UPI/Card/Bank Transfer payments awaiting bank reconciliation'],
     ['Cash in Transit',             'asset',   'STD-CIT',      'balance_sheet', 'SYS-CURA',   'Cash physically deposited at bank but not yet confirmed'],
     ['Bank & Processor Charges',    'expense', 'STD-PROC-CHG', 'profit_loss',   'SYS-INDEXP', 'Bank and payment processor charges deducted from settlements'],
+    // Inter-branch invoice ledgers. The derived books post branch-transfer
+    // invoices here, but with a SILENT fallback to Sundry Debtors/Creditors
+    // when missing. Only the legacy voucher path ever provisioned them — a
+    // business that has always invoiced its transfers (invoicing is the
+    // default) never ran it, so branch receivables inflated Sundry Debtors.
+    // Seeding at boot heals existing books; the invoice creators also ensure
+    // them so new environments never regress.
+    ['Inter-Branch Receivable',     'asset',     'STD-BRANCH-DEBTOR',   'balance_sheet', 'SYS-CURA', 'Owed by receiving branches for cross-GSTIN stock transfer invoices'],
+    ['Inter-Branch Payable',        'liability', 'STD-BRANCH-CREDITOR', 'balance_sheet', 'SYS-CURL', 'Owed to dispatching branches for cross-GSTIN stock transfer invoices'],
   ];
   for (const [name, type, code, section, parentCode, desc] of clearingLedgers) {
     const { rows: [parent] } = await pool.query(`SELECT id FROM account_ledgers WHERE code = $1`, [parentCode]);
@@ -1363,9 +1448,11 @@ async function runMigrations() {
   `);
 
   // ── Bill-wise settlement & party advances ─────────────────────────────────
-  // A receipt/payment voucher may settle specific bills and park any excess in
-  // a party advance ledger (CADV-<customerId> / VADV-<vendorId>).
-  //  · advance_amount / advance_ledger_id — the excess slice of the voucher.
+  // A receipt/payment voucher may settle specific bills; any excess stays as a
+  // credit balance on the customer's own ledger, or parks in a vendor advance
+  // ledger (VADV-<vendorId>) on the payment side.
+  //  · advance_amount / advance_ledger_id — the excess slice of the voucher
+  //    (advance_ledger_id is vendor-side only; NULL for customer receipts).
   //    The customer-side bill allocations are sale_payments rows (linked via
   //    clearing_receipt_id, exactly like counter collections), so no separate
   //    allocation table is needed there.

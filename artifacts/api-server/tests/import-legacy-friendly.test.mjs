@@ -55,6 +55,14 @@ const post = (p, b, t) => apiReq('POST', p, b, t);
 const get = (p, t) => apiReq('GET', p, undefined, t);
 const patch = (p, b, t) => apiReq('PATCH', p, b, t);
 
+// Transaction imports go through the wizard now: demo → approve. Direct
+// /commit is reserved for master modules and refuses sales/purchases batches.
+async function wizardCommit(batchId) {
+  const demo = await post(`/imports/batches/${batchId}/demo`, {});
+  if (demo.status !== 200) return demo;
+  return post(`/imports/batches/${batchId}/approve`, {});
+}
+
 const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
 const sql = (text, params) => pool.query(text, params);
 
@@ -121,6 +129,7 @@ async function cleanup() {
   }
   await sql(`DELETE FROM import_rows WHERE batch_id IN (SELECT id FROM import_batches WHERE filename LIKE $1)`, [`${TAG}%`]);
   await sql(`DELETE FROM import_batches WHERE filename LIKE $1`, [`${TAG}%`]);
+  await sql(`DELETE FROM import_mappings WHERE source_name LIKE $1`, [`${TAG}%`]);
   await sql(`DELETE FROM items WHERE name LIKE $1`, [`${TAG}%`]);
   await sql(`DELETE FROM account_ledgers WHERE name LIKE $1 AND (code LIKE 'VEND-%' OR code LIKE 'CUST-%')`, [`${TAG}%`]);
   await sql(`DELETE FROM customers WHERE name LIKE $1`, [`${TAG}%`]);
@@ -169,6 +178,35 @@ assert('Import settings switched ON for the main tests', await setImportSettings
 }));
 
 const HEADERS = ['Invoice No', 'Date', 'Customer', 'Item', 'Qty', 'Price', 'Line Total', 'Discount', 'Payment Status', 'Payment Account'];
+const PHEADERS = ['Vendor Invoice No', 'Date', 'Vendor', 'Item', 'Qty', 'Purchase Rate', 'Payment Status', 'Payment Account'];
+
+{
+  // Mapping-first framework: names are NEVER matched silently — each fixture
+  // name must be mapped once. Saved mappings are permanent memory shared by
+  // every later batch, so two throwaway batches bootstrap them here.
+  const upS = await uploadXlsx('sales', [
+    HEADERS,
+    [`${TAG}/MAP/1`, '2026-08-04', `${TAG} Buyer`, `${TAG} Item`, 1, 100, '', '', 'Paid', 'Cash'],
+  ]);
+  const mapS = await post(`/imports/batches/${upS.data?.batch?.id}/mappings`, { mappings: [
+    { kind: 'customer', name: `${TAG} Buyer`, targetId: fixtures.custId },
+    { kind: 'product', name: `${TAG} Item`, targetId: fixtures.itemId },
+  ] });
+  assert('Customer + item name mappings saved', mapS.status === 200 && (mapS.data?.errors ?? []).length === 0,
+    JSON.stringify(mapS.data).slice(0, 250));
+  await post(`/imports/batches/${upS.data?.batch?.id}/discard`, {});
+
+  const upP = await uploadXlsx('purchases', [
+    PHEADERS,
+    [`${TAG}/MAP/2`, '2026-08-04', `${TAG} Vendor`, `${TAG} Item`, 1, 40, 'Unpaid', ''],
+  ]);
+  const mapP = await post(`/imports/batches/${upP.data?.batch?.id}/mappings`, { mappings: [
+    { kind: 'vendor', name: `${TAG} Vendor`, targetId: fixtures.vendorId },
+  ] });
+  assert('Vendor name mapping saved', mapP.status === 200 && (mapP.data?.errors ?? []).length === 0,
+    JSON.stringify(mapP.data).slice(0, 250));
+  await post(`/imports/batches/${upP.data?.batch?.id}/discard`, {});
+}
 
 // ───────────────────────────────────────────────────────────────────────────
 console.log('\n[1] Order-independent grouping + blank-cell inheritance');
@@ -261,7 +299,7 @@ console.log('\n[2] Line Total handling');
     r2(up.data?.summary?.totalAmount ?? 0) === 2860, JSON.stringify(up.data?.summary));
 
   // Commit and prove the DISCOUNTED derived line lands as exactly the LT.
-  const commit = await post(`/imports/batches/${up.data.batch.id}/commit`, {});
+  const commit = await wizardCommit(up.data.batch.id);
   assert('Line-Total batch commits', commit.status === 200 && commit.data?.summary?.imported === 5,
     JSON.stringify(commit.data?.summary));
   const { rows: [l4] } = await sql(
@@ -309,7 +347,7 @@ console.log('\n[3] Walk-in sales (blank customer)');
     JSON.stringify(rows[1]?.reason));
   assert('Summary counts the walk-in invoice', up.data?.summary?.walkInInvoices === 1, JSON.stringify(up.data?.summary));
 
-  const commit = await post(`/imports/batches/${batchId}/commit`, {});
+  const commit = await wizardCommit(batchId);
   assert('Walk-in batch commits the walk-in sale', commit.status === 200 && commit.data?.summary?.imported === 1,
     JSON.stringify(commit.data?.summary));
   const { rows: [sale] } = await sql(
@@ -330,21 +368,32 @@ console.log('\n[4] Auto-create unknown parties at commit');
   ]);
   const batchId = up.data?.batch?.id ?? 0;
   if (batchId) batches.push(batchId);
-  const rows = up.data?.rows ?? [];
-  assert('Unknown customer is a warning (not needs_party) with auto-create ON',
-    rows[0]?.status === 'warning' && rows[0]?.willCreateParty === `${TAG} New Customer`
-    && /created automatically/i.test(String(rows[0]?.reason ?? '')),
-    JSON.stringify([rows[0]?.status, rows[0]?.willCreateParty, rows[0]?.reason]));
-  assert('Preview lists the name under partiesToCreate',
-    (up.data?.summary?.partiesToCreate ?? []).includes(`${TAG} New Customer`), JSON.stringify(up.data?.summary?.partiesToCreate));
+  let rows = up.data?.rows ?? [];
+  assert('Unknown customer holds the row at needs_mapping (no silent match)',
+    rows[0]?.status === 'needs_mapping' && /not mapped yet/i.test(String(rows[0]?.reason ?? '')),
+    JSON.stringify([rows[0]?.status, rows[0]?.reason]));
+  assert('Preview lists the name under unmappedNames',
+    (up.data?.summary?.unmappedNames ?? []).some((u) => u.name === `${TAG} New Customer`),
+    JSON.stringify(up.data?.summary?.unmappedNames));
 
-  const commit = await post(`/imports/batches/${batchId}/commit`, {});
-  assert('Commit creates the customer and imports the sale',
-    commit.status === 200 && commit.data?.summary?.imported === 1
-    && (commit.data?.partiesCreated ?? []).some((p) => p.name === `${TAG} New Customer`),
-    JSON.stringify({ s: commit.data?.summary, p: commit.data?.partiesCreated }));
-  const { rows: [cust] } = await sql(`SELECT id, notes FROM customers WHERE name = $1`, [`${TAG} New Customer`]);
-  assert('Created customer carries the batch note', cust && /automatically during import batch/i.test(String(cust.notes)), JSON.stringify(cust));
+  // The mapping step CREATES the party — the explicit, user-approved successor
+  // of the old auto-create-at-commit behaviour.
+  const map = await post(`/imports/batches/${batchId}/mappings`, { mappings: [
+    { kind: 'customer', name: `${TAG} New Customer`, create: {} },
+  ] });
+  assert('Mapping step creates the customer',
+    map.status === 200 && (map.data?.created ?? []).some((c) => String(c.name ?? '').includes('New Customer')),
+    JSON.stringify(map.data).slice(0, 250));
+  rows = map.data?.rows ?? [];
+  assert('Row validates once the name is mapped',
+    rows[0] && rows[0].status !== 'needs_mapping' && rows[0].status !== 'error',
+    JSON.stringify([rows[0]?.status, rows[0]?.reason]));
+
+  const commit = await wizardCommit(batchId);
+  assert('Approval imports the sale', commit.status === 200 && commit.data?.summary?.imported === 1,
+    JSON.stringify(commit.data?.summary ?? commit.data).slice(0, 250));
+  const { rows: [cust] } = await sql(`SELECT id FROM customers WHERE name = $1`, [`${TAG} New Customer`]);
+  assert('Created customer exists', !!cust?.id, JSON.stringify(cust));
   const { rows: [led] } = await sql(`SELECT id FROM account_ledgers WHERE code = $1`, [`CUST-${cust?.id ?? 0}`]);
   assert('Created customer got its debtor ledger', !!led?.id);
   const { rows: [sale] } = await sql(`SELECT customer_id FROM sales WHERE legacy_invoice_number = $1`, [`${TAG}/N/1`]);
@@ -353,21 +402,26 @@ console.log('\n[4] Auto-create unknown parties at commit');
 
 {
   const up = await uploadXlsx('purchases', [
-    ['Vendor Invoice No', 'Date', 'Vendor', 'Item', 'Qty', 'Purchase Rate', 'Payment Status', 'Payment Account'],
+    PHEADERS,
     [`${TAG}/P/1`, '2026-08-04', `${TAG} New Vendor`, `${TAG} Item`, 10, 40, 'Unpaid', ''],
   ]);
   const batchId = up.data?.batch?.id ?? 0;
   if (batchId) batches.push(batchId);
-  const rows = up.data?.rows ?? [];
-  assert('Unknown vendor is a warning with auto-create ON',
-    rows[0]?.status === 'warning' && rows[0]?.willCreateParty === `${TAG} New Vendor`,
-    JSON.stringify([rows[0]?.status, rows[0]?.willCreateParty, rows[0]?.reason]));
+  let rows = up.data?.rows ?? [];
+  assert('Unknown vendor holds the row at needs_mapping',
+    rows[0]?.status === 'needs_mapping' && /not mapped yet/i.test(String(rows[0]?.reason ?? '')),
+    JSON.stringify([rows[0]?.status, rows[0]?.reason]));
 
-  const commit = await post(`/imports/batches/${batchId}/commit`, {});
-  assert('Commit creates the vendor and imports the bill',
-    commit.status === 200 && commit.data?.summary?.imported === 1
-    && (commit.data?.partiesCreated ?? []).some((p) => p.name === `${TAG} New Vendor`),
-    JSON.stringify({ s: commit.data?.summary, p: commit.data?.partiesCreated }));
+  const map = await post(`/imports/batches/${batchId}/mappings`, { mappings: [
+    { kind: 'vendor', name: `${TAG} New Vendor`, create: {} },
+  ] });
+  assert('Mapping step creates the vendor',
+    map.status === 200 && (map.data?.created ?? []).some((c) => String(c.name ?? '').includes('New Vendor')),
+    JSON.stringify(map.data).slice(0, 250));
+
+  const commit = await wizardCommit(batchId);
+  assert('Approval imports the bill', commit.status === 200 && commit.data?.summary?.imported === 1,
+    JSON.stringify(commit.data?.summary ?? commit.data).slice(0, 250));
   const { rows: [vend] } = await sql(`SELECT id FROM vendors WHERE name = $1`, [`${TAG} New Vendor`]);
   const { rows: [vled] } = await sql(`SELECT id FROM account_ledgers WHERE code = $1`, [`VEND-${vend?.id ?? 0}`]);
   assert('Created vendor got its creditor ledger', !!vled?.id);
@@ -398,8 +452,8 @@ assert('Import settings switched OFF', await setImportSettings({
   if (up.data?.batch?.id) batches.push(up.data.batch.id);
   const rows = up.data?.rows ?? [];
   assert('Unknown customer needs the resolve step with auto-create OFF',
-    rows[0]?.status === 'needs_party' && rows[0]?.missingParty === `${TAG} Stranger`,
-    JSON.stringify([rows[0]?.status, rows[0]?.missingParty]));
+    rows[0]?.status === 'needs_mapping' && /not mapped yet/i.test(String(rows[0]?.reason ?? '')),
+    JSON.stringify([rows[0]?.status, rows[0]?.reason]));
   assert('Blank customer is an error with walk-in OFF',
     rows[1]?.status === 'error' && /Customer is required/i.test(String(rows[1]?.reason ?? '')),
     JSON.stringify(rows[1]?.reason));

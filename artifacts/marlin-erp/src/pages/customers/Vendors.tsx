@@ -95,6 +95,7 @@ function VendorLedger({ vendorId }: { vendorId: number }) {
               <TableRow className="bg-muted/10">
                 <TableHead className="text-xs">Date</TableHead>
                 <TableHead className="text-xs">Description</TableHead>
+                <TableHead className="text-xs">Voucher</TableHead>
                 <TableHead className="text-right text-xs">Debit</TableHead>
                 <TableHead className="text-right text-xs">Credit</TableHead>
                 <TableHead className="text-right text-xs">Balance</TableHead>
@@ -114,6 +115,7 @@ function VendorLedger({ vendorId }: { vendorId: number }) {
                       {e.description}
                     </span>
                   </TableCell>
+                  <TableCell className="text-xs font-mono text-muted-foreground whitespace-nowrap">{e.voucherNumber ?? '—'}</TableCell>
                   <TableCell className="text-right text-xs font-mono">
                     {e.debit > 0 ? <span className="text-emerald-600">₹{Number(e.debit).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span> : '—'}
                   </TableCell>

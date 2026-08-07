@@ -1,0 +1,347 @@
+Perform a complete ERP Workflow Bug Audit and fix every business logic bug.
+
+The ERP currently has multiple workflow inconsistencies.
+
+Example:
+Invoice SB2C/2026-27/000020 is saved with Payment Mode = Credit (Pay Later), but after saving it is marked as Paid and behaves like a cash sale.
+
+This indicates business logic bugs between transaction entry, accounting, invoice status and reports.
+
+Do NOT fix only this invoice.
+
+Audit the entire ERP.
+
+==================================================
+1. Sales Workflow
+==================================================
+
+Verify the complete workflow.
+
+Draft
+
+↓
+
+Save Sale
+
+↓
+
+Accounting
+
+↓
+
+Inventory
+
+↓
+
+Customer Ledger
+
+↓
+
+Invoice Status
+
+↓
+
+Dashboard
+
+↓
+
+Reports
+
+Verify all payment modes:
+
+Cash
+
+Bank
+
+UPI
+
+Card
+
+Credit (Pay Later)
+
+Mixed Payment
+
+Expected Behaviour:
+
+Cash/Bank/UPI/Card
+
+Invoice Status = Paid
+
+Outstanding = 0
+
+Receipt created only when required by design.
+
+Credit
+
+Invoice Status = Unpaid
+
+Outstanding = Invoice Amount
+
+No automatic payment posting.
+
+Partial
+
+Invoice Status = Partial
+
+Outstanding = Remaining Amount
+
+==================================================
+2. Payment Allocation
+==================================================
+
+Receipt Voucher
+
+must change:
+
+Outstanding
+
+Customer Ledger
+
+Invoice Status
+
+Dashboard
+
+Receivable
+
+Cash/Bank
+
+Verify every allocation.
+
+==================================================
+3. Purchase Workflow
+==================================================
+
+Verify:
+
+Cash Purchase
+
+Credit Purchase
+
+Partial Payment
+
+Vendor Outstanding
+
+Vendor Ledger
+
+Payment Voucher
+
+==================================================
+4. Returns
+==================================================
+
+Sales Return
+
+Purchase Return
+
+Verify:
+
+Stock
+
+Accounting
+
+Outstanding
+
+Customer/Vendor Ledger
+
+GST
+
+==================================================
+5. Journals
+==================================================
+
+Every transaction must create proper journal entries.
+
+Verify:
+
+Sales
+
+Purchase
+
+Receipt
+
+Payment
+
+Expense
+
+Production
+
+Stock Transfer
+
+Journal Voucher
+
+Opening Balance
+
+Imports
+
+==================================================
+6. Inventory
+==================================================
+
+Verify:
+
+Stock
+
+Batch
+
+FIFO
+
+COGS
+
+Inventory Valuation
+
+==================================================
+7. Ledger
+==================================================
+
+Verify every customer ledger.
+
+Every vendor ledger.
+
+Every general ledger.
+
+Every transaction affecting a ledger must appear.
+
+Nothing should be missing.
+
+==================================================
+8. Reports
+==================================================
+
+Verify:
+
+Dashboard
+
+Trial Balance
+
+Balance Sheet
+
+P&L
+
+Receivable
+
+Payable
+
+Cash Book
+
+Bank Book
+
+Customer Ledger
+
+Vendor Ledger
+
+Inventory
+
+==================================================
+9. Status Verification
+==================================================
+
+Invoice status must always match reality.
+
+Paid
+
+Partially Paid
+
+Unpaid
+
+Cancelled
+
+Returned
+
+No invoice should show Paid unless fully settled.
+
+==================================================
+10. Imports
+==================================================
+
+Imported Sales
+
+Imported Purchase
+
+Imported Receipt
+
+Imported Payment
+
+must behave exactly like manually entered transactions.
+
+==================================================
+11. Location
+==================================================
+
+Verify all transactions belong to the selected location.
+
+No posting should accidentally go to Head Office.
+
+==================================================
+12. Code Audit
+==================================================
+
+Search the codebase for duplicate workflow logic.
+
+There must be only one implementation for:
+
+Sales Posting
+
+Purchase Posting
+
+Receipt Posting
+
+Payment Posting
+
+Status Calculation
+
+Outstanding Calculation
+
+Ledger Posting
+
+Inventory Posting
+
+==================================================
+13. Regression Testing
+==================================================
+
+Create automated scenarios for:
+
+Cash Sale
+
+Credit Sale
+
+UPI Sale
+
+Partial Payment
+
+Receipt
+
+Purchase
+
+Purchase Return
+
+Sales Return
+
+Expense
+
+Production
+
+Stock Transfer
+
+Opening Balance
+
+Imports
+
+Verify every scenario end-to-end.
+
+==================================================
+14. Final Report
+==================================================
+
+List every workflow bug found.
+
+For each bug provide:
+
+• Root Cause
+• Files affected
+• Fix applied
+• Regression test added
+
+Do not stop after fixing the reported issue.
+
+Find and eliminate all workflow inconsistencies so the ERP behaves like a production-grade accounting system.

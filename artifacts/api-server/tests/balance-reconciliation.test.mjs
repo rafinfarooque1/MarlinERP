@@ -162,7 +162,7 @@ async function cleanup() {
 
 // ── Run ──────────────────────────────────────────────────────────────────────
 try {
-  authToken = (await post('/auth/login', { username: 'admin', password: 'marlin1458' })).data?.token ?? '';
+  authToken = (await post('/auth/login', { username: process.env.TEST_USERNAME || 'admin', password: process.env.TEST_PASSWORD || 'marlin1458' })).data?.token ?? '';
   if (!authToken) throw new Error('admin login failed');
 
   await cleanup(); // in case a previous run died mid-way

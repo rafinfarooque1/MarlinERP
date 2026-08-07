@@ -8,6 +8,7 @@ export interface LedgerEntry {
   date: string;
   description: string;
   entryType: string;
+  voucherNumber?: string | null;
   debit: number;
   credit: number;
   balance: number;

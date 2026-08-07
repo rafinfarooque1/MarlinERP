@@ -111,6 +111,14 @@ app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
     res.status(400).json({ error: "Request body is not valid JSON" });
     return;
   }
+  // Stock-write guard: a DB trigger refuses stock writes against a product
+  // master that no longer exists. Producers are expected to validate up
+  // front, but any path that slips through must surface the trigger's own
+  // message as a conflict — not an opaque 500.
+  if (typeof (err as any).message === "string" && (err as any).message.includes("stock write refused")) {
+    res.status(409).json({ error: (err as any).message });
+    return;
+  }
   logger.error({ err }, "Unhandled server error");
   res.status(500).json({ error: "An unexpected server error occurred" });
 });

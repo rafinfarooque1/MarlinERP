@@ -240,3 +240,13 @@ Rules that must hold for every import type, and why:
 - **Frontend:** ImportData 'Migration' tab (default) hosts MigrationWizard;
   Masters tab keeps standalone master imports; MappingStep/DemoReportView are
   shared components taking either batchId or migrationId.
+- **Test suites against the framework:** transaction batches refuse direct
+  `/commit` ("Transaction imports use the wizard") — commit via demo→approve
+  (`wizardCommit` helper). Name resolution is mapping-first: rows referencing
+  masters created via raw SQL park as `needs_mapping` until
+  `POST /imports/batches/:id/mappings` registers `{kind, name, targetId}`;
+  mappings are PERMANENT (keyed kind+source_name), so one tiny bootstrap batch
+  per module maps the fixture names once and every later upload validates
+  directly. Approve answers `{batch, summary, failures, details:{recordCounts,
+  timeTakenMs}}` — not the master-commit `details` shape. Clean up
+  `import_mappings` by source_name in test cleanup.

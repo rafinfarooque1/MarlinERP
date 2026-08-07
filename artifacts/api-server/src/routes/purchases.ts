@@ -575,6 +575,21 @@ router.post("/purchases", requireModuleAction("page:/production/purchase", "add"
   );
   if (inactiveMsg) { res.status(400).json({ error: inactiveMsg, code: INACTIVE_PRODUCT_CODE }); return; }
 
+  // A NEW bill cannot name a product that does not exist: without this check
+  // the stock-write trigger refuses mid-transaction and the user sees an
+  // opaque server error. Create-only — historical bills whose product was
+  // later deleted must stay readable and date-editable.
+  for (let i = 0; i < rawLineItems.length; i++) {
+    const li = rawLineItems[i];
+    const kind = String(li?.materialType ?? "material");
+    if (!maps[kind as keyof NameMaps]?.has(Number(li?.materialId))) {
+      res.status(400).json({
+        error: `Line ${i + 1}: ${KIND_LABEL[kind] ?? "Item"} #${li?.materialId} does not exist — it may have been deleted. Refresh the product list and pick it again.`,
+      });
+      return;
+    }
+  }
+
   // Dates, HSN shape, quantities and any hand-typed batch number.
   const identityMsg = lineIdentityError(rawLineItems, maps);
   if (identityMsg) { res.status(400).json({ error: identityMsg }); return; }

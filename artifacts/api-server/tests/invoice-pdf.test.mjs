@@ -19,7 +19,7 @@
 
 import pg from 'pg';
 import { execFileSync } from 'node:child_process';
-import { writeFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { writeFileSync, mkdtempSync, rmSync, readFileSync, existsSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -88,6 +88,30 @@ const createdPurchases = [];
 const createdSales = [];
 let preEntries = [], preEntryIds = [], preLots = [], preLotIds = [];
 let savedCompany = null; // { id, logo_url, state } — restored by id in cleanup
+let savedWh = [];         // pre-test warehouse billing profiles — restored in cleanup
+let savedFlags = null;    // pre-test general_settings (POS flags) — restored in cleanup
+
+// The pinned rows are REAL business data. The in-memory snapshot dies with a
+// crashed process, so it is also persisted to disk before any pinning UPDATE
+// runs; the next run (or a manual `node` one-liner) can then restore it.
+const SNAP_FILE = join(tmpdir(), 'zzpdf-pin-snapshot.json');
+
+async function restoreFromSnapshot(snap) {
+  for (const w of snap.warehouses ?? []) {
+    await sql(
+      `UPDATE warehouses SET billing_name=$2, gst_number=$3, fssai_number=$4, bank_account_holder=$5,
+          bank_name=$6, bank_branch=$7, bank_account_number=$8, ifsc_code=$9, upi_id=$10, authorized_signatory=$11
+        WHERE id=$1`,
+      [w.id, w.billing_name, w.gst_number, w.fssai_number, w.bank_account_holder, w.bank_name,
+       w.bank_branch, w.bank_account_number, w.ifsc_code, w.upi_id, w.authorized_signatory]);
+  }
+  if (snap.company) {
+    await sql(`UPDATE company_settings SET logo_url = $1, state = $2 WHERE id = $3`,
+      [snap.company.logo_url ?? '', snap.company.state ?? '', snap.company.id]);
+    if (snap.flags) await sql(`UPDATE company_settings SET general_settings = $1 WHERE id = $2`,
+      [snap.flags, snap.company.id]);
+  }
+}
 
 async function snapshotTB() {
   const res = await get('/accounts/trial-balance');
@@ -131,15 +155,40 @@ async function cleanup() {
     await sql(`UPDATE company_settings SET logo_url = $1, state = $2 WHERE id = $3`,
       [savedCompany.logo_url ?? '', savedCompany.state ?? '', savedCompany.id]);
   }
+  for (const w of savedWh) {
+    await sql(
+      `UPDATE warehouses SET billing_name=$2, gst_number=$3, fssai_number=$4, bank_account_holder=$5,
+          bank_name=$6, bank_branch=$7, bank_account_number=$8, ifsc_code=$9, upi_id=$10, authorized_signatory=$11
+        WHERE id=$1`,
+      [w.id, w.billing_name, w.gst_number, w.fssai_number, w.bank_account_holder, w.bank_name,
+       w.bank_branch, w.bank_account_number, w.ifsc_code, w.upi_id, w.authorized_signatory]);
+  }
+  savedWh = [];
+  if (savedCompany && savedFlags) {
+    await sql(`UPDATE company_settings SET general_settings = $1 WHERE id = $2`, [savedFlags, savedCompany.id]);
+    savedFlags = null;
+  }
+  // Everything above put the real rows back — the crash snapshot is now stale.
+  try { if (existsSync(SNAP_FILE)) unlinkSync(SNAP_FILE); } catch { /* best effort */ }
 }
 
 // ───────────────────────────────────────────────────────────────────────────
 console.log('\n[0] Authentication and fixtures');
 
-const loginRes = await post('/auth/login', { username: 'admin', password: 'marlin1458' });
+const loginRes = await post('/auth/login', { username: process.env.TEST_USERNAME || 'admin', password: process.env.TEST_PASSWORD || 'marlin1458' });
 authToken = loginRes.data?.token ?? '';
 assert('Admin login returns a token', !!authToken, `status=${loginRes.status}`);
 if (!authToken) { console.error('FATAL: no token'); process.exit(1); }
+
+// A previous run that died between pinning and cleanup left the REAL business
+// rows carrying fixture identities — heal from the on-disk snapshot first.
+if (existsSync(SNAP_FILE)) {
+  try {
+    await restoreFromSnapshot(JSON.parse(readFileSync(SNAP_FILE, 'utf8')));
+    console.log('  (restored real warehouse/company settings from a crashed run\'s snapshot)');
+  } catch (e) { console.error('  snapshot restore failed:', e?.message ?? e); }
+  unlinkSync(SNAP_FILE);
+}
 
 await cleanup(); // in case a previous run died mid-way
 const tbBefore = await snapshotTB();
@@ -147,6 +196,37 @@ savedCompany = (await sql(`SELECT id, logo_url, state FROM company_settings LIMI
 // The dev company profile has no state, which silently disables IGST detection
 // (interstate = company state ≠ customer state). Pin it for the IGST case.
 if (savedCompany) await sql(`UPDATE company_settings SET state = 'Karnataka' WHERE id = $1`, [savedCompany.id]);
+
+// The dev DB now carries the REAL business's warehouse billing profiles, its
+// company logo and its POS entry flags. Pin the two warehouses to the fixture
+// identities this suite asserts on, blank the logo (lettermark baseline) and
+// switch the POS discount/coupon flags on — all restored in cleanup().
+savedWh = (await sql(
+  `SELECT id, billing_name, gst_number, fssai_number, bank_account_holder, bank_name,
+          bank_branch, bank_account_number, ifsc_code, upi_id, authorized_signatory
+     FROM warehouses WHERE id IN ($1, $2)`, [WH_FULL, WH_BARE])).rows;
+savedFlags = (await sql(`SELECT general_settings FROM company_settings WHERE id = $1`, [savedCompany?.id])).rows[0]?.general_settings ?? {};
+// Persist the snapshot BEFORE the first pinning UPDATE — a crash after this
+// point must still be recoverable from disk.
+writeFileSync(SNAP_FILE, JSON.stringify({ warehouses: savedWh, company: savedCompany, flags: savedFlags }));
+await sql(
+  `UPDATE warehouses SET billing_name='MARLIN FROZEN FRUITS PVT', gst_number='29ABCDE1234F1Z5',
+      fssai_number='11223344556677', bank_account_holder='Marlin Frozen Fruits Pvt Ltd',
+      bank_name='HDFC Bank', bank_branch='Electronic City', bank_account_number='50200012345678',
+      ifsc_code='HDFC0001234', upi_id='marlinblr@okhdfcbank', authorized_signatory='S. Raghavan'
+    WHERE id = $1`, [WH_FULL]);
+await sql(
+  `UPDATE warehouses SET billing_name='MARLIN COASTAL FOODS LLP', gst_number='29PQRSX6789K2Z1',
+      fssai_number='', bank_account_holder='', bank_name='', bank_branch='',
+      bank_account_number='', ifsc_code='', upi_id='marlinkochi@ybl', authorized_signatory=''
+    WHERE id = $1`, [WH_BARE]);
+if (savedCompany) {
+  await sql(`UPDATE company_settings SET logo_url = '' WHERE id = $1`, [savedCompany.id]);
+  await sql(
+    `UPDATE company_settings SET general_settings = COALESCE(general_settings, '{}'::jsonb)
+        || '{"posDiscountsEnabled": true, "posCouponsEnabled": true}'::jsonb
+      WHERE id = $1`, [savedCompany.id]);
+}
 
 fixtures.vendorId = (await sql(
   `INSERT INTO vendors (name, state, gst_number) VALUES ($1,'Karnataka','29ZZPDF1234F1Z5') RETURNING id`,
@@ -242,7 +322,8 @@ console.log('\n[2] Company Profile logo is embedded when present');
   // A PNG with an alpha channel embeds as image + soft mask, so "more than just
   // the QR" is the honest assertion.
   assert('Logo embedded alongside the QR', pdfImageCount(pdf.file) >= 2, `imgs=${pdfImageCount(pdf.file)}`);
-  await sql(`UPDATE company_settings SET logo_url = $1 WHERE id = $2`, [savedCompany?.logo_url ?? '', savedCompany?.id]);
+  // Baseline for this suite is a BLANK logo (the real one comes back in cleanup).
+  await sql(`UPDATE company_settings SET logo_url = '' WHERE id = $1`, [savedCompany?.id]);
   const pdf2 = await invPdf(s1);
   assert('Back to lettermark after logo removed', pdfImageCount(pdf2.file) === 1);
 }

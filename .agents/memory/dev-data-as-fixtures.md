@@ -24,3 +24,24 @@ dev record you are about to use for a demo or a manual check, grep the test
 directory for its id and its name. If it is pinned, either pick a different row
 or keep the pinned attributes intact and vary only the fields your work needs.
 Re-run the suite that pins it before you finish.
+
+## The dev DB now holds REAL business data (since Aug 2026)
+
+The reverse trap also exists: suites can no longer assume QA fixture rows.
+The live import replaced warehouse billing profiles, set a company logo, and
+turned POS coupons off — every suite that asserted the old QA identities broke.
+
+**Rules for suites against this DB:**
+- Never hardcode warehouse ids or their attributes. Resolve the first enabled
+  warehouses after login, and PIN any billing-profile/company-settings state a
+  suite asserts on (billing name, GSTIN, FSSAI, bank, UPI, signatory, logo,
+  POS flags in `company_settings.general_settings`) — snapshot → set → restore
+  in cleanup(), with cleanup also run at start for crash recovery.
+- Fixture prices must respect the MRP floor of real items; backdated stock
+  reads must stay within the real stock-ledger baseline (history-reach guard:
+  use today, not a hardcoded past date).
+- Always export ALL FOUR of `TEST_USERNAME`, `TEST_PASSWORD`,
+  `TEST_ADMIN_USER`, `TEST_ADMIN_PASSWORD` — suites differ in which pair they
+  read, and the fallback is 'admin', which collects lockout strikes in
+  `login_lockouts` (that's the lockout table; `login_attempts` is just the
+  audit log).

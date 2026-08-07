@@ -288,7 +288,7 @@ export default function Outstanding() {
                               <p className="font-medium">{c.name}</p>
                               {c.phone && <p className="text-xs text-muted-foreground flex items-center gap-1"><Phone className="w-3 h-3" />{c.phone}</p>}
                               {Number(c.advance) > 0 && (
-                                <p className="text-[11px] text-amber-600 dark:text-amber-500">Advance held: ₹{fmt(c.advance)}</p>
+                                <p className="text-[11px] text-amber-600 dark:text-amber-500">Credit balance (advance): ₹{fmt(c.advance)}</p>
                               )}
                             </div>
                           </div>

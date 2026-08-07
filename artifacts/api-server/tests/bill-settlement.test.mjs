@@ -4,8 +4,11 @@
  *
  * Rules under test:
  *   A receipt/payment carrying `allocations` settles those exact bills; any
- *     excess (`advanceAmount`) parks on the party's advance ledger
- *     (CADV-<id> liability / VADV-<id> asset).
+ *     excess (`advanceAmount`) stays as a CREDIT balance on the customer's own
+ *     ledger (single-ledger model — no CADV), or parks on the vendor's
+ *     VADV-<id> asset ledger.
+ *   Customer "available advance" = max(0, −net(CUST ledger)) — it nets
+ *     against everything the customer still owes, by design.
  *   Allocations must never exceed the voucher amount, a bill's balance due,
  *     or target a cancelled sale.
  *   A sale/purchase created with `useAdvance:true` auto-adjusts the party's
@@ -106,8 +109,8 @@ async function cleanup() {
     await sql(`DELETE FROM stock_entries WHERE item_id = $1 AND material_type = 'item' AND NOT (id = ANY($2::int[]))`, [fx.itemId, preEntryIds]);
   }
   await sql(`DELETE FROM items WHERE name LIKE $1`, [`${TAG}%`]);
-  // Ledgers last — advance ledgers first (children of the containers), then party.
-  await sql(`DELETE FROM account_ledgers WHERE name LIKE $1 AND code LIKE 'CADV-%'`, [`%${TAG}%`]);
+  // Ledgers last — the vendor advance ledger first (child of the container),
+  // then party ledgers. (Customers have no separate advance ledger.)
   await sql(`DELETE FROM account_ledgers WHERE name LIKE $1 AND code LIKE 'VADV-%'`, [`%${TAG}%`]);
   await sql(`DELETE FROM account_ledgers WHERE name LIKE $1 AND (code LIKE 'VEND-%' OR code LIKE 'CUST-%')`, [`${TAG}%`]);
   await sql(`DELETE FROM customers WHERE name LIKE $1`, [`${TAG}%`]);
@@ -117,7 +120,7 @@ async function cleanup() {
 // ───────────────────────────────────────────────────────────────────────────
 console.log('\n[0] Authentication and fixtures');
 
-authToken = (await post('/auth/login', { username: 'admin', password: 'marlin1458' })).data?.token ?? '';
+authToken = (await post('/auth/login', { username: process.env.TEST_USERNAME || 'admin', password: process.env.TEST_PASSWORD || 'marlin1458' })).data?.token ?? '';
 assert('Admin login returns a token', !!authToken);
 if (!authToken) { console.error('FATAL: no token'); process.exit(1); }
 
@@ -251,8 +254,14 @@ let R2;
 
   const adv = await advance('customer', fx.custId);
   assert('party-advance shows ₹100 available', near(adv?.available, 100), JSON.stringify(adv));
-  const { rows: [cadv] } = await sql(`SELECT id, type FROM account_ledgers WHERE code = $1`, [`CADV-${fx.custId}`]);
-  assert('CADV ledger provisioned as liability', !!cadv && cadv.type === 'liability', JSON.stringify(cadv ?? {}));
+  // Single-ledger model: the excess lives as a credit balance on the
+  // customer's OWN ledger — no CADV ledger may ever be provisioned.
+  const { rows: [cadv] } = await sql(`SELECT id FROM account_ledgers WHERE code = $1`, [`CADV-${fx.custId}`]);
+  assert('No separate CADV ledger exists', !cadv, JSON.stringify(cadv ?? {}));
+  const tbRows = (await get('/accounts/trial-balance')).data?.rows ?? [];
+  const custRow = tbRows.find(r => Number(r.ledgerId) === fx.custLedger);
+  assert('Customer ledger stands at ₹100 Cr on the Trial Balance',
+    !!custRow && near(custRow.credit, 100) && near(custRow.debit, 0), JSON.stringify(custRow ?? {}));
 
   const recv = (await get('/outstanding/receivables')).data;
   const rc = (recv?.customers ?? []).find(c => c.customerId === fx.custId);
@@ -396,7 +405,9 @@ let R3, R4, S5;
   R4 = r4.data; if (r4.status === 201) made.receipts.push(R4.id);
   assert('Two advance-only receipts parked (₹100 + ₹120)', r3.status === 201 && r4.status === 201, `${r3.status}/${r4.status}`);
   const adv0 = await advance('customer', fx.custId);
-  assert('Advance pool ₹220', near(adv0?.available, 220), JSON.stringify(adv0));
+  // ₹220 parked, but S3 still owes ₹100 — under the single-ledger model the
+  // available advance is the NET credit on the customer ledger: 220 − 100.
+  assert('Available advance = ₹120 (₹220 parked net of ₹100 still owed)', near(adv0?.available, 120), JSON.stringify(adv0));
 
   // Consume only ₹30 — FIFO must pin it to R3, the OLDEST voucher.
   const s = await mkSale(2, { useAdvance: true, advanceAmount: 30, saleDate: '2026-08-03' });
@@ -421,7 +432,9 @@ let R3, R4, S5;
   const c = await post(`/sales/${S5.id}/cancel`, {});
   assert('Advance-adjusted sale cancels cleanly', c.status === 200, `status ${c.status} ${JSON.stringify(c.data).slice(0, 120)}`);
   const adv1 = await advance('customer', fx.custId);
-  assert('Advance restored to ₹100 after cancel', near(adv1?.available, 100), JSON.stringify(adv1));
+  // R3's ₹100 is back on the ledger, but S3's ₹100 due still nets it to zero
+  // — the netted figure is the whole point of the single-ledger model.
+  assert('Available advance back to ₹0 (R3 ₹100 restored, netted by S3 ₹100 due)', near(adv1?.available, 0), JSON.stringify(adv1));
   const { rows: spLeft } = await sql(`SELECT 1 FROM sale_payments WHERE sale_id = $1`, [S5.id]);
   const { rows: acLeft } = await sql(`SELECT 1 FROM advance_consumptions WHERE consumer_sale_id = $1`, [S5.id]);
   assert('Advance payment + attribution rows removed with the cancel', spLeft.length === 0 && acLeft.length === 0);

@@ -123,7 +123,7 @@ async function cleanup() {
 // ───────────────────────────────────────────────────────────────────────────
 console.log('\n[0] Authentication and fixtures');
 
-const loginRes = await post('/auth/login', { username: 'admin', password: 'marlin1458' });
+const loginRes = await post('/auth/login', { username: process.env.TEST_USERNAME || 'admin', password: process.env.TEST_PASSWORD || 'marlin1458' });
 authToken = loginRes.data?.token ?? '';
 assert('Admin login returns a token', !!authToken, `status=${loginRes.status}`);
 if (!authToken) { console.error('FATAL: no token'); process.exit(1); }
@@ -150,12 +150,26 @@ for (const [bt, bid] of [['warehouse', WH1], ['warehouse', WH2], ['headoffice', 
      VALUES ($1,'item',$2,$3,100,'50')`, [fixtures.itemId, bt, bid]);
 }
 
+// The allocator (voucher_sequences) is the authority on "the next number":
+// it never rewinds, so after a cancelled+deleted bill the counter sits AHEAD
+// of MAX(invoice_number). Anchor on the counter row when it exists; fall back
+// to the data maximum only for a scope that has never drawn (no row yet).
+async function nextAnchor(series, locType, locId) {
+  const counter = series === 'SB2B' ? 'sales_invoice_counter_b2b' : 'sales_invoice_counter_b2c';
+  const scope = locType === 'headoffice' ? 'headoffice' : `${locType}:${locId}`;
+  const { rows: [r] } = await sql(
+    `SELECT last_number FROM voucher_sequences WHERE voucher_type = $1 AND fy_label = $2`,
+    [`${counter}@${scope}`, FY]);
+  if (r) return Number(r.last_number);
+  return maxSuffix(series, locType, locId);
+}
+
 const before = {
-  wh1: await maxSuffix('SB2C', 'warehouse', WH1),
-  wh2: await maxSuffix('SB2C', 'warehouse', WH2),
-  ho: await maxSuffix('SB2C', 'headoffice', 1),
-  wh1b2b: await maxSuffix('SB2B', 'warehouse', WH1),
-  wh2b2b: await maxSuffix('SB2B', 'warehouse', WH2),
+  wh1: await nextAnchor('SB2C', 'warehouse', WH1),
+  wh2: await nextAnchor('SB2C', 'warehouse', WH2),
+  ho: await nextAnchor('SB2C', 'headoffice', 1),
+  wh1b2b: await nextAnchor('SB2B', 'warehouse', WH1),
+  wh2b2b: await nextAnchor('SB2B', 'warehouse', WH2),
 };
 console.log(`  (starting maxima: WH1 B2C ${before.wh1}, WH2 B2C ${before.wh2}, HO B2C ${before.ho}, WH1 B2B ${before.wh1b2b}, WH2 B2B ${before.wh2b2b})`);
 

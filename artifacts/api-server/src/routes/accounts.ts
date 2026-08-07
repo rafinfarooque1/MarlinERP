@@ -1336,13 +1336,11 @@ router.post("/accounts/receipts", requireModuleAction(["page:/accounts/vouchers"
         details.push({ sale, alloc: al, position });
       }
 
-      // Excess → the customer's advance ledger (provisioned on first use).
-      let advanceLedgerId: number | null = null;
-      if (advance > 0.004) {
-        const { rows: [cust] } = await client.query(`SELECT name FROM customers WHERE id = $1`, [party.partyId]);
-        const custName = cust?.name ?? fromLedger?.name ?? `Customer ${party.partyId}`;
-        advanceLedgerId = await ensureAdvanceLedger(client, "customer", party.partyId, custName);
-      }
+      // Excess simply stays as a CREDIT (negative) balance on the customer's
+      // own Sundry Debtor ledger — no separate advance ledger exists. The
+      // advance_amount column still records the unallocated slice (it drives
+      // FIFO consumption attribution and the voucher delete guard).
+      const advanceLedgerId: number | null = null;
 
       const method = (await isCashFamilyLedger(client, Number(receivedInLedgerId))) ? "cash" : "bank";
       const voucherNumber = await nextVoucherNumber(client, "receipt", receiptDate);
@@ -1563,13 +1561,20 @@ router.delete("/accounts/receipts/:id", requireModuleAction(["page:/accounts/vou
               res.status(409).json({ error: `₹${money2(consumed).toFixed(2)} of this voucher's advance has been adjusted against invoices. Cancel those invoices first.` });
               return;
             }
-            // Aggregate backstop: covers drains that predate slice tracking
-            // (manual journals on the advance ledger).
-            const pos = await advanceAvailable(party.kind, party.partyId);
-            if (pos.available + 0.005 < advAmt) {
-              await client.query("ROLLBACK");
-              res.status(409).json({ error: `₹${money2(advAmt - pos.available).toFixed(2)} of this voucher's advance has already been adjusted against invoices. Remove those adjustments first.` });
-              return;
+            // Aggregate backstop — vendor-side only. A vendor advance is a
+            // segregated VADV pool, so an aggregate drain that predates slice
+            // tracking must keep blocking. A CUSTOMER advance is just the
+            // credit side of their own Sundry Debtor ledger: open bills
+            // legitimately absorb it, so the netted "available" figure says
+            // nothing about whether THIS voucher's money was used — the
+            // reference-based guard above is the sole authority there.
+            if (party.kind === "vendor") {
+              const pos = await advanceAvailable(party.kind, party.partyId);
+              if (pos.available + 0.005 < advAmt) {
+                await client.query("ROLLBACK");
+                res.status(409).json({ error: `₹${money2(advAmt - pos.available).toFixed(2)} of this voucher's advance has already been adjusted against invoices. Remove those adjustments first.` });
+                return;
+              }
             }
           }
         }

@@ -11,7 +11,7 @@ async function api(m, p, b) {
   const t = await r.text(); let d; try { d = JSON.parse(t); } catch { d = t; }
   return { status: r.status, data: d };
 }
-tok = (await api('POST', '/auth/login', { username: 'admin', password: 'marlin1458' })).data.token;
+tok = (await api('POST', '/auth/login', { username: process.env.TEST_USERNAME || 'admin', password: process.env.TEST_PASSWORD || 'marlin1458' })).data.token;
 const WH = 2;
 
 if (process.env.MODE === 'clean') {

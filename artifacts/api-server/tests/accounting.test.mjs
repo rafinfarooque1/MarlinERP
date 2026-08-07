@@ -81,7 +81,7 @@ async function snapshotTB() {
 
 console.log('\n[0] Authentication');
 
-const loginRes = await post('/auth/login', { username: 'admin', password: 'marlin1458' });
+const loginRes = await post('/auth/login', { username: process.env.TEST_USERNAME || 'admin', password: process.env.TEST_PASSWORD || 'marlin1458' });
 authToken = loginRes.data?.token ?? '';
 assert('Admin login returns a token', !!authToken,
   `status=${loginRes.status} body=${JSON.stringify(loginRes.data).slice(0, 120)}`);
@@ -201,6 +201,12 @@ if (!vendor?.id) {
 } else {
   const tbBefore = await snapshotTB();
 
+  // Fixture: any live item works — the line sends its own gstRate/hsn, so the
+  // math is fixed regardless of which product carries it. (The old hardcoded
+  // material #1 fixture died when the materials master was emptied.)
+  const purMasters = (await get('/items')).data ?? [];
+  const purMaster  = purMasters[0];
+
   // Create a purchase with 12% GST (intra-state)
   const purchaseRes = await post('/purchases', {
     vendorId:       vendor.id,
@@ -210,8 +216,8 @@ if (!vendor?.id) {
     // expiry-checked without them. The batch number itself is left blank so the
     // server issues one.
     lineItems: [{
-      materialType: 'material',
-      materialId:   1,
+      materialType: 'item',
+      materialId:   purMaster?.id ?? -1,
       quantity:     5,
       unitCost:     100,
       hsnCode:      '0801',
@@ -488,11 +494,6 @@ if (!srcLoc || !dstLoc) {
     const txType     = transfer.taxType;
     const gstAmount  = Number(transfer.gstAmount ?? 0);
 
-    // Dispatch JV voucher number is always TRF-{challanNumber}
-    const jvsAll   = (await get('/accounts/journal-vouchers')).data ?? [];
-    const dispJv   = jvsAll.find(v => v.voucherNumber === `TRF-${challanNumber}`);
-    const dispVid  = dispJv?.id;
-
     assert('Transfer type is taxable (intrastate or interstate)',
       tType === 'intrastate' || tType === 'interstate',
       `transferType=${tType}`);
@@ -500,6 +501,45 @@ if (!srcLoc || !dstLoc) {
       txType === expectedTaxType,
       `taxType=${txType} expected=${expectedTaxType}`);
     assert('GST amount > 0', gstAmount > 0, `gstAmount=${gstAmount}`);
+
+    // A cross-GSTIN dispatch raises EITHER a transfer tax invoice (the
+    // default since transfer invoicing shipped) OR the legacy TRF- journal
+    // voucher (module switched off) — never both, or revenue would double.
+    const docMode = transfer.documentMode ?? 'voucher';
+
+    if (docMode === 'invoice') {
+      const invNo  = transfer.transferInvoiceNumber;
+      const saleId = transfer.saleId;
+      assert('Invoice mode: transfer invoice number stamped', !!invNo, `transferInvoiceNumber=${invNo}`);
+      assert('Invoice mode: linked sale id stamped', !!saleId, `saleId=${saleId}`);
+
+      if (saleId) {
+        const saleRes = await get(`/sales/${saleId}`);
+        const tSale   = saleRes.data;
+        assert('Invoice mode: transfer sale fetchable', !tSale?.error,
+          JSON.stringify(tSale).slice(0, 200));
+        if (!tSale?.error) {
+          const saleTotal = Number(tSale.totalAmount ?? 0);
+          const transferValue = Number(transfer.transferValue ?? 0);
+          const expectedTotal = round2(transferValue + gstAmount);
+          assert(`Invoice mode: sale total = taxable + GST (≈ ₹${expectedTotal.toFixed(2)})`,
+            Math.abs(saleTotal - expectedTotal) < 0.05,
+            `saleTotal=${saleTotal} expected=${expectedTotal}`);
+        }
+      }
+
+      // No TRF- JV may exist alongside the invoice
+      const jvsAll = (await get('/accounts/journal-vouchers')).data ?? [];
+      const dupJv  = jvsAll.find(v => v.voucherNumber === `TRF-${challanNumber}`);
+      assert('Invoice mode: no duplicate TRF- voucher raised', !dupJv,
+        `found voucher id=${dupJv?.id}`);
+    } else {
+
+    // Dispatch JV voucher number is always TRF-{challanNumber}
+    const jvsAll   = (await get('/accounts/journal-vouchers')).data ?? [];
+    const dispJv   = jvsAll.find(v => v.voucherNumber === `TRF-${challanNumber}`);
+    const dispVid  = dispJv?.id;
+
     assert('Dispatch voucher ID is set on transfer', !!dispVid,
       `dispatch_voucher_id=${dispVid}`);
 
@@ -568,6 +608,7 @@ if (!srcLoc || !dstLoc) {
           `actual=${totalGstCr} expected=${gstAmount}`);
       }
     }
+    } // end voucher-mode branch
 
     // Trial balance must remain balanced after transfer
     const tbAfter = await snapshotTB();

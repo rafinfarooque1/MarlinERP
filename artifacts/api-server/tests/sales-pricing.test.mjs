@@ -69,7 +69,7 @@ function expectExclusive(qty, price, rate, discount = 0) {
 }
 
 // ── Auth ─────────────────────────────────────────────────────────────────────
-const loginRes = await post('/auth/login', { username: 'admin', password: 'marlin1458' });
+const loginRes = await post('/auth/login', { username: process.env.TEST_USERNAME || 'admin', password: process.env.TEST_PASSWORD || 'marlin1458' });
 authToken = loginRes.data?.token ?? '';
 assert('Admin login returns a token', !!authToken, `status=${loginRes.status}`);
 if (!authToken) { console.error('FATAL: no token'); process.exit(1); }
@@ -274,9 +274,13 @@ console.log('\n[9] Odd-paise tax: CGST + SGST must sum EXACTLY to the line tax')
 {
   // Pick a price whose tax lands on an odd paise so an independent
   // round-each-half split would drift (e.g. @5%: base 100.50 → tax 5.03).
-  // Search a few candidates in case the fixture rate isn't 5%.
+  // Candidates start AT or ABOVE the item's MRP — the sale MRP floor refuses
+  // anything below the Item Master MRP, and fixture items are real records.
+  const mrpFloor = Math.max(100, Math.ceil(Number(item.mrp ?? 0)));
+  const candidates = [0.5, 0.1, 0.3, 0.7, 0.9, 1.1, 1.3, 1.7, 1.9, 2.1]
+    .map(off => round2(mrpFloor + off));
   let done = false;
-  for (const price of [100.5, 100.1, 100.3, 100.7, 100.9, 101.1, 33.33]) {
+  for (const price of candidates) {
     const tax = round2(price * RATE / 100);
     if (Math.round(tax * 100) % 2 === 0) continue; // even paise — halves split cleanly
     const r = await post('/sales', { ...saleBase, lineItems: [mkLine({ unitPrice: price, priceMode: 'exclusive' })] });

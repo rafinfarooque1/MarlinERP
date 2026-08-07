@@ -60,6 +60,14 @@ const post = (p, b, t) => apiReq('POST', p, b, t);
 const get = (p, t) => apiReq('GET', p, undefined, t);
 const del = (p, t) => apiReq('DELETE', p, undefined, t);
 
+// Transaction imports go through the wizard: Demo, then Approve. Direct
+// /commit is reserved for master modules and answers 409 for sales/purchases.
+async function wizardCommit(batchId) {
+  const demo = await post(`/imports/batches/${batchId}/demo`, {});
+  if (demo.status !== 200) return demo;
+  return post(`/imports/batches/${batchId}/approve`, {});
+}
+
 const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
 const sql = (text, params) => pool.query(text, params);
 
@@ -130,6 +138,7 @@ async function cleanup() {
   }
   await sql(`DELETE FROM import_rows WHERE batch_id IN (SELECT id FROM import_batches WHERE filename LIKE $1)`, [`${TAG}%`]);
   await sql(`DELETE FROM import_batches WHERE filename LIKE $1`, [`${TAG}%`]);
+  await sql(`DELETE FROM import_mappings WHERE source_name LIKE $1`, [`${TAG}%`]);
   await sql(`DELETE FROM items WHERE name LIKE $1`, [`${TAG}%`]);
   await sql(`DELETE FROM customers WHERE name LIKE $1`, [`${TAG}%`]);
   await sql(`DELETE FROM account_ledgers WHERE name LIKE $1 AND (code LIKE 'VEND-%' OR code LIKE 'CUST-%')`, [`${TAG}%`]);
@@ -179,6 +188,34 @@ const { rows: bankLeaves } = await sql(
     ORDER BY id`);
 assert('Cash till exists for the test warehouse', !!cashTill?.id);
 
+{ // Mapping-first: register the permanent name→master mappings once, through a
+  // tiny bootstrap batch per module — every later parse then auto-resolves the
+  // fixture names and validates directly.
+  const bs = await uploadXlsx('sales', [
+    ['Invoice No', 'Date', 'Customer', 'Item', 'Qty', 'Price', 'Payment Status', 'Payment Account'],
+    [`${TAG}/BOOT/S`, TODAY, `${TAG} Buyer`, `${TAG} Item`, 1, 100, 'Paid', 'Cash'],
+  ]);
+  if (bs.data?.batch?.id) {
+    batches.push(bs.data.batch.id);
+    const m = await post(`/imports/batches/${bs.data.batch.id}/mappings`, { mappings: [
+      { kind: 'customer', name: `${TAG} Buyer`, targetId: fixtures.custId },
+      { kind: 'product', name: `${TAG} Item`, targetId: fixtures.itemId },
+    ] });
+    assert('Bootstrap mappings registered (customer + item)', m.status === 200, JSON.stringify(m.data).slice(0, 200));
+  }
+  const bp = await uploadXlsx('purchases', [
+    ['Vendor Invoice No', 'Date', 'Vendor', 'Item', 'Qty', 'Purchase Rate', 'Payment Status', 'Paid Amount'],
+    [`${TAG}/BOOT/P`, TODAY, `${TAG} Vendor`, `${TAG} Item`, 1, 40, 'Unpaid', ''],
+  ]);
+  if (bp.data?.batch?.id) {
+    batches.push(bp.data.batch.id);
+    const m = await post(`/imports/batches/${bp.data.batch.id}/mappings`, { mappings: [
+      { kind: 'vendor', name: `${TAG} Vendor`, targetId: fixtures.vendorId },
+    ] });
+    assert('Bootstrap mapping registered (vendor)', m.status === 200, JSON.stringify(m.data).slice(0, 200));
+  }
+}
+
 // ───────────────────────────────────────────────────────────────────────────
 console.log('\n[1] Templates carry business columns only');
 
@@ -219,14 +256,15 @@ let importedSaleTotals = null;
     && r2(sum.totalTaxable) === 361.9 && sum.totalQuantity === 2 && r2(sum.totalDiscount) === 20,
     JSON.stringify(sum));
 
-  const commit = await post(`/imports/batches/${batchId}/commit`, {});
+  const commit = await wizardCommit(batchId);
   assert('Sales batch commits', commit.status === 200 && commit.data?.batch?.importedRows === 1, JSON.stringify(commit.data).slice(0, 250));
 
   // Post-commit report — counted from provenance stamps, not loop tallies.
+  // The wizard's approve answers { recordCounts, timeTakenMs }.
   const det = commit.data?.details;
   assert('Commit answers a stamped-record summary',
-    det && det.invoicesImported === 1 && det.invoicesFailed === 0 && det.stockMovements === 1
-    && det.gstInvoices === 1 && Number(det.timeTakenMs) > 0,
+    det && det.recordCounts?.sales === 1 && Number(det.timeTakenMs) > 0
+    && commit.data?.summary?.imported === 1 && commit.data?.summary?.failed === 0,
     JSON.stringify(det));
 
   const { rows: [sale] } = await sql(
@@ -329,7 +367,7 @@ console.log('\n[3] Sales validation guardrails');
   ]);
   const bId = up.data?.batch?.id ?? 0;
   if (bId) batches.push(bId);
-  const commit = await post(`/imports/batches/${bId}/commit`, {});
+  const commit = await wizardCommit(bId);
   assert('Below-MRP sale commits after conversion', commit.status === 200 && commit.data?.batch?.importedRows === 1,
     JSON.stringify(commit.data).slice(0, 250));
   const { rows: [conv] } = await sql(
@@ -376,7 +414,7 @@ const bankName = bankLeaves[0]?.name ?? null;
   if (batchId) batches.push(batchId);
   assert('Purchase file validates', up.data?.batch?.status === 'validated' && up.data?.batch?.validRows === rows.length - 1,
     JSON.stringify((up.data?.rows ?? []).map((x) => x.reason)).slice(0, 300));
-  const commit = await post(`/imports/batches/${batchId}/commit`, {});
+  const commit = await wizardCommit(batchId);
   assert('Purchase batch commits', commit.status === 200 && commit.data?.batch?.importedRows === rows.length - 1,
     JSON.stringify(commit.data).slice(0, 250));
 

@@ -583,6 +583,14 @@ export async function createTransferSaleInvoice(args: TransferInvoiceArgs): Prom
   const { client, transferId, invoiceNumber, transferDate, fromLocation, toLocation, lines, totals } = args;
   if (!(totals.taxableValue > 0)) return null;
 
+  // The derived books post this invoice's receivable to STD-BRANCH-DEBTOR —
+  // with a silent fallback to Sundry Debtors when that ledger is missing.
+  // The voucher path provisioned it, but a business that has ALWAYS invoiced
+  // its transfers never ran that path, so every branch receivable quietly
+  // inflated Sundry Debtors instead. Provision it here, where the invoice is
+  // born.
+  await ensureClearingLedger(client, 'STD-BRANCH-DEBTOR', 'Inter-Branch Receivable', 'asset', 'balance_sheet', 'SYS-CURA');
+
   // BTR numbers come from their own GLOBAL statutory sequence, but the row
   // still carries the same internal number identity as ordinary sales so the
   // per-location unique indexes cover it (a stricter global partial unique on
@@ -626,6 +634,11 @@ export async function createTransferSaleInvoice(args: TransferInvoiceArgs): Prom
 export async function createTransferPurchaseInvoice(args: TransferInvoiceArgs): Promise<number | null> {
   const { client, transferId, invoiceNumber, transferDate, fromLocation, toLocation, lines, totals, challanNumber } = args;
   if (!(totals.taxableValue > 0)) return null;
+
+  // Same trap as the sale side: the derived books credit STD-BRANCH-CREDITOR
+  // for this inward invoice, falling back to Sundry Creditors if it is
+  // missing. Provision it here so invoice-mode-only businesses get it too.
+  await ensureClearingLedger(client, 'STD-BRANCH-CREDITOR', 'Inter-Branch Payable', 'liability', 'balance_sheet', 'SYS-CURL');
 
   const { rows: [p] } = await client.query(
     `INSERT INTO purchases

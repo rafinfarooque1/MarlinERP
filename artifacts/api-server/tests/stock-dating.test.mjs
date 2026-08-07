@@ -21,8 +21,11 @@ import pg from 'pg';
 
 const BASE = process.env.API_URL || 'http://localhost:8080/api';
 const TAG = 'ZZDATE';
-const WH_A = 2; // QA Test WH — Karnataka
-const WH_B = 3; // RBAC-NEG-WH — second warehouse for the location-move case
+// Two ENABLED warehouses, resolved from the live DB after login — the dev DB
+// now carries the real business's warehouses, so hardcoded ids go stale
+// ("Warehouse #3 does not exist" broke the location-move section).
+let WH_A = 0; // primary warehouse for the dated bill
+let WH_B = 0; // second warehouse for the location-move case
 
 let authToken = '';
 let passed = 0, failed = 0;
@@ -92,9 +95,18 @@ async function qtyAsOf(matId, asOf) {
 
 // ───────────────────────────────────────────────────────────────────────────
 console.log('\n[0] Authentication and fixtures');
-const loginRes = await post('/auth/login', { username: 'admin', password: 'marlin1458' });
+const loginRes = await post('/auth/login', { username: process.env.TEST_USERNAME || 'admin', password: process.env.TEST_PASSWORD || 'marlin1458' });
 authToken = loginRes.data?.token ?? '';
 assert('Admin login returns a token', !!authToken, `status=${loginRes.status}`);
+
+{
+  const { rows: whs } = await sql(
+    `SELECT id FROM warehouses WHERE disabled_at IS NULL ORDER BY id LIMIT 2`);
+  if (whs.length < 2) { console.error('Need two enabled warehouses for the location-move case'); process.exit(1); }
+  WH_A = Number(whs[0].id);
+  WH_B = Number(whs[1].id);
+  console.log(`  (using warehouses #${WH_A} and #${WH_B})`);
+}
 if (!authToken) { console.error('FATAL: no token'); process.exit(1); }
 await cleanup(); // in case a previous run died mid-way
 
@@ -300,7 +312,11 @@ console.log('\n[11] Delete: the bill leaves history as if dated movements never 
 
 console.log('\n[12] Books integrity: balanced, no orphans, no forced entries');
 {
-  const fs2 = await get(`/accounts/financial-statements?fromDate=2026-04-01&toDate=2026-07-31`);
+  // As-at date must be TODAY: the dev DB now holds imported real business data
+  // whose stock baseline postdates July 2026, so a backdated closing-stock
+  // valuation is (correctly) refused by the history-reach guard.
+  const AS_AT = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  const fs2 = await get(`/accounts/financial-statements?fromDate=2026-04-01&toDate=${AS_AT}`);
   const integ = fs2.data?.integrity ?? {};
   assert('Balance Sheet balanced', integ.balanced === true, JSON.stringify(integ).slice(0, 200));
   assert('Difference is exactly zero', Number(integ.difference ?? NaN) === 0);

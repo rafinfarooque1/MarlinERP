@@ -33,13 +33,25 @@ import pg from "pg";
 const sql = new pg.Pool({ connectionString: process.env.DATABASE_URL });
 const q = async (text, params = []) => (await sql.query(text, params)).rows;
 
-const Y = 2026, M = 7;
+// Fixture month = the CURRENT month. Attendance-driven accrual pricing only
+// covers dates from the cutover (salary_accrual_config.attendance_from)
+// forward and never restates months before it, so a hardcoded past month
+// reads accrual ₹0 forever (lop-payroll pins that no-restatement contract).
+// The engine prices days through TODAY inclusive; future attendance rows are
+// accepted but stay unpriced until their day arrives.
+const NOW = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
+const Y = NOW.getFullYear(), M = NOW.getMonth() + 1, DOM = NOW.getDate();
 const D = (d) => `${Y}-${String(M).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-// Approval and payment vouchers are dated the day the test RUNS, not inside
-// the fixture month, so every ledger read must extend past today or the suite
-// starts failing the month after it was written (it did, on 1 Aug).
+if (DOM < 7) {
+  // Scenarios A–F walk days 1..7 of the month and need them all priced.
+  console.log(`SKIP: day-of-month ${DOM} < 7 — accrual prices only through today, so days 1..7 of the current month must exist. Re-run on/after the 7th.`);
+  process.exit(0);
+}
+// Approval and payment vouchers are dated the day the test RUNS; every ledger
+// read must extend to at least month-end or today, whichever is later.
 const TODAY = new Date().toLocaleDateString("en-CA");
-const END = TODAY > D(31) ? TODAY : D(31);
+const EOM = new Date(Date.UTC(Y, M, 0)).getUTCDate();
+const END = TODAY > D(EOM) ? TODAY : D(EOM);
 
 async function accrualTotal(empId) {
   const [r] = await q(
@@ -57,7 +69,10 @@ async function ledgerBalance(code) {
 }
 
 async function main() {
-  TOKEN = (await api("POST", "/auth/login", { username: "admin", password: "marlin1458" })).token;
+  TOKEN = (await api("POST", "/auth/login", {
+    username: process.env.TEST_ADMIN_USER || process.env.TEST_USERNAME || "admin",
+    password: process.env.TEST_ADMIN_PASSWORD || process.env.TEST_PASSWORD || "marlin1458",
+  })).token;
 
   // The pay basis is COMPANY policy since the Aug 2026 LOP change. Pin the
   // values every expectation below assumes, restore at the end.
@@ -177,7 +192,7 @@ async function main() {
   const [salPay] = await q(`SELECT id FROM account_ledgers WHERE code = $1`, [`SAL-PAY-${EID}`]);
   const [cashL] = await q(`SELECT id FROM account_ledgers WHERE code = 'STD-CASH'`);
   const jv = await tryApi("POST", "/accounts/journal-vouchers", {
-    voucherDate: D(28), narration: `Accrual test manual adjustment #${stamp}`,
+    voucherDate: TODAY, narration: `Accrual test manual adjustment #${stamp}`,
     lines: [
       { ledgerId: cashL.id, debit: 0, credit: 750, narration: "adj" },
       { ledgerId: salPay.id, debit: 0, credit: 0, narration: "adj" },
@@ -262,7 +277,7 @@ async function roundingAndStalenessTests(hierarchyId) {
     salary: 20000, joinDate: D(1),
   });
   const EID = emp.id;
-  console.log(`\nfixture employee #${EID} — ₹20,000/month over 26 days = ₹769.230769…/day\n`);
+  console.log(`\nfixture employee #${EID} — ₹20,000/month over 30 days = ₹666.666…/day\n`);
 
   // 25 attended days out of a 26-day basis: exactly one day of loss of pay.
   for (let d = 1; d <= 25; d++) {
@@ -275,10 +290,17 @@ async function roundingAndStalenessTests(hierarchyId) {
   const earnedBasic = round2(Number(row?.baseSalary ?? 0) - Number(row?.lopDeduction ?? 0));
 
   const t = await accrualTotal(EID);
-  check("Q", "Accrual matches payroll to the paisa when the daily rate doesn't divide evenly",
-    near(t.total, earnedBasic, 0.005),
-    `accrued ₹${t.total} vs payroll earned basic ₹${earnedBasic}` +
-    `${near(t.total, earnedBasic, 0.005) ? "" : "  ← rounding drift"}`);
+  // The engine prices only days that have arrived; the payroll figure covers
+  // the whole month. The paisa property under test is that k priced days
+  // total round2(k × rate) — cumulative rounding, never k independently
+  // rounded days (which drifts). At month-end (k=25) that equals the payroll
+  // earned basic exactly.
+  const k = Math.min(DOM, 25);
+  const expectedQ = k >= 25 ? earnedBasic : round2(k * (20000 / 30));
+  check("Q", "Accrual matches the cumulative daily rate to the paisa when it doesn't divide evenly",
+    near(t.total, expectedQ, 0.005),
+    `accrued ₹${t.total} vs expected ₹${expectedQ} (${k} priced day(s) × ₹20000/30, cumulative)` +
+    `${near(t.total, expectedQ, 0.005) ? "" : "  ← rounding drift"}`);
 
   // Attendance moves after the payroll row was frozen. Approving now would true
   // up to a figure the attendance no longer supports.

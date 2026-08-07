@@ -185,12 +185,14 @@ export function buildGstInvoiceHtml(opts: {
   const MONEY_EPSILON = 0.005;
   const invoiceTotalNum = Number(sale.totalAmount ?? 0);
   const amountReceivedNum = Number(sale.amountReceived ?? sale.amountPaid ?? 0);
+  const creditAdjustmentsNum = Number(sale.creditAdjustments ?? 0);
   // Prefer the server-derived outstanding when present; otherwise fall back to
-  // (total - received). Never negative.
-  const serverOutstanding = sale.outstanding ?? sale.outstandingAmount;
+  // (total - received - credited) — same semantics as the server position, so
+  // the fallback can never disagree with it. Never negative.
+  const serverOutstanding = sale.balanceDue ?? sale.outstanding ?? sale.outstandingAmount;
   const outstandingNum = serverOutstanding != null
     ? Math.max(0, Number(serverOutstanding))
-    : Math.max(0, invoiceTotalNum - amountReceivedNum);
+    : Math.max(0, invoiceTotalNum - amountReceivedNum - creditAdjustmentsNum);
   const isCancelled = Boolean(sale.cancelledAt) || sale.paymentStatus === 'cancelled' || String(sale.status || '').toLowerCase() === 'cancelled';
   const isSettled = isCancelled || outstandingNum <= MONEY_EPSILON;
   // A QR is only ever rendered when the caller supplied one AND money is still due.

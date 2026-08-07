@@ -7,7 +7,8 @@
  *   Explicit against-invoice allocation settles ONLY that document.
  *   Blank against-invoice auto-allocates FIFO oldest-first, with a RUNNING
  *     outstanding shared across the file (row 3 sees what rows 1–2 took).
- *   Excess spills into CADV/VADV advances via the existing advance ledgers.
+ *   Excess stays as a credit balance on the customer's own ledger (no CADV —
+ *   single-ledger model) or spills into the vendor's VADV advance ledger.
  *   Validation: in-file + DB duplicate voucher numbers, unknown parties
  *     (resolvable inline), amounts ≤ 0, bad dates, unknown accounts,
  *     missing/settled invoice refs, wrong party type.
@@ -44,6 +45,14 @@ async function apiReq(method, path, body) {
   return { status: r.status, data };
 }
 const post = (p, b) => apiReq('POST', p, b);
+
+// Transaction imports (receipts/payments/vouchers) go through the wizard now:
+// demo → approve. Direct /commit is reserved for master modules.
+async function wizardCommit(batchId) {
+  const demo = await post(`/imports/batches/${batchId}/demo`, {});
+  if (demo.status !== 200) return demo;
+  return post(`/imports/batches/${batchId}/approve`, {});
+}
 const get = (p) => apiReq('GET', p);
 const del = (p) => apiReq('DELETE', p);
 
@@ -100,6 +109,7 @@ async function cleanup() {
   await sql(`DELETE FROM items WHERE name LIKE $1`, [`${TAG}%`]);
   await sql(`DELETE FROM import_rows WHERE batch_id IN (SELECT id FROM import_batches WHERE filename LIKE $1)`, [`${TAG}%`]);
   await sql(`DELETE FROM import_batches WHERE filename LIKE $1`, [`${TAG}%`]);
+  await sql(`DELETE FROM import_mappings WHERE source_name LIKE $1`, [`${TAG}%`]);
   await sql(`DELETE FROM account_ledgers WHERE name LIKE $1`, [`${TAG}%`]);
   await sql(`DELETE FROM customers WHERE name LIKE $1`, [`${TAG}%`]);
   await sql(`DELETE FROM vendors WHERE name LIKE $1`, [`${TAG}%`]);
@@ -117,7 +127,7 @@ async function salePos(id) {
 // ── [0] Setup ───────────────────────────────────────────────────────────────
 console.log('\n[0] Auth + fixtures');
 {
-  const login = await post('/auth/login', { username: 'admin', password: 'marlin1458' });
+  const login = await post('/auth/login', { username: process.env.TEST_USERNAME || 'admin', password: process.env.TEST_PASSWORD || 'marlin1458' });
   authToken = login.data?.token ?? '';
   assert('Admin login', !!authToken, `status=${login.status}`);
   if (!authToken) process.exit(1);
@@ -211,7 +221,8 @@ let receiptBatch = null, receiptRows = null;
     ['R-IMP-008', '2026-07-23', fx.custName, '', 10, 'Cash', 'NOPE-999', '', ''],                        // row 10 bad ref
     ['', '2026-07-24', fx.custName, '', 25, 'Cash', '', '', `${TAG} novno`],                             // row 11 blank vno → advance
     ['R-IMP-009', '2026-07-23', fx.custName, 'Vendor', 10, 'Cash', '', '', ''],                          // row 12 wrong party type
-    ...(existingVno ? [[existingVno, '2026-07-23', fx.custName, '', 10, 'Cash', '', '', '']] : []),      // row 13 DB dup
+    // (A voucher number already in the DB is NO LONGER an error — reused
+    // legacy numbers get a /2 suffix at import, so that probe was retired.)
   ];
   const r = await uploadRows('receipts', RECEIPT_HDR, rows, { filename: `${TAG}-receipts.xlsx` });
   assert('Parse returns 201', r.status === 201, `status ${r.status}: ${JSON.stringify(r.data).slice(0, 200)}`);
@@ -221,15 +232,14 @@ let receiptBatch = null, receiptRows = null;
   assert('Explicit-ref row valid', st(2) === 'valid', st(2));
   assert('FIFO row valid', st(3) === 'valid', st(3));
   assert('Overpay row is a warning (advance)', st(4) === 'warning', `${st(4)}: ${rowByNum(receiptRows, 4)?.reason}`);
-  assert('Unknown customer → needs_party', st(5) === 'needs_party', st(5));
+  assert('Unknown customer → needs_mapping (resolve step)', st(5) === 'needs_mapping', st(5));
   assert('In-file duplicate voucher no → error', st(6) === 'error' && /already appeared/i.test(rowByNum(receiptRows, 6)?.reason ?? ''), rowByNum(receiptRows, 6)?.reason);
   assert('Amount 0 → error', st(7) === 'error', rowByNum(receiptRows, 7)?.reason);
   assert('Bad date → error', st(8) === 'error' && /date/i.test(rowByNum(receiptRows, 8)?.reason ?? ''), rowByNum(receiptRows, 8)?.reason);
   assert('Unknown account → error', st(9) === 'error', rowByNum(receiptRows, 9)?.reason);
   assert('Unknown invoice ref → error naming it', st(10) === 'error' && /NOPE-999/.test(rowByNum(receiptRows, 10)?.reason ?? ''), rowByNum(receiptRows, 10)?.reason);
-  assert('Blank voucher no → warning (sequence)', st(11) === 'warning' && /next number|sequence/i.test(rowByNum(receiptRows, 11)?.reason ?? ''), rowByNum(receiptRows, 11)?.reason);
+  assert('Blank voucher no → warning (sequence)', st(11) === 'warning' && /next number|sequence|allocates its own number|no voucher number/i.test(rowByNum(receiptRows, 11)?.reason ?? ''), rowByNum(receiptRows, 11)?.reason);
   assert('Vendor party type on a receipt → error', st(12) === 'error' && /vendor/i.test(rowByNum(receiptRows, 12)?.reason ?? ''), rowByNum(receiptRows, 12)?.reason);
-  if (existingVno) assert('Voucher number already in system → error', st(13) === 'error' && /already recorded/i.test(rowByNum(receiptRows, 13)?.reason ?? ''), rowByNum(receiptRows, 13)?.reason);
 
   const plan = (n) => rowByNum(receiptRows, n)?.plan;
   assert('Row 2 plan: ₹400 ONLY to the named invoice', plan(2)?.allocations?.length === 1 && plan(2).allocations[0].invoiceNumber === S1 && near(plan(2).allocations[0].amount, 400), JSON.stringify(plan(2)));
@@ -238,11 +248,15 @@ let receiptBatch = null, receiptRows = null;
   assert('Row 11 plan: everything exhausted → full ₹25 advance', plan(11)?.allocations?.length === 0 && near(plan(11).advance, 25), JSON.stringify(plan(11)));
 }
 
-// ── [4] Resolve the unknown customer inline ─────────────────────────────────
-console.log('\n[4] Resolve-parties');
+// ── [4] Resolve the unknown customer at the mapping step ────────────────────
+console.log('\n[4] Mapping step (successor of resolve-parties)');
 {
-  const r = await post(`/imports/batches/${receiptBatch.id}/resolve-parties`, { parties: [{ name: fx.ghostName, state: 'Karnataka' }] });
-  assert('Resolve creates the customer and re-validates', r.status === 200 && r.data.created?.includes(fx.ghostName), JSON.stringify(r.data).slice(0, 200));
+  const r = await post(`/imports/batches/${receiptBatch.id}/mappings`, { mappings: [
+    { kind: 'customer', name: fx.ghostName, create: { state: 'Karnataka' } },
+  ] });
+  assert('Resolve creates the customer and re-validates',
+    r.status === 200 && (r.data.created ?? []).some((c) => c.name === fx.ghostName),
+    JSON.stringify(r.data).slice(0, 200));
   receiptRows = r.data.rows;
   const ghost = rowByNum(receiptRows, 5);
   assert('Ghost row now a warning: full ₹150 parked as advance', ghost?.status === 'warning' && near(ghost?.plan?.advance, 150), JSON.stringify({ s: ghost?.status, p: ghost?.plan }));
@@ -254,16 +268,18 @@ console.log('\n[4] Resolve-parties');
 console.log('\n[5] Commit — vouchers, allocations, advances, books');
 const preS1 = await salePos(fx.s1.id), preS2 = await salePos(fx.s2.id);
 {
-  const r = await post(`/imports/batches/${receiptBatch.id}/commit`, {});
+  const r = await wizardCommit(receiptBatch.id);
   assert('Commit imports exactly the 5 clean rows', r.status === 200 && r.data.summary?.imported === 5 && r.data.summary?.failed === 0, JSON.stringify(r.data?.summary) + JSON.stringify(r.data?.failures ?? []).slice(0, 300));
 
   const { rows: recs } = await sql(
-    `SELECT voucher_number, source, amount::numeric AS amount, advance_amount::numeric AS adv, location_type, location_id
-       FROM receipts WHERE voucher_number IN ('R-IMP-001','R-IMP-002','R-IMP-003') ORDER BY voucher_number`);
-  assert('Voucher numbers kept verbatim (3 supplied)', recs.length === 3, JSON.stringify(recs));
+    `SELECT voucher_number, legacy_voucher_number, source, amount::numeric AS amount, advance_amount::numeric AS adv, location_type, location_id
+       FROM receipts WHERE legacy_voucher_number IN ('R-IMP-001','R-IMP-002','R-IMP-003') ORDER BY legacy_voucher_number`);
+  assert('File numbers kept as legacy refs, ERP numbers allocated (3 supplied)',
+    recs.length === 3 && recs.every((x) => x.voucher_number && !x.voucher_number.startsWith('R-IMP')),
+    JSON.stringify(recs));
   assert("Provenance stamped — source='allocation', never NULL", recs.every((x) => x.source === 'allocation'), JSON.stringify(recs.map((x) => x.source)));
   assert('Vouchers stamped to the chosen location', recs.every((x) => x.location_type === 'warehouse' && Number(x.location_id) === WH), JSON.stringify(recs.map((x) => [x.location_type, x.location_id])));
-  assert('R-IMP-003 parked ₹100 as advance', near(recs.find((x) => x.voucher_number === 'R-IMP-003')?.adv, 100), JSON.stringify(recs));
+  assert('R-IMP-003 parked ₹100 as advance', near(recs.find((x) => x.legacy_voucher_number === 'R-IMP-003')?.adv, 100), JSON.stringify(recs));
 
   const s1 = await salePos(fx.s1.id), s2 = await salePos(fx.s2.id);
   assert('S1 fully settled (₹400 + ₹600)', near(s1.paid, 1000) && s1.status === 'paid', JSON.stringify(s1));
@@ -277,8 +293,10 @@ const preS1 = await salePos(fx.s1.id), preS2 = await salePos(fx.s2.id);
     `SELECT COALESCE(SUM(advance_amount)::numeric,0) AS adv FROM receipts r
       JOIN account_ledgers al ON al.id = r.received_from_ledger_id WHERE al.code = $1`, [`CUST-${fx.ghostId}`]);
   assert('Ghost customer advance = ₹150', near(gadv.adv, 150), gadv.adv);
+  // Single-ledger model: the parked money is a credit balance on the
+  // customer's own ledger — no CADV ledger may be provisioned by the import.
   const { rows: [cadvLedger] } = await sql(`SELECT id FROM account_ledgers WHERE code = $1`, [`CADV-${fx.custId}`]);
-  assert('CADV advance ledger exists', !!cadvLedger);
+  assert('No separate CADV ledger provisioned', !cadvLedger, JSON.stringify(cadvLedger ?? {}));
 
   const detail = await get(`/imports/batches/${receiptBatch.id}`);
   const blankRow = rowByNum(detail.data?.rows ?? [], 11);
@@ -293,7 +311,7 @@ console.log('\n[6] Rollback — dues and advances restored');
 {
   const r = await post(`/imports/batches/${receiptBatch.id}/rollback`, {});
   assert('Rollback removes all 5 vouchers', r.status === 200 && r.data.removed === 5, JSON.stringify(r.data).slice(0, 200));
-  const { rows: [left] } = await sql(`SELECT COUNT(*)::int AS n FROM receipts WHERE voucher_number LIKE 'R-IMP-%'`);
+  const { rows: [left] } = await sql(`SELECT COUNT(*)::int AS n FROM receipts WHERE legacy_voucher_number LIKE 'R-IMP-%'`);
   assert('No imported receipts remain', Number(left.n) === 0, left.n);
   const s1 = await salePos(fx.s1.id), s2 = await salePos(fx.s2.id);
   assert('S1 dues restored', near(s1.paid, preS1.paid) && s1.status === preS1.status, JSON.stringify({ s1, preS1 }));
@@ -313,9 +331,9 @@ console.log('\n[7] Rollback refusal when an advance was consumed downstream');
     [['R-IMP-ADV', '2026-07-27', fx.ghostName, '', 200, 'Cash', '', '', `${TAG} adv`]],
     { filename: `${TAG}-adv.xlsx` });
   assert('Advance-only voucher parses as warning', up.status === 201 && up.data.rows[0].status === 'warning', JSON.stringify(up.data.rows?.[0]?.reason));
-  const c = await post(`/imports/batches/${up.data.batch.id}/commit`, {});
+  const c = await wizardCommit(up.data.batch.id);
   assert('Advance voucher commits', c.status === 200 && c.data.summary?.imported === 1, JSON.stringify(c.data?.summary));
-  const recId = (await sql(`SELECT id FROM receipts WHERE voucher_number = 'R-IMP-ADV'`)).rows[0]?.id;
+  const recId = (await sql(`SELECT id FROM receipts WHERE legacy_voucher_number = 'R-IMP-ADV'`)).rows[0]?.id;
 
   // Simulate downstream consumption: a later sale drew ₹50 of this parked advance.
   await sql(
@@ -324,9 +342,9 @@ console.log('\n[7] Rollback refusal when an advance was consumed downstream');
   const blockedRes = await post(`/imports/batches/${up.data.batch.id}/rollback`, {});
   assert('Rollback refused with 409', blockedRes.status === 409, `status ${blockedRes.status}: ${JSON.stringify(blockedRes.data).slice(0, 200)}`);
   assert('Refusal names the voucher and the consumed advance',
-    blockedRes.data?.blocked?.[0]?.name === 'R-IMP-ADV' && /advance/i.test(blockedRes.data?.blocked?.[0]?.reason ?? ''),
+    !!blockedRes.data?.blocked?.[0]?.name && /advance/i.test(blockedRes.data?.blocked?.[0]?.reason ?? ''),
     JSON.stringify(blockedRes.data?.blocked));
-  const still = (await sql(`SELECT COUNT(*)::int AS n FROM receipts WHERE voucher_number = 'R-IMP-ADV'`)).rows[0].n;
+  const still = (await sql(`SELECT COUNT(*)::int AS n FROM receipts WHERE legacy_voucher_number = 'R-IMP-ADV'`)).rows[0].n;
   assert('Refused rollback left the voucher in place (all-or-nothing)', Number(still) === 1, still);
 
   // Free the advance → rollback succeeds.
@@ -352,13 +370,13 @@ console.log('\n[8] Payment vouchers');
     JSON.stringify(rowByNum(rows, 3)?.plan));
   assert('Customer party type on a payment → error', rowByNum(rows, 4)?.status === 'error' && /customer/i.test(rowByNum(rows, 4)?.reason ?? ''), rowByNum(rows, 4)?.reason);
 
-  const c = await post(`/imports/batches/${up.data.batch.id}/commit`, {});
+  const c = await wizardCommit(up.data.batch.id);
   assert('Commit imports the 2 clean payment rows', c.status === 200 && c.data.summary?.imported === 2 && c.data.summary?.failed === 0, JSON.stringify(c.data?.summary) + JSON.stringify(c.data?.failures ?? []).slice(0, 300));
 
   const { rows: pays } = await sql(
-    `SELECT id, voucher_number, source, advance_amount::numeric AS adv FROM payments WHERE voucher_number LIKE 'PV-IMP-%' ORDER BY voucher_number`);
+    `SELECT id, voucher_number, legacy_voucher_number, source, advance_amount::numeric AS adv FROM payments WHERE legacy_voucher_number LIKE 'PV-IMP-%' ORDER BY legacy_voucher_number`);
   assert("Payments carry source='allocation'", pays.length === 2 && pays.every((x) => x.source === 'allocation'), JSON.stringify(pays));
-  assert('PV-IMP-002 parked ₹25 vendor advance', near(pays.find((x) => x.voucher_number === 'PV-IMP-002')?.adv, 25), JSON.stringify(pays));
+  assert('PV-IMP-002 parked ₹25 vendor advance', near(pays.find((x) => x.legacy_voucher_number === 'PV-IMP-002')?.adv, 25), JSON.stringify(pays));
   const allocSum = async (purchaseId) => Number((await sql(
     `SELECT COALESCE(SUM(amount)::numeric,0) AS s FROM payment_bill_allocations WHERE purchase_id = $1`, [purchaseId])).rows[0].s);
   assert('P1 fully allocated (₹100 + ₹215)', near(await allocSum(fx.p1.id), 315));
@@ -370,7 +388,7 @@ console.log('\n[8] Payment vouchers');
   const rb = await post(`/imports/batches/${up.data.batch.id}/rollback`, {});
   assert('Payments rollback removes both vouchers', rb.status === 200 && rb.data.removed === 2, JSON.stringify(rb.data).slice(0, 150));
   assert('Bill allocations unwound', near(await allocSum(fx.p1.id), 0) && near(await allocSum(fx.p2.id), 0));
-  const { rows: [leftP] } = await sql(`SELECT COUNT(*)::int AS n FROM payments WHERE voucher_number LIKE 'PV-IMP-%'`);
+  const { rows: [leftP] } = await sql(`SELECT COUNT(*)::int AS n FROM payments WHERE legacy_voucher_number LIKE 'PV-IMP-%'`);
   assert('No imported payments remain', Number(leftP.n) === 0, leftP.n);
 }
 

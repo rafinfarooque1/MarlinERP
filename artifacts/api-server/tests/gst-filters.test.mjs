@@ -25,9 +25,13 @@ import pg from 'pg';
 
 const BASE = process.env.API_URL || 'http://localhost:8080/api';
 const TAG = 'ZZGSTF';
-const WH1 = 1; // Marlin Bengaluru Cold Store — 29ABCDE1234F1Z5
-const GSTIN1 = '29ABCDE1234F1Z5';
-const GSTIN2 = '29PQRSX6789K2Z1';
+// GSTINs are read from the live warehouses table after login — the values
+// are real business data now, not seeded fixtures, so hardcoding them broke
+// the suite the day the user entered the real registrations.
+const WH1 = 1;
+let WH1NAME = '';
+let GSTIN1 = '';
+let GSTIN2 = '';
 
 let authToken = '';
 let passed = 0, failed = 0;
@@ -58,10 +62,23 @@ const sql = (text, params) => pool.query(text, params);
 // ── Auth + fixtures ─────────────────────────────────────────────────────────
 console.log('\n[0] Authentication and fixtures');
 {
-  const login = await post('/auth/login', { username: 'admin', password: 'marlin1458' });
+  const login = await post('/auth/login', { username: process.env.TEST_USERNAME || 'admin', password: process.env.TEST_PASSWORD || 'marlin1458' });
   authToken = login.data?.token ?? '';
   assert('Admin login returns a token', !!authToken, `status=${login.status}`);
   if (!authToken) process.exit(1);
+}
+
+// Resolve the GSTINs from live data: GSTIN1 = warehouse 1's registration,
+// GSTIN2 = any other warehouse registration (a different GSTIN group).
+{
+  const { rows } = await sql(
+    `SELECT id, name, gst_number FROM warehouses WHERE COALESCE(gst_number,'') <> '' ORDER BY id`);
+  WH1NAME = rows.find(r => Number(r.id) === WH1)?.name ?? '';
+  GSTIN1 = rows.find(r => Number(r.id) === WH1)?.gst_number ?? '';
+  GSTIN2 = rows.find(r => Number(r.id) !== WH1 && r.gst_number !== GSTIN1)?.gst_number ?? '';
+  assert('Warehouse 1 has a GSTIN', !!GSTIN1, JSON.stringify(rows));
+  assert('A second, different GSTIN exists', !!GSTIN2, JSON.stringify(rows));
+  if (!GSTIN1 || !GSTIN2) process.exit(1);
 }
 
 // Item + vendor are recreated each run under the tag; older tagged rows are
@@ -124,7 +141,7 @@ const docRow = (docs, type, num) => (docs?.[type] ?? []).find(r => r.documentNum
 {
   const docs = (await get('/gst/documents?fromDate=2026-08-01&toDate=2026-08-01')).data;
   const sale = docRow(docs, 'outward', saleInvoice);
-  assert('Unpaid credit sale row exists with Warehouse column', !!sale && sale.warehouseName?.includes('Bengaluru'), JSON.stringify(sale).slice(0, 150));
+  assert('Unpaid credit sale row exists with Warehouse column', !!sale && sale.warehouseName === WH1NAME, JSON.stringify(sale).slice(0, 150));
   assert('Unpaid credit sale → status unpaid, mode "Credit"',
     sale?.paymentStatus === 'unpaid' && sale?.paymentModes === 'Credit',
     `status=${sale?.paymentStatus} modes=${sale?.paymentModes}`);

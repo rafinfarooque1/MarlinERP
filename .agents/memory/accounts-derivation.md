@@ -13,7 +13,15 @@ Trial balance, cash/bank book (and their opening/running balances) all flow thro
 
 **How to apply:** any new feature that persists money-movement rows for sales/purchases must either be excluded in `buildDerivedPostings` + day book, or become the single source of truth there. When verifying books, always compare a component (e.g. sales-family credit) against an independent SQL sum — never trust `balanced` alone.
 
-**As-of-date caveat (accepted for Phase 1):** customer outstanding uses the CURRENT `sales.amount_paid`, so a historical `toDate` reflects later collections too.
+## Gross debtor postings (Aug 2026)
+
+Sales whose customer has a provisioned `CUST-` ledger (and are not branch transfers) post GROSS: Dr CUST for the full invoice total at `sale_date` ("Invoice <no>"), one Cr CUST leg per `sale_payments` row at its `payment_date` (voucher number = the clearing receipt's when present), and advance-method rows post a deliberate, visible Dr/Cr wash ("Advance adjusted"). The counter-money "extra" slice (`amount_paid` beyond recorded sale_payments) is measured against the ALL-TIME per-sale payments sum — not the as-of sum — so a `toDate` cutoff no longer backdates later collections to the sale date. The old net "Outstanding"/"Overpayment held" remainder legs survive ONLY for walk-in sales and sales whose customer ledger is missing. Net per ledger is unchanged, so TB/BS/P&L figures are identical.
+
+**Why:** party statements must show the whole story — under net posting, paid invoices and collections never appeared on a customer's ledger at all (the original owner complaint).
+
+**How to apply:** any new producer of sale money must write `sale_payments` rows, or its collections never reach the customer statement. The receivables report's per-customer control can legitimately differ from TB Sundry Debtors by dues sitting on `SYS-DEBTORS` itself (walk-ins, sales referencing deleted customers) — that gap is a data signal, not a derivation bug.
+
+**As-of-date caveat (net fallback only):** the walk-in/net path still uses CURRENT `sales.amount_paid`, so a historical `toDate` reflects later collections there.
 
 ## GST head split (Phase 2)
 

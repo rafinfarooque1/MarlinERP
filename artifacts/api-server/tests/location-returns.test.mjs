@@ -54,7 +54,7 @@ async function dayBookVouchers(from, to, locQ) {
 }
 
 (async () => {
-  authToken = (await post('/auth/login', { username: 'admin', password: 'marlin1458' })).data?.token ?? '';
+  authToken = (await post('/auth/login', { username: process.env.TEST_USERNAME || 'admin', password: process.env.TEST_PASSWORD || 'marlin1458' })).data?.token ?? '';
   if (!authToken) throw new Error('login failed');
 
   const WH = Number((await pool.query(`SELECT id FROM warehouses ORDER BY id LIMIT 1`)).rows[0].id);
@@ -69,7 +69,9 @@ async function dayBookVouchers(from, to, locQ) {
       ORDER BY SUM(se.quantity) DESC LIMIT 1`, [WH]);
   if (!stocked) throw new Error(`no item with >=2 stock at warehouse ${WH} — seed stock first`);
   const ITEM = Number(stocked.id);
-  const PRICE = 100; // explicit unit price in the sale payload; no lookup needed
+  // MRP floor: line price must be ≥ the item master's MRP.
+  const { rows: [itemRow] } = await pool.query(`SELECT COALESCE(mrp, 0)::numeric AS mrp FROM items WHERE id = $1`, [ITEM]);
+  const PRICE = Math.max(100, Number(itemRow?.mrp ?? 0));
 
   // ══ 1+3. Credit sale (backdated) + credit-note return (backdated, recorded now)
   console.log('\n— Credit-note return: location attribution + as-of business date —');

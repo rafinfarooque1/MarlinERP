@@ -1,0 +1,268 @@
+Refactor the ERP to remove the separate "Customer Advances" accounting structure completely.
+
+Business Decision (Final)
+
+This ERP will NOT maintain a separate "Customer Advances" liability account.
+
+Instead, customer advances will always be represented as a CREDIT (negative) balance in the customer's normal Sundry Debtor ledger.
+
+This is the final accounting design and must be implemented consistently across the entire ERP.
+
+====================================================
+1. Remove Customer Advances
+====================================================
+
+Remove the entire "Customer Advances" group from the Chart of Accounts.
+
+Remove every automatically created:
+
+Customer Name – Advance
+
+ledger.
+
+Do not create these ledgers for new customers.
+
+====================================================
+2. Single Customer Ledger
+====================================================
+
+Every customer must have ONLY ONE ledger.
+
+Customer Name
+
+under
+
+Assets
+→ Current Assets
+→ Sundry Debtors
+
+There should never be a second advance ledger.
+
+====================================================
+3. Accounting Entries
+====================================================
+
+When customer pays an advance:
+
+Debit
+Cash / Bank
+
+Credit
+Customer Ledger (Sundry Debtor)
+
+The customer ledger will become a CREDIT (negative) balance.
+
+Example:
+
+Customer pays ₹10,000 advance
+
+Dr Cash ₹10,000
+
+Cr Customer Ledger ₹10,000
+
+Customer Ledger:
+
+Credit Balance ₹10,000
+
+(No separate advance ledger.)
+
+====================================================
+4. Sale Against Advance
+====================================================
+
+When an invoice is created later:
+
+Invoice ₹8,000
+
+Customer Ledger
+
+Opening Credit
+₹10,000
+
+Invoice Debit
+₹8,000
+
+Closing Credit
+₹2,000
+
+Outstanding = ₹0
+
+Advance Remaining = ₹2,000 (shown as credit balance in the same ledger)
+
+====================================================
+5. Receivable Report
+====================================================
+
+Customer with credit balance should appear as:
+
+Outstanding
+
+₹(-2,000)
+
+or
+
+Credit Balance ₹2,000
+
+depending on the report format.
+
+Do NOT create a separate advance report.
+
+====================================================
+6. Dashboard
+====================================================
+
+Dashboard receivables must correctly calculate:
+
+Positive customer balances
+
+minus
+
+Negative customer balances
+
+using the same customer ledger.
+
+====================================================
+7. Customer List
+====================================================
+
+Customer List must display the exact balance from the Sundry Debtor ledger.
+
+Positive
+
+Negative
+
+Zero
+
+No separate advance field.
+
+====================================================
+8. Customer Ledger
+====================================================
+
+Customer ledger should clearly show:
+
+Advance Receipt
+
+Sales Invoice
+
+Receipt
+
+Credit Note
+
+Journal
+
+Payment Allocation
+
+Running Balance
+
+The balance can naturally become negative.
+
+====================================================
+9. Chart of Accounts
+====================================================
+
+Under Sundry Debtors:
+
+Customers with debit balance remain debit.
+
+Customers with credit balance appear as negative (credit).
+
+No Customer Advance subgroup.
+
+====================================================
+10. Reports
+====================================================
+
+Update all reports:
+
+Trial Balance
+
+Balance Sheet
+
+Dashboard
+
+Receivable Report
+
+Customer Statement
+
+Ledger
+
+Ageing
+
+Cash Flow
+
+GST
+
+so they correctly use the customer's single ledger.
+
+====================================================
+11. Data Migration
+====================================================
+
+For existing databases:
+
+Move every balance from:
+
+Customer Name – Advance
+
+into
+
+Customer Name
+
+(Sundry Debtor ledger)
+
+keeping all journal entries intact.
+
+Delete the advance ledgers afterwards.
+
+Do not lose accounting history.
+
+====================================================
+12. Validation
+====================================================
+
+Verify:
+
+✓ Trial Balance balances.
+
+✓ Balance Sheet balances.
+
+✓ Dashboard matches.
+
+✓ Customer balances reconcile.
+
+✓ Receivable report matches customer ledgers.
+
+✓ Imported advances work correctly.
+
+✓ Manual advance receipts work correctly.
+
+✓ Invoice settlement correctly consumes credit balance.
+
+✓ No Customer Advance ledgers remain anywhere in the ERP.
+
+====================================================
+13. Code Cleanup
+====================================================
+
+Search the entire codebase and remove every dependency on:
+
+Customer Advances
+
+Customer Advance Ledger
+
+Advance Ledger
+
+Advance Group
+
+Replace them with the customer's normal Sundry Debtor ledger.
+
+====================================================
+14. Final Objective
+====================================================
+
+The ERP must maintain only ONE ledger per customer.
+
+A customer advance is simply a CREDIT (negative) balance in that customer's Sundry Debtor ledger.
+
+There should never be a separate Customer Advance ledger or Customer Advances liability group anywhere in the ERP.

@@ -1378,7 +1378,8 @@ router.get("/stock/transfers/:id", requireModuleView("page:/transfers"), async (
     `SELECT id, challan_number, from_type, from_id, to_type, to_id, transfer_date,
             line_items, is_interstate, status, notes, created_at,
             approved_by, approved_at, received_line_items, rejection_reason,
-            transfer_type, from_gstin, to_gstin, tax_type, transfer_value, gst_amount
+            transfer_type, from_gstin, to_gstin, tax_type, transfer_value, gst_amount,
+            document_mode, transfer_invoice_number, sale_id, purchase_id, credit_note_voucher_id
      FROM stock_transfers t WHERE id = $1 AND ${scopeTransferWhere(transferScope, transferParams)} LIMIT 1`,
     transferParams
   );

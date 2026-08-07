@@ -63,31 +63,29 @@ function CustomerLedger({ customerId }: { customerId: number }) {
             <TableHeader>
               <TableRow className="bg-muted/10">
                 <TableHead className="text-xs">Date</TableHead>
-                <TableHead className="text-xs">Invoice</TableHead>
-                <TableHead className="text-right text-xs">Amount</TableHead>
+                <TableHead className="text-xs">Particulars</TableHead>
+                <TableHead className="text-xs">Voucher</TableHead>
+                <TableHead className="text-right text-xs">Debit</TableHead>
+                <TableHead className="text-right text-xs">Credit</TableHead>
                 <TableHead className="text-right text-xs">Balance</TableHead>
-                <TableHead className="text-xs">Status</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {[...entries].reverse().map((e, i) => (
                 <TableRow key={i} className="hover:bg-muted/10">
-                  <TableCell className="text-xs text-muted-foreground">
+                  <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
                     {new Date(e.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
                   </TableCell>
-                  <TableCell className="text-xs font-mono">{e.description}</TableCell>
-                  <TableCell className="text-right text-xs font-mono text-red-500">
-                    ₹{Number(e.debit).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                  <TableCell className="text-xs">{e.description}</TableCell>
+                  <TableCell className="text-xs font-mono text-muted-foreground whitespace-nowrap">{e.voucherNumber ?? '—'}</TableCell>
+                  <TableCell className="text-right text-xs font-mono">
+                    {e.debit > 0 ? <span className="text-red-500">₹{Number(e.debit).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span> : '—'}
+                  </TableCell>
+                  <TableCell className="text-right text-xs font-mono">
+                    {e.credit > 0 ? <span className="text-emerald-600">₹{Number(e.credit).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span> : '—'}
                   </TableCell>
                   <TableCell className="text-right text-xs font-mono font-bold">
                     ₹{Number(e.balance).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                  </TableCell>
-                  <TableCell>
-                    {e.paymentStatus === 'paid'
-                      ? <Badge className="text-[9px] bg-emerald-500/10 text-emerald-600 border-emerald-500/20">Paid</Badge>
-                      : e.paymentStatus === 'partially_paid'
-                        ? <Badge className="text-[9px] bg-amber-500/10 text-amber-600 border-amber-500/20">Partial</Badge>
-                        : <Badge className="text-[9px] bg-red-500/10 text-red-600 border-red-500/20">Unpaid</Badge>}
                   </TableCell>
                 </TableRow>
               ))}

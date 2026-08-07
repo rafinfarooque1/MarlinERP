@@ -26,7 +26,7 @@ import {
   loadPaymentPosition, loadPaymentPositions, computePaymentPosition,
   loadInvoicePaymentSettings, buildUpiRequest,
 } from "../lib/salePaymentPosition";
-import { advanceAvailable, takeAdvanceLock, attributeAdvanceConsumption, releaseAdvanceConsumption, ensureAdvanceLedger } from "../lib/advanceLedgers";
+import { advanceAvailable, takeAdvanceLock, attributeAdvanceConsumption, releaseAdvanceConsumption } from "../lib/advanceLedgers";
 import { allocateSalesInvoiceNumber, salesCounterScope } from "../lib/voucherNumber";
 
 const router = Router();
@@ -815,16 +815,10 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
     );
     custLedgerId = cl?.id ?? null;
   }
-  // Advance adjustment is only possible once the customer HAS an advance
-  // ledger (it is provisioned by the first over-payment). No ledger = nothing
-  // to adjust — the flag is silently a no-op rather than an error.
-  let custAdvLedgerId: number | null = null;
-  if (useAdvanceRequested) {
-    const { rows: [al] } = await pgPool.query<{ id: number }>(
-      `SELECT id FROM account_ledgers WHERE code = $1`, [`CADV-${parsed.data.customerId}`]
-    );
-    custAdvLedgerId = al?.id ?? null;
-  }
+  // Advance = the credit (negative) balance on the customer's own Sundry
+  // Debtor ledger — no separate advance ledger exists. Availability is read
+  // under the advance lock inside the transaction below; a customer with no
+  // credit balance makes the flag a silent no-op rather than an error.
 
   const txClient = await pgPool.connect();
   let row: any;
@@ -875,7 +869,7 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
     // Serialize on the advance lock, then read availability from the books
     // (ledger-authoritative). Concurrent consumers hold this lock until their
     // COMMIT, so the committed state we read here is the settled truth.
-    if (useAdvanceRequested && custAdvLedgerId && parsed.data.customerId) {
+    if (useAdvanceRequested && parsed.data.customerId) {
       await takeAdvanceLock(txClient, 'customer', parsed.data.customerId);
       const advPos = await advanceAvailable('customer', parsed.data.customerId);
       appliedAdvance = Math.min(advPos.available, totalAmount);
@@ -899,19 +893,14 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
       );
       const creditLimit = Number(cc?.credit_limit ?? 0);
       if (creditLimit > 0) {
-        const { rows: [ob] } = await txClient.query<{ due: string }>(
-          `SELECT COALESCE(SUM(total_amount::numeric - COALESCE(amount_paid, 0)::numeric), 0) AS due
-           FROM sales WHERE customer_id = $1`,
-          [parsed.data.customerId]
-        );
-        const { rows: [cnr] } = await txClient.query<{ amt: string }>(
-          `SELECT COALESCE(SUM(v.total_amount::numeric), 0) AS amt
-           FROM journal_vouchers v
-           JOIN account_ledgers l ON l.id = v.party_ledger_id
-           WHERE v.voucher_type = 'credit_note' AND l.code = $1`,
-          [`CUST-${parsed.data.customerId}`]
-        );
-        const currentOutstanding = Math.max(0, Math.round((Number(ob?.due ?? 0) - Number(cnr?.amt ?? 0)) * 100) / 100);
+        // Exposure is the customer's LEDGER balance — the same figure their
+        // statement, the receivables report and the Balance Sheet all show.
+        // The old document arithmetic (sum of invoice dues minus credit
+        // notes) could not see opening balances, manual journals or
+        // unallocated receipts, and even counted cancelled invoices.
+        const { currentPartyStatement } = await import("../lib/ledgerBalances");
+        const st = await currentPartyStatement("customer", parsed.data.customerId!, { q: txClient });
+        const currentOutstanding = Math.max(0, Math.round(Number(st.closing ?? 0) * 100) / 100);
         // The advance being adjusted against this bill is money already in
         // hand — it never becomes exposure, so the credit check sees only the
         // slice the customer will actually owe.
@@ -1043,8 +1032,8 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
     ));
 
     // The adjusted advance is a collection like any other: a sale_payments row
-    // with method 'advance'. The derived postings debit CADV-<customer> for it,
-    // which is exactly the moment the parked liability turns into revenue cover.
+    // with method 'advance'. The derived postings debit CUST-<customer> for it
+    // — the invoice debit consuming the customer's credit (negative) balance.
     if (appliedAdvance > 0) {
       await txClient.query(
         `INSERT INTO sale_payments (sale_id, payment_date, method, amount, notes, reconciliation_status, outlet_id, created_by)
@@ -1401,57 +1390,12 @@ router.put("/sales/:id", requireModuleAction("page:/sales/pos", "edit"), async (
   }
 
   // ── Credit limit check on edit ────────────────────────────────────────────
-  // Mirror of the POST credit-limit guard so edits can't silently bypass it.
+  // The guard itself runs INSIDE the edit transaction (below), under the same
+  // per-customer advisory lock the create path takes — checking here, outside
+  // the transaction, would let two concurrent writes both read the old balance
+  // and both pass.
   const newPaymentModeForCredit = effectivePaymentMode;
   const isEditCreditControlled = !!parsed.data.customerId && newPaymentModeForCredit === 'credit';
-
-  if (isEditCreditControlled) {
-    const editCustomerId = parsed.data.customerId!;
-    const { rows: [editCC] } = await pgPool.query<{ credit_limit: string }>(
-      `SELECT COALESCE(credit_limit, 0)::numeric AS credit_limit FROM customers WHERE id = $1`,
-      [editCustomerId]
-    );
-    const editCreditLimit = Number(editCC?.credit_limit ?? 0);
-    if (editCreditLimit > 0) {
-      // Outstanding = all credit sales for customer (excluding this sale, which
-      // we are replacing) minus all sale_payments collected for this customer.
-      const { rows: [ous] } = await pgPool.query<{ outstanding: string }>(
-        `SELECT GREATEST(
-           COALESCE((SELECT SUM(total_amount::numeric) FROM sales
-                     WHERE customer_id = $1 AND payment_mode = 'credit' AND id != $2), 0)
-           -
-           COALESCE((SELECT SUM(sp.amount::numeric) FROM sale_payments sp
-                     JOIN sales s ON s.id = sp.sale_id WHERE s.customer_id = $1), 0)
-         , 0)::numeric AS outstanding`,
-        [editCustomerId, id]
-      );
-      const currentOutstanding = Number(ous?.outstanding ?? 0);
-      const projectedOutstanding = currentOutstanding + totalAmount;
-
-      if (projectedOutstanding > editCreditLimit + 0.009) {
-        const editOverrideRequested = (req.body as any).creditOverride === true;
-        if (editOverrideRequested) {
-          const overrideAllowed = await hasModuleAction(req.employee?.hierarchyId, CREDIT_OVERRIDE_PAGES, "edit");
-          if (!overrideAllowed) {
-            res.status(403).json({
-              error: CREDIT_OVERRIDE_DENIED_MESSAGE,
-              code: 'CREDIT_LIMIT_OVERRIDE_DENIED',
-            });
-            return;
-          }
-        } else {
-          res.status(422).json({
-            error: `Credit limit exceeded: current outstanding ₹${currentOutstanding.toFixed(2)} plus this sale of ₹${totalAmount.toFixed(2)} exceeds the credit limit of ₹${editCreditLimit.toFixed(2)}.`,
-            code: 'CREDIT_LIMIT_EXCEEDED',
-            creditLimit: editCreditLimit,
-            currentOutstanding,
-            projectedOutstanding,
-          });
-          return;
-        }
-      }
-    }
-  }
 
   // ── Stock and sale row: one transaction ───────────────────────────────────
   // An edit reverses the bill's old lines and applies the new ones. Both halves
@@ -1480,15 +1424,9 @@ router.put("/sales/:id", requireModuleAction("page:/sales/pos", "edit"), async (
   }
   // The edit may lower the bill below what has already been collected —
   // payments are never wiped, so the excess becomes a credit held for the
-  // customer. The books derivation posts that credit to the customer's
-  // advance ledger, and being read-only it cannot create the ledger itself:
-  // provision it here, at the write that creates the overpayment.
-  if (newAmountPaid > totalAmount + 0.004 && parsed.data.customerId) {
-    const { rows: [advCust] } = await pgPool.query<{ name: string }>(
-      `SELECT name FROM customers WHERE id = $1`, [parsed.data.customerId]
-    );
-    await ensureAdvanceLedger(pgPool, "customer", parsed.data.customerId, advCust?.name ?? `Customer ${parsed.data.customerId}`);
-  }
+  // customer. Under the single-ledger model that credit simply lands on the
+  // customer's own CUST- ledger (which exists with the customer); nothing
+  // needs provisioning here.
   const newOutletId = newLocationType === 'outlet' ? newLocationId : null;
 
   // ── Everything the edit transaction will need, resolved before it opens ───
@@ -1536,6 +1474,75 @@ router.put("/sales/:id", requireModuleAction("page:/sales/pos", "edit"), async (
   const newLineItemsWithBatches: any[] = [];
   try {
     await editTx.query('BEGIN');
+
+    // ── Credit limit check on edit ───────────────────────────────────────────
+    // Mirror of the POST credit-limit guard so edits can't silently bypass it.
+    // Serialized on the same per-customer advisory lock the create path takes,
+    // and taken BEFORE any stock row locks — the same relative order as
+    // creation — so the two paths queue rather than deadlock.
+    if (isEditCreditControlled) {
+      const editCustomerId = parsed.data.customerId!;
+      await editTx.query(
+        `SELECT pg_advisory_xact_lock(hashtext('customer-credit'), $1)`,
+        [editCustomerId]
+      );
+      const { rows: [editCC] } = await editTx.query<{ credit_limit: string }>(
+        `SELECT COALESCE(credit_limit, 0)::numeric AS credit_limit FROM customers WHERE id = $1`,
+        [editCustomerId]
+      );
+      const editCreditLimit = Number(editCC?.credit_limit ?? 0);
+      if (editCreditLimit > 0) {
+        // Exposure is the customer's LEDGER balance, minus what THIS sale
+        // currently contributes to it (the edit replaces that contribution).
+        // The old document arithmetic missed opening balances, manual journals
+        // and credit notes, and silently ignored non-credit invoices' dues.
+        const { currentPartyStatement } = await import("../lib/ledgerBalances");
+        const st = await currentPartyStatement("customer", editCustomerId, { q: editTx });
+        // Only subtract the old contribution when the sale already sits on THIS
+        // customer's ledger — reassigning a sale to a new customer brings its
+        // whole unpaid remainder along as fresh exposure.
+        const oldContribution = Number(existingRaw.customer_id) === editCustomerId
+          ? Number(existingRaw.total_amount ?? 0) - Number(existingRaw.amount_paid ?? 0)
+          : 0;
+        const currentOutstanding = Math.max(0, Math.round((Number(st.closing ?? 0) - oldContribution) * 100) / 100);
+        // What will actually stand collected on this sale AFTER the edit, with
+        // the SAME semantics the save path uses for credit sales: amount_paid
+        // is re-derived from recorded sale_payments. The stored amount_paid
+        // must NOT be used here — a settled cash sale being converted to
+        // credit has amount_paid = total, which would project zero new
+        // exposure while the saved edit creates the full receivable.
+        const { rows: [paidRow] } = await editTx.query<{ paid: string }>(
+          `SELECT COALESCE(SUM(amount::numeric), 0) AS paid FROM sale_payments WHERE sale_id = $1`,
+          [id]
+        );
+        const paidOnThisSale = Number(paidRow?.paid ?? 0);
+        const projectedOutstanding = Math.round((currentOutstanding + Math.max(0, totalAmount - paidOnThisSale)) * 100) / 100;
+
+        if (projectedOutstanding > editCreditLimit + 0.009) {
+          const editOverrideRequested = (req.body as any).creditOverride === true;
+          const overrideAllowed = editOverrideRequested
+            && await hasModuleAction(req.employee?.hierarchyId, CREDIT_OVERRIDE_PAGES, "edit");
+          if (!overrideAllowed) {
+            await editTx.query('ROLLBACK');
+            if (editOverrideRequested) {
+              res.status(403).json({
+                error: CREDIT_OVERRIDE_DENIED_MESSAGE,
+                code: 'CREDIT_LIMIT_OVERRIDE_DENIED',
+              });
+            } else {
+              res.status(422).json({
+                error: `Credit limit exceeded: current outstanding ₹${currentOutstanding.toFixed(2)} plus this sale of ₹${totalAmount.toFixed(2)} exceeds the credit limit of ₹${editCreditLimit.toFixed(2)}.`,
+                code: 'CREDIT_LIMIT_EXCEEDED',
+                creditLimit: editCreditLimit,
+                currentOutstanding,
+                projectedOutstanding,
+              });
+            }
+            return;
+          }
+        }
+      }
+    }
 
     // 0. Take every stock lock this edit will need, up front, in one globally
     //    deterministic order.
