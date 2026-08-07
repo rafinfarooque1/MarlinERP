@@ -571,6 +571,7 @@ export async function buildBooks(
   buildDerivedPostings: (opts: { toDate?: string; q?: Q }) => Promise<Array<{
     date: string; ledgerId: number; debit: number; credit: number;
     source?: string;
+    entryId?: string; voucherNumber?: string | null;
     locationType?: string | null; locationId?: number | null;
   }>>,
   opts: BooksOptions = {},
@@ -822,6 +823,31 @@ export async function buildBooks(
     issues.push(
       `Opening stock as at ${previousDay(fromDate)} cannot be established from stock movement history, so cost of goods sold and net profit are understated or overstated by the true opening position.`,
     );
+  }
+  // An entry that posts more to one side than the other gaps the balance
+  // sheet by exactly its one-sided amount, with every other check silent.
+  // Name the documents — "no identifiable cause" once cost a full
+  // investigation to trace back to eleven overpaid invoices. Checked on the
+  // location-UNFILTERED stream (allPostings): a located view is legitimately
+  // one-sided by design. Date cutoffs are safe: every builder keeps its
+  // entries internally balanced at any toDate (the sale entry's "extra" leg
+  // absorbs collections the cutoff excludes).
+  {
+    const entryNet = new Map<string, { net: number; label: string }>();
+    for (const p of allPostings) {
+      const key = p.entryId;
+      if (!key) continue;
+      const e = entryNet.get(key) ?? { net: 0, label: String(p.voucherNumber ?? key) };
+      e.net = r2(e.net + p.debit - p.credit);
+      entryNet.set(key, e);
+    }
+    const unbalanced = [...entryNet.values()].filter((e) => Math.abs(e.net) > 0.009);
+    if (unbalanced.length > 0) {
+      const net = r2(unbalanced.reduce((a, e) => a + e.net, 0));
+      issues.push(
+        `${unbalanced.length} ${unbalanced.length === 1 ? "entry does" : "entries do"} not balance internally (net ₹${net.toFixed(2)}): ${unbalanced.slice(0, 5).map((e) => e.label).join(", ")}${unbalanced.length > 5 ? ", …" : ""}. Each posts more to one side than the other — usually a document whose stored figures no longer agree with its collections.`,
+      );
+    }
   }
   if (Math.abs(difference) > 0.01 && issues.length === 0) {
     issues.push(

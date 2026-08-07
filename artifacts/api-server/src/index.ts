@@ -26,6 +26,7 @@ import { PRODUCT_KINDS, PRODUCT_TABLE, nextProductIdentity } from "./lib/product
 import { nextVoucherNumber, financialYearLabel, salesInvoiceNumber, SALES_SERIES, type SalesSeries } from "./lib/voucherNumber";
 import { PAGE_PERM_KEYS, LEGACY_MODULE_TO_PAGES } from "./lib/pagePermissions";
 import { ensureChartStructure } from "./lib/chartGroups";
+import { ensureAdvanceLedger } from "./lib/advanceLedgers";
 import { DATE_COLUMNS } from "./lib/dateColumns";
 import { addQuotations } from "./migrations/quotations";
 import { runOrgHierarchyRestructure } from "./migrations/orgHierarchyRestructure";
@@ -665,6 +666,29 @@ async function runMigrations() {
       }
       await pool.query(`INSERT INTO migration_log (name) VALUES ('cust_vend_ledger_backfill_v1')`);
       console.log(`[migration] cust_vend_ledger_backfill_v1: seeded ${custs.length} customer + ${vends.length} vendor ledgers`);
+    }
+  }
+
+  // ── Advance ledgers for overpaid invoices ────────────────────────────────
+  // An invoice collected beyond its billed amount (legacy imports, or an edit
+  // that lowered a bill below what was already collected) posts its excess as
+  // a credit on the customer's advance ledger. The posting derivation is
+  // read-only and cannot provision ledgers, so this sweep heals every boot —
+  // same pattern as the orphan party-ledger sweep. Idempotent and normally a
+  // no-op: edits provision the ledger themselves at write time.
+  {
+    const { rows: overpaidCusts } = await pool.query(
+      `SELECT DISTINCT s.customer_id AS id, c.name
+         FROM sales s JOIN customers c ON c.id = s.customer_id
+        WHERE s.cancelled_at IS NULL AND s.customer_id IS NOT NULL
+          AND s.amount_paid::numeric - s.total_amount::numeric > 0.004
+          AND NOT EXISTS (SELECT 1 FROM account_ledgers al WHERE al.code = 'CADV-' || s.customer_id::text)`
+    );
+    for (const c of overpaidCusts) {
+      await ensureAdvanceLedger(pool, "customer", Number(c.id), c.name ?? `Customer ${c.id}`);
+    }
+    if (overpaidCusts.length) {
+      console.log(`[migration] overpaid-sale advance sweep: provisioned ${overpaidCusts.length} customer advance ledgers`);
     }
   }
 

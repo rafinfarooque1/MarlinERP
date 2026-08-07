@@ -26,7 +26,7 @@ import {
   loadPaymentPosition, loadPaymentPositions, computePaymentPosition,
   loadInvoicePaymentSettings, buildUpiRequest,
 } from "../lib/salePaymentPosition";
-import { advanceAvailable, takeAdvanceLock, attributeAdvanceConsumption, releaseAdvanceConsumption } from "../lib/advanceLedgers";
+import { advanceAvailable, takeAdvanceLock, attributeAdvanceConsumption, releaseAdvanceConsumption, ensureAdvanceLedger } from "../lib/advanceLedgers";
 import { allocateSalesInvoiceNumber, salesCounterScope } from "../lib/voucherNumber";
 
 const router = Router();
@@ -1471,6 +1471,17 @@ router.put("/sales/:id", requireModuleAction("page:/sales/pos", "edit"), async (
     );
     newAmountPaid = Number(pp?.paid ?? 0);
     newPaymentStatus = newAmountPaid >= totalAmount - 0.004 ? 'paid' : newAmountPaid > 0.004 ? 'partially_paid' : 'unpaid';
+  }
+  // The edit may lower the bill below what has already been collected —
+  // payments are never wiped, so the excess becomes a credit held for the
+  // customer. The books derivation posts that credit to the customer's
+  // advance ledger, and being read-only it cannot create the ledger itself:
+  // provision it here, at the write that creates the overpayment.
+  if (newAmountPaid > totalAmount + 0.004 && parsed.data.customerId) {
+    const { rows: [advCust] } = await pgPool.query<{ name: string }>(
+      `SELECT name FROM customers WHERE id = $1`, [parsed.data.customerId]
+    );
+    await ensureAdvanceLedger(pgPool, "customer", parsed.data.customerId, advCust?.name ?? `Customer ${parsed.data.customerId}`);
   }
   const newOutletId = newLocationType === 'outlet' ? newLocationId : null;
 

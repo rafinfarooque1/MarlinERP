@@ -4,7 +4,7 @@ import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { AccountCombobox } from '@/components/ui/account-combobox';
 import { FileText, Download, Calendar, ShieldOff } from 'lucide-react';
 import { downloadCSV } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
@@ -81,10 +81,17 @@ export default function Ledger() {
 
         {/* Filters */}
         <div className="flex flex-wrap gap-3">
-          <Select value={accountId} onValueChange={setAccountId}>
-            <SelectTrigger className="w-60"><SelectValue placeholder="Select account" /></SelectTrigger>
-            <SelectContent>{(accounts as any[]).filter((a: any) => !a.isGroup).map((a: any) => <SelectItem key={a.id} value={String(a.id)}>{a.code ? `[${a.code}] ` : ''}{a.name}</SelectItem>)}</SelectContent>
-          </Select>
+          <AccountCombobox
+            className="w-60"
+            placeholder="Select account"
+            options={(accounts as any[])
+              .filter((a: any) => !a.isGroup)
+              // Fold the code into the display name so the search box matches
+              // on either — "[STD-SALES] Sales" is findable by code or name.
+              .map((a: any) => ({ id: a.id, name: `${a.code ? `[${a.code}] ` : ''}${a.name}` }))}
+            value={Number(accountId) || 0}
+            onChange={id => setAccountId(String(id))}
+          />
           <div className="flex items-center gap-2">
             <Calendar className="w-4 h-4 text-muted-foreground" />
             <Input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} className="w-36" />

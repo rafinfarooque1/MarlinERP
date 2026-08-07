@@ -1258,6 +1258,17 @@ export async function buildDerivedPostings(opts: { toDate?: string; q?: Q } = {}
     if (due > 0.004) {
       const custLedger = s.customer_id ? (byCode.get(`CUST-${s.customer_id}`)?.id ?? debtors) : debtors;
       push({ entryId: eid, date: s.sale_date, ledgerId: custLedger, debit: due, credit: 0, source: "sale", voucherNumber: s.invoice_number, description: `Outstanding — ${inv}`, ...sLoc });
+    } else if (due < -0.004) {
+      // Collected beyond the bill — an edit can lower a bill below what was
+      // already collected (payments are never wiped), and legacy imports carry
+      // such rows too. The excess is money held for the customer: credit their
+      // advance ledger so the entry balances and the credit is visible and
+      // adjustable against future invoices. Silently dropping this negative
+      // leg is what let the balance sheet drift with "no identifiable cause".
+      const overLedger = (s.customer_id
+        ? (byCode.get(`CADV-${s.customer_id}`)?.id ?? byCode.get(`CUST-${s.customer_id}`)?.id)
+        : 0) || debtors;
+      push({ entryId: eid, date: s.sale_date, ledgerId: overLedger, debit: 0, credit: round2(-due), source: "sale", voucherNumber: s.invoice_number, description: `Overpayment held — ${inv}`, ...sLoc });
     }
   }
 
