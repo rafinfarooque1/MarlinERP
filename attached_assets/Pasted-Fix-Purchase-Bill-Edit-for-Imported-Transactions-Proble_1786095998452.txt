@@ -1,0 +1,46 @@
+Fix Purchase Bill Edit for Imported Transactions.
+
+Problem:
+
+Imported purchase bills often contain historical Manufacturing Date (MFG) and Expiry Date. When I edit only the MFG date or Expiry date, the ERP throws an error like:
+
+"0 of 60 received on batch XXX is left. Reverse those movements first..."
+
+The system is treating a date correction as a stock movement or batch replacement, even though only the dates are being corrected.
+
+Required changes:
+
+1. Allow editing only MFG Date and Expiry Date without triggering stock validation.
+   - If Batch No, Item, Quantity and Location remain unchanged, updating MFG/Expiry should NOT be considered a stock change.
+   - Do not validate consumed quantity when only MFG/Expiry is modified.
+   - Update the batch metadata only.
+
+2. Batch validation should only run if any of these fields change:
+   - Batch Number
+   - Item
+   - Quantity
+   - Warehouse/Location
+
+3. If MFG/Expiry cannot be safely edited because of business rules, then make them optional:
+   - Remove mandatory validation for MFG Date.
+   - Remove mandatory validation for Expiry Date.
+   - Allow blank dates on both new and imported purchase bills.
+   - Stock should still work correctly without these dates.
+
+4. Existing imported purchase bills must remain editable.
+   - Users should be able to correct wrong MFG or Expiry dates after import.
+   - This should not affect stock quantity, FIFO layers, inventory valuation, accounting entries or batch balances.
+
+5. Regression testing:
+   Verify that:
+   - Editing only MFG Date succeeds.
+   - Editing only Expiry Date succeeds.
+   - Editing both dates succeeds.
+   - No stock movement is created.
+   - No accounting entries are changed.
+   - FIFO remains unchanged.
+   - Inventory valuation remains unchanged.
+   - Batch quantity remains unchanged.
+   - Existing validation still blocks changing Batch Number, Quantity or Item when stock has already been consumed.
+
+The objective is that MFG Date and Expiry Date are treated as editable batch metadata, not stock movement fields. If that is not technically possible, make both fields optional throughout the ERP.

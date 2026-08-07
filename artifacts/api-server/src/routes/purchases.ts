@@ -14,7 +14,7 @@ import { resolveActingLocation, locationLabel, type ProdLocation } from "../lib/
 import { getUserDataScope, scopeLocationTypeWhere } from "../lib/dataScope";
 import { parseDateRange, pushDateRange, pushLocationFilter } from "../lib/queryFilters";
 import { getLocationFilter } from "../lib/requestLocation";
-import { isIsoDate } from "../lib/dateInput";
+import { isIsoDate, dateOrNull } from "../lib/dateInput";
 import { nextVoucherNumber } from "../lib/voucherNumber";
 import { advanceAvailable, takeAdvanceLock, attributeAdvanceConsumption, releaseAdvanceConsumption } from "../lib/advanceLedgers";
 import { PURCHASE_BATCH_SEQUENCE } from "../migrations/purchaseBills";
@@ -1166,6 +1166,7 @@ router.patch("/purchases/:id", requireModuleAction("page:/production/purchase", 
       const toReverse: any[] = []; // old lines whose full quantity comes back out
       const toApply: any[] = [];   // new lines applied in full
       const deltas: Array<{ nu: any; delta: number }> = []; // quantity-only changes
+      const dateFixes: any[] = []; // mfg/expiry corrections — lot metadata, no stock movement
       if (ambiguous) {
         toReverse.push(...oldLines);
         toApply.push(...(enriched as any[]));
@@ -1177,14 +1178,18 @@ router.patch("/purchases/:id", requireModuleAction("page:/production/purchase", 
           const newQty = Number(nl?.quantity ?? 0);
           const oldCost = Number(ol?.costPerUnit ?? ol?.unitCost ?? 0);
           const newCost = Number(nl?.costPerUnit ?? 0);
-          // Stock cares about the per-unit taxable cost and the lot dates. A
-          // change in either means the line's valuation must be rebuilt from
-          // scratch — which needs its full old quantity still on hand. A
-          // quantity-only change adjusts by the difference instead.
+          // Stock cares about the per-unit taxable cost: a cost change means
+          // the line's valuation must be rebuilt from scratch — which needs
+          // its full old quantity still on hand. A quantity-only change
+          // adjusts by the difference instead. MFG/expiry are lot METADATA:
+          // correcting them must never demand the old quantity back (imported
+          // bills' stock is often long consumed), so the lot row keeps its
+          // quantity and only its dates are rewritten in place.
           const costSame = Math.abs(oldCost - newCost) <= 0.005;
           const datesSame = sameDate(ol?.mfgDate, nl?.mfgDate) && sameDate(ol?.expiryDate, nl?.expiryDate);
-          if (costSame && datesSame) {
+          if (costSame) {
             if (Math.abs(newQty - oldQty) > 0.0005) deltas.push({ nu: nl, delta: newQty - oldQty });
+            if (!datesSame) dateFixes.push(nl);
             // identical line: no stock work at all
           } else {
             toReverse.push(ol);
@@ -1421,6 +1426,27 @@ router.patch("/purchases/:id", requireModuleAction("page:/production/purchase", 
         notes: d.delta > 0 ? 'Purchase edit — quantity increased' : 'Purchase edit — quantity reduced',
       };
     }));
+
+    // ── Date-only corrections: rewrite the lot's dates in place ─────────────
+    // No quantity moves, no ledger row, no valuation change — a direct UPDATE,
+    // not creditBatch (whose COALESCE deliberately keeps existing dates).
+    // Works even when the lot is fully consumed (quantity 0): that is exactly
+    // the imported-bill case this exists for. A lot that predates batch
+    // tracking simply has no row to update; the corrected dates still land in
+    // line_items below either way. dateFixes is only populated on the
+    // non-ambiguous path, where the bill is not moving — so `loc` is right.
+    // Provenance-scoped: only the lot THIS bill created is rewritten. A
+    // same-key lot owned by another document (legacy import, transfer-in)
+    // keeps its own dates — the natural key alone is not ownership.
+    for (const li of dateFixes) {
+      await client.query(
+        `UPDATE stock_batches SET mfg_date = $1, expiry_date = $2, updated_at = now()
+          WHERE item_id = $3 AND material_type = $4 AND branch_type = $5 AND branch_id = $6
+            AND batch_number = $7 AND source = 'purchase' AND source_id = $8`,
+        [dateOrNull(li.mfgDate), dateOrNull(li.expiryDate), Number(li.materialId),
+         String(li.materialType ?? "item"), loc.type, loc.id, String(li.batchNumber), id],
+      );
+    }
 
     // A line that already carries a lot number keeps it — an edit must not
     // silently re-issue lots and orphan the stock recorded against the old

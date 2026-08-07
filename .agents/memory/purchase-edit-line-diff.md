@@ -5,7 +5,9 @@ description: Bill edits pair old/new lines and touch only changed stock; settlem
 
 # Purchase bill edit — per-line diff, not whole-bill reversal
 
-**Rule:** PATCH /purchases/:id pairs old and new lines by `materialType:materialId:batchNumber` (lowercased; unique per bill via lineIdentityError). Untouched lines get NO stock writes; qty-only changes apply a validated delta; cost/date changes, removed lines → full reverse of THAT line only; moves and duplicate legacy keys fall back to full reverse+reapply of everything.
+**Rule:** PATCH /purchases/:id pairs old and new lines by `materialType:materialId:batchNumber` (lowercased; unique per bill via lineIdentityError). Untouched lines get NO stock writes; qty-only changes apply a validated delta; cost changes and removed lines → full reverse of THAT line only; moves and duplicate legacy keys fall back to full reverse+reapply of everything.
+
+**MFG/expiry are lot METADATA, not stock fields.** A date-only change (cost same) must never route through reverse+reapply — imported bills' stock is often fully consumed, and the reversal demands the full old quantity ("0 of 60 left" error). Instead the lot's dates are rewritten in place with a direct UPDATE on stock_batches, provenance-scoped (`source='purchase' AND source_id=bill`) so a same-key lot owned by another document keeps its dates. creditBatch cannot do this — its COALESCE deliberately keeps existing dates. Works on quantity-0 lots; a pre-lot-tracking line simply has no row and the dates still land in line_items. Runs AFTER the qty-delta loop so a combined date+qty edit ends with the new dates.
 
 **Why:** the old edit reversed every line, and floored reversals cannot express "8 of these are gone" — so one consumed line blocked the whole bill, and skipping the check would invent stock.
 
