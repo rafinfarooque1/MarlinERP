@@ -407,6 +407,31 @@ export default function Quotations() {
   const getPrice = (itemId: number) => Number((items.find(i => i.id === itemId) as any)?.mrp ?? 0);
   const getItem = (itemId: number) => items.find(i => i.id === itemId);
 
+  // ── Quotation MRP floor ────────────────────────────────────────────────
+  // The quote MRP is editable, but only UPWARD: it may equal or exceed the
+  // Item Master MRP, never undercut it (the server enforces the same rule).
+  // Editing an old quote grandfathers: floor = min(current master, the
+  // line's previously SAVED price), so a later master-MRP rise never locks
+  // an existing quotation. Items with master MRP 0/unset have no floor.
+  const savedLineFloors = useMemo(() => {
+    const floors = new Map<number, number>();
+    for (const li of ((editItem?.lineItems ?? []) as any[])) {
+      const iid = Number(li?.itemId); const p = Number(li?.unitPrice);
+      if (!iid || !Number.isFinite(p) || p <= 0) continue;
+      const prev = floors.get(iid);
+      floors.set(iid, prev === undefined ? p : Math.min(prev, p));
+    }
+    return floors;
+  }, [editItem]);
+  const mrpFloorFor = (itemId: number): number => {
+    const master = getPrice(itemId);
+    if (master <= 0) return 0;
+    const saved = savedLineFloors.get(Number(itemId));
+    return saved !== undefined && saved > 0 ? Math.min(master, saved) : master;
+  };
+  const mrpFloorMessage = (floor: number) =>
+    `Quotation MRP cannot be lower than the Item Master MRP (₹${floor.toFixed(2)}). Increase the MRP or use a discount if you want to quote a lower selling price.`;
+
   // GST state determination (same as Sales)
   const companyState = ((companySettings as any)?.state ?? '').trim().toLowerCase();
   const selectedCustomer = customers.find(c => c.id === watchCustomerId);
@@ -505,6 +530,15 @@ export default function Quotations() {
   const hasItems = fields.some((_, i) => (form.watch(`lineItems.${i}.itemId`) ?? 0) > 0);
 
   const onSubmit = (data: FormValues) => {
+    // Quotation MRP floor — checked BEFORE the re-entrancy lock so an early
+    // return can never leave the lock held. The server enforces the same rule.
+    for (const li of data.lineItems) {
+      const floor = mrpFloorFor(Number(li.itemId));
+      if (floor > 0 && Number(li.unitPrice) < floor) {
+        toast.error(mrpFloorMessage(floor));
+        return;
+      }
+    }
     // Synchronous re-entrancy lock: two rapid Ctrl+S / Enter submits can both
     // pass an isPending check before React Query publishes the pending state.
     // Released in onSettled (success or error).
@@ -1112,6 +1146,9 @@ export default function Quotations() {
                         const gst      = computeLineGst(1, Math.max(0, Math.round((qty * unitPrice - disc) * 100) / 100), taxRate, isInterState, 0, taxable);
                         const lineTotal = gst.lineGross;
                         const available = stockMap.get(Number(itemId)) ?? 0;
+                        const masterMrp = itemId > 0 ? getPrice(Number(itemId)) : 0;
+                        const mrpFloor  = itemId > 0 ? mrpFloorFor(Number(itemId)) : 0;
+                        const belowFloor = mrpFloor > 0 && unitPrice < mrpFloor;
 
                         return (
                           <div key={field.id} data-kbd-row={index} className="p-3 bg-muted/20 rounded-lg border border-border space-y-2">
@@ -1138,7 +1175,7 @@ export default function Quotations() {
                                 <FormField control={form.control} name={`lineItems.${index}.quantity`} render={({ field: f }) => (
                                   <FormItem>
                                     <FormLabel className="text-xs">Qty</FormLabel>
-                                    <FormControl><Input type="number" min={1} className="h-8 text-xs" data-last-field={!discountsEnabled && index === fields.length - 1 ? "1" : undefined} {...f} /></FormControl>
+                                    <FormControl><Input type="number" min={1} className="h-8 text-xs" {...f} /></FormControl>
                                   </FormItem>
                                 )} />
                                 {itemId > 0 && qty > available && (
@@ -1147,18 +1184,33 @@ export default function Quotations() {
                               </div>
 
                               <div className="col-span-3">
-                                <p className="text-xs font-medium mb-1.5 text-foreground/80">
-                                  MRP (₹) <span className="text-[10px] text-muted-foreground font-normal">from Item Master</span>
-                                </p>
-                                <div className={`h-8 flex items-center px-3 rounded-md border text-xs font-mono select-none cursor-default ${
-                                  unitPrice > 0
-                                    ? 'border-border bg-muted/40 text-foreground'
-                                    : 'border-amber-500/40 bg-amber-500/5 text-amber-500 text-[10px]'
-                                }`}>
-                                  {unitPrice > 0
-                                    ? `₹${unitPrice.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`
-                                    : 'Set MRP in Item Master'}
-                                </div>
+                                <FormField control={form.control} name={`lineItems.${index}.unitPrice`} render={({ field: f }) => (
+                                  <FormItem>
+                                    <FormLabel className="text-xs">
+                                      MRP (₹){masterMrp > 0 && (
+                                        <span className="text-[10px] text-muted-foreground font-normal ml-1">Item Master ₹{masterMrp.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                                      )}
+                                    </FormLabel>
+                                    <FormControl><Input
+                                      type="number"
+                                      min={0}
+                                      step="0.01"
+                                      className={`h-8 text-xs font-mono ${belowFloor ? 'border-destructive focus-visible:ring-destructive' : ''}`}
+                                      data-testid={`input-line-mrp-${index}`}
+                                      data-last-field={!discountsEnabled && index === fields.length - 1 ? '1' : undefined}
+                                      {...f}
+                                      value={(f.value as any) ?? ''}
+                                    /></FormControl>
+                                  </FormItem>
+                                )} />
+                                {belowFloor && (
+                                  <p className="text-[10px] text-destructive mt-0.5" data-testid={`error-line-mrp-${index}`}>
+                                    {mrpFloorMessage(mrpFloor)}
+                                  </p>
+                                )}
+                                {itemId > 0 && masterMrp <= 0 && unitPrice <= 0 && (
+                                  <p className="text-[10px] text-amber-500 mt-0.5">No MRP in Item Master — enter the quote price</p>
+                                )}
                                 <FormField control={form.control} name={`lineItems.${index}.taxable`} render={({ field: f }) => (
                                   <label
                                     className="mt-1 flex items-center gap-1.5 cursor-pointer select-none w-fit"
@@ -1499,6 +1551,9 @@ export default function Quotations() {
                         <div className="mt-2 flex justify-between text-xs text-muted-foreground">
                           <span>
                             {li.quantity} × ₹{Number(li.unitPrice).toFixed(2)}
+                            {Number(li.masterMrp ?? 0) > 0 && Number(li.unitPrice) > Number(li.masterMrp) && (
+                              <span className="text-sky-600"> (MRP raised from ₹{Number(li.masterMrp).toFixed(2)})</span>
+                            )}
                             {Number(li.discount ?? 0) > 0 && (
                               <span className="text-emerald-600"> − ₹{Number(li.discount).toFixed(2)} disc</span>
                             )}

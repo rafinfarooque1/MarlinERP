@@ -1055,7 +1055,8 @@ export const ListSalesResponseItem = zod.object({
   "unitDiscount": zod.number().optional().describe('Discount per UNIT off the MRP, in rupees (0 ≤ unitDiscount ≤ unitPrice). Present only on lines created since the per-unit discount system; absent on historical lines, whose \'discount\' is a line-total amount and must not be reinterpreted.\n'),
   "billDiscountShare": zod.number().optional().describe('This line\'s paise-exact share of the invoice-level bill discount, allocated proportionally to the line\'s post-item-discount value. Shares across the invoice sum exactly to the sale\'s billDiscount.\n'),
   "taxAmount": zod.number().optional(),
-  "priceMode": zod.enum(['inclusive', 'exclusive']).optional().describe('How the entered unitPrice is interpreted for THIS line. \'inclusive\' (default, and the treatment of every historical line): unitPrice is the final GST-inclusive price and GST is extracted from it. \'exclusive\': unitPrice is the taxable base and GST is added on top. Mirrors the purchases priceMode convention, per line.\n')
+  "priceMode": zod.enum(['inclusive', 'exclusive']).optional().describe('How the entered unitPrice is interpreted for THIS line. \'inclusive\' (default, and the treatment of every historical line): unitPrice is the final GST-inclusive price and GST is extracted from it. \'exclusive\': unitPrice is the taxable base and GST is added on top. Mirrors the purchases priceMode convention, per line.\n'),
+  "masterMrp": zod.number().optional().describe('QUOTATION lines only, server-stamped: the Item Master MRP as of the moment the quotation was saved. A line whose unitPrice exceeds its masterMrp is a deliberate quotation-level MRP raise (the master item is never modified). Absent on sale lines and on quotations saved before this field existed.\n')
 })),
   "subtotal": zod.number().optional(),
   "taxTotal": zod.number().optional(),
@@ -1086,7 +1087,8 @@ export const CreateSaleBody = zod.object({
   "unitDiscount": zod.number().optional().describe('Discount per UNIT off the MRP, in rupees (0 ≤ unitDiscount ≤ unitPrice). Present only on lines created since the per-unit discount system; absent on historical lines, whose \'discount\' is a line-total amount and must not be reinterpreted.\n'),
   "billDiscountShare": zod.number().optional().describe('This line\'s paise-exact share of the invoice-level bill discount, allocated proportionally to the line\'s post-item-discount value. Shares across the invoice sum exactly to the sale\'s billDiscount.\n'),
   "taxAmount": zod.number().optional(),
-  "priceMode": zod.enum(['inclusive', 'exclusive']).optional().describe('How the entered unitPrice is interpreted for THIS line. \'inclusive\' (default, and the treatment of every historical line): unitPrice is the final GST-inclusive price and GST is extracted from it. \'exclusive\': unitPrice is the taxable base and GST is added on top. Mirrors the purchases priceMode convention, per line.\n')
+  "priceMode": zod.enum(['inclusive', 'exclusive']).optional().describe('How the entered unitPrice is interpreted for THIS line. \'inclusive\' (default, and the treatment of every historical line): unitPrice is the final GST-inclusive price and GST is extracted from it. \'exclusive\': unitPrice is the taxable base and GST is added on top. Mirrors the purchases priceMode convention, per line.\n'),
+  "masterMrp": zod.number().optional().describe('QUOTATION lines only, server-stamped: the Item Master MRP as of the moment the quotation was saved. A line whose unitPrice exceeds its masterMrp is a deliberate quotation-level MRP raise (the master item is never modified). Absent on sale lines and on quotations saved before this field existed.\n')
 })),
   "paymentMode": zod.string(),
   "couponCode": zod.string().optional(),
@@ -1110,7 +1112,8 @@ export const CreateSaleResponse = zod.object({
   "unitDiscount": zod.number().optional().describe('Discount per UNIT off the MRP, in rupees (0 ≤ unitDiscount ≤ unitPrice). Present only on lines created since the per-unit discount system; absent on historical lines, whose \'discount\' is a line-total amount and must not be reinterpreted.\n'),
   "billDiscountShare": zod.number().optional().describe('This line\'s paise-exact share of the invoice-level bill discount, allocated proportionally to the line\'s post-item-discount value. Shares across the invoice sum exactly to the sale\'s billDiscount.\n'),
   "taxAmount": zod.number().optional(),
-  "priceMode": zod.enum(['inclusive', 'exclusive']).optional().describe('How the entered unitPrice is interpreted for THIS line. \'inclusive\' (default, and the treatment of every historical line): unitPrice is the final GST-inclusive price and GST is extracted from it. \'exclusive\': unitPrice is the taxable base and GST is added on top. Mirrors the purchases priceMode convention, per line.\n')
+  "priceMode": zod.enum(['inclusive', 'exclusive']).optional().describe('How the entered unitPrice is interpreted for THIS line. \'inclusive\' (default, and the treatment of every historical line): unitPrice is the final GST-inclusive price and GST is extracted from it. \'exclusive\': unitPrice is the taxable base and GST is added on top. Mirrors the purchases priceMode convention, per line.\n'),
+  "masterMrp": zod.number().optional().describe('QUOTATION lines only, server-stamped: the Item Master MRP as of the moment the quotation was saved. A line whose unitPrice exceeds its masterMrp is a deliberate quotation-level MRP raise (the master item is never modified). Absent on sale lines and on quotations saved before this field existed.\n')
 })),
   "subtotal": zod.number().optional(),
   "taxTotal": zod.number().optional(),
@@ -1145,7 +1148,8 @@ export const GetSaleResponse = zod.object({
   "unitDiscount": zod.number().optional().describe('Discount per UNIT off the MRP, in rupees (0 ≤ unitDiscount ≤ unitPrice). Present only on lines created since the per-unit discount system; absent on historical lines, whose \'discount\' is a line-total amount and must not be reinterpreted.\n'),
   "billDiscountShare": zod.number().optional().describe('This line\'s paise-exact share of the invoice-level bill discount, allocated proportionally to the line\'s post-item-discount value. Shares across the invoice sum exactly to the sale\'s billDiscount.\n'),
   "taxAmount": zod.number().optional(),
-  "priceMode": zod.enum(['inclusive', 'exclusive']).optional().describe('How the entered unitPrice is interpreted for THIS line. \'inclusive\' (default, and the treatment of every historical line): unitPrice is the final GST-inclusive price and GST is extracted from it. \'exclusive\': unitPrice is the taxable base and GST is added on top. Mirrors the purchases priceMode convention, per line.\n')
+  "priceMode": zod.enum(['inclusive', 'exclusive']).optional().describe('How the entered unitPrice is interpreted for THIS line. \'inclusive\' (default, and the treatment of every historical line): unitPrice is the final GST-inclusive price and GST is extracted from it. \'exclusive\': unitPrice is the taxable base and GST is added on top. Mirrors the purchases priceMode convention, per line.\n'),
+  "masterMrp": zod.number().optional().describe('QUOTATION lines only, server-stamped: the Item Master MRP as of the moment the quotation was saved. A line whose unitPrice exceeds its masterMrp is a deliberate quotation-level MRP raise (the master item is never modified). Absent on sale lines and on quotations saved before this field existed.\n')
 })),
   "subtotal": zod.number().optional(),
   "taxTotal": zod.number().optional(),
@@ -1211,7 +1215,8 @@ export const ListQuotationsResponseItem = zod.object({
   "unitDiscount": zod.number().optional().describe('Discount per UNIT off the MRP, in rupees (0 ≤ unitDiscount ≤ unitPrice). Present only on lines created since the per-unit discount system; absent on historical lines, whose \'discount\' is a line-total amount and must not be reinterpreted.\n'),
   "billDiscountShare": zod.number().optional().describe('This line\'s paise-exact share of the invoice-level bill discount, allocated proportionally to the line\'s post-item-discount value. Shares across the invoice sum exactly to the sale\'s billDiscount.\n'),
   "taxAmount": zod.number().optional(),
-  "priceMode": zod.enum(['inclusive', 'exclusive']).optional().describe('How the entered unitPrice is interpreted for THIS line. \'inclusive\' (default, and the treatment of every historical line): unitPrice is the final GST-inclusive price and GST is extracted from it. \'exclusive\': unitPrice is the taxable base and GST is added on top. Mirrors the purchases priceMode convention, per line.\n')
+  "priceMode": zod.enum(['inclusive', 'exclusive']).optional().describe('How the entered unitPrice is interpreted for THIS line. \'inclusive\' (default, and the treatment of every historical line): unitPrice is the final GST-inclusive price and GST is extracted from it. \'exclusive\': unitPrice is the taxable base and GST is added on top. Mirrors the purchases priceMode convention, per line.\n'),
+  "masterMrp": zod.number().optional().describe('QUOTATION lines only, server-stamped: the Item Master MRP as of the moment the quotation was saved. A line whose unitPrice exceeds its masterMrp is a deliberate quotation-level MRP raise (the master item is never modified). Absent on sale lines and on quotations saved before this field existed.\n')
 })),
   "subtotal": zod.number().optional(),
   "taxTotal": zod.number().optional(),
@@ -1249,7 +1254,8 @@ export const CreateQuotationBody = zod.object({
   "unitDiscount": zod.number().optional().describe('Discount per UNIT off the MRP, in rupees (0 ≤ unitDiscount ≤ unitPrice). Present only on lines created since the per-unit discount system; absent on historical lines, whose \'discount\' is a line-total amount and must not be reinterpreted.\n'),
   "billDiscountShare": zod.number().optional().describe('This line\'s paise-exact share of the invoice-level bill discount, allocated proportionally to the line\'s post-item-discount value. Shares across the invoice sum exactly to the sale\'s billDiscount.\n'),
   "taxAmount": zod.number().optional(),
-  "priceMode": zod.enum(['inclusive', 'exclusive']).optional().describe('How the entered unitPrice is interpreted for THIS line. \'inclusive\' (default, and the treatment of every historical line): unitPrice is the final GST-inclusive price and GST is extracted from it. \'exclusive\': unitPrice is the taxable base and GST is added on top. Mirrors the purchases priceMode convention, per line.\n')
+  "priceMode": zod.enum(['inclusive', 'exclusive']).optional().describe('How the entered unitPrice is interpreted for THIS line. \'inclusive\' (default, and the treatment of every historical line): unitPrice is the final GST-inclusive price and GST is extracted from it. \'exclusive\': unitPrice is the taxable base and GST is added on top. Mirrors the purchases priceMode convention, per line.\n'),
+  "masterMrp": zod.number().optional().describe('QUOTATION lines only, server-stamped: the Item Master MRP as of the moment the quotation was saved. A line whose unitPrice exceeds its masterMrp is a deliberate quotation-level MRP raise (the master item is never modified). Absent on sale lines and on quotations saved before this field existed.\n')
 })),
   "couponCode": zod.string().optional(),
   "billDiscount": zod.number().optional().describe('Pre-tax bill-level discount, allocated across lines.'),
@@ -1284,7 +1290,8 @@ export const CreateQuotationResponse = zod.object({
   "unitDiscount": zod.number().optional().describe('Discount per UNIT off the MRP, in rupees (0 ≤ unitDiscount ≤ unitPrice). Present only on lines created since the per-unit discount system; absent on historical lines, whose \'discount\' is a line-total amount and must not be reinterpreted.\n'),
   "billDiscountShare": zod.number().optional().describe('This line\'s paise-exact share of the invoice-level bill discount, allocated proportionally to the line\'s post-item-discount value. Shares across the invoice sum exactly to the sale\'s billDiscount.\n'),
   "taxAmount": zod.number().optional(),
-  "priceMode": zod.enum(['inclusive', 'exclusive']).optional().describe('How the entered unitPrice is interpreted for THIS line. \'inclusive\' (default, and the treatment of every historical line): unitPrice is the final GST-inclusive price and GST is extracted from it. \'exclusive\': unitPrice is the taxable base and GST is added on top. Mirrors the purchases priceMode convention, per line.\n')
+  "priceMode": zod.enum(['inclusive', 'exclusive']).optional().describe('How the entered unitPrice is interpreted for THIS line. \'inclusive\' (default, and the treatment of every historical line): unitPrice is the final GST-inclusive price and GST is extracted from it. \'exclusive\': unitPrice is the taxable base and GST is added on top. Mirrors the purchases priceMode convention, per line.\n'),
+  "masterMrp": zod.number().optional().describe('QUOTATION lines only, server-stamped: the Item Master MRP as of the moment the quotation was saved. A line whose unitPrice exceeds its masterMrp is a deliberate quotation-level MRP raise (the master item is never modified). Absent on sale lines and on quotations saved before this field existed.\n')
 })),
   "subtotal": zod.number().optional(),
   "taxTotal": zod.number().optional(),
@@ -1331,7 +1338,8 @@ export const GetQuotationResponse = zod.object({
   "unitDiscount": zod.number().optional().describe('Discount per UNIT off the MRP, in rupees (0 ≤ unitDiscount ≤ unitPrice). Present only on lines created since the per-unit discount system; absent on historical lines, whose \'discount\' is a line-total amount and must not be reinterpreted.\n'),
   "billDiscountShare": zod.number().optional().describe('This line\'s paise-exact share of the invoice-level bill discount, allocated proportionally to the line\'s post-item-discount value. Shares across the invoice sum exactly to the sale\'s billDiscount.\n'),
   "taxAmount": zod.number().optional(),
-  "priceMode": zod.enum(['inclusive', 'exclusive']).optional().describe('How the entered unitPrice is interpreted for THIS line. \'inclusive\' (default, and the treatment of every historical line): unitPrice is the final GST-inclusive price and GST is extracted from it. \'exclusive\': unitPrice is the taxable base and GST is added on top. Mirrors the purchases priceMode convention, per line.\n')
+  "priceMode": zod.enum(['inclusive', 'exclusive']).optional().describe('How the entered unitPrice is interpreted for THIS line. \'inclusive\' (default, and the treatment of every historical line): unitPrice is the final GST-inclusive price and GST is extracted from it. \'exclusive\': unitPrice is the taxable base and GST is added on top. Mirrors the purchases priceMode convention, per line.\n'),
+  "masterMrp": zod.number().optional().describe('QUOTATION lines only, server-stamped: the Item Master MRP as of the moment the quotation was saved. A line whose unitPrice exceeds its masterMrp is a deliberate quotation-level MRP raise (the master item is never modified). Absent on sale lines and on quotations saved before this field existed.\n')
 })),
   "subtotal": zod.number().optional(),
   "taxTotal": zod.number().optional(),
@@ -1372,7 +1380,8 @@ export const UpdateQuotationBody = zod.object({
   "unitDiscount": zod.number().optional().describe('Discount per UNIT off the MRP, in rupees (0 ≤ unitDiscount ≤ unitPrice). Present only on lines created since the per-unit discount system; absent on historical lines, whose \'discount\' is a line-total amount and must not be reinterpreted.\n'),
   "billDiscountShare": zod.number().optional().describe('This line\'s paise-exact share of the invoice-level bill discount, allocated proportionally to the line\'s post-item-discount value. Shares across the invoice sum exactly to the sale\'s billDiscount.\n'),
   "taxAmount": zod.number().optional(),
-  "priceMode": zod.enum(['inclusive', 'exclusive']).optional().describe('How the entered unitPrice is interpreted for THIS line. \'inclusive\' (default, and the treatment of every historical line): unitPrice is the final GST-inclusive price and GST is extracted from it. \'exclusive\': unitPrice is the taxable base and GST is added on top. Mirrors the purchases priceMode convention, per line.\n')
+  "priceMode": zod.enum(['inclusive', 'exclusive']).optional().describe('How the entered unitPrice is interpreted for THIS line. \'inclusive\' (default, and the treatment of every historical line): unitPrice is the final GST-inclusive price and GST is extracted from it. \'exclusive\': unitPrice is the taxable base and GST is added on top. Mirrors the purchases priceMode convention, per line.\n'),
+  "masterMrp": zod.number().optional().describe('QUOTATION lines only, server-stamped: the Item Master MRP as of the moment the quotation was saved. A line whose unitPrice exceeds its masterMrp is a deliberate quotation-level MRP raise (the master item is never modified). Absent on sale lines and on quotations saved before this field existed.\n')
 })),
   "couponCode": zod.string().optional(),
   "billDiscount": zod.number().optional().describe('Pre-tax bill-level discount, allocated across lines.'),
@@ -1407,7 +1416,8 @@ export const UpdateQuotationResponse = zod.object({
   "unitDiscount": zod.number().optional().describe('Discount per UNIT off the MRP, in rupees (0 ≤ unitDiscount ≤ unitPrice). Present only on lines created since the per-unit discount system; absent on historical lines, whose \'discount\' is a line-total amount and must not be reinterpreted.\n'),
   "billDiscountShare": zod.number().optional().describe('This line\'s paise-exact share of the invoice-level bill discount, allocated proportionally to the line\'s post-item-discount value. Shares across the invoice sum exactly to the sale\'s billDiscount.\n'),
   "taxAmount": zod.number().optional(),
-  "priceMode": zod.enum(['inclusive', 'exclusive']).optional().describe('How the entered unitPrice is interpreted for THIS line. \'inclusive\' (default, and the treatment of every historical line): unitPrice is the final GST-inclusive price and GST is extracted from it. \'exclusive\': unitPrice is the taxable base and GST is added on top. Mirrors the purchases priceMode convention, per line.\n')
+  "priceMode": zod.enum(['inclusive', 'exclusive']).optional().describe('How the entered unitPrice is interpreted for THIS line. \'inclusive\' (default, and the treatment of every historical line): unitPrice is the final GST-inclusive price and GST is extracted from it. \'exclusive\': unitPrice is the taxable base and GST is added on top. Mirrors the purchases priceMode convention, per line.\n'),
+  "masterMrp": zod.number().optional().describe('QUOTATION lines only, server-stamped: the Item Master MRP as of the moment the quotation was saved. A line whose unitPrice exceeds its masterMrp is a deliberate quotation-level MRP raise (the master item is never modified). Absent on sale lines and on quotations saved before this field existed.\n')
 })),
   "subtotal": zod.number().optional(),
   "taxTotal": zod.number().optional(),
@@ -1470,7 +1480,8 @@ export const SetQuotationStatusResponse = zod.object({
   "unitDiscount": zod.number().optional().describe('Discount per UNIT off the MRP, in rupees (0 ≤ unitDiscount ≤ unitPrice). Present only on lines created since the per-unit discount system; absent on historical lines, whose \'discount\' is a line-total amount and must not be reinterpreted.\n'),
   "billDiscountShare": zod.number().optional().describe('This line\'s paise-exact share of the invoice-level bill discount, allocated proportionally to the line\'s post-item-discount value. Shares across the invoice sum exactly to the sale\'s billDiscount.\n'),
   "taxAmount": zod.number().optional(),
-  "priceMode": zod.enum(['inclusive', 'exclusive']).optional().describe('How the entered unitPrice is interpreted for THIS line. \'inclusive\' (default, and the treatment of every historical line): unitPrice is the final GST-inclusive price and GST is extracted from it. \'exclusive\': unitPrice is the taxable base and GST is added on top. Mirrors the purchases priceMode convention, per line.\n')
+  "priceMode": zod.enum(['inclusive', 'exclusive']).optional().describe('How the entered unitPrice is interpreted for THIS line. \'inclusive\' (default, and the treatment of every historical line): unitPrice is the final GST-inclusive price and GST is extracted from it. \'exclusive\': unitPrice is the taxable base and GST is added on top. Mirrors the purchases priceMode convention, per line.\n'),
+  "masterMrp": zod.number().optional().describe('QUOTATION lines only, server-stamped: the Item Master MRP as of the moment the quotation was saved. A line whose unitPrice exceeds its masterMrp is a deliberate quotation-level MRP raise (the master item is never modified). Absent on sale lines and on quotations saved before this field existed.\n')
 })),
   "subtotal": zod.number().optional(),
   "taxTotal": zod.number().optional(),

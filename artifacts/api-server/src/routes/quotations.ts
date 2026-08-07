@@ -32,7 +32,7 @@ import { getUserDataScope, isLocationInScope, type DataScope } from "../lib/data
 import { availabilityAt } from "../lib/reservations";
 import { logActivity } from "../lib/audit";
 import { createQuotationShareToken } from "../lib/shareToken";
-import { buildSaleLines, computeInvoiceNumber } from "./sales";
+import { buildSaleLines, checkMrpFloor, computeInvoiceNumber } from "./sales";
 import { blockedByInactiveProducts } from "../lib/productIdentity";
 
 const router = Router();
@@ -169,7 +169,7 @@ type BuiltQuotation =
       lineItems: any[]; billDiscount: number;
       subtotal: number; taxTotal: number; discountTotal: number; totalAmount: number;
     }
-  | { ok: false; error: string };
+  | { ok: false; error: string; code?: string };
 
 /**
  * Validate the payload and compute the money EXACTLY as a sale would:
@@ -181,6 +181,10 @@ async function buildQuotationFigures(data: {
   lineItems: any[];
   billDiscount?: number | null;
   discountTotal?: number | null;
+  // Edit only: itemId → lowest previously SAVED line price for that item in
+  // THIS quotation. Grandfathers old quotes across a later master-MRP rise —
+  // same rule as sale edits (floor = min(master, saved), never the request).
+  savedFloors?: Map<number, number>;
 }): Promise<BuiltQuotation> {
   const rawLineItems = data.lineItems ?? [];
   if (rawLineItems.length === 0) return { ok: false, error: "At least one line item is required" };
@@ -222,8 +226,32 @@ async function buildQuotationFigures(data: {
   }
   const isInterState = !!(companyState && customerState && companyState !== customerState);
 
+  // ── Quotation MRP floor ─────────────────────────────────────────────────
+  // The quotation MRP is editable, but only UPWARD: it may equal or exceed
+  // the Item Master MRP, never undercut it. Same rule engine as sales
+  // (strict compare, no epsilon; items with master MRP 0/unset have no
+  // floor), with quotation-specific wording. The Item Master row is never
+  // written from here — the raised figure lives on this document alone.
+  const mrpCheck = await checkMrpFloor(pool, rawLineItems, data.savedFloors,
+    (itemName, floor) =>
+      `Quotation MRP cannot be lower than the Item Master MRP (₹${floor.toFixed(2)}). ` +
+      `Increase the MRP or use a discount if you want to quote a lower selling price. (${itemName})`);
+  if (!mrpCheck.ok) return { ok: false, error: mrpCheck.error, code: "MRP_BELOW_MASTER" };
+
   const built = buildSaleLines(rawLineItems, itemTaxMap, isInterState, data.billDiscount);
   if (!built.ok) return { ok: false, error: built.error };
+
+  // Stamp the master MRP AS OF SAVE TIME on every stored line — the audit
+  // record of what the Item Master said when this quote was priced. A line
+  // whose unitPrice exceeds its masterMrp is a deliberate quote-level raise.
+  // items.mrp is a raw-migration column, invisible to drizzle — raw SQL only.
+  const { rows: mrpRows } = await pool.query(
+    `SELECT id, mrp FROM items WHERE id = ANY($1::int[])`, [itemIds],
+  );
+  const mrpById = new Map<number, number>(mrpRows.map((r: any) => [Number(r.id), Number(r.mrp ?? 0)]));
+  built.lineItems = built.lineItems.map((li: any) => ({
+    ...li, masterMrp: mrpById.get(Number(li.itemId)) ?? 0,
+  }));
 
   const subtotal = built.lineItems.reduce((s: number, li: any) => s + li.lineSubtotal, 0);
   const taxTotal = built.lineItems.reduce((s: number, li: any) => s + li.taxAmount, 0);
@@ -248,6 +276,39 @@ const s = (v: unknown): string | null => {
   const t = typeof v === "string" ? v.trim() : "";
   return t.length > 0 ? t : null;
 };
+
+/**
+ * Audit rows for quotation-level MRP raises: lines priced ABOVE the master
+ * MRP that was in force when the quote was saved. Recorded in the activity
+ * log (with user + timestamp) alongside the masterMrp stamped on the line.
+ */
+function quoteMrpOverrides(lineItems: any[]): Array<{
+  itemId: number; itemName: string | null; masterMrp: number; quotationMrp: number;
+}> {
+  return (lineItems ?? [])
+    .filter((li: any) => Number(li?.masterMrp ?? 0) > 0 && Number(li?.unitPrice ?? 0) > Number(li.masterMrp))
+    .map((li: any) => ({
+      itemId: Number(li.itemId),
+      itemName: li.itemName ?? null,
+      masterMrp: Number(li.masterMrp),
+      quotationMrp: Number(li.unitPrice),
+    }));
+}
+
+/** itemId → lowest saved line price (the edit-time grandfather floor). */
+function storedLineFloors(rawLineItems: unknown): Map<number, number> {
+  const lines: any[] = typeof rawLineItems === "string"
+    ? (() => { try { return JSON.parse(rawLineItems); } catch { return []; } })()
+    : (Array.isArray(rawLineItems) ? rawLineItems : []);
+  const floors = new Map<number, number>();
+  for (const li of lines) {
+    const iid = Number(li?.itemId); const p = Number(li?.unitPrice);
+    if (!iid || !Number.isFinite(p) || p <= 0) continue;
+    const prev = floors.get(iid);
+    floors.set(iid, prev === undefined ? p : Math.min(prev, p));
+  }
+  return floors;
+}
 
 // ── Expiring/expired feed for the notification bell ──────────────────────────
 // Registered BEFORE /quotations/:id so the literal path is not swallowed by
@@ -400,7 +461,10 @@ router.post("/quotations", requireModuleAction(QUOTE_PAGES, "add"), async (req, 
   }
 
   const figures = await buildQuotationFigures(body);
-  if (!figures.ok) { res.status(400).json({ error: figures.error }); return; }
+  if (!figures.ok) {
+    res.status(400).json({ error: figures.error, ...(figures.code ? { code: figures.code } : {}) });
+    return;
+  }
 
   const employee = (req as any).employee;
   const client = await pool.connect();
@@ -452,11 +516,16 @@ router.post("/quotations", requireModuleAction(QUOTE_PAGES, "add"), async (req, 
   const names = await locationNameMaps();
   const mapped = mapQuotation(full, names);
 
+  const mrpOverrides = quoteMrpOverrides(figures.lineItems);
   logActivity({
     action: "CREATE", module: "quotations", entityType: "quotation", entityId: mapped.id,
     user: employee?.username ?? "system",
-    description: `New quotation ${mapped.quotationNumber} — ${mapped.customerName ?? "Walk-in"} — ₹${mapped.totalAmount.toFixed(2)}`,
-    metadata: { after: { quotationNumber: mapped.quotationNumber, locationType: mapped.locationType, locationId: mapped.locationId, customerId: mapped.customerId, totalAmount: mapped.totalAmount, lineCount: mapped.lineItems.length } },
+    description: `New quotation ${mapped.quotationNumber} — ${mapped.customerName ?? "Walk-in"} — ₹${mapped.totalAmount.toFixed(2)}`
+      + (mrpOverrides.length ? ` — MRP raised on ${mrpOverrides.length} line${mrpOverrides.length > 1 ? "s" : ""}` : ""),
+    metadata: {
+      after: { quotationNumber: mapped.quotationNumber, locationType: mapped.locationType, locationId: mapped.locationId, customerId: mapped.customerId, totalAmount: mapped.totalAmount, lineCount: mapped.lineItems.length },
+      ...(mrpOverrides.length ? { mrpOverrides } : {}),
+    },
   }).catch(() => {});
 
   res.status(201).json(mapped);
@@ -521,8 +590,14 @@ router.put("/quotations/:id", requireModuleAction(QUOTE_PAGES, "edit"), async (r
     if (disabledMsg) { res.status(409).json({ error: disabledMsg, code: WAREHOUSE_DISABLED_CODE }); return; }
   }
 
-  const figures = await buildQuotationFigures(body);
-  if (!figures.ok) { res.status(400).json({ error: figures.error }); return; }
+  // Grandfather floor from the STORED lines (never the request): a quote
+  // saved before a later master-MRP rise stays editable, but no line may be
+  // priced below what it already carried.
+  const figures = await buildQuotationFigures({ ...body, savedFloors: storedLineFloors(existing.line_items) });
+  if (!figures.ok) {
+    res.status(400).json({ error: figures.error, ...(figures.code ? { code: figures.code } : {}) });
+    return;
+  }
 
   // The row was free of a conversion when checked above; the WHERE clause
   // re-checks under the UPDATE's own row lock so a conversion that lands in
@@ -558,10 +633,13 @@ router.put("/quotations/:id", requireModuleAction(QUOTE_PAGES, "edit"), async (r
   const mapped = mapQuotation(full, names);
 
   const employee = (req as any).employee;
+  const mrpOverrides = quoteMrpOverrides(figures.lineItems);
   logActivity({
     action: "UPDATE", module: "quotations", entityType: "quotation", entityId: id,
     user: employee?.username ?? "system",
-    description: `Quotation ${mapped.quotationNumber} updated — ${mapped.customerName ?? "Walk-in"} — ₹${mapped.totalAmount.toFixed(2)}`,
+    description: `Quotation ${mapped.quotationNumber} updated — ${mapped.customerName ?? "Walk-in"} — ₹${mapped.totalAmount.toFixed(2)}`
+      + (mrpOverrides.length ? ` — MRP raised on ${mrpOverrides.length} line${mrpOverrides.length > 1 ? "s" : ""}` : ""),
+    ...(mrpOverrides.length ? { metadata: { mrpOverrides } } : {}),
   }).catch(() => {});
 
   res.json(mapped);

@@ -125,6 +125,32 @@ export async function advanceAvailable(
 }
 
 /**
+ * Bulk form of advanceAvailable for list endpoints: partyId → usable advance,
+ * from the SAME balance index the caller already holds. Parties without an
+ * advance ledger (or with zero available) are simply absent from the map.
+ * This exists so list endpoints never invent their own advance definition —
+ * the party ledger's credit side is a credit balance, NOT an advance.
+ */
+export async function advanceBalanceMap(
+  kind: AdvanceKind,
+  idx: { net(ledgerId: number): number },
+): Promise<Map<number, number>> {
+  const prefix = kind === "customer" ? "CADV-" : "VADV-";
+  const { rows } = await pool.query<{ id: number; code: string }>(
+    `SELECT id, code FROM account_ledgers WHERE code LIKE $1`, [`${prefix}%`],
+  );
+  const map = new Map<number, number>();
+  for (const r of rows) {
+    const m = /^(?:CADV|VADV)-(\d+)$/.exec(String(r.code));
+    if (!m) continue;
+    const net = idx.net(Number(r.id)); // raw Dr − Cr
+    const available = kind === "customer" ? r2(Math.max(0, -net)) : r2(Math.max(0, net));
+    if (available > 0.004) map.set(Number(m[1]), available);
+  }
+  return map;
+}
+
+/**
  * Advisory-lock key that serializes everything which CONSUMES a party's
  * advance (sale creation, purchase creation, allocation-receipt deletion).
  * Creation of an advance only ever adds, so it does not need the lock.

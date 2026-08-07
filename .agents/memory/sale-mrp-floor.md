@@ -20,8 +20,11 @@ under-pricing at the till.
   can't be reduced further. Floors come from stored lines, never the request.
 - The compare is STRICT with no epsilon: both sides parse decimal strings, so
   equal decimals are identical doubles; an epsilon re-opens a sub-paisa hole.
-- Deliberate exemptions: quotations (check sits outside the shared line
-  builder) and cross-GSTIN transfer invoices (system docs priced at cost).
+- Deliberate exemption: cross-GSTIN transfer invoices (system docs priced at
+  cost). Quotations are NO LONGER exempt (Aug 2026): they enforce the same
+  floor via the shared checkMrpFloor (quotation-specific message, code stays
+  MRP_BELOW_MASTER), because the quote MRP became editable UPWARD — see
+  quotations-module.md.
 
 **Test-fixture rule:** any suite selling below its fixture item's MRP now gets
 400 — price fixture sales ≥ the fixture mrp, or pin the fixture mrp to the

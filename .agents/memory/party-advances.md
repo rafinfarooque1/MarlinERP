@@ -26,6 +26,10 @@ description: CADV/VADV advance ledger design, allocation voucher lifecycle, expl
 # Explicit-first settlement rule
 - Pinned money (bill allocations + advance applications) settles its exact bill and NEVER enters the FIFO pool. Pool = billed − ledgerBal − explicit. Every consumer (payables ageing, GST purchase register, settlement-context) must carve explicit out before the oldest-first walk or the same rupee settles two bills.
 
+# Party-ledger credits are not advances
+- **Rule:** a credit balance on the party's CUST/VEND ledger is a CREDIT BALANCE, never an "advance" — every advance figure must come from the dedicated advance ledgers (advanceLedgers.ts helpers). The two coexist legitimately (e.g. a credit note on the party ledger plus parked money on the advance ledger).
+- **Why:** a list endpoint that derives "advance" from the party ledger's credit side silently contradicts the advance API, ageing and settlement. Such drift is found only by DIFFERENTIAL audit — comparing the same figure across every surface — never by checking one screen against expectations.
+
 # Report visibility traps (bit us twice in one session)
 A new money figure on an ageing report needs THREE hooks, not one:
 1. computed map (`advByCustomer`/`advByVendor`),

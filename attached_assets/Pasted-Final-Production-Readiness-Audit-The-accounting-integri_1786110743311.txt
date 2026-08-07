@@ -1,0 +1,222 @@
+Final Production Readiness Audit
+
+The accounting integrity audit is complete. Now perform a complete end-to-end ERP workflow audit.
+
+Do not assume anything. Verify every business process from data entry to financial statements.
+
+====================================================
+1. End-to-End Transaction Flow
+====================================================
+
+For every module verify the complete flow:
+
+Sales
+Quotation
+POS
+Purchase
+Sales Return
+Purchase Return
+Receipt Voucher
+Payment Voucher
+Journal Voucher
+Expenses
+Production
+Stock Transfer
+Inventory Adjustment
+Cash & Bank
+Opening Balances
+Imports
+
+Each transaction must correctly update:
+
+• Stock
+• Batch
+• FIFO
+• Inventory valuation
+• Customer/Vendor outstanding
+• Ledger
+• Journal entries
+• GST
+• Dashboard
+• Reports
+• Trial Balance
+• Balance Sheet
+• Profit & Loss
+
+====================================================
+2. Ledger Verification
+====================================================
+
+Every transaction must create balanced journal entries.
+
+Verify no transaction exists without accounting entries.
+
+Verify no accounting entry exists without a source transaction.
+
+====================================================
+3. Customer & Vendor Verification
+====================================================
+
+Verify for every customer and vendor:
+
+Customer List
+Vendor List
+Ledger
+Receivable/Payable Report
+Dashboard
+Chart of Accounts
+Trial Balance
+
+all show identical balances.
+
+Verify advances, credit notes, receipts, payments and journals reconcile correctly.
+
+====================================================
+4. Inventory Verification
+====================================================
+
+Verify every stock movement:
+
+Purchase
+Sale
+Return
+Production
+Transfer
+
+correctly updates:
+
+Stock Quantity
+Batch Quantity
+Inventory Ledger
+Inventory Valuation
+COGS
+
+====================================================
+5. Location Verification
+====================================================
+
+Verify:
+
+Head Office
+
+Every Warehouse
+
+All Locations
+
+Each shows only its own accounting.
+
+All Locations shows consolidated accounting.
+
+No transaction leaks between locations.
+
+====================================================
+6. Reports Verification
+====================================================
+
+Verify:
+
+Dashboard
+Trial Balance
+Balance Sheet
+Profit & Loss
+Cash Book
+Bank Book
+Day Book
+GST Reports
+Inventory Reports
+Sales Reports
+Purchase Reports
+Customer Ledger
+Vendor Ledger
+Item Ledger
+
+all reconcile.
+
+====================================================
+7. Import Verification
+====================================================
+
+Verify imported:
+
+Sales
+Purchases
+Receipts
+Payments
+Journals
+Opening Balances
+
+behave exactly like manually entered transactions.
+
+====================================================
+8. Data Integrity
+====================================================
+
+Check for:
+
+Duplicate invoices
+
+Duplicate journals
+
+Missing ledgers
+
+Missing customer ledgers
+
+Missing vendor ledgers
+
+Negative stock
+
+Negative batches
+
+Broken foreign keys
+
+Orphan records
+
+Duplicate voucher numbers
+
+====================================================
+9. Security
+====================================================
+
+Verify:
+
+Warehouse users cannot modify another warehouse.
+
+Admin can work in every location.
+
+Transactions always belong to the selected location.
+
+Permissions never override accounting location.
+
+====================================================
+10. Performance
+====================================================
+
+Review expensive queries.
+
+Check indexes.
+
+Check reports.
+
+Check dashboard.
+
+Check ledger pages.
+
+Optimize where necessary.
+
+====================================================
+11. Final Certification
+====================================================
+
+Produce a report containing:
+
+• Remaining issues
+• Severity (Critical / High / Medium / Low)
+• Recommended fixes
+• Whether the ERP is production-ready
+• Confidence score out of 100
+
+Do not make cosmetic changes.
+
+Only fix genuine accounting, inventory, reporting, permission or data-integrity issues.
+
+The objective is to certify that every module works correctly from data entry through to the financial statements and that the ERP is safe for daily business operations.

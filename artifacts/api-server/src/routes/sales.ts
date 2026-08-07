@@ -247,6 +247,10 @@ export async function checkMrpFloor(
   pgPool: { query: (sql: string, params?: any[]) => Promise<{ rows: any[] }> },
   rawLineItems: Array<{ itemId: number; unitPrice: number }>,
   savedFloors?: Map<number, number>,
+  // Optional caller-specific wording (e.g. quotations). The RULE — strict
+  // compare against min(master, saved floor), no epsilon — stays in this one
+  // function; only the message may differ per document type.
+  messageFor?: (itemName: string, floor: number) => string,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const itemIds = [...new Set(rawLineItems.map(li => Number(li.itemId)))]
     .filter(n => Number.isFinite(n) && n > 0);
@@ -265,7 +269,9 @@ export async function checkMrpFloor(
     if (Number(li.unitPrice ?? 0) < floor) {
       return {
         ok: false,
-        error: `MRP cannot be lower than the Item Master MRP. Use Discount if you want to reduce the selling price. (${item.name}: minimum allowed ₹${floor.toFixed(2)})`,
+        error: messageFor
+          ? messageFor(item.name, floor)
+          : `MRP cannot be lower than the Item Master MRP. Use Discount if you want to reduce the selling price. (${item.name}: minimum allowed ₹${floor.toFixed(2)})`,
       };
     }
   }

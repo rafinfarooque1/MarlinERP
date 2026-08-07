@@ -21,9 +21,10 @@ const router = Router();
  * `outstandingBalance` keeps its name because every screen already reads it, but
  * its meaning is now precise: the party's ledger balance signed to its natural
  * side — payable for a vendor, receivable for a customer. It is deliberately
- * **not** clamped at zero. A negative figure is a real position (an advance paid
- * to a vendor, or an advance received from a customer) and is surfaced separately
- * as `advanceBalance` so the UI can label it rather than swallow it.
+ * **not** clamped at zero. A negative figure is a real position (a credit
+ * balance on the party's account) and is labelled via `balanceSide` rather
+ * than swallowed. It is NOT an advance: `advanceBalance` is a separate figure
+ * read from the dedicated advance ledgers (see attachPartyBalance's map param).
  *
  * `hasLedger: false` means the party was never provisioned an account ledger, so
  * nothing can be attributed to it. That is reported rather than shown as a
@@ -33,9 +34,19 @@ function attachPartyBalance(
   rows: any[],
   idx: { partyBalance(kind: "vendor" | "customer", id: number): { balance: number; net: number; ledgerId: number } | null },
   kind: "vendor" | "customer",
+  // partyId → usable advance from the CADV/VADV ledgers (advanceBalanceMap).
+  // The advance figure must come from the advance ledgers — the same source
+  // as /accounts/party-advance, the ageing reports and bill settlement. The
+  // party ledger's credit side is a CREDIT BALANCE (shown via balanceSide),
+  // not an advance: deriving "advance" from it made this list contradict
+  // every other advance surface in the ERP.
+  advances: Map<number, number>,
 ): void {
   for (const row of rows) {
     const b = idx.partyBalance(kind, Number(row.id));
+    // Advance is independent of the party ledger — an advance-only party has
+    // a CADV/VADV balance and no CUST/VEND ledger activity at all.
+    row.advanceBalance = advances.get(Number(row.id)) ?? 0;
     if (b == null) {
       // No ledger was ever provisioned for this party, so nothing can be
       // attributed to it. That is NOT a balance of zero — a confident ₹0.00 here
@@ -43,7 +54,6 @@ function attachPartyBalance(
       // say so.
       row.outstandingBalance = null;
       row.ledgerBalance = null;
-      row.advanceBalance = 0;
       row.balanceSide = null;
       row.ledgerId = null;
       row.hasLedger = false;
@@ -52,7 +62,6 @@ function attachPartyBalance(
     const balance = b.balance;
     row.outstandingBalance = balance;
     row.ledgerBalance = balance;
-    row.advanceBalance = balance < -0.004 ? Math.round(-balance * 100) / 100 : 0;
     // Dr/Cr comes from the account's nature and the sign of the raw net, never
     // from the sign of the presented balance — a payable of 100 is Cr, and the
     // same account at −100 is Dr.
@@ -192,7 +201,8 @@ router.get("/customers", requireModuleView(["page:/sales/pos", "page:/accounts/v
   // the customer's own ledger.
   const { currentBalanceIndex } = await import("../lib/ledgerBalances");
   const balIdx = await currentBalanceIndex();
-  attachPartyBalance(rows, balIdx, "customer");
+  const { advanceBalanceMap } = await import("../lib/advanceLedgers");
+  attachPartyBalance(rows, balIdx, "customer", await advanceBalanceMap("customer", balIdx));
   const paging = parsePaging(req.query as Record<string, unknown>);
   setPagingHeaders(res, rows.length, paging);
   res.json(applyPaging(rows as any[], paging).map((r: any) => ({
@@ -379,7 +389,8 @@ router.get("/vendors", requireModuleView(["page:/production/purchase", "page:/ac
   // value while the vendor's own ledger correctly showed zero.
   const { currentBalanceIndex } = await import("../lib/ledgerBalances");
   const balIdx = await currentBalanceIndex();
-  attachPartyBalance(rows, balIdx, "vendor");
+  const { advanceBalanceMap } = await import("../lib/advanceLedgers");
+  attachPartyBalance(rows, balIdx, "vendor", await advanceBalanceMap("vendor", balIdx));
 
   const paging = parsePaging(req.query as Record<string, unknown>);
   setPagingHeaders(res, rows.length, paging);

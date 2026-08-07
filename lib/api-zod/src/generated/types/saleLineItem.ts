@@ -20,4 +20,6 @@ export interface SaleLineItem {
   taxAmount?: number;
   /** How the entered unitPrice is interpreted for THIS line. 'inclusive' (default, and the treatment of every historical line): unitPrice is the final GST-inclusive price and GST is extracted from it. 'exclusive': unitPrice is the taxable base and GST is added on top. Mirrors the purchases priceMode convention, per line. */
   priceMode?: SaleLineItemPriceMode;
+  /** QUOTATION lines only, server-stamped: the Item Master MRP as of the moment the quotation was saved. A line whose unitPrice exceeds its masterMrp is a deliberate quotation-level MRP raise (the master item is never modified). Absent on sale lines and on quotations saved before this field existed. */
+  masterMrp?: number;
 }

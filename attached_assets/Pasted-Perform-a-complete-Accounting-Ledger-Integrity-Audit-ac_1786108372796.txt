@@ -1,0 +1,328 @@
+Perform a complete Accounting & Ledger Integrity Audit across the entire ERP.
+
+I suspect there are inconsistencies in ledger postings, customer advances, vendor advances and financial balances.
+
+Do NOT patch individual screens.
+
+Find the root cause.
+
+==================================================
+1. Chart of Accounts Verification
+==================================================
+
+Verify every ledger under every group.
+
+Assets
+
+Liabilities
+
+Income
+
+Expenses
+
+Equity
+
+Current Assets
+
+Current Liabilities
+
+Customer Advances
+
+Vendor Advances
+
+Cash
+
+Bank
+
+Sundry Debtors
+
+Sundry Creditors
+
+Inventory
+
+GST
+
+Every ledger balance must equal the sum of its journal entries.
+
+No stored balances.
+
+No cached balances.
+
+==================================================
+2. Customer Advances
+==================================================
+
+Every customer advance must be verified.
+
+For each customer:
+
+Opening Balance
+
++
+
+Sales
+
++
+
+Receipts
+
++
+
+Credit Notes
+
++
+
+Journal Entries
+
+=
+
+Closing Balance
+
+If a customer has an advance,
+
+verify it appears correctly under Customer Advances.
+
+If the customer has outstanding invoices,
+
+verify receivable and advance are correctly offset.
+
+There must never be duplicate balances.
+
+==================================================
+3. Vendor Advances
+==================================================
+
+Perform the same verification.
+
+==================================================
+4. Customer Ledger
+==================================================
+
+Verify:
+
+Customer List
+
+Customer Ledger
+
+Receivable Report
+
+Dashboard
+
+Trial Balance
+
+Balance Sheet
+
+Chart of Accounts
+
+all show identical balances.
+
+==================================================
+5. Vendor Ledger
+==================================================
+
+Verify the same.
+
+==================================================
+6. Ledger Posting Audit
+==================================================
+
+Every transaction must create journals.
+
+Sales
+
+Purchase
+
+Sales Return
+
+Purchase Return
+
+Receipt
+
+Payment
+
+Journal
+
+Expense
+
+Production
+
+Stock Transfer
+
+Opening Balance
+
+Inventory Adjustment
+
+Imports
+
+Verify every posting.
+
+==================================================
+7. Chart of Accounts vs Ledger
+==================================================
+
+Every ledger balance displayed inside Chart of Accounts
+
+must exactly equal
+
+Ledger View.
+
+No differences allowed.
+
+==================================================
+8. Dashboard Verification
+==================================================
+
+Verify dashboard totals.
+
+Receivable
+
+Payable
+
+Cash
+
+Bank
+
+Inventory
+
+Sales
+
+Purchases
+
+Profit
+
+must equal accounting reports.
+
+==================================================
+9. Trial Balance
+==================================================
+
+Verify
+
+Total Debit = Total Credit
+
+to the paisa.
+
+==================================================
+10. Balance Sheet
+==================================================
+
+Verify
+
+Assets
+
+=
+
+Liabilities + Equity
+
+==================================================
+11. Profit & Loss
+==================================================
+
+Verify
+
+Sales
+
+COGS
+
+Expenses
+
+GST
+
+Returns
+
+all reconcile with journal entries.
+
+==================================================
+12. Inventory
+==================================================
+
+Verify
+
+Stock Ledger
+
+Batch Ledger
+
+Inventory Valuation
+
+COGS
+
+Accounting
+
+all reconcile.
+
+==================================================
+13. Imports
+==================================================
+
+Verify imported data.
+
+Sales
+
+Purchases
+
+Receipts
+
+Payments
+
+Journal
+
+must create exactly the same accounting entries as manually entered transactions.
+
+==================================================
+14. Location Verification
+==================================================
+
+Every journal must belong to the correct location.
+
+Warehouse
+
+Head Office
+
+All Locations
+
+must reconcile correctly.
+
+==================================================
+15. Code Review
+==================================================
+
+Search the entire codebase for every balance calculation.
+
+Find duplicate logic.
+
+Replace with one shared accounting calculation service.
+
+==================================================
+16. Final Report
+==================================================
+
+Produce a detailed audit report containing:
+
+• Every inconsistency found
+• Why it occurred
+• The root cause
+• The fix applied
+• Verification after fixing
+
+The ERP should behave like a professional accounting system.
+
+Every transaction must post correctly.
+
+Every ledger must reconcile.
+
+Every report must reconcile.
+
+Every balance must match exactly across:
+
+Customer List
+Vendor List
+Ledger View
+Chart of Accounts
+Dashboard
+Trial Balance
+Balance Sheet
+Profit & Loss
+Receivable Report
+Payable Report
+
+No balance differences should exist anywhere in the ERP.

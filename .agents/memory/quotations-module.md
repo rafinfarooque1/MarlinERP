@@ -13,6 +13,8 @@ Belt-and-braces on purpose: partial unique indexes on BOTH sides of the link, pl
 **How to apply:** any future "convert X into Y exactly once" flow needs all three layers, and the conversion must re-check the source row's LBAC scope *inside the transaction* — the sale's own location check does not cover the quotation's location, and skipping it lets a scoped user consume an out-of-scope quotation by guessing its id (completion review caught exactly this). Out-of-scope reads as not-found, never 403.
 
 ## Settled decisions
+- Quote MRP is editable, but only UPWARD (owner spec Aug 2026): line price ≥ item master MRP, same shared floor rule as sales with grandfathering on edit; the raise lives on the quotation alone (each line stores the master MRP as of save time for audit; activity log records overrides). The Item Master is never written from quotations. Conversion carries the raised price into the sale via the normal prefill — no special-casing.
+- The quotation line JSON is described by the shared sale-line schema in the OpenAPI spec — any new stored line field must be added there and regenerated, or generated clients silently strip it from responses.
 - Quote-time stock is informational only; the Sales form's oversell clamp still applies at conversion — a "Qty (max 0)" block there means the location genuinely has no stock, not a bug. The pre-conversion warning warns, never blocks, and the prefilled form stays fully editable (including location).
 - Auto-expiry sweeps only draft/sent past valid-till; accepted quotes never auto-expire. Bell feed = expired within the last 14 days.
 - On convert, honour the quote's stored bill discount while the coupon code is unchanged, even if the coupon has since expired (same rule as sale edit).
