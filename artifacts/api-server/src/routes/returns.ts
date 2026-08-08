@@ -26,6 +26,7 @@ import { getUserDataScope, isLocationInScope } from "../lib/dataScope";
 import { getLocationFilter } from "../lib/requestLocation";
 import { availabilityAt, insufficientStockMessage } from "../lib/reservations";
 import { isIsoDate } from "../lib/dateInput";
+import { respondIfMonthLocked, isMonthLocked, ymOfDate, monthLockedBody } from "../lib/periodLock";
 
 const router: IRouter = Router();
 
@@ -200,6 +201,10 @@ router.post("/sales-returns", requireModuleAction(["page:/returns", "page:/sales
     if (idxSeen.has(ix)) { res.status(400).json({ error: `Duplicate return line for lineIndex ${ix}` }); return; }
     idxSeen.add(ix);
   }
+
+  // Month lock: a new return (and the credit note / refund it raises, all dated
+  // returnDate) may not be backdated into a locked month — one check covers all.
+  if (await respondIfMonthLocked(res, pool, [returnDate], "sales return create")) return;
 
   const client = await (pool as any).connect();
   try {
@@ -648,6 +653,16 @@ router.patch("/sales-returns/:id", requireModuleAction("page:/returns", "edit"),
       await client.query("ROLLBACK"); res.status(404).json({ error: "Return not found" }); return;
     }
 
+    // Month lock: an edit may neither change a return inside a locked month nor
+    // move one into/out of one — guard the stored date AND the incoming date.
+    for (const d of [ret.return_date, returnDate]) {
+      const ym = ymOfDate(d);
+      if (ym && await isMonthLocked(client, ym.year, ym.month)) {
+        await client.query("ROLLBACK");
+        res.status(423).json(monthLockedBody(ym.year, ym.month)); return;
+      }
+    }
+
     if (sale.cancelled_at) {
       await client.query("ROLLBACK");
       res.status(409).json({ error: "This invoice has been cancelled — its returns can no longer be changed.", code: "SALE_CANCELLED" });
@@ -1065,6 +1080,10 @@ router.post("/purchase-returns", requireModuleAction(["page:/returns", "page:/pr
     idxSeen.add(ix);
   }
 
+  // Month lock: a new return (and the debit note it raises, dated returnDate)
+  // may not be backdated into a locked month.
+  if (await respondIfMonthLocked(res, pool, [returnDate], "purchase return create")) return;
+
   const client = await (pool as any).connect();
   try {
     await client.query("BEGIN");
@@ -1447,6 +1466,16 @@ router.patch("/purchase-returns/:id", requireModuleAction("page:/returns", "edit
     const { rows: [ret] } = await client.query(`SELECT * FROM purchase_returns WHERE id = $1 FOR UPDATE`, [id]);
     if (!ret || !purchase || Number(ret.purchase_id) !== Number(purchase.id)) {
       await client.query("ROLLBACK"); res.status(404).json({ error: "Return not found" }); return;
+    }
+
+    // Month lock: an edit may neither change a return inside a locked month nor
+    // move one into/out of one — guard the stored date AND the incoming date.
+    for (const d of [ret.return_date, returnDate]) {
+      const ym = ymOfDate(d);
+      if (ym && await isMonthLocked(client, ym.year, ym.month)) {
+        await client.query("ROLLBACK");
+        res.status(423).json(monthLockedBody(ym.year, ym.month)); return;
+      }
     }
 
     const prLocType: string = purchase.location_type ?? "headoffice";

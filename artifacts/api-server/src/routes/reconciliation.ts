@@ -7,6 +7,7 @@ import { isIsoDate } from "../lib/dateInput";
 import { LEGACY_BANK_MODES } from "../lib/paymentModes";
 import { getLocationFilter } from "../lib/requestLocation";
 import { resolveMoneyVoucherLocation } from "../lib/moneyScope";
+import { respondIfMonthLocked } from "../lib/periodLock";
 
 const router = Router();
 
@@ -360,6 +361,10 @@ router.post("/reconciliation/batches", requireModuleAction("page:/accounts/recon
   if (!settlementDate) { res.status(400).json({ error: "settlementDate is required" }); return; }
   if (!isIsoDate(settlementDate)) { res.status(400).json({ error: "settlementDate must be a real calendar date in YYYY-MM-DD form" }); return; }
   if (!destinationBankLedgerId) { res.status(400).json({ error: "destinationBankLedgerId is required" }); return; }
+
+  // Month lock: a reconciliation batch posts new receipt/payment vouchers dated
+  // settlementDate — it may not be created in a locked month.
+  if (await respondIfMonthLocked(res, pool, [settlementDate], "reconciliation batch")) return;
 
   const parsedCharges = Number(charges ?? 0);
   if (parsedCharges < 0) { res.status(400).json({ error: "charges cannot be negative" }); return; }

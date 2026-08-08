@@ -58,6 +58,7 @@ export const PAGE_PERM_KEYS: readonly string[] = [
   "page:/accounts/gst",                // Accounts › GST Summary
   "page:/accounts/gst-returns",        // Accounts › GST Returns
   "page:/accounts/reconciliation",     // Accounts › Reconciliation
+  "page:/accounts/periods",            // Accounts › Month Locking
   "page:/reports/sales",               // Accounts › Reports
   "page:/company/settings",            // Company › Settings
   "page:/company/profile",             // Company › Company Profile
@@ -115,6 +116,7 @@ export const LEGACY_MODULE_TO_PAGES: Readonly<Record<string, readonly string[]>>
   "GST Summary": ["page:/accounts/gst"],
   "GST Returns": ["page:/accounts/gst-returns"],
   "Reconciliation": ["page:/accounts/reconciliation"],
+  "Accounting Periods": ["page:/accounts/periods"],
   "Reports": ["page:/reports/sales"],
   "Dashboard": ["page:/"],
   "Settings": ["page:/company/settings", "page:/company/profile", "page:/company/audit"],

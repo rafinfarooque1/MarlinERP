@@ -325,7 +325,7 @@ export default function Vendors() {
 
   const openEdit = (v: any) => {
     setEditItem(v);
-    form.reset({ name: v.name, phone: v.phone ?? '', email: v.email ?? '', address: v.address ?? '', gstNumber: v.gstNumber ?? '', state: v.state ?? '', bankName: v.bankName ?? '', accountNumber: v.accountNumber ?? '', location: locationValueOf(v.locationType ?? v.location_type, v.locationId ?? v.location_id) });
+    form.reset({ name: v.name, phone: v.phone ?? '', email: v.email ?? '', address: v.address ?? '', gstNumber: v.gstNumber ?? (v as any).gst_number ?? '', state: v.state ?? '', bankName: v.bankName ?? '', accountNumber: v.accountNumber ?? '', location: locationValueOf(v.locationType ?? v.location_type, v.locationId ?? v.location_id) });
     setIsOpen(true);
   };
   const closeDialog = () => { setIsOpen(false); setEditItem(null); form.reset(); };

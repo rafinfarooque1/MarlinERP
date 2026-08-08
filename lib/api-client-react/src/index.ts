@@ -37,5 +37,6 @@ export * from "./attendance-punches";
 export * from "./company-holidays";
 export * from "./employee-password";
 export * from "./imports";
+export * from "./accounting-periods";
 export * from './generated/api';
 export * from './generated/api.schemas';

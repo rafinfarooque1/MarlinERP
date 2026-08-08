@@ -1,0 +1,170 @@
+Fix Customer & Vendor GST Number Saving Bug
+
+There is a bug in the ERP where GST numbers entered while creating or editing a Customer or Vendor are not always being saved correctly in their profile.
+
+Investigate and fix the complete flow — frontend, backend/API, database, and profile display.
+
+Requirements:
+
+1. CUSTOMER GST NUMBER
+
+When creating a customer:
+
+- Enter GST Number
+- Save Customer
+- GST number must be persisted in the customer master record.
+
+When editing a customer:
+
+- Existing GST number must load correctly.
+- Changing the GST number must update the database.
+- Clearing the GST number must actually clear it from the database if the field is optional.
+
+2. VENDOR GST NUMBER
+
+Apply exactly the same behaviour to Vendors.
+
+- Create Vendor → GST saved.
+- Edit Vendor → GST updated.
+- Existing GST → displayed correctly.
+- Clear GST → database value cleared if optional.
+
+3. FRONTEND CHECK
+
+Verify:
+
+- Correct form field is being submitted.
+- Correct field name is used.
+- No mismatch between gstNumber, gstin, GSTIN, gst_no, or other duplicate field names.
+- Form state is not losing the value before submission.
+- Edit form correctly loads the saved value.
+- Save response contains the persisted GST number.
+
+4. BACKEND/API CHECK
+
+Trace the complete request:
+
+Frontend
+→ API
+→ validation
+→ service
+→ database update
+→ response
+→ frontend refresh
+
+Make sure the GST number is included in:
+
+- Create Customer request
+- Update Customer request
+- Create Vendor request
+- Update Vendor request
+
+Do not accept the value in the frontend and silently discard it in the backend.
+
+5. DATABASE CHECK
+
+Inspect the actual customer and vendor database schema.
+
+Confirm:
+
+- Correct GST column exists.
+- Correct column is used by the application.
+- Create and update queries write to that column.
+- Read queries return that column.
+- No duplicate GST fields are causing one value to be saved while another is displayed.
+
+6. VALIDATION
+
+GSTIN should be validated appropriately when provided.
+
+Do not make GST mandatory unless the existing ERP business rules require it.
+
+If GST is blank:
+
+- Allow saving if GST is optional.
+- Store NULL/blank consistently.
+- Do not display an old GST number after it has been cleared.
+
+7. PROFILE DISPLAY
+
+After saving:
+
+Customer Profile must show the saved GST number.
+
+Vendor Profile must show the saved GST number.
+
+Customer list/detail views should use the same source.
+
+Vendor list/detail views should use the same source.
+
+8. SALES / PURCHASE INTEGRATION
+
+The GST number shown on:
+
+- Sales invoice
+- POS invoice
+- Quotation
+- Purchase Bill
+- Purchase Return
+- Sales Return
+
+must come from the correct Customer/Vendor master record where applicable.
+
+Do not maintain a separate stale GST number in different modules unless it is intentionally stored as a historical invoice snapshot.
+
+9. EXISTING DATA
+
+Do not overwrite existing customer/vendor GST numbers during this fix.
+
+Find records where:
+
+- Profile has GST
+- Database has GST
+- UI shows blank
+
+and identify the actual source-of-truth problem.
+
+Do not perform destructive data migration without verification.
+
+10. TEST CASES
+
+Customer:
+✓ Create without GST
+✓ Create with GST
+✓ Edit GST
+✓ Replace existing GST
+✓ Clear GST
+✓ Reload page and verify persistence
+
+Vendor:
+✓ Create without GST
+✓ Create with GST
+✓ Edit GST
+✓ Replace existing GST
+✓ Clear GST
+✓ Reload page and verify persistence
+
+Also verify:
+
+✓ Customer GST appears correctly in Sales/POS where applicable.
+✓ Vendor GST appears correctly in Purchase Bills where applicable.
+✓ No duplicate GST fields are being used.
+✓ API response matches database.
+✓ Database value matches profile display.
+
+11. IMPORTANT
+
+Do not just patch the UI.
+
+Find the root cause and fix the complete persistence chain:
+
+Form
+→ API request
+→ Backend validation
+→ Database
+→ API response
+→ Profile display.
+
+After fixing, run a regression test for Customer and Vendor creation/editing and confirm that GST numbers remain correct after page refresh and re-login.
+
+Do not change unrelated accounting, GST calculation, ledger, inventory, or transaction logic.

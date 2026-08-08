@@ -46,6 +46,7 @@ import CashBank from './pages/accounts/CashBank';
 import Expenses from './pages/accounts/Expenses';
 import GstSummary from './pages/accounts/GstSummary';
 import GstReturns from './pages/accounts/GstReturns';
+import AccountingPeriods from './pages/accounts/AccountingPeriods';
 import Payment from './pages/accounts/Payment';
 import ReceiptPage from './pages/accounts/Receipt';
 import ReceiptVoucher from './pages/operations/ReceiptVoucher';
@@ -394,6 +395,9 @@ function Router() {
       </Route>
       <Route path="/accounts/reconciliation">
         <PermGuard href="/accounts/reconciliation" pageName="Reconciliation"><Reconciliation /></PermGuard>
+      </Route>
+      <Route path="/accounts/periods">
+        <PermGuard href="/accounts/periods" pageName="Month Locking"><AccountingPeriods /></PermGuard>
       </Route>
       <Route path="/accounts/cash-in-outlet">
         <PermGuard href="/accounts/cash-in-outlet" pageName="Cash Balance"><CashInOutlet /></PermGuard>

@@ -134,4 +134,7 @@
 - [Returns edit](returns-edit.md) — full-state PATCH, delta-based stock, numbers FY-pinned, note JV in place; returns are invoice-anchored (never item master) — sale unitPrice is GROSS, show Net Rate + server's r2 chain; coupons excluded.
 - [Location data wipe pattern](location-data-wipe.md) — soft-link tables found by column scan (no FKs); refuse mixed cross-location rows; rehearse on scratch DB with real prod data; backups to workspace, never a prod schema.
 - [GST place of supply](gst-place-of-supply.md) — sale GST = SELLING LOCATION state vs customer via ONE isInterStateSupply (code-first, alias-folding); client mirror in indianStates.ts must stay in lockstep.
+- [Party GST persistence](party-gst-persistence.md) — the list-casing wipe bug: edit forms fed from list rows turn snake/camel mismatch into data loss; blank GST = NULL; GSTIN validation grandfathers stored typos.
+- [Accounting month locking](month-locking.md) — absence-of-row = open; ONE 423 helper guards business dates; open-month payments on locked credit sales stay allowed; accepted check-then-lock race.
+- [B2C→B2B invoice reclassification](invoice-reclass.md) — GST save inside the conversion txn; compaction floor = only gaps the conversion opened; trail renames/deletes need UNCONDITIONAL location guards.
 - [Sale overpayment & one-sided entries](sale-overpayment-books.md) — overpayment = natural Cr remainder on CUST- (gross model; explicit leg only on walk-in fallback); sale EDIT is the live producer; prod-only BS gaps = data divergence, query the prod replica for clamp classes.

@@ -8,6 +8,7 @@ import { isIsoDate } from "../lib/dateInput";
 import { getUserDataScope, isLocationInScope } from "../lib/dataScope";
 import { resolveMoneyVoucherLocation, callerLocation } from "../lib/moneyScope";
 import { outletWritesBlocked, OUTLETS_DISABLED_MESSAGE, OUTLETS_DISABLED_CODE } from "../lib/featureFlags";
+import { respondIfMonthLocked } from "../lib/periodLock";
 
 const router = Router();
 
@@ -235,6 +236,10 @@ router.post("/cash-in-outlet/deposits", requireModuleAction("page:/accounts/cash
   if (!depositDate) { res.status(400).json({ error: "depositDate is required" }); return; }
   if (!isIsoDate(depositDate)) { res.status(400).json({ error: "depositDate must be a real calendar date in YYYY-MM-DD form" }); return; }
 
+  // Month lock: a deposit posts a payment voucher dated depositDate — it may not
+  // be backdated into a locked accounting period.
+  if (await respondIfMonthLocked(res, pool, [depositDate], "cash deposit")) return;
+
   const isWarehouse = !!warehouseId;
   // Cash cannot be banked out of a retired outlet — its till is frozen along
   // with the rest of the module. Historical deposits stay readable.
@@ -376,6 +381,10 @@ router.post("/cash-in-outlet/deposits/:id/reconcile", requireModuleAction(["page
 
   const parsedCharges = Number(charges ?? 0);
   if (parsedCharges < 0) { res.status(400).json({ error: "charges cannot be negative" }); return; }
+
+  // Month lock: reconciliation posts the receipt (and any charges payment) dated
+  // settlementDate — that accounting period must be open.
+  if (await respondIfMonthLocked(res, pool, [settlementDate], "cash deposit reconcile")) return;
 
   const createdBy = (req as any).employee?.username ?? "system";
 

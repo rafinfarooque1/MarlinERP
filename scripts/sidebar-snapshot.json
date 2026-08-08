@@ -232,6 +232,10 @@
           "href": "/accounts/reconciliation"
         },
         {
+          "name": "Month Locking",
+          "href": "/accounts/periods"
+        },
+        {
           "name": "Reports",
           "href": "/reports/sales"
         }

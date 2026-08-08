@@ -124,14 +124,28 @@ async function withWarehouseRentLock<T>(
   }
 }
 
-/** Warehouse-months already signed off, which no writer may touch again. */
+/**
+ * Warehouse-months already signed off, which no writer may touch again.
+ *
+ * Two things freeze a month, and both are unioned: the warehouse's own
+ * approved/paid rent period (the original contract), and an accounting-period
+ * lock on that calendar month. A locked accounting period is frozen for
+ * automation exactly like an approved period — the sweep and the revision
+ * rebuild must not accrue or delete a day inside it — so both sets flow into
+ * the same `locked` guard the walk already respects.
+ */
 async function lockedRentMonths(q: Querier, warehouseId: number): Promise<Set<string>> {
   const { rows } = await q.query<{ year: number; month: number }>(
     `SELECT year, month FROM rent_periods
       WHERE warehouse_id = $1 AND status IN ('approved', 'paid')`,
     [warehouseId],
   );
-  return new Set(rows.map((r) => monthKey(Number(r.year), Number(r.month))));
+  const set = new Set(rows.map((r) => monthKey(Number(r.year), Number(r.month))));
+  const { rows: apRows } = await q.query<{ year: number; month: number }>(
+    `SELECT year, month FROM accounting_period_locks`,
+  );
+  for (const r of apRows) set.add(monthKey(Number(r.year), Number(r.month)));
+  return set;
 }
 
 /**
@@ -416,6 +430,10 @@ export async function recalcUnapprovedRentAccruals(
             SELECT 1 FROM rent_periods p
              WHERE p.warehouse_id = r.warehouse_id AND p.year = r.year AND p.month = r.month
                AND p.status IN ('approved', 'paid')
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM accounting_period_locks l
+             WHERE l.year = r.year AND l.month = r.month
           )
         RETURNING amount, accrual_date, year, month`,
       [warehouseId],

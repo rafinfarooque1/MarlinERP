@@ -5,6 +5,7 @@ import { outletWritesBlocked, OUTLETS_DISABLED_MESSAGE, OUTLETS_DISABLED_CODE } 
 import { requireModuleView, requireModuleAction, canViewStockValuation } from "../middleware/permissions";
 import { logActivity } from "../lib/audit";
 import { isIsoDate } from "../lib/dateInput";
+import { respondIfMonthLocked } from "../lib/periodLock";
 import { buildBranchMaps } from "./stock";
 import { consumeBatches, creditBatch, planFEFO, inboundCostForItem } from "../lib/batches";
 import { writeStockLedger } from "../lib/stockLedger";
@@ -539,6 +540,10 @@ router.post("/stock/verifications", requireModuleAction("page:/headoffice/stock-
       res.status(400).json({ error: `reason must be one of: ${VERIFY_REASONS.join(", ")}` }); return;
     }
   }
+
+  // Month lock: a verification adjusts stock on its verify_date — a new count
+  // may not be backdated into a locked month.
+  if (await respondIfMonthLocked(res, pool, [verifyDate], "stock verification")) return;
 
   const bId = Number(branchId);
   const client = await pool.connect();

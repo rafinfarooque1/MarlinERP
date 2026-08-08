@@ -29,6 +29,9 @@ import {
 } from "../lib/attendanceFactor";
 import { ownLocationScope, scopeCashLedgerIds } from "../lib/moneyScope";
 import {
+  respondIfMonthLocked, isMonthLocked, monthLockedBody,
+} from "../lib/periodLock";
+import {
   CreateHierarchyBody, UpdateHierarchyBody, DeleteHierarchyParams,
   CreateEmployeeBody, UpdateEmployeeBody, GetEmployeeParams, DeleteEmployeeParams,
   CheckInBody, CheckOutBody, ApplyLeaveBody, ApproveLeaveBody,
@@ -706,6 +709,16 @@ async function postSalaryApproval(opts: {
     if (locked.status === 'approved' || locked.status === 'paid') {
       throw Object.assign(
         new Error("This payroll was already approved by someone else"), { conflict: true });
+    }
+
+    // Month lock: approval posts the true-up voucher into the payroll month, so
+    // it may not run once that accounting period is locked. Re-checked inside
+    // the transaction — a check on the pool could go stale before the voucher.
+    if (await isMonthLocked(client as unknown as Querier, Number(pr.year), Number(pr.month))) {
+      await client.query("ROLLBACK");
+      throw Object.assign(new Error("Month locked"), {
+        monthLocked: monthLockedBody(Number(pr.year), Number(pr.month)),
+      });
     }
 
     // Serialise against the accrual sweep for this employee, then read what the
@@ -1709,6 +1722,12 @@ router.post("/hr/payroll/generate", requireModuleAction("page:/hr/payroll", "add
   const { month, year, employeeId, forceRegenerate = false } = req.body;
   if (!month || !year) { res.status(400).json({ error: "month and year are required" }); return; }
 
+  // Month lock: payroll is a dated financial record for (year, month). A locked
+  // accounting period may not have a run generated into it.
+  if (await isMonthLocked(pool, Number(year), Number(month))) {
+    res.status(423).json(monthLockedBody(Number(year), Number(month))); return;
+  }
+
   // The same thresholds and company-wide leave policy the daily accrual engine
   // prices a day at, loaded from one place. Payroll and the books must not be
   // able to disagree about what a given day of attendance was worth.
@@ -1999,6 +2018,14 @@ router.post("/hr/payroll/generate", requireModuleAction("page:/hr/payroll", "add
 router.patch("/hr/payroll/:id", requireModuleAction("page:/hr/payroll", "edit"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const { extraAmount = 0, extraNote = null } = req.body;
+
+  // Month lock: editing a payroll row is a change to that (year, month) record,
+  // so refuse if its accounting period is locked. Checked before the write.
+  const { rows: [ym] } = await pool.query(`SELECT year, month FROM payroll WHERE id = $1`, [id]);
+  if (ym && await isMonthLocked(pool, Number(ym.year), Number(ym.month))) {
+    res.status(423).json(monthLockedBody(Number(ym.year), Number(ym.month))); return;
+  }
+
   // Draft only. An extra amount changes net pay, and approval has already posted
   // a salary voucher for the old figure — editing after that would leave the
   // payslip saying one thing and the ledger another, with nothing to reconcile
@@ -2177,6 +2204,7 @@ router.post("/hr/payroll/:id/approve", requireModuleAction("page:/hr/payroll", "
     // there first — is a 409 with the reason verbatim. Only a genuine posting
     // failure is a 500, so the UI can tell "you need to do something" apart
     // from "the server broke".
+    if (e?.monthLocked) { res.status(423).json(e.monthLocked); return; }
     if (e?.conflict) { res.status(409).json({ error: e.message }); return; }
     console.error("[payroll/approve] posting failed:", e);
     res.status(500).json({ error: `Could not post the salary entry, so the payroll was not approved: ${e?.message ?? "unknown error"}` });
@@ -2204,6 +2232,12 @@ router.post("/hr/payroll/:id/pay", requireModuleAction("page:/hr/payroll", "edit
     res.status(400).json({ error: "Approve this payroll before recording a payment." });
     return;
   }
+
+  // Month lock: the payment posts a voucher dated `today` and settles the
+  // payable of the payroll month, so BOTH must be open. Pre-checked before the
+  // transaction opens.
+  const payMonthFirst = `${existing.year}-${String(existing.month).padStart(2, "0")}-01`;
+  if (await respondIfMonthLocked(res, pool, [payMonthFirst, today], "salary payment")) return;
 
   const extraAmt   = Number(existing.extra_amount ?? 0);
   const totalNet   = round2(Number(existing.net_pay ?? 0) + extraAmt);
@@ -2363,6 +2397,10 @@ router.post("/hr/advances", requireModuleAction("page:/hr/advances", "add"), asy
   const today = new Date().toISOString().split("T")[0];
   const advDate = date ?? today;
 
+  // Month lock: an advance is a new payment dated advDate — it may not be
+  // recorded into a locked accounting period.
+  if (await respondIfMonthLocked(res, pool, [advDate], "employee advance")) return;
+
   // Resolve the paying account BEFORE the advance row exists: an invalid
   // account must reject the whole request, not leave an advance with no
   // accounting behind it.
@@ -2429,6 +2467,11 @@ router.post("/hr/advances/:id/recover", requireModuleAction("page:/hr/advances",
   const id = parseInt(req.params.id, 10);
   if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid advance id" }); return; }
   const today = new Date().toISOString().split("T")[0];
+
+  // Month lock: cash recovery posts a voucher dated today — it may not land in a
+  // locked accounting period. (The original advance document is untouched, so
+  // an old advance can still be recovered into an open month.)
+  if (await respondIfMonthLocked(res, pool, [today], "advance recovery")) return;
 
   const client = await pool.connect();
   try {
@@ -2863,6 +2906,9 @@ router.post("/hr/attendance/check-in", requireModuleAction("page:/hr/attendance"
     return;
   }
   const today = await businessTodayStr();
+  // Month lock: a punch is a dated attendance record (it re-prices salary
+  // accrual for that day), so it may not land in a locked accounting period.
+  if (await respondIfMonthLocked(res, pool, [today], "attendance check-in")) return;
   // Checking in writes the same figure approval reads, so it queues on the same
   // per-employee lock — see withAttendanceWrite.
   let row: any;
@@ -2955,6 +3001,9 @@ router.post("/hr/attendance/check-out", requireModuleAction("page:/hr/attendance
     return;
   }
   const today = await businessTodayStr();
+  // Month lock: a punch is a dated attendance record (it re-prices salary
+  // accrual for that day), so it may not land in a locked accounting period.
+  if (await respondIfMonthLocked(res, pool, [today], "attendance check-out")) return;
   let row: any;
   let dayPunchesOut: any[] = [];
   try {
@@ -3251,6 +3300,13 @@ router.post("/hr/leaves/:id/approve", requireModuleAction("page:/hr/attendance",
   const toStr = pgDateStr(leave.toDate);
   const leaveDates = leaveDateList(fromStr, toStr);
 
+  // Month lock: approving stamps the whole span as paid leave (a financial
+  // write), so if ANY day of the span falls in a locked accounting period the
+  // approval is refused. Rejection is a pure status flip that stamps nothing —
+  // refusing it would strand the request as pending forever — so it is left to
+  // proceed. respondIfMonthLocked dedups the span by month.
+  if (decision === "approved" && await respondIfMonthLocked(res, pool, leaveDates, "leave approval")) return;
+
   if (decision === "approved") {
     // Approval is the moment leave becomes paid attendance, so it is a salary
     // write: it takes the per-employee accrual lock, re-checks that no month in
@@ -3330,7 +3386,10 @@ router.post("/hr/leaves/:id/approve", requireModuleAction("page:/hr/attendance",
                                WHERE pr.employee_id = a.employee_id
                                  AND pr.year  = EXTRACT(YEAR  FROM a.date)::int
                                  AND pr.month = EXTRACT(MONTH FROM a.date)::int
-                                 AND pr.status IN ('approved','paid'))`,
+                                 AND pr.status IN ('approved','paid'))
+              AND NOT EXISTS (SELECT 1 FROM accounting_period_locks apl
+                               WHERE apl.year  = EXTRACT(YEAR  FROM a.date)::int
+                                 AND apl.month = EXTRACT(MONTH FROM a.date)::int)`,
           [leave.employeeId, fromStr, toStr, id],
         );
       });
@@ -3380,6 +3439,12 @@ router.post("/hr/leaves/:id/cancel", requireModuleView("page:/hr/attendance"), a
     res.status(409).json({ error: `Only pending requests can be cancelled — this one is ${leave.status}.` });
     return;
   }
+
+  // Month lock: a leave whose span touches a locked accounting period is frozen
+  // in every direction, so it can neither be approved nor cancelled while the
+  // month stays locked.
+  const cancelDates = leaveDateList(pgDateStr(leave.fromDate), pgDateStr(leave.toDate));
+  if (await respondIfMonthLocked(res, pool, cancelDates, "leave cancel")) return;
 
   // A pending request never touched attendance, so cancelling is a pure status
   // flip; the WHERE guards against a decision that landed since the read above.
@@ -3443,6 +3508,10 @@ router.put("/hr/attendance", requireModuleAction("page:/hr/attendance", "edit"),
 
   const [emp] = await db.select().from(employeesTable).where(eq(employeesTable.id, employeeId)).limit(1);
   if (!emp) { res.status(404).json({ error: "Employee not found" }); return; }
+
+  // Month lock: a correction re-prices the salary accrual for `date`, so it may
+  // not touch a locked accounting period.
+  if (await respondIfMonthLocked(res, pool, [date], "attendance correction")) return;
 
   // Casual-leave-deducting weekly off with the month's casual allowance already
   // exhausted: what happens is the company's choice. 'ask' makes the manager

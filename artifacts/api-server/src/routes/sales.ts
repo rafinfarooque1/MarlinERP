@@ -22,6 +22,7 @@ import { blockedByInactiveProducts, INACTIVE_PRODUCT_CODE } from "../lib/product
 import { CREATE_SALE_PAYMENT_MODES, isAllowedNewSaleMode, isSettledAtSale, clearsThroughBank, resolveEditedSaleMode } from "../lib/paymentModes";
 import { availabilityAt, insufficientStockMessage } from "../lib/reservations";
 import { isIsoDate } from "../lib/dateInput";
+import { respondIfMonthLocked, isMonthLocked, ymOfDate, monthLockedBody } from "../lib/periodLock";
 import {
   loadPaymentPosition, loadPaymentPositions, computePaymentPosition,
   loadInvoicePaymentSettings, buildUpiRequest,
@@ -562,6 +563,10 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
   }
 
   const { pool: pgPool } = await import("@workspace/db");
+
+  // Month lock: no new sale (or its same-dated payment/receipt trail) may
+  // land in a locked accounting month.
+  if (await respondIfMonthLocked(res, pgPool, [parsed.data.saleDate], "sale create")) return;
 
   const rawLineItems = parsed.data.lineItems as Array<{
     itemId: number; quantity: number; unitPrice: number; discount?: number; unitDiscount?: number | null; taxAmount: number;
@@ -1227,6 +1232,10 @@ router.put("/sales/:id", requireModuleAction("page:/sales/pos", "edit"), async (
     res.status(400).json({ error: "saleDate must be a real calendar date in YYYY-MM-DD form" }); return;
   }
 
+  // Month lock: an invoice in a locked month cannot be edited, and an open
+  // invoice cannot be moved INTO a locked month — both dates must be open.
+  if (await respondIfMonthLocked(res, pgPool, [existingRaw.sale_date, parsed.data.saleDate], "sale edit")) return;
+
   // Editing must not be a loophole for setting bank/upi on a sale. A new sale
   // may only be cash or credit; an edit may only leave the mode among the
   // create-time modes OR keep the historical mode (bank/upi/card/bank_transfer)
@@ -1879,6 +1888,16 @@ router.post("/sales/:id/cancel", requireModuleAction("page:/sales/pos", "delete"
         error: 'This invoice belongs to a branch transfer. Reject the transfer to reverse it.',
         code: 'BRANCH_TRANSFER_INVOICE',
       }); return;
+    }
+    // Month lock: a cancelled sale reverses stock and books in its own month —
+    // frozen once the month is locked.
+    {
+      const ym = ymOfDate(sale.sale_date);
+      if (ym && await isMonthLocked(tx, ym.year, ym.month)) {
+        await tx.query('ROLLBACK');
+        res.status(423).json(monthLockedBody(ym.year, ym.month));
+        return;
+      }
     }
     // Money already banked, or goods already taken back, mean the bill has a
     // life of its own. Reversing it silently would strand those records.

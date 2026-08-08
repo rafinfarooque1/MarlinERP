@@ -74,7 +74,9 @@ export function CustomerFormDialog({ open, onOpenChange, editItem, defaultLocati
     if (editItem) {
       form.reset({
         name: editItem.name, phone: editItem.phone ?? '', email: editItem.email ?? '',
-        address: editItem.address ?? '', gstNumber: editItem.gstNumber ?? '',
+        // gst_number fallback: tolerate a raw snake_case row from a stale
+        // cached list, so an edit can never load blank and wipe the stored GST.
+        address: editItem.address ?? '', gstNumber: editItem.gstNumber ?? (editItem as any).gst_number ?? '',
         state: (editItem as any).state ?? '', notes: editItem.notes ?? '',
         creditLimit: Number(editItem.creditLimit ?? 0), creditDays: Number(editItem.creditDays ?? 0),
         location: locationValueOf((editItem as any).locationType ?? (editItem as any).location_type, (editItem as any).locationId ?? (editItem as any).location_id),

@@ -1,5 +1,6 @@
 import { Router, type IRouter } from "express";
 import healthRouter from "./health";
+import periodsRouter from "./periods";
 import authRouter from "./auth";
 import dashboardRouter from "./dashboard";
 import inventoryRouter from "./inventory";
@@ -57,6 +58,7 @@ router.use(hrRouter);
 router.use(customersRouter);
 router.use(accountsRouter);
 router.use(journalRouter);
+router.use(periodsRouter);
 router.use(gstRouter);
 router.use(companyRouter);
 router.use(auditRouter);

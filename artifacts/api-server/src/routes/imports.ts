@@ -72,6 +72,7 @@ import { outstandingExpr } from "../lib/salePaymentPosition";
 import { type PostingLocationFilter } from "../lib/postingLocation";
 import { purchaseSettlementIndex } from "../lib/vendorBillSettlement";
 import { type PgPoolClient as PoolClient } from "@workspace/db";
+import { lockedMonthsAmong, monthLabel, type Queryable } from "../lib/periodLock";
 
 const router: IRouter = Router();
 
@@ -4198,6 +4199,26 @@ router.post("/imports/batches/:id/approve", requireModuleAction(PERM, "add"), as
     );
     const loc = { type: String(batch.location_type ?? "headoffice"), id: Number(batch.location_id ?? 0) };
 
+    // ── Accounting-period guard — BEFORE any document is written ──
+    // Collect the business date (norm.dateIso) of every row about to import
+    // and refuse the WHOLE file if any land in a locked month, so a partial
+    // import into a locked month can never happen. Revert the 'committing'
+    // claim (as the failure path does) so the batch stays demo_ready.
+    {
+      const dates = importRows
+        .map((r: any) => r.raw?.norm?.dateIso)
+        .filter((d: unknown): d is string => typeof d === "string" && d.length > 0);
+      const lockedMonths = await lockedMonthsAmong(pool, dates);
+      if (lockedMonths.size > 0) {
+        await pool.query(
+          `UPDATE import_batches SET status = 'demo_ready', committed_at = NULL, committed_by = NULL
+            WHERE id = $1 AND status = 'committing'`, [id],
+        );
+        respondImportLocked(res, "import", dates, lockedMonths);
+        return;
+      }
+    }
+
     const client = await pool.connect();
     let run: Awaited<ReturnType<typeof runBatchImport>>;
     try {
@@ -4738,6 +4759,79 @@ function describeCounts(counts: Record<string, number>): string {
   return parts.length ? parts.join(", ") : "no stamped records";
 }
 
+/**
+ * Accounting-period guard for imports (batch commit + both rollback paths).
+ *
+ * An import is a bulk write of dated financial documents, so it obeys the
+ * same month-lock rule as every manual create/edit/delete — but ALL-OR-
+ * NOTHING: if even one row (commit) or one existing record (rollback) falls
+ * in a locked month, the WHOLE operation is refused, so a partial import into
+ * — or a partial deletion of — a locked month can never happen.
+ */
+
+/** The 423 body for a rejected import — lists every locked month it touched,
+ *  with the number of affected records, so the operator knows what to unlock. */
+function importLockedBody(
+  verb: string,
+  perMonth: Map<string, number>,
+): Record<string, unknown> {
+  const months = [...perMonth.keys()].sort();
+  const phrases = months.map((key) => {
+    const [y, m] = key.split("-").map(Number);
+    const n = perMonth.get(key) ?? 0;
+    return `${n} row${n === 1 ? "" : "s"} fall in locked month ${monthLabel(y, m)}`;
+  });
+  return {
+    error: `Cannot ${verb}: ${phrases.join("; ")}. Contact an Administrator to unlock the month${months.length === 1 ? "" : "s"}.`,
+    code: "MONTH_LOCKED",
+    months,
+  };
+}
+
+/**
+ * Business dates of the records THIS batch created, gathered from the stamped
+ * financial tables (import_batch_id) — sale_date, purchase_date, receipt_date,
+ * payment_date, journal voucher_date, opening-stock verify_date. Master-only
+ * tables (customers/vendors/ledgers/items/opening_balances) carry no document
+ * date and are intentionally excluded — rolling them back is date-neutral.
+ */
+async function batchRecordDates(q: Queryable, batchId: number): Promise<string[]> {
+  const { rows } = await q.query(
+    `SELECT to_char(d, 'YYYY-MM-DD') AS d FROM (
+        SELECT sale_date     AS d FROM sales               WHERE import_batch_id = $1
+        UNION ALL SELECT purchase_date FROM purchases      WHERE import_batch_id = $1
+        UNION ALL SELECT receipt_date  FROM receipts       WHERE import_batch_id = $1
+        UNION ALL SELECT payment_date  FROM payments       WHERE import_batch_id = $1
+        UNION ALL SELECT voucher_date  FROM journal_vouchers WHERE import_batch_id = $1
+        UNION ALL SELECT verify_date   FROM stock_verifications WHERE import_batch_id = $1
+      ) x WHERE d IS NOT NULL`,
+    [batchId],
+  );
+  return rows.map((r: any) => String(r.d)).filter(Boolean);
+}
+
+/**
+ * Send the 423 for a locked-month import. `dates` are the business dates the
+ * operation touches and `locked` the 'YYYY-MM' keys among them found locked
+ * (from lockedMonthsAmong) — the two together give the per-month row counts.
+ * Call AFTER the caller has already ROLLBACKed, mirroring the file convention.
+ */
+function respondImportLocked(
+  res: Response,
+  verb: string,
+  dates: Array<string | Date | null | undefined>,
+  locked: Set<string>,
+): void {
+  const perMonth = new Map<string, number>();
+  for (const d of dates) {
+    const ym = /^(\d{4})-(\d{2})/.exec(String(d ?? ""));
+    if (!ym) continue;
+    const key = `${ym[1]}-${ym[2]}`;
+    if (locked.has(key)) perMonth.set(key, (perMonth.get(key) ?? 0) + 1);
+  }
+  res.status(423).json(importLockedBody(verb, perMonth));
+}
+
 /** Invoice numbers of the sales THIS batch created — captured inside the
  * delete transaction (before the deletes) so verification can check the
  * exact documents this rollback touched, immune to unrelated concurrent
@@ -4839,6 +4933,21 @@ router.post("/imports/batches/:id/rollback", requireModuleAction(PERM, "delete")
     // verification can check the exact invoices this rollback deletes.
     const countsSnapshot = await batchRecordCounts(client, id);
     const batchInvoices = await batchSaleInvoiceNumbers(client, id);
+
+    // ── Accounting-period guard — BEFORE any record is deleted ──
+    // A rollback DELETES the dated documents this batch created; if any fall
+    // in a locked month, deleting that history is refused (all-or-nothing).
+    // Read from ACTUAL stamped records so the check matches what would be
+    // removed. Master-only batches carry no document date → no-op.
+    {
+      const dates = await batchRecordDates(client, id);
+      const locked = await lockedMonthsAmong(client, dates);
+      if (locked.size > 0) {
+        await client.query("ROLLBACK");
+        respondImportLocked(res, "roll back", dates, locked);
+        return;
+      }
+    }
 
     // ── Transaction batches: reverse whole documents, all-or-nothing ──
     // Runs INSIDE this transaction: if any document is blocked by downstream
@@ -5904,6 +6013,33 @@ router.post("/imports/migrations/:id/approve", requireModuleAction(PERM, "add"),
         return;
       }
 
+      // ── Accounting-period guard — BEFORE any document is written ──
+      // Collect the business date (norm.dateIso) of every row this approval is
+      // about to import, across every file, and refuse the WHOLE migration if
+      // any land in a locked month. Checked here (after the location restamp +
+      // revalidation) so the dates match exactly what will be written, and
+      // before runBatchImport so a partial import into a locked month is
+      // impossible.
+      {
+        const { rows: dateRows } = await client.query(
+          `SELECT raw->'norm'->>'dateIso' AS d FROM import_rows
+            WHERE batch_id = ANY($1::int[]) AND raw->'norm'->>'dateIso' IS NOT NULL`,
+          [batches.map((b: any) => Number(b.id))],
+        );
+        const dates = dateRows.map((r: any) => String(r.d)).filter(Boolean);
+        const locked = await lockedMonthsAmong(client, dates);
+        if (locked.size > 0) {
+          const perMonth = new Map<string, number>();
+          for (const d of dates) {
+            const ym = /^(\d{4})-(\d{2})/.exec(d);
+            const key = ym ? `${ym[1]}-${ym[2]}` : "";
+            if (key && locked.has(key)) perMonth.set(key, (perMonth.get(key) ?? 0) + 1);
+          }
+          await bail(423, importLockedBody("import", perMonth));
+          return;
+        }
+      }
+
       const byModule = new Map<string, any>(batches.map((b: any) => [String(b.module), b]));
       const runs: Array<{ batch: any; run: Awaited<ReturnType<typeof runBatchImport>> }> = [];
       for (const module of WIZARD_RUN_ORDER) {
@@ -6172,6 +6308,21 @@ router.post("/imports/migrations/:id/rollback", requireModuleAction(PERM, "delet
       const rc = await batchRecordCounts(client, Number(b.id));
       for (const [k, v] of Object.entries(rc)) removedCounts[k] = (removedCounts[k] ?? 0) + Number(v);
       invoicesByBatch.set(Number(b.id), await batchSaleInvoiceNumbers(client, Number(b.id)));
+    }
+
+    // ── Accounting-period guard — BEFORE any record is deleted ──
+    // A migration rollback deletes every dated document its files created; if
+    // any fall in a locked month, deleting that history is refused for the
+    // WHOLE migration (nothing partial). Read from ACTUAL stamped records.
+    {
+      const dates: string[] = [];
+      for (const b of batches) dates.push(...await batchRecordDates(client, Number(b.id)));
+      const locked = await lockedMonthsAmong(client, dates);
+      if (locked.size > 0) {
+        await client.query("ROLLBACK");
+        respondImportLocked(res, "roll back", dates, locked);
+        return;
+      }
     }
 
     // Reverse import order: money first, then documents, then opening stock.

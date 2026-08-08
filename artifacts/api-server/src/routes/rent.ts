@@ -10,6 +10,7 @@ import {
   runRentAccrual, isPeriodAccrualComplete, rentMonthCoverage, recalcUnapprovedRentAccruals, dailyRentRate,
 } from "../lib/rentAccrual";
 import { provisionRentLedgers } from "../lib/rentLedgers";
+import { isMonthLocked, monthLockedBody, respondIfMonthLocked } from "../lib/periodLock";
 
 const router: IRouter = Router();
 const PERM = "page:/hr/rent";
@@ -431,6 +432,12 @@ router.post("/rent/periods/:warehouseId/:year/:month/approve", requireModuleActi
   const scope = await getUserDataScope(req.employee!);
   if (!requireHeadOffice(scope, res)) return;
 
+  // Month lock: approval freezes and settles the payable for this (year, month),
+  // so it may not run once that accounting period is locked.
+  if (await isMonthLocked(pool, year, month)) {
+    res.status(423).json(monthLockedBody(year, month)); return;
+  }
+
   const { rows: [existing] } = await pool.query<{ status: string }>(
     `SELECT status FROM rent_periods WHERE warehouse_id = $1 AND year = $2 AND month = $3`,
     [warehouseId, year, month],
@@ -520,6 +527,11 @@ router.post("/rent/periods/:warehouseId/:year/:month/pay", requireModuleAction(P
   }
   const reference = String(b.referenceNumber ?? "");
   const remarks = String(b.remarks ?? "");
+
+  // Month lock: the payment posts a voucher dated paymentDate and settles the
+  // payable of the period month, so BOTH must belong to open accounting periods.
+  const periodMonthFirst = `${year}-${String(month).padStart(2, "0")}-01`;
+  if (await respondIfMonthLocked(res, pool, [paymentDate, periodMonthFirst], "rent payment")) return;
 
   const { rows: [period] } = await pool.query<{ status: string }>(
     `SELECT status FROM rent_periods WHERE warehouse_id = $1 AND year = $2 AND month = $3`,

@@ -393,6 +393,12 @@ async function runMigrations() {
   await pool.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS location_type text`);
   await pool.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS location_id integer`);
 
+  // Blank GST numbers are stored as NULL, never '' — the write paths normalise
+  // this since Aug 2026, and this idempotent sweep keeps rows written by older
+  // code (and any importer) consistent so "cleared" and "never set" read alike.
+  await pool.query(`UPDATE customers SET gst_number = NULL WHERE gst_number = ''`);
+  await pool.query(`UPDATE vendors SET gst_number = NULL WHERE gst_number = ''`);
+
   // Idempotent backfill: set location_id = outlet_id for existing outlet sales
   await pool.query(
     `UPDATE sales SET location_id = outlet_id WHERE location_id IS NULL AND outlet_id IS NOT NULL`
@@ -1394,6 +1400,30 @@ async function runMigrations() {
   // One-time: wrap every existing positive stock quantity into an OPENING
   // batch so legacy stock participates in batch views with quantities
   // preserved exactly. Runs after dedup so (item, branch) rows are unique.
+  // Accounting-period (month) locking — see lib/periodLock.ts. Absence of a
+  // row = month OPEN, so no backfill is needed and new months auto-open.
+  // period_lock_events keeps the full admin lock/unlock history (with the
+  // unlock reason the spec requires).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS accounting_period_locks (
+      year integer NOT NULL,
+      month integer NOT NULL CHECK (month BETWEEN 1 AND 12),
+      locked_by text NOT NULL,
+      locked_at timestamptz NOT NULL DEFAULT now(),
+      PRIMARY KEY (year, month)
+    );
+    CREATE TABLE IF NOT EXISTS period_lock_events (
+      id serial PRIMARY KEY,
+      year integer NOT NULL,
+      month integer NOT NULL,
+      action text NOT NULL,
+      username text NOT NULL,
+      reason text,
+      created_at timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_period_lock_events_ym ON period_lock_events(year, month, created_at DESC);
+  `);
+
   // Phase 7: login history + configurable password policy (raw columns —
   // remember: invisible to drizzle db.select(), read/write via raw SQL only)
   await pool.query(`

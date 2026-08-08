@@ -222,7 +222,7 @@ router.get("/gst/gstr1", requireModuleView("page:/accounts/gst-returns"), async 
 
   const sp: any[] = [];
   const { rows: sales } = await pool.query(
-    `SELECT id, invoice_number, sale_date, total_amount, tax_total, customer_id, line_items,
+    `SELECT id, invoice_number, invoice_series, sale_date, total_amount, tax_total, customer_id, line_items,
             branch_transfer_id, party_name, party_gstin, party_state, payment_mode,
             COALESCE(location_type, 'outlet') AS loc_type,
             COALESCE(location_id, outlet_id, 0) AS loc_id
@@ -265,7 +265,14 @@ router.get("/gst/gstr1", requireModuleView("page:/accounts/gst-returns"), async 
     const pos = String(s.party_state || cust?.state || "").trim() || homeState;
     const partyName = String(s.party_name || cust?.name || "");
     const groups = rateGroups((s.line_items ?? []) as any[]);
-    if (gstin) {
+    // Classification follows the STAMPED invoice series — the number printed
+    // on the bill decides B2B vs B2C forever. Falling back to the customer's
+    // CURRENT GSTIN here would silently flip a locked month's B2C invoices to
+    // B2B the moment the customer registers; only legacy rows with no series
+    // stamp (and transfer twins) keep the GSTIN heuristic.
+    const series = String((s as any).invoice_series ?? "");
+    const isB2B = series === "SB2B" ? true : series === "SB2C" ? false : Boolean(gstin);
+    if (isB2B) {
       b2bCount++;
       const pay = paySummaries.get(Number(s.id));
       for (const g of groups) {

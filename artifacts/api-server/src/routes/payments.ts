@@ -4,6 +4,7 @@ import { pool } from "@workspace/db";
 import { logActivity } from "../lib/audit";
 import { nextVoucherNumber } from "../lib/voucherNumber";
 import { optionalIsoDate } from "../lib/dateInput";
+import { respondIfMonthLocked } from "../lib/periodLock";
 import { COLLECTION_METHODS, paymentModeLabel } from "../lib/paymentModes";
 import { getUserDataScope, scopeSalesWhere } from "../lib/dataScope";
 import { callerLocation, scopeCashLedgerIds, locationOwnedLedgerMap, ledgerIdsUnderCodes } from "../lib/moneyScope";
@@ -111,6 +112,11 @@ router.post("/sales/:id/payments", requireModuleAction(["page:/sales/pos", "page
   if (!pDateInput.ok) { res.status(400).json({ error: "paymentDate must be a real calendar date in YYYY-MM-DD form" }); return; }
   const pDate = pDateInput.value ?? new Date().toISOString().split("T")[0];
   const createdBy = (req as any).employee?.username ?? "system";
+
+  // Month lock: a collection is a new record dated pDate — it may not be
+  // backdated into a locked month. (Collecting TODAY against an old credit
+  // sale stays allowed: the sale document itself is not being changed.)
+  if (await respondIfMonthLocked(res, pool, [pDate], "sale payment")) return;
 
   const client = await pool.connect();
   try {

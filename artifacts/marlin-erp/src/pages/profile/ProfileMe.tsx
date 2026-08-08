@@ -340,10 +340,10 @@ export default function ProfileMe() {
             </div>
           ) : (
             <div className="space-y-2">
-              {(u?.education ?? []).length === 0 ? (
+              {!Array.isArray(u?.education) || u.education.length === 0 ? (
                 <p className="text-sm text-muted-foreground italic">No education details added.</p>
               ) : (
-                (u?.education as EducationEntry[]).map((edu, i) => (
+                (u.education as EducationEntry[]).map((edu, i) => (
                   <div key={i} className="flex items-start gap-3 py-2">
                     <div className="w-8 h-8 rounded-md bg-primary/10 flex items-center justify-center shrink-0">
                       <BookOpen className="w-4 h-4 text-primary" />
@@ -427,10 +427,10 @@ export default function ProfileMe() {
             </div>
           ) : (
             <div className="space-y-2">
-              {(u?.workExperience as WorkExperienceEntry[] ?? []).length === 0 ? (
+              {!Array.isArray(u?.workExperience) || u.workExperience.length === 0 ? (
                 <p className="text-sm text-muted-foreground italic">No work experience added.</p>
               ) : (
-                (u?.workExperience as WorkExperienceEntry[]).map((exp, i) => (
+                (u.workExperience as WorkExperienceEntry[]).map((exp, i) => (
                   <div key={i} className="flex items-start gap-3 py-2">
                     <div className="w-8 h-8 rounded-md bg-primary/10 flex items-center justify-center shrink-0 mt-0.5">
                       <Briefcase className="w-4 h-4 text-primary" />

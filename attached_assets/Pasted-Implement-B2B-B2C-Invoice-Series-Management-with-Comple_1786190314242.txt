@@ -1,0 +1,494 @@
+Implement B2B/B2C Invoice Series Management with Complete Monthly Locking.
+
+BUSINESS OBJECTIVE
+
+The ERP must maintain separate B2B and B2C invoice serial series.
+
+If a customer does not have GSTIN:
+→ Sales invoice = B2C
+
+If a customer has a valid GSTIN:
+→ Sales invoice = B2B
+
+If GSTIN is added while the accounting month is OPEN:
+→ Existing eligible B2C invoices for that customer in that OPEN month must automatically convert to B2B.
+→ B2B serial numbers must be assigned.
+→ B2C serial numbers must automatically be resequenced in the background.
+
+Once a month is LOCKED:
+→ NOTHING in that month can be changed automatically or manually unless an Admin explicitly unlocks the month.
+
+==================================================
+1. SEPARATE B2B AND B2C SERIES
+==================================================
+
+Maintain separate invoice series:
+
+B2B/2026-27/0001
+B2B/2026-27/0002
+B2B/2026-27/0003
+
+B2C/2026-27/0001
+B2C/2026-27/0002
+B2C/2026-27/0003
+
+Do NOT mention warehouse/location in the visible invoice serial number.
+
+The existing location-wise numbering architecture must remain intact internally.
+
+==================================================
+2. CUSTOMER GSTIN RULE
+==================================================
+
+Customer with valid GSTIN:
+
+→ New Sales invoice = B2B
+
+Customer without GSTIN:
+
+→ New Sales invoice = B2C
+
+Use the actual Customer Master GSTIN.
+
+Do not determine B2B/B2C from:
+
+- Customer name
+- Previous invoice
+- User selection
+- Browser
+- Location
+- Hardcoded values
+
+==================================================
+3. B2C → B2B CONVERSION WHILE MONTH IS OPEN
+==================================================
+
+Example:
+
+Customer initially has no GSTIN.
+
+The customer has already generated:
+
+B2C/2026-27/0001
+B2C/2026-27/0002
+B2C/2026-27/0003
+...
+B2C/2026-27/0010
+
+Later, while the month is OPEN, the customer GSTIN is added.
+
+The system must automatically:
+
+1. Detect the GSTIN update.
+2. Find all eligible B2C sales invoices belonging to that customer in the OPEN month.
+3. Convert them to B2B.
+4. Assign valid B2B serial numbers.
+5. Remove those invoice numbers from the B2C sequence.
+6. Resequence the remaining OPEN-month B2C invoices automatically in the background.
+7. Update GST classification and reports.
+8. Keep the original accounting transaction intact.
+
+==================================================
+4. MONTH LOCKING
+==================================================
+
+Add a proper Month Locking system.
+
+Every accounting month must have a status:
+
+OPEN
+
+or
+
+LOCKED
+
+Example:
+
+April 2026 → LOCKED
+May 2026 → LOCKED
+June 2026 → OPEN
+July 2026 → OPEN
+
+Only Admin can lock or unlock a month.
+
+==================================================
+5. WHAT MONTH LOCKING MEANS
+==================================================
+
+When a month is LOCKED:
+
+ABSOLUTELY NOTHING belonging to that month can be changed.
+
+This includes:
+
+Sales
+POS Sales
+Quotations converted to Sales
+Purchase Bills
+Purchase Returns
+Sales Returns
+Receipt Vouchers
+Payment Vouchers
+Journal Vouchers
+Expenses
+Production
+Stock Transfers
+Inventory Adjustments
+Cash Entries
+Bank Entries
+Payroll
+GST-related transaction data
+Customer transactions
+Vendor transactions
+Ledger entries
+Invoice classifications
+B2B/B2C status
+Invoice serial numbers
+Invoice dates
+Purchase dates
+Sales dates
+Payment dates
+Receipt dates
+MFG/Expiry data where the change affects a locked transaction
+Opening balances belonging to that period
+Imported transactions
+
+No edit.
+
+No delete.
+
+No automatic update.
+
+No automatic resequencing.
+
+No automatic reclassification.
+
+No background process may modify locked-month data.
+
+==================================================
+6. LOCKED MONTH AND CUSTOMER GSTIN
+==================================================
+
+Example:
+
+June is LOCKED.
+
+Customer had:
+
+B2C/2026-27/0010
+
+Customer GSTIN is added in July.
+
+The June invoice MUST remain:
+
+B2C/2026-27/0010
+
+It must NOT automatically become B2B.
+
+It must NOT receive a new B2B serial.
+
+It must NOT cause B2C June invoices to be renumbered.
+
+The locked month's history is frozen.
+
+==================================================
+7. UNLOCK MONTH
+==================================================
+
+Only Admin can unlock a month.
+
+When Admin unlocks a month:
+
+Status:
+
+LOCKED → OPEN
+
+Only then may permitted corrections occur.
+
+Record every unlock in the Audit Log:
+
+- Month
+- Unlocked By
+- Date
+- Time
+- Reason
+
+Require Admin confirmation before unlocking.
+
+==================================================
+8. LOCK MONTH
+==================================================
+
+Only Admin can lock a month.
+
+Before locking, show:
+
+"This will permanently lock all transactions, invoice numbers, accounting entries and reports for this month. No changes or automatic reclassification will be allowed until an Administrator unlocks the month."
+
+Require confirmation.
+
+After locking:
+
+- Freeze the month.
+- Stop all background modifications.
+- Stop B2B/B2C automatic conversion.
+- Stop serial resequencing.
+- Stop editing.
+- Stop deletion.
+
+Record:
+
+- Month
+- Locked By
+- Date
+- Time
+
+==================================================
+9. FRONTEND VALIDATION
+==================================================
+
+If user attempts to edit a locked transaction:
+
+Show:
+
+" This month is locked. Transactions in a locked month cannot be modified. Contact an Administrator to unlock the month."
+
+Do not open the save operation.
+
+If user attempts to delete:
+
+Show the same locked-month warning.
+
+==================================================
+10. BACKEND VALIDATION
+==================================================
+
+IMPORTANT:
+
+Locking MUST NOT be implemented only in the frontend.
+
+Every backend create/update/delete endpoint must verify the accounting period.
+
+Before any transaction is modified:
+
+1. Identify transaction date.
+2. Identify accounting month.
+3. Check month status.
+4. If LOCKED:
+   Reject the operation.
+
+This protection must apply even if someone calls the API directly.
+
+==================================================
+11. BACKGROUND JOB PROTECTION
+==================================================
+
+Every automated process must check month status before modifying records.
+
+Especially:
+
+- B2B/B2C conversion
+- Invoice resequencing
+- GST updates
+- Payment allocation
+- Outstanding recalculation
+- Payroll
+- Inventory recalculation
+- Import processing
+
+If transaction belongs to a LOCKED month:
+
+DO NOT modify it.
+
+==================================================
+12. ACCOUNTING INTEGRITY
+==================================================
+
+Changing B2C → B2B must NOT create:
+
+- Duplicate sales
+- Duplicate journals
+- Duplicate receipts
+- Duplicate payments
+- Duplicate stock movements
+
+Only classification and invoice-series information may change while the month is OPEN.
+
+Accounting values must remain identical unless a genuine accounting correction is explicitly performed.
+
+==================================================
+13. SERIAL NUMBER RESEQUENCING
+==================================================
+
+For OPEN months:
+
+If invoices move from B2C to B2B:
+
+Automatically remove unnecessary gaps in the OPEN B2C sequence.
+
+Example:
+
+Before:
+
+B2C/001
+B2C/002
+B2C/003
+B2C/004
+B2C/005
+
+B2C/003 moves to B2B.
+
+After:
+
+B2C/001
+B2C/002
+B2C/003
+B2C/004
+
+The remaining OPEN invoices may be resequenced.
+
+For LOCKED months:
+
+NO resequencing under any circumstance.
+
+==================================================
+14. AUDIT LOG
+==================================================
+
+Record all:
+
+- B2C → B2B conversions
+- Serial number changes
+- Month locks
+- Month unlocks
+- Admin corrections
+
+For conversion record:
+
+Customer
+Old GST status
+New GST status
+Old Invoice Number
+New Invoice Number
+Old Classification
+New Classification
+Month
+User
+Date
+Time
+Reason
+
+==================================================
+15. REPORTS
+==================================================
+
+Reports must respect month locking and invoice classification.
+
+Verify:
+
+Sales Reports
+GST Reports
+GSTR-1
+B2B Reports
+B2C Reports
+Invoice Register
+Day Book
+Customer Ledger
+Trial Balance
+Dashboard
+
+All must remain consistent.
+
+==================================================
+16. MONTH CLOSE VERIFICATION
+==================================================
+
+Before Admin can lock a month, show a verification summary:
+
+Total Sales
+Total Purchases
+Total Receipts
+Total Payments
+Total Expenses
+Receivables
+Payables
+Cash
+Bank
+Inventory
+GST
+B2B Invoice Count
+B2C Invoice Count
+
+Allow Admin to review before locking.
+
+==================================================
+17. MONTH OPENING
+==================================================
+
+At the beginning of a new month:
+
+Create a new OPEN accounting period.
+
+Start the appropriate B2B/B2C running series according to the ERP's existing numbering rules.
+
+Previous locked months must remain untouched.
+
+==================================================
+18. REGRESSION TESTING
+==================================================
+
+Test:
+
+1. Customer without GSTIN creates B2C invoice.
+2. Add GSTIN while month is OPEN.
+3. Existing eligible B2C invoices convert to B2B.
+4. B2B serials are assigned correctly.
+5. B2C series is resequenced.
+6. Accounting entries remain unchanged.
+7. Lock the month.
+8. Add GSTIN to a customer.
+9. Verify locked-month invoices do NOT change.
+10. Attempt to edit locked invoice.
+11. Verify backend rejects it.
+12. Attempt to delete locked invoice.
+13. Verify backend rejects it.
+14. Attempt automatic B2C → B2B conversion.
+15. Verify background process skips locked month.
+16. Admin unlocks the month.
+17. Verify controlled corrections can happen again.
+18. Lock the month again.
+19. Verify it becomes completely immutable.
+
+==================================================
+FINAL BUSINESS RULE
+==================================================
+
+OPEN MONTH:
+
+Transactions can be corrected according to permissions.
+
+B2C → B2B automatic conversion is allowed.
+
+B2C serial resequencing is allowed.
+
+LOCKED MONTH:
+
+The month is completely frozen.
+
+Nothing can be changed.
+
+Nothing can be deleted.
+
+Nothing can be automatically reclassified.
+
+No serial number can change.
+
+No background process can modify it.
+
+Only Admin can unlock the month.
+
+After Admin unlocks it, it becomes OPEN again and controlled corrections are permitted.
+
+The month-lock restriction must be enforced in BOTH frontend and backend.
+
+The accounting database must never allow a locked month's historical records to be silently changed.

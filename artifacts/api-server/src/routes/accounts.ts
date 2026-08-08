@@ -28,6 +28,7 @@ import {
   resolveMoneyVoucherLocation,
 } from "../lib/moneyScope";
 import { loadLedgerUsage, deleteBlockReason } from "../lib/chartGroups";
+import { respondIfMonthLocked, isMonthLocked, ymOfDate, monthLockedBody } from "../lib/periodLock";
 import { loadPaymentPosition, computePaymentPosition, outstandingExpr } from "../lib/salePaymentPosition";
 import { parsePartyLedgerCode, ensureAdvanceLedger, advanceAvailable, takeAdvanceLock, voucherAdvanceConsumed } from "../lib/advanceLedgers";
 import { purchaseSettlementIndex } from "../lib/vendorBillSettlement";
@@ -895,6 +896,9 @@ router.post("/accounts/payments", requireModuleAction(["page:/accounts/vouchers"
   if (!isIsoDate(paymentDate)) {
     res.status(400).json({ error: "paymentDate must be a real calendar date in YYYY-MM-DD form" }); return;
   }
+  // Month lock: a payment voucher is a new record dated paymentDate — it may
+  // not be created in a locked month.
+  if (await respondIfMonthLocked(res, pool, [paymentDate], "payment voucher create")) return;
   const av = validateVoucherFields({ amount });
   if (av.error) { res.status(400).json({ error: av.error }); return; }
   if (Number(paidFromLedgerId) === Number(paidToLedgerId)) {
@@ -1129,6 +1133,19 @@ router.patch("/accounts/payments/:id", requireModuleAction(["page:/accounts/vouc
       return;
     }
     const row = loaded.row;
+    // Month lock: an edit may neither touch a voucher inside a locked month
+    // nor move it into/out of one — check BOTH the stored date and the new one.
+    {
+      const newDate = b.paymentDate !== undefined ? String(b.paymentDate) : row.payment_date;
+      for (const d of [row.payment_date, newDate]) {
+        const ym = ymOfDate(d);
+        if (ym && await isMonthLocked(client, ym.year, ym.month)) {
+          await client.query("ROLLBACK");
+          res.status(423).json(monthLockedBody(ym.year, ym.month));
+          return;
+        }
+      }
+    }
     const newFrom = b.paidFromLedgerId !== undefined ? Number(b.paidFromLedgerId) : Number(row.paid_from_ledger_id);
     const newTo = b.paidToLedgerId !== undefined ? Number(b.paidToLedgerId) : Number(row.paid_to_ledger_id);
     if (!Number.isInteger(newFrom) || !Number.isInteger(newTo) || newFrom <= 0 || newTo <= 0) {
@@ -1212,6 +1229,15 @@ router.delete("/accounts/payments/:id", requireModuleAction(["page:/accounts/vou
         await client.query("BEGIN");
         const { rows: [row] } = await client.query(`SELECT * FROM payments WHERE id = $1 FOR UPDATE`, [id]);
         if (!row) { await client.query("ROLLBACK"); res.status(404).json({ error: "Payment not found" }); return; }
+        // Month lock: cannot delete a voucher dated in a locked month.
+        {
+          const ym = ymOfDate(row.payment_date);
+          if (ym && await isMonthLocked(client, ym.year, ym.month)) {
+            await client.query("ROLLBACK");
+            res.status(423).json(monthLockedBody(ym.year, ym.month));
+            return;
+          }
+        }
         const advAmt = Number(row.advance_amount ?? 0);
         if (advAmt > 0.004) {
           const party = parsePartyLedgerCode(
@@ -1267,6 +1293,8 @@ router.delete("/accounts/payments/:id", requireModuleAction(["page:/accounts/vou
     else res.status(403).json({ error: loaded.error });
     return;
   }
+  // Month lock: cannot delete a voucher dated in a locked month.
+  if (await respondIfMonthLocked(res, pool, [loaded.row.payment_date], "payment voucher delete")) return;
   await pool.query(`DELETE FROM payments WHERE id = $1`, [id]);
   logActivity({ action: "DELETE", module: "accounts", entityType: "payment_voucher", entityId: id,
     description: `Payment voucher ${loaded.row.voucher_number} deleted — ₹${Number(loaded.row.amount).toLocaleString("en-IN")}`,
@@ -1350,6 +1378,10 @@ router.post("/accounts/receipts", requireModuleAction(["page:/accounts/vouchers"
   if (!isIsoDate(receiptDate)) {
     res.status(400).json({ error: "receiptDate must be a real calendar date in YYYY-MM-DD form" }); return;
   }
+  // Month lock: a receipt is a new record dated receiptDate — it may not be
+  // created in a locked month. (We guard the receipt's OWN date, never the
+  // linked sale's month — same principle as counter-collection payments.)
+  if (await respondIfMonthLocked(res, pool, [receiptDate], "receipt voucher create")) return;
   const av = validateVoucherFields({ amount });
   if (av.error) { res.status(400).json({ error: av.error }); return; }
   if (Number(receivedFromLedgerId) === Number(receivedInLedgerId)) {
@@ -1584,6 +1616,19 @@ router.patch("/accounts/receipts/:id", requireModuleAction(["page:/accounts/vouc
       return;
     }
     const row = loaded.row;
+    // Month lock: an edit may neither touch a receipt inside a locked month
+    // nor move it into/out of one — check BOTH the stored date and the new one.
+    {
+      const newDate = b.receiptDate !== undefined ? String(b.receiptDate) : row.receipt_date;
+      for (const d of [row.receipt_date, newDate]) {
+        const ym = ymOfDate(d);
+        if (ym && await isMonthLocked(client, ym.year, ym.month)) {
+          await client.query("ROLLBACK");
+          res.status(423).json(monthLockedBody(ym.year, ym.month));
+          return;
+        }
+      }
+    }
     const newFrom = b.receivedFromLedgerId !== undefined ? Number(b.receivedFromLedgerId) : Number(row.received_from_ledger_id);
     const newIn = b.receivedInLedgerId !== undefined ? Number(b.receivedInLedgerId) : Number(row.received_in_ledger_id);
     if (!Number.isInteger(newFrom) || !Number.isInteger(newIn) || newFrom <= 0 || newIn <= 0) {
@@ -1668,6 +1713,15 @@ router.delete("/accounts/receipts/:id", requireModuleAction(["page:/accounts/vou
           `SELECT * FROM receipts WHERE id = $1 FOR UPDATE`, [id],
         );
         if (!row) { await client.query("ROLLBACK"); res.status(404).json({ error: "Receipt not found" }); return; }
+        // Month lock: cannot delete a receipt dated in a locked month.
+        {
+          const ym = ymOfDate(row.receipt_date);
+          if (ym && await isMonthLocked(client, ym.year, ym.month)) {
+            await client.query("ROLLBACK");
+            res.status(423).json(monthLockedBody(ym.year, ym.month));
+            return;
+          }
+        }
         const advAmt = Number(row.advance_amount ?? 0);
         if (advAmt > 0.004) {
           const party = parsePartyLedgerCode(
@@ -1749,6 +1803,8 @@ router.delete("/accounts/receipts/:id", requireModuleAction(["page:/accounts/vou
     else res.status(403).json({ error: loaded.error });
     return;
   }
+  // Month lock: cannot delete a receipt dated in a locked month.
+  if (await respondIfMonthLocked(res, pool, [loaded.row.receipt_date], "receipt voucher delete")) return;
   await pool.query(`DELETE FROM receipts WHERE id = $1`, [id]);
   logActivity({ action: "DELETE", module: "accounts", entityType: "receipt_voucher", entityId: id,
     description: `Receipt voucher ${loaded.row.voucher_number} deleted — ₹${Number(loaded.row.amount).toLocaleString("en-IN")}`,
@@ -1844,6 +1900,16 @@ router.post("/accounts/receipts/:id/system-delete", requireModuleAction(["page:/
       await client.query("ROLLBACK");
       res.status(400).json({ error: "This is not a system-generated sale receipt. Use the normal voucher workflow." });
       return;
+    }
+    // Month lock: cannot delete a receipt dated in a locked month. We guard the
+    // receipt's OWN receipt_date, never the linked sale's month.
+    {
+      const ym = ymOfDate(receipt.receipt_date);
+      if (ym && await isMonthLocked(client, ym.year, ym.month)) {
+        await client.query("ROLLBACK");
+        res.status(423).json(monthLockedBody(ym.year, ym.month));
+        return;
+      }
     }
     // Recompute the impact with the sale rows locked — the preview the client
     // showed is not the verdict; the state under the lock is.
@@ -2640,6 +2706,10 @@ router.post("/expenses", requireModuleAction("page:/accounts/expenses", "add"), 
     res.status(400).json({ error: "expenseDate must be a real calendar date in YYYY-MM-DD form" }); return;
   }
 
+  // Month lock: an expense is a new record dated expenseDate — it may not be
+  // created in a locked month.
+  if (await respondIfMonthLocked(res, pool, [parsed.data.expenseDate], "expense create")) return;
+
   // Head Office only. This row is paid from a company cash/bank account, which
   // a branch does not operate — a branch records spending through
   // /accounts/location-expenses, where its own cash balance is checked.
@@ -3106,6 +3176,9 @@ router.post("/accounts/location-expenses", requireModuleAction("page:/sales/expe
   if (!isIsoDate(expenseDate)) {
     res.status(400).json({ error: "expenseDate must be a real calendar date in YYYY-MM-DD form" }); return;
   }
+  // Month lock: a location expense is a new payment dated expenseDate — it may
+  // not be created in a locked month.
+  if (await respondIfMonthLocked(res, pool, [expenseDate], "location expense create")) return;
   const parsedAmount = Number(amount);
   if (!parsedAmount || parsedAmount <= 0) {
     res.status(400).json({ error: "Amount must be positive." }); return;
@@ -3239,7 +3312,7 @@ router.delete("/accounts/location-expenses/:id", requireModuleAction("page:/sale
   const expenseLedgerIds = await getDescendantLedgerIds(['SYS-DIREXP', 'SYS-INDEXP']);
   const { rows: [row] } = await pool.query(`
     SELECT p.id, p.voucher_number, p.amount, p.paid_to_ledger_id, p.is_location_expense,
-           p.location_type, p.location_id,
+           p.location_type, p.location_id, p.payment_date,
            pt.name AS expense_name,
            COALESCE(w.name, o.name) AS location_name,
            CASE WHEN p.location_type = 'outlet' THEN p.location_id END AS outlet_id
@@ -3261,6 +3334,9 @@ router.delete("/accounts/location-expenses/:id", requireModuleAction("page:/sale
   if (row.outlet_id != null && await outletWritesBlocked(pool)) {
     res.status(409).json({ error: OUTLETS_DISABLED_MESSAGE, code: OUTLETS_DISABLED_CODE }); return;
   }
+  // Month lock: cannot delete a location expense whose underlying payment is
+  // dated in a locked month.
+  if (await respondIfMonthLocked(res, pool, [row.payment_date], "location expense delete")) return;
 
   await pool.query(`DELETE FROM payments WHERE id = $1`, [id]);
   logActivity({
@@ -3562,6 +3638,10 @@ router.post("/accounts/opening-balances", requireModuleAction("page:/accounts/ch
     res.status(400).json({ error: "asOfDate (YYYY-MM-DD) is required" }); return;
   }
 
+  // Month lock: an opening balance belongs to its as-of period — it cannot be
+  // written into a locked month.
+  if (await respondIfMonthLocked(res, pool, [asOfDate], "opening balance upsert")) return;
+
   // Verify ledger exists and is postable (not a group)
   const { rows: [ledger] } = await pool.query(
     `SELECT id, name, code, is_group, is_system_group FROM account_ledgers WHERE id = $1`, [ledgerId]
@@ -3737,7 +3817,7 @@ router.delete("/accounts/opening-balances/:id", requireModuleAction("page:/accou
   // Module-owned openings are off limits here — deleting one by hand would
   // bypass the equity counterweight and unbalance the books.
   const { rows: [owner] } = await pool.query(
-    `SELECT al.name, al.code FROM opening_balances ob JOIN account_ledgers al ON al.id = ob.ledger_id WHERE ob.id = $1`, [id]
+    `SELECT al.name, al.code, ob.as_of_date FROM opening_balances ob JOIN account_ledgers al ON al.id = ob.ledger_id WHERE ob.id = $1`, [id]
   );
   const ownerCode = String(owner?.code ?? "");
   if (ownerCode.startsWith("CBA-")) {
@@ -3746,6 +3826,9 @@ router.delete("/accounts/opening-balances/:id", requireModuleAction("page:/accou
   if (ownerCode === "STD-OB-ADJ") {
     res.status(400).json({ error: "Opening Balance Adjustment is maintained automatically — it cannot be deleted by hand." }); return;
   }
+  // Month lock: an opening balance belongs to its as-of period — it cannot be
+  // deleted when that month is locked.
+  if (owner && await respondIfMonthLocked(res, pool, [owner.as_of_date], "opening balance delete")) return;
   const { rows: [deleted] } = await pool.query(
     `DELETE FROM opening_balances WHERE id = $1 RETURNING ledger_id`, [id]
   );

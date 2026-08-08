@@ -40,6 +40,7 @@ import { ensureFixedAssetLedger } from "../migrations/fixedAssets";
 import {
   ASSET_DISPOSAL_TYPES, ASSET_PAYMENT_MODES, ASSET_PAYMENT_STATUSES,
 } from "../migrations/assetModule";
+import { respondIfMonthLocked, isMonthLocked, ymOfDate, monthLockedBody } from "../lib/periodLock";
 
 const router: IRouter = Router();
 
@@ -315,6 +316,10 @@ router.post("/assets/purchases", requireModuleAction(PG_PURCHASES, "add"), async
   const purchaseDate = String(body.purchaseDate ?? "").slice(0, 10);
   if (!isIsoDate(purchaseDate)) { res.status(400).json({ error: "purchaseDate must be a real calendar date (YYYY-MM-DD)" }); return; }
 
+  // Month lock: an asset purchase posts a journal voucher dated purchaseDate —
+  // it may not be recorded into a locked accounting period.
+  if (await respondIfMonthLocked(res, pool, [purchaseDate], "asset purchase")) return;
+
   const gstRate = Number(body.gstRate ?? 0);
   if (!Number.isFinite(gstRate) || gstRate < 0 || gstRate > 100 || !hasMaxDp(gstRate, 2)) {
     res.status(400).json({ error: "gstRate must be between 0 and 100 (max 2 decimals)" }); return;
@@ -583,6 +588,11 @@ router.patch("/assets/purchases/:id", requireModuleAction(PG_REGISTER, "edit"), 
   const curId = Number(before.current_location_id ?? before.location_id ?? 1);
   if (!isLocationInScope(scope, curType, curId)) { res.status(404).json({ error: "Not found" }); return; }
 
+  // Month lock: this purchase is a dated financial record — it may not be edited
+  // while its purchase month's accounting period is locked. (purchase_date is
+  // immutable here, so the stored date is the only one to check.)
+  if (await respondIfMonthLocked(res, pool, [before.purchase_date], "asset purchase edit")) return;
+
   const body = req.body ?? {};
   const sets: string[] = [];
   const params: unknown[] = [];
@@ -696,6 +706,17 @@ router.delete("/assets/purchases/:id", requireModuleAction(PG_REGISTER, "delete"
       res.status(400).json({ error: "This asset has been disposed and is part of history — it cannot be deleted." });
       return;
     }
+
+    // Month lock: deleting the purchase reverses its journal voucher, so it may
+    // not run while the purchase month's accounting period is locked. Checked
+    // inside the transaction after the row is loaded.
+    const purchaseYm = ymOfDate(row.purchase_date);
+    if (purchaseYm && await isMonthLocked(client, purchaseYm.year, purchaseYm.month)) {
+      await client.query("ROLLBACK");
+      res.status(423).json(monthLockedBody(purchaseYm.year, purchaseYm.month));
+      return;
+    }
+
     label = `${row.asset_code ?? `#${id}`} (${row.asset_name})`;
     beforeMeta = {
       assetId: row.asset_id, assetName: row.asset_name, assetCode: row.asset_code,
@@ -793,6 +814,7 @@ router.post("/assets/transfers", requireModuleAction(PG_TRANSFERS, "add"), async
 
   const transferDate = String(body.transferDate ?? "").slice(0, 10);
   if (!isIsoDate(transferDate)) { res.status(400).json({ error: "transferDate must be a real calendar date (YYYY-MM-DD)" }); return; }
+  if (await respondIfMonthLocked(res, pool, [transferDate], "asset transfer")) return;
   const approvedBy = trimOrNull(body.approvedBy);
   const reason = trimOrNull(body.reason);
 
@@ -942,6 +964,10 @@ router.post("/assets/disposals", requireModuleAction(PG_DISPOSAL, "add"), async 
   const disposalDate = String(body.disposalDate ?? "").slice(0, 10);
   if (!isIsoDate(disposalDate)) { res.status(400).json({ error: "disposalDate must be a real calendar date (YYYY-MM-DD)" }); return; }
   const reason = trimOrNull(body.reason);
+
+  // Month lock: a disposal is a dated financial event — it may not be recorded
+  // into a locked accounting period.
+  if (await respondIfMonthLocked(res, pool, [disposalDate], "asset disposal")) return;
 
   const scope = await getUserDataScope(employee ?? { branchType: "headoffice", branchId: 0 });
   const client = await pool.connect();

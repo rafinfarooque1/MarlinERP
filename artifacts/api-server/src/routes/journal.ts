@@ -10,6 +10,7 @@ import { clearsThroughBank } from "../lib/paymentModes";
 import { isIsoDate } from "../lib/dateInput";
 import { callerLocation, ownLocationScope, foreignPartyLedgerIds, locationOwnedLedgerMap } from "../lib/moneyScope";
 import { outletWritesBlocked } from "../lib/featureFlags";
+import { respondIfMonthLocked, isMonthLocked, ymOfDate, monthLockedBody } from "../lib/periodLock";
 
 const router = Router();
 
@@ -537,6 +538,9 @@ router.post("/accounts/journal-vouchers", requireModuleAction("page:/accounts/vo
   }
   const voucherDate = String(body.voucherDate ?? "").slice(0, 10);
   if (!isDate(voucherDate)) { res.status(400).json({ error: "voucherDate (YYYY-MM-DD) is required" }); return; }
+  // Month lock: a journal voucher is a new record dated voucherDate — it may
+  // not be created in a locked month.
+  if (await respondIfMonthLocked(res, pool, [voucherDate], "journal voucher create")) return;
   const narration = body.narration ? String(body.narration).trim() || null : null;
   const reason = body.reason ? String(body.reason).trim() || null : null;
   const createdBy = (req as any).employee?.username ?? "system";
@@ -727,6 +731,17 @@ router.patch("/accounts/journal-vouchers/:id", requireModuleAction("page:/accoun
     if (!cur) { await client.query("ROLLBACK"); res.status(404).json({ error: "Voucher not found" }); return; }
     if (!isEditableVoucher(cur)) { await client.query("ROLLBACK"); res.status(409).json({ error: lockedReason(cur) }); return; }
 
+    // Month lock: an edit may neither touch a voucher inside a locked month nor
+    // move it into/out of one — check BOTH the stored date and the new one.
+    for (const d of [cur.voucher_date, voucherDate]) {
+      const ym = ymOfDate(d);
+      if (ym && await isMonthLocked(client, ym.year, ym.month)) {
+        await client.query("ROLLBACK");
+        res.status(423).json(monthLockedBody(ym.year, ym.month));
+        return;
+      }
+    }
+
     const currentRev = cur.updated_at ?? cur.created_at;
     const currentMs = currentRev ? new Date(currentRev).getTime() : NaN;
     if (!Number.isFinite(currentMs) || currentMs !== expectedMs) {
@@ -811,7 +826,7 @@ router.delete("/accounts/journal-vouchers/:id", requireModuleAction("page:/accou
     // deletable, because deletion is a capability this screen has always had and
     // silently withdrawing it for every historical voucher is its own hazard.
     const { rows: [v] } = await client.query(
-      `SELECT id, voucher_number, voucher_type, total_amount, origin, source_module,
+      `SELECT id, voucher_number, voucher_type, voucher_date, total_amount, origin, source_module,
               location_type, location_id
          FROM journal_vouchers WHERE id = $1 FOR UPDATE`, [id]
     );
@@ -831,6 +846,15 @@ router.delete("/accounts/journal-vouchers/:id", requireModuleAction("page:/accou
       await client.query("ROLLBACK");
       res.status(409).json({ error: lockedReason(v, "delete") });
       return;
+    }
+    // Month lock: cannot delete a voucher dated in a locked month.
+    {
+      const ym = ymOfDate(v.voucher_date);
+      if (ym && await isMonthLocked(client, ym.year, ym.month)) {
+        await client.query("ROLLBACK");
+        res.status(423).json(monthLockedBody(ym.year, ym.month));
+        return;
+      }
     }
 
     await client.query(`DELETE FROM journal_vouchers WHERE id = $1`, [id]);

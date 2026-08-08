@@ -201,14 +201,28 @@ export async function loadAccrualCutover(pool: Pool): Promise<string> {
   return ymd(row?.attendance_from) ?? monthStart(ymd(new Date())!);
 }
 
-/** Employee-months already signed off, which the sweep must leave alone. */
+/**
+ * Employee-months already signed off, which the sweep must leave alone.
+ *
+ * Two things freeze a month here, and both are unioned: the employee's own
+ * approved/paid payroll row (the original contract), and an accounting-period
+ * lock on that calendar month. A locked accounting period is frozen for
+ * automation exactly like an approved payroll — the sweep must not accrue,
+ * re-price or delete a day inside it, so both sets flow into the same `locked`
+ * guard the walk already respects.
+ */
 async function lockedMonths(q: Querier, employeeId: number): Promise<Set<string>> {
   const { rows } = await q.query(
     `SELECT year, month FROM payroll
       WHERE employee_id = $1 AND status IN ('approved', 'paid')`,
     [employeeId],
   );
-  return new Set(rows.map((r) => monthKey(Number(r.year), Number(r.month))));
+  const set = new Set(rows.map((r) => monthKey(Number(r.year), Number(r.month))));
+  const { rows: apRows } = await q.query(
+    `SELECT year, month FROM accounting_period_locks`,
+  );
+  for (const r of apRows) set.add(monthKey(Number(r.year), Number(r.month)));
+  return set;
 }
 
 /**
@@ -357,6 +371,10 @@ async function accrueEmployee(
             SELECT 1 FROM payroll p
              WHERE p.employee_id = a.employee_id AND p.year = a.year AND p.month = a.month
                AND p.status IN ('approved', 'paid')
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM accounting_period_locks l
+             WHERE l.year = a.year AND l.month = a.month
           )`,
       [e.id, e.lastWorkingDate],
     );
@@ -676,6 +694,10 @@ export async function recalcUnapprovedSalaryAccruals(
             SELECT 1 FROM payroll p
              WHERE p.employee_id = a.employee_id AND p.year = a.year AND p.month = a.month
                AND p.status IN ('approved', 'paid')
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM accounting_period_locks l
+             WHERE l.year = a.year AND l.month = a.month
           )`,
       [employeeId, startDate],
     );
@@ -694,6 +716,10 @@ export async function recalcUnapprovedSalaryAccruals(
               SELECT 1 FROM payroll p
                WHERE p.employee_id = a.employee_id AND p.year = a.year AND p.month = a.month
                  AND p.status IN ('approved', 'paid')
+            )
+            AND NOT EXISTS (
+              SELECT 1 FROM accounting_period_locks l
+               WHERE l.year = a.year AND l.month = a.month
             )
           RETURNING amount`,
         [employeeId, startDate],

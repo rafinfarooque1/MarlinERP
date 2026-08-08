@@ -19,6 +19,7 @@ import { parseDateRange, pushDateRange, pushLocationFilter } from "../lib/queryF
 import { getLocationFilter } from "../lib/requestLocation";
 import { parsePaging, setPagingHeaders, applyPaging } from "../lib/paging";
 import { availabilityAt, insufficientStockMessage } from "../lib/reservations";
+import { respondIfMonthLocked, isMonthLocked, ymOfDate, monthLockedBody } from "../lib/periodLock";
 
 // ── Batch costing & wastage ──────────────────────────────────────────────────
 // Every new batch snapshots, at save time:
@@ -515,6 +516,9 @@ router.post("/productions", requireModuleAction("page:/production/production", "
   if (!mfgInput.ok) { res.status(400).json({ error: "mfgDate must be a real calendar date in YYYY-MM-DD form" }); return; }
   if (!expiryInput.ok) { res.status(400).json({ error: "expiryDate must be a real calendar date in YYYY-MM-DD form" }); return; }
 
+  // Month lock: a new batch dated in a locked month cannot be backdated in.
+  if (await respondIfMonthLocked(res, pool, [parsed.data.productionDate], "production create")) return;
+
   const client = await pool.connect();
   let rowId = 0;
   let createdAt: Date | null = null;
@@ -840,6 +844,15 @@ router.patch("/productions/:id", requireModuleAction("page:/production/productio
       await client.query("ROLLBACK");
       res.status(409).json({ error: "This batch was changed by someone else. Reload and try again." }); return;
     }
+    // Month lock: an edit may neither change a batch inside a locked month nor
+    // move one into/out of one — guard the stored date AND the incoming date.
+    for (const d of [before.day, productionDate]) {
+      const ym = ymOfDate(d);
+      if (ym && await isMonthLocked(client, ym.year, ym.month)) {
+        await client.query("ROLLBACK");
+        res.status(423).json(monthLockedBody(ym.year, ym.month)); return;
+      }
+    }
     // LBAC: a batch belonging to another location must not be editable by id.
     const editLoc: ProdLocation = {
       type: before.location_type ?? "headoffice",
@@ -945,6 +958,15 @@ router.delete("/productions/:id", requireModuleAction("page:/production/producti
       await client.query("ROLLBACK");
       res.status(409).json({ error: "This batch was changed by someone else. Reload and try again." });
       return;
+    }
+    // Month lock: deleting a batch reverses stock and books in its own month —
+    // frozen once that month is locked.
+    {
+      const ym = ymOfDate(row.production_date_str);
+      if (ym && await isMonthLocked(client, ym.year, ym.month)) {
+        await client.query("ROLLBACK");
+        res.status(423).json(monthLockedBody(ym.year, ym.month)); return;
+      }
     }
     delLocName = await locationLabel(client, delLoc);
 

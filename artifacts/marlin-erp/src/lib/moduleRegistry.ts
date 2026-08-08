@@ -541,6 +541,13 @@ export const MODULE_REGISTRY: ModuleDef[] = [
     navEntries: [{ name: 'Reconciliation', href: '/accounts/reconciliation' }],
   },
   {
+    // Month locking — admin-only (default-deny permission row; only the
+    // Administrator hierarchy sees it unless explicitly granted).
+    key: 'Accounting Periods', permGroup: 'Accounts',
+    navGroup: 'Accounts',
+    navEntries: [{ name: 'Month Locking', href: '/accounts/periods' }],
+  },
+  {
     // 'Cash Balance' in Operations now covers both the branch view (/sales/cash-balance)
     // and the HO aggregate view (/accounts/cash-in-outlet), following the HO Transfers
     // pattern. This module key is kept for backward-compatible permission rows only;

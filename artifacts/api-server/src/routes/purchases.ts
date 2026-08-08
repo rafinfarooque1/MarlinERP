@@ -23,6 +23,7 @@ import {
   calcPurchaseBill, asPriceMode, asTaxType,
   type PriceMode, type TaxType,
 } from "@workspace/purchase-pricing";
+import { respondIfMonthLocked, isMonthLocked, ymOfDate, monthLockedBody } from "../lib/periodLock";
 
 const router = Router();
 
@@ -560,6 +561,9 @@ router.post("/purchases", requireModuleAction("page:/production/purchase", "add"
     res.status(400).json({ error: "Purchase date must be a real calendar date (YYYY-MM-DD)" }); return;
   }
 
+  // Month lock: a new bill dated in a locked month cannot be backdated in.
+  if (await respondIfMonthLocked(res, pool, [parsed.data.purchaseDate], "purchase create")) return;
+
   const rawLineItems = (parsed.data.lineItems || []) as any[];
   if (rawLineItems.length === 0) { res.status(400).json({ error: "Add at least one line item" }); return; }
 
@@ -994,6 +998,12 @@ router.patch("/purchases/:id", requireModuleAction("page:/production/purchase", 
     res.status(400).json({ error: "Purchase date must be a real calendar date (YYYY-MM-DD)" }); return;
   }
 
+  // Month lock: an edit may neither change a bill inside a locked month nor
+  // move one into/out of one — guard the stored date AND the incoming date.
+  // Fast pre-check for both edit paths; the line-items path re-checks under the
+  // row lock below.
+  if (await respondIfMonthLocked(res, pool, [current.purchaseDate, purchaseDate], "purchase edit")) return;
+
   if (lineItems !== undefined) {
     if (!Array.isArray(lineItems) || lineItems.length === 0) {
       res.status(400).json({ error: "Add at least one line item" }); return;
@@ -1111,6 +1121,16 @@ router.patch("/purchases/:id", requireModuleAction("page:/production/purchase", 
         res.status(409).json({ error: "This bill was changed by someone else. Reload and try again." }); return;
       }
       beforeTotal = Number(locked.total_amount ?? 0);
+
+      // Month lock: an edit may neither change a bill inside a locked month nor
+      // move one into/out of one — guard the stored date AND the incoming date.
+      for (const d of [locked.purchase_date, purchaseDate]) {
+        const ym = ymOfDate(d);
+        if (ym && await isMonthLocked(client, ym.year, ym.month)) {
+          await client.query("ROLLBACK");
+          res.status(423).json(monthLockedBody(ym.year, ym.month)); return;
+        }
+      }
 
       // Re-check the settlement floor UNDER the row lock. The pre-transaction
       // check is a fast fail for the common case, but a payment allocation can
@@ -1757,6 +1777,16 @@ router.delete("/purchases/:id", requireModuleAction("page:/production/purchase",
     if (!locked) {
       await client.query("ROLLBACK");
       res.status(404).json({ error: "Not found" }); return;
+    }
+
+    // Month lock: deleting a bill reverses stock and books in its own month —
+    // frozen once that month is locked.
+    {
+      const ym = ymOfDate(locked.purchase_date);
+      if (ym && await isMonthLocked(client, ym.year, ym.month)) {
+        await client.query("ROLLBACK");
+        res.status(423).json(monthLockedBody(ym.year, ym.month)); return;
+      }
     }
 
     // A bill that a payment voucher explicitly settled cannot quietly vanish —

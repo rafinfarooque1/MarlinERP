@@ -4,6 +4,7 @@ import { requireModuleView, requireModuleAction } from "../middleware/permission
 import { eq, sql } from "drizzle-orm";
 import { pool } from "@workspace/db";
 import { isIsoDate } from "../lib/dateInput";
+import { respondIfMonthLocked } from "../lib/periodLock";
 import {
   CreateCouponBody, UpdateCouponBody, DeleteCouponParams,
 } from "@workspace/api-zod";
@@ -86,6 +87,44 @@ function pickVendor(body: StrRecord): StrRecord {
   const r: StrRecord = {};
   for (const k of VENDOR_FIELDS) { if (k in body) r[k] = body[k]; }
   return r;
+}
+
+// ── GST number normalisation & validation ──────────────────────────────────
+// Blank is stored as NULL, never '' — otherwise "cleared" and "never set"
+// diverge and reads have to guard both. A supplied value is trimmed and
+// uppercased before it is written or compared.
+const GSTIN_RE = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][A-Z0-9]Z[A-Z0-9]$/;
+
+/** Normalise data.gstNumber in place (trim, uppercase, '' → null). No-op when the key is absent. */
+function normalizeGstField(data: StrRecord): void {
+  if (!('gstNumber' in data)) return;
+  const v = String(data.gstNumber ?? '').trim().toUpperCase();
+  data.gstNumber = v === '' ? null : v;
+}
+
+/**
+ * Validate an already-normalised GST number for a write.
+ *
+ * GST stays OPTIONAL (null always passes). A non-null value must be a
+ * 15-character GSTIN — except when it equals the value already stored on the
+ * row (grandfathering): live data holds a few legacy typos, and rejecting
+ * them here would block every unrelated edit of those records, since the
+ * edit form resubmits the stored GST verbatim.
+ */
+async function gstWriteError(
+  data: StrRecord,
+  table: "customers" | "vendors" | null,
+  id: number | null,
+): Promise<string | null> {
+  if (!('gstNumber' in data) || data.gstNumber == null) return null;
+  if (GSTIN_RE.test(data.gstNumber)) return null;
+  if (table && id != null) {
+    const { rows: [cur] } = await pool.query<{ gst_number: string | null }>(
+      `SELECT gst_number FROM ${table} WHERE id = $1`, [id]);
+    const stored = String(cur?.gst_number ?? '').trim().toUpperCase();
+    if (stored && stored === data.gstNumber) return null; // unchanged legacy value
+  }
+  return "GST number must be a valid 15-character GSTIN (e.g. 32AAICM1234A1Z5), or leave it blank";
 }
 
 /**
@@ -201,6 +240,11 @@ router.get("/customers", requireModuleView(["page:/sales/pos", "page:/accounts/v
   setPagingHeaders(res, rows.length, paging);
   res.json(applyPaging(rows as any[], paging).map((r: any) => ({
     ...r,
+    // Raw c.* rows carry snake_case gst_number; every consumer (list columns,
+    // the edit dialog, POS/Quotations B2B checks) reads camelCase gstNumber —
+    // same normalisation the vendors list below has always done. Without this
+    // the edit form loaded blank and saved the blank back, wiping the GST.
+    gstNumber:           r.gst_number ?? null,
     totalPurchases:      Number(r.totalPurchases),
     // Kept nullable on purpose: Number(null) is 0, which would turn "this party
     // has no ledger" back into a confident zero balance.
@@ -221,6 +265,9 @@ router.post("/customers", requireModuleAction("page:/customers", "add"), async (
     res.status(400).json({ error: "name is required" });
     return;
   }
+  normalizeGstField(data);
+  const gstErr = await gstWriteError(data, null, null);
+  if (gstErr) { res.status(400).json({ error: gstErr }); return; }
   const creditErr = validateCreditFields(req.body);
   if (creditErr) { res.status(400).json({ error: creditErr }); return; }
   // LBAC: stamp location from the authenticated employee's session — never trust client.
@@ -264,12 +311,30 @@ router.patch("/customers/:id", requireModuleAction("page:/customers", "edit"), a
   const id = parseInt(raw, 10);
   const data = pickCustomer(req.body);
   if (await partyScopeCheck(req, "customer", id) !== "ok") { res.status(404).json({ error: "Not found" }); return; }
+  normalizeGstField(data);
+  const gstErr = await gstWriteError(data, "customers", id);
+  if (gstErr) { res.status(400).json({ error: gstErr }); return; }
+  // Snapshot the stored GST BEFORE the write: a blank→valid transition
+  // triggers automatic B2C→B2B invoice reclassification below, and a failed
+  // conversion must be able to put the old value back.
+  const { rows: [gstBefore] } = await pool.query<{ gst_number: string | null }>(
+    `SELECT gst_number FROM customers WHERE id = $1`, [id],
+  );
   const creditErr = validateCreditFields(req.body);
   if (creditErr) { res.status(400).json({ error: creditErr }); return; }
   const hasCreditFields = ('creditLimit' in req.body) || ('creditDays' in req.body);
   const reloc = await resolveRelocation(req);
   if (reloc && "error" in reloc) { res.status(reloc.status).json({ error: reloc.error }); return; }
   if (Object.keys(data).length === 0 && !hasCreditFields && !reloc) { res.status(400).json({ error: "No valid fields to update" }); return; }
+
+  // A customer gaining a GSTIN (blank → valid) triggers B2C→B2B invoice
+  // reclassification. That GST write must share the conversion's transaction
+  // so the two can never disagree — strip it here and let the conversion
+  // helper write it (applyGstin) inside its own BEGIN/COMMIT.
+  const newGst = 'gstNumber' in data ? (data as any).gstNumber as string | null : undefined;
+  const hadGst = String(gstBefore?.gst_number ?? '').trim() !== '';
+  const gstGained = typeof newGst === 'string' && newGst !== '' && !hadGst;
+  if (gstGained) delete (data as any).gstNumber;
 
   let row;
   if (Object.keys(data).length > 0) {
@@ -292,8 +357,35 @@ router.patch("/customers/:id", requireModuleAction("page:/customers", "edit"), a
       [row.name, `Customer ledger — ${row.name}`, `CUST-${id}`]
     ).catch(() => {});
   }
+  // ── Automatic B2C → B2B reclassification ─────────────────────────────────
+  // A customer who just gained a GSTIN has all eligible (open-month,
+  // non-cancelled) B2C invoices converted to the B2B series in one atomic
+  // transaction; locked months are never touched. If the conversion fails,
+  // the GST save is rolled back too — GST-on-file and invoice classification
+  // must never disagree.
+  let reclass: import("../lib/invoiceReclass").ReclassResult | null = null;
+  if (gstGained) {
+    try {
+      const { convertCustomerB2CToB2B } = await import("../lib/invoiceReclass");
+      reclass = await convertCustomerB2CToB2B({
+        customerId: id, gstin: newGst as string,
+        actor: (req as any).employee?.username ?? "system",
+        applyGstin: true, // GST save + conversion commit (or fail) as ONE txn
+      });
+      row = { ...row, gstNumber: newGst } as typeof row;
+    } catch (err) {
+      console.error("[customers] B2C→B2B conversion failed; GST save rolled back with it:", err);
+      res.status(500).json({
+        error: "GST number was not saved: converting this customer's existing B2C invoices to the B2B series failed. No invoice was changed — please try again.",
+      });
+      return;
+    }
+  }
   const credit = await creditFieldsRow(id);
-  res.json({ ...row, ...credit, totalPurchases: Number(row.totalPurchases) });
+  res.json({
+    ...row, ...credit, totalPurchases: Number(row.totalPurchases),
+    ...(reclass ? { invoiceReclassification: reclass } : {}),
+  });
 });
 
 router.delete("/customers/:id", requireModuleAction("page:/customers", "delete"), async (req, res): Promise<void> => {
@@ -409,6 +501,9 @@ router.post("/vendors", requireModuleAction("page:/vendors", "add"), async (req,
     res.status(400).json({ error: "name is required" });
     return;
   }
+  normalizeGstField(data);
+  const vendGstErr = await gstWriteError(data, null, null);
+  if (vendGstErr) { res.status(400).json({ error: vendGstErr }); return; }
   // LBAC: stamp location from the authenticated employee's session
   const vendEmp = (req as any).employee as { branchType: string; branchId: number } | undefined;
   let vendStampType = vendEmp?.branchType ?? 'headoffice';
@@ -442,6 +537,9 @@ router.patch("/vendors/:id", requireModuleAction("page:/vendors", "edit"), async
   const id = parseInt(raw, 10);
   const data = pickVendor(req.body);
   if (await partyScopeCheck(req, "vendor", id) !== "ok") { res.status(404).json({ error: "Not found" }); return; }
+  normalizeGstField(data);
+  const vendGstErr = await gstWriteError(data, "vendors", id);
+  if (vendGstErr) { res.status(400).json({ error: vendGstErr }); return; }
   const reloc = await resolveRelocation(req);
   if (reloc && "error" in reloc) { res.status(reloc.status).json({ error: reloc.error }); return; }
   if (Object.keys(data).length === 0 && !reloc) { res.status(400).json({ error: "No valid fields to update" }); return; }
@@ -656,6 +754,9 @@ router.post("/vendors/:id/payment", requireModuleAction(["page:/vendors", "page:
   if (!isIsoDate(date)) {
     res.status(400).json({ error: "date must be a real calendar date in YYYY-MM-DD form" }); return;
   }
+
+  // Month lock: a vendor payment may not be backdated into a locked month.
+  if (await respondIfMonthLocked(res, pool, [date], "vendor payment")) return;
 
   // Find the VEND-{id} ledger account
   const { rows: [vendorLedger] } = await pool.query(

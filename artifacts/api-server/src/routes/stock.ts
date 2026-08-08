@@ -9,6 +9,7 @@ import { pool } from "@workspace/db";
 import { consumeBatches, restoreBatches, creditBatch, updateAvgCostOnInbound, validateBatchOverride, type BatchBreakdownEntry } from "../lib/batches";
 import { writeStockLedger, batchResolveMeta } from "../lib/stockLedger";
 import { isIsoDate } from "../lib/dateInput";
+import { isMonthLocked, ymOfDate, monthLockedBody, respondIfMonthLocked } from "../lib/periodLock";
 import {
   resolveLocationGst, classifyTransfer, computeTransferGst, createDispatchVoucher, createReceiveVoucher,
   buildTransferInvoiceLines, totalsFromLines, isTransferInvoicingEnabled, nextTransferInvoiceNumber,
@@ -530,6 +531,9 @@ router.post("/stock/transfers", requireModuleAction("page:/transfers", "add"), a
   // transfer gets, and it must not change halfway through.
   const invoicingEnabled = await isTransferInvoicingEnabled(pool);
 
+  // Month lock: a new transfer dated in a locked month cannot be backdated in.
+  if (await respondIfMonthLocked(res, pool, [parsed.data.transferDate], "stock transfer create")) return;
+
   // All stock effects happen in ONE transaction: manual batch picks are
   // validated server-side (ownership + availability + exact total), the source
   // stock rows are row-locked before deduction, and batches are consumed FEFO
@@ -914,6 +918,17 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction("page:/transfer
       return;
     }
 
+    // Month lock: receiving posts the destination credit and JV on the
+    // transfer's own business date (transfer_date, see the postings below) —
+    // frozen once that month is locked.
+    {
+      const ym = ymOfDate(row.transfer_date);
+      if (ym && await isMonthLocked(client, ym.year, ym.month)) {
+        await client.query("ROLLBACK");
+        res.status(423).json(monthLockedBody(ym.year, ym.month)); return;
+      }
+    }
+
     // The shipment has landed: it is no longer in transit, so its in-transit
     // reservations are settled here. The destination credit below puts the goods
     // back into a location's on-hand figure, and leaving the reservations active
@@ -1259,6 +1274,17 @@ router.patch("/stock/transfers/:id/reject", requireModuleAction("page:/transfers
       if (!chk) { res.status(404).json({ error: "Transfer not found" }); return; }
       res.status(400).json({ error: `Cannot reject a transfer with status "${chk.status}"` });
       return;
+    }
+
+    // Month lock: rejection reverses the source deduction and re-posts on the
+    // transfer's own business date (transfer_date, see the postings below) —
+    // frozen once that month is locked.
+    {
+      const ym = ymOfDate(row.transfer_date);
+      if (ym && await isMonthLocked(client, ym.year, ym.month)) {
+        await client.query("ROLLBACK");
+        res.status(423).json(monthLockedBody(ym.year, ym.month)); return;
+      }
     }
 
     const lineItems = row.line_items as Array<{ itemId: number; quantity: number; costPrice?: number; batchBreakdown?: BatchBreakdownEntry[]; materialType?: string }>;
