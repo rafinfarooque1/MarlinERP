@@ -1,0 +1,141 @@
+Fix GST calculation in Point of Sale (POS) to use the customer's state and the selected selling location's state.
+
+GST RULE:
+
+1. Get the State of the selected Selling Location/Warehouse.
+
+2. Get the State of the selected Customer.
+
+3. If Customer State = Selling Location State:
+
+   Apply INTRA-STATE GST:
+   - CGST
+   - SGST
+
+   Do NOT apply IGST.
+
+4. If Customer State != Selling Location State:
+
+   Apply INTER-STATE GST:
+   - IGST
+
+   Do NOT apply CGST.
+   Do NOT apply SGST.
+
+5. Walk-in Customer:
+
+If the customer is Walk-in Customer and there is no customer state available, use the configured state of the Selling Location for the GST determination, according to the existing Sales module behavior.
+
+6. POS MUST NOT determine GST from:
+- Head Office state
+- User's state
+- Browser/location
+- Customer name
+- Previous invoice
+- Previous transaction
+- Default hardcoded GST type
+
+GST must always be determined from:
+
+Selling Location State
++
+Customer State
+
+7. Apply this logic everywhere in POS:
+
+- New Sale
+- Add Item
+- Edit Sale
+- Recalculate Sale
+- Change Customer
+- Change Selling Location
+- Change quantity
+- Change discount
+- Change taxable amount
+- Save Sale
+- Invoice/PDF generation
+
+If the customer or selling location is changed, immediately recalculate the GST type and amounts.
+
+8. Example:
+
+Selling Location:
+Frozen Hub - Calicut
+State: Kerala
+
+Customer:
+State: Kerala
+
+Result:
+CGST 2.5%
+SGST 2.5%
+IGST 0%
+
+Another example:
+
+Selling Location:
+Frozen Hub - Calicut
+State: Kerala
+
+Customer:
+State: Karnataka
+
+Result:
+IGST 5%
+CGST 0%
+SGST 0%
+
+9. IMPORTANT:
+
+POS must use the SAME GST calculation service/function used by the normal Sales module.
+
+Do not create a separate POS GST calculation algorithm.
+
+Find the existing Sales GST/place-of-supply logic and reuse the same backend calculation so Sales and POS can never produce different GST results.
+
+10. Backend validation:
+
+Do not rely only on frontend GST calculation.
+
+Before saving the POS sale, the backend must determine:
+
+sellingLocationState
+customerState
+gstType
+
+and calculate the correct tax.
+
+Reject/correct inconsistent frontend GST values.
+
+11. Existing transactions:
+
+Do not modify historical sales automatically.
+
+Apply the corrected logic to new POS transactions and edited transactions only where recalculation is explicitly performed.
+
+12. Test thoroughly:
+
+A. Kerala warehouse + Kerala customer
+→ CGST + SGST
+
+B. Kerala warehouse + Karnataka customer
+→ IGST
+
+C. Karnataka warehouse + Karnataka customer
+→ CGST + SGST
+
+D. Karnataka warehouse + Kerala customer
+→ IGST
+
+E. Change customer from same-state to different-state
+→ GST must immediately change from CGST+SGST to IGST.
+
+F. Change customer from different-state to same-state
+→ GST must immediately change from IGST to CGST+SGST.
+
+G. Change selling location
+→ GST must recalculate based on the new selling location.
+
+Verify that POS invoice, Sales invoice, ledger postings, GST reports and dashboard all use the same tax values.
+
+Do not change any other POS functionality.

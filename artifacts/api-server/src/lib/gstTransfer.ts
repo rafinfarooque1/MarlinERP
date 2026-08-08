@@ -45,6 +45,31 @@ function stateCodeFromGstin(gstin: string | null | undefined): string {
   return /^\d{2}$/.test(code) ? code : '';
 }
 
+/**
+ * Inter-state test for a SALE or QUOTATION: the SELLING LOCATION's state vs
+ * the customer's state (place of supply). Official state codes are compared
+ * when both sides resolve to one (folding aliases like Orissa/Odisha);
+ * otherwise the normalised names are compared. A missing customer state
+ * (walk-in) or a missing seller state keeps the supply intrastate — GST is
+ * then charged at the counter's own state, the pre-existing behaviour.
+ *
+ * Every sales producer (POS, sales entry, quotations) must route through this
+ * ONE function so no two modules can disagree on CGST/SGST vs IGST.
+ */
+export function isInterStateSupply(
+  seller: { state?: string | null; stateCode?: string | null },
+  customerState: string | null | undefined,
+): boolean {
+  const custName = (customerState ?? '').trim().toLowerCase();
+  if (!custName) return false;
+  const sellerName = (seller.state ?? '').trim().toLowerCase();
+  const sellerCode = (seller.stateCode ?? '').trim() || stateCodeFromState(sellerName);
+  const custCode = stateCodeFromState(custName);
+  if (sellerCode && custCode) return sellerCode !== custCode;
+  if (!sellerName) return false;
+  return sellerName !== custName;
+}
+
 // ── Location GST resolution ───────────────────────────────────────────────────
 
 export interface LocationGst {

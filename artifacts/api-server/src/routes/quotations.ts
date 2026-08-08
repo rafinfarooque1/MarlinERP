@@ -33,6 +33,7 @@ import { availabilityAt } from "../lib/reservations";
 import { logActivity } from "../lib/audit";
 import { createQuotationShareToken } from "../lib/shareToken";
 import { buildSaleLines, checkMrpFloor, computeInvoiceNumber } from "./sales";
+import { resolveLocationGst, isInterStateSupply } from "../lib/gstTransfer";
 import { blockedByInactiveProducts } from "../lib/productIdentity";
 
 const router = Router();
@@ -178,6 +179,8 @@ type BuiltQuotation =
  */
 async function buildQuotationFigures(data: {
   customerId?: number | null;
+  locationType?: string;
+  locationId?: number;
   lineItems: any[];
   billDiscount?: number | null;
   discountTotal?: number | null;
@@ -211,7 +214,10 @@ async function buildQuotationFigures(data: {
     i.id, { taxRate: Number(i.taxRate), name: i.name, hsnCode: i.hsnCode, unit: i.unit },
   ]));
 
-  // Inter-state exactly as sales decides it: company state vs customer state.
+  // Inter-state exactly as sales decides it: the SELLING LOCATION's state vs
+  // the customer's state (company state only as the fallback for a location
+  // with no state configured). A quotation and the invoice it later becomes
+  // must agree — both route through isInterStateSupply.
   let company = (await db.select().from(companySettingsTable).limit(1))[0];
   if (!company) {
     [company] = await db.insert(companySettingsTable).values({}).returning();
@@ -224,7 +230,13 @@ async function buildQuotationFigures(data: {
     if (!cust) return { ok: false, error: "Customer not found" };
     customerState = (cust.state ?? "").trim().toLowerCase();
   }
-  const isInterState = !!(companyState && customerState && companyState !== customerState);
+  const sellerGst = data.locationType && data.locationId
+    ? await resolveLocationGst(pool, data.locationType, Number(data.locationId))
+    : null;
+  const isInterState = isInterStateSupply(
+    { state: sellerGst?.state || companyState, stateCode: sellerGst?.stateCode ?? '' },
+    customerState,
+  );
 
   // ── Quotation MRP floor ─────────────────────────────────────────────────
   // The quotation MRP is editable, but only UPWARD: it may equal or exceed

@@ -133,4 +133,5 @@
 - [401 = dead session contract](session-401-contract.md) — clients log out on any 401; wrong typed credentials must be 400; self-service GETs self-scope instead of 403 (a 403 zeroes mobile tiles silently).
 - [Returns edit](returns-edit.md) — full-state PATCH, delta-based stock, numbers FY-pinned, note JV in place; returns are invoice-anchored (never item master) — sale unitPrice is GROSS, show Net Rate + server's r2 chain; coupons excluded.
 - [Location data wipe pattern](location-data-wipe.md) — soft-link tables found by column scan (no FKs); refuse mixed cross-location rows; rehearse on scratch DB with real prod data; backups to workspace, never a prod schema.
+- [GST place of supply](gst-place-of-supply.md) — sale GST = SELLING LOCATION state vs customer via ONE isInterStateSupply (code-first, alias-folding); client mirror in indianStates.ts must stay in lockstep.
 - [Sale overpayment & one-sided entries](sale-overpayment-books.md) — overpayment = natural Cr remainder on CUST- (gross model; explicit leg only on walk-in fallback); sale EDIT is the live producer; prod-only BS gaps = data divergence, query the prod replica for clamp classes.

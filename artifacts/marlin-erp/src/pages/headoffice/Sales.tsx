@@ -15,6 +15,7 @@ import { usePermission } from '@/lib/usePermission';
 import { isActiveProduct } from '@/lib/productStatus';
 import { useOutletsEnabled, useFeatureFlags } from '@/lib/useFeatureFlags';
 import { useEnabledOutlets } from '@/lib/locationStructure';
+import { isInterStateSupply } from '@/lib/indianStates';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -705,11 +706,32 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   const getMaxQty = (itemId: number) => getAvailableQty(itemId) + (editHeldQty.get(itemId) ?? 0);
   const getItem = (itemId: number) => items.find(i => i.id === itemId);
 
-  // GST state determination
+  // GST state determination — place of supply is the SELLING LOCATION's state
+  // vs the customer's state (never the head-office state: a Karnataka
+  // warehouse selling to a Karnataka customer is intrastate even though the
+  // company is registered in Kerala). Mirrors the server's isInterStateSupply;
+  // the server recomputes on save and stays authoritative. Company state is
+  // only the fallback for a location with no state configured, and for Head
+  // Office itself. Changing the customer OR the location recomputes this
+  // immediately — every GST figure below derives from it.
   const companyState = ((companySettings as any)?.state ?? '').trim().toLowerCase();
+  const seller = (() => {
+    if (watchLocationType === 'warehouse') {
+      const w = (warehouses as any[]).find((w: any) => Number(w.id) === Number(watchLocationId));
+      const state = String(w?.state ?? '').trim().toLowerCase();
+      return { state: state || companyState, stateCode: state ? String(w?.stateCode ?? '').trim() : '' };
+    }
+    if (watchLocationType === 'outlet') {
+      const o = (outlets as any[]).find((o: any) => Number(o.id) === Number(watchLocationId));
+      const state = String(o?.state ?? '').trim().toLowerCase();
+      return { state: state || companyState, stateCode: state ? String(o?.stateCode ?? '').trim() : '' };
+    }
+    return { state: companyState, stateCode: '' };
+  })();
+  const sellerState = seller.state;
   const selectedCustomer = customers.find(c => c.id === watchCustomerId);
   const customerState = ((selectedCustomer as any)?.state ?? '').trim().toLowerCase();
-  const isInterState = !!(companyState && customerState && companyState !== customerState);
+  const isInterState = isInterStateSupply(seller, customerState);
 
   // Default for the per-line "Taxable" box: a GSTIN-registered customer
   // usually bills B2B (price = taxable base, GST on top); walk-in / no-GSTIN
@@ -1483,7 +1505,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                       {watchCustomerId && isInterState && (
                         <p className="text-xs text-amber-500 mt-1">Inter-state sale → IGST applies</p>
                       )}
-                      {watchCustomerId && !isInterState && companyState && customerState && (
+                      {watchCustomerId && !isInterState && sellerState && customerState && (
                         <p className="text-xs text-emerald-600 mt-1">Intra-state sale → CGST + SGST apply</p>
                       )}
                     </FormItem>

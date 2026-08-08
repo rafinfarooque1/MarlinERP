@@ -28,6 +28,7 @@ import {
 } from "../lib/salePaymentPosition";
 import { advanceAvailable, takeAdvanceLock, attributeAdvanceConsumption, releaseAdvanceConsumption } from "../lib/advanceLedgers";
 import { allocateSalesInvoiceNumber, salesCounterScope } from "../lib/voucherNumber";
+import { resolveLocationGst, isInterStateSupply } from "../lib/gstTransfer";
 
 const router = Router();
 
@@ -663,6 +664,12 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
   const companyState = (company.state ?? '').trim().toLowerCase();
 
   // ── Determine inter-state vs intra-state ──────────────────────────────────
+  // Place of supply = the SELLING LOCATION's state vs the customer's state,
+  // never the head-office state: a Karnataka warehouse selling to a Karnataka
+  // customer is intrastate (CGST+SGST) even though the company registration
+  // is Kerala. Walk-in / stateless customers are supplied over the counter →
+  // intrastate at the location's own state. A location with no state
+  // configured falls back to the company state (the previous behaviour).
   let customerState = '';
   if (parsed.data.customerId) {
     const [cust] = await db.select().from(customersTable)
@@ -670,7 +677,11 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
       .limit(1);
     customerState = (cust?.state ?? '').trim().toLowerCase();
   }
-  const isInterState = !!(companyState && customerState && companyState !== customerState);
+  const sellerGst = await resolveLocationGst(pgPool, locationType, locationId);
+  const isInterState = isInterStateSupply(
+    { state: sellerGst.state || companyState, stateCode: sellerGst.stateCode },
+    customerState,
+  );
 
   // ── Fetch item tax rates ──────────────────────────────────────────────────
   const itemIds = [...new Set(rawLineItems.map(li => li.itemId))];
@@ -1292,7 +1303,9 @@ router.put("/sales/:id", requireModuleAction("page:/sales/pos", "edit"), async (
     res.status(409).json({ error: OUTLETS_DISABLED_MESSAGE, code: OUTLETS_DISABLED_CODE }); return;
   }
 
-  // Determine inter-state
+  // Determine inter-state — the EDITED sale's location vs the customer, same
+  // rule as creation (see POST). Editing the customer or moving the bill to a
+  // location in another state therefore recomputes CGST/SGST vs IGST.
   let company = (await db.select().from(companySettingsTable).limit(1))[0];
   if (!company) { [company] = await db.insert(companySettingsTable).values({}).returning(); }
   const companyState = (company.state ?? '').trim().toLowerCase();
@@ -1302,7 +1315,11 @@ router.put("/sales/:id", requireModuleAction("page:/sales/pos", "edit"), async (
     const [cust] = await db.select().from(customersTable).where(eq(customersTable.id, parsed.data.customerId)).limit(1);
     customerState = (cust?.state ?? '').trim().toLowerCase();
   }
-  const isInterState = !!(companyState && customerState && companyState !== customerState);
+  const sellerGst = await resolveLocationGst(pgPool, newLocationType, newLocationId);
+  const isInterState = isInterStateSupply(
+    { state: sellerGst.state || companyState, stateCode: sellerGst.stateCode },
+    customerState,
+  );
 
   // Fetch item tax rates
   const itemIds = [...new Set(rawLineItems.map(li => li.itemId))];
