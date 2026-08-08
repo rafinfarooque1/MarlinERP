@@ -770,26 +770,28 @@ export async function renderInvoicePdf(data: InvoiceData): Promise<{ buffer: Buf
   // ══════════════════════════════════════════════════════════════════════════
   // 3. GOODS TABLE
   // ══════════════════════════════════════════════════════════════════════════
-  // Col widths: Sl | Desc | HSN | Qty | Unit | UnitPrice | Taxable | C% | CAmt | S% | SAmt | I% | IAmt | Total
-  const W = [8, 42, 14, 8, 9, 15, 19, 7.5, 11, 7.5, 11, 7.5, 11, 19.5];
+  // Col widths: Sl | Desc | HSN | Qty | Unit | MRP | Disc/Unit | Taxable | C% | CAmt | S% | SAmt | I% | IAmt | Total
+  const W = [8, 35.5, 13, 8, 9, 14, 12.5, 18, 7.5, 10.5, 7.5, 10.5, 7.5, 10.5, 18];
   const X: number[] = [];
   { let cx = M; for (const w of W) { X.push(cx); cx += w; } }
   const XEND = M + CW;
 
   const HDR1 = 6.4;   // first header row height
-  const HDR2 = 5.2;   // second header row height
+  const HDR2 = 5.6;   // second header row height (rate/amount sub-row, padded)
   const THDR = HDR1 + HDR2;
   const TROW = 6.9;   // minimum row height; a wrapped description grows it
 
   const drawTableHeader = (yy: number): number => {
     fill(M, yy, CW, THDR, NAVY);
 
-    const allCols = [1, 2, 3, 4, 5, 6, 7, 9, 11, 13];
+    const allCols = [1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 14];
     for (const i of allCols) ln(X[i], yy, X[i], yy + THDR, WHITE, 0.2);
-    ln(X[8],  yy + HDR1, X[8],  yy + THDR, WHITE, 0.15);
-    ln(X[10], yy + HDR1, X[10], yy + THDR, WHITE, 0.15);
-    ln(X[12], yy + HDR1, X[12], yy + THDR, WHITE, 0.15);
-    ln(X[7], yy + HDR1, X[13], yy + HDR1, WHITE, 0.15);
+    ln(X[9],  yy + HDR1, X[9],  yy + THDR, WHITE, 0.15);
+    ln(X[11], yy + HDR1, X[11], yy + THDR, WHITE, 0.15);
+    ln(X[13], yy + HDR1, X[13], yy + THDR, WHITE, 0.15);
+    // Divider between the GST group captions and their RATE/AMOUNT sub-row —
+    // spans all six GST columns and nothing else.
+    ln(X[8], yy + HDR1, X[14], yy + HDR1, WHITE, 0.15);
 
     const cy1 = yy + THDR / 2 + 1.8;
     txt("SL",           X[0]  + W[0]/2,  cy1 - 1.6, { bold: true, size: 6, color: WHITE, align: "center" });
@@ -799,26 +801,27 @@ export async function renderInvoicePdf(data: InvoiceData): Promise<{ buffer: Buf
     txt("CODE",         X[2]  + W[2]/2,  cy1 + 1.6, { bold: true, size: 6, color: WHITE, align: "center" });
     txt("QTY",          X[3]  + W[3]/2,  cy1,        { bold: true, size: 6, color: WHITE, align: "center" });
     txt("UNIT",         X[4]  + W[4]/2,  cy1,        { bold: true, size: 6, color: WHITE, align: "center" });
-    txt("UNIT PRICE",   X[5]  + W[5]/2,  cy1 - 1.6, { bold: true, size: 5.6, color: WHITE, align: "center" });
+    txt("MRP",          X[5]  + W[5]/2,  cy1 - 1.6, { bold: true, size: 5.6, color: WHITE, align: "center" });
     txt("(\u20B9)",     X[5]  + W[5]/2,  cy1 + 1.6, { bold: true, size: 5.6, color: WHITE, align: "center" });
-    txt("TAXABLE",      X[6]  + W[6]/2,  cy1 - 1.6, { bold: true, size: 5.8, color: WHITE, align: "center" });
-    txt("VALUE (\u20B9)", X[6] + W[6]/2, cy1 + 1.6, { bold: true, size: 5.8, color: WHITE, align: "center" });
+    txt("DISC./UNIT",   X[6]  + W[6]/2,  cy1 - 1.6, { bold: true, size: 5.2, color: WHITE, align: "center" });
+    txt("(\u20B9)",     X[6]  + W[6]/2,  cy1 + 1.6, { bold: true, size: 5.2, color: WHITE, align: "center" });
+    txt("TAXABLE",      X[7]  + W[7]/2,  cy1 - 1.6, { bold: true, size: 5.8, color: WHITE, align: "center" });
+    txt("VALUE (\u20B9)", X[7] + W[7]/2, cy1 + 1.6, { bold: true, size: 5.8, color: WHITE, align: "center" });
     const gy1 = yy + HDR1 - 2;
-    txt("CGST", X[7]  + (W[7]+W[8])/2,  gy1, { bold: true, size: 6.6, color: WHITE, align: "center" });
-    txt("SGST", X[9]  + (W[9]+W[10])/2, gy1, { bold: true, size: 6.6, color: WHITE, align: "center" });
-    txt("IGST", X[11] + (W[11]+W[12])/2,gy1, { bold: true, size: 6.6, color: WHITE, align: "center" });
-    txt("TOTAL",        X[13] + W[13]/2, cy1 - 1.6, { bold: true, size: 6, color: WHITE, align: "center" });
-    txt("(\u20B9)",     X[13] + W[13]/2, cy1 + 1.6, { bold: true, size: 6, color: WHITE, align: "center" });
-    const gy2 = yy + HDR1 + HDR2 - 1.8;
-    txt("RATE",    X[7]  + W[7]/2,  gy2 - 2.8, { bold: true, size: 4.8, color: WHITE, align: "center" });
-    txt("(%)",     X[7]  + W[7]/2,  gy2,       { bold: true, size: 4.8, color: WHITE, align: "center" });
-    txt("AMOUNT",  X[8]  + W[8]/2,  gy2 - 1.4, { bold: true, size: 4.8, color: WHITE, align: "center" });
-    txt("RATE",    X[9]  + W[9]/2,  gy2 - 2.8, { bold: true, size: 4.8, color: WHITE, align: "center" });
-    txt("(%)",     X[9]  + W[9]/2,  gy2,       { bold: true, size: 4.8, color: WHITE, align: "center" });
-    txt("AMOUNT",  X[10] + W[10]/2, gy2 - 1.4, { bold: true, size: 4.8, color: WHITE, align: "center" });
-    txt("RATE",    X[11] + W[11]/2, gy2 - 2.8, { bold: true, size: 4.8, color: WHITE, align: "center" });
-    txt("(%)",     X[11] + W[11]/2, gy2,       { bold: true, size: 4.8, color: WHITE, align: "center" });
-    txt("AMOUNT",  X[12] + W[12]/2, gy2 - 1.4, { bold: true, size: 4.8, color: WHITE, align: "center" });
+    txt("CGST", X[8]  + (W[8]+W[9])/2,  gy1, { bold: true, size: 6.6, color: WHITE, align: "center" });
+    txt("SGST", X[10] + (W[10]+W[11])/2, gy1, { bold: true, size: 6.6, color: WHITE, align: "center" });
+    txt("IGST", X[12] + (W[12]+W[13])/2,gy1, { bold: true, size: 6.6, color: WHITE, align: "center" });
+    txt("TOTAL",        X[14] + W[14]/2, cy1 - 1.6, { bold: true, size: 6, color: WHITE, align: "center" });
+    txt("(\u20B9)",     X[14] + W[14]/2, cy1 + 1.6, { bold: true, size: 6, color: WHITE, align: "center" });
+    // Sub-row labels are centred on the sub-row's own vertical middle so the
+    // divider above never crosses the text; the three groups share identical
+    // geometry by construction.
+    const cy2 = yy + HDR1 + HDR2 / 2;
+    for (const g of [8, 10, 12]) {
+      txt("RATE",   X[g]   + W[g]/2,   cy2 - 0.4, { bold: true, size: 4.8, color: WHITE, align: "center" });
+      txt("(%)",    X[g]   + W[g]/2,   cy2 + 1.8, { bold: true, size: 4.8, color: WHITE, align: "center" });
+      txt("AMOUNT", X[g+1] + W[g+1]/2, cy2 + 0.7, { bold: true, size: 4.8, color: WHITE, align: "center" });
+    }
 
     return yy + THDR;
   };
@@ -849,6 +852,17 @@ export async function renderInvoicePdf(data: InvoiceData): Promise<{ buffer: Buf
     const qty     = Number(li.quantity  ?? 0);
     const gross   = qty * Number(li.unitPrice ?? 0) - Number(li.discount ?? 0);
     const taxable = Number(li.lineSubtotal ?? gross);
+    // Display-only decomposition: MRP column shows the stored per-unit price
+    // (the selling price BEFORE discount — sale lines are floored at master
+    // MRP), and the discount column shows the line's total pre-tax deduction
+    // (item discount + any allocated bill-discount share) per unit. Legacy
+    // lines store the discount as a line total, so dividing by qty yields the
+    // per-unit figure for both generations. Nothing here feeds the totals —
+    // taxable, GST and line total keep reading the stored figures. A line
+    // without a positive, finite quantity has no meaningful per-unit figure,
+    // so it renders "-" rather than mislabelling a line total as per-unit.
+    const discRaw = Number(li.discount ?? 0);
+    const discPerUnit = Number.isFinite(discRaw) && Number.isFinite(qty) && qty > 0 ? discRaw / qty : 0;
     const cgst    = Number(li.cgst ?? 0);
     const sgst    = Number(li.sgst ?? 0);
     const igst    = Number(li.igst ?? 0);
@@ -877,24 +891,29 @@ export async function renderInvoicePdf(data: InvoiceData): Promise<{ buffer: Buf
     cell(String(qty),                        X[3] + W[3]/2, ry, W[3] - 2, { size: 7.2, align: "center" });
     cell((li.unit || "-").toUpperCase(),      X[4] + W[4]/2, ry, W[4] - 2, { size: 7, align: "center" });
     cell(money(Number(li.unitPrice ?? 0)),    X[5] + W[5]-1.5, ry, W[5] - 3, { size: 7.2, align: "right" });
-    cell(money(taxable),                      X[6] + W[6]-1.5, ry, W[6] - 3, { size: 7.2, align: "right" });
+    if (discPerUnit > 0.004) {
+      cell(money(discPerUnit), X[6] + W[6]-1.5, ry, W[6] - 3, { size: 7.2, align: "right" });
+    } else {
+      txt("-", X[6] + W[6]/2, ry, { size: 7, align: "center", color: MUT });
+    }
+    cell(money(taxable),                      X[7] + W[7]-1.5, ry, W[7] - 3, { size: 7.2, align: "right" });
 
     if (isIgst) {
-      txt("-", X[7] + W[7]/2,  ry, { size: 7, align: "center", color: MUT });
       txt("-", X[8] + W[8]/2,  ry, { size: 7, align: "center", color: MUT });
       txt("-", X[9] + W[9]/2,  ry, { size: 7, align: "center", color: MUT });
       txt("-", X[10]+ W[10]/2, ry, { size: 7, align: "center", color: MUT });
-      cell(`${rate}%`,   X[11]+ W[11]/2, ry, W[11] - 2, { size: 6.8, align: "center" });
-      cell(money(igst),  X[12]+ W[12]-1.5, ry, W[12] - 3, { size: 7.2, align: "right" });
-    } else {
-      cell(`${rate/2}%`, X[7] + W[7]/2,  ry, W[7] - 2,  { size: 6.8, align: "center" });
-      cell(money(cgst),  X[8] + W[8]-1.5,  ry, W[8] - 3,  { size: 7.2, align: "right" });
-      cell(`${rate/2}%`, X[9] + W[9]/2,  ry, W[9] - 2,  { size: 6.8, align: "center" });
-      cell(money(sgst),  X[10]+ W[10]-1.5, ry, W[10] - 3, { size: 7.2, align: "right" });
       txt("-", X[11]+ W[11]/2, ry, { size: 7, align: "center", color: MUT });
+      cell(`${rate}%`,   X[12]+ W[12]/2, ry, W[12] - 2, { size: 6.8, align: "center" });
+      cell(money(igst),  X[13]+ W[13]-1.5, ry, W[13] - 3, { size: 7.2, align: "right" });
+    } else {
+      cell(`${rate/2}%`, X[8] + W[8]/2,  ry, W[8] - 2,  { size: 6.8, align: "center" });
+      cell(money(cgst),  X[9] + W[9]-1.5,  ry, W[9] - 3,  { size: 7.2, align: "right" });
+      cell(`${rate/2}%`, X[10]+ W[10]/2,  ry, W[10] - 2,  { size: 6.8, align: "center" });
+      cell(money(sgst),  X[11]+ W[11]-1.5, ry, W[11] - 3, { size: 7.2, align: "right" });
       txt("-", X[12]+ W[12]/2, ry, { size: 7, align: "center", color: MUT });
+      txt("-", X[13]+ W[13]/2, ry, { size: 7, align: "center", color: MUT });
     }
-    cell(money(lineTot), X[13] + W[13]-1.5, ry, W[13] - 3, { size: 7.2, align: "right", bold: true });
+    cell(money(lineTot), X[14] + W[14]-1.5, ry, W[14] - 3, { size: 7.2, align: "right", bold: true });
     y += rowH;
   });
 
@@ -905,11 +924,11 @@ export async function renderInvoicePdf(data: InvoiceData): Promise<{ buffer: Buf
   const sr = y + TROW / 2 + 1.2;
   txt("TOTAL (E&OE)", X[1] + 2, sr, { bold: true, size: 7.2, color: NAVY });
   cell(String(Math.round(tQty * 1000) / 1000), X[3] + W[3]/2, sr, W[3] - 2, { bold: true, size: 7.2, color: NAVY, align: "center" });
-  cell(money(tTaxable), X[6] + W[6]-1.5, sr, W[6] - 3, { bold: true, size: 7.2, color: NAVY, align: "right" });
-  cell(tCgst > 0 ? money(tCgst) : "-", X[8]  + W[8]-1.5,  sr, W[8] - 3,  { bold: true, size: 7.2, color: NAVY, align: "right" });
-  cell(tSgst > 0 ? money(tSgst) : "-", X[10] + W[10]-1.5, sr, W[10] - 3, { bold: true, size: 7.2, color: NAVY, align: "right" });
-  cell(tIgst > 0 ? money(tIgst) : "-", X[12] + W[12]-1.5, sr, W[12] - 3, { bold: true, size: 7.2, color: NAVY, align: "right" });
-  cell(money(tTot), X[13] + W[13]-1.5, sr, W[13] - 3, { bold: true, size: 7.2, color: NAVY, align: "right" });
+  cell(money(tTaxable), X[7] + W[7]-1.5, sr, W[7] - 3, { bold: true, size: 7.2, color: NAVY, align: "right" });
+  cell(tCgst > 0 ? money(tCgst) : "-", X[9]  + W[9]-1.5,  sr, W[9] - 3,  { bold: true, size: 7.2, color: NAVY, align: "right" });
+  cell(tSgst > 0 ? money(tSgst) : "-", X[11] + W[11]-1.5, sr, W[11] - 3, { bold: true, size: 7.2, color: NAVY, align: "right" });
+  cell(tIgst > 0 ? money(tIgst) : "-", X[13] + W[13]-1.5, sr, W[13] - 3, { bold: true, size: 7.2, color: NAVY, align: "right" });
+  cell(money(tTot), X[14] + W[14]-1.5, sr, W[14] - 3, { bold: true, size: 7.2, color: NAVY, align: "right" });
   y += TROW + 3.5;
 
   // ══════════════════════════════════════════════════════════════════════════
