@@ -20,6 +20,7 @@ import { addExpensePaymentModes } from "./migrations/expensePaymentModes";
 import { addFixedAssets } from "./migrations/fixedAssets";
 import { addAssetModule } from "./migrations/assetModule";
 import { addPurchaseBillFields } from "./migrations/purchaseBills";
+import { addSaleOtherCharges } from "./migrations/saleOtherCharges";
 import { addVoucherProvenance } from "./migrations/voucherProvenance";
 import { startBackupScheduler } from "./lib/backup/scheduler";
 import { PasswordService } from "./lib/password";
@@ -3990,6 +3991,10 @@ await addAssetModule(pool);
 // Manual Purchase Bill: stored rate mode, the batch-number allocator and the
 // duplicate-invoice guard. Independent of the ledger seeding above.
 await addPurchaseBillFields(pool);
+
+// Other Charges on POS sales (Packing & Transport, freight, hamali…) — the
+// sales-side mirror of the purchase-bill charges column above.
+await addSaleOtherCharges(pool);
 
 // Quotations — customer offers that touch nothing: their own table, their own
 // QTN numbering sequence, share links, and the one-sale-per-quotation bridge

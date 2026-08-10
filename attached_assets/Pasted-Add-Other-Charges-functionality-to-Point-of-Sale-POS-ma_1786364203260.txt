@@ -1,0 +1,203 @@
+Add "Other Charges" functionality to Point of Sale (POS), matching the existing Purchase Bill functionality.
+
+In the POS "Record Sale" screen, add:
+
+OTHER CHARGES
+[ + Add Charge ]
+
+The user should be able to add charges such as:
+
+- Packing & Transport
+- Freight
+- Hamali
+- Courier
+- Delivery Charges
+- Other configured charges
+
+Use the same charge/ledger structure already used in Purchase Bills wherever possible.
+
+REQUIREMENTS
+
+1. POS UI
+
+Add an "Other Charges" section below the cart items and before the invoice summary.
+
+Example:
+
+Other Charges
+[ + Add Charge ]
+
+After clicking Add Charge:
+
+Charge Account / Type: [dropdown]
+Amount: [amount]
+
+Allow multiple charges.
+
+Each charge should have a remove button.
+
+2. TOTAL CALCULATION
+
+Other charges must be included in the POS invoice total according to the existing ERP accounting rules.
+
+Show clearly:
+
+Subtotal
+Taxable Amount
+GST
+Other Charges
+Grand Total
+
+Do not incorrectly include/exclude charges from GST.
+
+Use the same charge-tax treatment already implemented in Purchase/Sales where applicable.
+
+3. LEDGER POSTING
+
+IMPORTANT:
+
+When a POS sale with an Other Charge is saved, the charge must create the correct accounting entry.
+
+Example:
+
+Sale goods = ₹10,000
+Transport charge = ₹500
+
+The ₹500 must be posted to the selected/configured charge expense ledger.
+
+Do NOT simply add ₹500 to the invoice total without creating the corresponding ledger posting.
+
+The ledger posting must use the same accounting service used by the existing Purchase Bill Other Charges functionality.
+
+4. LOCATION
+
+The charge must belong to the POS Selling Location.
+
+Example:
+
+Selling Location:
+Frozen Hub - Ragiguda
+
+Then:
+
+- Expense/charge ledger entry → Ragiguda
+- POS transaction → Ragiguda
+- Dashboard → Ragiguda
+- Ledger → Ragiguda
+- Reports → Ragiguda
+
+Never post the charge to Head Office unless Head Office is the selected selling location.
+
+5. PAYMENT ACCOUNTING
+
+If the POS sale is paid immediately:
+
+Cash/Bank payment must include the charge in the final amount.
+
+If the sale is Credit:
+
+Customer receivable must include the charge in the final invoice amount.
+
+All accounting entries must remain balanced.
+
+6. EDIT POS SALE
+
+When editing a POS sale:
+
+- Existing charges must load correctly.
+- User can edit charge amount.
+- User can add another charge.
+- User can remove a charge.
+
+When saving the edited sale:
+
+Reverse/recalculate the previous charge posting correctly and create the new correct posting.
+
+Do NOT create duplicate ledger entries.
+
+7. DELETE/CANCEL POS SALE
+
+If an eligible POS sale is deleted/cancelled according to existing ERP rules:
+
+The related Other Charge accounting entries must also be reversed correctly.
+
+Do not leave orphan expense/ledger entries.
+
+8. CUSTOMER / WALK-IN
+
+Charges must work for:
+
+- Registered Customer
+- Walk-in Customer
+
+The charge must follow the same accounting treatment as the underlying POS sale.
+
+9. BACKEND
+
+Do not implement this only in the frontend.
+
+Trace the existing Purchase Bill Other Charges implementation and reuse the same backend accounting logic/service where possible.
+
+Verify:
+
+POS UI
+→ POS API
+→ Sale transaction
+→ Charge records
+→ Ledger posting
+→ Cash/Bank or Receivable
+→ Dashboard
+→ Reports
+
+10. ACCOUNTING VALIDATION
+
+For every POS sale with charges:
+
+Total Debits = Total Credits exactly.
+
+Verify:
+
+- Customer Ledger
+- Cash Ledger
+- Bank Ledger
+- Charge/Expense Ledger
+- Sales Ledger
+- Trial Balance
+- Dashboard
+- P&L
+- Day Book
+- Location-wise reports
+
+All must show consistent values.
+
+11. IMPORTANT
+
+Do not create a separate accounting implementation for POS if an existing Purchase/Sales charge-posting service already exists.
+
+Reuse the existing accounting logic so Other Charges behave consistently across:
+
+Purchase
+Sales
+POS
+
+12. REGRESSION TEST
+
+Test:
+
+A. POS sale without charge
+B. POS sale with one charge
+C. POS sale with multiple charges
+D. Cash sale + charge
+E. Credit sale + charge
+F. Walk-in sale + charge
+G. Registered customer sale + charge
+H. Edit charge
+I. Remove charge
+J. Delete/cancel sale
+K. Different selling locations
+L. Verify location-wise ledger
+M. Verify Dashboard
+N. Verify P&L
+O. Verify Trial Balance
+
+Confirm that every transaction is balanced and no duplicate/orphan ledger entries are created.

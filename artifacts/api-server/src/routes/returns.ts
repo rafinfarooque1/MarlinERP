@@ -398,6 +398,14 @@ router.post("/sales-returns", requireModuleAction(["page:/returns", "page:/sales
     }
 
     // ── Money: CN for registered customers, cash refund for walk-ins ──────
+    // Other Charges (sales.other_charges — packing, freight, hamali…) are
+    // NEVER part of a return, BY DESIGN and matching purchase returns: the
+    // charge was incurred delivering the goods and does not come back with
+    // them. Returns are built purely from the goods lines (taxable + GST), so
+    // a full return of a charged invoice deliberately leaves the charge owed
+    // by (or already paid by) the customer, and the charge ledger's credit
+    // stands. Refunding a charge is an explicit act — edit the sale to remove
+    // the charge (books restate), or raise a manual voucher.
     const returnNumber = await nextVoucherNumber(client, "sales_return", returnDate);
     const { cashLedgerId, salesLedgerId, locationName } = await locationLedgers(client, locationType, locationId);
     const salesLedger = salesLedgerId ?? await ledgerIdByCode(client, "STD-SALES");

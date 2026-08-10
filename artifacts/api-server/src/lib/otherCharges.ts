@@ -73,7 +73,7 @@ export async function validateOtherCharges(
     const label = `"${l.name}"`;
     if (l.is_group || l.is_system_group) return { error: `${label} is a group — pick a postable expense ledger under it` };
     if (l.is_active === false) return { error: `${label} is inactive — reactivate it in the Chart of Accounts or pick another expense ledger` };
-    if (String(l.type) !== "expense") return { error: `${label} is not an expense ledger — other purchase charges must post to a P&L expense account` };
+    if (String(l.type) !== "expense") return { error: `${label} is not an expense ledger — other charges must post to a P&L expense account` };
     if (l.under_purchase) return { error: `${label} sits under Purchase in the Chart of Accounts — record the charge on a freight/expense ledger, not a purchase account` };
     if (l.code && SYSTEM_CODE_RE.test(String(l.code))) return { error: `${label} is an internal system ledger — pick a normal expense ledger` };
   }

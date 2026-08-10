@@ -34,6 +34,7 @@ import {
 import { eq, inArray } from "drizzle-orm";
 import { FONT, SCRIPT_FONT, registerFonts, registerScriptFont } from "@workspace/pdf-kit";
 import { paymentModeLabel } from "../lib/paymentModes";
+import { parseStoredOtherCharges } from "../lib/otherCharges";
 import { resolveInvoiceIssuer, resolveLocationIssuer, type InvoiceIssuer } from "../lib/billingProfile";
 import {
   loadPaymentPosition, loadRecordedPayments, loadInvoicePaymentSettings, buildUpiRequest,
@@ -76,6 +77,13 @@ export interface InvoiceData {
     cancelledAt: string | null;
     /** For sales converted from a quotation: the QTN/… it came from. */
     quotationNumber?: string | null;
+    /**
+     * Other Charges on the invoice (Packing & Transport, freight, hamali…),
+     * already folded into totalAmount and carrying no GST. Ledger names are
+     * resolved at assembly; absent/empty means the document shows no charge
+     * rows — the renderer never computes them.
+     */
+    otherCharges?: Array<{ name: string; amount: number }>;
   };
   /**
    * Which document this is. The ONE renderer draws both: 'quotation' swaps the
@@ -143,9 +151,26 @@ export async function assembleInvoiceData(saleId: number): Promise<InvoiceData |
 
   // cancelled_at and quotation_number are raw-migration columns: drizzle's
   // select() silently drops them, so they are read with raw SQL.
-  const { rows: [locRow] } = await pool.query<{ cancelled_at: Date | null; quotation_number: string | null }>(
-    `SELECT cancelled_at, quotation_number FROM sales WHERE id = $1`, [saleId],
+  const { rows: [locRow] } = await pool.query<{ cancelled_at: Date | null; quotation_number: string | null; other_charges: unknown }>(
+    `SELECT cancelled_at, quotation_number, other_charges FROM sales WHERE id = $1`, [saleId],
   );
+
+  // Other Charges — stored as { ledgerId, amount } rows; the document shows
+  // the ledger's NAME, so resolve it here (a renamed ledger prints its current
+  // name on a reprint, matching how the books present the same posting).
+  const storedCharges = parseStoredOtherCharges(locRow?.other_charges);
+  let otherCharges: Array<{ name: string; amount: number }> = [];
+  if (storedCharges.length > 0) {
+    const { rows: ocLedgers } = await pool.query<{ id: number; name: string }>(
+      `SELECT id, name FROM account_ledgers WHERE id = ANY($1::int[])`,
+      [[...new Set(storedCharges.map((c) => c.ledgerId))]],
+    );
+    const ocNames = new Map(ocLedgers.map((l) => [Number(l.id), l.name]));
+    otherCharges = storedCharges.map((c) => ({
+      name: ocNames.get(c.ledgerId) ?? "Other Charge",
+      amount: c.amount,
+    }));
+  }
 
   const customerRow = sale.customerId
     ? (await db.select().from(customersTable).where(eq(customersTable.id, sale.customerId)).limit(1))[0] ?? null
@@ -218,6 +243,7 @@ export async function assembleInvoiceData(saleId: number): Promise<InvoiceData |
       lineItems,
       cancelledAt: locRow?.cancelled_at ? new Date(locRow.cancelled_at).toISOString() : null,
       quotationNumber: locRow?.quotation_number ?? null,
+      otherCharges,
     },
     issuer,
     outletName: issuer.locationName,
@@ -975,6 +1001,12 @@ export async function renderInvoicePdf(data: InvoiceData): Promise<{ buffer: Buf
   taxRows.push(...slabRows("SGST", byRate.sgst));
   taxRows.push(...slabRows("IGST", byRate.igst));
   if (discount > 0) taxRows.push(["Coupon Discount", `- ${rs(discount)}`]);
+  // Other Charges — stored figures with their ledger names, one row each.
+  // Already inside the grand total and outside the taxable/GST rows above;
+  // nothing here is computed, so a chargeless invoice shows no extra rows.
+  for (const oc of sale.otherCharges ?? []) {
+    taxRows.push([oc.name, rs(oc.amount)]);
+  }
   taxRows.push(["Round Off", rs(roundOff)]);
 
   const TR_H    = 5.9;

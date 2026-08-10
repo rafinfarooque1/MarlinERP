@@ -30,6 +30,7 @@ import {
 import { advanceAvailable, takeAdvanceLock, attributeAdvanceConsumption, releaseAdvanceConsumption } from "../lib/advanceLedgers";
 import { allocateSalesInvoiceNumber, salesCounterScope } from "../lib/voucherNumber";
 import { resolveLocationGst, isInterStateSupply } from "../lib/gstTransfer";
+import { validateOtherCharges, parseStoredOtherCharges, otherChargesTotal, type OtherCharge } from "../lib/otherCharges";
 
 const router = Router();
 
@@ -525,6 +526,8 @@ router.get("/sales", requireModuleView(["page:/sales/pos", "page:/returns", "pag
       totalAmount,
       paymentMode: r.payment_mode,
       couponCode: r.coupon_code,
+      otherCharges: parseStoredOtherCharges(r.other_charges),
+      otherChargesTotal: otherChargesTotal(parseStoredOtherCharges(r.other_charges)),
       createdAt: r.created_at,
       paymentStatus: position.status,
       amountPaid,
@@ -731,7 +734,21 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
     return;
   }
   const discountTotal = Math.round(rawDiscountTotal * 100) / 100;
-  const totalAmount = subtotal + taxTotal - discountTotal;
+
+  // ── Other Charges (Packing & Transport, Freight, Hamali, Courier…) ────────
+  // Money the customer owes ON TOP of the goods: folded into total_amount (the
+  // grand total that dues, receipts, credit checks and the customer Dr leg all
+  // key off) but never into subtotal/tax_total — charges carry no GST, so the
+  // GSTR-1 taxable value stays goods-only. Validated on the EFFECTIVE ledgers
+  // server-side, same rules as purchase-bill charges (postable expense ledger,
+  // outside SYS-PUR, not internal). CreateSaleBody strips unknown keys, so
+  // read the raw body — the same pattern as discountTotal above.
+  const ocParsed = await validateOtherCharges(pgPool, rawBody.otherCharges);
+  if ('error' in ocParsed) { res.status(400).json({ error: ocParsed.error }); return; }
+  const otherCharges = ocParsed.charges;
+  const otherChargesTot = ocParsed.total;
+
+  const totalAmount = Math.round((subtotal + taxTotal - discountTotal + otherChargesTot) * 100) / 100;
 
   // ── Quotation conversion (optional) ───────────────────────────────────────
   // A sale may complete a quotation. The link is validated and stamped INSIDE
@@ -1030,8 +1047,8 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
     const outletIdForInsert = locationType === 'outlet' ? locationId : null;
     ({ rows: [row] } = await txClient.query<any>(
       `INSERT INTO sales (invoice_number, outlet_id, location_type, location_id, customer_id, sale_date, line_items, subtotal, tax_total, discount_total, bill_discount, total_amount, payment_mode, coupon_code, amount_paid, payment_status,
-                          number_scope, invoice_series, invoice_fy, invoice_serial)
-       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20) RETURNING *`,
+                          number_scope, invoice_series, invoice_fy, invoice_serial, other_charges)
+       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21::jsonb) RETURNING *`,
       [invoiceNumber, outletIdForInsert, locationType, locationId,
        parsed.data.customerId ?? null, parsed.data.saleDate,
        // Stored WITH the batch trail already resolved above, so the served lots
@@ -1044,7 +1061,8 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
        settledAtSale
          ? 'paid'
          : computePaymentPosition({ totalAmount, amountReceived: appliedAdvance, cancelledAt: null }).status,
-       numberAlloc.numberScope, numberAlloc.seriesPrefix, numberAlloc.fyLabel, numberAlloc.serial]
+       numberAlloc.numberScope, numberAlloc.seriesPrefix, numberAlloc.fyLabel, numberAlloc.serial,
+       JSON.stringify(otherCharges)]
     ));
 
     // The adjusted advance is a collection like any other: a sale_payments row
@@ -1174,6 +1192,8 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
     totalAmount: Number(row.total_amount),
     paymentMode: row.payment_mode,
     couponCode: row.coupon_code,
+    otherCharges,
+    otherChargesTotal: otherChargesTot,
     createdAt: row.created_at,
     quotationId: row.quotation_id ?? null,
     quotationNumber: row.quotation_number ?? null,
@@ -1381,7 +1401,23 @@ router.put("/sales/:id", requireModuleAction("page:/sales/pos", "edit"), async (
     return;
   }
   const discountTotal = Math.round(rawDiscountTotal * 100) / 100;
-  const totalAmount = subtotal + taxTotal - discountTotal;
+
+  // ── Other Charges on edit ─────────────────────────────────────────────────
+  // A supplied list REPLACES the stored one (full-body PUT semantics, same as
+  // the line items); an ABSENT field preserves what the invoice already
+  // carries, so a payment-mode or quantity fix never silently wipes charges.
+  // Same validation as creation — see POST.
+  let otherCharges: OtherCharge[];
+  if (rawBody.otherCharges === undefined) {
+    otherCharges = parseStoredOtherCharges(existingRaw.other_charges);
+  } else {
+    const ocParsed = await validateOtherCharges(pgPool, rawBody.otherCharges);
+    if ('error' in ocParsed) { res.status(400).json({ error: ocParsed.error }); return; }
+    otherCharges = ocParsed.charges;
+  }
+  const otherChargesTot = otherChargesTotal(otherCharges);
+
+  const totalAmount = Math.round((subtotal + taxTotal - discountTotal + otherChargesTot) * 100) / 100;
 
   // ── POS entry flags: edits may keep, but not grow, existing amounts ───────
   // Guard the EFFECTIVE value against what the sale already stored: a historical
@@ -1698,11 +1734,12 @@ router.put("/sales/:id", requireModuleAction("page:/sales/pos", "edit"), async (
     ({ rows: [updated] } = await editTx.query<any>(
       `UPDATE sales SET outlet_id=$1, location_type=$2, location_id=$3, customer_id=$4, sale_date=$5,
        line_items=$6::jsonb, subtotal=$7, tax_total=$8, discount_total=$9, bill_discount=$10, total_amount=$11,
-       payment_mode=$12, coupon_code=$13, amount_paid=$14, payment_status=$15, number_scope=$17
+       payment_mode=$12, coupon_code=$13, amount_paid=$14, payment_status=$15, number_scope=$17, other_charges=$18::jsonb
        WHERE id=$16 RETURNING *`,
       [newOutletId, newLocationType, newLocationId, parsed.data.customerId ?? null,
        parsed.data.saleDate, JSON.stringify(newLineItemsWithBatches), subtotal, taxTotal, discountTotal, billDiscount, totalAmount,
-       newPaymentMode, parsed.data.couponCode ?? null, newAmountPaid, newPaymentStatus, id, editedNumberScope]
+       newPaymentMode, parsed.data.couponCode ?? null, newAmountPaid, newPaymentStatus, id, editedNumberScope,
+       JSON.stringify(otherCharges)]
     ));
 
     // 4. Ledger the reversal before the re-apply so the trail reads
@@ -1825,6 +1862,8 @@ router.put("/sales/:id", requireModuleAction("page:/sales/pos", "edit"), async (
     totalAmount: Number(updated.total_amount),
     paymentMode: updated.payment_mode,
     couponCode: updated.coupon_code,
+    otherCharges,
+    otherChargesTotal: otherChargesTot,
     createdAt: updated.created_at,
     paymentStatus: editedPosition?.status ?? updated.payment_status ?? 'paid',
     amountPaid: Number(updated.amount_paid ?? 0),
@@ -2248,6 +2287,8 @@ router.get("/sales/:id", requireModuleView("page:/sales/pos"), async (req, res):
     totalAmount,
     paymentMode: row.payment_mode,
     couponCode: row.coupon_code,
+    otherCharges: parseStoredOtherCharges(row.other_charges),
+    otherChargesTotal: otherChargesTotal(parseStoredOtherCharges(row.other_charges)),
     createdAt: row.created_at,
     paymentStatus: position.status,
     amountPaid,

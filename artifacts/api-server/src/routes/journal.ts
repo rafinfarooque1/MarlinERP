@@ -1154,7 +1154,7 @@ export async function buildDerivedPostings(opts: { toDate?: string; q?: Q } = {}
     // invoice as well would subtract the same amount twice.
     `SELECT id, invoice_number, sale_date, total_amount, tax_total, amount_paid,
             payment_mode, customer_id, location_type, location_id, line_items,
-            branch_transfer_id
+            branch_transfer_id, other_charges
      FROM sales
      WHERE (cancelled_at IS NULL OR branch_transfer_id IS NOT NULL)
        ${upTo("sale_date", sp)}`, sp
@@ -1196,7 +1196,23 @@ export async function buildDerivedPostings(opts: { toDate?: string; q?: Q } = {}
   for (const s of sales) {
     const total = Number(s.total_amount);
     const tax = Number(s.tax_total ?? 0);
-    const net = round2(total - tax);
+    // Other Charges on the sale (Packing & Transport, freight, hamali…): the
+    // customer owes them — they are inside total_amount — but they are not
+    // revenue. Each one credits its own expense ledger (an expense RECOVERY),
+    // so the sales-revenue credit must derive as total − tax − charges or the
+    // P&L would inflate by every charge collected. The stored ledger id is
+    // posted as-is: the chart's delete guard (loadLedgerUsage) refuses to
+    // delete a ledger any sale's charges reference, so it cannot dangle.
+    const saleCharges: Array<{ ledgerId: number; amount: number }> = [];
+    let ocTotal = 0;
+    for (const c of (Array.isArray(s.other_charges) ? s.other_charges : []) as any[]) {
+      const cLid = Number(c?.ledgerId);
+      const cAmt = round2(Number(c?.amount));
+      if (!Number.isInteger(cLid) || cLid <= 0 || !(cAmt > 0.004)) continue;
+      ocTotal = round2(ocTotal + cAmt);
+      saleCharges.push({ ledgerId: cLid, amount: cAmt });
+    }
+    const net = round2(total - tax - ocTotal);
     const inv = s.invoice_number || `Sale #${s.id}`;
     const loc = locMap.get(`${s.location_type}:${s.location_id}`);
     // A branch-transfer invoice credits the inter-branch clearing ledger, never
@@ -1229,6 +1245,13 @@ export async function buildDerivedPostings(opts: { toDate?: string; q?: Q } = {}
       } else {
         push({ entryId: eid, date: s.sale_date, ledgerId: stdDtx, debit: 0, credit: tax, source: "sale", voucherNumber: s.invoice_number, description: `GST on ${inv}`, ...sLoc });
       }
+    }
+    // Cr each charge's expense ledger — balanced by the Dr side below, which
+    // carries the FULL total_amount (customer / cash / clearing), charges
+    // included. Branch-transfer invoices never carry charges (no producer),
+    // so this loop is empty for them by construction.
+    for (const c of saleCharges) {
+      push({ entryId: eid, date: s.sale_date, ledgerId: c.ledgerId, debit: 0, credit: c.amount, source: "sale", voucherNumber: s.invoice_number, description: `Sale charge — ${inv}`, ...sLoc });
     }
 
     // Branch transfers are never settled in cash and never sit against a

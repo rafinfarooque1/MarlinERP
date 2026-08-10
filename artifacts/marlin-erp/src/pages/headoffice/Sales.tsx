@@ -3,7 +3,7 @@ import { SearchableItemSelect, type ItemOption } from '@/components/ui/searchabl
 import { entryScopeKeyDown, autoFocusFirst, focusAndOpen, focusField, useEntryShortcuts } from '@/lib/keyboard-entry';
 import { Checkbox } from '@/components/ui/checkbox';
 import {
-  useInfiniteSales, useCreateSale, useListCustomers, useGetMe,
+  useInfiniteSales, useCreateSale, useListCustomers, useGetMe, useListAccountsFlat,
   useListItems, useListItemPrices, useListStock, useGetCompanySettings,
   useListCoupons,
   customFetch,
@@ -16,6 +16,7 @@ import { isActiveProduct } from '@/lib/productStatus';
 import { useOutletsEnabled, useFeatureFlags } from '@/lib/useFeatureFlags';
 import { useEnabledOutlets } from '@/lib/locationStructure';
 import { isInterStateSupply } from '@/lib/indianStates';
+import { isSystemLedger } from '@/lib/systemLedgers';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -134,6 +135,15 @@ const saleLineSchema = z.object({
   message: 'Cannot exceed the unit price',
   path: ['unitDiscount'],
 });
+/** Other Charges on the invoice — Packing & Transport, freight, hamali,
+ *  courier… Flat post-tax amounts the customer owes on top of the goods
+ *  (no GST on them). Posted Cr <chosen expense ledger> in the books; the
+ *  server validates the ledger with the same rules as purchase-bill charges. */
+const saleOtherChargeSchema = z.object({
+  ledgerId: z.coerce.number().min(1, 'Pick an expense ledger'),
+  amount: z.coerce.number().gt(0, 'Amount must be above zero'),
+});
+
 const schema = z.object({
   locationType: z.enum(['outlet', 'warehouse', 'headoffice']).default('outlet'),
   locationId: z.coerce.number().min(1, 'Location required'),
@@ -146,6 +156,7 @@ const schema = z.object({
   // from the coupon, which is a post-tax deduction off the grand total.
   billDiscount: z.coerce.number().min(0, 'Discount ≥ 0').optional(),
   lineItems: z.array(saleLineSchema).min(1, 'Add at least one item'),
+  otherCharges: z.array(saleOtherChargeSchema).optional(),
 });
 type FormValues = z.infer<typeof schema>;
 
@@ -157,6 +168,7 @@ const defaultFormValues: FormValues = {
   couponCode: '',
   billDiscount: 0,
   lineItems: [{ itemId: 0, quantity: 1, unitPrice: 0, unitDiscount: 0, taxable: false, taxableTouched: false }],
+  otherCharges: [],
 };
 
 // ── Component ──────────────────────────────────────────────────────────────────
@@ -376,6 +388,11 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
       paymentMode: storedSaleMode(sale.paymentMode) as FormValues['paymentMode'],
       couponCode: sale.couponCode ?? '',
       billDiscount: Number((sale as any).billDiscount ?? 0),
+      // List rows may be raw snake_case while detail reads map camelCase —
+      // read both so an edit never silently drops the stored charges.
+      otherCharges: (((sale.otherCharges ?? sale.other_charges) ?? []) as any[])
+        .map((c: any) => ({ ledgerId: Number(c?.ledgerId ?? 0), amount: Number(c?.amount ?? 0) }))
+        .filter((c: any) => c.ledgerId > 0 && c.amount > 0),
       lineItems: (sale.lineItems ?? []).map((li: any) => ({
         itemId: li.itemId,
         quantity: li.quantity,
@@ -478,6 +495,33 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
 
   const form = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: effectiveDefaultValues });
   const { fields, append, remove } = useFieldArray({ control: form.control, name: 'lineItems' });
+  const { fields: chargeFields, append: appendCharge, remove: removeCharge } = useFieldArray({ control: form.control, name: 'otherCharges' });
+
+  // Expense ledgers offered for Other Charges — postable, non-internal, and
+  // outside the Purchase (SYS-PUR) subtree. Mirrors the server's validation
+  // (shared with purchase-bill charges), so anything pickable here is accepted
+  // there; a ledger created in Chart of Accounts appears automatically.
+  const { data: allAccounts = [] } = useListAccountsFlat();
+  const expenseLedgers = useMemo(() => {
+    const byId = new Map((allAccounts as any[]).map((a: any) => [Number(a.id), a]));
+    const underPurchaseGroup = (a: any): boolean => {
+      const seen = new Set<number>();
+      for (let cur = a; cur && !seen.has(Number(cur.id)); cur = cur.parentId != null ? byId.get(Number(cur.parentId)) : undefined) {
+        seen.add(Number(cur.id));
+        if (String(cur.code ?? '').toUpperCase() === 'SYS-PUR') return true;
+      }
+      return false;
+    };
+    return (allAccounts as any[])
+      .filter((a: any) => a.type === 'expense' && !a.isGroup && !a.isSystemGroup && !isSystemLedger(a.code) && !underPurchaseGroup(a))
+      .sort((x: any, y: any) => String(x.name).localeCompare(String(y.name)));
+  }, [allAccounts]);
+  // Resolve a charge's ledger name for the view sheet — stored rows carry only
+  // the ledger id.
+  const ledgerNameById = useMemo(
+    () => new Map((allAccounts as any[]).map((a: any) => [Number(a.id), String(a.name)])),
+    [allAccounts],
+  );
 
   // ── Keyboard Entry Mode ──
   const scopeRef = useRef<HTMLFormElement>(null);
@@ -849,7 +893,11 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
           ? Math.round(grandTotal * Number(appliedCoupon.discountValue) / 100 * 100) / 100
           : Math.min(Number(appliedCoupon.discountValue), grandTotal)
         : 0;
-    return { grossItemValue, grossTotal, subtotal, cgstTotal, sgstTotal, igstTotal, taxTotal, itemDiscountTotal, billDiscount, grandTotal, discountAmount, finalAmount: grandTotal - discountAmount };
+    // Other Charges — flat post-tax amounts on top of the goods (no GST on
+    // them), mirroring the server: total = goods + GST − coupon + charges.
+    const otherTotal = Math.round(((form.watch('otherCharges') ?? []) as any[])
+      .reduce((t, c) => t + (Number(c?.amount) || 0), 0) * 100) / 100;
+    return { grossItemValue, grossTotal, subtotal, cgstTotal, sgstTotal, igstTotal, taxTotal, itemDiscountTotal, billDiscount, grandTotal, discountAmount, otherTotal, finalAmount: Math.round((grandTotal - discountAmount + otherTotal) * 100) / 100 };
   };
 
   const totals = computeCartTotals();
@@ -900,6 +948,11 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
       lineItems: enrichedItems,
       customerId: data.customerId || undefined,
       discountTotal: discountAmount,
+      // Always sent: on edit the list REPLACES the stored charges, so removing
+      // the last row genuinely clears them (absent would preserve).
+      otherCharges: (data.otherCharges ?? [])
+        .filter(c => Number(c.ledgerId) > 0 && Number(c.amount) > 0)
+        .map(c => ({ ledgerId: Number(c.ledgerId), amount: Number(c.amount) })),
       // Conversion marker — the server locks the quotation, refuses a second
       // conversion, and stamps the invoice number back onto the quotation.
       ...(convertFrom && !editItem ? { quotationId: convertFrom.id } : {}),
@@ -1813,6 +1866,50 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                 )}
               </div>
 
+              {/* ── Other Charges — Packing & Transport, freight, hamali,
+                  courier… Flat amounts the customer owes on top of the goods:
+                  added to the invoice total, no GST on them, posted to the
+                  chosen expense ledger (an expense recovery). Same ledger
+                  list as purchase-bill charges. ── */}
+              <div>
+                <h3 className="text-sm font-semibold mb-2">
+                  Other Charges{' '}
+                  <span className="text-xs font-normal text-muted-foreground">(Packing &amp; Transport, freight, hamali… — added to the invoice total, no GST)</span>
+                </h3>
+                {chargeFields.length > 0 && (
+                  <div className="space-y-2">
+                    {chargeFields.map((cf, ci) => (
+                      <div key={cf.id} className="grid grid-cols-[minmax(0,1fr)_130px_32px] gap-2 items-start">
+                        <FormField control={form.control} name={`otherCharges.${ci}.ledgerId`} render={({ field }) => (
+                          <FormItem>
+                            <Select value={field.value ? String(field.value) : ''} onValueChange={v => field.onChange(Number(v))}>
+                              <FormControl><SelectTrigger className="h-9 text-xs" data-testid={`select-other-charge-ledger-${ci}`}><SelectValue placeholder="Expense ledger" /></SelectTrigger></FormControl>
+                              <SelectContent>
+                                {expenseLedgers.length === 0 && <div className="px-3 py-2 text-xs text-muted-foreground">No expense ledgers — create one under Accounts → Chart of Accounts</div>}
+                                {expenseLedgers.map((l: any) => <SelectItem key={l.id} value={String(l.id)}>{l.name}</SelectItem>)}
+                              </SelectContent>
+                            </Select>
+                            <FormMessage />
+                          </FormItem>
+                        )} />
+                        <FormField control={form.control} name={`otherCharges.${ci}.amount`} render={({ field }) => (
+                          <FormItem>
+                            <FormControl><Input className="h-9 text-xs text-right font-mono" type="number" step="0.01" min="0" placeholder="Amount" data-testid={`input-other-charge-amount-${ci}`} {...field} value={(field.value as any) === 0 ? '' : (field.value as any) ?? ''} /></FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )} />
+                        <Button type="button" variant="ghost" size="icon" tabIndex={-1} className="h-9 w-8 text-destructive justify-self-end" data-testid={`button-remove-other-charge-${ci}`} onClick={() => removeCharge(ci)}>
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <Button type="button" variant="outline" size="sm" className="mt-2 border-dashed" data-testid="button-add-other-charge" onClick={() => appendCharge({ ledgerId: 0, amount: 0 } as any)}>
+                  <Plus className="w-3.5 h-3.5 mr-1" /> Add Charge
+                </Button>
+              </div>
+
               {/* ── Tax Summary + Footer ── */}
               <DialogFooter className="flex-col gap-0 sm:flex-col w-full pt-2 border-t border-border max-md:sticky max-md:bottom-0 max-md:z-20 max-md:-mx-4 max-md:-mb-4 max-md:px-4 max-md:pb-4 max-md:bg-background/95 max-md:backdrop-blur">
                 {hasItems && (
@@ -1927,8 +2024,17 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                         </div>
                       )}
 
+                      {/* Other Charges — post-tax, no GST; part of the amount
+                          payable below, never of the taxable/GST rows above. */}
+                      {totals.otherTotal > 0 && (
+                        <div className="flex justify-between">
+                          <span>Other Charges</span>
+                          <span className="font-mono">+₹{totals.otherTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                        </div>
+                      )}
+
                       <div className="flex justify-between font-bold text-base">
-                        <span>{totals.discountAmount > 0 ? 'Amount Payable' : 'Grand Total'}</span>
+                        <span>{totals.discountAmount > 0 || totals.otherTotal > 0 ? 'Amount Payable' : 'Grand Total'}</span>
                         <span className="font-mono text-primary">₹{totals.finalAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
                       </div>
                     </div>
@@ -2086,6 +2192,16 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                     <span>Bill Discount{viewItem.couponCode ? ` (${viewItem.couponCode})` : ''}</span>
                     <span className="font-mono">−₹{Number(viewItem.discountTotal).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
                   </div>
+                )}
+                {/* Other Charges — stored { ledgerId, amount } rows; names come
+                    from the chart of accounts already loaded for the form. */}
+                {((((viewItem.otherCharges ?? viewItem.other_charges) ?? []) as any[]).length > 0) && (
+                  (((viewItem.otherCharges ?? viewItem.other_charges) ?? []) as any[]).map((c: any, i: number) => (
+                    <div key={i} className="flex justify-between text-muted-foreground">
+                      <span>{ledgerNameById.get(Number(c?.ledgerId)) ?? 'Other Charge'}</span>
+                      <span className="font-mono">+₹{Number(c?.amount ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                    </div>
+                  ))
                 )}
                 <Separator />
                 <div className="flex justify-between font-bold text-base">

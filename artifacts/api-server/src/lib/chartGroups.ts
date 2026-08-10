@@ -285,7 +285,7 @@ export async function loadLedgerUsage(pool: Pool): Promise<Map<number, LedgerUsa
   const { rows: present } = await pool.query<{ table_name: string; column_name: string }>(
     `SELECT table_name, column_name FROM information_schema.columns
       WHERE table_schema = 'public' AND table_name = ANY($1::text[])`,
-    [[...wanted.map((s) => s.table), "purchases"]],
+    [[...wanted.map((s) => s.table), "purchases", "sales"]],
   );
   const has = new Set(present.map((r) => `${r.table_name}.${r.column_name}`));
 
@@ -313,6 +313,15 @@ export async function loadLedgerUsage(pool: Pool): Promise<Map<number, LedgerUsa
     parts.push(
       `SELECT (e->>'ledgerId')::int AS ledger_id, 'txn' AS kind, 'purchase bill other charges' AS src
          FROM purchases, jsonb_array_elements(COALESCE(other_charges, '[]'::jsonb)) e
+        WHERE e->>'ledgerId' ~ '^[0-9]+$'`,
+    );
+  }
+  // Same rule for Other Charges on POS sales: each row credits its expense
+  // ledger in the derived postings, so that ledger is in active use.
+  if (has.has("sales.other_charges")) {
+    parts.push(
+      `SELECT (e->>'ledgerId')::int AS ledger_id, 'txn' AS kind, 'sale other charges' AS src
+         FROM sales, jsonb_array_elements(COALESCE(other_charges, '[]'::jsonb)) e
         WHERE e->>'ledgerId' ~ '^[0-9]+$'`,
     );
   }

@@ -1,0 +1,94 @@
+Investigate the receipt/payment duplication around customer advances.
+
+In production/dev, customer AHMED has an invoice:
+
+SB2C/2026-27/000026 = ₹8,725
+
+The customer ledger previously showed:
+
+Advance received = ₹400
+Invoice = ₹8,725
+Payment received = ₹8,325
+Therefore:
+₹400 advance + ₹8,325 payment = ₹8,725 fully settled.
+
+However, the Receipt Voucher list shows:
+
+REC/2026-27/0397 = ₹8,725
+Received From = THE RAMESHWARAM CAFE.BROOKFIELD
+Cash/Bank = Frozen Hub - Ragiguda Cash
+Reference/Narration = Sale: SB2C/2026-27/000026
+
+This needs a complete backend investigation.
+
+DO NOT change production data.
+
+Trace exactly how SB2C/2026-27/000026 creates:
+
+1. Sale accounting entry
+2. Customer receivable entry
+3. Advance adjustment
+4. Payment received
+5. Receipt Voucher
+6. Cash/Bank entry
+7. Customer Ledger entry
+
+Determine whether the ₹8,725 receipt is correct or whether the system has incorrectly created a full ₹8,725 receipt in addition to the ₹400 advance and ₹8,325 settlement.
+
+The correct accounting principle is:
+
+Invoice = ₹8,725
+Existing advance = ₹400
+Remaining amount = ₹8,325
+
+If the advance is applied, only ₹8,325 additional payment should be required.
+
+Do not count the ₹400 twice.
+Do not count the ₹8,725 twice.
+Do not create duplicate cash/bank postings.
+Do not create duplicate customer ledger postings.
+
+Also inspect other sales in the Receipt Voucher list and determine whether the same problem exists where:
+
+Sale payment posting
+AND
+Receipt Voucher
+
+both record the same payment.
+
+The system must have ONE authoritative accounting flow for a payment.
+
+For CASH/UPI/BANK sale:
+- Sale creates receivable/sales accounting.
+- Actual payment creates the corresponding cash/bank receipt.
+- Customer balance reduces by the actual amount paid.
+- Do not create another duplicate receipt for the same payment.
+
+For CREDIT sale:
+- No cash/bank receipt should be created automatically.
+- Customer receivable remains outstanding until an actual receipt/payment is recorded.
+
+For customer advance:
+- Advance is recorded once.
+- When allocated against an invoice, it reduces the customer's outstanding balance.
+- It must not be treated as a second cash receipt.
+
+IMPORTANT:
+Inspect the actual database journal/posting records and source code before changing anything.
+
+Verify:
+
+Customer Ledger
+Cash Ledger
+Bank Ledger
+Receipt Voucher
+Sales Ledger
+Chart of Accounts
+Trial Balance
+Receivables
+Dashboard
+Cash/Bank Balance
+
+All must reconcile exactly to the paisa.
+
+Run the investigation first and report the exact root cause and affected transaction flow before making any production changes.

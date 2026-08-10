@@ -38,6 +38,11 @@ description: Single-ledger customer advances (credit balance on CUST-), vendor V
 # Report visibility traps (still apply to any NEW money figure)
 1. computed map, 2. the SEED loop, 3. the final visibility FILTER — seeded rows are hand-built literals and silently omit new fields.
 
+# Field diagnostic: the rolling-advance / "duplicate receipt" complaint (seen in prod, Aug 2026)
+- An owner reporting "the receipt shows the FULL invoice amount but the ledger shows advance + smaller payment" is almost never a books bug — it is ONE allocation voucher: the entered amount exceeded the outstanding (an advance was auto-applied at sale creation), the engine allocated the due and parked the excess as a NEW advance, which auto-applies to the NEXT invoice → the same ₹X advance "rolls" forward every time a cashier types the invoice total instead of the due.
+- The Receipt Voucher LIST also shows the sale's trail row (voucher_number = invoice number, source='sale'; for CREDIT sales it displays the full total with zero cash moved), so two same-amount rows sit side by side and look like duplication. buildDerivedPostings excludes trail rows (invoice-number match) and linked allocation slices — verify with: sale-source receipts not matching any invoice AND not in sale_payments.clearing_receipt_id must be ZERO.
+- Genuine cash overstatement hides in allocation vouchers where allocated = 0 and the WHOLE amount parked as advance for parties that can't have advances (Walking Customer) — likely re-entries of POS-settled cash. Paise-level advance_amounts (1–4p) are rounding residue, not money.
+
 # Wire contract — UNCHANGED
 - Receipt `allocations:[{saleId,amount}]` + optional `advanceAmount` (sum ±0.011); sale/purchase `useAdvance:true` in raw body (zod strips unknown keys — read req.body), response `advanceApplied`, capped min(available, total).
 - `GET /accounts/settlement-context?ledgerId=`, `GET /accounts/party-advance?kind=&partyId=`; receipts list marks allocation vouchers `origin:'system', editable:false`.
