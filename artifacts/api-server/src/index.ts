@@ -34,6 +34,8 @@ import { runOrgHierarchyRestructure } from "./migrations/orgHierarchyRestructure
 import { backfillPartyLocations } from "./migrations/partyLocationBackfill";
 import { restampMoneyVoucherLocations } from "./migrations/moneyVoucherLocationRestamp";
 import { backfillSalePaymentLegs } from "./migrations/salePaymentLegsBackfill";
+import { backfillSalePaymentLegsV2 } from "./migrations/salePaymentLegsBackfillV2";
+import { addStorageLocationsSetup } from "./migrations/storageLocationsSetup";
 import { cleanupOrphanStockRows, ensureStockMasterGuardTrigger } from "./migrations/orphanStockCleanup";
 import { addDataImport } from "./migrations/dataImport";
 import { addWarehouseLifecycle } from "./migrations/warehouseLifecycle";
@@ -4065,6 +4067,22 @@ try {
   await backfillSalePaymentLegs(pool);
 } catch (err) {
   console.error("[migration] sale_payment_legs_backfill_v1 FAILED (non-fatal):", (err as Error).message);
+}
+
+// V2 of the same backfill: covers partially-settled and over-paid counter
+// sales the V1 predicate skipped. Same contract — history rows only, no
+// receipts, no vouchers, no postings.
+try {
+  await backfillSalePaymentLegsV2(pool);
+} catch (err) {
+  console.error("[migration] sale_payment_legs_backfill_v2 FAILED (non-fatal):", (err as Error).message);
+}
+
+// Storage sub-location tables/indexes (idempotent DDL — see the module docs).
+try {
+  await addStorageLocationsSetup(pool);
+} catch (err) {
+  console.error("[migration] storage_locations_setup FAILED (non-fatal):", (err as Error).message);
 }
 
 // Orphan stock sweep (audit M-3): removes stock rows stranded by product

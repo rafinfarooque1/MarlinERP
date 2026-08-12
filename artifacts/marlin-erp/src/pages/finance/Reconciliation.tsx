@@ -18,9 +18,13 @@ import {
   useListOutlets, useListWarehouses, customFetch,
 } from '@workspace/api-client-react';
 import { toast } from 'sonner';
-import { CheckSquare, Layers, Info, Link2, Link2Off, ShieldCheck } from 'lucide-react';
+import { CheckSquare, Layers, Info, Link2, Link2Off, ShieldCheck, Wallet, Hash } from 'lucide-react';
 import { paymentModeLabel } from '@/lib/paymentModes';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
+import { PageHeader } from '@/components/app/page-header';
+import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
+import { EmptyState } from '@/components/app/empty-state';
+import { TableSkeleton } from '@/components/app/loading-skeletons';
 
 // ── Reconciled/Matched entry shape (raw customFetch) ─────────────────────────
 interface ReconciledEntry {
@@ -282,16 +286,26 @@ export default function Reconciliation() {
     items: b => Number(b.itemCount),
   });
 
+  const pendingTotal = pending.reduce((s, p) => s + p.amount, 0);
+  const batchesNetTotal = batches.reduce((s, b) => s + Number(b.netAmount), 0);
+
   return (
     <AppLayout>
       <div className="p-4 md:p-6 space-y-4">
         {/* Header */}
-        <div className="flex items-center justify-between flex-wrap gap-3">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight">Reconciliation</h1>
-            <p className="text-sm text-muted-foreground mt-0.5">Match incoming UPI / Card / Bank payments to bank settlements</p>
-          </div>
-        </div>
+        <PageHeader
+          title="Reconciliation"
+          description="Match incoming UPI / Card / Bank payments to bank settlements"
+          icon={CheckSquare}
+        />
+
+        {/* Summary cards */}
+        <SummaryCardGrid>
+          <SummaryCard label="Pending Payments" value={String(pending.length)} icon={CheckSquare} tone="warning" loading={pendingLoading} />
+          <SummaryCard label="Pending Amount" value={fmt(pendingTotal)} icon={Wallet} tone="warning" loading={pendingLoading} />
+          <SummaryCard label="Batches" value={String(batches.length)} icon={Layers} loading={batchesLoading} />
+          <SummaryCard label="Settled to Bank" value={fmt(batchesNetTotal)} icon={Hash} tone="positive" loading={batchesLoading} />
+        </SummaryCardGrid>
 
         {/* Tabs */}
         <div className="flex gap-1 border-b border-border">
@@ -368,15 +382,15 @@ export default function Reconciliation() {
 
             {/* Table */}
             {pendingLoading ? (
-              <div className="py-12 text-center text-muted-foreground">Loading…</div>
+              <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
+                <TableSkeleton rows={8} cols={8} />
+              </div>
             ) : pending.length === 0 ? (
-              <div className="py-16 text-center text-muted-foreground space-y-2">
-                <CheckSquare className="w-10 h-10 mx-auto opacity-30" />
-                <p className="font-medium">No pending electronic payments</p>
-                <p className="text-xs">UPI, card, and bank transfer payments will appear here once collected.</p>
+              <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
+                <EmptyState icon={CheckSquare} title="No pending electronic payments" hint="UPI, card, and bank transfer payments will appear here once collected." />
               </div>
             ) : (
-              <div className="rounded-lg border border-border overflow-hidden">
+              <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
                 <Table className="no-sticky-col">
                   <TableHeader>
                     <TableRow>
@@ -433,15 +447,15 @@ export default function Reconciliation() {
             </div>
 
             {reconciledLoading ? (
-              <div className="py-12 text-center text-muted-foreground">Loading…</div>
+              <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
+                <TableSkeleton rows={8} cols={9} />
+              </div>
             ) : reconciledEntries.length === 0 ? (
-              <div className="py-16 text-center text-muted-foreground space-y-2">
-                <ShieldCheck className="w-10 h-10 mx-auto opacity-30" />
-                <p className="font-medium">No reconciled entries</p>
-                <p className="text-xs">Reconcile pending payments first, then match them to ledger postings here.</p>
+              <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
+                <EmptyState icon={ShieldCheck} title="No reconciled entries" hint="Reconcile pending payments first, then match them to ledger postings here." />
               </div>
             ) : (
-              <div className="rounded-lg border border-border overflow-hidden">
+              <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -501,15 +515,15 @@ export default function Reconciliation() {
         {tab === 'batches' && (
           <div className="space-y-3">
             {batchesLoading ? (
-              <div className="py-12 text-center text-muted-foreground">Loading…</div>
+              <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
+                <TableSkeleton rows={8} cols={8} />
+              </div>
             ) : batches.length === 0 ? (
-              <div className="py-16 text-center text-muted-foreground space-y-2">
-                <Layers className="w-10 h-10 mx-auto opacity-30" />
-                <p className="font-medium">No reconciliation batches yet</p>
-                <p className="text-xs">Reconcile pending electronic payments to create your first batch.</p>
+              <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
+                <EmptyState icon={Layers} title="No reconciliation batches yet" hint="Reconcile pending electronic payments to create your first batch." />
               </div>
             ) : (
-              <div className="rounded-lg border border-border overflow-hidden">
+              <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
                 <Table>
                   <TableHeader>
                     <TableRow>

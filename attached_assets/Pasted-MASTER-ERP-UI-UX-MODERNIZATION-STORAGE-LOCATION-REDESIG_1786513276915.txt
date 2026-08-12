@@ -1,0 +1,1584 @@
+MASTER ERP UI/UX MODERNIZATION + STORAGE LOCATION REDESIGN
+
+OBJECTIVE
+
+Completely modernize and improve the UI/UX of the entire existing Marlin ERP.
+
+The ERP should look and behave like one professional, modern, production-grade ERP system across every module.
+
+Use the existing ERP functionality, backend, accounting engine, database, permissions, calculations and workflows as the source of truth.
+
+IMPORTANT:
+This task is primarily a UI/UX modernization.
+
+DO NOT break or rewrite working business logic.
+
+DO NOT change existing accounting calculations unless a genuine bug is discovered.
+
+DO NOT change existing ledger posting rules.
+
+DO NOT change GST calculations.
+
+DO NOT change stock calculations.
+
+DO NOT change customer/vendor balances.
+
+DO NOT change voucher numbering.
+
+DO NOT change month-locking rules.
+
+DO NOT change B2B/B2C logic.
+
+DO NOT change payroll calculations.
+
+DO NOT change import/migration logic.
+
+The new UI must use the existing backend and services wherever possible.
+
+If backend changes are required for the new Storage Location/Sub-location functionality, implement them properly and test them.
+
+==================================================
+PART 1 — GLOBAL ERP DESIGN SYSTEM
+==================================================
+
+Create a single consistent design system throughout the complete ERP.
+
+The current application should no longer look like separate pages developed independently.
+
+Every module must feel like part of the same ERP.
+
+Visual style:
+
+- Modern SaaS ERP
+- Professional
+- Clean
+- Spacious
+- Information-dense without looking crowded
+- White/light background
+- Subtle borders
+- Soft shadows
+- Rounded cards
+- Teal/blue Marlin branding
+- Strong readable typography
+- Clear visual hierarchy
+- Consistent icons
+- Consistent spacing
+- Consistent buttons
+- Consistent forms
+- Consistent tables
+- Consistent cards
+- Consistent dialogs
+- Consistent notifications
+- Consistent empty/loading/error states
+
+Do not overuse colors.
+
+Use color mainly to communicate:
+
+Success
+Warning
+Error
+Pending
+Paid
+Unpaid
+Credit
+Debit
+Active
+Inactive
+
+==================================================
+PART 2 — GLOBAL APPLICATION LAYOUT
+==================================================
+
+Create a modern ERP shell.
+
+LEFT SIDEBAR
+
+Use a clean collapsible sidebar.
+
+Main sections:
+
+OPERATIONS
+
+- Dashboard
+- Sales
+- Point of Sale
+- Quotations
+- Sales Returns
+- Purchases
+- Purchase Returns
+- Expenses
+- Receipt Voucher
+- Payment Voucher
+- Stock Transfer
+
+INVENTORY
+
+- Live Stock
+- Storage Locations
+- Item Tracking
+- Stock Adjustments
+- Production
+- Batches
+
+FINANCE
+
+- Accounts
+- Chart of Accounts
+- Ledger
+- Cash & Bank
+- Receivables
+- Payables
+- Financial Reports
+
+HR
+
+- Employees
+- Attendance
+- Payroll
+
+MASTERS
+
+- Items
+- Customers
+- Vendors
+- Employees
+- Locations
+- Banks
+- Ledgers
+
+SETTINGS
+
+- Company
+- Users
+- Roles & Permissions
+- Tax/GST
+- Financial Year
+- Month Locking
+- System Settings
+
+Do not remove existing modules.
+Map existing routes into this structure rather than creating duplicate pages.
+
+Sidebar requirements:
+
+- Expand/collapse
+- Active module highlighted
+- Submenus
+- Icons
+- Tooltips when collapsed
+- Smooth transitions
+- Remember collapsed/expanded state
+
+==================================================
+PART 3 — GLOBAL TOP HEADER
+==================================================
+
+Create a consistent top header.
+
+Left:
+
+Page title
+Breadcrumb
+
+Example:
+
+Inventory / Storage Locations
+
+Right:
+
+Current location/warehouse
+Notifications
+User profile
+Role
+Settings
+
+Warehouse selector should appear only where relevant.
+
+Example:
+
+[ Frozen Hub - Ragiguda ▼ ]
+
+==================================================
+PART 4 — GLOBAL PAGE STRUCTURE
+==================================================
+
+Every page should follow a consistent structure.
+
+Example:
+
+------------------------------------------------
+Page Title
+Short description
+
+[Search] [Filters] [Sort]        [+ Add New]
+------------------------------------------------
+
+Summary cards
+
+------------------------------------------------
+
+Main content/table/card layout
+
+------------------------------------------------
+
+Pagination / totals
+------------------------------------------------
+
+Do not create random layouts for different modules.
+
+==================================================
+PART 5 — DASHBOARD UI
+==================================================
+
+Completely redesign Dashboard.
+
+Top:
+
+Good Morning / Company name
+Current location
+Financial period
+
+Summary cards:
+
+Sales
+Purchases
+Receivables
+Payables
+Cash
+Bank
+Stock
+Profit
+
+Cards should show:
+
+Current value
+Comparison where existing data supports it
+Trend indicator
+Click/drill-down
+
+Then:
+
+Sales Overview
+Purchase Overview
+Receivables
+Payables
+Cash/Bank
+Stock Summary
+
+Do not introduce fake analytics.
+
+Only display values that exist in the backend.
+
+Dashboard figures must use the same accounting source of truth as reports.
+
+==================================================
+PART 6 — SALES UI
+==================================================
+
+Redesign Sales list.
+
+Top:
+
+Sales
+"Manage customer invoices and collections"
+
+[Search]
+
+Filters:
+
+Date
+Customer
+Location
+Payment Status
+B2B/B2C
+Payment Mode
+
+[+ New Sale]
+
+Table:
+
+Invoice #
+Date
+Customer
+Location
+Payment Mode
+Subtotal
+Tax
+Total
+Paid
+Balance
+Status
+Actions
+
+Actions:
+
+View
+Edit
+Print
+PDF
+Payment
+Return
+Cancel
+
+Use status badges:
+
+PAID
+PARTIALLY PAID
+UNPAID
+CANCELLED
+
+==================================================
+PART 7 — POS UI
+==================================================
+
+Modernize Point of Sale.
+
+Layout:
+
+Customer
+Date
+Payment Mode
+
+Then item-entry section.
+
+Each item card:
+
+Item
+Available Stock
+Qty
+MRP
+Discount / Unit
+Tax
+Total
+
+[+ Add Item]
+
+Add:
+
+[+ Add Charge]
+
+Charge selection must show only eligible DIRECT INCOME ledgers.
+
+Example:
+
+Packing Charge
+Delivery Charge
+Freight Recovery
+
+Invoice summary:
+
+Gross Item Value
+Discount
+Subtotal
+Taxable Amount
+CGST
+SGST
+IGST
+Other Charges
+Grand Total
+
+Payment section:
+
+Cash
+Bank
+UPI
+Card
+Credit / Pay Later
+
+For credit:
+
+UNPAID
+
+For partial payment:
+
+Total: ₹1,000
+Paid: ₹500
+Balance: ₹500
+Status: PARTIALLY PAID
+
+Collect Payment must use the same receipt backend.
+
+If payment is collected from POS:
+
+Automatically create the corresponding receipt/payment record.
+
+Do not create a second independent payment system.
+
+==================================================
+PART 8 — PURCHASE UI
+==================================================
+
+Modernize Purchase.
+
+Header:
+
+Vendor
+Purchase Date
+Vendor Invoice Date
+Invoice Reference
+Receiving Location
+
+GST Mode
+GST Type
+
+Line items:
+
+Item
+HSN
+Qty
+Purchase Rate
+Discount
+GST
+Total
+
+MFG
+Expiry
+Batch
+
+Other Charges:
+
+Only DIRECT EXPENSE ledgers.
+
+Examples:
+
+Freight
+Packing
+Loading
+Transport
+
+Summary:
+
+Subtotal
+Taxable Amount
+GST
+Round Off
+Goods Total
+Other Charges
+Total Payable
+
+Maintain existing purchase stock and accounting logic.
+
+==================================================
+PART 9 — CUSTOMER UI
+==================================================
+
+Redesign Customers page.
+
+Summary cards:
+
+Total Customers
+Active Customers
+Receivables
+Credit Balances
+
+Search:
+
+Name
+Phone
+Email
+GSTIN
+
+Filters:
+
+Location
+State
+B2B/B2C
+Active/Inactive
+
+Table:
+
+Customer
+Phone
+State
+GSTIN
+B2B/B2C
+Outstanding
+Status
+Actions
+
+Customer detail should contain tabs:
+
+Details
+Ledger
+Sales
+Receipts
+Payments
+Outstanding
+Returns
+
+Every customer balance must come from the accounting source of truth.
+
+==================================================
+PART 10 — VENDOR UI
+==================================================
+
+Same design language.
+
+Tabs:
+
+Details
+Ledger
+Purchases
+Payments
+Returns
+Outstanding
+
+Show:
+
+Vendor name
+Phone
+State
+GSTIN
+Outstanding
+Status
+
+==================================================
+PART 11 — LEDGER UI
+==================================================
+
+Ledger is a critical accounting screen.
+
+Make it highly readable.
+
+Header:
+
+Ledger Statement
+
+Account selector:
+[ Search ledger/account ]
+
+Date range:
+
+From
+To
+
+Buttons:
+
+[Filter]
+[Sort]
+[Export]
+
+Summary cards:
+
+Opening Balance
+Total Debit
+Total Credit
+Closing Balance
+Entries
+
+Table:
+
+Date
+Description
+Reference
+Type
+Debit
+Credit
+Balance
+
+Every transaction must be identifiable.
+
+Examples:
+
+Sale — SB2C/2026-27/000026
+Receipt — REC/2026-27/0397
+Payment — PAY/...
+Purchase — PUR/...
+Journal — JV/...
+
+Clicking a transaction should open its source document.
+
+==================================================
+PART 12 — CHART OF ACCOUNTS
+==================================================
+
+Redesign Chart of Accounts.
+
+Use expandable account tree.
+
+Example:
+
+Assets
+ ├── Current Assets
+ │    ├── Cash
+ │    ├── Bank
+ │    └── Sundry Debtors
+
+Liabilities
+ ├── Sundry Creditors
+
+Income
+ ├── Sales
+ └── Direct Income
+
+Expenses
+ ├── Direct Expenses
+ └── Indirect Expenses
+
+Show:
+
+Account name
+Group
+Debit/Credit balance
+Balance amount
+
+Use clear Dr/Cr indicators.
+
+Customer credit balances should follow the existing accounting model and must not be incorrectly converted into a separate customer-advance liability.
+
+==================================================
+PART 13 — RECEIPT VOUCHER UI
+==================================================
+
+Modern receipt screen.
+
+Header:
+
+Receipt Voucher
+
+Search/filter toolbar.
+
+Table:
+
+Voucher #
+Date
+Received From
+Cash/Bank
+Location
+Reference
+Narration
+By
+Amount
+Actions
+
+Actions:
+
+View
+Print
+Export
+Edit
+Delete
+
+Delete must follow existing admin-only permission and dependency rules.
+
+Do not delete accounting data partially.
+
+==================================================
+PART 14 — PAYMENT VOUCHER UI
+==================================================
+
+Same structure as Receipt Voucher.
+
+Table:
+
+Voucher #
+Date
+Paid To
+Cash/Bank
+Location
+Reference
+Narration
+By
+Amount
+Actions
+
+Keep UI consistent with Receipt.
+
+==================================================
+PART 15 — EXPENSE UI
+==================================================
+
+Modern expense entry.
+
+Fields:
+
+Date
+Expense Ledger
+Amount
+Payment Account
+Location
+Reference
+Notes
+
+Searchable ledger dropdown.
+
+Show accounting impact before saving when appropriate.
+
+==================================================
+PART 16 — INVENTORY UI
+==================================================
+
+Redesign inventory around three primary tabs:
+
+[ Live Stock ]
+[ Storage Locations ]
+[ Item Tracking ]
+
+==================================================
+PART 17 — LIVE STOCK UI
+==================================================
+
+Create a professional stock dashboard.
+
+Summary cards:
+
+Total Items
+Total Quantity
+Low Stock
+Out of Stock
+Locations
+
+Table:
+
+Item
+SKU
+Unit
+Current Stock
+Reserved
+Available
+Location
+Stock Value where permitted
+Actions
+
+Search:
+
+Item name
+SKU
+Barcode
+
+Filters:
+
+Item type
+Location
+Stock status
+
+Sorting:
+
+Quantity
+Name
+Value
+Date
+
+==================================================
+PART 18 — STORAGE LOCATIONS — COMPLETE REDESIGN
+==================================================
+
+Use the attached Storage Locations screen as the visual reference, but improve it substantially.
+
+Top tabs:
+
+[Live Stock] [Storage Locations] [Item Tracking]
+
+Page title:
+
+Storage Locations
+
+Description:
+
+"Manage physical stock locations and track inventory across warehouses and sub-locations."
+
+Warehouse selector:
+
+[ Warehouse icon ] Frozen Hub - Ragiguda ▼
+
+Top-right:
+
+[ + Add Storage Location ]
+
+Then display modern location cards.
+
+Example:
+
+FREEZER 1
+ACTIVE
+
+Total Items: 186
+Total Stock: 1,248 kg
+
+Actions:
+Edit
+Duplicate
+Delete
+
+FREEZER 2
+ACTIVE
+
+Total Items
+Total Stock
+
+COLD ROOM
+ACTIVE
+
+Total Items
+Total Stock
+
+Add New Storage Location card.
+
+Do not use the old small horizontal location chips as the primary UI.
+
+Use proper cards.
+
+==================================================
+PART 19 — SUB-LOCATION SYSTEM
+==================================================
+
+Implement proper hierarchy:
+
+Warehouse
+    ↓
+Storage Location
+    ↓
+Sub-location
+    ↓
+Rack / Shelf / Section if needed
+
+Example:
+
+Frozen Hub - Ragiguda
+    ├── Freezer 1
+    │    ├── Rack A
+    │    ├── Rack B
+    │    └── Shelf 1
+    │
+    ├── Freezer 2
+    │    ├── Rack A
+    │    └── Rack B
+    │
+    └── Cold Room
+         ├── Rack A
+         └── Rack B
+
+When adding a location:
+
+Name
+Code
+Location Type
+Parent Warehouse
+Parent Storage Location
+Manager
+Description
+Active/Inactive
+
+Allow:
+
+Warehouse
+Storage Location
+Sub-location
+
+Do not fake this hierarchy only in frontend state.
+
+Persist it properly in backend.
+
+==================================================
+PART 20 — STORAGE LOCATION STOCK TABLE
+==================================================
+
+Below the location cards:
+
+Search:
+"Search item name, SKU or barcode..."
+
+Filters:
+
+Item Type
+Location
+Stock Status
+
+Table:
+
+Item
+SKU
+Item Type
+Warehouse Total
+Sub-location Breakdown
+Unassigned
+Actions
+
+Example:
+
+ANAR
+
+Warehouse Total:
+48 kg
+
+Storage breakdown:
+
+❄ Freezer 1 — 30 kg
+❄ Freezer 2 — 18 kg
+
+Unassigned:
+—
+
+Actions:
+
+[View Details]
+[Move]
+
+For an item with sub-locations:
+
+Freezer 1
+ ├── Rack A: 20 kg
+ └── Rack B: 10 kg
+
+Freezer 2
+ └── Rack A: 18 kg
+
+Total:
+48 kg
+
+==================================================
+PART 21 — STOCK MOVE UI
+==================================================
+
+Click Move.
+
+Open professional dialog:
+
+Move Stock
+
+Item:
+ANAR
+
+Available:
+48 kg
+
+From:
+Freezer 1 / Rack A
+
+Quantity:
+[ 10 kg ]
+
+To:
+Freezer 2 / Rack B
+
+Reason:
+[ optional ]
+
+[Cancel]
+[Move Stock]
+
+Validate all quantities.
+
+Never allow:
+
+Negative stock
+Over-allocation
+Allocation greater than warehouse stock
+
+Internal moves must not change warehouse total.
+
+Every move must create the correct inventory movement record.
+
+==================================================
+PART 22 — STORAGE LOCATION PERMISSIONS
+==================================================
+
+Manager/Admin with permission:
+
+Create
+Edit
+Move
+Allocate
+Deactivate
+
+Normal staff:
+
+View
+Move only if permitted
+
+Permissions must be enforced on backend as well as UI.
+
+==================================================
+PART 23 — ITEM TRACKING UI
+==================================================
+
+Item Tracking should show the complete lifecycle of an item.
+
+Search item.
+
+Show:
+
+Current Stock
+Current Locations
+Total Purchased
+Total Sold
+Total Returned
+Total Transferred
+Adjustments
+
+Timeline:
+
+Purchase
+→ Stock received
+→ Storage allocation
+→ Transfer
+→ Sale
+→ Return
+→ Adjustment
+
+Each event:
+
+Date
+Transaction
+Reference
+Vendor/Customer
+Quantity
+Rate/value if permitted
+Location
+Running quantity
+
+==================================================
+PART 24 — STOCK LOCATION RECONCILIATION
+==================================================
+
+For every item:
+
+Warehouse Total =
+Allocated Storage Stock + Unassigned Stock
+
+For nested locations:
+
+Warehouse Total =
+All child storage locations + unassigned
+
+Never allow mismatch.
+
+Provide a reconciliation indicator:
+
+✓ Reconciled
+
+or
+
+⚠ Difference detected: 5 kg
+
+Clicking the warning should show the exact discrepancy.
+
+==================================================
+PART 25 — REPORT UI
+==================================================
+
+All reports should have a standard toolbar.
+
+Example:
+
+[Search]
+[Date]
+[Filters]
+[Sort]
+[Export]
+[Print]
+
+All report tables should support:
+
+Column sorting
+Ascending
+Descending
+Pagination
+Rows per page
+Search
+Filters
+
+Do not calculate reports separately from accounting services.
+
+Reports must use the same source of truth.
+
+==================================================
+PART 26 — FILTER AND SORT DESIGN
+==================================================
+
+Every major table should have:
+
+LEFT:
+Sort button
+
+RIGHT:
+Filter button
+
+Filter panel can contain:
+
+Date
+Location
+Customer
+Vendor
+Status
+Payment Mode
+Item
+Ledger
+User
+B2B/B2C
+Other relevant fields
+
+Sort:
+
+Ascending
+Descending
+
+Do not add useless filters that have no backend support.
+
+==================================================
+PART 27 — SEARCHABLE DROPDOWNS
+==================================================
+
+Every long dropdown must have:
+
+Search bar
+Scrollable results
+Keyboard navigation
+Clear selection
+
+Apply to:
+
+Customer
+Vendor
+Item
+Ledger
+Employee
+Bank
+Cash account
+Expense ledger
+Income ledger
+Warehouse
+Storage Location
+Sub-location
+Material
+
+Do not force users to scroll through long lists.
+
+==================================================
+PART 28 — MODAL DESIGN
+==================================================
+
+Every modal should have:
+
+Clear title
+Description
+Proper spacing
+Scrollable body
+Sticky footer
+Cancel button
+Primary action
+Validation messages
+
+Long forms must remain usable.
+
+Do not create modals where the Save button disappears below the viewport.
+
+==================================================
+PART 29 — TABLE UX
+==================================================
+
+Every table should have:
+
+Readable headers
+Sticky header where appropriate
+Row hover
+Consistent column alignment
+Numeric values right aligned
+Dates consistently formatted
+Status badges
+Action menu
+
+Currency:
+
+₹1,23,456.00
+
+Numbers should align properly.
+
+Do not allow columns to overlap.
+
+==================================================
+PART 30 — EMPTY STATES
+==================================================
+
+When no data exists, show useful empty states.
+
+Example:
+
+No storage locations yet.
+
+"Create a storage location to start allocating stock."
+
+[+ Add Storage Location]
+
+Do not show blank white tables.
+
+==================================================
+PART 31 — LOADING STATES
+==================================================
+
+Use skeleton loaders for:
+
+Dashboard cards
+Tables
+Location cards
+Item details
+Ledger
+
+Do not freeze the screen while loading.
+
+==================================================
+PART 32 — ERROR STATES
+==================================================
+
+Never expose raw backend/database errors.
+
+Convert them into useful messages.
+
+Example:
+
+Instead of:
+
+stock_allocation_constraint_failed
+
+Show:
+
+"Unable to move stock. Only 18 kg is available in Freezer 2."
+
+==================================================
+PART 33 — RESPONSIVE UI
+==================================================
+
+The ERP must work properly on:
+
+Desktop
+Laptop
+Tablet
+
+Tables should horizontally scroll when necessary.
+
+Cards should resize properly.
+
+Modals should fit the screen.
+
+Do not allow text or buttons to overlap.
+
+==================================================
+PART 34 — GLOBAL UI COMPONENT LIBRARY
+==================================================
+
+Create/reuse shared components for:
+
+PageHeader
+Breadcrumb
+SearchBar
+FilterButton
+FilterPanel
+SortButton
+Pagination
+DataTable
+StatusBadge
+SummaryCard
+LocationCard
+FormSection
+SearchableDropdown
+Modal
+Drawer
+ConfirmDialog
+EmptyState
+LoadingSkeleton
+ErrorState
+Toast
+Tabs
+
+Do not create slightly different versions of the same component on every page.
+
+==================================================
+PART 35 — ACCOUNTING SAFETY
+==================================================
+
+UI modernization must NOT alter:
+
+Trial Balance
+Balance Sheet
+P&L
+Ledger balances
+Customer balances
+Vendor balances
+Cash
+Bank
+GST
+Stock
+Receivables
+Payables
+
+Before and after UI implementation compare the figures.
+
+All must remain identical unless a genuine accounting bug is intentionally fixed.
+
+==================================================
+PART 36 — BACKEND SAFETY
+==================================================
+
+Before changing any page:
+
+1. Inspect frontend component.
+2. Inspect API endpoint.
+3. Inspect backend service.
+4. Inspect database schema.
+5. Inspect permissions.
+6. Inspect accounting posting logic.
+7. Inspect inventory logic.
+8. Reuse existing services.
+
+Do not duplicate business logic in frontend.
+
+For Storage Locations/Sub-locations, backend changes are allowed where required.
+
+==================================================
+PART 37 — COMPLETE ERP WORKFLOW TEST
+==================================================
+
+After the UI modernization, test the entire ERP.
+
+CUSTOMERS
+- Create
+- Edit
+- GSTIN
+- B2B/B2C
+- Ledger
+- Sales
+- Receipts
+- Outstanding
+
+VENDORS
+- Create
+- Edit
+- GSTIN
+- Purchases
+- Payments
+- Outstanding
+
+SALES
+- Cash
+- Bank
+- UPI
+- Credit
+- Partial payment
+- Full payment
+- Overpayment
+- Returns
+- Charges
+- GST
+
+PURCHASE
+- Vendor invoice date
+- Stock
+- GST
+- Charges
+- Payment
+- Returns
+
+RECEIPTS
+- Full
+- Partial
+- Advance/credit balance according to existing accounting rules
+
+PAYMENTS
+- Vendor payment
+- Expense payment
+
+INVENTORY
+- Purchase stock
+- Sale stock reduction
+- Return stock
+- Transfer
+- Storage allocation
+- Sub-location allocation
+- Item tracking
+- Stock reconciliation
+
+ACCOUNTING
+- Ledger
+- Chart of Accounts
+- Trial Balance
+- Balance Sheet
+- P&L
+- Cash
+- Bank
+- Receivables
+- Payables
+
+HR
+- Attendance
+- Payroll
+- Salary expense
+- Employee payable
+
+GST
+- Correct CGST/SGST/IGST based on place of supply
+- B2B
+- B2C
+- GSTIN persistence
+
+MONTH LOCK
+- Locked month cannot be modified
+- Admin can reopen according to existing permission
+- Voucher numbering remains protected
+
+IMPORT
+- Sales
+- Purchase
+- Receipt
+- Payment
+- Ledger mapping
+- Customer mapping
+- Vendor mapping
+
+==================================================
+PART 38 — FINAL ACCOUNTING RECONCILIATION
+==================================================
+
+After implementation run a complete reconciliation.
+
+Check:
+
+Every transaction has corresponding ledger entries.
+
+Every customer transaction appears in customer ledger.
+
+Every vendor transaction appears in vendor ledger.
+
+Every cash transaction appears in cash ledger.
+
+Every bank transaction appears in bank ledger.
+
+Every sale affects:
+
+Customer
+Sales
+GST
+Stock
+Cash/Bank when applicable
+
+Every purchase affects:
+
+Vendor
+Purchase/Stock
+GST
+Cash/Bank when applicable
+
+Every receipt affects:
+
+Cash/Bank
+Customer/Vendor as appropriate
+
+Every payment affects:
+
+Cash/Bank
+Vendor/Expense/Employee as appropriate
+
+Every stock movement affects inventory correctly.
+
+No duplicate postings.
+
+No orphaned postings.
+
+No missing ledger entries.
+
+No UI-only balances.
+
+==================================================
+PART 39 — PERFORMANCE
+==================================================
+
+Do not load thousands of records unnecessarily.
+
+Use pagination.
+
+Use server-side search for large datasets.
+
+Use efficient API queries.
+
+Do not change accounting calculations for performance reasons.
+
+==================================================
+PART 40 — FINAL UI QUALITY CHECK
+==================================================
+
+Before completion inspect every major ERP page visually.
+
+Check:
+
+Alignment
+Spacing
+Typography
+Buttons
+Tables
+Dropdowns
+Modals
+Mobile/tablet behavior
+Scrolling
+Pagination
+Search
+Filters
+Sorting
+Loading
+Errors
+Empty states
+
+No:
+
+Overlapping elements
+Broken layouts
+Invisible buttons
+Cut-off text
+Misaligned currency
+Misaligned dates
+Broken dropdowns
+Unscrollable modals
+Duplicate buttons
+Inconsistent colors
+Inconsistent spacing
+
+==================================================
+PART 41 — FINAL DELIVERABLE
+==================================================
+
+At completion provide a report containing:
+
+1. All UI pages redesigned
+2. Global components created
+3. Storage Location changes
+4. Sub-location changes
+5. Backend changes
+6. Database changes
+7. Permission changes
+8. Existing functionality preserved
+9. Tests completed
+10. Accounting reconciliation results
+11. Inventory reconciliation results
+12. Any remaining bugs
+13. Any areas that were intentionally not changed
+
+IMPORTANT:
+
+Do not simply report that the UI looks better.
+
+Actually test the complete ERP after the redesign.
+
+The final result must be:
+
+MODERN UI
++
+CONSISTENT UX
++
+CORRECT ACCOUNTING
++
+CORRECT INVENTORY
++
+CORRECT LEDGERS
++
+CORRECT REPORTS
++
+CORRECT PERMISSIONS
++
+CORRECT BACKEND
++
+NO REGRESSION
+
+The Storage Locations screen shown in the provided reference image should be treated as the visual direction for the new design, but the same design quality must be applied to the ENTIRE ERP.
+
+Do not stop after redesigning Storage Locations.
+
+Modernize the complete ERP.

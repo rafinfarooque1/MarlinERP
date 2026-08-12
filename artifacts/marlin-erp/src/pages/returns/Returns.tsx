@@ -10,17 +10,22 @@ import { usePermission } from '@/lib/usePermission';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
-import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { BillCombobox } from '@/components/ui/bill-combobox';
-import { Undo2, Plus, Search, Eye, Pencil, PackageX, ShieldOff } from 'lucide-react';
+import { Undo2, Plus, Search, Eye, Pencil, PackageX, ShieldOff, Wallet, Receipt } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { invalidateDashboard } from '@/lib/invalidateDashboard';
+import { TablePager, useClientPage } from '@/components/ui/table-pager';
+import { PageHeader } from '@/components/app/page-header';
+import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
+import { StatusBadge } from '@/components/app/status-badge';
+import { EmptyState } from '@/components/app/empty-state';
+import { TableSkeleton } from '@/components/app/loading-skeletons';
 
 const fmt = (n: unknown) => Number(n ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 });
 // Paise rounding — must match the API's r2 so estimates equal the note total.
@@ -520,6 +525,16 @@ export default function Returns() {
   const isLoading = tab === 'sales' ? srLoading : prLoading;
   const empty = tab === 'sales' ? filteredSR.length === 0 : filteredPR.length === 0;
 
+  // Client-side pagination over the already-filtered sets (furniture only).
+  const srPage = useClientPage(filteredSR);
+  const prPage = useClientPage(filteredPR);
+  const pager = tab === 'sales' ? srPage : prPage;
+
+  const srCount = (salesReturns as SalesReturn[]).length;
+  const srTotal = (salesReturns as SalesReturn[]).reduce((s, r) => s + Number(r.totalAmount ?? 0), 0);
+  const prCount = (purchaseReturns as PurchaseReturn[]).length;
+  const prTotal = (purchaseReturns as PurchaseReturn[]).reduce((s, r) => s + Number(r.totalAmount ?? 0), 0);
+
   if (!perm.isLoading && !perm.canView) {
     return (
       <AppLayout>
@@ -542,17 +557,35 @@ export default function Returns() {
   return (
     <AppLayout>
       <div className="space-y-6">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h1 className="text-2xl font-bold flex items-center gap-2"><Undo2 className="w-6 h-6 text-primary" /> Returns</h1>
-            <p className="text-sm text-muted-foreground mt-0.5">Sales returns restock inventory and issue credit notes; purchase returns raise debit notes on the vendor.</p>
-          </div>
-          {perm.canAdd && (
+        <PageHeader
+          title="Returns"
+          description="Sales returns restock inventory and issue credit notes; purchase returns raise debit notes on the vendor."
+          icon={Undo2}
+          actions={perm.canAdd && (
             <Button onClick={() => setCreateOpen(true)}>
               <Plus className="w-4 h-4 mr-2" /> {tab === 'sales' ? 'New Sales Return' : 'New Purchase Return'}
             </Button>
           )}
-        </div>
+        />
+
+        <SummaryCardGrid>
+          <SummaryCard
+            label="Sales Returns"
+            value={srCount.toLocaleString('en-IN')}
+            sub={`₹${fmt(srTotal)} credited`}
+            icon={Receipt}
+            tone="info"
+            loading={srLoading}
+          />
+          <SummaryCard
+            label="Purchase Returns"
+            value={prCount.toLocaleString('en-IN')}
+            sub={`₹${fmt(prTotal)} debited`}
+            icon={Wallet}
+            tone="info"
+            loading={prLoading}
+          />
+        </SummaryCardGrid>
 
         <div className="flex flex-wrap items-center gap-3">
           <div className="inline-flex rounded-lg border border-border p-0.5 bg-muted/30">
@@ -572,17 +605,17 @@ export default function Returns() {
           </div>
         </div>
 
-        <div className="bg-card border border-border rounded-xl overflow-hidden">
+        <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
           {isLoading ? (
-            <div className="p-10 text-center text-muted-foreground text-sm">Loading returns…</div>
-          ) : empty ? (
-            <div className="p-12 text-center">
-              <PackageX className="w-10 h-10 mx-auto text-muted-foreground/40 mb-3" />
-              <p className="font-medium">No {tab === 'sales' ? 'sales' : 'purchase'} returns yet</p>
-              <p className="text-sm text-muted-foreground mt-1">
-                {tab === 'sales' ? 'Record one when a customer brings stock back.' : 'Record one when goods go back to a vendor.'}
-              </p>
+            <div className="p-4">
+              <TableSkeleton rows={8} cols={7} />
             </div>
+          ) : empty ? (
+            <EmptyState
+              icon={PackageX}
+              title={`No ${tab === 'sales' ? 'sales' : 'purchase'} returns yet`}
+              hint={tab === 'sales' ? 'Record one when a customer brings stock back.' : 'Record one when goods go back to a vendor.'}
+            />
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
@@ -599,7 +632,7 @@ export default function Returns() {
                 </thead>
                 <tbody>
                   {tab === 'sales'
-                    ? filteredSR.map(r => (
+                    ? srPage.pageRows.map(r => (
                         <tr key={r.id} className="border-t border-border hover:bg-muted/10">
                           <td className="px-4 py-2.5 font-mono font-semibold text-primary">{r.returnNumber}</td>
                           <td className="px-3 py-2.5 whitespace-nowrap">{dfmt(r.returnDate)}</td>
@@ -608,8 +641,8 @@ export default function Returns() {
                           <td className="px-3 py-2.5 text-right font-mono font-semibold">₹{fmt(r.totalAmount)}</td>
                           <td className="px-3 py-2.5">
                             {r.refundMode === 'cash'
-                              ? <Badge variant="outline" className="text-amber-600 border-amber-500/40">Cash refund</Badge>
-                              : <Badge variant="outline" className="text-emerald-600 border-emerald-500/40 font-mono">{r.creditNoteNumber || 'Credit Note'}</Badge>}
+                              ? <StatusBadge status="partial" label="Cash refund" />
+                              : <StatusBadge status="completed" label={r.creditNoteNumber || 'Credit Note'} className="font-mono" />}
                           </td>
                           <td className="px-4 py-2.5 text-right whitespace-nowrap">
                             <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setView({ kind: 'sales', doc: r })} data-testid={`button-view-sr-${r.id}`}><Eye className="w-4 h-4" /></Button>
@@ -619,14 +652,14 @@ export default function Returns() {
                           </td>
                         </tr>
                       ))
-                    : filteredPR.map(r => (
+                    : prPage.pageRows.map(r => (
                         <tr key={r.id} className="border-t border-border hover:bg-muted/10">
                           <td className="px-4 py-2.5 font-mono font-semibold text-primary">{r.returnNumber}</td>
                           <td className="px-3 py-2.5 whitespace-nowrap">{dfmt(r.returnDate)}</td>
                           <td className="px-3 py-2.5 font-mono text-xs">{r.invoiceNumber || `PB #${String(r.purchaseId).padStart(4, '0')}`}</td>
                           <td className="px-3 py-2.5">{r.vendorName}</td>
                           <td className="px-3 py-2.5 text-right font-mono font-semibold">₹{fmt(r.totalAmount)}</td>
-                          <td className="px-3 py-2.5"><Badge variant="outline" className="text-sky-600 border-sky-500/40 font-mono">{r.debitNoteNumber || 'Debit Note'}</Badge></td>
+                          <td className="px-3 py-2.5"><StatusBadge status="converted" label={r.debitNoteNumber || 'Debit Note'} className="font-mono" /></td>
                           <td className="px-4 py-2.5 text-right whitespace-nowrap">
                             <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setView({ kind: 'purchase', doc: r })} data-testid={`button-view-pr-${r.id}`}><Eye className="w-4 h-4" /></Button>
                             {perm.canEdit && (
@@ -640,6 +673,8 @@ export default function Returns() {
             </div>
           )}
         </div>
+
+        {!isLoading && !empty && <TablePager {...pager.pagerProps} />}
       </div>
 
       {tab === 'sales'

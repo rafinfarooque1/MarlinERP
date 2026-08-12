@@ -15,6 +15,8 @@ import {
 } from '@/components/ui/dialog';
 import { HandCoins, ChevronDown, ChevronRight, Search, Wallet, Phone, ShieldOff } from 'lucide-react';
 import { toast } from 'sonner';
+import { PageHeader } from '@/components/app/page-header';
+import { EmptyState } from '@/components/app/empty-state';
 
 const fmt = (n: unknown) => Number(n ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 });
 const fmt0 = (n: unknown) => Number(n ?? 0).toLocaleString('en-IN', { maximumFractionDigits: 0 });
@@ -175,12 +177,11 @@ export default function Outstanding() {
   return (
     <AppLayout>
       <div className="space-y-6">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h1 className="text-2xl font-bold flex items-center gap-2"><Wallet className="w-6 h-6 text-primary" /> Outstanding</h1>
-            <p className="text-sm text-muted-foreground mt-0.5">Who owes you, whom you owe, and which invoices to chase today.</p>
-          </div>
-        </div>
+        <PageHeader
+          title="Outstanding"
+          description="Who owes you, whom you owe, and which invoices to chase today."
+          icon={Wallet}
+        />
 
         <div className="flex flex-wrap items-center gap-3">
           <div className="inline-flex rounded-lg border border-border p-0.5 bg-muted/30">
@@ -260,11 +261,7 @@ export default function Outstanding() {
           {tab === 'receivables' && (recvLoading ? (
             <div className="p-10 text-center text-muted-foreground text-sm">Loading receivables…</div>
           ) : customers.length === 0 ? (
-            <div className="p-12 text-center">
-              <HandCoins className="w-10 h-10 mx-auto text-muted-foreground/40 mb-3" />
-              <p className="font-medium">Nothing outstanding</p>
-              <p className="text-sm text-muted-foreground mt-1">All customer invoices are fully paid.</p>
-            </div>
+            <EmptyState icon={HandCoins} title="Nothing outstanding" hint="All customer invoices are fully paid." />
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
@@ -349,11 +346,7 @@ export default function Outstanding() {
           {tab === 'payables' && (payLoading ? (
             <div className="p-10 text-center text-muted-foreground text-sm">Loading payables…</div>
           ) : vendors.length === 0 ? (
-            <div className="p-12 text-center">
-              <HandCoins className="w-10 h-10 mx-auto text-muted-foreground/40 mb-3" />
-              <p className="font-medium">Nothing outstanding</p>
-              <p className="text-sm text-muted-foreground mt-1">All vendor bills are settled.</p>
-            </div>
+            <EmptyState icon={HandCoins} title="Nothing outstanding" hint="All vendor bills are settled." />
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
@@ -441,11 +434,7 @@ export default function Outstanding() {
           {tab === 'collections' && (collLoading ? (
             <div className="p-10 text-center text-muted-foreground text-sm">Loading worklist…</div>
           ) : collItems.length === 0 ? (
-            <div className="p-12 text-center">
-              <HandCoins className="w-10 h-10 mx-auto text-muted-foreground/40 mb-3" />
-              <p className="font-medium">Nothing to chase</p>
-              <p className="text-sm text-muted-foreground mt-1">No unpaid or partly-paid credit invoices right now.</p>
-            </div>
+            <EmptyState icon={HandCoins} title="Nothing to chase" hint="No unpaid or partly-paid credit invoices right now." />
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">

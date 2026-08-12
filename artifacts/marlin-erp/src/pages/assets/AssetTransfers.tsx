@@ -22,6 +22,12 @@ import { usePermission } from '@/lib/usePermission';
 import { toast } from 'sonner';
 import { downloadCSV } from '@/lib/download';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
+import { TablePager, useClientPage } from '@/components/ui/table-pager';
+import { PageHeader } from '@/components/app/page-header';
+import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
+import { EmptyState } from '@/components/app/empty-state';
+import { TableSkeleton } from '@/components/app/loading-skeletons';
+import { EntityCombobox } from '@/components/ui/entity-combobox';
 import { fmtDate } from '@/pages/reports/shared';
 import { AssetsAccessDenied, useAssetLocationOptions, locKey } from './shared';
 
@@ -58,6 +64,8 @@ export default function AssetTransfers() {
     recordedBy: t => t.createdBy,
   });
 
+  const { pageRows, pagerProps } = useClientPage(sorted);
+
   const [form, setForm] = useState({ assetId: '', to: '', transferDate: todayIso(), approvedBy: '', reason: '' });
   const selectedAsset: AssetPurchase | undefined = (activeAssets as AssetPurchase[]).find(a => String(a.id) === form.assetId);
 
@@ -93,18 +101,23 @@ export default function AssetTransfers() {
   return (
     <AppLayout>
       <div className="space-y-6">
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><ArrowRightLeft className="w-6 h-6 text-primary" /> Asset Transfers</h1>
-            <p className="text-muted-foreground mt-1">Moves between locations — recorded in history, no accounting entries.</p>
-          </div>
-          <div className="flex gap-2">
-            {perm.canDownload && (
-              <Button variant="outline" size="sm" onClick={exportCSV}><Download className="w-4 h-4 mr-2" /> Export</Button>
-            )}
-            {perm.canAdd && <Button onClick={openAdd}><Plus className="w-4 h-4 mr-2" /> New Transfer</Button>}
-          </div>
-        </div>
+        <PageHeader
+          title="Asset Transfers"
+          description="Moves between locations — recorded in history, no accounting entries."
+          icon={ArrowRightLeft}
+          actions={
+            <>
+              {perm.canDownload && (
+                <Button variant="outline" size="sm" onClick={exportCSV}><Download className="w-4 h-4 mr-2" /> Export</Button>
+              )}
+              {perm.canAdd && <Button onClick={openAdd}><Plus className="w-4 h-4 mr-2" /> New Transfer</Button>}
+            </>
+          }
+        />
+
+        <SummaryCardGrid>
+          <SummaryCard label="Transfers" value={String(transfers.length)} icon={ArrowRightLeft} tone="default" loading={isLoading} />
+        </SummaryCardGrid>
 
         <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
           <div className="p-4 border-b border-border flex flex-wrap gap-3 bg-muted/20 items-center">
@@ -130,13 +143,13 @@ export default function AssetTransfers() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {isLoading ? [...Array(5)].map((_, i) => (
-                <TableRow key={i}><TableCell colSpan={8}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
-              )) : transfers.length === 0 ? (
-                <TableRow><TableCell colSpan={8} className="text-center py-16 text-muted-foreground">
-                  <ArrowRightLeft className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No transfers recorded</p>
+              {isLoading ? (
+                <TableRow><TableCell colSpan={8} className="p-0"><TableSkeleton rows={8} cols={8} /></TableCell></TableRow>
+              ) : transfers.length === 0 ? (
+                <TableRow><TableCell colSpan={8} className="p-0">
+                  <EmptyState icon={ArrowRightLeft} title="No transfers recorded" hint="Record an asset move to see it here." compact />
                 </TableCell></TableRow>
-              ) : sorted.map(t => (
+              ) : pageRows.map(t => (
                 <TableRow key={t.id} className="hover:bg-muted/10">
                   <TableCell className="whitespace-nowrap text-sm">{fmtDate(t.transferDate)}</TableCell>
                   <TableCell className="font-mono text-sm font-semibold whitespace-nowrap">{t.assetCode}</TableCell>
@@ -150,6 +163,9 @@ export default function AssetTransfers() {
               ))}
             </TableBody>
           </Table>
+          <div className="px-4 py-2 border-t border-border">
+            <TablePager {...pagerProps} />
+          </div>
         </div>
       </div>
 
@@ -162,14 +178,14 @@ export default function AssetTransfers() {
           <div className="space-y-4 pt-2">
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Asset <span className="text-destructive">*</span></label>
-              <Select value={form.assetId} onValueChange={v => setForm(s => ({ ...s, assetId: v, to: '' }))}>
-                <SelectTrigger><SelectValue placeholder="Select asset" /></SelectTrigger>
-                <SelectContent>
-                  {(activeAssets as AssetPurchase[]).map(a => (
-                    <SelectItem key={a.id} value={String(a.id)}>{a.assetCode} — {a.assetName} ({a.currentLocationName})</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <EntityCombobox
+                options={(activeAssets as AssetPurchase[]).map(a => ({ id: a.id, label: `${a.assetCode} — ${a.assetName}`, sublabel: a.currentLocationName }))}
+                value={form.assetId ? Number(form.assetId) : null}
+                onChange={id => setForm(s => ({ ...s, assetId: id ? String(id) : '', to: '' }))}
+                placeholder="Select asset"
+                searchPlaceholder="Search assets…"
+                emptyLabel="No assets found."
+              />
               {selectedAsset && (
                 <p className="text-xs text-muted-foreground">Currently at <span className="font-medium">{selectedAsset.currentLocationName}</span></p>
               )}

@@ -12,11 +12,10 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sh
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Textarea } from '@/components/ui/textarea';
 import { Separator } from '@/components/ui/separator';
-import { Badge } from '@/components/ui/badge';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Plus, Search, Truck, Download, Eye, BookOpen, Pencil, IndianRupee, ArrowUpRight, ArrowDownLeft, ShieldOff } from 'lucide-react';
+import { Plus, Search, Truck, Download, Eye, BookOpen, Pencil, IndianRupee, ArrowUpRight, ArrowDownLeft, ShieldOff, Wallet } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV } from '@/lib/download';
@@ -26,6 +25,11 @@ import { usePermission } from '@/lib/usePermission';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { PartyBalance } from '@/lib/partyBalance';
 import { usePartyLocations, rowMatchesLocation, locationValueOf, HEAD_OFFICE_VALUE } from '@/lib/usePartyLocations';
+import { PageHeader } from '@/components/app/page-header';
+import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
+import { EmptyState } from '@/components/app/empty-state';
+import { TableSkeleton } from '@/components/app/loading-skeletons';
+import { TablePager, useClientPage } from '@/components/ui/table-pager';
 
 // ── Schemas ───────────────────────────────────────────────────────────────────
 const vendorSchema = z.object({
@@ -370,6 +374,11 @@ export default function Vendors() {
     location: v => (v as any)._locationName,
     balance: v => Number((v as any).outstandingBalance) || null,
   });
+  const { pageRows, pagerProps } = useClientPage(sorted);
+
+  const totalPayable = vendors.reduce((s, v: any) => s + Number(v.outstandingBalance ?? 0), 0);
+  const withDues = vendors.filter((v: any) => Number(v.outstandingBalance ?? 0) > 0.009).length;
+  const inr = (n: number) => `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
 
   if (!perm.isLoading && !perm.canView) {
     return (
@@ -393,22 +402,29 @@ export default function Vendors() {
   return (
     <AppLayout>
       <div className="space-y-6">
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><Truck className="w-6 h-6 text-primary" /> Vendors / Suppliers</h1>
-            <p className="text-muted-foreground mt-1">Raw material and packaging suppliers</p>
-          </div>
-          <div className="flex gap-2">
-            {perm.canDownload && (
-            <Button variant="outline" size="sm" onClick={() => downloadCSV('vendors.csv', filtered.map(v => ({ Name: v.name, Phone: v.phone || '', State: (v as any).state || '', GST: v.gstNumber || '', Location: loc.nameOf((v as any).locationType ?? (v as any).location_type, (v as any).locationId ?? (v as any).location_id), Balance: (v as any).outstandingBalance || 0 })))}>
-              <Download className="w-4 h-4 mr-2" /> Export
-            </Button>
-            )}
-            {perm.canAdd && (
-            <Button onClick={() => { form.reset(); setIsOpen(true); }}><Plus className="w-4 h-4 mr-2" /> Add Vendor</Button>
-            )}
-          </div>
-        </div>
+        <PageHeader
+          title="Vendors / Suppliers"
+          description="Raw material and packaging suppliers"
+          icon={Truck}
+          actions={
+            <>
+              {perm.canDownload && (
+              <Button variant="outline" size="sm" onClick={() => downloadCSV('vendors.csv', filtered.map(v => ({ Name: v.name, Phone: v.phone || '', State: (v as any).state || '', GST: v.gstNumber || '', Location: loc.nameOf((v as any).locationType ?? (v as any).location_type, (v as any).locationId ?? (v as any).location_id), Balance: (v as any).outstandingBalance || 0 })))}>
+                <Download className="w-4 h-4 mr-2" /> Export
+              </Button>
+              )}
+              {perm.canAdd && (
+              <Button onClick={() => { form.reset(); setIsOpen(true); }}><Plus className="w-4 h-4 mr-2" /> Add Vendor</Button>
+              )}
+            </>
+          }
+        />
+
+        <SummaryCardGrid>
+          <SummaryCard label="Total Vendors" value={vendors.length} icon={Truck} loading={isLoading} />
+          <SummaryCard label="With Dues" value={withDues} icon={Truck} tone="warning" loading={isLoading} />
+          <SummaryCard label="Total Payable" value={inr(totalPayable)} icon={Wallet} tone="warning" loading={isLoading} />
+        </SummaryCardGrid>
 
         <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
           <div className="p-4 border-b border-border flex flex-col sm:flex-row sm:items-center gap-2 bg-muted/20">
@@ -429,6 +445,9 @@ export default function Vendors() {
             </Select>
           </div>
           <div className="hidden md:block">
+          {isLoading ? (
+            <TableSkeleton rows={8} cols={7} />
+          ) : (
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
@@ -442,13 +461,11 @@ export default function Vendors() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {isLoading ? [...Array(3)].map((_, i) => (
-                <TableRow key={i}><TableCell colSpan={7}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
-              )) : filtered.length === 0 ? (
-                <TableRow><TableCell colSpan={7} className="text-center py-16 text-muted-foreground">
-                  <Truck className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>{vendors.length === 0 ? 'No vendors yet' : 'No vendors match this search or location'}</p>
+              {filtered.length === 0 ? (
+                <TableRow><TableCell colSpan={7} className="p-0">
+                  <EmptyState icon={Truck} title={vendors.length === 0 ? 'No vendors yet' : 'No vendors match this search or location'} hint={vendors.length === 0 ? 'Add your first supplier.' : undefined} compact />
                 </TableCell></TableRow>
-              ) : sorted.map(v => (
+              ) : pageRows.map(v => (
                 <TableRow key={v.id} className="hover:bg-muted/10">
                   <TableCell className="font-semibold">{v.name}</TableCell>
                   <TableCell className="text-sm text-muted-foreground">{v.phone || '—'}</TableCell>
@@ -479,6 +496,7 @@ export default function Vendors() {
               ))}
             </TableBody>
           </Table>
+          )}
           </div>
 
           {/* Mobile cards */}
@@ -486,10 +504,8 @@ export default function Vendors() {
             {isLoading ? [...Array(3)].map((_, i) => (
               <div key={i} className="h-20 bg-muted/30 rounded-lg animate-pulse" />
             )) : filtered.length === 0 ? (
-              <div className="text-center py-16 text-muted-foreground">
-                <Truck className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>{vendors.length === 0 ? 'No vendors yet' : 'No vendors match this search or location'}</p>
-              </div>
-            ) : sorted.map(v => (
+              <EmptyState icon={Truck} title={vendors.length === 0 ? 'No vendors yet' : 'No vendors match this search or location'} hint={vendors.length === 0 ? 'Add your first supplier.' : undefined} compact />
+            ) : pageRows.map(v => (
               <div key={v.id} className="border border-border rounded-lg p-3">
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
@@ -521,6 +537,12 @@ export default function Vendors() {
               </div>
             ))}
           </div>
+
+          {!isLoading && filtered.length > 0 && (
+            <div className="px-3 pb-2 border-t border-border">
+              <TablePager {...pagerProps} />
+            </div>
+          )}
         </div>
       </div>
 

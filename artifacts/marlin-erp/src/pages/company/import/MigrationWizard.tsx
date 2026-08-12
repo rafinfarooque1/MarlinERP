@@ -351,7 +351,7 @@ export function MigrationWizard({ canAdd, canDelete, canDownload, resumeId = nul
                     <>
                       <div className="text-xs text-muted-foreground truncate" title={f.filename}>{f.filename}</div>
                       {f.conversion && (
-                        <div className="rounded-md border border-blue-200 bg-blue-50 p-2 space-y-0.5">
+                        <div className="rounded-md border border-blue-500/25 bg-blue-500/10 p-2 space-y-0.5">
                           <div className="text-[11px] font-medium text-blue-900 flex items-center gap-1">
                             <Sparkles className="w-3 h-3" />
                             Old software report detected — converted automatically
@@ -460,7 +460,7 @@ export function MigrationWizard({ canAdd, canDelete, canDownload, resumeId = nul
             )}
 
             {Object.entries(analysis.issues).filter(([, n]) => n > 0).length > 0 && (
-              <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 space-y-1">
+              <div className="rounded-lg border border-amber-500/25 bg-amber-500/10 p-3 space-y-1">
                 <div className="text-sm font-medium flex items-center gap-1.5">
                   <XCircle className="w-4 h-4 text-destructive" />Problem rows — fix the file in Excel and upload it again
                 </div>
@@ -592,7 +592,7 @@ export function MigrationWizard({ canAdd, canDelete, canDownload, resumeId = nul
             )}
 
             {(mig.demoSummary?.failures?.length ?? 0) > 0 && (
-              <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 space-y-1">
+              <div className="rounded-lg border border-amber-500/25 bg-amber-500/10 p-3 space-y-1">
                 <div className="text-sm font-medium flex items-center gap-1.5">
                   <AlertTriangle className="w-4 h-4 text-amber-600" />
                   {mig.demoSummary!.failures.length} document{mig.demoSummary!.failures.length === 1 ? '' : 's'} failed in the trial — approval needs a clean trial

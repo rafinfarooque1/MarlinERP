@@ -17,13 +17,17 @@ import {
   AlertDialogFooter, AlertDialogCancel, AlertDialogAction,
 } from '@/components/ui/alert-dialog';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
-import { Plus, Search, Network, Download, Eye, Pencil, Trash2, ShieldOff, Crown } from 'lucide-react';
+import { Plus, Search, Network, Download, Eye, Pencil, Trash2, ShieldOff, Crown, Users } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
 import { usePermission } from '@/lib/usePermission';
 import type { Hierarchy as Role } from '@workspace/api-client-react';
+import { PageHeader } from '@/components/app/page-header';
+import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
+import { EmptyState } from '@/components/app/empty-state';
+import { TableSkeleton } from '@/components/app/loading-skeletons';
 
 const schema = z.object({
   name: z.string().min(1, 'Name required'),
@@ -116,6 +120,11 @@ export default function Hierarchy() {
 
   const reportsToName = (h: Role) => (h.reportsToId != null ? byId.get(h.reportsToId)?.name ?? '—' : null);
 
+  const totalRoles = roles.length;
+  const topLevelRoles = roles.filter(r => r.reportsToId == null).length;
+  const leafRoles = roles.filter(r => !roles.some(c => c.reportsToId === r.id)).length;
+  const maxDepth = roles.reduce((mx, r) => Math.max(mx, chainFor(r, byId).length), 0);
+
   // Why a role cannot be deleted right now — shown on the disabled button.
   // Children are derived from the list itself; the employee headcount is
   // server-provided and only present for callers who hold the delete right,
@@ -163,20 +172,28 @@ export default function Hierarchy() {
   return (
     <AppLayout>
       <div className="space-y-6">
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><Network className="w-6 h-6 text-primary" /> Org Hierarchy</h1>
-            <p className="text-muted-foreground mt-1">Roles and who they report to</p>
-          </div>
-          <div className="flex gap-2">
-            {perm.canDownload && (
-            <Button variant="outline" size="sm" onClick={() => downloadCSV('hierarchy.csv', filtered.map(h => ({ Name: h.name, 'Reports To': reportsToName(h) ?? '', Description: h.description || '' })))}>
-              <Download className="w-4 h-4 mr-2" /> Export
-            </Button>
-            )}
-            {perm.canAdd && <Button onClick={() => { setEditItem(null); form.reset({ name: '', reportsToId: root?.id ?? (undefined as unknown as number), description: '' }); setIsOpen(true); }}><Plus className="w-4 h-4 mr-2" /> Add Role</Button>}
-          </div>
-        </div>
+        <PageHeader
+          title="Org Hierarchy"
+          description="Roles and who they report to"
+          icon={Network}
+          actions={
+            <>
+              {perm.canDownload && (
+                <Button variant="outline" size="sm" onClick={() => downloadCSV('hierarchy.csv', filtered.map(h => ({ Name: h.name, 'Reports To': reportsToName(h) ?? '', Description: h.description || '' })))}>
+                  <Download className="w-4 h-4 mr-2" /> Export
+                </Button>
+              )}
+              {perm.canAdd && <Button onClick={() => { setEditItem(null); form.reset({ name: '', reportsToId: root?.id ?? (undefined as unknown as number), description: '' }); setIsOpen(true); }}><Plus className="w-4 h-4 mr-2" /> Add Role</Button>}
+            </>
+          }
+        />
+
+        <SummaryCardGrid>
+          <SummaryCard label="Total Roles" value={String(totalRoles)} icon={Network} loading={isLoading} />
+          <SummaryCard label="Top Level" value={String(topLevelRoles)} icon={Crown} tone="info" loading={isLoading} />
+          <SummaryCard label="Leaf Roles" value={String(leafRoles)} icon={Users} loading={isLoading} />
+          <SummaryCard label="Chain Depth" value={String(maxDepth)} icon={Network} loading={isLoading} />
+        </SummaryCardGrid>
 
         <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
           <div className="p-4 border-b border-border flex items-center gap-2 bg-muted/20">
@@ -193,11 +210,11 @@ export default function Hierarchy() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {isLoading ? [...Array(3)].map((_, i) => (
-                <TableRow key={i}><TableCell colSpan={4}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
-              )) : filtered.length === 0 ? (
-                <TableRow><TableCell colSpan={4} className="text-center py-16 text-muted-foreground">
-                  <Network className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No roles defined</p>
+              {isLoading ? (
+                <TableRow><TableCell colSpan={4} className="p-0"><TableSkeleton rows={3} cols={4} /></TableCell></TableRow>
+              ) : filtered.length === 0 ? (
+                <TableRow><TableCell colSpan={4} className="p-0">
+                  <EmptyState icon={Network} title="No roles defined" hint={search ? 'No roles match your search.' : 'Add a role to build your org chart.'} compact />
                 </TableCell></TableRow>
               ) : filtered.map(h => (
                 <TableRow key={h.id} className="hover:bg-muted/10">

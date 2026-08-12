@@ -22,6 +22,7 @@ import {
 } from '@workspace/api-client-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
+import { StatusBadge } from '@/components/app/status-badge';
 import { usePermission } from '@/lib/usePermission';
 import { useEnabledOutlets } from '@/lib/locationStructure';
 import { downloadCSV } from '@/lib/download';
@@ -70,15 +71,7 @@ function LocationSelect({ label, value, onChange, options, loading }: {
   );
 }
 
-const statusBadge = (s: string) => {
-  const map: Record<string, string> = {
-    completed: 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20',
-    in_transit: 'bg-amber-500/10 text-amber-600 border-amber-500/20',
-    pending: 'bg-amber-500/10 text-amber-600 border-amber-500/20',
-    rejected: 'bg-red-500/10 text-red-600 border-red-500/20',
-  };
-  return <Badge className={`text-[10px] capitalize ${map[s] ?? 'bg-muted/20 text-muted-foreground'}`}>{titleCase(s)}</Badge>;
-};
+const statusBadge = (s: string) => <StatusBadge status={s} label={titleCase(s)} />;
 
 function BranchTransferReport({ canDownload }: { canDownload: boolean }) {
   const range = useDateRange('month');

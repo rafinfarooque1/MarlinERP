@@ -24,8 +24,14 @@ import { downloadCSV, downloadPDFFromEndpoint } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
 import { useDateRange, RangeBar } from '@/pages/reports/shared';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
+import { TablePager, useClientPage } from '@/components/ui/table-pager';
+import { EntityCombobox } from '@/components/ui/entity-combobox';
 import { useLocationContext, locationFilterParams } from '@/lib/locationContext';
 import { entryScopeKeyDown, autoFocusFirst, focusField, useEntryShortcuts } from '@/lib/keyboard-entry';
+import { PageHeader } from '@/components/app/page-header';
+import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
+import { EmptyState } from '@/components/app/empty-state';
+import { TableSkeleton } from '@/components/app/loading-skeletons';
 
 const schema = z.object({
   description: z.string().min(1, 'Description required'),
@@ -70,6 +76,8 @@ function LocationDrilldown({ loc, onBack, canDownload }: { loc: LocationExpenseS
     amount: e => Number(e.amount),
   });
 
+  const { pageRows, pagerProps } = useClientPage(sorted);
+
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-3">
@@ -95,6 +103,11 @@ function LocationDrilldown({ loc, onBack, canDownload }: { loc: LocationExpenseS
       )}
 
       <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
+        {isLoading ? (
+          <TableSkeleton rows={3} cols={7} />
+        ) : expenses.length === 0 ? (
+          <EmptyState icon={Receipt} title="No expenses recorded for this location" compact />
+        ) : (
         <Table>
           <TableHeader>
             <TableRow className="bg-muted/10">
@@ -108,20 +121,7 @@ function LocationDrilldown({ loc, onBack, canDownload }: { loc: LocationExpenseS
             </TableRow>
           </TableHeader>
           <TableBody>
-            {isLoading ? (
-              [...Array(3)].map((_, i) => (
-                <TableRow key={i}>
-                  <TableCell colSpan={7}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell>
-                </TableRow>
-              ))
-            ) : expenses.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={7} className="text-center py-12 text-muted-foreground">
-                  <Receipt className="w-8 h-8 mx-auto mb-2 opacity-20" />
-                  <p>No expenses recorded for this location</p>
-                </TableCell>
-              </TableRow>
-            ) : sorted.map(e => (
+            {pageRows.map(e => (
               <TableRow key={e.id} className="hover:bg-muted/10">
                 <TableCell className="font-mono text-xs text-primary whitespace-nowrap">
                   {e.voucherNumber || <span className="text-muted-foreground">—</span>}
@@ -175,6 +175,8 @@ function LocationDrilldown({ loc, onBack, canDownload }: { loc: LocationExpenseS
             ))}
           </TableBody>
         </Table>
+        )}
+        <TablePager {...pagerProps} />
       </div>
 
       {/* Detail sheet */}
@@ -261,6 +263,15 @@ function ByLocationTab({ canDownload }: { canDownload: boolean }) {
       )}
 
       <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
+        {isLoading ? (
+          <TableSkeleton rows={4} cols={5} />
+        ) : summary.length === 0 ? (
+          <EmptyState
+            icon={Building2}
+            title="No warehouses or outlets with cash ledgers found"
+            hint="Provision ledgers under Accounts → Warehouses/Outlets"
+          />
+        ) : (
         <Table>
           <TableHeader>
             <TableRow className="bg-muted/10">
@@ -272,22 +283,7 @@ function ByLocationTab({ canDownload }: { canDownload: boolean }) {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {isLoading ? (
-              [...Array(4)].map((_, i) => (
-                <TableRow key={i}>
-                  <TableCell colSpan={5}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell>
-                </TableRow>
-              ))
-            ) : summary.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={5} className="text-center py-16 text-muted-foreground">
-                  <Building2 className="w-10 h-10 mx-auto mb-3 opacity-20" />
-                  <p>No warehouses or outlets with cash ledgers found</p>
-                  <p className="text-xs mt-1">Provision ledgers under Accounts → Warehouses/Outlets</p>
-                </TableCell>
-              </TableRow>
-            ) : (
-              <>
+            <>
                 {/* Locations that have expenses — sorted by spend descending */}
                 {[...locationsWithExpenses]
                   .sort((a, b) => b.total - a.total)
@@ -340,9 +336,9 @@ function ByLocationTab({ canDownload }: { canDownload: boolean }) {
                   </TableRow>
                 ))}
               </>
-            )}
           </TableBody>
         </Table>
+        )}
       </div>
     </div>
   );
@@ -458,6 +454,8 @@ export default function Expenses() {
     amount: e => Number(e.amount),
   });
 
+  const { pageRows, pagerProps } = useClientPage(sorted);
+
   if (!perm.isLoading && !perm.canView) {
     return (
       <AppLayout>
@@ -476,40 +474,39 @@ export default function Expenses() {
   return (
     <AppLayout>
       <div className="space-y-6">
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-              <Receipt className="w-6 h-6 text-primary" /> Expenses
-            </h1>
-            <p className="text-muted-foreground mt-1">All business expenditure — head office and locations</p>
-          </div>
-          <div className="flex gap-2">
-            {perm.canDownload && (
-            <Button variant="outline" size="sm" onClick={() => downloadCSV('expenses.csv', filtered.map(e => ({
-              Voucher: e.expenseNumber ?? e.voucherNumber ?? '',
-              Date: e.expenseDate,
-              Description: e.description ?? '',
-              Category: e.category ?? 'Uncategorised',
-              Account: e.ledgerAccountName ?? '',
-              PaidFrom: e.paymentAccountName ?? '',
-              Location: e.locationName ?? 'Head Office',
-              Amount: e.amount,
-              Bill: e.attachmentUrl ? 'Attached' : 'Missing',
-              Source: e.source === 'location' ? 'Location' : 'Direct',
-            })))}>
-              <Download className="w-4 h-4 mr-2" /> Export
-            </Button>
-            )}
-            {perm.canAdd && isHOUser && (
-            <Button onClick={() => {
-              form.reset(blankForm);
-              setIsOpen(true);
-            }}>
-              <Plus className="w-4 h-4 mr-2" /> Add Expense
-            </Button>
-            )}
-          </div>
-        </div>
+        <PageHeader
+          title="Expenses"
+          description="All business expenditure — head office and locations"
+          icon={Receipt}
+          actions={
+            <>
+              {perm.canDownload && (
+              <Button variant="outline" size="sm" onClick={() => downloadCSV('expenses.csv', filtered.map(e => ({
+                Voucher: e.expenseNumber ?? e.voucherNumber ?? '',
+                Date: e.expenseDate,
+                Description: e.description ?? '',
+                Category: e.category ?? 'Uncategorised',
+                Account: e.ledgerAccountName ?? '',
+                PaidFrom: e.paymentAccountName ?? '',
+                Location: e.locationName ?? 'Head Office',
+                Amount: e.amount,
+                Bill: e.attachmentUrl ? 'Attached' : 'Missing',
+                Source: e.source === 'location' ? 'Location' : 'Direct',
+              })))}>
+                <Download className="w-4 h-4 mr-2" /> Export
+              </Button>
+              )}
+              {perm.canAdd && isHOUser && (
+              <Button onClick={() => {
+                form.reset(blankForm);
+                setIsOpen(true);
+              }}>
+                <Plus className="w-4 h-4 mr-2" /> Add Expense
+              </Button>
+              )}
+            </>
+          }
+        />
 
         <Tabs defaultValue="all">
           <TabsList>
@@ -524,10 +521,10 @@ export default function Expenses() {
           {/* ── All Expenses tab ── */}
           <TabsContent value="all" className="mt-4 space-y-4">
             {filtered.length > 0 && (
-              <div className="bg-card border border-border rounded-xl p-4 flex justify-between items-center">
-                <span className="text-muted-foreground text-sm">{filtered.length} expense entries</span>
-                <span className="text-xl font-bold text-red-500 font-mono">₹{total.toLocaleString('en-IN')}</span>
-              </div>
+              <SummaryCardGrid className="lg:grid-cols-2">
+                <SummaryCard label="Expense Entries" value={String(filtered.length)} icon={LayoutList} tone="default" loading={isLoading} />
+                <SummaryCard label="Total Spend" value={<span className="font-mono text-red-500">₹{total.toLocaleString('en-IN')}</span>} icon={Receipt} tone="negative" loading={isLoading} />
+              </SummaryCardGrid>
             )}
 
             <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
@@ -541,6 +538,11 @@ export default function Expenses() {
                 />
                 <div className="ml-auto"><RangeBar range={range} /></div>
               </div>
+              {isLoading ? (
+                <TableSkeleton rows={4} cols={9} />
+              ) : filtered.length === 0 ? (
+                <EmptyState icon={Receipt} title="No expenses recorded" />
+              ) : (
               <Table>
                 <TableHeader>
                   <TableRow className="bg-muted/10">
@@ -556,20 +558,7 @@ export default function Expenses() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {isLoading ? (
-                    [...Array(4)].map((_, i) => (
-                      <TableRow key={i}>
-                        <TableCell colSpan={9}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell>
-                      </TableRow>
-                    ))
-                  ) : filtered.length === 0 ? (
-                    <TableRow>
-                      <TableCell colSpan={9} className="text-center py-16 text-muted-foreground">
-                        <Receipt className="w-10 h-10 mx-auto mb-3 opacity-20" />
-                        <p>No expenses recorded</p>
-                      </TableCell>
-                    </TableRow>
-                  ) : sorted.map(e => (
+                  {pageRows.map(e => (
                     <TableRow key={`${e.source}-${e.id}`} className="hover:bg-muted/10">
                       <TableCell className="font-mono text-xs text-primary whitespace-nowrap">
                         {e.expenseNumber ?? e.voucherNumber ?? <span className="text-muted-foreground">—</span>}
@@ -631,6 +620,8 @@ export default function Expenses() {
                   ))}
                 </TableBody>
               </Table>
+              )}
+              <TablePager {...pagerProps} />
             </div>
           </TabsContent>
 
@@ -697,12 +688,16 @@ export default function Expenses() {
               <FormField control={form.control} name="paymentAccountId" render={({ field }) => (
                 <FormItem>
                   <FormLabel>Paid From <span className="text-destructive">*</span></FormLabel>
-                  <Select onValueChange={v => field.onChange(Number(v))} value={field.value ? String(field.value) : ''}>
-                    <FormControl><SelectTrigger data-field="paymentAccountId"><SelectValue placeholder="Select cash/bank account" /></SelectTrigger></FormControl>
-                    <SelectContent>
-                      {(cashBanks as any[]).map((cb: any) => <SelectItem key={cb.id} value={String(cb.id)}>{cb.name}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
+                  <FormControl>
+                    <EntityCombobox
+                      options={(cashBanks as any[]).map((cb: any) => ({ id: cb.id, label: cb.name, sublabel: cb.gstin ?? cb.phone ?? cb.code ?? null }))}
+                      value={Number(field.value) || null}
+                      onChange={id => field.onChange(id ?? 0)}
+                      placeholder="Select cash/bank account"
+                      clearable
+                      data-field="paymentAccountId"
+                    />
+                  </FormControl>
                   <FormMessage />
                 </FormItem>
               )} />

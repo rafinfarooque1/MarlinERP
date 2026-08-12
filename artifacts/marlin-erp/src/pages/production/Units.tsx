@@ -7,6 +7,8 @@ import { useUnits } from '@/lib/useUnits';
 import { Plus, X, Ruler, ShieldOff } from 'lucide-react';
 import { toast } from 'sonner';
 import { usePermission } from '@/lib/usePermission';
+import { PageHeader } from '@/components/app/page-header';
+import { EmptyState } from '@/components/app/empty-state';
 
 export default function Units() {
   const perm = usePermission('page:/production/units');
@@ -44,14 +46,11 @@ export default function Units() {
   return (
     <AppLayout>
       <div className="space-y-6 max-w-2xl">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-            <Ruler className="w-6 h-6 text-primary" /> Unit of Measure
-          </h1>
-          <p className="text-muted-foreground mt-1">
-            Manage units available when creating items, materials, and raw materials
-          </p>
-        </div>
+        <PageHeader
+          title="Unit of Measure"
+          description="Manage units available when creating items, materials, and raw materials"
+          icon={Ruler}
+        />
 
         {/* Add unit */}
         {perm.canAdd && (
@@ -78,7 +77,7 @@ export default function Units() {
             Current Units <span className="text-primary">({units.length})</span>
           </h3>
           {units.length === 0 ? (
-            <p className="text-muted-foreground text-sm py-4 text-center">No units defined. Add one above.</p>
+            <EmptyState icon={Ruler} title="No units defined" hint="Add one above to start using it in item forms." compact />
           ) : (
             <div className="flex flex-wrap gap-2">
               {units.map(unit => (

@@ -7,6 +7,8 @@ import { useLocationContext } from '@/lib/locationContext';
 import { useOutletsEnabled } from '@/lib/useFeatureFlags';
 import { buildPickerHierarchy } from '@/lib/locationHierarchy';
 import { MapPin, Warehouse, Store, ChevronRight, Layers } from 'lucide-react';
+import { PageHeader } from '@/components/app/page-header';
+import { EmptyState } from '@/components/app/empty-state';
 
 export default function LocationPicker() {
   const [, navigate] = useLocation();
@@ -81,17 +83,13 @@ export default function LocationPicker() {
   return (
     <AppLayout>
       <div className="max-w-2xl mx-auto space-y-4">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-            <MapPin className="w-6 h-6 text-primary" />
-            Select Selling Location
-          </h1>
-          <p className="text-muted-foreground mt-1 text-sm">
-            {isWarehouseEmployee
-              ? 'Choose the outlet you are selling from today.'
-              : 'Choose the warehouse or outlet you are selling from today.'}
-          </p>
-        </div>
+        <PageHeader
+          title="Select Selling Location"
+          icon={MapPin}
+          description={isWarehouseEmployee
+            ? 'Choose the outlet you are selling from today.'
+            : 'Choose the warehouse or outlet you are selling from today.'}
+        />
 
         {isLoading ? (
           <div className="space-y-3">
@@ -204,14 +202,13 @@ export default function LocationPicker() {
             )}
 
             {totalCount === 0 && (
-              <div className="text-center py-16 text-muted-foreground">
-                <MapPin className="w-10 h-10 mx-auto mb-3 opacity-20" />
-                <p>
-                  {outletsEnabled
-                    ? 'No warehouses or outlets found. Add them under Accounts → Warehouses / Outlets.'
-                    : 'No warehouses found. Add them under Accounts → Warehouses.'}
-                </p>
-              </div>
+              <EmptyState
+                icon={MapPin}
+                title="No selling locations found"
+                hint={outletsEnabled
+                  ? 'Add them under Accounts → Warehouses / Outlets.'
+                  : 'Add them under Accounts → Warehouses.'}
+              />
             )}
           </div>
         )}

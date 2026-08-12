@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { AppLayout } from '@/components/layout/AppLayout';
+import { PageHeader } from '@/components/app/page-header';
 import { useGetMe } from '@workspace/api-client-react';
 import { customFetch } from '@workspace/api-client-react';
 import { useQueryClient } from '@tanstack/react-query';
@@ -181,13 +182,12 @@ export default function ProfileMe() {
       <div className="max-w-3xl mx-auto space-y-6">
 
         {/* ── Header ── */}
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight">My Profile</h1>
-            <p className="text-muted-foreground text-sm mt-0.5">View and update your personal information</p>
-          </div>
-          <div className="flex gap-2">
-            {editing ? (
+        <PageHeader
+          title="My Profile"
+          description="View and update your personal information"
+          icon={User}
+          actions={
+            editing ? (
               <>
                 <Button variant="outline" size="sm" onClick={handleCancel} disabled={saving}>
                   <X className="w-4 h-4 mr-1.5" /> Cancel
@@ -201,9 +201,9 @@ export default function ProfileMe() {
               <Button size="sm" onClick={() => setEditing(true)}>
                 <Pencil className="w-4 h-4 mr-1.5" /> Edit Profile
               </Button>
-            )}
-          </div>
-        </div>
+            )
+          }
+        />
 
         {/* ── Avatar + basic identity ── */}
         <Card>

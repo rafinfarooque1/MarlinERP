@@ -7,10 +7,10 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { useForm } from 'react-hook-form';
 import { StateCombobox } from '@/components/ui/state-combobox';
+import { EntityCombobox } from '@/components/ui/entity-combobox';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import { Plus, Search, Edit2, Trash2, Store, Download, Eye, ShieldOff } from 'lucide-react';
@@ -21,6 +21,11 @@ import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { usePermission } from '@/lib/usePermission';
 import { useOutletsEnabled, OUTLETS_LEGACY_NOTE } from '@/lib/useFeatureFlags';
 import { Archive } from 'lucide-react';
+import { PageHeader } from '@/components/app/page-header';
+import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
+import { EmptyState } from '@/components/app/empty-state';
+import { TableSkeleton } from '@/components/app/loading-skeletons';
+import { TablePager, useClientPage } from '@/components/ui/table-pager';
 
 const schema = z.object({
   name: z.string().min(1, 'Name required'),
@@ -83,6 +88,8 @@ export default function Outlets() {
     contactPerson: o => o.contactPerson,
     phone: o => o.phone,
   });
+  const { pageRows, pagerProps } = useClientPage(sorted);
+  const warehouseCount = new Set(outlets.map(o => o.warehouseId)).size;
   const isPending = createMutation.isPending || updateMutation.isPending;
 
   if (!perm.isLoading && !perm.canView) {
@@ -107,29 +114,31 @@ export default function Outlets() {
   return (
     <AppLayout>
       <div className="space-y-6">
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-              <Store className="w-6 h-6 text-primary" /> Retail Outlets
+        <PageHeader
+          title="Retail Outlets"
+          description={readOnly ? 'Historical outlet records, kept for reports and audits' : 'Point-of-sale locations management'}
+          icon={Store}
+          actions={
+            <>
               {readOnly && (
-                <span className="text-[10px] uppercase tracking-wide px-2 py-0.5 rounded border border-border bg-muted text-muted-foreground font-semibold">
+                <span className="text-[10px] uppercase tracking-wide px-2 py-0.5 rounded border border-border bg-muted text-muted-foreground font-semibold self-center">
                   Legacy · Read-only
                 </span>
               )}
-            </h1>
-            <p className="text-muted-foreground mt-1">
-              {readOnly ? 'Historical outlet records, kept for reports and audits' : 'Point-of-sale locations management'}
-            </p>
-          </div>
-          <div className="flex gap-2">
-            {perm.canDownload && (
-            <Button variant="outline" size="sm" onClick={() => downloadCSV('outlets.csv', filtered.map(o => ({ Name: o.name, Warehouse: o.warehouseName || '', Contact: o.contactPerson || '', Phone: o.phone || '', Address: o.address || '' })))}>
-              <Download className="w-4 h-4 mr-2" /> Export
-            </Button>
-            )}
-            {!readOnly && perm.canAdd && <Button onClick={openAdd}><Plus className="w-4 h-4 mr-2" /> Add Outlet</Button>}
-          </div>
-        </div>
+              {perm.canDownload && (
+                <Button variant="outline" size="sm" onClick={() => downloadCSV('outlets.csv', filtered.map(o => ({ Name: o.name, Warehouse: o.warehouseName || '', Contact: o.contactPerson || '', Phone: o.phone || '', Address: o.address || '' })))}>
+                  <Download className="w-4 h-4 mr-2" /> Export
+                </Button>
+              )}
+              {!readOnly && perm.canAdd && <Button onClick={openAdd}><Plus className="w-4 h-4 mr-2" /> Add Outlet</Button>}
+            </>
+          }
+        />
+
+        <SummaryCardGrid>
+          <SummaryCard label="Total Outlets" value={outlets.length.toLocaleString('en-IN')} icon={Store} loading={isLoading} />
+          <SummaryCard label="Linked Warehouses" value={warehouseCount.toLocaleString('en-IN')} icon={Archive} tone="info" loading={isLoading} />
+        </SummaryCardGrid>
 
         {readOnly && (
           <div className="flex items-start gap-3 p-4 rounded-xl border border-border bg-muted/30">
@@ -141,11 +150,15 @@ export default function Outlets() {
           </div>
         )}
 
+        <div className="flex items-center gap-2 max-w-xs max-md:max-w-full">
+          <Search className="w-4 h-4 text-muted-foreground shrink-0" />
+          <Input placeholder="Search outlets..." value={search} onChange={e => setSearch(e.target.value)} />
+        </div>
+
         <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
-          <div className="p-4 border-b border-border flex items-center gap-2 bg-muted/20">
-            <Search className="w-4 h-4 text-muted-foreground" />
-            <Input placeholder="Search outlets..." value={search} onChange={e => setSearch(e.target.value)} className="border-transparent bg-transparent focus-visible:ring-0 max-w-xs max-md:max-w-full" />
-          </div>
+          {isLoading ? (
+            <TableSkeleton rows={8} cols={5} />
+          ) : (
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
@@ -157,13 +170,11 @@ export default function Outlets() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {isLoading ? [...Array(3)].map((_, i) => (
-                <TableRow key={i}><TableCell colSpan={5}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
-              )) : filtered.length === 0 ? (
-                <TableRow><TableCell colSpan={5} className="text-center py-16 text-muted-foreground">
-                  <Store className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No outlets found</p>
+              {filtered.length === 0 ? (
+                <TableRow><TableCell colSpan={5} className="p-0">
+                  <EmptyState icon={Store} title="No outlets found" hint="Point-of-sale locations will appear here." compact />
                 </TableCell></TableRow>
-              ) : sorted.map(o => (
+              ) : pageRows.map(o => (
                 <TableRow key={o.id} className="hover:bg-muted/10">
                   <TableCell className="font-semibold">{o.name}</TableCell>
                   <TableCell className="text-muted-foreground text-sm">{o.warehouseName}</TableCell>
@@ -171,16 +182,18 @@ export default function Outlets() {
                   <TableCell className="text-sm text-muted-foreground">{o.phone || '—'}</TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
-                      <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(o)}><Eye className="w-4 h-4" /></Button>
-                      {!readOnly && perm.canEdit && <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => openEdit(o)}><Edit2 className="w-4 h-4" /></Button>}
-                      {!readOnly && perm.canDelete && <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-destructive" onClick={() => handleDelete(o.id, o.name)}><Trash2 className="w-4 h-4" /></Button>}
+                      <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" title="View" onClick={() => setViewItem(o)}><Eye className="w-4 h-4" /></Button>
+                      {!readOnly && perm.canEdit && <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" title="Edit" onClick={() => openEdit(o)}><Edit2 className="w-4 h-4" /></Button>}
+                      {!readOnly && perm.canDelete && <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-destructive" title="Delete" onClick={() => handleDelete(o.id, o.name)}><Trash2 className="w-4 h-4" /></Button>}
                     </div>
                   </TableCell>
                 </TableRow>
               ))}
             </TableBody>
           </Table>
+          )}
         </div>
+        {!isLoading && filtered.length > 0 && <TablePager {...pagerProps} />}
       </div>
 
       <Dialog open={isOpen} onOpenChange={v => { setIsOpen(v); if (!v) { setEditingId(null); form.reset(); } }}>
@@ -193,10 +206,15 @@ export default function Outlets() {
               )} />
               <FormField control={form.control} name="warehouseId" render={({ field }) => (
                 <FormItem><FormLabel>Parent Warehouse <span className="text-destructive">*</span></FormLabel>
-                  <Select onValueChange={v => field.onChange(Number(v))} value={field.value ? String(field.value) : ''}>
-                    <FormControl><SelectTrigger><SelectValue placeholder="Select warehouse" /></SelectTrigger></FormControl>
-                    <SelectContent>{warehouses.map(w => <SelectItem key={w.id} value={String(w.id)}>{w.name}</SelectItem>)}</SelectContent>
-                  </Select><FormMessage /></FormItem>
+                  <FormControl>
+                    <EntityCombobox
+                      options={warehouses.map(w => ({ id: w.id, label: w.name }))}
+                      value={field.value || null}
+                      onChange={id => field.onChange(id ?? 0)}
+                      placeholder="Select warehouse"
+                    />
+                  </FormControl>
+                  <FormMessage /></FormItem>
               )} />
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <FormField control={form.control} name="state" render={({ field }) => (

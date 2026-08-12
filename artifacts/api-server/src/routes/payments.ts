@@ -12,6 +12,8 @@ import { loadPaymentPosition, computePaymentPosition } from "../lib/salePaymentP
 
 const router = Router();
 
+const round2 = (n: number): number => Math.round((Number(n) || 0) * 100) / 100;
+
 // ── Helper: get-or-assert outlet cash ledger (created at startup) ─────────────
 async function getOutletCashLedgerId(outletId: number): Promise<number | null> {
   const code = `OUTLET-CASH-${outletId}`;
@@ -64,6 +66,10 @@ router.get("/sales/:id/payments", requireModuleView("page:/sales/pos"), async (r
     referenceNumber: p.reference_number,
     notes: p.notes,
     reconciliationStatus: p.reconciliation_status,
+    // Provenance travels with the row: 'counter' legs are till-settled history
+    // (no receipt behind them) and clients must not offer receipt-only actions
+    // on them.
+    source: p.source ?? null,
     clearingReceiptId: p.clearing_receipt_id,
     outletId: p.outlet_id,
     createdBy: p.created_by,
@@ -89,6 +95,12 @@ router.post("/sales/:id/payments", requireModuleAction(["page:/sales/pos", "page
     notes?: string;
     paymentDate?: string;
   };
+  // Idempotency + overpayment consent (double-click / retry, and paying beyond
+  // the balance to land the excess as advance). Read from the raw body.
+  const clientRequestId = typeof (req.body as any)?.clientRequestId === "string"
+    ? String((req.body as any).clientRequestId).trim() || null
+    : null;
+  const allowOverpayment = (req.body as any)?.allowOverpayment === true;
   // Modern path: the caller names the ACTUAL Cash & Bank account the money
   // went into, and the method is derived from that account's type. The legacy
   // method-only path stays for older clients and the importer.
@@ -118,13 +130,42 @@ router.post("/sales/:id/payments", requireModuleAction(["page:/sales/pos", "page
   // sale stays allowed: the sale document itself is not being changed.)
   if (await respondIfMonthLocked(res, pool, [pDate], "sale payment")) return;
 
+  // ── Idempotency (double-click / network retry) ────────────────────────────
+  // A replay of the same clientRequestId must return the ORIGINAL collection
+  // (200, idempotentReplay) — never post a second receipt or double the paid
+  // figure. The key is stored on the sale_payments row and is the identity a
+  // replay matches on.
+  if (clientRequestId) {
+    const { rows: [prior] } = await pool.query(
+      `SELECT * FROM sale_payments WHERE sale_id = $1 AND client_request_id = $2 LIMIT 1`,
+      [saleId, clientRequestId],
+    );
+    if (prior) {
+      res.status(200).json({
+        id: prior.id,
+        saleId: prior.sale_id,
+        paymentDate: prior.payment_date,
+        method: prior.method,
+        amount: Number(prior.amount),
+        referenceNumber: prior.reference_number,
+        notes: prior.notes,
+        reconciliationStatus: prior.reconciliation_status,
+        outletId: prior.outlet_id,
+        createdBy: prior.created_by,
+        createdAt: prior.created_at,
+        idempotentReplay: true,
+      });
+      return;
+    }
+  }
+
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
 
     // 1. Lock and fetch sale (include location columns added by Task #33)
     const { rows: [sale] } = await client.query(
-      `SELECT id, outlet_id, location_type, location_id, cancelled_at,
+      `SELECT id, outlet_id, location_type, location_id, cancelled_at, customer_id,
               total_amount::numeric AS total_amount,
               amount_paid::numeric AS amount_paid, payment_status
        FROM sales WHERE id = $1 FOR UPDATE`,
@@ -157,10 +198,33 @@ router.post("/sales/:id/payments", requireModuleAction(["page:/sales/pos", "page
     }
     const balanceDue = position.outstanding;
 
+    // ── Overpayment gate ──────────────────────────────────────────────────
+    // Paying beyond the balance is refused by default with a machine-readable
+    // code, so the client can offer the "hold the excess as advance" choice.
+    // Consent (`allowOverpayment`) is honoured ONLY for a registered customer:
+    // the excess lands as a credit (advance) on their CUST- ledger, which
+    // emerges naturally as the credit remainder of this payment leg over the
+    // invoice debit in the derived books. A walk-in sale has no ledger to hold
+    // the credit, so overpaying it is unrepresentable — refused even WITH
+    // consent.
     if (parsedAmount > balanceDue + 0.001) {
-      await client.query("ROLLBACK");
-      res.status(400).json({ error: `Amount (₹${parsedAmount}) exceeds balance due (₹${balanceDue.toFixed(2)})` });
-      return;
+      const excess = round2(parsedAmount - balanceDue);
+      const overpaymentAllowed = sale.customer_id != null;
+      if (!allowOverpayment || !overpaymentAllowed) {
+        await client.query("ROLLBACK");
+        res.status(400).json({
+          error: overpaymentAllowed
+            ? `Amount (₹${parsedAmount.toFixed(2)}) exceeds the balance due (₹${balanceDue.toFixed(2)}) by ₹${excess.toFixed(2)}. Confirm to hold the excess as customer advance.`
+            : `Amount (₹${parsedAmount.toFixed(2)}) exceeds the balance due (₹${balanceDue.toFixed(2)}). A walk-in sale cannot hold the excess as advance — collect only what is owed.`,
+          code: "EXCEEDS_OUTSTANDING",
+          excess,
+          balanceDue,
+          overpaymentAllowed,
+        });
+        return;
+      }
+      // Consented + registered: the full amount is recorded; the excess becomes
+      // usable advance. Fall through — nothing else is capped.
     }
 
     let clearingReceiptId: number | null = null;
@@ -398,10 +462,10 @@ router.post("/sales/:id/payments", requireModuleAction(["page:/sales/pos", "page
 
     // 4. Insert sale_payment record
     const { rows: [salePayment] } = await client.query(
-      `INSERT INTO sale_payments (sale_id, payment_date, method, amount, reference_number, notes, reconciliation_status, clearing_receipt_id, outlet_id, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
+      `INSERT INTO sale_payments (sale_id, payment_date, method, amount, reference_number, notes, reconciliation_status, clearing_receipt_id, outlet_id, created_by, client_request_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
       [saleId, pDate, method, parsedAmount, referenceNumber ?? null, notes ?? null,
-        reconciliationStatus, clearingReceiptId, sale.outlet_id, createdBy]
+        reconciliationStatus, clearingReceiptId, sale.outlet_id, createdBy, clientRequestId]
     );
 
     // 5. Update sales.amount_paid and sales.payment_status

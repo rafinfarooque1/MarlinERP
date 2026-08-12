@@ -14,6 +14,7 @@ import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { customFetch } from '@workspace/api-client-react';
 import { Textarea } from '@/components/ui/textarea';
+import { PageHeader } from '@/components/app/page-header';
 
 interface SettingGroup {
   icon: React.ElementType;
@@ -1007,10 +1008,11 @@ export default function Settings() {
   return (
     <AppLayout>
       <div className="space-y-6 max-w-3xl">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><Settings2 className="w-6 h-6 text-primary" /> Settings</h1>
-          <p className="text-muted-foreground mt-1">Configure billing, payroll, notifications, and regional preferences</p>
-        </div>
+        <PageHeader
+          title="Settings"
+          description="Configure billing, payroll, notifications, and regional preferences"
+          icon={Settings2}
+        />
 
         {SETTING_GROUPS.map(group => (
           <div key={group.title} className="bg-card border border-border rounded-xl overflow-hidden">

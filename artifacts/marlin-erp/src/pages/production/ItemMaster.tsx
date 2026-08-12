@@ -28,6 +28,12 @@ import { Badge } from '@/components/ui/badge';
 import { useUnits } from '@/lib/useUnits';
 import { useIsHeadOffice, HEAD_OFFICE_ONLY_HINT, isActiveProduct } from '@/lib/productStatus';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
+import { PageHeader } from '@/components/app/page-header';
+import { StatusBadge } from '@/components/app/status-badge';
+import { EmptyState } from '@/components/app/empty-state';
+import { TableSkeleton } from '@/components/app/loading-skeletons';
+import { TablePager, useClientPage } from '@/components/ui/table-pager';
+import { EntityCombobox } from '@/components/ui/entity-combobox';
 
 // Fixed assets moved to the standalone Assets module (Assets › Asset
 // Purchases / Register) — the Item Master handles sale inventory only.
@@ -187,6 +193,8 @@ export default function ItemMaster() {
 
   const isLoading = rmLoading || mLoading || iLoading;
 
+  const { pageRows, pagerProps } = useClientPage(sorted);
+
   const openAdd = (type?: ItemType) => {
     setEditTarget(null);
     form.reset({ itemType: type || 'raw_material', name: '', unit: units[0] || '', hsnCode: '', taxRate: 5, cost: 0, mrp: 0, reorderLevel: 10, description: '', itemCode: '', barcode: '', status: 'active' });
@@ -315,31 +323,30 @@ export default function ItemMaster() {
   return (
     <AppLayout>
       <div className="space-y-6">
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><Layers className="w-6 h-6 text-primary" /> Item Master</h1>
-            <p className="text-muted-foreground mt-1">
-              {isHeadOffice
-                ? 'All packing materials, raw materials and Item Name (SKU) in one place'
-                : HEAD_OFFICE_ONLY_HINT}
-            </p>
-          </div>
-          <div className="flex gap-2">
-            {perm.canDownload && (
-            <Button variant="outline" size="sm" onClick={() => downloadCSV('items.csv', filtered.map(i => ({
-              Code: (i as any).itemCode || '', Barcode: (i as any).barcode || '',
-              Type: (TYPE_LABELS as any)[i._type] ?? i._type, Name: i.name, Unit: i.unit,
-              MRP: Number((i as any).mrp ?? 0),
-              HSN: (i as any).hsnCode || '', 'Tax%': (i as any).taxRate || '',
-              Stock: i.stock, Status: isActiveProduct(i) ? 'Active' : 'Inactive',
-              Description: i.description || '',
-            })))}>
-              <Download className="w-4 h-4 mr-2" /> Export
-            </Button>
-            )}
-            {isHeadOffice && perm.canAdd && <Button onClick={() => openAdd()}><Plus className="w-4 h-4 mr-2" /> Add Item</Button>}
-          </div>
-        </div>
+        <PageHeader
+          title="Item Master"
+          description={isHeadOffice
+            ? 'All packing materials, raw materials and Item Name (SKU) in one place'
+            : HEAD_OFFICE_ONLY_HINT}
+          icon={Layers}
+          actions={
+            <>
+              {perm.canDownload && (
+                <Button variant="outline" size="sm" onClick={() => downloadCSV('items.csv', filtered.map(i => ({
+                  Code: (i as any).itemCode || '', Barcode: (i as any).barcode || '',
+                  Type: (TYPE_LABELS as any)[i._type] ?? i._type, Name: i.name, Unit: i.unit,
+                  MRP: Number((i as any).mrp ?? 0),
+                  HSN: (i as any).hsnCode || '', 'Tax%': (i as any).taxRate || '',
+                  Stock: i.stock, Status: isActiveProduct(i) ? 'Active' : 'Inactive',
+                  Description: i.description || '',
+                })))}>
+                  <Download className="w-4 h-4 mr-2" /> Export
+                </Button>
+              )}
+              {isHeadOffice && perm.canAdd && <Button onClick={() => openAdd()}><Plus className="w-4 h-4 mr-2" /> Add Item</Button>}
+            </>
+          }
+        />
 
         {/* Summary badges */}
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
@@ -347,7 +354,7 @@ export default function ItemMaster() {
             const count = allItems.filter(i => i._type === t).length;
             return (
               <button key={t} onClick={() => setTypeFilter(typeFilter === t ? 'all' : t)}
-                className={`bg-card border rounded-xl p-4 text-left transition-all ${typeFilter === t ? 'border-primary ring-1 ring-primary' : 'border-border hover:border-primary/40'}`}>
+                className={`bg-card border rounded-xl p-4 text-left shadow-sm transition-all ${typeFilter === t ? 'border-primary ring-1 ring-primary' : 'border-border hover:border-primary/40'}`}>
                 <p className="text-xs text-muted-foreground uppercase tracking-wider">{TYPE_LABELS[t]}</p>
                 <p className="text-2xl font-bold font-mono mt-1">{count}</p>
               </button>
@@ -385,34 +392,22 @@ export default function ItemMaster() {
 
             {/* Step 2: specific branch (only for warehouse / outlet) */}
             {locType === 'warehouse' && (
-              <Select
-                value={locId != null ? String(locId) : ''}
-                onValueChange={v => setLocId(Number(v))}
-              >
-                <SelectTrigger className="w-44">
-                  <SelectValue placeholder="Select warehouse…" />
-                </SelectTrigger>
-                <SelectContent>
-                  {(warehouses as any[]).map((w: any) => (
-                    <SelectItem key={w.id} value={String(w.id)}>{w.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <EntityCombobox
+                className="w-44"
+                options={(warehouses as any[]).map((w: any) => ({ id: w.id, label: w.name }))}
+                value={locId}
+                onChange={id => setLocId(id)}
+                placeholder="Select warehouse…"
+              />
             )}
             {locType === 'outlet' && (
-              <Select
-                value={locId != null ? String(locId) : ''}
-                onValueChange={v => setLocId(Number(v))}
-              >
-                <SelectTrigger className="w-44">
-                  <SelectValue placeholder="Select outlet…" />
-                </SelectTrigger>
-                <SelectContent>
-                  {(outlets as any[]).map((o: any) => (
-                    <SelectItem key={o.id} value={String(o.id)}>{o.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <EntityCombobox
+                className="w-44"
+                options={(outlets as any[]).map((o: any) => ({ id: o.id, label: o.name }))}
+                value={locId}
+                onChange={id => setLocId(id)}
+                placeholder="Select outlet…"
+              />
             )}
 
             {/* Item type filter */}
@@ -438,6 +433,9 @@ export default function ItemMaster() {
             </Select>
           </div>
 
+          {isLoading ? (
+            <TableSkeleton rows={8} cols={10} />
+          ) : (
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
@@ -460,13 +458,11 @@ export default function ItemMaster() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {isLoading ? [...Array(5)].map((_, i) => (
-                <TableRow key={i}><TableCell colSpan={10}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
-              )) : filtered.length === 0 ? (
-                <TableRow><TableCell colSpan={10} className="text-center py-16 text-muted-foreground">
-                  <Layers className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No items found</p>
+              {filtered.length === 0 ? (
+                <TableRow><TableCell colSpan={10} className="p-0">
+                  <EmptyState icon={Layers} title="No items found" hint="Packing materials, raw materials and SKUs appear here." compact />
                 </TableCell></TableRow>
-              ) : sorted.map(item => {
+              ) : pageRows.map(item => {
                 // Show mrp for all types
                 const displayCost = Number((item as any).mrp ?? 0);
                 const active = isActiveProduct(item);
@@ -504,11 +500,7 @@ export default function ItemMaster() {
                     })()}
                   </TableCell>
                   <TableCell>
-                    <Badge variant="outline" className={`text-xs ${active
-                      ? 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20'
-                      : 'bg-muted text-muted-foreground border-border'}`}>
-                      {active ? 'Active' : 'Inactive'}
-                    </Badge>
+                    <StatusBadge status={active ? 'active' : 'inactive'} />
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
@@ -517,12 +509,12 @@ export default function ItemMaster() {
                           <ClipboardList className="w-4 h-4" />
                         </Button>
                       )}
-                      <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(item)}><Eye className="w-4 h-4" /></Button>
+                      <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" title="View" onClick={() => setViewItem(item)}><Eye className="w-4 h-4" /></Button>
                       {isHeadOffice && perm.canEdit && (
-                        <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => openEdit(item)}><Edit2 className="w-4 h-4" /></Button>
+                        <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" title="Edit" onClick={() => openEdit(item)}><Edit2 className="w-4 h-4" /></Button>
                       )}
                       {isHeadOffice && perm.canDelete && (
-                        <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-destructive" onClick={() => setDeleteTarget({ id: item.id, name: item.name, type: item._type })}><Trash2 className="w-4 h-4" /></Button>
+                        <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-destructive" title="Delete" onClick={() => setDeleteTarget({ id: item.id, name: item.name, type: item._type })}><Trash2 className="w-4 h-4" /></Button>
                       )}
                     </div>
                   </TableCell>
@@ -531,7 +523,9 @@ export default function ItemMaster() {
               })}
             </TableBody>
           </Table>
+          )}
         </div>
+        {!isLoading && filtered.length > 0 && <TablePager {...pagerProps} />}
       </div>
 
       {/* Create/Edit Dialog */}

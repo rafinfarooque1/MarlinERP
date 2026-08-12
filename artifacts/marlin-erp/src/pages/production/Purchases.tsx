@@ -19,7 +19,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { useForm, useFieldArray } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Plus, Search, Trash2, ShoppingCart, Download, Eye, Calendar, FileDown, Edit2, AlertTriangle, X } from 'lucide-react';
+import { Plus, Search, Trash2, ShoppingCart, Download, Eye, Calendar, FileDown, Edit2, AlertTriangle, X, FileText, Wallet, Receipt } from 'lucide-react';
 import { toast } from 'sonner';
 import { downloadCSV } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
@@ -36,6 +36,10 @@ import { Separator } from '@/components/ui/separator';
 import { calcPurchaseBill, calcPurchaseLine, type PriceMode } from '@workspace/purchase-pricing';
 import { useQueryClient } from '@tanstack/react-query';
 import { autoFocusFirst, useEntryShortcuts } from '@/lib/keyboard-entry';
+import { PageHeader } from '@/components/app/page-header';
+import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
+import { EmptyState } from '@/components/app/empty-state';
+import { TableSkeleton } from '@/components/app/loading-skeletons';
 
 const GST_RATES = [0, 5, 12, 18, 28] as const;
 
@@ -504,6 +508,10 @@ export default function Purchases() {
     total: (p: any) => Number(p.totalAmount) + Number(p.otherChargesTotal || 0),
   });
 
+  // Summary over the current page's already-fetched rows (server-paged list).
+  const pageTaxTotal = filtered.reduce((s, p: any) => s + (Number((p as any).taxTotal) || 0), 0);
+  const pagePayableTotal = filtered.reduce((s, p: any) => s + Number(p.totalAmount) + Number((p as any).otherChargesTotal || 0), 0);
+
   if (!perm.isLoading && !perm.canView) {
     return (
       <AppLayout>
@@ -519,12 +527,11 @@ export default function Purchases() {
   return (
     <AppLayout>
       <div className="space-y-6">
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><ShoppingCart className="w-6 h-6 text-primary" /> Purchase Bills</h1>
-            <p className="text-muted-foreground mt-1">Record purchases with GST, HSN code & discounts</p>
-          </div>
-          <div className="flex gap-2">
+        <PageHeader
+          title="Purchase Bills"
+          description="Record purchases with GST, HSN code & discounts"
+          icon={ShoppingCart}
+          actions={<>
             {perm.canDownload && (
               <Button variant="outline" size="sm" onClick={() => downloadCSV('purchases.csv', filtered.map(p => ({
                 'Bill #': p.id, Date: p.purchaseDate, Vendor: p.vendorName, Invoice: p.invoiceNumber || '',
@@ -544,8 +551,15 @@ export default function Purchases() {
                 <Plus className="w-4 h-4 mr-2" /> New Purchase Bill
               </Button>
             )}
-          </div>
-        </div>
+          </>}
+        />
+
+        <SummaryCardGrid>
+          <SummaryCard label="Bills (this page)" value={filtered.length.toLocaleString('en-IN')} sub={`${totalPurchases.toLocaleString('en-IN')} total`} icon={FileText} tone="info" loading={isLoading} />
+          <SummaryCard label="Vendors (this page)" value={new Set(filtered.map((p: any) => p.vendorId)).size.toLocaleString('en-IN')} icon={Receipt} loading={isLoading} />
+          <SummaryCard label="Tax (this page)" value={`₹${fmt(pageTaxTotal)}`} icon={Receipt} tone="warning" loading={isLoading} />
+          <SummaryCard label="Payable (this page)" value={`₹${fmt(pagePayableTotal)}`} icon={Wallet} tone="default" loading={isLoading} />
+        </SummaryCardGrid>
 
         <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
           <div className="p-4 border-b border-border flex flex-wrap items-center gap-2 bg-muted/20">
@@ -554,6 +568,11 @@ export default function Purchases() {
             <div className="ml-auto"><RangeBar range={range} /></div>
           </div>
           <div className="hidden md:block">
+          {isLoading ? (
+            <TableSkeleton rows={6} cols={locations.isHeadOffice ? 9 : 8} />
+          ) : filtered.length === 0 ? (
+            <EmptyState icon={ShoppingCart} title="No purchase bills yet" hint="Record your first vendor bill." />
+          ) : (
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
@@ -569,13 +588,7 @@ export default function Purchases() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {isLoading ? [...Array(3)].map((_, i) => (
-                <TableRow key={i}><TableCell colSpan={locations.isHeadOffice ? 9 : 8}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
-              )) : filtered.length === 0 ? (
-                <TableRow><TableCell colSpan={locations.isHeadOffice ? 9 : 8} className="text-center py-16 text-muted-foreground">
-                  <ShoppingCart className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No purchase bills yet</p>
-                </TableCell></TableRow>
-              ) : sorted.map(p => (
+              {sorted.map(p => (
                 <TableRow key={p.id} className="hover:bg-muted/10">
                   <TableCell className="font-mono text-primary font-bold text-sm">#{String(p.id).padStart(4, '0')}</TableCell>
                   <TableCell className="text-sm text-muted-foreground">
@@ -610,6 +623,7 @@ export default function Purchases() {
               ))}
             </TableBody>
           </Table>
+          )}
           </div>
 
           {/* Mobile cards — same data, same handlers */}
@@ -619,9 +633,7 @@ export default function Purchases() {
                 {[...Array(3)].map((_, i) => <div key={i} className="h-24 bg-muted/30 rounded-lg animate-pulse" />)}
               </div>
             ) : filtered.length === 0 ? (
-              <div className="text-center py-16 text-muted-foreground">
-                <ShoppingCart className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No purchase bills yet</p>
-              </div>
+              <EmptyState icon={ShoppingCart} title="No purchase bills yet" hint="Record your first vendor bill." compact />
             ) : (
               <div className="p-3 space-y-2">
                 {sorted.map(p => (

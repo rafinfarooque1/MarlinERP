@@ -50,6 +50,11 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { LocationFilter, parseLocationFilter } from '@/components/ui/LocationFilter';
 import { autoFocusFirst, entryScopeKeyDown, useEntryShortcuts } from '@/lib/keyboard-entry';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
+import { PageHeader } from '@/components/app/page-header';
+import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
+import { EmptyState } from '@/components/app/empty-state';
+import { StatusBadge } from '@/components/app/status-badge';
+import { TablePager, useClientPage } from '@/components/ui/table-pager';
 
 // ── Form schema ───────────────────────────────────────────────────────────────
 const schema = z.object({
@@ -74,19 +79,16 @@ const MAT_LABELS: Record<string, string> = {
 };
 
 // ── Status badge ──────────────────────────────────────────────────────────────
-const STATUS_CFG: Record<string, { label: string; color: string; icon: React.ReactNode }> = {
-  in_transit: { label: 'In Transit',  color: 'text-amber-400 bg-amber-400/10 border-amber-400/30',  icon: <Clock className="w-3 h-3" /> },
-  completed:  { label: 'Received',    color: 'text-emerald-400 bg-emerald-400/10 border-emerald-400/30', icon: <CheckCircle2 className="w-3 h-3" /> },
-  rejected:   { label: 'Rejected',    color: 'text-red-400 bg-red-400/10 border-red-400/30',    icon: <XCircle className="w-3 h-3" /> },
+// Labels retained from the previous per-page map (notably completed → "Received")
+// so the transfer wording is unchanged; colours now come from the shared kit.
+const STATUS_CFG: Record<string, { label: string }> = {
+  in_transit: { label: 'In Transit' },
+  completed:  { label: 'Received' },
+  rejected:   { label: 'Rejected' },
 };
 
-function StatusBadge({ status }: { status: string }) {
-  const c = STATUS_CFG[status] ?? { label: status, color: 'text-muted-foreground bg-muted/20 border-border', icon: null };
-  return (
-    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[11px] font-semibold ${c.color}`}>
-      {c.icon}{c.label}
-    </span>
-  );
+function TransferStatusBadge({ status }: { status: string }) {
+  return <StatusBadge status={status} label={STATUS_CFG[status]?.label} />;
 }
 
 // ── FEFO batch picker (headoffice source only) ────────────────────────────────
@@ -432,6 +434,7 @@ export default function Transfers() {
     items: (t: any) => Number(t.lineItems?.length ?? 0),
     status: (t: any) => (STATUS_CFG[t.status]?.label ?? t.status),
   });
+  const { pageRows, pagerProps } = useClientPage(sorted);
 
   // Employee can only approve transfers coming TO their location
   const canReceive = (t: any) =>
@@ -717,38 +720,41 @@ export default function Transfers() {
   return (
     <AppLayout>
       <div className="space-y-6">
-        {/* ── Header ── */}
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-              <Truck className="w-6 h-6 text-primary" />
-              {isEmployee ? `Transfers — ${userBranchName ?? ''}` : 'Stock Transfers'}
-            </h1>
-            <p className="text-muted-foreground mt-1">
-              {isEmployee
-                ? 'Transfers to and from your location'
-                : 'Head Office → Warehouse · Warehouse → Outlet movements'}
-            </p>
-          </div>
-          <div className="flex gap-2">
-            {canDownload && (
-              <Button variant="outline" size="sm"
-                onClick={() => downloadCSV('transfers.csv', filtered.map((t: any) => ({
-                  Challan: t.challanNumber, Date: t.transferDate,
-                  From: t.fromName, 'From Type': t.fromType,
-                  To: t.toName, 'To Type': t.toType,
-                  Items: t.lineItems?.length || 0, Status: t.status,
-                })))}>
-                <Download className="w-4 h-4 mr-2" /> Export
-              </Button>
-            )}
-            {canAdd && (
-              <Button onClick={openCreate}>
-                <Plus className="w-4 h-4 mr-2" /> New Transfer
-              </Button>
-            )}
-          </div>
-        </div>
+        <PageHeader
+          title={isEmployee ? `Transfers — ${userBranchName ?? ''}` : 'Stock Transfers'}
+          description={isEmployee
+            ? 'Transfers to and from your location'
+            : 'Head Office → Warehouse · Warehouse → Outlet movements'}
+          icon={Truck}
+          actions={
+            <>
+              {canDownload && (
+                <Button variant="outline" size="sm"
+                  onClick={() => downloadCSV('transfers.csv', filtered.map((t: any) => ({
+                    Challan: t.challanNumber, Date: t.transferDate,
+                    From: t.fromName, 'From Type': t.fromType,
+                    To: t.toName, 'To Type': t.toType,
+                    Items: t.lineItems?.length || 0, Status: t.status,
+                  })))}>
+                  <Download className="w-4 h-4 mr-2" /> Export
+                </Button>
+              )}
+              {canAdd && (
+                <Button onClick={openCreate}>
+                  <Plus className="w-4 h-4 mr-2" /> New Transfer
+                </Button>
+              )}
+            </>
+          }
+        />
+
+        {/* Summary — counts derived from the already-fetched transfer list */}
+        <SummaryCardGrid>
+          <SummaryCard label="Total Transfers" value={list.length.toLocaleString('en-IN')} icon={ArrowRightLeft} loading={isLoading} />
+          <SummaryCard label="In Transit" value={pendingCount.toLocaleString('en-IN')} icon={Clock} tone="warning" loading={isLoading} />
+          <SummaryCard label="Received" value={list.filter((t: any) => t.status === 'completed').length.toLocaleString('en-IN')} icon={CheckCircle2} tone="positive" loading={isLoading} />
+          <SummaryCard label="Rejected" value={list.filter((t: any) => t.status === 'rejected').length.toLocaleString('en-IN')} icon={XCircle} tone="negative" loading={isLoading} />
+        </SummaryCardGrid>
 
         {/* ── Pending approvals banner ── */}
         {pendingCount > 0 && (
@@ -817,12 +823,15 @@ export default function Transfers() {
                 ))
               ) : filtered.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center py-16 text-muted-foreground">
-                    <ArrowRightLeft className="w-10 h-10 mx-auto mb-3 opacity-20" />
-                    <p>{tab === 'in_transit' ? 'No pending approvals' : 'No transfers found'}</p>
+                  <TableCell colSpan={7} className="p-0">
+                    <EmptyState
+                      icon={ArrowRightLeft}
+                      title={tab === 'in_transit' ? 'No pending approvals' : 'No transfers found'}
+                      compact
+                    />
                   </TableCell>
                 </TableRow>
-              ) : sorted.map((t: any) => (
+              ) : pageRows.map((t: any) => (
                 <TableRow key={t.id} className={`hover:bg-muted/10 ${t.status === 'in_transit' ? 'border-l-2 border-l-amber-500' : ''}`}>
                   <TableCell className="font-mono text-primary font-bold text-sm">{t.challanNumber || `DC-${String(t.id).padStart(4, '0')}`}</TableCell>
                   <TableCell className="text-sm text-muted-foreground">
@@ -841,7 +850,7 @@ export default function Transfers() {
                   <TableCell>
                     <Badge variant="secondary">{t.lineItems?.length || 0} item{t.lineItems?.length !== 1 ? 's' : ''}</Badge>
                   </TableCell>
-                  <TableCell><StatusBadge status={t.status} /></TableCell>
+                  <TableCell><TransferStatusBadge status={t.status} /></TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
                       <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(t)}>
@@ -867,8 +876,8 @@ export default function Transfers() {
             </TableBody>
           </Table>
           {filtered.length > 0 && (
-            <div className="p-3 border-t border-border text-xs text-muted-foreground">
-              {filtered.length} transfer{filtered.length !== 1 ? 's' : ''}
+            <div className="p-3 border-t border-border">
+              <TablePager {...pagerProps} />
             </div>
           )}
         </div>
@@ -891,7 +900,7 @@ export default function Transfers() {
           </SheetHeader>
           {viewItem && (
             <div className="mt-6 space-y-4 text-sm">
-              <div className="flex justify-center"><StatusBadge status={viewItem.status} /></div>
+              <div className="flex justify-center"><TransferStatusBadge status={viewItem.status} /></div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 {[

@@ -95,6 +95,47 @@ const navigation: SidebarNavItem[] = [
   ...getNavGroups(),
 ];
 
+// ─── Breadcrumbs ──────────────────────────────────────────────────────────────
+// Derived from the module registry so the trail can never drift from the nav.
+// A leaf page shows "Group > Page"; a standalone page shows just its name.
+
+export interface Crumb { label: string; href?: string }
+
+/**
+ * Satellite paths that carry no sidebar link of their own. Each maps to an
+ * explicit "Group > Page" trail so a deep link into a tab still reads sensibly.
+ */
+export const BREADCRUMB_ENTRIES: Record<string, Crumb[]> = {
+  '/headoffice/stock/storage':  [{ label: 'Stock', href: '/headoffice/stock' }, { label: 'Storage Locations' }],
+  '/headoffice/stock/tracking': [{ label: 'Stock', href: '/headoffice/stock' }, { label: 'Item Tracking' }],
+};
+
+// One-time index: href → { group, name } built from the rendered nav groups.
+const _breadcrumbIndex: Record<string, { group?: string; name: string }> = (() => {
+  const idx: Record<string, { group?: string; name: string }> = {};
+  for (const item of navigation) {
+    if (item.href) {
+      idx[item.href] = { name: item.name };
+    } else if (item.children) {
+      for (const child of item.children) {
+        if (!idx[child.href]) idx[child.href] = { group: item.name, name: child.name };
+      }
+    }
+  }
+  return idx;
+})();
+
+/** Resolve a path to its breadcrumb trail (Group > Page). */
+export function breadcrumbFor(path: string): Crumb[] {
+  if (BREADCRUMB_ENTRIES[path]) return BREADCRUMB_ENTRIES[path];
+  const hit = _breadcrumbIndex[path];
+  if (!hit) return [];
+  const trail: Crumb[] = [];
+  if (hit.group) trail.push({ label: hit.group });
+  trail.push({ label: hit.name });
+  return trail;
+}
+
 // ─── Permission helpers ───────────────────────────────────────────────────────
 
 // ─── PasswordInput ────────────────────────────────────────────────────────────
@@ -365,6 +406,9 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   // Location-locked employees cannot change their location context
   const canChangeLocation = !isLocationEmployee;
 
+  // Breadcrumb trail for the current route — Group > Page, registry-driven.
+  const crumbs = breadcrumbFor(location);
+
   // ── Global quick search (Cmd/Ctrl+K) ────────────────────────────────────────
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQ, setSearchQ] = useState('');
@@ -560,6 +604,25 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
                   <span className="text-xs">⌘</span>K
                 </kbd>
               </button>
+
+              {crumbs.length > 0 && (
+                <nav aria-label="Breadcrumb" className="hidden lg:flex items-center gap-1.5 text-sm min-w-0">
+                  {crumbs.map((c, i) => (
+                    <span key={`${c.label}-${i}`} className="flex items-center gap-1.5 min-w-0">
+                      {i > 0 && <ChevronRight className="w-3.5 h-3.5 text-muted-foreground shrink-0" />}
+                      {c.href && i < crumbs.length - 1 ? (
+                        <Link href={c.href} className="text-muted-foreground hover:text-foreground transition-colors truncate">
+                          {c.label}
+                        </Link>
+                      ) : (
+                        <span className={i === crumbs.length - 1 ? 'font-medium text-foreground truncate' : 'text-muted-foreground truncate'}>
+                          {c.label}
+                        </span>
+                      )}
+                    </span>
+                  ))}
+                </nav>
+              )}
             </div>
 
             <div className="flex items-center gap-2 lg:gap-4">

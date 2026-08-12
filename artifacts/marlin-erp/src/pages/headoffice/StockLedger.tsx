@@ -10,6 +10,10 @@ import { Badge } from '@/components/ui/badge';
 import { downloadCSV } from '@/lib/download';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { usePermission } from '@/lib/usePermission';
+import { PageHeader } from '@/components/app/page-header';
+import { EmptyState } from '@/components/app/empty-state';
+import { Skeleton } from '@/components/ui/skeleton';
+import { TablePager } from '@/components/ui/table-pager';
 
 const money = (n: number) => `₹${(Number(n) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const dtIN = (s: string) => {
@@ -59,7 +63,7 @@ export default function StockLedger() {
   const [matType,   setMatType]   = useState('all');
   const [txnType,   setTxnType]   = useState('all');
   const [page,      setPage]      = useState(1);
-  const PAGE_SIZE = 50;
+  const [pageSize,  setPageSize]  = useState(50);
 
   useEffect(() => {
     const t = setTimeout(() => { setDebSearch(search.trim()); setPage(1); }, 300);
@@ -68,7 +72,7 @@ export default function StockLedger() {
   useEffect(() => { setPage(1); }, [from, to, matType, txnType]);
 
   const { data, isLoading, isFetching } = usePaginatedStockLedger({
-    page, limit: PAGE_SIZE,
+    page, limit: pageSize,
     q:            debSearch || undefined,
     from:         from      || undefined,
     to:           to        || undefined,
@@ -82,7 +86,7 @@ export default function StockLedger() {
   const canSeeValue = data?.canViewValuation === true;
   const COLS = canSeeValue ? 9 : 8;
   const totalRows  = data?.total ?? 0;
-  const totalPages = Math.max(1, Math.ceil(totalRows / PAGE_SIZE));
+  const totalPages = Math.max(1, Math.ceil(totalRows / pageSize));
 
   useEffect(() => { if (page > totalPages) setPage(totalPages); }, [page, totalPages]);
 
@@ -117,17 +121,11 @@ export default function StockLedger() {
   return (
     <AppLayout>
       <div className="space-y-6">
-        {/* Header */}
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-              <BookOpen className="w-6 h-6 text-primary" /> Stock Ledger
-            </h1>
-            <p className="text-muted-foreground mt-1">
-              Immutable history of every inventory movement — purchase, production, transfer, return
-            </p>
-          </div>
-          {perm.canDownload && (
+        <PageHeader
+          title="Stock Ledger"
+          description="Immutable history of every inventory movement — purchase, production, transfer, return"
+          icon={BookOpen}
+          actions={perm.canDownload && (
           <Button variant="outline" size="sm" onClick={() => downloadCSV('stock-ledger.csv', rows.map(r => ({
             Date: dtIN(r.createdAt),
             'Transaction Type': TXN_LABELS[r.txnType] ?? r.txnType,
@@ -145,7 +143,7 @@ export default function StockLedger() {
             <Download className="w-4 h-4 mr-2" /> Export
           </Button>
           )}
-        </div>
+        />
 
         <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
           {/* Filter bar */}
@@ -210,17 +208,20 @@ export default function StockLedger() {
             </TableHeader>
             <TableBody>
               {isLoading ? (
-                [...Array(6)].map((_, i) => (
+                [...Array(8)].map((_, i) => (
                   <TableRow key={i}>
-                    <TableCell colSpan={COLS}><div className="h-7 bg-muted/30 rounded animate-pulse" /></TableCell>
+                    <TableCell colSpan={COLS}><Skeleton className="h-5 w-full" /></TableCell>
                   </TableRow>
                 ))
               ) : rows.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={COLS} className="text-center py-16 text-muted-foreground">
-                    <BookOpen className="w-10 h-10 mx-auto mb-3 opacity-20" />
-                    <p>No ledger entries found</p>
-                    <p className="text-xs mt-1 opacity-60">Entries appear automatically when purchases, production, transfers, or returns are recorded.</p>
+                  <TableCell colSpan={COLS} className="p-0">
+                    <EmptyState
+                      icon={BookOpen}
+                      title="No ledger entries found"
+                      hint="Entries appear automatically when purchases, production, transfers, or returns are recorded."
+                      compact
+                    />
                   </TableCell>
                 </TableRow>
               ) : sorted.map(r => {
@@ -266,16 +267,16 @@ export default function StockLedger() {
           </Table>
 
           {totalRows > 0 && (
-            <div className="p-3 border-t border-border text-xs text-muted-foreground flex flex-wrap items-center justify-between gap-2">
-              <span>
-                Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, totalRows)} of {totalRows} entries
-                {isFetching ? ' · refreshing…' : ''}
-              </span>
-              <div className="flex items-center gap-1">
-                <Button variant="outline" size="sm" className="h-7 px-2 text-xs" disabled={page <= 1} onClick={() => setPage(p => p - 1)}>Prev</Button>
-                <span className="px-1">Page {page}/{totalPages}</span>
-                <Button variant="outline" size="sm" className="h-7 px-2 text-xs" disabled={page >= totalPages} onClick={() => setPage(p => p + 1)}>Next</Button>
-              </div>
+            <div className="p-3 border-t border-border">
+              <TablePager
+                page={page}
+                pageSize={pageSize}
+                total={totalRows}
+                onPageChange={setPage}
+                onPageSizeChange={setPageSize}
+                isFetching={isFetching}
+                alwaysShow
+              />
             </div>
           )}
         </div>

@@ -5,12 +5,16 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { AccountCombobox } from '@/components/ui/account-combobox';
-import { FileText, Download, Calendar, ShieldOff } from 'lucide-react';
+import { FileText, Download, Calendar, ShieldOff, ArrowDownCircle, ArrowUpCircle, ListChecks } from 'lucide-react';
 import { downloadCSV } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { usePermission } from '@/lib/usePermission';
 import { useLocationContext, locationFilterParams } from '@/lib/locationContext';
+import { PageHeader } from '@/components/app/page-header';
+import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
+import { EmptyState } from '@/components/app/empty-state';
+import { TableSkeleton } from '@/components/app/loading-skeletons';
 
 export default function Ledger() {
   const perm = usePermission('page:/accounts/ledger');
@@ -67,17 +71,16 @@ export default function Ledger() {
   return (
     <AppLayout>
       <div className="space-y-6">
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><FileText className="w-6 h-6 text-primary" /> Ledger Statement</h1>
-            <p className="text-muted-foreground mt-1">Account-wise debit / credit statement</p>
-          </div>
-          {perm.canDownload && (
-          <Button variant="outline" size="sm" disabled={!entries.length} onClick={() => downloadCSV('ledger.csv', entries.map((e: any) => ({ Date: e.date, Description: e.description, Debit: e.debit || 0, Credit: e.credit || 0, Balance: e.balance || 0 })))}>
-            <Download className="w-4 h-4 mr-2" /> Export
-          </Button>
+        <PageHeader
+          title="Ledger Statement"
+          description="Account-wise debit / credit statement"
+          icon={FileText}
+          actions={perm.canDownload && (
+            <Button variant="outline" size="sm" disabled={!entries.length} onClick={() => downloadCSV('ledger.csv', entries.map((e: any) => ({ Date: e.date, Description: e.description, Debit: e.debit || 0, Credit: e.credit || 0, Balance: e.balance || 0 })))}>
+              <Download className="w-4 h-4 mr-2" /> Export
+            </Button>
           )}
-        </div>
+        />
 
         {/* Filters */}
         <div className="flex flex-wrap gap-3">
@@ -101,17 +104,21 @@ export default function Ledger() {
         </div>
 
         {statement && (
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            {[['Opening Balance', `₹${Number(statement.openingBalance || 0).toLocaleString('en-IN')}`], ['Closing Balance', `₹${Number(statement.closingBalance || 0).toLocaleString('en-IN')}`], ['Entries', String(entries.length)]].map(([k, v]) => (
-              <div key={k} className="bg-card border border-border rounded-xl p-4">
-                <p className="text-xs text-muted-foreground uppercase tracking-wider">{k}</p>
-                <p className="text-xl font-bold font-mono text-primary mt-1">{v}</p>
-              </div>
-            ))}
-          </div>
+          <SummaryCardGrid>
+            <SummaryCard label="Opening Balance" value={`₹${Number(statement.openingBalance || 0).toLocaleString('en-IN')}`} icon={ArrowDownCircle} tone="info" loading={isLoading} />
+            <SummaryCard label="Closing Balance" value={`₹${Number(statement.closingBalance || 0).toLocaleString('en-IN')}`} icon={ArrowUpCircle} tone="info" loading={isLoading} />
+            <SummaryCard label="Entries" value={String(entries.length)} icon={ListChecks} tone="default" loading={isLoading} />
+          </SummaryCardGrid>
         )}
 
         <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
+          {!accountId ? (
+            <EmptyState icon={FileText} title="Select an account to view statement" />
+          ) : isLoading ? (
+            <TableSkeleton rows={5} cols={6} />
+          ) : entries.length === 0 ? (
+            <EmptyState icon={FileText} title="No entries for this period" />
+          ) : (
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
@@ -124,15 +131,7 @@ export default function Ledger() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {!accountId ? (
-                <TableRow><TableCell colSpan={6} className="text-center py-16 text-muted-foreground">
-                  <FileText className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>Select an account to view statement</p>
-                </TableCell></TableRow>
-              ) : isLoading ? [...Array(5)].map((_, i) => (
-                <TableRow key={i}><TableCell colSpan={6}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
-              )) : entries.length === 0 ? (
-                <TableRow><TableCell colSpan={6} className="text-center py-16 text-muted-foreground">No entries for this period</TableCell></TableRow>
-              ) : sorted.map((e: any, i: number) => (
+              {sorted.map((e: any, i: number) => (
                 <TableRow key={i} className="hover:bg-muted/10">
                   <TableCell className="text-sm">{new Date(e.date).toLocaleDateString('en-IN')}</TableCell>
                   <TableCell className="text-sm">{e.description}</TableCell>
@@ -144,6 +143,7 @@ export default function Ledger() {
               ))}
             </TableBody>
           </Table>
+          )}
         </div>
       </div>
     </AppLayout>

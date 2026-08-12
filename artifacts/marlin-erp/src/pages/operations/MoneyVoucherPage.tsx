@@ -40,6 +40,7 @@ import { usePermission } from '@/lib/usePermission';
 import { AccountCombobox } from '@/components/ui/account-combobox';
 import { isSystemLedger } from '@/lib/systemLedgers';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
+import { PageHeader } from '@/components/app/page-header';
 import { BillSettlementPanel, type SettlementSelection } from '@/components/settlement/BillSettlementPanel';
 import { entryScopeKeyDown, focusField, useEntryShortcuts } from '@/lib/keyboard-entry';
 import { useVoucherLocationChoice, parseLocKey, LocationSelectField, voucherLocationName } from '@/lib/voucherLocation';
@@ -400,19 +401,16 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
     <AppLayout>
       <div className="space-y-6">
         {/* ── Header ── */}
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-              <C.Icon className={`w-6 h-6 ${C.accent}`} /> {C.title}s
-            </h1>
-            <p className="text-muted-foreground mt-1">{C.subtitle}</p>
-          </div>
-          {perm.canDownload && (
+        <PageHeader
+          title={`${C.title}s`}
+          description={C.subtitle}
+          icon={C.Icon}
+          actions={perm.canDownload ? (
             <Button variant="outline" size="sm" onClick={exportCsv}>
               <Download className="w-4 h-4 mr-2" /> Export CSV
             </Button>
-          )}
-        </div>
+          ) : undefined}
+        />
 
         {/* ── Entry form (inline, full-page — never a dialog) ── */}
         {(perm.canAdd || editing) && (

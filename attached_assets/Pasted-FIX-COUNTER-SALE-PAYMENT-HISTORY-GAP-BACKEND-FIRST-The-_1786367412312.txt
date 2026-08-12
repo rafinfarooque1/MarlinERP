@@ -1,0 +1,442 @@
+FIX: COUNTER-SALE PAYMENT HISTORY GAP — BACKEND-FIRST
+
+The latest full ERP audit found one real operational gap:
+
+When a sale is paid immediately at the counter using Cash, UPI, Bank, or another immediate payment method, the accounting is correct and the money is correctly reflected in the books, BUT the system does not always create the corresponding "Payment Received" history record.
+
+Result:
+- Sale accounting is correct.
+- Cash/Bank balance is correct.
+- Customer balance is correct.
+- But the payment-history section of the invoice can be blank.
+- Bank reconciliation cannot reliably match counter UPI/Bank collections.
+- Approximately 45 existing production bills are affected.
+
+IMPORTANT:
+DO NOT change the existing accounting amounts or create duplicate accounting entries.
+
+The objective is ONLY to ensure that every actual counter payment has one corresponding payment-history record.
+
+==================================================
+1. INVESTIGATE BEFORE CHANGING
+==================================================
+
+Trace the complete backend flow for an immediate-payment sale:
+
+POS / Sales Entry
+→ Sale creation
+→ Payment mode
+→ Payment amount
+→ Accounting posting
+→ Cash/Bank posting
+→ Customer ledger
+→ Payment history
+
+Identify exactly why the accounting payment is being posted but the payment-history record is missing.
+
+Find the existing payment-history table/model/service/API.
+
+Determine whether the normal Receipt Voucher/payment flow already has a reusable payment-history creation service.
+
+Reuse the existing service where possible.
+
+Do NOT create a second independent payment system.
+
+==================================================
+2. CORRECT BEHAVIOUR
+==================================================
+
+For an immediate-payment sale:
+
+Example:
+
+Sale = ₹10,000
+Payment Mode = Cash
+Amount Paid = ₹10,000
+
+The system must create:
+
+SALE
+₹10,000
+
+PAYMENT HISTORY
+₹10,000 Cash
+
+CASH LEDGER
+₹10,000
+
+CUSTOMER BALANCE
+₹0
+
+All records must reference the same sale/payment transaction.
+
+For UPI:
+
+Sale = ₹10,000
+Payment Mode = UPI
+Amount Paid = ₹10,000
+
+Create exactly one payment-history record linked to that sale and the correct UPI/Bank account.
+
+For Bank:
+
+Sale = ₹10,000
+Payment Mode = Bank
+Amount Paid = ₹10,000
+
+Create exactly one payment-history record linked to the sale and correct bank account.
+
+==================================================
+3. CREDIT SALES
+==================================================
+
+If Payment Mode = Credit / Pay Later:
+
+DO NOT create a payment-history record unless actual money was received.
+
+The customer should remain outstanding.
+
+Example:
+
+Sale = ₹10,000
+Payment Mode = Credit
+Amount Received = ₹0
+
+Result:
+
+Customer Receivable = ₹10,000
+Payment History = no payment
+
+==================================================
+4. PARTIAL PAYMENT
+==================================================
+
+If partial payment is supported:
+
+Sale = ₹10,000
+Actual payment = ₹6,000
+
+Then:
+
+Payment History = ₹6,000
+Cash/Bank = ₹6,000
+Customer outstanding = ₹4,000
+
+Do not create a ₹10,000 payment-history record.
+
+==================================================
+5. CUSTOMER ADVANCE
+==================================================
+
+Do not confuse payment history with customer advance.
+
+If the customer pays more than the invoice:
+
+Invoice = ₹8,000
+Actual payment = ₹8,500
+
+Payment History = ₹8,500
+
+₹8,000 settles the invoice.
+
+₹500 remains as customer credit/advance according to the ERP's existing accounting rules.
+
+Do NOT create duplicate receipt entries.
+
+==================================================
+6. EDIT SALE
+==================================================
+
+When editing an already-paid sale:
+
+Compare the OLD payment with the NEW payment.
+
+Example:
+
+Old sale:
+₹10,000 paid by Cash
+
+New sale:
+₹9,000 paid by Cash
+
+The backend must correctly update/reverse the related payment accounting and payment-history record.
+
+Do NOT create another ₹9,000 payment on top of the existing ₹10,000.
+
+The final accounting and payment history must represent only the final valid transaction.
+
+If changing payment mode:
+
+Cash → UPI
+
+the payment-history record and accounting must correctly reflect the new payment account.
+
+==================================================
+7. DELETE / CANCEL / REVERSE
+==================================================
+
+If a paid sale is deleted, cancelled, or reversed according to the ERP's existing rules:
+
+The related payment-history record must also be handled correctly.
+
+No orphan payment-history record may remain.
+
+No orphan cash/bank entry may remain.
+
+No duplicate reversal may be created.
+
+Do not bypass the existing accounting reversal mechanism.
+
+==================================================
+8. LOCATION
+==================================================
+
+Payment history must inherit the accounting location of the sale.
+
+Example:
+
+Selling Location:
+Frozen Hub - Ragiguda
+
+Then:
+
+Sale → Ragiguda
+Payment History → Ragiguda
+Cash/Bank → Ragiguda
+Customer Ledger → Ragiguda
+Dashboard → Ragiguda
+Reports → Ragiguda
+
+Never accidentally post the payment history or accounting to Head Office.
+
+The creator/user must not override the selected accounting location.
+
+==================================================
+9. PAYMENT HISTORY UI
+==================================================
+
+After the fix, open a paid sale and verify the payment-history section.
+
+It must show:
+
+Payment date
+Amount
+Payment method
+Cash/Bank account
+Reference if available
+Location
+Linked sale/invoice number
+Created by/user where supported
+
+Clearly distinguish:
+
+SYSTEM-GENERATED SALE PAYMENT
+from
+MANUALLY CREATED RECEIPT VOUCHER
+
+Do not show a system-generated accounting row as if it were a separate cash receipt.
+
+==================================================
+10. DUPLICATE PROTECTION
+==================================================
+
+This is critical.
+
+The backend must be idempotent.
+
+If the same sale/payment operation is processed twice because of:
+
+- double click
+- page refresh
+- API retry
+- network retry
+- background retry
+
+the system must NOT create two payment-history records or two accounting payments.
+
+Use the existing transaction/reference identifiers to prevent duplicates.
+
+There must be exactly one payment-history record for one actual payment.
+
+==================================================
+11. DO NOT ALTER ACCOUNTING TOTALS
+==================================================
+
+The audit already confirmed that:
+
+Trial Balance balances.
+Balance Sheet balances.
+Cash/Bank balances reconcile.
+Customer balances reconcile.
+Vendor balances reconcile.
+
+Therefore:
+
+DO NOT change the accounting calculation merely to fix payment history.
+
+The payment-history record must be attached to the existing valid payment/accounting transaction.
+
+Do not create a second debit/credit just to populate the payment-history screen.
+
+==================================================
+12. EXISTING PRODUCTION RECORDS
+==================================================
+
+Approximately 45 existing production counter-sale bills are missing payment-history records.
+
+Before backfilling anything:
+
+Perform a read-only analysis.
+
+Identify all affected sales where:
+
+- Sale is marked paid/immediate-payment
+- Actual cash/bank accounting exists
+- Payment-history record is missing
+
+Create a reconciliation report containing:
+
+Sale number
+Date
+Location
+Customer
+Payment mode
+Payment account
+Sale total
+Actual amount paid
+Existing accounting payment
+Existing payment-history record
+Difference
+
+DO NOT automatically backfill until the records are proven to represent one actual payment.
+
+For each eligible record, create exactly one matching payment-history record referencing the existing payment/accounting transaction.
+
+Do not create duplicate cash/bank postings.
+
+Do not change historical accounting amounts.
+
+==================================================
+13. BANK RECONCILIATION
+==================================================
+
+After the fix, verify that immediate UPI/Bank sales appear correctly in payment history and can be matched in bank reconciliation.
+
+Payment history amount must equal the actual accounting payment.
+
+No payment should appear twice.
+
+==================================================
+14. REGRESSION TESTS
+==================================================
+
+Run tests for:
+
+1. Cash sale — fully paid
+2. UPI sale — fully paid
+3. Bank sale — fully paid
+4. Credit sale
+5. Partial payment
+6. Payment greater than invoice
+7. Existing customer
+8. Walk-in customer
+9. Sale with GST
+10. Sale without GST where supported
+11. Sale with discount
+12. Sale with Other Charges
+13. Edit paid sale
+14. Change payment method
+15. Delete/cancel paid sale
+16. Multiple sales for same customer
+17. Multiple locations
+18. Head Office
+19. Warehouse
+20. All Locations
+21. API retry/double submission
+22. Page refresh after payment
+23. Bank reconciliation
+24. Customer ledger
+25. Cash Book
+26. Bank Book
+27. Day Book
+28. Trial Balance
+29. Dashboard
+30. Receivables
+
+==================================================
+15. FINAL RECONCILIATION
+==================================================
+
+After implementation verify:
+
+Payment History
+=
+Actual Payment
+
+Actual Payment
+=
+Cash/Bank Accounting
+
+Customer Ledger
+=
+Customer Balance
+
+Cash Book
+=
+Cash Account
+
+Bank Book
+=
+Bank Account
+
+Sales Report
+=
+Sales Transactions
+
+Dashboard
+=
+Authoritative Accounting Data
+
+Trial Balance:
+Total Debit = Total Credit exactly.
+
+There must be:
+
+ZERO duplicate payments
+ZERO orphan payment-history records
+ZERO missing eligible payment-history records
+ZERO location leakage
+ZERO accounting difference
+
+==================================================
+16. FINAL REPORT
+==================================================
+
+Before finishing, report:
+
+1. Root cause of the missing payment-history records.
+2. Exact backend service/API responsible.
+3. Code changes made.
+4. Number of existing affected records found.
+5. Number safely backfilled.
+6. Number excluded and why.
+7. Duplicate-protection mechanism.
+8. Regression test results.
+9. Accounting reconciliation results.
+10. Confirmation that no accounting totals were changed incorrectly.
+
+IMPORTANT:
+Do not claim the fix is complete merely because the payment-history screen displays a row.
+
+Verify the entire chain:
+
+SALE
+→ PAYMENT
+→ PAYMENT HISTORY
+→ CASH/BANK
+→ CUSTOMER LEDGER
+→ RECONCILIATION
+→ REPORTS
+→ DASHBOARD
+
+Everything must represent the same single actual payment.

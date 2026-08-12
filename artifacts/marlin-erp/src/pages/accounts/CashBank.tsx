@@ -22,6 +22,11 @@ import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
 import { usePermission } from '@/lib/usePermission';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
+import { PageHeader } from '@/components/app/page-header';
+import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
+import { EmptyState } from '@/components/app/empty-state';
+import { TableSkeleton } from '@/components/app/loading-skeletons';
+import { TablePager, useClientPage } from '@/components/ui/table-pager';
 
 const BAD_BALANCE = 'Please enter a valid opening balance.';
 
@@ -163,6 +168,8 @@ export default function CashBank() {
     balance: a => Number(a.balance ?? 0),
   });
 
+  const { pageRows, pagerProps } = useClientPage(sorted);
+
   const typeColor = (t: string) => t === 'cash' ? 'bg-emerald-500/10 text-emerald-500' : t === 'bank' ? 'bg-primary/10 text-primary' : t === 'upi' ? 'bg-purple-500/10 text-purple-500' : 'bg-muted';
   const sourceBadge = (a: any) => {
     if (a.source === 'system') return <Badge variant="outline" className="ml-2 gap-1 text-[10px] uppercase tracking-wide"><Lock className="w-2.5 h-2.5" /> system</Badge>;
@@ -193,40 +200,47 @@ export default function CashBank() {
   return (
     <AppLayout>
       <div className="space-y-6">
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><Banknote className="w-6 h-6 text-primary" /> Cash & Bank</h1>
-            <p className="text-muted-foreground mt-1">Every account is backed by a ledger under Cash / Bank Accounts — balances here match the books exactly</p>
-          </div>
-          <div className="flex gap-2">
-            {perm.canDownload && (
-            <Button variant="outline" size="sm" onClick={() => downloadCSV('cash-bank.csv', filtered.map(a => ({ Name: a.name, Type: a.accountType, Location: (a as any).locationName || '', Bank: a.bankName || '', 'Account No': a.accountNumber || '', Balance: Number(a.balance ?? 0) })))}>
-              <Download className="w-4 h-4 mr-2" /> Export
-            </Button>
-            )}
-            {perm.canAdd && isHOUser && <Button onClick={openAdd}><Plus className="w-4 h-4 mr-2" /> Add Account</Button>}
-          </div>
-        </div>
+        <PageHeader
+          title="Cash & Bank"
+          description="Every account is backed by a ledger under Cash / Bank Accounts — balances here match the books exactly"
+          icon={Banknote}
+          actions={
+            <>
+              {perm.canDownload && (
+                <Button variant="outline" size="sm" onClick={() => downloadCSV('cash-bank.csv', filtered.map(a => ({ Name: a.name, Type: a.accountType, Location: (a as any).locationName || '', Bank: a.bankName || '', 'Account No': a.accountNumber || '', Balance: Number(a.balance ?? 0) })))}>
+                  <Download className="w-4 h-4 mr-2" /> Export
+                </Button>
+              )}
+              {perm.canAdd && isHOUser && <Button onClick={openAdd}><Plus className="w-4 h-4 mr-2" /> Add Account</Button>}
+            </>
+          }
+        />
 
         {/* Balance Summary — ledger-derived, agrees with Cash Book / Bank Book / Balance Sheet */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <div className="bg-card border border-border rounded-xl p-5">
-            <p className="text-xs text-muted-foreground uppercase tracking-wider flex items-center gap-1.5"><Banknote className="w-3.5 h-3.5" /> Cash in Hand</p>
-            <p className="text-3xl font-bold font-mono text-primary mt-1">{fmt(cashTotal)}</p>
-            <p className="text-xs text-muted-foreground mt-1">Matches the <Link href="/accounts/cash-book" className="underline">Cash Book</Link></p>
-          </div>
-          <div className="bg-card border border-border rounded-xl p-5">
-            <p className="text-xs text-muted-foreground uppercase tracking-wider flex items-center gap-1.5"><Landmark className="w-3.5 h-3.5" /> Bank Accounts</p>
-            <p className="text-3xl font-bold font-mono text-primary mt-1">{fmt(bankTotal)}</p>
-            <p className="text-xs text-muted-foreground mt-1">Matches the <Link href="/accounts/bank-book" className="underline">Bank Book</Link></p>
-          </div>
+        <SummaryCardGrid className="lg:grid-cols-2">
+          <SummaryCard
+            label="Cash in Hand"
+            value={fmt(cashTotal)}
+            sub={<>Matches the <Link href="/accounts/cash-book" className="underline">Cash Book</Link></>}
+            icon={Banknote}
+            loading={isLoading}
+          />
+          <SummaryCard
+            label="Bank Accounts"
+            value={fmt(bankTotal)}
+            sub={<>Matches the <Link href="/accounts/bank-book" className="underline">Bank Book</Link></>}
+            icon={Landmark}
+            tone="info"
+            loading={isLoading}
+          />
+        </SummaryCardGrid>
+
+        <div className="relative max-w-xs max-md:max-w-full">
+          <Search className="w-4 h-4 text-muted-foreground absolute left-3 top-1/2 -translate-y-1/2" />
+          <Input placeholder="Search accounts..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9" />
         </div>
 
         <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
-          <div className="p-4 border-b border-border flex items-center gap-2 bg-muted/20">
-            <Search className="w-4 h-4 text-muted-foreground" />
-            <Input placeholder="Search accounts..." value={search} onChange={e => setSearch(e.target.value)} className="border-transparent bg-transparent focus-visible:ring-0 max-w-xs max-md:max-w-full" />
-          </div>
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
@@ -241,13 +255,13 @@ export default function CashBank() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {isLoading ? [...Array(3)].map((_, i) => (
-                <TableRow key={i}><TableCell colSpan={8}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
-              )) : filtered.length === 0 ? (
-                <TableRow><TableCell colSpan={8} className="text-center py-16 text-muted-foreground">
-                  <Banknote className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No accounts yet</p>
+              {isLoading ? (
+                <TableRow><TableCell colSpan={8} className="p-0"><TableSkeleton rows={3} cols={8} /></TableCell></TableRow>
+              ) : filtered.length === 0 ? (
+                <TableRow><TableCell colSpan={8} className="p-0">
+                  <EmptyState icon={Banknote} title="No accounts yet" compact />
                 </TableCell></TableRow>
-              ) : sorted.map(a => (
+              ) : pageRows.map(a => (
                 <TableRow key={a.id} className="hover:bg-muted/10">
                   <TableCell className="font-semibold">{a.name}{sourceBadge(a)}</TableCell>
                   <TableCell><Badge variant="outline" className={`capitalize ${typeColor(a.accountType)}`}>{a.accountType}</Badge></TableCell>
@@ -301,6 +315,11 @@ export default function CashBank() {
               ))}
             </TableBody>
           </Table>
+          {!isLoading && filtered.length > 0 && (
+            <div className="px-4 border-t border-border">
+              <TablePager {...pagerProps} />
+            </div>
+          )}
         </div>
       </div>
 

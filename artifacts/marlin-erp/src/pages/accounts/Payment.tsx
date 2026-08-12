@@ -21,6 +21,12 @@ import { AccountCombobox } from '@/components/ui/account-combobox';
 import { isSystemLedger } from '@/lib/systemLedgers';
 import { BillSettlementPanel, type SettlementSelection } from '@/components/settlement/BillSettlementPanel';
 import { useVoucherLocationChoice, parseLocKey, LocationSelectField, voucherLocationName } from '@/lib/voucherLocation';
+import { PageHeader } from '@/components/app/page-header';
+import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
+import { EmptyState } from '@/components/app/empty-state';
+import { TableSkeleton } from '@/components/app/loading-skeletons';
+import { TablePager, useClientPage } from '@/components/ui/table-pager';
+import { FileStack } from 'lucide-react';
 
 const schema = z.object({
   paymentDate: z.string().min(1, 'Date required'),
@@ -117,6 +123,8 @@ export default function Payment() {
     amount: (p: any) => Number(p.amount),
   });
 
+  const { pageRows, pagerProps } = useClientPage(sorted);
+
   if (!perm.isLoading && !perm.canView) {
     return (
       <AppLayout>
@@ -131,47 +139,48 @@ export default function Payment() {
   return (
     <AppLayout>
       <div className="space-y-6">
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-              <ArrowUpLeft className="w-6 h-6 text-red-500" /> Payment Vouchers
-            </h1>
-            <p className="text-muted-foreground mt-1">Record outgoing payments</p>
-          </div>
-          <div className="flex gap-2">
-            {perm.canDownload && (
-              <Button variant="outline" size="sm" onClick={() => downloadCSV('payments.csv', filtered.map((p: any) => ({
-                Voucher: p.voucherNumber, Date: p.paymentDate, 'Paid From': p.paidFromName,
-                'Paid To': p.paidToName, Location: voucherLocationName(locations, p.locationType, p.locationId),
-                Amount: p.amount,
-                Reference: p.referenceNumber || '', Narration: p.narration || '',
-              })))}>
-                <Download className="w-4 h-4 mr-2" /> Export
-              </Button>
-            )}
-            {perm.canAdd && (
-              <Button onClick={() => {
-                form.reset({ paymentDate: new Date().toISOString().split('T')[0], paidFromLedgerId: 0, paidToLedgerId: 0, amount: 0, referenceNumber: '', narration: '' });
-                setIsOpen(true);
-              }}>
-                <Plus className="w-4 h-4 mr-2" /> New Payment
-              </Button>
-            )}
-          </div>
+        <PageHeader
+          title="Payment Vouchers"
+          description="Record outgoing payments"
+          icon={ArrowUpLeft}
+          actions={
+            <>
+              {perm.canDownload && (
+                <Button variant="outline" size="sm" onClick={() => downloadCSV('payments.csv', filtered.map((p: any) => ({
+                  Voucher: p.voucherNumber, Date: p.paymentDate, 'Paid From': p.paidFromName,
+                  'Paid To': p.paidToName, Location: voucherLocationName(locations, p.locationType, p.locationId),
+                  Amount: p.amount,
+                  Reference: p.referenceNumber || '', Narration: p.narration || '',
+                })))}>
+                  <Download className="w-4 h-4 mr-2" /> Export
+                </Button>
+              )}
+              {perm.canAdd && (
+                <Button onClick={() => {
+                  form.reset({ paymentDate: new Date().toISOString().split('T')[0], paidFromLedgerId: 0, paidToLedgerId: 0, amount: 0, referenceNumber: '', narration: '' });
+                  setIsOpen(true);
+                }}>
+                  <Plus className="w-4 h-4 mr-2" /> New Payment
+                </Button>
+              )}
+            </>
+          }
+        />
+
+        <SummaryCardGrid>
+          <SummaryCard label="Payment Vouchers" value={filtered.length.toLocaleString('en-IN')} icon={FileStack} tone="info" loading={isLoading} />
+          <SummaryCard label="Total Paid" value={`₹${total.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`} icon={ArrowUpLeft} tone="negative" loading={isLoading} />
+        </SummaryCardGrid>
+
+        <div className="relative w-full sm:max-w-sm">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
+          <Input placeholder="Search voucher, account or narration..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9" />
         </div>
 
-        {filtered.length > 0 && (
-          <div className="bg-card border border-border rounded-xl p-4 flex justify-between items-center">
-            <span className="text-muted-foreground text-sm">{filtered.length} payment vouchers</span>
-            <span className="text-xl font-bold text-red-500 font-mono">₹{total.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
-          </div>
-        )}
-
         <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
-          <div className="p-4 border-b border-border flex items-center gap-2 bg-muted/20">
-            <Search className="w-4 h-4 text-muted-foreground shrink-0" />
-            <Input placeholder="Search voucher, account or narration..." value={search} onChange={e => setSearch(e.target.value)} className="border-transparent bg-transparent focus-visible:ring-0 max-w-sm max-md:max-w-full" />
-          </div>
+          {isLoading ? (
+            <TableSkeleton rows={8} cols={9} />
+          ) : (
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
@@ -187,13 +196,11 @@ export default function Payment() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {isLoading ? [...Array(3)].map((_, i) => (
-                <TableRow key={i}><TableCell colSpan={9}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
-              )) : filtered.length === 0 ? (
-                <TableRow><TableCell colSpan={9} className="text-center py-16 text-muted-foreground">
-                  <ArrowUpLeft className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No payment vouchers yet</p>
+              {filtered.length === 0 ? (
+                <TableRow><TableCell colSpan={9} className="p-0">
+                  <EmptyState icon={ArrowUpLeft} title="No payment vouchers yet" hint="Record an outgoing payment to see it here." compact />
                 </TableCell></TableRow>
-              ) : sorted.map((p: any) => (
+              ) : pageRows.map((p: any) => (
                 <TableRow key={p.id} className="hover:bg-muted/10">
                   <TableCell className="font-mono text-primary font-bold text-sm">{p.voucherNumber}</TableCell>
                   <TableCell className="text-sm text-muted-foreground">
@@ -226,7 +233,9 @@ export default function Payment() {
               ))}
             </TableBody>
           </Table>
+          )}
         </div>
+        <TablePager {...pagerProps} />
       </div>
 
       {/* ── New Payment Dialog ── */}

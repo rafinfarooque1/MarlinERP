@@ -64,6 +64,10 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
+import { PageHeader } from '@/components/app/page-header';
+import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
+import { EmptyState } from '@/components/app/empty-state';
+import { TablePager } from '@/components/ui/table-pager';
 
 // ── GST math (mirror of Sales.tsx / server buildSaleLines) ────────────────────
 
@@ -210,7 +214,7 @@ export default function Quotations() {
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | QStatus>('all');
   const [page, setPage] = useState(1);
-  const PAGE_SIZE = 25;
+  const [pageSize, setPageSize] = useState(25);
 
   useEffect(() => {
     const t = setTimeout(() => { setDebouncedSearch(search.trim()); setPage(1); }, 300);
@@ -219,7 +223,7 @@ export default function Quotations() {
   useEffect(() => { setPage(1); }, [range.from, range.to, statusFilter]);
   useEffect(() => { setPage(1); }, [locationState.locationType, locationState.locationId]);
 
-  const { data: quotesPage, isLoading, isFetching } = usePaginatedQuotations(page, PAGE_SIZE, {
+  const { data: quotesPage, isLoading, isFetching } = usePaginatedQuotations(page, pageSize, {
     q: debouncedSearch || undefined,
     from: range.from || undefined,
     to: range.to || undefined,
@@ -240,7 +244,7 @@ export default function Quotations() {
     salesperson: q => q.salesperson,
   });
   const totalQuotes = quotesPage?.total ?? 0;
-  const totalPages = Math.max(1, Math.ceil(totalQuotes / PAGE_SIZE));
+  const totalPages = Math.max(1, Math.ceil(totalQuotes / pageSize));
   useEffect(() => { if (page > totalPages) setPage(totalPages); }, [page, totalPages]);
 
   const { data: customers = [] } = useQuery<any[]>({
@@ -756,33 +760,48 @@ export default function Quotations() {
   return (
     <AppLayout>
       <div className="space-y-6">
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><FileText className="w-6 h-6 text-primary" /> Quotations</h1>
-            <p className="text-muted-foreground mt-1">Quote customers — nothing moves in stock or books until a quote becomes a sale</p>
-          </div>
-          <div className="flex gap-2">
-            {perm.canDownload && (
-              <Button variant="outline" size="sm" onClick={() => downloadCSV('quotations.csv', quotes.map(q => ({
-                Quotation: q.quotationNumber, Date: q.quoteDate, Location: q.locationName,
-                Customer: q.customerName || 'Walk-in', Status: STATUS_LABEL[q.status as QStatus] ?? q.status,
-                'Valid Till': q.validTill ?? '', Salesperson: q.salesperson ?? '',
-                Subtotal: q.subtotal, Tax: q.taxTotal,
-                Discount: (Number(q.discountTotal ?? 0)
-                  + ((q.lineItems as any[]) ?? []).reduce((acc: number, li: any) => acc + Number(li?.discount ?? 0), 0)).toFixed(2),
-                Total: q.totalAmount,
-                'Converted To': q.convertedInvoiceNumber ?? '',
-              })))}>
-                <Download className="w-4 h-4 mr-2" /> Export
-              </Button>
-            )}
-            {perm.canAdd && (
-              <Button onClick={() => { setEditItem(null); form.reset({ ...effectiveDefaults, quoteDate: new Date().toISOString().split('T')[0], validTill: defaultValidTill() }); setIsOpen(true); }}>
-                <Plus className="w-4 h-4 mr-2" /> New Quotation
-              </Button>
-            )}
-          </div>
-        </div>
+        <PageHeader
+          title="Quotations"
+          description="Quote customers — nothing moves in stock or books until a quote becomes a sale"
+          icon={FileText}
+          actions={
+            <>
+              {perm.canDownload && (
+                <Button variant="outline" size="sm" onClick={() => downloadCSV('quotations.csv', quotes.map(q => ({
+                  Quotation: q.quotationNumber, Date: q.quoteDate, Location: q.locationName,
+                  Customer: q.customerName || 'Walk-in', Status: STATUS_LABEL[q.status as QStatus] ?? q.status,
+                  'Valid Till': q.validTill ?? '', Salesperson: q.salesperson ?? '',
+                  Subtotal: q.subtotal, Tax: q.taxTotal,
+                  Discount: (Number(q.discountTotal ?? 0)
+                    + ((q.lineItems as any[]) ?? []).reduce((acc: number, li: any) => acc + Number(li?.discount ?? 0), 0)).toFixed(2),
+                  Total: q.totalAmount,
+                  'Converted To': q.convertedInvoiceNumber ?? '',
+                })))}>
+                  <Download className="w-4 h-4 mr-2" /> Export
+                </Button>
+              )}
+              {perm.canAdd && (
+                <Button onClick={() => { setEditItem(null); form.reset({ ...effectiveDefaults, quoteDate: new Date().toISOString().split('T')[0], validTill: defaultValidTill() }); setIsOpen(true); }}>
+                  <Plus className="w-4 h-4 mr-2" /> New Quotation
+                </Button>
+              )}
+            </>
+          }
+        />
+
+        {/* Summary — server total count + value of the quotations on this page
+            (both figures the page already holds; no extra fetch). */}
+        <SummaryCardGrid>
+          <SummaryCard label="Total Quotations" value={totalQuotes.toLocaleString('en-IN')} icon={FileText} loading={isLoading} />
+          <SummaryCard
+            label="This Page Value"
+            value={`₹${quotes.reduce((s, r) => s + Number(r.totalAmount || 0), 0).toLocaleString('en-IN')}`}
+            icon={FileText}
+            tone="info"
+            sub={`${quotes.length} shown`}
+            loading={isLoading}
+          />
+        </SummaryCardGrid>
 
         {/* Quotations table */}
         <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
@@ -836,8 +855,8 @@ export default function Quotations() {
               {isLoading ? [...Array(4)].map((_, i) => (
                 <TableRow key={i}><TableCell colSpan={9}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
               )) : quotes.length === 0 ? (
-                <TableRow><TableCell colSpan={9} className="text-center py-16 text-muted-foreground">
-                  <FileText className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No quotations yet</p>
+                <TableRow><TableCell colSpan={9} className="p-0">
+                  <EmptyState icon={FileText} title="No quotations yet" compact />
                 </TableCell></TableRow>
               ) : sorted.map(q => (
                 <TableRow key={q.id} className="hover:bg-muted/10">
@@ -906,21 +925,19 @@ export default function Quotations() {
             </TableBody>
           </Table>
           {totalQuotes > 0 && (
-            <div className="p-3 border-t border-border flex flex-wrap items-center justify-between gap-3 text-sm">
-              <span className="text-muted-foreground">
-                Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, totalQuotes)} of {totalQuotes} quotations
-                {isFetching ? ' · refreshing…' : ''}
+            <div className="p-3 border-t border-border flex flex-wrap items-center justify-between gap-3">
+              <span className="font-bold text-primary text-sm">
+                Page total: ₹{quotes.reduce((s, r) => s + Number(r.totalAmount || 0), 0).toLocaleString('en-IN')}
               </span>
-              <div className="flex items-center gap-3">
-                <span className="font-bold text-primary">
-                  Page total: ₹{quotes.reduce((s, r) => s + Number(r.totalAmount || 0), 0).toLocaleString('en-IN')}
-                </span>
-                <div className="flex items-center gap-1">
-                  <Button variant="outline" size="sm" className="h-7 px-2 text-xs" disabled={page <= 1} onClick={() => setPage(p => p - 1)}>Prev</Button>
-                  <span className="px-1 text-xs text-muted-foreground">Page {page}/{totalPages}</span>
-                  <Button variant="outline" size="sm" className="h-7 px-2 text-xs" disabled={page >= totalPages} onClick={() => setPage(p => p + 1)}>Next</Button>
-                </div>
-              </div>
+              <TablePager
+                page={page}
+                pageSize={pageSize}
+                total={totalQuotes}
+                onPageChange={setPage}
+                onPageSizeChange={setPageSize}
+                isFetching={isFetching}
+                alwaysShow
+              />
             </div>
           )}
         </div>

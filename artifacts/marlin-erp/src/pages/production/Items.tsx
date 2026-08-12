@@ -12,7 +12,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Plus, Search, Edit2, Trash2, Package, Download, Eye, Ruler, ShieldOff } from 'lucide-react';
+import { Plus, Search, Edit2, Trash2, Package, Download, Eye, Ruler, ShieldOff, CheckCircle2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV } from '@/lib/download';
@@ -22,6 +22,12 @@ import { Link } from 'wouter';
 import { usePermission } from '@/lib/usePermission';
 import { useIsHeadOffice, HEAD_OFFICE_ONLY_HINT, isActiveProduct } from '@/lib/productStatus';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
+import { PageHeader } from '@/components/app/page-header';
+import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
+import { StatusBadge } from '@/components/app/status-badge';
+import { EmptyState } from '@/components/app/empty-state';
+import { TableSkeleton } from '@/components/app/loading-skeletons';
+import { TablePager, useClientPage } from '@/components/ui/table-pager';
 
 const schema = z.object({
   name: z.string().min(1, 'Name required'),
@@ -84,6 +90,8 @@ export default function Items() {
     stock: i => Number(i.productionStock || 0),
     status: i => isActiveProduct(i) ? 'Active' : 'Inactive',
   });
+  const { pageRows, pagerProps } = useClientPage(sorted);
+  const activeCount = items.filter(i => isActiveProduct(i)).length;
   const isPending = createMutation.isPending || updateMutation.isPending;
 
   if (!perm.isLoading && !perm.canView) {
@@ -108,26 +116,37 @@ export default function Items() {
   return (
     <AppLayout>
       <div className="space-y-6">
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><Package className="w-6 h-6 text-primary" /> Item Master</h1>
-            <p className="text-muted-foreground mt-1">{isHeadOffice ? 'Finished goods / SKU catalogue' : HEAD_OFFICE_ONLY_HINT}</p>
-          </div>
-          <div className="flex gap-2">
-            {perm.canDownload && (
-            <Button variant="outline" size="sm" onClick={() => downloadCSV('items.csv', filtered.map(i => ({ Code: (i as any).itemCode || '', Barcode: (i as any).barcode || '', Name: i.name, HSN: i.hsnCode, 'Tax%': i.taxRate, Unit: i.unit, 'Production Stock': i.productionStock, Status: isActiveProduct(i) ? 'Active' : 'Inactive' })))}>
-              <Download className="w-4 h-4 mr-2" /> Export
-            </Button>
-            )}
-            {isHeadOffice && perm.canAdd && <Button onClick={openAdd}><Plus className="w-4 h-4 mr-2" /> Add Item</Button>}
-          </div>
+        <PageHeader
+          title="Item Master"
+          description={isHeadOffice ? 'Finished goods / SKU catalogue' : HEAD_OFFICE_ONLY_HINT}
+          icon={Package}
+          actions={
+            <>
+              {perm.canDownload && (
+                <Button variant="outline" size="sm" onClick={() => downloadCSV('items.csv', filtered.map(i => ({ Code: (i as any).itemCode || '', Barcode: (i as any).barcode || '', Name: i.name, HSN: i.hsnCode, 'Tax%': i.taxRate, Unit: i.unit, 'Production Stock': i.productionStock, Status: isActiveProduct(i) ? 'Active' : 'Inactive' })))}>
+                  <Download className="w-4 h-4 mr-2" /> Export
+                </Button>
+              )}
+              {isHeadOffice && perm.canAdd && <Button onClick={openAdd}><Plus className="w-4 h-4 mr-2" /> Add Item</Button>}
+            </>
+          }
+        />
+
+        <SummaryCardGrid>
+          <SummaryCard label="Total Items" value={items.length.toLocaleString('en-IN')} icon={Package} loading={isLoading} />
+          <SummaryCard label="Active" value={activeCount.toLocaleString('en-IN')} icon={CheckCircle2} tone="positive" loading={isLoading} />
+          <SummaryCard label="Inactive" value={(items.length - activeCount).toLocaleString('en-IN')} icon={ShieldOff} tone="warning" loading={isLoading} />
+        </SummaryCardGrid>
+
+        <div className="flex items-center gap-2 max-w-xs max-md:max-w-full">
+          <Search className="w-4 h-4 text-muted-foreground shrink-0" />
+          <Input placeholder="Search by name or HSN..." value={search} onChange={e => setSearch(e.target.value)} />
         </div>
 
         <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
-          <div className="p-4 border-b border-border flex items-center gap-2 bg-muted/20">
-            <Search className="w-4 h-4 text-muted-foreground shrink-0" />
-            <Input placeholder="Search by name or HSN..." value={search} onChange={e => setSearch(e.target.value)} className="border-transparent bg-transparent focus-visible:ring-0 max-w-xs max-md:max-w-full" />
-          </div>
+          {isLoading ? (
+            <TableSkeleton rows={8} cols={8} />
+          ) : (
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
@@ -142,13 +161,11 @@ export default function Items() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {isLoading ? [...Array(3)].map((_, i) => (
-                <TableRow key={i}><TableCell colSpan={8}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
-              )) : filtered.length === 0 ? (
-                <TableRow><TableCell colSpan={8} className="text-center py-16 text-muted-foreground">
-                  <Package className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No items found</p>
+              {filtered.length === 0 ? (
+                <TableRow><TableCell colSpan={8} className="p-0">
+                  <EmptyState icon={Package} title="No items found" hint="Finished goods and SKUs will appear here." compact />
                 </TableCell></TableRow>
-              ) : sorted.map(item => {
+              ) : pageRows.map(item => {
                 const active = isActiveProduct(item);
                 return (
                 <TableRow key={item.id} className={`hover:bg-muted/10 ${active ? '' : 'opacity-60'}`}>
@@ -162,20 +179,16 @@ export default function Items() {
                   <TableCell className="text-muted-foreground">{item.unit}</TableCell>
                   <TableCell className="font-mono text-primary font-bold">{Number(item.productionStock || 0).toLocaleString()}</TableCell>
                   <TableCell>
-                    <Badge variant="outline" className={`text-xs ${active
-                      ? 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20'
-                      : 'bg-muted text-muted-foreground border-border'}`}>
-                      {active ? 'Active' : 'Inactive'}
-                    </Badge>
+                    <StatusBadge status={active ? 'active' : 'inactive'} />
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
-                      <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(item)}><Eye className="w-4 h-4" /></Button>
+                      <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" title="View" onClick={() => setViewItem(item)}><Eye className="w-4 h-4" /></Button>
                       {isHeadOffice && perm.canEdit && (
-                        <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => openEdit(item)}><Edit2 className="w-4 h-4" /></Button>
+                        <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" title="Edit" onClick={() => openEdit(item)}><Edit2 className="w-4 h-4" /></Button>
                       )}
                       {isHeadOffice && perm.canDelete && (
-                        <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-destructive" onClick={() => handleDelete(item.id, item.name)}><Trash2 className="w-4 h-4" /></Button>
+                        <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-destructive" title="Delete" onClick={() => handleDelete(item.id, item.name)}><Trash2 className="w-4 h-4" /></Button>
                       )}
                     </div>
                   </TableCell>
@@ -184,7 +197,9 @@ export default function Items() {
               })}
             </TableBody>
           </Table>
+          )}
         </div>
+        {!isLoading && filtered.length > 0 && <TablePager {...pagerProps} />}
       </div>
 
       <Dialog open={isOpen} onOpenChange={v => { setIsOpen(v); if (!v) { setEditingId(null); form.reset(); } }}>

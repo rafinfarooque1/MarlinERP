@@ -21,11 +21,16 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
-import { Plus, Search, Edit2, Eye, ArrowRightLeft, Archive, ClipboardList, Download } from 'lucide-react';
+import { Plus, Search, Edit2, Eye, ArrowRightLeft, Archive, ClipboardList, Download, Wallet, CheckCircle2 } from 'lucide-react';
 import { usePermission } from '@/lib/usePermission';
 import { toast } from 'sonner';
 import { downloadCSV } from '@/lib/download';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
+import { TablePager, useClientPage } from '@/components/ui/table-pager';
+import { PageHeader } from '@/components/app/page-header';
+import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
+import { EmptyState } from '@/components/app/empty-state';
+import { TableSkeleton } from '@/components/app/loading-skeletons';
 import { AttachmentField } from '@/components/AttachmentField';
 import { fmt, fmtDate } from '@/pages/reports/shared';
 import {
@@ -81,6 +86,11 @@ export default function AssetRegister() {
     status: a => ASSET_STATUS_LABELS[a.status] ?? a.status,
     warranty: a => a.warrantyEnd,
   });
+
+  const { pageRows, pagerProps } = useClientPage(sorted);
+
+  const totalCost = assets.reduce((s, a) => s + (Number(a.totalCost) || 0), 0);
+  const activeCount = assets.filter(a => a.status === 'active').length;
 
   const [viewTarget, setViewTarget] = useState<AssetPurchase | null>(null);
   const [editTarget, setEditTarget] = useState<AssetPurchase | null>(null);
@@ -187,20 +197,27 @@ export default function AssetRegister() {
   return (
     <AppLayout>
       <div className="space-y-6">
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><ClipboardList className="w-6 h-6 text-primary" /> Asset Register</h1>
-            <p className="text-muted-foreground mt-1">Every company asset with its current location and status.</p>
-          </div>
-          <div className="flex gap-2">
-            {perm.canDownload && (
-              <Button variant="outline" size="sm" onClick={exportCSV}><Download className="w-4 h-4 mr-2" /> Export</Button>
-            )}
-            {perm.canAdd && (
-              <Link href="/assets/purchases"><Button><Plus className="w-4 h-4 mr-2" /> New Asset Purchase</Button></Link>
-            )}
-          </div>
-        </div>
+        <PageHeader
+          title="Asset Register"
+          description="Every company asset with its current location and status."
+          icon={ClipboardList}
+          actions={
+            <>
+              {perm.canDownload && (
+                <Button variant="outline" size="sm" onClick={exportCSV}><Download className="w-4 h-4 mr-2" /> Export</Button>
+              )}
+              {perm.canAdd && (
+                <Link href="/assets/purchases"><Button><Plus className="w-4 h-4 mr-2" /> New Asset Purchase</Button></Link>
+              )}
+            </>
+          }
+        />
+
+        <SummaryCardGrid>
+          <SummaryCard label="Assets" value={String(assets.length)} icon={ClipboardList} tone="default" loading={isLoading} />
+          <SummaryCard label="Active" value={String(activeCount)} icon={CheckCircle2} tone="positive" loading={isLoading} />
+          <SummaryCard label="Total Value (at cost)" value={fmt(totalCost)} icon={Wallet} tone="info" loading={isLoading} />
+        </SummaryCardGrid>
 
         <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
           <div className="p-4 border-b border-border flex flex-wrap gap-3 bg-muted/20">
@@ -250,13 +267,13 @@ export default function AssetRegister() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {isLoading ? [...Array(5)].map((_, i) => (
-                <TableRow key={i}><TableCell colSpan={12}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
-              )) : assets.length === 0 ? (
-                <TableRow><TableCell colSpan={12} className="text-center py-16 text-muted-foreground">
-                  <ClipboardList className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No assets found</p>
+              {isLoading ? (
+                <TableRow><TableCell colSpan={12} className="p-0"><TableSkeleton rows={8} cols={12} /></TableCell></TableRow>
+              ) : assets.length === 0 ? (
+                <TableRow><TableCell colSpan={12} className="p-0">
+                  <EmptyState icon={ClipboardList} title="No assets found" hint="Record an asset purchase to see it here." compact />
                 </TableCell></TableRow>
-              ) : sorted.map(a => {
+              ) : pageRows.map(a => {
                 const warrantyExpired = a.warrantyEnd && a.warrantyEnd < todayIso();
                 return (
                 <TableRow key={a.id} className={`hover:bg-muted/10 ${a.status === 'active' ? '' : 'opacity-70'}`}>
@@ -290,6 +307,9 @@ export default function AssetRegister() {
               })}
             </TableBody>
           </Table>
+          </div>
+          <div className="px-4 py-2 border-t border-border">
+            <TablePager {...pagerProps} />
           </div>
         </div>
       </div>

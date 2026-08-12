@@ -25,6 +25,11 @@ import { Badge } from '@/components/ui/badge';
 import { usePermission } from '@/lib/usePermission';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { useOutletsEnabled, useClearOutletSelection } from '@/lib/useFeatureFlags';
+import { PageHeader } from '@/components/app/page-header';
+import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
+import { EmptyState } from '@/components/app/empty-state';
+import { TableSkeleton } from '@/components/app/loading-skeletons';
+import { FilterPanel } from '@/components/app/filter-panel';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
@@ -644,113 +649,125 @@ export default function Attendance() {
       <AppLayout>
         <div className="space-y-6">
           {/* Header */}
-          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-            <div>
-              <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-                <Clock className="w-6 h-6 text-primary" /> Attendance
-              </h1>
-              <p className="text-muted-foreground mt-1">Daily check-in / check-out register with location</p>
+          <PageHeader
+            title="Attendance"
+            description="Daily check-in / check-out register with location"
+            icon={Clock}
+            actions={(
+              <>
+                {perm.canDownload && (
+                <Button variant="outline" size="sm" onClick={() =>
+                  viewMode === 'day'
+                    ? downloadCSV('attendance.csv', filtered.map((a: any) => ({
+                        Employee: a.employeeName, Date: a.date,
+                        Sessions: (a.punches ?? []).map((p: any) =>
+                          `${p.punchIn ? new Date(p.punchIn).toLocaleTimeString('en-IN') : ''}-${p.punchOut ? new Date(p.punchOut).toLocaleTimeString('en-IN') : 'open'}`).join(' | ') || '—',
+                        FirstIn: a.checkIn ? new Date(a.checkIn).toLocaleTimeString('en-IN') : '—',
+                        CheckInLat: a.checkInLat ?? '—', CheckInLng: a.checkInLng ?? '—',
+                        LastOut: a.checkOut ? new Date(a.checkOut).toLocaleTimeString('en-IN') : '—',
+                        CheckOutLat: a.checkOutLat ?? '—', CheckOutLng: a.checkOutLng ?? '—',
+                        Hours: a.hoursWorked != null ? Number(a.hoursWorked).toFixed(2) : '—',
+                        LateMinutes: a.lateMinutes ?? '—',
+                        OvertimeHours: a.overtimeHours ?? '—',
+                        Status: a.status,
+                      })))
+                    : downloadCSV(`attendance_${range.from || 'start'}_${range.to || 'today'}.csv`, filteredRange.map((a: any) => ({
+                        Date: a.date, Employee: empNameMap.get(a.employeeId) ?? a.employeeId,
+                        CheckIn: a.checkIn ? new Date(a.checkIn).toLocaleTimeString('en-IN') : '—',
+                        CheckOut: a.checkOut ? new Date(a.checkOut).toLocaleTimeString('en-IN') : '—',
+                        Hours: a.hoursWorked ? Number(a.hoursWorked).toFixed(1) : '—',
+                        Status: a.status,
+                      })))}>
+                  <Download className="w-4 h-4 mr-2" /> Export
+                </Button>
+                )}
+                {perm.canEdit && (
+                <Button variant="outline" size="sm" onClick={() => setHolidaysOpen(true)}>
+                  <CalendarOff className="w-4 h-4 mr-2" /> Holidays
+                </Button>
+                )}
+              </>
+            )}
+          />
+
+          {/* View toggle + date */}
+          <div className="flex flex-wrap gap-2 items-center">
+            <div className="flex rounded-md border border-border overflow-hidden">
+              <Button variant={viewMode === 'day' ? 'secondary' : 'ghost'} size="sm" className="h-9 rounded-none text-xs px-3"
+                onClick={() => setViewMode('day')}>Day</Button>
+              <Button variant={viewMode === 'calendar' ? 'secondary' : 'ghost'} size="sm" className="h-9 rounded-none text-xs px-3"
+                onClick={() => setViewMode('calendar')}>Calendar</Button>
+              <Button variant={viewMode === 'range' ? 'secondary' : 'ghost'} size="sm" className="h-9 rounded-none text-xs px-3"
+                onClick={() => setViewMode('range')}>Range</Button>
             </div>
-            <div className="flex gap-2 items-center">
-              {perm.canDownload && (
-              <Button variant="outline" size="sm" onClick={() =>
-                viewMode === 'day'
-                  ? downloadCSV('attendance.csv', filtered.map((a: any) => ({
-                      Employee: a.employeeName, Date: a.date,
-                      Sessions: (a.punches ?? []).map((p: any) =>
-                        `${p.punchIn ? new Date(p.punchIn).toLocaleTimeString('en-IN') : ''}-${p.punchOut ? new Date(p.punchOut).toLocaleTimeString('en-IN') : 'open'}`).join(' | ') || '—',
-                      FirstIn: a.checkIn ? new Date(a.checkIn).toLocaleTimeString('en-IN') : '—',
-                      CheckInLat: a.checkInLat ?? '—', CheckInLng: a.checkInLng ?? '—',
-                      LastOut: a.checkOut ? new Date(a.checkOut).toLocaleTimeString('en-IN') : '—',
-                      CheckOutLat: a.checkOutLat ?? '—', CheckOutLng: a.checkOutLng ?? '—',
-                      Hours: a.hoursWorked != null ? Number(a.hoursWorked).toFixed(2) : '—',
-                      LateMinutes: a.lateMinutes ?? '—',
-                      OvertimeHours: a.overtimeHours ?? '—',
-                      Status: a.status,
-                    })))
-                  : downloadCSV(`attendance_${range.from || 'start'}_${range.to || 'today'}.csv`, filteredRange.map((a: any) => ({
-                      Date: a.date, Employee: empNameMap.get(a.employeeId) ?? a.employeeId,
-                      CheckIn: a.checkIn ? new Date(a.checkIn).toLocaleTimeString('en-IN') : '—',
-                      CheckOut: a.checkOut ? new Date(a.checkOut).toLocaleTimeString('en-IN') : '—',
-                      Hours: a.hoursWorked ? Number(a.hoursWorked).toFixed(1) : '—',
-                      Status: a.status,
-                    })))}>
-                <Download className="w-4 h-4 mr-2" /> Export
-              </Button>
-              )}
-              {perm.canEdit && (
-              <Button variant="outline" size="sm" onClick={() => setHolidaysOpen(true)}>
-                <CalendarOff className="w-4 h-4 mr-2" /> Holidays
-              </Button>
-              )}
-              <div className="flex rounded-md border border-border overflow-hidden">
-                <Button variant={viewMode === 'day' ? 'secondary' : 'ghost'} size="sm" className="h-9 rounded-none text-xs px-3"
-                  onClick={() => setViewMode('day')}>Day</Button>
-                <Button variant={viewMode === 'calendar' ? 'secondary' : 'ghost'} size="sm" className="h-9 rounded-none text-xs px-3"
-                  onClick={() => setViewMode('calendar')}>Calendar</Button>
-                <Button variant={viewMode === 'range' ? 'secondary' : 'ghost'} size="sm" className="h-9 rounded-none text-xs px-3"
-                  onClick={() => setViewMode('range')}>Range</Button>
-              </div>
-              {viewMode === 'day' && (
-                <Input type="date" value={date} onChange={e => setDate(e.target.value)} className="w-40 bg-card border-border" />
-              )}
-            </div>
+            {viewMode === 'day' && (
+              <Input type="date" value={date} onChange={e => setDate(e.target.value)} className="w-40 bg-card border-border" />
+            )}
           </div>
 
           {viewMode === 'range' && <RangeBar range={range} />}
 
           {/* Day summary cards */}
           {viewMode === 'day' && (
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-              {[
-                { label: 'Present', value: daySummary.present, cls: 'text-emerald-600' },
-                { label: 'Half Day', value: daySummary.half_day, cls: 'text-amber-600' },
-                { label: 'On Leave', value: daySummary.leave, cls: 'text-blue-600' },
+            <SummaryCardGrid className="grid-cols-2 sm:grid-cols-3 lg:grid-cols-6">
+              {([
+                { label: 'Present', value: daySummary.present, tone: 'positive' as const },
+                { label: 'Half Day', value: daySummary.half_day, tone: 'warning' as const },
+                { label: 'On Leave', value: daySummary.leave, tone: 'info' as const },
                 // Shown only on days that have them, so ordinary working days
                 // keep the familiar six cards.
-                ...(daySummary.offday > 0 ? [{ label: 'Holiday / Off', value: daySummary.offday, cls: 'text-purple-600' }] : []),
-                { label: 'Absent', value: daySummary.absent, cls: 'text-red-600' },
-                { label: 'Late Arrivals', value: daySummary.late, cls: 'text-amber-600' },
-                { label: 'Overtime', value: `${daySummary.otHours.toFixed(1)}h`, cls: 'text-primary' },
-              ].map((c) => (
-                <div key={c.label} className="bg-card border border-border rounded-xl px-4 py-3">
-                  <p className="text-xs text-muted-foreground">{c.label}</p>
-                  <p className={`text-xl font-bold mt-0.5 ${c.cls}`}>{c.value}</p>
-                </div>
+                ...(daySummary.offday > 0 ? [{ label: 'Holiday / Off', value: daySummary.offday, tone: 'default' as const }] : []),
+                { label: 'Absent', value: daySummary.absent, tone: 'negative' as const },
+                { label: 'Late Arrivals', value: daySummary.late, tone: 'warning' as const },
+                { label: 'Overtime', value: `${daySummary.otHours.toFixed(1)}h`, tone: 'default' as const },
+              ]).map((c) => (
+                <SummaryCard key={c.label} label={c.label} value={c.value} tone={c.tone} loading={isLoading} />
               ))}
-            </div>
+            </SummaryCardGrid>
           )}
 
           {/* Branch filter */}
-          <div className="flex flex-wrap gap-2 items-center">
-            <Select value={branchTypeFilter} onValueChange={v => { setBranchTypeFilter(v); setBranchLocId('all'); }}>
-              <SelectTrigger className="h-7 w-38 text-xs"><SelectValue placeholder="All Branches" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Branches</SelectItem>
-                <SelectItem value="headoffice">Head Office</SelectItem>
-                <SelectItem value="warehouse">Warehouse</SelectItem>
-                {outletsEnabled && <SelectItem value="outlet">Outlet</SelectItem>}
-              </SelectContent>
-            </Select>
-            {branchTypeFilter === 'warehouse' && (
-              <Select value={branchLocId} onValueChange={setBranchLocId}>
-                <SelectTrigger className="h-7 w-44 text-xs"><SelectValue placeholder="All Warehouses" /></SelectTrigger>
+          {viewMode !== 'calendar' && (
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div className="relative w-full sm:max-w-xs">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+              <Input placeholder="Search employee..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9" />
+            </div>
+            <FilterPanel
+              activeCount={(branchTypeFilter !== 'all' ? 1 : 0) + (branchLocId !== 'all' ? 1 : 0)}
+              onClear={() => { setBranchTypeFilter('all'); setBranchLocId('all'); }}
+              className="shrink-0"
+            >
+              <Select value={branchTypeFilter} onValueChange={v => { setBranchTypeFilter(v); setBranchLocId('all'); }}>
+                <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="All Branches" /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">All Warehouses</SelectItem>
-                  {(warehouses as any[]).map(w => <SelectItem key={w.id} value={String(w.id)}>{w.name}</SelectItem>)}
+                  <SelectItem value="all">All Branches</SelectItem>
+                  <SelectItem value="headoffice">Head Office</SelectItem>
+                  <SelectItem value="warehouse">Warehouse</SelectItem>
+                  {outletsEnabled && <SelectItem value="outlet">Outlet</SelectItem>}
                 </SelectContent>
               </Select>
-            )}
-            {branchTypeFilter === 'outlet' && (
-              <Select value={branchLocId} onValueChange={setBranchLocId}>
-                <SelectTrigger className="h-7 w-44 text-xs"><SelectValue placeholder="All Outlets" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Outlets</SelectItem>
-                  {(outlets as any[]).map(o => <SelectItem key={o.id} value={String(o.id)}>{o.name}</SelectItem>)}
-                </SelectContent>
-              </Select>
-            )}
+              {branchTypeFilter === 'warehouse' && (
+                <Select value={branchLocId} onValueChange={setBranchLocId}>
+                  <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="All Warehouses" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Warehouses</SelectItem>
+                    {(warehouses as any[]).map(w => <SelectItem key={w.id} value={String(w.id)}>{w.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              )}
+              {branchTypeFilter === 'outlet' && (
+                <Select value={branchLocId} onValueChange={setBranchLocId}>
+                  <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="All Outlets" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Outlets</SelectItem>
+                    {(outlets as any[]).map(o => <SelectItem key={o.id} value={String(o.id)}>{o.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              )}
+            </FilterPanel>
           </div>
+          )}
 
           {/* Calendar — month at a glance; click a day to open its register */}
           {viewMode === 'calendar' && (
@@ -836,10 +853,6 @@ export default function Attendance() {
               on ONE date, so they live in the Day view only) */}
           {viewMode === 'calendar' ? null : viewMode === 'range' ? (
           <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
-            <div className="p-4 border-b border-border flex items-center gap-2 bg-muted/20">
-              <Search className="w-4 h-4 text-muted-foreground" />
-              <Input placeholder="Search employee..." value={search} onChange={e => setSearch(e.target.value)} className="border-transparent bg-transparent focus-visible:ring-0 max-w-xs max-md:max-w-full" />
-            </div>
             <Table>
               <TableHeader>
                 <TableRow className="bg-muted/10">
@@ -854,20 +867,16 @@ export default function Attendance() {
               <TableBody>
                 {rangeUnbounded ? (
                   <TableRow>
-                    <TableCell colSpan={6} className="text-center py-16 text-muted-foreground">
-                      <CalendarDays className="w-10 h-10 mx-auto mb-3 opacity-20" />
-                      <p>Pick a bounded period — "All time" is not available for the attendance register</p>
+                    <TableCell colSpan={6} className="p-0">
+                      <EmptyState icon={CalendarDays} title="Pick a bounded period" hint='"All time" is not available for the attendance register' compact />
                     </TableCell>
                   </TableRow>
                 ) : rangeLoading ? (
-                  [...Array(4)].map((_, i) => (
-                    <TableRow key={i}><TableCell colSpan={6}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
-                  ))
+                  <TableRow><TableCell colSpan={6} className="p-0"><TableSkeleton rows={4} cols={6} /></TableCell></TableRow>
                 ) : filteredRange.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={6} className="text-center py-16 text-muted-foreground">
-                      <Clock className="w-10 h-10 mx-auto mb-3 opacity-20" />
-                      <p>No attendance records in this period</p>
+                    <TableCell colSpan={6} className="p-0">
+                      <EmptyState icon={Clock} title="No attendance records in this period" compact />
                     </TableCell>
                   </TableRow>
                 ) : rangeSort.sorted.map((a: any) => (
@@ -889,10 +898,6 @@ export default function Attendance() {
           </div>
           ) : (
           <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
-            <div className="p-4 border-b border-border flex items-center gap-2 bg-muted/20">
-              <Search className="w-4 h-4 text-muted-foreground" />
-              <Input placeholder="Search employee..." value={search} onChange={e => setSearch(e.target.value)} className="border-transparent bg-transparent focus-visible:ring-0 max-w-xs max-md:max-w-full" />
-            </div>
             <Table>
               <TableHeader>
                 <TableRow className="bg-muted/10">
@@ -910,14 +915,11 @@ export default function Attendance() {
               </TableHeader>
               <TableBody>
                 {isLoading ? (
-                  [...Array(4)].map((_, i) => (
-                    <TableRow key={i}><TableCell colSpan={10}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
-                  ))
+                  <TableRow><TableCell colSpan={10} className="p-0"><TableSkeleton rows={4} cols={10} /></TableCell></TableRow>
                 ) : filtered.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={10} className="text-center py-16 text-muted-foreground">
-                      <Clock className="w-10 h-10 mx-auto mb-3 opacity-20" />
-                      <p>No attendance records for {date}</p>
+                    <TableCell colSpan={10} className="p-0">
+                      <EmptyState icon={Clock} title={`No attendance records for ${date}`} compact />
                     </TableCell>
                   </TableRow>
                 ) : daySort.sorted.map((a: any) => (
@@ -1062,29 +1064,28 @@ export default function Attendance() {
     <AppLayout>
       <div className="space-y-6">
         {/* Header */}
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-              <Clock className="w-6 h-6 text-primary" /> My Attendance
-            </h1>
-            <p className="text-muted-foreground mt-1">Your daily attendance and leave records</p>
-          </div>
-          <div className="flex gap-2 items-center">
-            {perm.canAdd && (
+        <PageHeader
+          title="My Attendance"
+          description="Your daily attendance and leave records"
+          icon={Clock}
+          actions={perm.canAdd && (
             <Button onClick={() => { leaveForm.reset(); setApplyLeaveOpen(true); }}>
               <Plus className="w-4 h-4 mr-2" /> Apply Leave
             </Button>
-            )}
-            <div className="flex rounded-md border border-border overflow-hidden">
-              <Button variant={viewMode === 'day' ? 'secondary' : 'ghost'} size="sm" className="h-9 rounded-none text-xs px-3"
-                onClick={() => setViewMode('day')}>Day</Button>
-              <Button variant={viewMode === 'range' ? 'secondary' : 'ghost'} size="sm" className="h-9 rounded-none text-xs px-3"
-                onClick={() => setViewMode('range')}>Range</Button>
-            </div>
-            {viewMode === 'day' && (
-              <Input type="date" value={date} onChange={e => setDate(e.target.value)} className="w-40 bg-card border-border" />
-            )}
+          )}
+        />
+
+        {/* View toggle + date */}
+        <div className="flex flex-wrap gap-2 items-center">
+          <div className="flex rounded-md border border-border overflow-hidden">
+            <Button variant={viewMode === 'day' ? 'secondary' : 'ghost'} size="sm" className="h-9 rounded-none text-xs px-3"
+              onClick={() => setViewMode('day')}>Day</Button>
+            <Button variant={viewMode === 'range' ? 'secondary' : 'ghost'} size="sm" className="h-9 rounded-none text-xs px-3"
+              onClick={() => setViewMode('range')}>Range</Button>
           </div>
+          {viewMode === 'day' && (
+            <Input type="date" value={date} onChange={e => setDate(e.target.value)} className="w-40 bg-card border-border" />
+          )}
         </div>
 
         {viewMode === 'range' && <RangeBar range={range} />}
@@ -1092,20 +1093,20 @@ export default function Attendance() {
         {/* This month's leave balance — hidden when no leave allowance is
             configured, so companies without the policy see no empty card. */}
         {leaveBalance && (leaveBalance.casual.allowed > 0 || leaveBalance.sick.allowed > 0) && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <SummaryCardGrid className="grid-cols-1 sm:grid-cols-2 lg:grid-cols-2">
             {([
-              ['Casual Leave', leaveBalance.casual, 'text-blue-600'],
-              ['Sick Leave', leaveBalance.sick, 'text-purple-600'],
-            ] as const).filter(([, side]) => side.allowed > 0).map(([label, side, cls]) => (
-              <div key={label} className="bg-card border border-border rounded-xl px-4 py-3">
-                <p className="text-xs text-muted-foreground">{label} — this month</p>
-                <p className={`text-xl font-bold mt-0.5 ${cls}`}>
-                  {side.remaining} <span className="text-sm font-medium text-muted-foreground">of {side.allowed} left</span>
-                </p>
-                <p className="text-xs text-muted-foreground mt-0.5">{side.taken} used</p>
-              </div>
+              ['Casual Leave', leaveBalance.casual, 'info'],
+              ['Sick Leave', leaveBalance.sick, 'default'],
+            ] as const).filter(([, side]) => side.allowed > 0).map(([label, side, tone]) => (
+              <SummaryCard
+                key={label}
+                label={`${label} — this month`}
+                value={<>{side.remaining} <span className="text-sm font-medium text-muted-foreground">of {side.allowed} left</span></>}
+                sub={`${side.taken} used`}
+                tone={tone}
+              />
             ))}
-          </div>
+          </SummaryCardGrid>
         )}
 
         {/* Period view — the server already limits range rows to this employee */}
@@ -1128,20 +1129,16 @@ export default function Attendance() {
             <TableBody>
               {rangeUnbounded ? (
                 <TableRow>
-                  <TableCell colSpan={5} className="text-center py-12 text-muted-foreground">
-                    <CalendarDays className="w-8 h-8 mx-auto mb-2 opacity-20" />
-                    <p className="text-sm">Pick a bounded period to see your records</p>
+                  <TableCell colSpan={5} className="p-0">
+                    <EmptyState icon={CalendarDays} title="Pick a bounded period to see your records" compact />
                   </TableCell>
                 </TableRow>
               ) : rangeLoading ? (
-                [...Array(3)].map((_, i) => (
-                  <TableRow key={i}><TableCell colSpan={5}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
-                ))
+                <TableRow><TableCell colSpan={5} className="p-0"><TableSkeleton rows={3} cols={5} /></TableCell></TableRow>
               ) : (rangeRows as any[]).length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={5} className="text-center py-12 text-muted-foreground">
-                    <Clock className="w-8 h-8 mx-auto mb-2 opacity-20" />
-                    <p className="text-sm">No records in this period</p>
+                  <TableCell colSpan={5} className="p-0">
+                    <EmptyState icon={Clock} title="No records in this period" compact />
                   </TableCell>
                 </TableRow>
               ) : myRangeSort.sorted.map((a: any) => (
@@ -1264,14 +1261,11 @@ export default function Attendance() {
             </TableHeader>
             <TableBody>
               {leavesLoading ? (
-                [...Array(2)].map((_, i) => (
-                  <TableRow key={i}><TableCell colSpan={6}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
-                ))
+                <TableRow><TableCell colSpan={6} className="p-0"><TableSkeleton rows={2} cols={6} /></TableCell></TableRow>
               ) : (myLeaves as any[]).length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={6} className="text-center py-12 text-muted-foreground">
-                    <CalendarDays className="w-8 h-8 mx-auto mb-2 opacity-20" />
-                    <p className="text-sm">No leave applications yet</p>
+                  <TableCell colSpan={6} className="p-0">
+                    <EmptyState icon={CalendarDays} title="No leave applications yet" compact />
                   </TableCell>
                 </TableRow>
               ) : myLeavesSort.sorted.map(l => (

@@ -1,0 +1,1714 @@
+MASTER ERP FUNCTIONAL, ACCOUNTING, INVENTORY, UI & DATA-INTEGRITY IMPLEMENTATION
+
+IMPORTANT:
+Use the existing ERP and the previously generated ERP Functional/Technical Specification as the CURRENT-STATE BASELINE.
+
+Do NOT blindly rewrite existing functionality.
+
+First inspect the current implementation and understand the existing architecture, database, APIs, accounting engine, inventory engine, location system, permissions, reports and workflows.
+
+Then implement the requirements below.
+
+The ERP must behave as ONE integrated accounting and operational system.
+
+============================================================
+1. CORE ERP PRINCIPLE — SINGLE SOURCE OF TRUTH
+============================================================
+
+The accounting ledger must be the authoritative source for financial balances.
+
+Every financial transaction must follow:
+
+USER ENTRY
+→ VALIDATION
+→ DATABASE
+→ ACCOUNTING POSTING
+→ LEDGER
+→ CUSTOMER/VENDOR/CASH/BANK
+→ REPORTS
+→ DASHBOARD
+
+Do NOT allow individual screens to calculate financial balances independently if the same balance already exists in the accounting system.
+
+The following must always reconcile:
+
+Chart of Accounts
+↔ General Ledger
+↔ Customer/Vendor Ledger
+↔ Trial Balance
+↔ Balance Sheet
+↔ Profit & Loss
+↔ Cash Book
+↔ Bank Book
+↔ Dashboard
+↔ Receivables
+↔ Payables
+
+Every debit must have a corresponding credit.
+
+All accounting must balance exactly to the paisa.
+
+============================================================
+2. EVERY TRANSACTION MUST ENTER THE CORRECT LEDGER
+============================================================
+
+This is one of the highest-priority requirements.
+
+Every:
+
+Sales
+POS Sales
+Purchase
+Purchase Return
+Sales Return
+Receipt Voucher
+Payment Voucher
+Journal Voucher
+Expense
+Payroll
+Cash transaction
+Bank transaction
+Other Charge
+Stock-related accounting transaction
+
+must create the appropriate accounting/ledger entries.
+
+There must never be a situation where:
+
+- Report shows a transaction but ledger does not.
+- Customer ledger misses a sale.
+- Customer ledger misses a receipt.
+- Vendor ledger misses a purchase.
+- Vendor ledger misses a payment.
+- Cash Book differs from Cash ledger.
+- Bank Book differs from Bank ledger.
+- Chart of Accounts differs from ledger.
+- Dashboard uses a different calculation from the ledger.
+
+Fix the ROOT accounting flow, not merely the display.
+
+============================================================
+3. CHART OF ACCOUNTS
+============================================================
+
+Chart of Accounts is the master accounting structure.
+
+All ledgers must belong to the correct account/group.
+
+When a new ledger is required:
+
+1. Search existing ledger.
+2. If it exists, use it.
+3. If it does not exist, create it.
+4. Ask/identify the correct parent group.
+5. Never create duplicate ledgers unnecessarily.
+
+Ledger balances must flow into Chart of Accounts.
+
+Customer and vendor ledgers must be correctly linked to the corresponding accounting structure.
+
+============================================================
+4. CUSTOMER LEDGER
+============================================================
+
+Every customer transaction must appear in the customer's ledger.
+
+Include:
+
+Opening balance
+Sales
+Receipts
+Partial payments
+Advances/credit balances according to the existing accounting structure
+Advance adjustments
+Sales returns
+Credit notes
+Debit notes
+Journal entries
+Other applicable transactions
+
+Customer balance must equal the actual ledger balance.
+
+Customer list balance
+=
+Customer Ledger
+=
+Receivables
+=
+Trial Balance contribution
+
+Do not use separate inconsistent calculations.
+
+============================================================
+5. CUSTOMER ADVANCE / CREDIT BALANCE
+============================================================
+
+Do not incorrectly classify every negative Sundry Debtor/customer balance as a separate Customer Advance liability.
+
+The required business behaviour is:
+
+If customer pays more than the amount due, the customer ledger can show a negative balance/credit.
+
+Example:
+
+Invoice = ₹1,000
+Receipt = ₹1,200
+
+₹1,000 settles the invoice.
+₹200 remains as customer credit/negative Sundry Debtor balance.
+
+When the next sale is made, that credit can be adjusted.
+
+The system must never double-count the advance.
+
+Investigate and prevent duplicate "Advance Adjusted" accounting postings.
+
+An advance/credit adjustment must have one consistent accounting treatment.
+
+============================================================
+6. SALES MODULE
+============================================================
+
+Sales must support:
+
+Customer
+Date
+Invoice number
+Location
+Items
+Quantity
+MRP
+Selling price
+Discount
+GST
+Other Charges
+Payment method
+Cash
+Bank
+UPI
+Credit
+Partial payment
+
+On saving a sale:
+
+Sales entry
+→ Customer ledger
+→ Stock reduction
+→ Inventory valuation
+→ GST
+→ Cash/Bank if paid
+→ Payment history
+→ Reports
+→ Dashboard
+
+must all update correctly.
+
+============================================================
+7. POINT OF SALE
+============================================================
+
+POS must use the same accounting logic as the normal Sales module wherever possible.
+
+POS flow:
+
+Customer selection
+→ Date
+→ Items
+→ Quantity
+→ MRP
+→ Selling price
+→ Discount
+→ GST
+→ Other Charges
+→ Payment method
+→ Save
+
+Payment methods:
+
+Cash
+Bank
+UPI
+Credit / Pay Later
+Other configured payment accounts
+
+The selected payment account must be the actual account used for accounting.
+
+Do NOT accidentally post POS Cash/Bank transactions to Head Office.
+
+The selected selling location determines the accounting location.
+
+============================================================
+8. POS CREDIT / PAY LATER
+============================================================
+
+If a POS sale is Credit / Pay Later:
+
+Example:
+
+Sale = ₹1,000
+Payment = ₹0
+
+Then:
+
+Customer outstanding = ₹1,000
+Payment history = no actual payment
+Cash/Bank = no payment
+
+The POS must display:
+
+UNPAID
+
+or the appropriate outstanding amount.
+
+============================================================
+9. POS PARTIAL PAYMENT
+============================================================
+
+Example:
+
+Sale = ₹1,000
+
+Customer pays ₹500.
+
+POS must show:
+
+Paid = ₹500
+Outstanding = ₹500
+Status = PARTIALLY PAID
+
+Customer ledger must show the remaining ₹500.
+
+Payment history must show exactly ₹500.
+
+Cash/Bank must increase exactly ₹500.
+
+============================================================
+10. POS COLLECT PAYMENT
+============================================================
+
+Add/maintain:
+
+COLLECT PAYMENT
+
+inside POS.
+
+When the user selects Collect Payment:
+
+It should use the same Receipt Voucher/payment backend service.
+
+Do NOT create a separate payment system.
+
+Example:
+
+Invoice = ₹1,000
+Already paid = ₹0
+
+Collect Payment = ₹500
+
+Result:
+
+Invoice:
+Partially Paid
+
+Paid:
+₹500
+
+Outstanding:
+₹500
+
+Payment History:
+₹500
+
+Customer Ledger:
+₹500 payment
+
+Receipt Voucher:
+₹500
+
+Cash/Bank:
+₹500
+
+The POS payment and Receipt Voucher must be linked.
+
+============================================================
+11. RECEIPT VOUCHER
+============================================================
+
+Receipt Voucher and POS Collect Payment must use the same underlying payment/accounting flow.
+
+If a receipt is entered from Receipt Voucher:
+
+The corresponding customer invoice/outstanding must update automatically.
+
+If payment is entered through POS Collect Payment:
+
+The corresponding Receipt/payment record must automatically appear in Receipt Voucher/payment history.
+
+Do NOT create duplicate receipts.
+
+One actual payment = one authoritative payment record.
+
+============================================================
+12. COUNTER PAYMENT HISTORY
+============================================================
+
+Every immediate POS payment must have exactly one payment-history record.
+
+Cash
+UPI
+Bank
+Card
+Other immediate payment methods
+
+Payment history must show:
+
+Date
+Amount
+Payment Method
+Account
+Location
+Invoice
+Reference
+Created By
+
+System-generated counter payment must be clearly labelled:
+
+"Paid at counter"
+
+Do not confuse it with a manually entered Receipt Voucher.
+
+Credit sales must not create fake payment-history records.
+
+============================================================
+13. PAYMENT DUPLICATE PROTECTION
+============================================================
+
+Prevent duplicate payments caused by:
+
+Double click
+API retry
+Refresh
+Network retry
+Background retry
+Repeated save
+
+One actual payment must create exactly one payment record and one accounting effect.
+
+Use transaction/reference identifiers for idempotency.
+
+============================================================
+14. PAYMENT EXCEEDING OUTSTANDING
+============================================================
+
+If:
+
+Invoice outstanding = ₹8,325
+User enters Receipt = ₹8,725
+
+Show a clear warning:
+
+"Payment exceeds outstanding amount by ₹400. The excess ₹400 will remain as customer credit."
+
+Require confirmation if this is permitted by the business rules.
+
+Do not silently create unexplained advances.
+
+============================================================
+15. PURCHASE MODULE
+============================================================
+
+Purchase Bill must support:
+
+Vendor
+Vendor Invoice Number
+Vendor Invoice Date
+Purchase Date
+Location
+Items
+Quantity
+Purchase Rate
+Discount
+GST
+MFG Date
+Expiry Date
+Batch
+Other Charges
+Payment
+
+IMPORTANT:
+
+Vendor Invoice Date must be a separate field from the ERP Purchase Date.
+
+Both must be saved correctly.
+
+============================================================
+16. PURCHASE OTHER CHARGES
+============================================================
+
+Purchase must support:
+
+Add Charge
+
+Examples:
+
+Freight
+Packing
+Transport
+Loading
+Other Direct Expenses
+
+These must be posted to the appropriate Direct Expense ledger.
+
+The charge ledger must be selectable from the correct Direct Expense group.
+
+============================================================
+17. POS OTHER CHARGES
+============================================================
+
+Add:
+
++ ADD CHARGE
+
+to POS.
+
+For POS/Sales:
+
+Only ledgers configured as eligible Direct Income / applicable income charge ledgers should appear where the business rule requires income charges.
+
+Example:
+
+Packing Charge
+Freight Charge
+Delivery Charge
+Other applicable charge
+
+The dropdown must NOT display unrelated expense/liability/asset ledgers.
+
+When saved:
+
+Sale
+→ Charge
+→ Correct Income Ledger
+→ Customer/Cash/Bank
+→ Reports
+
+must all reconcile.
+
+For Purchase:
+
+Use eligible Direct Expense ledgers.
+
+============================================================
+18. SALES RETURN
+============================================================
+
+Sales Return must use the ORIGINAL SALE'S SELLING RATE.
+
+Do NOT use the current Item Master MRP when returning an item.
+
+Example:
+
+Item Master MRP = ₹350
+Original sale price = ₹320
+Discount = ₹30
+
+Return must be based on the original sale transaction.
+
+Sales Return must update:
+
+Stock
+Customer balance
+Sales Return ledger
+GST reversal
+Inventory valuation
+Reports
+
+============================================================
+19. PURCHASE RETURN
+============================================================
+
+Purchase Return must use the ORIGINAL PURCHASE RATE.
+
+Do NOT use the current item master purchase rate.
+
+Update:
+
+Stock
+Vendor balance
+Purchase Return accounting
+GST reversal
+Inventory valuation
+Reports
+
+============================================================
+20. GST LOGIC
+============================================================
+
+GST must be determined from:
+
+Selling Location State
++
+Customer State
+
+Same state:
+
+CGST + SGST
+
+Different state:
+
+IGST
+
+This must work identically in:
+
+Sales
+POS
+Returns
+Invoices
+GST reports
+
+Do not create a separate POS GST algorithm.
+
+Reuse the common GST service.
+
+============================================================
+21. CUSTOMER / VENDOR GSTIN
+============================================================
+
+GSTIN entered in Customer/Vendor profiles must persist correctly.
+
+Create:
+→ Save GSTIN
+
+Edit:
+→ Update GSTIN
+
+Clear:
+→ Clear GSTIN if optional
+
+Reload:
+→ GSTIN must remain correct.
+
+Sales/POS/Purchase/GST reports must use the correct saved GSTIN.
+
+============================================================
+22. B2B / B2C
+============================================================
+
+Customer with valid GSTIN:
+
+→ B2B
+
+Customer without GSTIN:
+
+→ B2C
+
+If GSTIN is added while the accounting month is OPEN:
+
+Eligible B2C invoices in that OPEN month may automatically convert to B2B according to the configured business rule.
+
+B2B series and B2C series must remain separate.
+
+Any necessary B2C resequencing may happen only while the month is OPEN.
+
+============================================================
+23. MONTH LOCKING
+============================================================
+
+Implement/maintain:
+
+OPEN
+LOCKED
+
+When a month is LOCKED:
+
+Nothing in that month can change.
+
+No:
+
+Create
+Edit
+Delete
+Reclassify
+Renumber
+GST change
+Ledger modification
+Stock modification
+Voucher modification
+Payroll modification
+Automatic background modification
+
+is allowed.
+
+Only Admin can unlock the month.
+
+Unlock must be audited.
+
+Backend must enforce locking, not just frontend.
+
+============================================================
+24. MULTI-LOCATION ERP
+============================================================
+
+Every operational module must work in every location.
+
+Locations can use:
+
+Sales
+POS
+Quotation
+Customers
+Vendors
+Purchase
+Purchase Return
+Sales Return
+Receipt
+Payment
+Expense
+Stock
+Production
+Stock Transfer
+Cash
+Bank
+Inventory
+Reports
+Payroll where applicable
+
+Warehouse/location users can only access their permitted location data.
+
+Head Office is also a normal location.
+
+Head Office selected:
+
+→ Head Office data only.
+
+Warehouse selected:
+
+→ That warehouse only.
+
+All Locations:
+
+→ Consolidated company data.
+
+The creator/user must NEVER override the selected accounting location.
+
+============================================================
+25. LOCATION ACCOUNTING
+============================================================
+
+If Admin selects:
+
+Frozen Hub - Calicut
+
+and creates a Receipt:
+
+Receipt
+→ Calicut ledger
+→ Calicut customer ledger
+→ Calicut cash/bank
+→ Calicut dashboard
+→ Calicut reports
+
+NOT Head Office.
+
+The same rule applies to every financial and stock transaction.
+
+============================================================
+26. ITEM / STOCK MASTER
+============================================================
+
+The Item Master must provide current:
+
+Item Name
+SKU/code
+Category
+Unit
+HSN
+GST
+MRP
+Purchase Rate where applicable
+Selling Price
+Stock
+Locations
+Batch information
+
+============================================================
+27. ITEM-WISE FULL TRACKING
+============================================================
+
+Create/maintain an Item Tracking view.
+
+For each item, show complete lifecycle history.
+
+Example:
+
+MANGO
+
+Purchase History:
+
+Vendor
+Purchase Invoice
+Purchase Date
+Batch
+Quantity
+Purchase Rate
+Location
+
+Stock:
+
+Opening Stock
+Purchases
+Sales
+Sales Returns
+Purchase Returns
+Transfers
+Adjustments
+Production
+Current Stock
+Current Value
+
+Sales History:
+
+Sale Invoice
+Customer
+Sale Date
+Quantity
+Selling Rate
+Discount
+GST
+Location
+
+Profit/Cost information where supported.
+
+The user must be able to track an item throughout its entire lifecycle.
+
+============================================================
+28. STOCK LOCATION / STORAGE LOCATION
+============================================================
+
+Add a Stock Location / Storage Location concept separate from the main warehouse/location where required.
+
+Example:
+
+Warehouse:
+Frozen Hub - Calicut
+
+Storage locations:
+
+Freezer 1
+Freezer 2
+Freezer 3
+Freezer 10
+
+An item can exist in multiple storage locations.
+
+Example:
+
+Mango
+
+Freezer 10 = 50 Qty
+Freezer 12 = 25 Qty
+Freezer 15 = 40 Qty
+
+Total location stock = 115 Qty.
+
+The system must show:
+
+Item
+Warehouse
+Storage Location
+Quantity
+
+Do not duplicate the item master for each storage location.
+
+============================================================
+29. STOCK LOCATION MANAGEMENT
+============================================================
+
+Managers with the appropriate permission can:
+
+Add storage location
+Edit storage location
+Assign item stock
+Move stock between storage locations
+
+Normal users can view according to permissions.
+
+Stock quantity must always reconcile:
+
+Warehouse Total
+=
+Sum of Storage Locations
+
+No negative stock unless explicitly allowed by business configuration.
+
+============================================================
+30. STOCK REPORT
+============================================================
+
+Create/improve Stock Report.
+
+Columns:
+
+Item Name
+SKU
+Category
+Quantity
+Unit
+Location
+Storage Location
+Batch
+MFG
+Expiry
+Purchase Rate
+MRP
+Stock Value
+
+Allow:
+
+Search
+Filter
+Sort
+Export
+
+============================================================
+31. UNIVERSAL TABLE SYSTEM
+============================================================
+
+All ERP list/report pages must use a consistent professional table experience.
+
+Apply to:
+
+Sales
+Purchase
+Sales Return
+Purchase Return
+Receipt Voucher
+Payment Voucher
+Journal Voucher
+Expenses
+Stock
+Customers
+Vendors
+Items
+Ledgers
+Reports
+Payroll
+Inventory
+Batches
+Cash
+Bank
+Any future list module
+
+Each table must support:
+
+Search
+Filter
+Sorting
+Pagination
+Column visibility where appropriate
+Export where applicable
+
+============================================================
+32. TABLE SORTING
+============================================================
+
+Every appropriate column must support:
+
+Ascending
+Descending
+
+Example:
+
+Amount ↑
+Amount ↓
+
+Date ↑
+Date ↓
+
+Customer A-Z
+Customer Z-A
+
+Item A-Z
+Item Z-A
+
+Do not make users manually scan long lists.
+
+============================================================
+33. TABLE FILTER
+============================================================
+
+Add a small Filter button on the right side of the table/header.
+
+Clicking Filter opens the available filters for that module.
+
+Examples:
+
+Date range
+Location
+Customer
+Vendor
+Item
+Status
+Payment method
+Amount range
+Account
+Ledger
+Batch
+Storage location
+User
+GST/B2B/B2C where applicable
+
+Only relevant filters should appear for each module.
+
+============================================================
+34. TABLE SEARCH
+============================================================
+
+Each large data list must have a search field.
+
+Search should work across relevant fields.
+
+Examples:
+
+Customer name
+Invoice number
+Item
+Vendor
+Voucher number
+Ledger
+Batch
+Reference
+
+============================================================
+35. PAGINATION
+============================================================
+
+Large tables must support:
+
+25
+50
+100
+
+rows per page where appropriate.
+
+Use efficient backend pagination for large datasets.
+
+Do not load thousands of records unnecessarily into the browser.
+
+============================================================
+36. SMART DROPDOWN SYSTEM
+============================================================
+
+All large selection dropdowns must use a common Smart Dropdown component.
+
+Examples:
+
+Customer
+Vendor
+Ledger
+Chart of Accounts
+Item
+Payment Account
+Cash Account
+Bank Account
+Additional Charge Ledger
+Location
+Storage Location
+Employee
+Batch
+
+Every large dropdown must have:
+
+Search box
+Scrollable list
+Keyboard navigation where practical
+Fast filtering
+Clear selection
+Loading state
+No-result state
+
+Do NOT show a giant fixed dropdown that forces the user to scroll manually through hundreds/thousands of records.
+
+============================================================
+37. SMART DROPDOWN CONSISTENCY
+============================================================
+
+The same component must be used across:
+
+Customer selection in POS
+Customer selection in Sales
+Vendor selection in Purchase
+Ledger selection
+Add Charge
+Payment Account
+Receipt Voucher
+Payment Voucher
+Journal Voucher
+Stock Location
+Storage Location
+Item selection where applicable
+
+If the data set is small or large, the user experience should remain consistent.
+
+============================================================
+38. CUSTOMER/VENDOR CREATION FROM TRANSACTION
+============================================================
+
+If POS/Sales allows:
+
+New Customer
+
+the customer creation form must behave exactly like the Customer module.
+
+Do not create a simplified incompatible customer record.
+
+The same fields, validation, GSTIN, state, address, opening balance/business rules must apply.
+
+Similarly:
+
+New Vendor from Purchase
+
+must use the same Vendor module creation logic.
+
+============================================================
+39. IMPORT / MIGRATION
+============================================================
+
+Excel/CSV import must support migration from the old ERP.
+
+Support:
+
+Customers
+Vendors
+Items
+Ledgers
+Sales
+Purchases
+Receipts
+Payments
+Expenses
+Journals
+Stock
+Opening balances
+Other supported transactions
+
+Import flow:
+
+Upload
+→ Validate
+→ Preview
+→ Map
+→ Calculate
+→ Show Errors
+→ Confirm
+→ Import
+→ Accounting
+→ Ledger
+→ Reconciliation
+
+============================================================
+40. MASTER MAPPING
+============================================================
+
+During migration:
+
+Old Customer
+→ Search ERP Customer
+
+If found:
+→ map to existing customer.
+
+If not found:
+→ create new customer.
+
+Same for:
+
+Vendor
+Item
+Ledger
+Chart of Accounts
+
+Ledger creation must determine the correct parent group.
+
+Do not create duplicate masters.
+
+============================================================
+41. IMPORT AMOUNTS
+============================================================
+
+Imported data must preserve exact amounts.
+
+Verify:
+
+Old ERP total
+=
+Imported ERP total
+
+for:
+
+Sales
+Purchase
+Receipt
+Payment
+Expense
+Opening Balance
+Closing Balance
+
+No unexplained rate, GST, discount or total differences.
+
+============================================================
+42. PAYROLL
+============================================================
+
+Payroll must be attendance-driven.
+
+Do not generate salary merely because an employee exists.
+
+Verify:
+
+Present
+Half Day
+Paid Leave
+Absent
+Joining Date
+Resignation Date
+Last Working Date
+
+If employee is not eligible for the period:
+
+No salary expense
+No salary payable
+
+If eligible:
+
+Salary Expense
+→ Salary Payable
+
+must be generated correctly.
+
+Payroll expense must also appear correctly in P&L and payable/ledger according to the ERP accounting design.
+
+============================================================
+43. CASH & BANK
+============================================================
+
+Every Cash/Bank transaction must have:
+
+Correct account
+Correct location
+Correct date
+Correct amount
+Correct source transaction
+Correct ledger
+
+Cash Book
+=
+Cash Ledger
+
+Bank Book
+=
+Bank Ledger
+
+Dashboard
+=
+Authoritative accounting balance
+
+============================================================
+44. REPORTS
+============================================================
+
+Every report must use authoritative data.
+
+Verify:
+
+Dashboard
+Trial Balance
+Balance Sheet
+P&L
+Cash Book
+Bank Book
+Day Book
+Sales
+Purchase
+Sales Return
+Purchase Return
+Customer Ledger
+Vendor Ledger
+Item Ledger
+Receivables
+Payables
+Stock
+Inventory
+GST
+Payroll
+
+Reports must support:
+
+Date filter
+Location filter
+Search
+Sort
+Relevant module-specific filters
+
+============================================================
+45. DASHBOARD
+============================================================
+
+Dashboard values must match the underlying accounting/reporting system.
+
+Verify:
+
+Sales
+Purchases
+Receivables
+Payables
+Cash
+Bank
+Profit
+Inventory
+Stock
+Expenses
+GST
+
+No dashboard should independently calculate a conflicting balance.
+
+============================================================
+46. EDIT / DELETE / CANCEL
+============================================================
+
+For every transaction:
+
+Create
+Edit
+Delete
+Cancel
+Reverse
+
+must correctly handle:
+
+Ledger
+Accounting
+Stock
+Cash
+Bank
+Customer
+Vendor
+Reports
+Dashboard
+
+Never leave orphan records.
+
+Never duplicate accounting entries.
+
+Never silently change locked-period transactions.
+
+============================================================
+47. AUDIT TRAIL
+============================================================
+
+Record important changes:
+
+Create
+Edit
+Delete
+Cancel
+Reverse
+Month Lock
+Month Unlock
+B2B/B2C conversion
+Master changes
+Backend corrections
+
+Include:
+
+User
+Date
+Time
+Record
+Old value
+New value
+Reason where required
+
+============================================================
+48. PERMISSIONS
+============================================================
+
+Permissions must be separate from accounting location.
+
+User permissions determine:
+
+What modules the user can access.
+What locations the user can access.
+What actions they can perform.
+
+The selected transaction location determines:
+
+Where the accounting entry belongs.
+Where stock belongs.
+Where the ledger belongs.
+Where cash/bank belongs.
+
+The creator must never override the accounting location.
+
+============================================================
+49. ACCOUNTING INTEGRITY CHECK
+============================================================
+
+After implementation run complete reconciliation.
+
+Verify:
+
+Total Debit = Total Credit
+
+Assets = Liabilities + Equity
+
+Customer Ledger = Receivables
+
+Vendor Ledger = Payables
+
+Cash Book = Cash Account
+
+Bank Book = Bank Account
+
+Stock Ledger = Inventory Valuation
+
+P&L = Income - Expenses
+
+Dashboard = Reports
+
+All Locations = Sum of individual locations
+
+All results must reconcile exactly to the paisa.
+
+============================================================
+50. NO REGRESSION
+============================================================
+
+The existing ERP already has working functionality.
+
+DO NOT break:
+
+Sales
+Purchase
+POS
+Receipt
+Payment
+Ledger
+Accounting
+Stock
+Inventory
+GST
+Reports
+Dashboard
+Imports
+Payroll
+Locations
+Permissions
+
+Before changing shared services:
+
+Identify all modules using the service.
+
+After changing it:
+
+Run regression tests for every affected module.
+
+============================================================
+51. BACKEND-FIRST IMPLEMENTATION
+============================================================
+
+Do not fix accounting problems only in the UI.
+
+For every important feature verify:
+
+Frontend
+→ API
+→ Backend
+→ Database
+→ Accounting service
+→ Ledger
+→ Reports
+
+If frontend and backend disagree, fix the backend/source-of-truth logic.
+
+============================================================
+52. PRODUCTION SAFETY
+============================================================
+
+Do not directly modify production data during development/testing unless explicitly instructed.
+
+Before any data migration or correction:
+
+Perform read-only analysis.
+
+Show:
+
+Affected records
+Affected amount
+Affected locations
+Affected ledgers
+Affected reports
+
+Then implement a safe, transactional correction.
+
+Never invent financial transactions to make a report look correct.
+
+============================================================
+53. TESTING REQUIREMENT
+============================================================
+
+After implementation run a full regression battery.
+
+Test at minimum:
+
+Sales
+POS
+Credit Sale
+Cash Sale
+Bank Sale
+UPI Sale
+Partial Payment
+Receipt
+Payment
+Purchase
+Sales Return
+Purchase Return
+Expenses
+Other Charges
+Ledger
+Customer Ledger
+Vendor Ledger
+Stock
+Stock Locations
+Inventory
+GST
+B2B
+B2C
+Payroll
+Import
+Multi-location
+Head Office
+All Locations
+Month Lock
+Month Unlock
+Tables
+Filters
+Sorting
+Smart Dropdowns
+
+============================================================
+54. END-TO-END TEST
+============================================================
+
+Run a complete real-world scenario:
+
+1. Create Customer.
+2. Save GSTIN/state/address.
+3. Create Item.
+4. Create Vendor.
+5. Purchase item.
+6. Assign batch.
+7. Assign stock location.
+8. Verify vendor ledger.
+9. Verify stock.
+10. Create POS Sale.
+11. Select customer.
+12. Select item.
+13. Apply discount.
+14. Add applicable charge.
+15. Calculate GST.
+16. Save as Credit.
+17. Verify customer ledger.
+18. Verify stock reduction.
+19. Verify unpaid amount.
+20. Collect partial payment.
+21. Verify Receipt.
+22. Verify payment history.
+23. Verify customer outstanding.
+24. Verify cash/bank.
+25. Complete payment.
+26. Verify customer balance = correct.
+27. Perform Sales Return.
+28. Verify stock and customer balance.
+29. Perform Purchase Return.
+30. Verify stock and vendor balance.
+31. Verify Trial Balance.
+32. Verify Balance Sheet.
+33. Verify P&L.
+34. Verify Dashboard.
+35. Verify Stock Report.
+36. Verify Item Tracking.
+37. Verify Location Report.
+
+============================================================
+55. ITEM TRACKING END-TO-END
+============================================================
+
+For every item, the ERP should be able to answer:
+
+Where did this stock come from?
+
+Which vendor supplied it?
+
+Which purchase invoice?
+
+What date?
+
+What batch?
+
+What purchase cost?
+
+Where is the stock currently?
+
+Which warehouse?
+
+Which storage/freezer?
+
+How much quantity?
+
+How much has been sold?
+
+To which customers?
+
+At what selling price?
+
+What discount?
+
+What GST?
+
+What remains?
+
+What is the current stock value?
+
+What is the estimated/actual margin where supported?
+
+The item tracking module must provide this complete traceability.
+
+============================================================
+56. UI CONSISTENCY
+============================================================
+
+All modules should have a consistent professional UI.
+
+Consistent:
+
+Tables
+Filters
+Sorting
+Search
+Pagination
+Dropdowns
+Buttons
+Forms
+Validation
+Error messages
+Confirmation dialogs
+
+Do not implement a different UX pattern for each module.
+
+Build reusable components.
+
+============================================================
+57. FINAL IMPLEMENTATION RULE
+============================================================
+
+Before implementing each requirement:
+
+1. Inspect current implementation.
+2. Identify existing reusable service/component.
+3. Identify affected modules.
+4. Implement centrally where possible.
+5. Preserve existing working behaviour.
+6. Test.
+7. Reconcile accounting.
+8. Test locations.
+9. Test reports.
+10. Test frontend.
+11. Test backend.
+12. Test database integrity.
+
+============================================================
+58. FINAL ACCEPTANCE CRITERIA
+============================================================
+
+The ERP is considered correct only when:
+
+✓ Every transaction reaches the correct ledger.
+✓ Every customer ledger is complete.
+✓ Every vendor ledger is complete.
+✓ POS and Sales accounting are consistent.
+✓ POS Collect Payment and Receipt Voucher use one payment flow.
+✓ Partial payments work.
+✓ Advances/negative customer balances are not double-counted.
+✓ Cash/Bank balances reconcile.
+✓ Sales Returns use original selling rate.
+✓ Purchase Returns use original purchase rate.
+✓ GST uses correct place-of-supply logic.
+✓ B2B/B2C classification works.
+✓ Closed months cannot change.
+✓ Locations remain isolated.
+✓ Head Office works as its own location.
+✓ All Locations consolidates correctly.
+✓ Stock quantities reconcile.
+✓ Stock locations reconcile to warehouse totals.
+✓ Item tracking provides complete lifecycle visibility.
+✓ Payroll is attendance-driven.
+✓ Import/migration preserves amounts and mappings.
+✓ Reports use authoritative accounting data.
+✓ Dashboard matches reports.
+✓ Tables have search/filter/sort.
+✓ Dropdowns have search/scroll.
+✓ No duplicate accounting entries.
+✓ No orphan ledger entries.
+✓ No orphan stock entries.
+✓ No location leakage.
+✓ No duplicate payment records.
+✓ Trial Balance balances exactly.
+✓ Balance Sheet balances exactly.
+✓ All accounting matches to the paisa.
+
+============================================================
+FINAL INSTRUCTION
+============================================================
+
+Treat the existing ERP as the foundation.
+
+Do not destroy working functionality.
+
+Do not create separate accounting logic for individual modules when a common service should be used.
+
+Do not make UI-only fixes for backend/accounting problems.
+
+Use the existing ERP specification and codebase to understand what already exists.
+
+Where the current implementation already satisfies a requirement, preserve it.
+
+Where it is incomplete or inconsistent, fix the underlying implementation.
+
+After all changes, provide a detailed completion report showing:
+
+- What was changed
+- What was already working
+- What bugs were fixed
+- What backend services were changed
+- What database changes were made
+- What modules were affected
+- Regression test results
+- Accounting reconciliation results
+- Location reconciliation results
+- Stock reconciliation results
+- Import verification
+- Any remaining issues
+
+Do not declare the ERP complete merely because the UI works.
+
+The final verification must prove:
+
+TRANSACTION
+→ ACCOUNTING
+→ LEDGER
+→ STOCK/CASH/BANK/PARTY
+→ REPORT
+→ DASHBOARD
+
+all represent the same underlying data.

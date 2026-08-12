@@ -23,6 +23,12 @@ import { usePermission } from '@/lib/usePermission';
 import { AccountCombobox } from '@/components/ui/account-combobox';
 import { entryScopeKeyDown, autoFocusFirst, focusField, useEntryShortcuts } from '@/lib/keyboard-entry';
 import { useVoucherLocationChoice, parseLocKey, LocationSelectField } from '@/lib/voucherLocation';
+import { PageHeader } from '@/components/app/page-header';
+import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
+import { EmptyState } from '@/components/app/empty-state';
+import { TableSkeleton } from '@/components/app/loading-skeletons';
+import { TablePager, useClientPage } from '@/components/ui/table-pager';
+import { FileStack } from 'lucide-react';
 
 const schema = z.object({
   voucherDate: z.string().min(1, 'Date required'),
@@ -115,6 +121,8 @@ function NotesTab({ noteType }: { noteType: 'credit_note' | 'debit_note' }) {
     amount: v => Number(v.totalAmount),
   });
 
+  const { pageRows, pagerProps } = useClientPage(sorted);
+
   return (
     <div className="space-y-4">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
@@ -140,18 +148,20 @@ function NotesTab({ noteType }: { noteType: 'credit_note' | 'debit_note' }) {
         </div>
       </div>
 
-      {filtered.length > 0 && (
-        <div className="bg-card border border-border rounded-xl p-4 flex justify-between items-center">
-          <span className="text-muted-foreground text-sm">{filtered.length} {isCN ? 'credit' : 'debit'} notes</span>
-          <span className={`text-xl font-bold font-mono ${isCN ? 'text-emerald-500' : 'text-amber-500'}`}>{inr(total)}</span>
-        </div>
-      )}
+      <SummaryCardGrid>
+        <SummaryCard label={isCN ? 'Credit Notes' : 'Debit Notes'} value={filtered.length.toLocaleString('en-IN')} icon={FileStack} tone="info" loading={isLoading} />
+        <SummaryCard label="Total Amount" value={inr(total)} icon={isCN ? FileMinus2 : FilePlus2} tone={isCN ? 'positive' : 'warning'} loading={isLoading} />
+      </SummaryCardGrid>
+
+      <div className="relative w-full sm:max-w-sm">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
+        <Input placeholder="Search voucher, party or reason..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9" />
+      </div>
 
       <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
-        <div className="p-4 border-b border-border flex items-center gap-2 bg-muted/20">
-          <Search className="w-4 h-4 text-muted-foreground shrink-0" />
-          <Input placeholder="Search voucher, party or reason..." value={search} onChange={e => setSearch(e.target.value)} className="border-transparent bg-transparent focus-visible:ring-0 max-w-sm max-md:max-w-full" />
-        </div>
+        {isLoading ? (
+          <TableSkeleton rows={8} cols={6} />
+        ) : (
         <Table>
           <TableHeader>
             <TableRow className="bg-muted/10">
@@ -164,14 +174,11 @@ function NotesTab({ noteType }: { noteType: 'credit_note' | 'debit_note' }) {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {isLoading ? [...Array(3)].map((_, i) => (
-              <TableRow key={i}><TableCell colSpan={6}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
-            )) : filtered.length === 0 ? (
-              <TableRow><TableCell colSpan={6} className="text-center py-16 text-muted-foreground">
-                {isCN ? <FileMinus2 className="w-10 h-10 mx-auto mb-3 opacity-20" /> : <FilePlus2 className="w-10 h-10 mx-auto mb-3 opacity-20" />}
-                <p>No {isCN ? 'credit' : 'debit'} notes yet</p>
+            {filtered.length === 0 ? (
+              <TableRow><TableCell colSpan={6} className="p-0">
+                <EmptyState icon={isCN ? FileMinus2 : FilePlus2} title={`No ${isCN ? 'credit' : 'debit'} notes yet`} hint="Returns and billing adjustments appear here." compact />
               </TableCell></TableRow>
-            ) : sorted.map(v => (
+            ) : pageRows.map(v => (
               <TableRow key={v.id} className="hover:bg-muted/10">
                 <TableCell className="font-mono text-primary font-bold text-sm">{v.voucherNumber}</TableCell>
                 <TableCell className="text-sm text-muted-foreground">
@@ -191,7 +198,9 @@ function NotesTab({ noteType }: { noteType: 'credit_note' | 'debit_note' }) {
             ))}
           </TableBody>
         </Table>
+        )}
       </div>
+      <TablePager {...pagerProps} />
 
       {/* ── New Note Dialog ── */}
       <Dialog open={isOpen} onOpenChange={v => { setIsOpen(v); if (!v) form.reset(); }}>
@@ -292,12 +301,11 @@ export default function Notes() {
   return (
     <AppLayout>
       <div className="space-y-6">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-            <FileMinus2 className="w-6 h-6 text-emerald-500" /> Credit & Debit Notes
-          </h1>
-          <p className="text-muted-foreground mt-1">Returns, rate differences and billing adjustments</p>
-        </div>
+        <PageHeader
+          title="Credit & Debit Notes"
+          description="Returns, rate differences and billing adjustments"
+          icon={FileMinus2}
+        />
 
         <Tabs defaultValue="credit_note">
           <TabsList>

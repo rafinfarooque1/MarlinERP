@@ -1,0 +1,1182 @@
+FULL ERP FUNCTIONAL AUDIT + END-TO-END PROCESS MAPPING + ACCOUNTING INTEGRITY REVIEW
+
+IMPORTANT:
+Do NOT immediately modify or rewrite the ERP.
+
+First inspect and understand the COMPLETE ERP system, including frontend, backend, database/schema, APIs, services, accounting logic, inventory logic, location logic, permissions, and all transaction flows.
+
+The objective is to understand exactly how the ERP currently works from beginning to end, identify inconsistencies, missing links, duplicate logic, incorrect calculations, broken accounting flows, and data that is not reaching the correct ledger.
+
+After the investigation, produce a complete ERP process map and a bug/fix plan.
+
+==================================================
+1. COMPLETE ERP MODULE INVENTORY
+==================================================
+
+Inspect every module currently available in the ERP.
+
+Document:
+
+- Dashboard
+- Company
+- Locations / Warehouses
+- Users
+- Roles / Permissions
+- Customers
+- Vendors
+- Items
+- Item Master
+- Categories
+- Units
+- HSN
+- GST
+- Sales
+- Quotations
+- Point of Sale
+- Purchase
+- Purchase Bills
+- Sales Returns
+- Purchase Returns
+- Receipt Voucher
+- Payment Voucher
+- Journal Voucher
+- Expenses
+- Cash
+- Bank
+- Stock
+- Inventory
+- Stock Transfer
+- Production
+- Batches
+- Assets
+- Payroll / Employees
+- Reports
+- Chart of Accounts
+- Ledgers
+- Trial Balance
+- Balance Sheet
+- Profit & Loss
+- Cash Book
+- Bank Book
+- Day Book
+- Customer Ledger
+- Vendor Ledger
+- Item Ledger
+- Receivables
+- Payables
+- GST Reports
+- B2B/B2C
+- Import / Export
+- Migration
+- Month Closing
+- Audit / Activity Logs
+- Any other module discovered in the codebase
+
+Do not assume the above list is complete.
+
+Find every additional module, page, API, service, database table, scheduled process, background calculation, or accounting process.
+
+==================================================
+2. FOR EVERY MODULE, TRACE THE COMPLETE PROCESS
+==================================================
+
+For EVERY module, document the complete lifecycle:
+
+CREATE
+→ VALIDATE
+→ SAVE
+→ DATABASE
+→ BACKEND SERVICE
+→ ACCOUNTING POSTING
+→ LEDGER
+→ STOCK
+→ CUSTOMER/VENDOR
+→ CASH/BANK
+→ REPORTS
+→ DASHBOARD
+
+For each transaction answer:
+
+1. What does the user enter?
+2. Which frontend component handles it?
+3. Which API is called?
+4. Which backend function/service processes it?
+5. Which database tables are changed?
+6. Which records are created?
+7. Which ledger entries are created?
+8. Which debit account is used?
+9. Which credit account is used?
+10. Which customer/vendor ledger is affected?
+11. Which stock ledger is affected?
+12. Which cash/bank account is affected?
+13. Which location is assigned?
+14. Which reports read this transaction?
+15. Which dashboard values depend on it?
+16. What happens when the transaction is edited?
+17. What happens when it is deleted?
+18. What happens when it is reversed?
+19. What happens if the transaction is returned?
+20. What happens if the transaction is moved to another location?
+
+Do this separately for every transaction type.
+
+==================================================
+3. ACCOUNTING POSTING AUDIT
+==================================================
+
+The ERP must have ONE authoritative accounting flow.
+
+Trace every transaction into the accounting system.
+
+Verify that:
+
+Sales
+→ Customer/Sundry Debtor
+→ Sales/Revenue
+→ Output GST
+→ Stock
+→ Cost of Goods Sold
+→ Cash/Bank if paid
+
+Purchase
+→ Vendor/Sundry Creditor
+→ Purchase/Inventory
+→ Input GST
+→ Cash/Bank if paid
+
+Receipt
+→ Cash/Bank
+→ Customer/Sundry Debtor
+
+Payment
+→ Vendor/Expense/Other payable
+→ Cash/Bank
+
+Expense
+→ Expense Ledger
+→ Cash/Bank or Payable
+
+Purchase Return
+→ Vendor
+→ Inventory
+→ Input GST reversal
+
+Sales Return
+→ Customer
+→ Sales Return
+→ Output GST reversal
+→ Inventory
+
+Journal
+→ Correct debit and credit ledgers
+
+Payroll
+→ Salary Expense
+→ Salary Payable
+→ Employee ledger/payable where applicable
+
+Verify every transaction produces the correct accounting entries.
+
+No transaction should exist in the operational module without the corresponding accounting impact when accounting impact is required.
+
+==================================================
+4. LEDGER IS THE SOURCE OF TRUTH
+==================================================
+
+Inspect the current ledger architecture carefully.
+
+The requirement is:
+
+EVERY financial transaction must reach the corresponding ledger.
+
+Do not allow a situation where:
+
+- Sales report is correct but customer ledger is missing entries
+- Receipt report is correct but customer ledger does not show the receipt
+- Purchase report is correct but vendor ledger is missing entries
+- Payment report is correct but vendor ledger does not show the payment
+- Expense appears in expense report but not in the ledger
+- Payroll appears in payroll but not in expense/payable
+- Cash balance differs from Cash Book
+- Bank balance differs from Bank Book
+- Customer list differs from customer ledger
+- Vendor list differs from vendor ledger
+- Chart of Accounts differs from ledger statement
+- Dashboard differs from accounting reports
+
+Every accounting transaction must flow through the same authoritative posting mechanism.
+
+Identify any places where the ERP calculates balances independently instead of using the authoritative ledger/accounting data.
+
+==================================================
+5. CHART OF ACCOUNTS CONSISTENCY
+==================================================
+
+Check:
+
+Chart of Accounts
+↔ Ledger
+↔ Trial Balance
+↔ Balance Sheet
+↔ Profit & Loss
+↔ Customer balances
+↔ Vendor balances
+↔ Cash
+↔ Bank
+↔ Dashboard
+
+For every account verify:
+
+Opening Balance
++ Debits
+- Credits
+= Closing Balance
+
+Make sure the same balance is displayed everywhere.
+
+Find any duplicate balance-calculation logic.
+
+Where possible, replace duplicated calculations with one shared accounting service.
+
+==================================================
+6. CUSTOMER LEDGER AUDIT
+==================================================
+
+For every customer verify:
+
+Opening balance
++ Sales
++ Debit adjustments
+- Receipts
+- Sales returns
+- Credit adjustments
+± Journal entries
+= Closing balance
+
+Every customer transaction must appear in the customer ledger.
+
+Check specifically:
+
+- Sales
+- Receipts
+- Advances
+- Advance adjustments
+- Sales returns
+- Credit notes
+- Journal entries
+- Opening balances
+
+Investigate any customer where the customer list, customer ledger, receivables report, and Trial Balance disagree.
+
+==================================================
+7. VENDOR LEDGER AUDIT
+==================================================
+
+For every vendor verify:
+
+Opening balance
++ Purchases
++ Debit adjustments
+- Payments
+- Purchase returns
+± Journal entries
+= Closing balance
+
+Every vendor transaction must appear in the vendor ledger.
+
+Check:
+
+- Purchase bills
+- Payments
+- Purchase returns
+- Debit notes
+- Opening balances
+- Journal entries
+- Advances
+
+==================================================
+8. ADVANCE HANDLING
+==================================================
+
+Investigate the current advance system carefully.
+
+Do NOT automatically classify every customer credit balance as "Customer Advance."
+
+Determine exactly how the ERP currently handles:
+
+- Customer overpayments
+- Receipt greater than outstanding
+- Customer credit balance
+- Advance received
+- Advance adjustment against sale
+- Sales return
+- Credit note
+- Opening credit balance
+
+Do not create a separate Customer Advances liability classification unless the accounting design explicitly requires it.
+
+Where the business logic is:
+
+Customer has a negative Sundry Debtor balance
+
+that negative customer balance must be correctly represented according to the company's accounting structure.
+
+Document the current implementation and identify incorrect advance calculations.
+
+==================================================
+9. SALES AUDIT
+==================================================
+
+Trace a complete sale from creation to final accounting.
+
+Verify:
+
+Location
+Date
+Customer
+Item
+Quantity
+MRP
+Selling price
+Discount
+GST
+Taxable amount
+Invoice total
+Payment mode
+Cash/Bank
+Customer balance
+Stock reduction
+Cost of goods sold
+Sales ledger
+GST ledger
+Customer ledger
+Cash/Bank ledger
+Dashboard
+Reports
+
+Payment modes must work correctly:
+
+Cash
+Bank
+UPI
+Credit
+Other configured modes
+
+If Credit is selected, the transaction must NOT incorrectly post as cash.
+
+If Cash/Bank is selected, the correct cash/bank account must be updated.
+
+==================================================
+10. PURCHASE AUDIT
+==================================================
+
+Trace:
+
+Purchase Bill
+→ Vendor
+→ Inventory
+→ Stock Batch
+→ GST
+→ Payable
+→ Cash/Bank if paid
+→ Vendor Ledger
+→ Purchase Ledger
+→ Reports
+
+Verify purchase editing does not create duplicate stock or duplicate accounting entries.
+
+If a purchase line/batch has already been consumed, transferred, returned, or otherwise used, editing must safely handle the dependency.
+
+Do not simply block valid edits with misleading errors.
+
+If MFG/EXPIRY dates are optional, make them optional unless legally/business-required.
+
+If required, explain exactly why.
+
+==================================================
+11. SALES RETURN
+==================================================
+
+Sales Return must use the ORIGINAL SALE'S SELLING RATE for the returned item.
+
+Do NOT use the current Item Master MRP as the return rate.
+
+Example:
+
+Item Master MRP = ₹350
+Original sale price = ₹320
+Discount = ₹30
+
+Sales return must use the original transaction's price/discount/tax calculation, not the current MRP.
+
+Trace:
+
+Original sale
+→ Return
+→ Stock increase
+→ Customer balance
+→ Sales return ledger
+→ GST reversal
+→ Inventory valuation
+→ Reports
+
+==================================================
+12. PURCHASE RETURN
+==================================================
+
+Purchase Return must use the ORIGINAL PURCHASE RATE.
+
+Do not use the current Item Master purchase rate.
+
+Trace:
+
+Purchase
+→ Purchase Return
+→ Stock reduction
+→ Vendor balance
+→ Purchase return/debit note
+→ GST reversal
+→ Inventory valuation
+→ Reports
+
+==================================================
+13. GST LOGIC
+==================================================
+
+Verify GST based on customer/vendor state versus selling/receiving location state.
+
+Required logic:
+
+Same state:
+CGST + SGST
+
+Different state:
+IGST
+
+This must work consistently in:
+
+Sales
+POS
+Quotations where applicable
+Purchases
+Purchase Returns
+Sales Returns
+Invoices
+GST reports
+B2B/B2C
+
+Check whether POS currently follows the same GST logic as normal Sales.
+
+If not, fix the shared GST calculation instead of creating another separate calculation.
+
+==================================================
+14. CUSTOMER/VENDOR GST PROFILE
+==================================================
+
+Check that GSTIN entered in:
+
+Customer profile
+Vendor profile
+
+is correctly saved to the database and retrieved everywhere.
+
+Verify:
+
+Create
+Edit
+Save
+Reload
+Invoice
+B2B/B2C
+GST reports
+Import
+Export
+
+No GSTIN should disappear after saving.
+
+==================================================
+15. B2B / B2C SERIAL LOGIC
+==================================================
+
+Inspect invoice numbering.
+
+If a customer initially has no GSTIN and invoices are generated as B2C, then GSTIN is later added while the month is still OPEN:
+
+Existing eligible invoices must be converted to B2B according to the business rules.
+
+B2C numbering must automatically be recalculated/compacted in the background.
+
+Do not leave missing B2C serial numbers caused by conversion.
+
+Once the month is CLOSED:
+
+Invoice numbering and transaction history must be locked.
+
+==================================================
+16. MONTH CLOSING
+==================================================
+
+Implement/verify monthly closing.
+
+Only Admin should be able to close/reopen a month.
+
+When a month is CLOSED:
+
+No user should be able to:
+
+- Create transactions
+- Edit transactions
+- Delete transactions
+- Change invoice numbering
+- Change GST classification
+- Change accounting date
+- Change ledger postings
+- Change stock movements
+- Change vouchers
+- Change payroll
+- Change reports/data belonging to that month
+
+If Admin reopens the month, controlled changes become possible again.
+
+Every month-close/reopen action must be logged.
+
+==================================================
+17. MULTI-LOCATION ACCOUNTING
+==================================================
+
+ERP must be truly location based.
+
+Every transaction must have an accounting location.
+
+Warehouse users:
+
+Can operate all modules
+BUT only for their own location.
+
+Head Office:
+
+Is itself a normal location.
+
+Head Office selected:
+→ only Head Office transactions.
+
+Warehouse selected:
+→ only that warehouse.
+
+All Locations:
+→ consolidated company-wide data.
+
+Verify location propagation through:
+
+Sales
+Purchase
+Returns
+Receipts
+Payments
+Expenses
+Journals
+Stock
+Production
+Cash
+Bank
+Ledgers
+Customers
+Vendors
+Reports
+Dashboard
+Payroll
+
+Creator/user permissions must NOT override the selected accounting location.
+
+==================================================
+18. WAREHOUSE DELETE / OFF
+==================================================
+
+Inspect warehouse lifecycle.
+
+Need:
+
+ACTIVE
+INACTIVE/OFF
+DELETE
+
+If a warehouse is permanently deleted by Admin, clearly identify every related record that would be affected:
+
+Sales
+Purchases
+Sales Returns
+Purchase Returns
+Receipts
+Payments
+Expenses
+Journals
+Stock
+Stock Transfers
+Production
+Cash
+Bank
+Ledgers
+Customers/Vendors where location-specific
+Payroll
+Reports
+Batches
+Assets
+Audit records
+
+Do NOT implement destructive deletion without dependency analysis and confirmation.
+
+Provide a safe deletion strategy.
+
+==================================================
+19. VOUCHER AUDIT
+==================================================
+
+Receipt Voucher:
+
+Receipt
+→ Cash/Bank
+→ Customer/vendor/ledger
+→ Correct location
+→ Correct balance
+
+Payment Voucher:
+
+Payment
+→ Cash/Bank
+→ Vendor/expense/ledger
+→ Correct location
+
+Journal Voucher:
+
+Debit
+↔ Credit
+
+Every voucher must appear in:
+
+Ledger
+Day Book
+Cash Book/Bank Book where applicable
+Trial Balance
+Balance Sheet/P&L where applicable
+Customer/Vendor ledger where applicable
+
+==================================================
+20. PAYROLL AUDIT
+==================================================
+
+Payroll must NOT automatically create salary expense merely because an employee exists.
+
+Salary expense/payable should be generated based on actual attendance/payroll eligibility.
+
+Verify:
+
+Present
+Absent
+Half Day
+Full Day
+Leave
+Joining date
+Resignation date
+Last working date
+Payroll period
+
+If employee is not eligible/present for the payroll period, do not incorrectly generate salary expense.
+
+If salary is generated:
+
+Salary Expense
+→ Salary Payable
+
+must both be created correctly.
+
+Payroll must not continue generating salary after resignation unless the payroll period legitimately includes eligible working days.
+
+==================================================
+21. POS AUDIT
+==================================================
+
+POS must use the same accounting engine as Sales wherever possible.
+
+Check:
+
+GST
+Customer
+Walk-in Customer
+Payment mode
+Cash
+Bank
+UPI
+Credit
+Stock
+Discount
+MRP
+Selling price
+Additional charges
+Ledger
+Customer balance
+Invoice numbering
+
+Add "Add Charge" functionality to POS if supported by Purchase/Sales.
+
+Charges must post to the correct expense/charge ledger and location.
+
+==================================================
+22. WALK-IN CUSTOMER
+==================================================
+
+There must be one consistent Walk-in Customer concept.
+
+Do not create duplicate:
+
+Walk-in Customer
+Walking Customer
+Walk-in Customer accounts
+
+unless there is a deliberate accounting reason.
+
+Investigate migrated receipts assigned to Walk-in Customer that incorrectly created advances.
+
+Separate:
+
+Actual cash sale
+from
+Customer receipt voucher.
+
+Do not count the same payment twice.
+
+==================================================
+23. IMPORT / MIGRATION AUDIT
+==================================================
+
+Inspect the complete migration system.
+
+It must support importing:
+
+Customers
+Vendors
+Items
+Ledgers
+Opening balances
+Sales
+Purchases
+Receipts
+Payments
+Expenses
+Journals
+Stock
+Other supported transactions
+
+Migration should support mapping old ERP names to current ERP masters.
+
+Example:
+
+OLD ITEM NAME
+→ ERP ITEM NAME
+
+OLD CUSTOMER
+→ ERP CUSTOMER
+
+OLD VENDOR
+→ ERP VENDOR
+
+OLD LEDGER
+→ ERP LEDGER
+
+If mapped ledger exists:
+USE EXISTING LEDGER.
+
+If it does not exist:
+CREATE NEW LEDGER.
+
+When creating a ledger, determine the correct parent/group.
+
+Never blindly create duplicates.
+
+==================================================
+24. IMPORT VALIDATION
+==================================================
+
+Before importing:
+
+Validate
+→ Preview
+→ Map
+→ Calculate
+→ Show errors
+→ User confirmation
+→ Import
+→ Accounting posting
+→ Reconciliation
+
+After import:
+
+Check:
+
+Imported total
+vs
+ERP total
+
+Sales total
+Purchase total
+Receipt total
+Payment total
+Expense total
+Opening balance
+Closing balance
+
+Everything must reconcile.
+
+==================================================
+25. REPORT AUDIT
+==================================================
+
+Every report must be generated from authoritative accounting/transaction data.
+
+Verify:
+
+Dashboard
+Trial Balance
+Balance Sheet
+Profit & Loss
+Cash Book
+Bank Book
+Day Book
+GST
+Stock
+Customer Ledger
+Vendor Ledger
+Item Ledger
+Receivables
+Payables
+Sales
+Purchase
+Production
+
+For every report check:
+
+Source data
+Calculation
+Location filter
+Date filter
+Opening balance
+Closing balance
+Debit
+Credit
+Totals
+
+==================================================
+26. EDIT / DELETE / REVERSE AUDIT
+==================================================
+
+For every transaction type test:
+
+CREATE
+EDIT
+DELETE
+REVERSE
+RETURN
+CANCEL
+
+When a transaction is edited:
+
+Old accounting postings must be correctly reversed/replaced.
+
+When deleted:
+
+All dependent accounting, stock, cash/bank, customer/vendor, and report impacts must be handled.
+
+Never leave orphan ledger entries.
+
+Never leave orphan stock movements.
+
+Never create duplicate accounting postings after editing.
+
+==================================================
+27. DATABASE INTEGRITY
+==================================================
+
+Inspect the database for:
+
+Duplicate transactions
+Orphan ledger entries
+Missing ledger entries
+Duplicate customer ledgers
+Duplicate vendor ledgers
+Incorrect location IDs
+Missing location IDs
+Incorrect account IDs
+Incorrect references
+Unbalanced journal entries
+Duplicate stock movements
+Incorrect batch links
+Missing customer/vendor references
+Incorrect voucher references
+
+==================================================
+28. SINGLE SOURCE OF TRUTH
+==================================================
+
+Identify every place where the ERP calculates the same value differently.
+
+Examples:
+
+Customer balance
+Vendor balance
+Advance
+Receivable
+Payable
+Cash
+Bank
+Stock
+Profit
+GST
+Ledger balance
+
+Create a plan so each value comes from one authoritative source.
+
+Avoid:
+
+Screen A calculation
+Screen B calculation
+Screen C calculation
+
+for the same accounting value.
+
+Instead:
+
+AUTHORITATIVE ACCOUNTING DATA
+→ shared service
+→ all screens/reports
+
+==================================================
+29. COMPLETE TRANSACTION FLOW TEST
+==================================================
+
+Create a test matrix.
+
+For each transaction test:
+
+1. Create
+2. Verify database
+3. Verify ledger
+4. Verify customer/vendor
+5. Verify stock
+6. Verify cash/bank
+7. Verify Trial Balance
+8. Verify Balance Sheet/P&L
+9. Verify dashboard
+10. Edit
+11. Verify all affected records again
+12. Delete/reverse
+13. Verify all affected records again
+
+Do this for every major module.
+
+==================================================
+30. LOCATION TEST MATRIX
+==================================================
+
+Test the same transaction flow separately for:
+
+Head Office
+Calicut
+Ragiguda
+Any other existing location
+
+Verify that transactions never leak between locations.
+
+Then test:
+
+All Locations
+
+Verify that consolidated figures equal:
+
+Head Office
++
+Calicut
++
+Ragiguda
++
+all other active locations.
+
+==================================================
+31. ACCOUNTING RECONCILIATION
+==================================================
+
+At the end calculate:
+
+Total Debits
+Total Credits
+
+They MUST match exactly.
+
+Also verify:
+
+Assets = Liabilities + Equity
+
+Trial Balance = 0 difference
+
+Customer balances = Receivables
+
+Vendor balances = Payables
+
+Cash Book = Cash balance
+
+Bank Book = Bank balance
+
+Stock ledger = Inventory valuation
+
+P&L = underlying income - expenses
+
+All differences must be reported to the paisa.
+
+==================================================
+32. DO NOT ASSUME REPORTS ARE CORRECT
+==================================================
+
+Even if the dashboard or reports currently look correct, verify them against the underlying ledger.
+
+The requirement is:
+
+TRANSACTION
+→ LEDGER
+→ ACCOUNTING
+→ REPORT
+
+NOT:
+
+TRANSACTION
+→ REPORT DIRECTLY
+
+If a report is correct while the ledger is incomplete, treat that as a serious architectural problem.
+
+==================================================
+33. OUTPUT REQUIRED FROM THIS AUDIT
+==================================================
+
+Do NOT just say "everything is working."
+
+Produce a detailed report containing:
+
+A. Complete ERP module list
+
+B. Complete transaction flow for every module
+
+C. Frontend → API → backend → database → ledger flow
+
+D. Accounting posting map
+
+E. Chart of Accounts structure
+
+F. Customer/Vendor ledger flow
+
+G. Stock flow
+
+H. Cash/Bank flow
+
+I. Location flow
+
+J. Permission flow
+
+K. Import/migration flow
+
+L. Payroll flow
+
+M. GST flow
+
+N. Invoice numbering/month-close flow
+
+O. Edit/delete/reversal behavior
+
+P. All bugs discovered
+
+Q. Missing ledger postings
+
+R. Duplicate calculations
+
+S. Incorrect accounting entries
+
+T. Location leakage issues
+
+U. Data integrity issues
+
+V. High-risk issues
+
+W. Medium-risk issues
+
+X. Low-risk issues
+
+Y. Recommended fixes
+
+Z. Regression test plan
+
+==================================================
+34. IMPORTANT DEVELOPMENT RULE
+==================================================
+
+Do NOT fix issues blindly.
+
+For every issue:
+
+1. Reproduce it.
+2. Identify the exact source.
+3. Identify the frontend code.
+4. Identify the API.
+5. Identify the backend service.
+6. Identify the database records.
+7. Identify the accounting impact.
+8. Identify dependent modules.
+9. Fix at the correct source.
+10. Re-run all affected tests.
+11. Verify no regression.
+
+Prefer fixing the shared backend/accounting service instead of adding frontend-only patches.
+
+==================================================
+35. FINAL GOAL
+==================================================
+
+The ERP must behave as one consistent accounting system.
+
+Every transaction must have a clear lifecycle:
+
+USER ENTRY
+→ VALIDATION
+→ DATABASE
+→ ACCOUNTING POSTING
+→ LEDGER
+→ STOCK/CASH/BANK/PARTY
+→ REPORT
+→ DASHBOARD
+
+The same transaction must never be calculated differently by different screens.
+
+The ledger must contain every required accounting entry.
+
+The Chart of Accounts must agree with the ledger.
+
+Customer and Vendor ledgers must agree with their balances.
+
+Cash and Bank must agree with their books.
+
+Stock must agree with inventory.
+
+Trial Balance must balance.
+
+Balance Sheet must balance.
+
+P&L must be correct.
+
+Location accounting must remain isolated.
+
+All Locations must consolidate correctly.
+
+Month locking must protect closed periods.
+
+Edits/deletions must reverse all dependent effects correctly.
+
+Migration must preserve accounting meaning.
+
+Before making any major change, show the discovered architecture, problems, affected modules, and proposed fix plan.
+
+Only after the audit and plan are complete should implementation begin.

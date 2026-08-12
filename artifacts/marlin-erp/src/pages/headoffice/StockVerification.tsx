@@ -21,6 +21,10 @@ import { toast } from 'sonner';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { usePermission } from '@/lib/usePermission';
 import { useOutletsEnabled, useClearOutletSelection } from '@/lib/useFeatureFlags';
+import { PageHeader } from '@/components/app/page-header';
+import { EmptyState } from '@/components/app/empty-state';
+import { EntityCombobox } from '@/components/ui/entity-combobox';
+import { TablePager, useClientPage } from '@/components/ui/table-pager';
 
 const fmtQty = (n: number | string) => Number(n || 0).toLocaleString('en-IN');
 const fmtDate = (d: string) => (d ? new Date(d).toLocaleDateString('en-IN') : '—');
@@ -159,14 +163,15 @@ function NewCountTab({ canAdd }: { canAdd: boolean }) {
         </div>
         <div className="space-y-1.5">
           <label className="text-xs text-muted-foreground">Location</label>
-          <Select value={branchId} onValueChange={setBranchId} disabled={!branchType}>
-            <SelectTrigger className="w-56"><SelectValue placeholder="Select location" /></SelectTrigger>
-            <SelectContent>
-              {branchOptions.map((b: any) => (
-                <SelectItem key={b.id} value={String(b.id)}>{b.name}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <EntityCombobox
+            className="w-56"
+            options={branchOptions.map((b: any) => ({ id: Number(b.id), label: b.name }))}
+            value={branchId ? Number(branchId) : null}
+            onChange={id => setBranchId(id ? String(id) : '')}
+            placeholder="Select location"
+            searchPlaceholder="Search location…"
+            disabled={!branchType}
+          />
         </div>
         <div className="space-y-1.5">
           <label className="text-xs text-muted-foreground">Verification date</label>
@@ -294,6 +299,7 @@ function HistoryTab() {
     createdBy:     v => v.createdBy,
     notes:         v => v.notes,
   });
+  const { pageRows, pagerProps } = useClientPage(sorted);
 
   return (
     <div className="space-y-4">
@@ -317,13 +323,12 @@ function HistoryTab() {
                 ))
               ) : verifications.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={6} className="text-center py-16 text-muted-foreground text-sm">
-                    <ClipboardCheck className="w-10 h-10 mx-auto mb-3 opacity-20" />
-                    No verifications recorded yet
+                  <TableCell colSpan={6} className="p-0">
+                    <EmptyState icon={ClipboardCheck} title="No verifications recorded yet" compact />
                   </TableCell>
                 </TableRow>
               ) : (
-                sorted.map(v => (
+                pageRows.map(v => (
                   <TableRow key={v.id} className="hover:bg-muted/10 cursor-pointer" onClick={() => setSelected(v)}>
                     <TableCell className="text-sm">{fmtDate(v.verifyDate)}</TableCell>
                     <TableCell className="font-medium">{v.branchName}</TableCell>
@@ -345,6 +350,11 @@ function HistoryTab() {
             </TableBody>
           </Table>
         </div>
+        {verifications.length > 0 && (
+          <div className="p-3 border-t border-border">
+            <TablePager {...pagerProps} />
+          </div>
+        )}
       </div>
 
       <Dialog open={!!selected} onOpenChange={o => !o && setSelected(null)}>
@@ -413,12 +423,11 @@ export default function StockVerification() {
   return (
     <AppLayout>
       <div className="space-y-6">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-            <ClipboardCheck className="w-6 h-6 text-primary" /> Stock Verification
-          </h1>
-          <p className="text-muted-foreground mt-1">Physical count with automatic variance adjustment</p>
-        </div>
+        <PageHeader
+          title="Stock Verification"
+          description="Physical count with automatic variance adjustment"
+          icon={ClipboardCheck}
+        />
 
         <Tabs value={tab} onValueChange={setTab}>
           <TabsList>

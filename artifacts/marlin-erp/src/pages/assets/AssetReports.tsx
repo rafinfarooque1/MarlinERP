@@ -16,6 +16,7 @@ import {
 import { AppLayout } from '@/components/layout/AppLayout';
 import { usePermission } from '@/lib/usePermission';
 import { downloadCSV } from '@/lib/download';
+import { PageHeader } from '@/components/app/page-header';
 import { BarChart3 } from 'lucide-react';
 import {
   fmt, fmtDate, pdfMoney, periodLabel,
@@ -357,10 +358,11 @@ export default function AssetReports() {
   return (
     <AppLayout>
       <div className="space-y-5">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><BarChart3 className="w-6 h-6 text-primary" /> Asset Reports</h1>
-          <p className="text-muted-foreground mt-1">Register, purchases, warranty and movement history — filter and export.</p>
-        </div>
+        <PageHeader
+          title="Asset Reports"
+          description="Register, purchases, warranty and movement history — filter and export."
+          icon={BarChart3}
+        />
 
         <ReportPicker options={REPORTS} value={report} onChange={setReport} />
 

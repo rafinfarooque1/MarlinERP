@@ -52,6 +52,11 @@ import {
 // ── WhatsApp brand icon (inline SVG) ──────────────────────────────────────────
 import { WhatsAppIcon } from '@/components/ui/WhatsAppIcon';
 import { InvoiceShareLinkPanel, NO_PHONE_MESSAGE } from '@/components/sales/InvoiceShareLinkPanel';
+import { PageHeader } from '@/components/app/page-header';
+import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
+import { StatusBadge } from '@/components/app/status-badge';
+import { EmptyState } from '@/components/app/empty-state';
+import { TableSkeleton } from '@/components/app/loading-skeletons';
 import { cn } from '@/lib/utils';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { toast } from 'sonner';
@@ -1206,31 +1211,64 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   return (
     <AppLayout>
       <div className="space-y-6">
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><CreditCard className="w-6 h-6 text-primary" /> Point of Sale</h1>
-            <p className="text-muted-foreground mt-1">Record and view retail transactions</p>
-          </div>
-          <div className="flex gap-2">
-            {perm.canDownload && (
-              <Button variant="outline" size="sm" onClick={() => downloadCSV('sales.csv', filtered.map(s => ({
-                Invoice: s.invoiceNumber, Date: s.saleDate, Outlet: s.outletName,
-                Customer: s.customerName || 'Walk-in', Payment: paymentModeLabel(s.paymentMode),
-                Subtotal: s.subtotal, Tax: s.taxTotal,
-                Discount: (Number((s as any).discountTotal ?? 0)
-                  + (((s as any).lineItems as any[]) ?? []).reduce((acc: number, li: any) => acc + Number(li?.discount ?? 0), 0)).toFixed(2),
-                Total: s.totalAmount,
-              })))}>
-                <Download className="w-4 h-4 mr-2" /> Export
-              </Button>
-            )}
-            {perm.canAdd && (
-              <Button onClick={() => { form.reset(effectiveDefaultValues); setIsOpen(true); }}>
-                <Plus className="w-4 h-4 mr-2" /> New Sale
-              </Button>
-            )}
-          </div>
-        </div>
+        <PageHeader
+          title="Point of Sale"
+          description="Record and view retail transactions"
+          icon={CreditCard}
+          actions={
+            <>
+              {perm.canDownload && (
+                <Button variant="outline" size="sm" onClick={() => downloadCSV('sales.csv', filtered.map(s => ({
+                  Invoice: s.invoiceNumber, Date: s.saleDate, Outlet: s.outletName,
+                  Customer: s.customerName || 'Walk-in', Payment: paymentModeLabel(s.paymentMode),
+                  Subtotal: s.subtotal, Tax: s.taxTotal,
+                  Discount: (Number((s as any).discountTotal ?? 0)
+                    + (((s as any).lineItems as any[]) ?? []).reduce((acc: number, li: any) => acc + Number(li?.discount ?? 0), 0)).toFixed(2),
+                  Total: s.totalAmount,
+                })))}>
+                  <Download className="w-4 h-4 mr-2" /> Export
+                </Button>
+              )}
+              {perm.canAdd && (
+                <Button onClick={() => { form.reset(effectiveDefaultValues); setIsOpen(true); }}>
+                  <Plus className="w-4 h-4 mr-2" /> New Sale
+                </Button>
+              )}
+            </>
+          }
+        />
+
+        {/* Summary cards — derived from the already-loaded sales rows only. */}
+        <SummaryCardGrid>
+          <SummaryCard
+            label="Loaded Sales"
+            value={filtered.length.toLocaleString('en-IN')}
+            sub={totalSales > filtered.length ? `of ${totalSales.toLocaleString('en-IN')} total` : undefined}
+            icon={Receipt}
+            loading={isLoading}
+          />
+          <SummaryCard
+            label="Loaded Total"
+            value={`₹${filtered.reduce((s, r) => s + Number(r.totalAmount || 0), 0).toLocaleString('en-IN')}`}
+            icon={IndianRupee}
+            tone="positive"
+            loading={isLoading}
+          />
+          <SummaryCard
+            label="Tax Collected"
+            value={`₹${filtered.reduce((s, r) => s + Number((r as any).taxTotal || 0), 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`}
+            icon={FileDown}
+            tone="info"
+            loading={isLoading}
+          />
+          <SummaryCard
+            label="Balance Due"
+            value={`₹${filtered.reduce((s, r) => s + Number((r as any).balanceDue || 0), 0).toLocaleString('en-IN')}`}
+            icon={AlertTriangle}
+            tone="warning"
+            loading={isLoading}
+          />
+        </SummaryCardGrid>
 
         {/* Sales Table */}
         <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
@@ -1280,11 +1318,11 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
               </TableRow>
             </TableHeader>
             <TableBody>
-              {isLoading ? [...Array(4)].map((_, i) => (
-                <TableRow key={i}><TableCell colSpan={9}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
-              )) : filtered.length === 0 ? (
-                <TableRow><TableCell colSpan={9} className="text-center py-16 text-muted-foreground">
-                  <Receipt className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No sales recorded yet</p>
+              {isLoading ? (
+                <TableRow><TableCell colSpan={9} className="p-0"><TableSkeleton rows={6} cols={9} /></TableCell></TableRow>
+              ) : filtered.length === 0 ? (
+                <TableRow><TableCell colSpan={9} className="p-0">
+                  <EmptyState icon={Receipt} title="No sales recorded yet" hint="Record your first retail transaction to see it here." compact />
                 </TableCell></TableRow>
               ) : sorted.map(sale => (
                 <TableRow key={sale.id} className="hover:bg-muted/10">
@@ -1295,13 +1333,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                   <TableCell className="text-sm">{sale.outletName}</TableCell>
                   <TableCell className="text-sm">{sale.customerName || 'Walk-in'}</TableCell>
                   <TableCell>
-                    {(() => {
-                      const ps = (sale as any).paymentStatus ?? 'paid';
-                      if (ps === 'cancelled') return <Badge variant="outline" className="text-[10px] text-muted-foreground">Cancelled</Badge>;
-                      if (ps === 'paid') return <Badge className="text-[10px] bg-emerald-500/10 text-emerald-600 border-emerald-500/20">Paid</Badge>;
-                      if (ps === 'partially_paid') return <Badge className="text-[10px] bg-amber-500/10 text-amber-600 border-amber-500/20">Partial</Badge>;
-                      return <Badge className="text-[10px] bg-red-500/10 text-red-600 border-red-500/20">Unpaid</Badge>;
-                    })()}
+                    <StatusBadge status={(sale as any).paymentStatus ?? 'paid'} />
                   </TableCell>
                   <TableCell className="text-right font-mono text-xs text-muted-foreground">
                     {Number(sale.taxTotal) > 0 ? `₹${Number(sale.taxTotal).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` : '—'}
@@ -1352,20 +1384,11 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                 {[...Array(4)].map((_, i) => <div key={i} className="h-24 bg-muted/30 rounded-lg animate-pulse" />)}
               </div>
             ) : filtered.length === 0 ? (
-              <div className="text-center py-16 text-muted-foreground">
-                <Receipt className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No sales recorded yet</p>
-              </div>
+              <EmptyState icon={Receipt} title="No sales recorded yet" hint="Record your first retail transaction to see it here." compact />
             ) : (
               <div className="space-y-2 p-3">
                 {sorted.map(sale => {
-                  const ps = (sale as any).paymentStatus ?? 'paid';
-                  const statusBadge = ps === 'cancelled'
-                    ? <Badge variant="outline" className="text-[10px] text-muted-foreground">Cancelled</Badge>
-                    : ps === 'paid'
-                      ? <Badge className="text-[10px] bg-emerald-500/10 text-emerald-600 border-emerald-500/20">Paid</Badge>
-                      : ps === 'partially_paid'
-                        ? <Badge className="text-[10px] bg-amber-500/10 text-amber-600 border-amber-500/20">Partial</Badge>
-                        : <Badge className="text-[10px] bg-red-500/10 text-red-600 border-red-500/20">Unpaid</Badge>;
+                  const statusBadge = <StatusBadge status={(sale as any).paymentStatus ?? 'paid'} />;
                   const balanceDue = Number((sale as any).balanceDue ?? 0);
                   return (
                     <div key={sale.id} className="border border-border rounded-lg p-3 space-y-2">

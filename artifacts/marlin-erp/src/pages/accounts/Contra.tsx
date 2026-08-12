@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Plus, ArrowLeftRight, Download, Trash2, Search, Calendar, AlertTriangle } from 'lucide-react';
+import { Plus, ArrowLeftRight, Download, Trash2, Search, Calendar, AlertTriangle, FileStack } from 'lucide-react';
 import { toast } from 'sonner';
 import { Form, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Textarea } from '@/components/ui/textarea';
@@ -22,6 +22,11 @@ import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { AccountCombobox } from '@/components/ui/account-combobox';
 import { entryScopeKeyDown, autoFocusFirst, focusField, useEntryShortcuts } from '@/lib/keyboard-entry';
 import { useVoucherLocationChoice, parseLocKey, LocationSelectField } from '@/lib/voucherLocation';
+import { PageHeader } from '@/components/app/page-header';
+import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
+import { EmptyState } from '@/components/app/empty-state';
+import { TableSkeleton } from '@/components/app/loading-skeletons';
+import { TablePager, useClientPage } from '@/components/ui/table-pager';
 
 const schema = z.object({
   voucherDate: z.string().min(1, 'Date required'),
@@ -117,6 +122,8 @@ export default function Contra() {
     amount: v => Number(v.totalAmount),
   });
 
+  const { pageRows, pagerProps } = useClientPage(sorted);
+
   if (!perm.isLoading && !perm.canView) {
     return (
       <AppLayout>
@@ -131,42 +138,43 @@ export default function Contra() {
   return (
     <AppLayout>
       <div className="space-y-6">
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-              <ArrowLeftRight className="w-6 h-6 text-violet-500" /> Contra Vouchers
-            </h1>
-            <p className="text-muted-foreground mt-1">Move money between cash and bank accounts</p>
-          </div>
-          <div className="flex gap-2">
-            {perm.canDownload && (
-              <Button variant="outline" size="sm" onClick={() => downloadCSV('contra-vouchers.csv', rows.map(v => ({
-                Voucher: v.voucherNumber, Date: v.voucherDate, From: v.fromName, To: v.toName,
-                Amount: v.totalAmount, Narration: v.narration || '',
-              })))}>
-                <Download className="w-4 h-4 mr-2" /> Export
-              </Button>
-            )}
-            {perm.canAdd && (
-              <Button onClick={() => { form.reset({ voucherDate: today(), fromLedgerId: 0, toLedgerId: 0, amount: 0, narration: '' }); setIsOpen(true); }}>
-                <Plus className="w-4 h-4 mr-2" /> New Contra
-              </Button>
-            )}
-          </div>
+        <PageHeader
+          title="Contra Vouchers"
+          description="Move money between cash and bank accounts"
+          icon={ArrowLeftRight}
+          actions={
+            <>
+              {perm.canDownload && (
+                <Button variant="outline" size="sm" onClick={() => downloadCSV('contra-vouchers.csv', rows.map(v => ({
+                  Voucher: v.voucherNumber, Date: v.voucherDate, From: v.fromName, To: v.toName,
+                  Amount: v.totalAmount, Narration: v.narration || '',
+                })))}>
+                  <Download className="w-4 h-4 mr-2" /> Export
+                </Button>
+              )}
+              {perm.canAdd && (
+                <Button onClick={() => { form.reset({ voucherDate: today(), fromLedgerId: 0, toLedgerId: 0, amount: 0, narration: '' }); setIsOpen(true); }}>
+                  <Plus className="w-4 h-4 mr-2" /> New Contra
+                </Button>
+              )}
+            </>
+          }
+        />
+
+        <SummaryCardGrid>
+          <SummaryCard label="Contra Vouchers" value={rows.length.toLocaleString('en-IN')} icon={FileStack} tone="info" loading={isLoading} />
+          <SummaryCard label="Total Amount" value={inr(total)} icon={ArrowLeftRight} tone="default" loading={isLoading} />
+        </SummaryCardGrid>
+
+        <div className="relative w-full sm:max-w-sm">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
+          <Input placeholder="Search voucher, account or narration..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9" />
         </div>
 
-        {rows.length > 0 && (
-          <div className="bg-card border border-border rounded-xl p-4 flex justify-between items-center">
-            <span className="text-muted-foreground text-sm">{rows.length} contra vouchers</span>
-            <span className="text-xl font-bold text-violet-500 font-mono">{inr(total)}</span>
-          </div>
-        )}
-
         <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
-          <div className="p-4 border-b border-border flex items-center gap-2 bg-muted/20">
-            <Search className="w-4 h-4 text-muted-foreground shrink-0" />
-            <Input placeholder="Search voucher, account or narration..." value={search} onChange={e => setSearch(e.target.value)} className="border-transparent bg-transparent focus-visible:ring-0 max-w-sm max-md:max-w-full" />
-          </div>
+          {isLoading ? (
+            <TableSkeleton rows={8} cols={7} />
+          ) : (
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
@@ -180,13 +188,11 @@ export default function Contra() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {isLoading ? [...Array(3)].map((_, i) => (
-                <TableRow key={i}><TableCell colSpan={7}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
-              )) : rows.length === 0 ? (
-                <TableRow><TableCell colSpan={7} className="text-center py-16 text-muted-foreground">
-                  <ArrowLeftRight className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No contra vouchers yet</p>
+              {rows.length === 0 ? (
+                <TableRow><TableCell colSpan={7} className="p-0">
+                  <EmptyState icon={ArrowLeftRight} title="No contra vouchers yet" hint="Move money between cash and bank accounts to see it here." compact />
                 </TableCell></TableRow>
-              ) : sorted.map(v => (
+              ) : pageRows.map(v => (
                 <TableRow key={v.id} className="hover:bg-muted/10">
                   <TableCell className="font-mono text-primary font-bold text-sm">{v.voucherNumber}</TableCell>
                   <TableCell className="text-sm text-muted-foreground">
@@ -207,7 +213,9 @@ export default function Contra() {
               ))}
             </TableBody>
           </Table>
+          )}
         </div>
+        <TablePager {...pagerProps} />
       </div>
 
       {/* ── New Contra Dialog ── */}

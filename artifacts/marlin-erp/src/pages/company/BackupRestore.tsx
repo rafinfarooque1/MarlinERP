@@ -32,6 +32,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
+import { PageHeader } from '@/components/app/page-header';
+import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
 import { toast } from 'sonner';
 import {
   DatabaseBackup, ShieldOff, ShieldCheck, ShieldAlert, Download, Trash2, Upload,
@@ -124,35 +126,6 @@ function CheckList({ checks }: { checks: CheckResult[] }) {
         </div>
       ))}
     </div>
-  );
-}
-
-function Tile({
-  label, value, sub, icon: Icon, tone = 'default',
-}: {
-  label: string; value: string; sub?: string;
-  icon: typeof HardDrive;
-  tone?: 'default' | 'good' | 'warn' | 'bad';
-}) {
-  const toneClass = {
-    default: 'text-muted-foreground',
-    good: 'text-emerald-600 dark:text-emerald-400',
-    warn: 'text-amber-600 dark:text-amber-400',
-    bad: 'text-destructive',
-  }[tone];
-  return (
-    <Card>
-      <CardContent className="pt-5">
-        <div className="flex items-start justify-between gap-2">
-          <div className="min-w-0">
-            <p className="text-xs uppercase tracking-wide text-muted-foreground">{label}</p>
-            <p className="text-xl font-bold mt-1 truncate">{value}</p>
-            {sub && <p className={`text-xs mt-1 ${toneClass}`}>{sub}</p>}
-          </div>
-          <Icon className={`w-5 h-5 shrink-0 ${toneClass}`} />
-        </div>
-      </CardContent>
-    </Card>
   );
 }
 
@@ -355,26 +328,22 @@ export default function BackupRestore() {
     <AppLayout>
       <div className="space-y-6 font-sans">
         {/* Header */}
-        <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
-            <DatabaseBackup className="w-6 h-6 text-primary" />
-            Backup &amp; Restore
-          </h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            Protect every record in the ERP — and be able to prove you can get it back.
-          </p>
-        </div>
+        <PageHeader
+          title="Backup & Restore"
+          description="Protect every record in the ERP — and be able to prove you can get it back."
+          icon={DatabaseBackup}
+        />
 
         {/* ── The question that actually matters ──────────────────────────── */}
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <Tile
+        <SummaryCardGrid>
+          <SummaryCard
             label="Last backup"
             value={latest ? ago(latest.createdAt) : 'Never'}
             sub={latest ? `${latest.filename} · ${latest.sizeLabel}` : 'Nothing is protected yet'}
             icon={Clock}
-            tone={!latest ? 'bad' : latest.verifyStatus === 'passed' ? 'good' : 'warn'}
+            tone={!latest ? 'negative' : latest.verifyStatus === 'passed' ? 'positive' : 'warning'}
           />
-          <Tile
+          <SummaryCard
             label="Proven to restore"
             value={
               !latest ? '—'
@@ -389,9 +358,9 @@ export default function BackupRestore() {
                 : 'Run Verify to prove it works'
             }
             icon={latest?.verifyStatus === 'passed' ? ShieldCheck : ShieldAlert}
-            tone={latest?.verifyStatus === 'passed' ? 'good' : latest?.verifyStatus === 'failed' ? 'bad' : 'warn'}
+            tone={latest?.verifyStatus === 'passed' ? 'positive' : latest?.verifyStatus === 'failed' ? 'negative' : 'warning'}
           />
-          <Tile
+          <SummaryCard
             label="Copy kept off Replit"
             value={!latest ? '—' : neverDownloaded ? 'No' : 'Yes'}
             sub={
@@ -400,9 +369,9 @@ export default function BackupRestore() {
                 : `Downloaded ${ago(latest.downloadedAt!)}`
             }
             icon={neverDownloaded ? CloudOff : Download}
-            tone={!latest ? 'default' : neverDownloaded ? 'warn' : 'good'}
+            tone={!latest ? 'default' : neverDownloaded ? 'warning' : 'positive'}
           />
-          <Tile
+          <SummaryCard
             label="Automatic backups"
             value={settings ? FREQUENCY_LABELS[settings.frequency] : '—'}
             sub={
@@ -411,9 +380,9 @@ export default function BackupRestore() {
                 : undefined
             }
             icon={HardDrive}
-            tone={settings?.frequency === 'manual' ? 'warn' : 'good'}
+            tone={settings?.frequency === 'manual' ? 'warning' : 'positive'}
           />
-        </div>
+        </SummaryCardGrid>
 
         {/* Off-platform warning — the single most misunderstood thing about backups */}
         {latest && neverDownloaded && (

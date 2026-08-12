@@ -25,6 +25,10 @@ import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { Badge } from '@/components/ui/badge';
 import { usePermission } from '@/lib/usePermission';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { PageHeader } from '@/components/app/page-header';
+import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
+import { EmptyState } from '@/components/app/empty-state';
+import { TableSkeleton } from '@/components/app/loading-skeletons';
 
 // Every pattern below mirrors api-server/src/lib/billingProfile.ts so a bad
 // value is caught in the form instead of coming back as a toast. When one side
@@ -213,25 +217,32 @@ export default function Warehouses() {
   return (
     <AppLayout>
       <div className="space-y-6">
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><Warehouse className="w-6 h-6 text-primary" /> Warehouses</h1>
-            <p className="text-muted-foreground mt-1">Regional distribution centres and the billing identity they invoice under</p>
-          </div>
-          <div className="flex gap-2">
-            {perm.canDownload && (
-            <Button variant="outline" size="sm" onClick={() => downloadCSV('warehouses.csv', filtered.map(w => ({
-              Name: w.name, 'Billing Name': (w as any).billingName || '', State: w.state, 'State Code': (w as any).stateCode || '',
-              GSTIN: w.gstNumber || '', FSSAI: (w as any).fssaiNumber || '', City: (w as any).city || '', Pincode: (w as any).pincode || '',
-              Bank: (w as any).bankName || '', 'Account No.': (w as any).bankAccountNumber || '', IFSC: (w as any).ifscCode || '',
-              UPI: (w as any).upiId || '', Contact: w.contactPerson || '', Phone: w.phone || '',
-            })))}>
-              <Download className="w-4 h-4 mr-2" /> Export
-            </Button>
-            )}
-            {perm.canAdd && <Button onClick={openAdd}><Plus className="w-4 h-4 mr-2" /> Add Warehouse</Button>}
-          </div>
-        </div>
+        <PageHeader
+          title="Warehouses"
+          description="Regional distribution centres and the billing identity they invoice under"
+          icon={Warehouse}
+          actions={
+            <>
+              {perm.canDownload && (
+              <Button variant="outline" size="sm" onClick={() => downloadCSV('warehouses.csv', filtered.map(w => ({
+                Name: w.name, 'Billing Name': (w as any).billingName || '', State: w.state, 'State Code': (w as any).stateCode || '',
+                GSTIN: w.gstNumber || '', FSSAI: (w as any).fssaiNumber || '', City: (w as any).city || '', Pincode: (w as any).pincode || '',
+                Bank: (w as any).bankName || '', 'Account No.': (w as any).bankAccountNumber || '', IFSC: (w as any).ifscCode || '',
+                UPI: (w as any).upiId || '', Contact: w.contactPerson || '', Phone: w.phone || '',
+              })))}>
+                <Download className="w-4 h-4 mr-2" /> Export
+              </Button>
+              )}
+              {perm.canAdd && <Button onClick={openAdd}><Plus className="w-4 h-4 mr-2" /> Add Warehouse</Button>}
+            </>
+          }
+        />
+
+        <SummaryCardGrid>
+          <SummaryCard label="Total Warehouses" value={warehouses.length} icon={Warehouse} loading={isLoading} />
+          <SummaryCard label="Billing Complete" value={warehouses.length - incompleteCount} icon={CheckCircle2} tone="positive" loading={isLoading} />
+          <SummaryCard label="Billing Incomplete" value={incompleteCount} icon={AlertTriangle} tone="warning" loading={isLoading} />
+        </SummaryCardGrid>
 
         {incompleteCount > 0 && (
           <div className="flex items-start gap-3 rounded-lg border border-amber-500/40 bg-amber-500/5 px-4 py-3">
@@ -249,6 +260,9 @@ export default function Warehouses() {
             <Input placeholder="Search by name or state..." value={search} onChange={e => setSearch(e.target.value)} className="border-transparent bg-transparent focus-visible:ring-0 max-w-xs max-md:max-w-full" />
           </div>
           <div className="overflow-x-auto">
+          {isLoading ? (
+            <TableSkeleton rows={3} cols={7} />
+          ) : (
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
@@ -262,11 +276,9 @@ export default function Warehouses() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {isLoading ? [...Array(3)].map((_, i) => (
-                <TableRow key={i}><TableCell colSpan={7}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
-              )) : filtered.length === 0 ? (
-                <TableRow><TableCell colSpan={7} className="text-center py-16 text-muted-foreground">
-                  <Warehouse className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No warehouses found</p>
+              {filtered.length === 0 ? (
+                <TableRow><TableCell colSpan={7} className="p-0">
+                  <EmptyState icon={Warehouse} title="No warehouses found" compact />
                 </TableCell></TableRow>
               ) : sorted.map(w => {
                 const gaps = billingGaps(w as any);
@@ -332,6 +344,7 @@ export default function Warehouses() {
               })}
             </TableBody>
           </Table>
+          )}
           </div>
         </div>
       </div>

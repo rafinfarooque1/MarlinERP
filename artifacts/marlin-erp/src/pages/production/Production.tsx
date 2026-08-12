@@ -18,7 +18,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { useForm, useFieldArray } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Plus, Search, Factory, Download, Eye, Calendar, Trash2, Edit2, AlertTriangle, Recycle, ClipboardList } from 'lucide-react';
+import { Plus, Search, Factory, Download, Eye, Calendar, Trash2, Edit2, AlertTriangle, Recycle, ClipboardList, Package, IndianRupee } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV } from '@/lib/download';
@@ -30,6 +30,11 @@ import { useActingLocations, decodeLocation } from '@/lib/useActingLocation';
 import { useDateRange, RangeBar } from '@/pages/reports/shared';
 import { useLocationContext, locationFilterParams } from '@/lib/locationContext';
 import { autoFocusFirst, entryScopeKeyDown, focusAndOpen, useEntryShortcuts } from '@/lib/keyboard-entry';
+import { PageHeader } from '@/components/app/page-header';
+import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
+import { EmptyState } from '@/components/app/empty-state';
+import { TableSkeleton } from '@/components/app/loading-skeletons';
+import { TablePager, useClientPage } from '@/components/ui/table-pager';
 
 const schema = z.object({
   itemId: z.coerce.number().min(1, 'Item required'),
@@ -308,6 +313,13 @@ export default function ProductionList() {
     expiry: (p: any) => p.expiryDate || null,
     materials: (p: any) => p.materialUsed?.length || 0,
   });
+  const { pageRows, pagerProps } = useClientPage(sorted);
+
+  // Summary derived from the already-fetched, filtered rows only.
+  const summaryBatches = filtered.length;
+  const summaryUnits = filtered.reduce((s, p: any) => s + (Number(p.producedQuantity) || 0), 0);
+  const summaryTotalCost = filtered.reduce((s, p: any) => s + (Number((p as any).totalCost) || 0), 0);
+  const summaryWastage = filtered.reduce((s, p: any) => s + (Number((p as any).wastageQty) || 0), 0);
 
   if (!perm.isLoading && !perm.canView) {
     return (
@@ -324,14 +336,11 @@ export default function ProductionList() {
   return (
     <AppLayout>
       <div className="space-y-6">
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-              <Factory className="w-6 h-6 text-primary" /> Production Batches
-            </h1>
-            <p className="text-muted-foreground mt-1">Record finished goods production runs</p>
-          </div>
-          <div className="flex gap-2">
+        <PageHeader
+          title="Production Batches"
+          description="Record finished goods production runs"
+          icon={Factory}
+          actions={<>
             {perm.canDownload && (
               <Button variant="outline" size="sm" onClick={() => downloadCSV('production.csv', filtered.map(p => ({
                 Batch: (p as any).batchNumber || `B-${String(p.id).padStart(4, '0')}`,
@@ -356,8 +365,15 @@ export default function ProductionList() {
                 <Plus className="w-4 h-4 mr-2" /> New Batch
               </Button>
             )}
-          </div>
-        </div>
+          </>}
+        />
+
+        <SummaryCardGrid>
+          <SummaryCard label="Batches" value={summaryBatches.toLocaleString('en-IN')} icon={Factory} tone="info" loading={isLoading} />
+          <SummaryCard label="Units Produced" value={fmtQty(summaryUnits)} icon={Package} tone="positive" loading={isLoading} />
+          <SummaryCard label="Wastage" value={fmtQty(summaryWastage)} icon={Recycle} tone="warning" loading={isLoading} />
+          <SummaryCard label="Total Production Cost" value={inr(summaryTotalCost, false)} icon={IndianRupee} loading={isLoading} />
+        </SummaryCardGrid>
 
         <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
           <div className="p-4 border-b border-border flex flex-wrap items-center gap-2 bg-muted/20">
@@ -365,6 +381,11 @@ export default function ProductionList() {
             <Input placeholder="Search by item..." value={search} onChange={e => setSearch(e.target.value)} className="border-transparent bg-transparent focus-visible:ring-0 max-w-xs max-md:max-w-full" />
             <div className="ml-auto"><RangeBar range={range} /></div>
           </div>
+          {isLoading ? (
+            <TableSkeleton rows={6} cols={locations.isHeadOffice ? 10 : 9} />
+          ) : filtered.length === 0 ? (
+            <EmptyState icon={Factory} title="No production batches yet" hint="Record your first finished-goods production run." />
+          ) : (
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
@@ -381,13 +402,7 @@ export default function ProductionList() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {isLoading ? [...Array(3)].map((_, i) => (
-                <TableRow key={i}><TableCell colSpan={locations.isHeadOffice ? 10 : 9}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
-              )) : filtered.length === 0 ? (
-                <TableRow><TableCell colSpan={locations.isHeadOffice ? 10 : 9} className="text-center py-16 text-muted-foreground">
-                  <Factory className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No production batches yet</p>
-                </TableCell></TableRow>
-              ) : sorted.map(p => (
+              {pageRows.map(p => (
                 <TableRow key={p.id} className="hover:bg-muted/10">
                   <TableCell className="font-mono text-primary font-bold">{(p as any).batchNumber || `B-${String(p.id).padStart(4, '0')}`}</TableCell>
                   <TableCell className="text-sm text-muted-foreground flex items-center gap-1">
@@ -449,13 +464,22 @@ export default function ProductionList() {
               ))}
             </TableBody>
           </Table>
+          )}
+          {!isLoading && filtered.length > 0 && (
+            <div className="px-3 pb-2 border-t border-border">
+              <TablePager {...pagerProps} />
+            </div>
+          )}
         </div>
       </div>
 
       {/* Create Dialog */}
       <Dialog open={isOpen} onOpenChange={setIsOpen}>
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto" onOpenAutoFocus={autoFocusFirst}>
-          <DialogHeader><DialogTitle>Record Production Batch</DialogTitle></DialogHeader>
+          <DialogHeader>
+            <DialogTitle>Record Production Batch</DialogTitle>
+            <DialogDescription>Log a finished-goods run with the materials it consumed.</DialogDescription>
+          </DialogHeader>
           <Form {...form}>
             <form
               ref={scopeRef}

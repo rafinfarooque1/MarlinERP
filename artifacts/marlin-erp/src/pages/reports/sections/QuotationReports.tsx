@@ -14,7 +14,8 @@ import {
 import { useEnabledOutlets } from '@/lib/locationStructure';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Input } from '@/components/ui/input';
-import { Badge } from '@/components/ui/badge';
+import { StatusBadge } from '@/components/app/status-badge';
+import { TablePager } from '@/components/ui/table-pager';
 import { usePermission } from '@/lib/usePermission';
 import { downloadCSV } from '@/lib/download';
 import {
@@ -25,17 +26,6 @@ import {
 
 const STATUSES = ['draft', 'sent', 'accepted', 'rejected', 'expired', 'converted'] as const;
 
-function statusTone(s: string): string {
-  switch (s) {
-    case 'accepted':  return 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20';
-    case 'converted': return 'bg-violet-500/10 text-violet-600 border-violet-500/20';
-    case 'rejected':  return 'bg-red-500/10 text-red-600 border-red-500/20';
-    case 'expired':   return 'bg-amber-500/10 text-amber-600 border-amber-500/20';
-    case 'sent':      return 'bg-sky-500/10 text-sky-600 border-sky-500/20';
-    default:          return 'text-muted-foreground';
-  }
-}
-
 export function QuotationsSection() {
   const perm = usePermission('page:/sales/quotations');
   const range = useDateRange('month');
@@ -44,7 +34,7 @@ export function QuotationsSection() {
   const [customerId, setCustomerId] = useState<string>('all');
   const [salesperson, setSalesperson] = useState('');
   const [page, setPage] = useState(1);
-  const PAGE_SIZE = 50;
+  const [PAGE_SIZE, setPageSize] = useState(50);
 
   const { data: customers = [] } = useListCustomers();
   const { data: warehouses = [], isLoading: whLoading } = useListWarehouses();
@@ -68,7 +58,6 @@ export function QuotationsSection() {
   const { data: pageData, isLoading } = usePaginatedQuotations(page, PAGE_SIZE, filters);
   const rows = pageData?.rows ?? [];
   const total = pageData?.total ?? 0;
-  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   const summary = useMemo(() => {
     const quotedValue = rows.reduce((s, r) => s + Number(r.totalAmount || 0), 0);
@@ -96,7 +85,7 @@ export function QuotationsSection() {
       key: 'status', label: 'Status',
       render: r => (
         <span className="inline-flex items-center gap-1.5">
-          <Badge variant="outline" className={`text-[10px] ${statusTone(r.status)}`}>{titleCase(r.status)}</Badge>
+          <StatusBadge status={r.status} label={titleCase(r.status)} />
           {r.convertedInvoiceNumber && <span className="text-[10px] text-violet-600 font-mono">→ {r.convertedInvoiceNumber}</span>}
         </span>
       ),
@@ -192,16 +181,14 @@ export function QuotationsSection() {
         rowKey={r => r.id}
       />
 
-      {total > PAGE_SIZE && (
-        <div className="flex items-center justify-between text-sm text-muted-foreground">
-          <span>Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, total)} of {total}</span>
-          <div className="flex items-center gap-2">
-            <button className="px-2 py-1 rounded border border-border disabled:opacity-40" disabled={page <= 1} onClick={() => setPage(p => p - 1)}>Prev</button>
-            <span>Page {page}/{totalPages}</span>
-            <button className="px-2 py-1 rounded border border-border disabled:opacity-40" disabled={page >= totalPages} onClick={() => setPage(p => p + 1)}>Next</button>
-          </div>
-        </div>
-      )}
+      <TablePager
+        page={page}
+        pageSize={PAGE_SIZE}
+        total={total}
+        onPageChange={setPage}
+        onPageSizeChange={setPageSize}
+        isFetching={isLoading}
+      />
 
       <p className="text-xs text-muted-foreground">
         Quotations are offers only — none of these figures appear in sales, GST, financial or dashboard reports.

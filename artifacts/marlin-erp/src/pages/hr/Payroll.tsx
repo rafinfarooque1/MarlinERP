@@ -17,12 +17,11 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
-import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import {
   DollarSign, Download, Eye, CheckCircle, Zap, RefreshCw, FileDown,
-  ShieldOff, Pencil, PlusCircle, ChevronDown, ChevronUp, Wallet,
+  ShieldOff, Pencil, PlusCircle, ChevronDown, ChevronUp, Wallet, Search, Users,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
@@ -31,6 +30,11 @@ import { usePermission } from '@/lib/usePermission';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { useOutletsEnabled, useClearOutletSelection } from '@/lib/useFeatureFlags';
 import { useGetMe } from '@workspace/api-client-react';
+import { PageHeader } from '@/components/app/page-header';
+import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
+import { StatusBadge } from '@/components/app/status-badge';
+import { EmptyState } from '@/components/app/empty-state';
+import { TableSkeleton } from '@/components/app/loading-skeletons';
 
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
@@ -56,11 +60,11 @@ async function downloadPayslip(p: { id: number; employeeName?: string; month?: n
 }
 
 function statusBadge(status: string, paidAmt: number, netPay: number) {
-  if (status === 'paid') return <Badge className="bg-emerald-500 text-white">Paid</Badge>;
+  if (status === 'paid') return <StatusBadge status="paid" />;
   if (status === 'approved' && paidAmt > 0 && paidAmt < netPay - 0.005)
-    return <Badge className="bg-yellow-500 text-white">Partial</Badge>;
-  if (status === 'approved') return <Badge className="bg-blue-500 text-white">Approved</Badge>;
-  return <Badge variant="outline">Draft</Badge>;
+    return <StatusBadge status="partial" />;
+  if (status === 'approved') return <StatusBadge status="approved" />;
+  return <StatusBadge status="draft" />;
 }
 
 function fmt(n: number) {
@@ -504,10 +508,12 @@ function AdvancesSection({ isAdmin, employees }: { isAdmin: boolean; employees: 
       </div>
 
       {(advances as any[]).length === 0 ? (
-        <p className="text-sm text-muted-foreground py-4 text-center">No advances recorded</p>
+        <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
+          <EmptyState icon={Wallet} title="No advances recorded" hint="Cash advances appear here once disbursed." compact />
+        </div>
       ) : (
         <>
-          <div className="rounded-lg border overflow-hidden">
+          <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -527,8 +533,8 @@ function AdvancesSection({ isAdmin, employees }: { isAdmin: boolean; employees: 
                     <TableCell className="text-muted-foreground">{a.note ?? '—'}</TableCell>
                     <TableCell>
                       {a.isDeducted
-                        ? <Badge className="bg-emerald-500 text-white text-xs">Deducted</Badge>
-                        : <Badge variant="outline" className="text-xs">Pending</Badge>}
+                        ? <StatusBadge status="settled" label="Deducted" />
+                        : <StatusBadge status="pending" label="Pending" />}
                     </TableCell>
                   </TableRow>
                 ))}
@@ -687,11 +693,54 @@ export default function Payroll() {
 
   return (
     <AppLayout>
-      {/* Header controls */}
-      <div className="flex flex-col gap-4 mb-6">
-        <div className="flex items-center justify-between flex-wrap gap-3">
-          <div className="flex items-center gap-3 flex-wrap">
-            {/* Month / Year selectors */}
+      <div className="space-y-6 mb-6">
+        <PageHeader
+          title="Payroll"
+          description="Monthly salary runs — generate, approve and pay"
+          icon={DollarSign}
+          actions={
+            <>
+              {isAdmin && perm.canAdd && (
+                <>
+                  <Button variant="outline" size="sm" onClick={() => handleGenerate(false)} disabled={generating}>
+                    <Zap className="h-4 w-4 mr-1" />{generating ? 'Generating…' : 'Generate'}
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={() => handleGenerate(true)} disabled={generating}>
+                    <RefreshCw className="h-4 w-4 mr-1" />Regenerate
+                  </Button>
+                </>
+              )}
+              {perm.canDownload && (
+                <Button variant="outline" size="sm" onClick={handleExport}>
+                  <Download className="h-4 w-4 mr-1" />Export
+                </Button>
+              )}
+            </>
+          }
+        />
+
+        {/* Summary strip */}
+        {filtered.length > 0 && (
+          <SummaryCardGrid>
+            <SummaryCard label="Total Employees" value={String(totals.count)} icon={Users} />
+            <SummaryCard label="Total Net Pay" value={fmt(totals.net)} icon={DollarSign} />
+            <SummaryCard label="Total Paid" value={fmt(totals.paid)} icon={Wallet} tone="positive" />
+            <SummaryCard label="Already Accrued Daily" value={fmt(totals.accrued)} sub="In the P&L as it was attended" icon={RefreshCw} tone="info" />
+          </SummaryCardGrid>
+        )}
+
+        {/* Toolbar: search left, filters right */}
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="relative flex-1 min-w-[200px] max-w-xs max-md:max-w-full">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Input
+              placeholder="Search employee…"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              className="pl-9"
+            />
+          </div>
+          <div className="flex items-center gap-3 flex-wrap ml-auto">
             <Select value={month} onValueChange={setMonth}>
               <SelectTrigger className="w-28"><SelectValue /></SelectTrigger>
               <SelectContent>
@@ -715,58 +764,12 @@ export default function Payroll() {
                 </SelectContent>
               </Select>
             )}
-            <Input
-              placeholder="Search employee…"
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              className="w-48 max-md:w-full"
-            />
-          </div>
-          <div className="flex gap-2 flex-wrap">
-            {isAdmin && perm.canAdd && (
-              <>
-                <Button variant="outline" size="sm" onClick={() => handleGenerate(false)} disabled={generating}>
-                  <Zap className="h-4 w-4 mr-1" />{generating ? 'Generating…' : 'Generate'}
-                </Button>
-                <Button variant="outline" size="sm" onClick={() => handleGenerate(true)} disabled={generating}>
-                  <RefreshCw className="h-4 w-4 mr-1" />Regenerate
-                </Button>
-              </>
-            )}
-            {perm.canDownload && (
-            <Button variant="outline" size="sm" onClick={handleExport}>
-              <Download className="h-4 w-4 mr-1" />Export
-            </Button>
-            )}
           </div>
         </div>
-
-        {/* Summary strip */}
-        {filtered.length > 0 && (
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
-            <div className="rounded-lg border bg-card p-3">
-              <p className="text-xs text-muted-foreground">Total Employees</p>
-              <p className="font-semibold text-xl">{totals.count}</p>
-            </div>
-            <div className="rounded-lg border bg-card p-3">
-              <p className="text-xs text-muted-foreground">Total Net Pay</p>
-              <p className="font-semibold text-xl">{fmt(totals.net)}</p>
-            </div>
-            <div className="rounded-lg border bg-card p-3">
-              <p className="text-xs text-muted-foreground">Total Paid</p>
-              <p className="font-semibold text-xl">{fmt(totals.paid)}</p>
-            </div>
-            <div className="rounded-lg border bg-card p-3">
-              <p className="text-xs text-muted-foreground">Already Accrued Daily</p>
-              <p className="font-semibold text-xl">{fmt(totals.accrued)}</p>
-              <p className="text-[11px] text-muted-foreground mt-0.5">In the P&amp;L as it was attended</p>
-            </div>
-          </div>
-        )}
       </div>
 
       {/* Payroll table */}
-      <div className="rounded-lg border overflow-hidden">
+      <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
         <Table>
           <TableHeader>
             <TableRow>
@@ -783,11 +786,17 @@ export default function Payroll() {
           </TableHeader>
           <TableBody>
             {isLoading ? (
-              <TableRow><TableCell colSpan={9} className="text-center py-12 text-muted-foreground">Loading…</TableCell></TableRow>
+              <TableRow><TableCell colSpan={9} className="p-0"><TableSkeleton rows={8} cols={9} /></TableCell></TableRow>
             ) : filtered.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={9} className="text-center py-12 text-muted-foreground">
-                  No payroll records. {isAdmin && <button className="underline text-primary" onClick={() => handleGenerate()}>Generate now</button>}
+                <TableCell colSpan={9} className="p-0">
+                  <EmptyState
+                    icon={DollarSign}
+                    title="No payroll records"
+                    hint={`No payroll for ${MONTHS[Number(month) - 1]} ${year}.`}
+                    action={isAdmin ? <Button size="sm" onClick={() => handleGenerate()}><Zap className="h-4 w-4 mr-1" />Generate now</Button> : undefined}
+                    compact
+                  />
                 </TableCell>
               </TableRow>
             ) : sorted.map((p) => {

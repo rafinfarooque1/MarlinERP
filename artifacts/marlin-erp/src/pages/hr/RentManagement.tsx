@@ -16,7 +16,6 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
-import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import {
   Building2, Download, Printer, BadgeCheck, Wallet, IndianRupee, AlertTriangle,
@@ -29,6 +28,10 @@ import { downloadCSV, printHTML } from '@/lib/download';
 import { usePermission } from '@/lib/usePermission';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { useIsHeadOffice } from '@/lib/productStatus';
+import { PageHeader } from '@/components/app/page-header';
+import { StatusBadge } from '@/components/app/status-badge';
+import { EmptyState } from '@/components/app/empty-state';
+import { TableSkeleton } from '@/components/app/loading-skeletons';
 
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
@@ -70,13 +73,13 @@ const REPORTS: Array<{ key: ReportKey; label: string; hint: string }> = [
 ];
 
 function statusBadge(p: RentPeriod) {
-  if (p.status === 'paid') return <Badge className="bg-emerald-600 hover:bg-emerald-600">Paid</Badge>;
+  if (p.status === 'paid') return <StatusBadge status="paid" />;
   if (p.status === 'approved') {
     return p.paid > 0
-      ? <Badge className="bg-amber-600 hover:bg-amber-600">Part Paid</Badge>
-      : <Badge className="bg-blue-600 hover:bg-blue-600">Approved</Badge>;
+      ? <StatusBadge status="partial" label="Part Paid" />
+      : <StatusBadge status="approved" />;
   }
-  return <Badge variant="secondary">{p.accrualComplete ? 'Awaiting Approval' : 'Accruing'}</Badge>;
+  return <StatusBadge status={p.accrualComplete ? 'awaiting_approval' : 'accruing'} label={p.accrualComplete ? 'Awaiting Approval' : 'Accruing'} />;
 }
 
 export default function RentManagement() {
@@ -354,19 +357,16 @@ export default function RentManagement() {
     <AppLayout>
       <div className="p-6 space-y-6">
         {/* Header */}
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h1 className="text-2xl font-bold flex items-center gap-2">
-              <Building2 className="w-6 h-6 text-primary" /> Rent Management
-            </h1>
-            <p className="text-muted-foreground mt-1">
-              Warehouse rent accrues daily and posts straight to the books — approval releases payment, it does not create the expense.
-            </p>
-          </div>
-          <Button variant="outline" size="sm" onClick={refreshAll}>
-            <RefreshCw className="w-4 h-4 mr-2" /> Refresh
-          </Button>
-        </div>
+        <PageHeader
+          title="Rent Management"
+          description="Warehouse rent accrues daily and posts straight to the books — approval releases payment, it does not create the expense."
+          icon={Building2}
+          actions={
+            <Button variant="outline" size="sm" onClick={refreshAll}>
+              <RefreshCw className="w-4 h-4 mr-2" /> Refresh
+            </Button>
+          }
+        />
 
         {/* Due reminders */}
         {reminders.length > 0 && (
@@ -502,9 +502,9 @@ export default function RentManagement() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {loadingAgr && <TableRow><TableCell colSpan={10} className="text-center py-8 text-muted-foreground">Loading…</TableCell></TableRow>}
+                {loadingAgr && <TableRow><TableCell colSpan={10} className="p-0"><TableSkeleton rows={6} cols={10} /></TableCell></TableRow>}
                 {!loadingAgr && agreements.length === 0 && (
-                  <TableRow><TableCell colSpan={10} className="text-center py-8 text-muted-foreground">No warehouses found.</TableCell></TableRow>
+                  <TableRow><TableCell colSpan={10} className="p-0"><EmptyState icon={Building2} title="No warehouses found" hint="Rent agreements appear here once warehouses exist." compact /></TableCell></TableRow>
                 )}
                 {agreementsSort.sorted.map(a => (
                   <TableRow key={a.warehouseId}>
@@ -525,8 +525,8 @@ export default function RentManagement() {
                     </TableCell>
                     <TableCell>
                       {a.status === 'active'
-                        ? <Badge className="bg-emerald-600 hover:bg-emerald-600">Active</Badge>
-                        : <Badge variant="secondary">Inactive</Badge>}
+                        ? <StatusBadge status="active" />
+                        : <StatusBadge status="inactive" />}
                     </TableCell>
                     <TableCell className="text-right">
                       {perm.canEdit && isHeadOffice && (
@@ -560,10 +560,10 @@ export default function RentManagement() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {loadingPer && <TableRow><TableCell colSpan={9} className="text-center py-8 text-muted-foreground">Loading…</TableCell></TableRow>}
+                {loadingPer && <TableRow><TableCell colSpan={9} className="p-0"><TableSkeleton rows={6} cols={9} /></TableCell></TableRow>}
                 {!loadingPer && periods.length === 0 && (
-                  <TableRow><TableCell colSpan={9} className="text-center py-8 text-muted-foreground">
-                    No rent accrued in {year}. Activate an agreement to start accruing.
+                  <TableRow><TableCell colSpan={9} className="p-0">
+                    <EmptyState icon={CalendarClock} title={`No rent accrued in ${year}`} hint="Activate an agreement to start accruing." compact />
                   </TableCell></TableRow>
                 )}
                 {periodsSort.sorted.map(p => (
@@ -618,7 +618,7 @@ export default function RentManagement() {
               </TableHeader>
               <TableBody>
                 {payments.length === 0 && (
-                  <TableRow><TableCell colSpan={8} className="text-center py-8 text-muted-foreground">No rent payments in {year}.</TableCell></TableRow>
+                  <TableRow><TableCell colSpan={8} className="p-0"><EmptyState icon={Wallet} title={`No rent payments in ${year}`} hint="Payments recorded against approved months will appear here." compact /></TableCell></TableRow>
                 )}
                 {paymentsSort.sorted.map(p => (
                   <TableRow key={p.id}>
@@ -675,7 +675,7 @@ export default function RentManagement() {
               </div>
 
               {reportRows.length === 0 ? (
-                <p className="text-center py-10 text-muted-foreground text-sm">Nothing to show for this selection.</p>
+                <EmptyState icon={FileText} title="Nothing to show" hint="No rows for this report and selection." compact />
               ) : (
                 <div className="overflow-x-auto">
                   <Table>

@@ -10,14 +10,19 @@ import { useAssetCategories, useCreateAssetCategory, useUpdateAssetCategory, typ
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Plus, Search, Edit2, FolderTree } from 'lucide-react';
+import { Plus, Search, Edit2, FolderTree, CheckCircle2 } from 'lucide-react';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { usePermission } from '@/lib/usePermission';
 import { toast } from 'sonner';
+import { TablePager, useClientPage } from '@/components/ui/table-pager';
+import { PageHeader } from '@/components/app/page-header';
+import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
+import { StatusBadge } from '@/components/app/status-badge';
+import { EmptyState } from '@/components/app/empty-state';
+import { TableSkeleton } from '@/components/app/loading-skeletons';
 import { AssetsAccessDenied } from './shared';
 
 export default function AssetCategories() {
@@ -40,6 +45,11 @@ export default function AssetCategories() {
     status: c => c.status,
   });
 
+  const { pageRows, pagerProps } = useClientPage(sorted);
+
+  const allCategories = categories as AssetCategory[];
+  const activeCount = allCategories.filter(c => c.status === 'active').length;
+
   const openAdd = () => { setEditTarget(null); setName(''); setStatus('active'); setIsOpen(true); };
   const openEdit = (c: AssetCategory) => { setEditTarget(c); setName(c.name); setStatus(c.status); setIsOpen(true); };
 
@@ -59,13 +69,17 @@ export default function AssetCategories() {
   return (
     <AppLayout>
       <div className="space-y-6">
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><FolderTree className="w-6 h-6 text-primary" /> Asset Categories</h1>
-            <p className="text-muted-foreground mt-1">Categories asset purchases are classified under. Inactive ones stay on old records but leave the pickers.</p>
-          </div>
-          {perm.canAdd && <Button onClick={openAdd}><Plus className="w-4 h-4 mr-2" /> Add Category</Button>}
-        </div>
+        <PageHeader
+          title="Asset Categories"
+          description="Categories asset purchases are classified under. Inactive ones stay on old records but leave the pickers."
+          icon={FolderTree}
+          actions={perm.canAdd && <Button onClick={openAdd}><Plus className="w-4 h-4 mr-2" /> Add Category</Button>}
+        />
+
+        <SummaryCardGrid>
+          <SummaryCard label="Categories" value={String(allCategories.length)} icon={FolderTree} tone="default" loading={isLoading} />
+          <SummaryCard label="Active" value={String(activeCount)} icon={CheckCircle2} tone="positive" loading={isLoading} />
+        </SummaryCardGrid>
 
         <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
           <div className="p-4 border-b border-border flex items-center gap-2 bg-muted/20">
@@ -82,22 +96,18 @@ export default function AssetCategories() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {isLoading ? [...Array(5)].map((_, i) => (
-                <TableRow key={i}><TableCell colSpan={4}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
-              )) : filtered.length === 0 ? (
-                <TableRow><TableCell colSpan={4} className="text-center py-16 text-muted-foreground">
-                  <FolderTree className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No categories found</p>
+              {isLoading ? (
+                <TableRow><TableCell colSpan={4} className="p-0"><TableSkeleton rows={8} cols={4} /></TableCell></TableRow>
+              ) : filtered.length === 0 ? (
+                <TableRow><TableCell colSpan={4} className="p-0">
+                  <EmptyState icon={FolderTree} title="No categories found" hint="Add a category to classify asset purchases." compact />
                 </TableCell></TableRow>
-              ) : sorted.map(c => (
+              ) : pageRows.map(c => (
                 <TableRow key={c.id} className={`hover:bg-muted/10 ${c.status === 'active' ? '' : 'opacity-60'}`}>
                   <TableCell className="font-medium">{c.name}</TableCell>
                   <TableCell className="text-right font-mono">{Number(c.assetCount ?? 0)}</TableCell>
                   <TableCell>
-                    <Badge variant="outline" className={`text-xs ${c.status === 'active'
-                      ? 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20'
-                      : 'bg-muted text-muted-foreground border-border'}`}>
-                      {c.status === 'active' ? 'Active' : 'Inactive'}
-                    </Badge>
+                    <StatusBadge status={c.status} />
                   </TableCell>
                   <TableCell className="text-right">
                     {perm.canEdit && (
@@ -108,6 +118,9 @@ export default function AssetCategories() {
               ))}
             </TableBody>
           </Table>
+          <div className="px-4 py-2 border-t border-border">
+            <TablePager {...pagerProps} />
+          </div>
         </div>
       </div>
 

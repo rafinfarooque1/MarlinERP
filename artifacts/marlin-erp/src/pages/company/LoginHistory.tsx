@@ -10,6 +10,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Badge } from '@/components/ui/badge';
 import { ShieldCheck, ShieldAlert, Search, ChevronLeft, ChevronRight, Lock, ShieldOff } from 'lucide-react';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
+import { PageHeader } from '@/components/app/page-header';
+import { EmptyState } from '@/components/app/empty-state';
+import { TableSkeleton } from '@/components/app/loading-skeletons';
 
 const REASON_LABELS: Record<string, string> = {
   invalid_credentials: 'Wrong password',
@@ -78,17 +81,11 @@ export default function LoginHistory() {
   return (
     <AppLayout>
       <div className="space-y-6 font-sans">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div>
-            <h1 className="text-2xl font-bold flex items-center gap-2">
-              <ShieldCheck className="w-6 h-6 text-primary" />
-              Login History
-            </h1>
-            <p className="text-sm text-muted-foreground mt-1">
-              Every sign-in attempt — successful or failed — with who, when, and from where.
-            </p>
-          </div>
-        </div>
+        <PageHeader
+          title="Login History"
+          description="Every sign-in attempt — successful or failed — with who, when, and from where."
+          icon={ShieldCheck}
+        />
 
         {/* Active lockouts */}
         {lockedAccounts.length > 0 && (
@@ -135,7 +132,10 @@ export default function LoginHistory() {
         </div>
 
         {/* Table */}
-        <div className="border border-border rounded-lg overflow-hidden">
+        <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
+          {isLoading ? (
+            <TableSkeleton rows={8} cols={6} />
+          ) : (
           <Table>
             <TableHeader>
               <TableRow>
@@ -148,10 +148,12 @@ export default function LoginHistory() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {isLoading ? (
-                <TableRow><TableCell colSpan={6} className="text-center py-10 text-muted-foreground">Loading…</TableCell></TableRow>
-              ) : rows.length === 0 ? (
-                <TableRow><TableCell colSpan={6} className="text-center py-10 text-muted-foreground">No login attempts recorded yet.</TableCell></TableRow>
+              {rows.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={6} className="p-0">
+                    <EmptyState icon={ShieldCheck} title="No login attempts recorded yet." compact />
+                  </TableCell>
+                </TableRow>
               ) : sorted.map(row => (
                 <TableRow key={row.id}>
                   <TableCell className="whitespace-nowrap text-sm">{fmtTime(row.createdAt)}</TableCell>
@@ -181,6 +183,7 @@ export default function LoginHistory() {
               ))}
             </TableBody>
           </Table>
+          )}
         </div>
 
         {/* Pagination */}

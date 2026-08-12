@@ -24,11 +24,17 @@ import { Textarea } from '@/components/ui/textarea';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Plus, Search, Trash2, Download, Landmark, Paperclip } from 'lucide-react';
+import { Plus, Search, Trash2, Download, Landmark, Paperclip, Wallet, Receipt } from 'lucide-react';
 import { usePermission } from '@/lib/usePermission';
 import { toast } from 'sonner';
 import { downloadCSV } from '@/lib/download';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
+import { TablePager, useClientPage } from '@/components/ui/table-pager';
+import { PageHeader } from '@/components/app/page-header';
+import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
+import { EmptyState } from '@/components/app/empty-state';
+import { TableSkeleton } from '@/components/app/loading-skeletons';
+import { EntityCombobox } from '@/components/ui/entity-combobox';
 import { attachmentViewUrl } from '@workspace/api-client-react';
 import { AttachmentField } from '@/components/AttachmentField';
 import { useActingLocations, decodeLocation } from '@/lib/useActingLocation';
@@ -106,6 +112,11 @@ export default function AssetPurchases() {
     payment: p => PAYMENT_MODE_LABELS[p.paymentMode] ?? p.paymentMode,
     voucher: p => p.voucherNumber,
   });
+
+  const { pageRows, pagerProps } = useClientPage(sorted);
+
+  const totalCost = purchases.reduce((s, p) => s + (Number(p.totalCost) || 0), 0);
+  const totalGst = purchases.reduce((s, p) => s + (Number(p.gstAmount) || 0), 0);
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
@@ -204,18 +215,25 @@ export default function AssetPurchases() {
   return (
     <AppLayout>
       <div className="space-y-6">
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><Landmark className="w-6 h-6 text-primary" /> Asset Purchases</h1>
-            <p className="text-muted-foreground mt-1">Capital purchases — posted to Fixed Assets, never to inventory stock.</p>
-          </div>
-          <div className="flex gap-2">
-            {perm.canDownload && (
-              <Button variant="outline" size="sm" onClick={exportCSV}><Download className="w-4 h-4 mr-2" /> Export</Button>
-            )}
-            {perm.canAdd && <Button onClick={openAdd}><Plus className="w-4 h-4 mr-2" /> New Asset Purchase</Button>}
-          </div>
-        </div>
+        <PageHeader
+          title="Asset Purchases"
+          description="Capital purchases — posted to Fixed Assets, never to inventory stock."
+          icon={Landmark}
+          actions={
+            <>
+              {perm.canDownload && (
+                <Button variant="outline" size="sm" onClick={exportCSV}><Download className="w-4 h-4 mr-2" /> Export</Button>
+              )}
+              {perm.canAdd && <Button onClick={openAdd}><Plus className="w-4 h-4 mr-2" /> New Asset Purchase</Button>}
+            </>
+          }
+        />
+
+        <SummaryCardGrid>
+          <SummaryCard label="Purchases" value={String(purchases.length)} icon={Landmark} tone="default" loading={isLoading} />
+          <SummaryCard label="Total GST" value={fmt(totalGst)} icon={Receipt} tone="warning" loading={isLoading} />
+          <SummaryCard label="Total Cost (capitalised)" value={fmt(totalCost)} icon={Wallet} tone="info" loading={isLoading} />
+        </SummaryCardGrid>
 
         <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
           <div className="p-4 border-b border-border flex flex-wrap gap-3 bg-muted/20">
@@ -250,13 +268,13 @@ export default function AssetPurchases() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {isLoading ? [...Array(5)].map((_, i) => (
-                <TableRow key={i}><TableCell colSpan={13}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
-              )) : purchases.length === 0 ? (
-                <TableRow><TableCell colSpan={13} className="text-center py-16 text-muted-foreground">
-                  <Landmark className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No asset purchases recorded</p>
+              {isLoading ? (
+                <TableRow><TableCell colSpan={13} className="p-0"><TableSkeleton rows={8} cols={13} /></TableCell></TableRow>
+              ) : purchases.length === 0 ? (
+                <TableRow><TableCell colSpan={13} className="p-0">
+                  <EmptyState icon={Landmark} title="No asset purchases recorded" hint="Record your first capital purchase." compact />
                 </TableCell></TableRow>
-              ) : sorted.map(p => (
+              ) : pageRows.map(p => (
                 <TableRow key={p.id} className="hover:bg-muted/10">
                   <TableCell className="whitespace-nowrap text-sm">{fmtDate(p.purchaseDate)}</TableCell>
                   <TableCell className="font-mono text-sm font-semibold whitespace-nowrap">{p.assetCode}</TableCell>
@@ -294,6 +312,9 @@ export default function AssetPurchases() {
             </TableBody>
           </Table>
           </div>
+          <div className="px-4 py-2 border-t border-border">
+            <TablePager {...pagerProps} />
+          </div>
         </div>
       </div>
 
@@ -328,13 +349,17 @@ export default function AssetPurchases() {
                 )} />
                 <FormField control={form.control} name="vendorId" render={({ field }) => (
                   <FormItem><FormLabel>Vendor {wMode === 'credit' && <span className="text-destructive">*</span>}</FormLabel>
-                    <Select onValueChange={field.onChange} value={field.value}>
-                      <FormControl><SelectTrigger><SelectValue /></SelectTrigger></FormControl>
-                      <SelectContent>
-                        <SelectItem value="0">— None —</SelectItem>
-                        {(vendors as any[]).map(v => <SelectItem key={v.id} value={String(v.id)}>{v.name}</SelectItem>)}
-                      </SelectContent>
-                    </Select><FormMessage /></FormItem>
+                    <FormControl>
+                      <EntityCombobox
+                        options={(vendors as any[]).map(v => ({ id: v.id, label: v.name }))}
+                        value={Number(field.value) > 0 ? Number(field.value) : null}
+                        onChange={id => field.onChange(String(id ?? 0))}
+                        placeholder="— None —"
+                        searchPlaceholder="Search vendors…"
+                        emptyLabel="No vendors found."
+                        clearable
+                      />
+                    </FormControl><FormMessage /></FormItem>
                 )} />
                 <FormField control={form.control} name="location" render={({ field }) => (
                   <FormItem><FormLabel>Warehouse / Location <span className="text-destructive">*</span></FormLabel>

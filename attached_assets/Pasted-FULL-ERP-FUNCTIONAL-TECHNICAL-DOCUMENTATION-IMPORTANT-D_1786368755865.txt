@@ -1,0 +1,975 @@
+FULL ERP FUNCTIONAL + TECHNICAL DOCUMENTATION
+
+IMPORTANT:
+
+Do NOT modify, delete, migrate, refactor, or fix anything.
+
+This task is READ-ONLY.
+
+I want a complete and extremely detailed understanding of the current ERP before making further changes.
+
+Your job is to inspect the entire ERP — frontend, backend, database, APIs, accounting engine, inventory engine, permissions, reports, workflows and background processes — and create a complete ERP documentation/specification.
+
+Do not assume how something works.
+
+Trace the actual implementation in the code and database and document what the ERP CURRENTLY DOES.
+
+If something is unclear or not implemented, explicitly say:
+
+NOT FOUND
+NOT IMPLEMENTED
+PARTIALLY IMPLEMENTED
+UNCLEAR
+
+Do not guess.
+
+==================================================
+1. ERP OVERVIEW
+==================================================
+
+Explain:
+
+- What the ERP does
+- Main business purpose
+- Architecture
+- Frontend technology
+- Backend technology
+- Database
+- Authentication
+- Authorization
+- Accounting architecture
+- Inventory architecture
+- Multi-location architecture
+- Reporting architecture
+- Import/export architecture
+- Background jobs
+- Audit logging
+
+Explain how all major components communicate.
+
+==================================================
+2. COMPLETE MODULE LIST
+==================================================
+
+Find every module currently implemented.
+
+Document each module individually.
+
+Include at minimum:
+
+Company
+Locations / Warehouses
+Users
+Roles
+Permissions
+Dashboard
+Customers
+Vendors
+Items
+Item Master
+Categories
+Units
+HSN
+GST
+Sales
+Quotations
+Point of Sale
+Purchase
+Purchase Bills
+Sales Returns
+Purchase Returns
+Receipt Vouchers
+Payment Vouchers
+Journal Vouchers
+Expenses
+Cash
+Bank
+Cash & Bank
+Stock
+Inventory
+Stock Transfer
+Production
+Batches
+Assets
+Payroll
+Employees
+Chart of Accounts
+Ledgers
+Customer Ledger
+Vendor Ledger
+Item Ledger
+Trial Balance
+Balance Sheet
+Profit & Loss
+Cash Book
+Bank Book
+Day Book
+Receivables
+Payables
+GST Reports
+B2B
+B2C
+Import
+Export
+Migration
+Month Closing
+Audit Logs
+
+Also identify any modules not listed above.
+
+==================================================
+3. FOR EACH MODULE
+==================================================
+
+For every module explain:
+
+A. Purpose
+
+B. Who can access it
+
+C. Required permissions
+
+D. Main screens
+
+E. Main fields
+
+F. Create process
+
+G. Edit process
+
+H. Delete process
+
+I. Cancel/reverse process
+
+J. Approval process if any
+
+K. Database tables
+
+L. APIs
+
+M. Backend services
+
+N. Accounting impact
+
+O. Inventory impact
+
+P. Customer/Vendor impact
+
+Q. Cash/Bank impact
+
+R. Location impact
+
+S. Reports affected
+
+T. Dashboard impact
+
+U. Audit log impact
+
+V. Important validations
+
+W. Known limitations
+
+==================================================
+4. COMPLETE SALES WORKFLOW
+==================================================
+
+Document the exact current workflow:
+
+Quotation
+→ Sales Order if applicable
+→ Sales Invoice
+→ Payment
+→ Receipt
+→ Customer Ledger
+→ Stock
+→ Inventory Valuation
+→ COGS
+→ GST
+→ Cash/Bank
+→ Reports
+→ Dashboard
+
+Explain every step.
+
+Explain what happens for:
+
+Cash Sale
+Bank Sale
+UPI Sale
+Credit Sale
+Partial Payment
+Walk-in Customer
+Registered Customer
+Discount
+Other Charges
+GST
+B2B
+B2C
+Sales Return
+
+Explain exactly how each accounting entry is generated.
+
+==================================================
+5. POS WORKFLOW
+==================================================
+
+Document POS completely.
+
+Explain:
+
+Customer selection
+Walk-in customer
+Item selection
+Quantity
+MRP
+Selling price
+Discount
+GST
+Other Charges
+Payment
+Cash
+Bank
+UPI
+Credit
+Invoice creation
+Stock deduction
+Ledger posting
+Payment history
+Receipt
+Reports
+
+Explain how POS differs from normal Sales.
+
+Identify duplicated logic between POS and Sales.
+
+==================================================
+6. PURCHASE WORKFLOW
+==================================================
+
+Document:
+
+Purchase Bill
+Vendor
+Items
+Batch
+MFG
+Expiry
+Rate
+Discount
+GST
+Other Charges
+Payment
+Credit Purchase
+Cash Purchase
+Vendor Payable
+Vendor Ledger
+Stock
+Inventory Valuation
+Reports
+
+Explain purchase editing and validation.
+
+==================================================
+7. SALES RETURN
+==================================================
+
+Explain exactly how Sales Return currently works.
+
+Document:
+
+Original invoice lookup
+Returnable quantity
+Rate
+Discount
+GST
+Stock
+Customer balance
+Accounting
+Credit note
+Inventory valuation
+
+Identify whether return pricing comes from:
+
+Original invoice
+or
+Item Master
+
+==================================================
+8. PURCHASE RETURN
+==================================================
+
+Document the same process for Purchase Return.
+
+==================================================
+9. RECEIPT VOUCHER
+==================================================
+
+Explain:
+
+Who can create it
+Customer selection
+Amount
+Cash/Bank
+Location
+Advance
+Invoice allocation
+Ledger posting
+Payment history
+Reports
+
+Explain what happens when:
+
+Receipt > outstanding
+Receipt = outstanding
+Receipt < outstanding
+
+==================================================
+10. PAYMENT VOUCHER
+==================================================
+
+Document complete Payment Voucher workflow.
+
+==================================================
+11. JOURNAL VOUCHER
+==================================================
+
+Explain:
+
+Debit
+Credit
+Ledger selection
+Location
+Validation
+Posting
+Reports
+Trial Balance
+
+==================================================
+12. EXPENSES
+==================================================
+
+Explain:
+
+Expense creation
+Expense account
+Cash/Bank
+Payable
+Location
+Ledger
+P&L
+Dashboard
+
+==================================================
+13. CASH & BANK
+==================================================
+
+For every cash/bank account document:
+
+Creation
+Chart of Accounts mapping
+Location assignment
+Opening balance
+Transactions
+Receipt
+Payment
+Transfer
+Balance
+Ledger
+Cash Book
+Bank Book
+Dashboard
+
+==================================================
+14. CHART OF ACCOUNTS
+==================================================
+
+Document the complete hierarchy.
+
+Explain:
+
+Assets
+Liabilities
+Equity
+Income
+Expenses
+
+Show how customer/vendor/cash/bank/expense/sales/purchase ledgers are connected.
+
+==================================================
+15. LEDGER ARCHITECTURE
+==================================================
+
+This is extremely important.
+
+Explain exactly:
+
+How ledger entries are created.
+
+What table stores them.
+
+What service creates them.
+
+How debit/credit works.
+
+How running balance works.
+
+How opening balance works.
+
+How closing balance works.
+
+How customer ledger works.
+
+How vendor ledger works.
+
+How general ledger works.
+
+How Chart of Accounts gets balances.
+
+Identify whether ANY transaction bypasses the ledger.
+
+==================================================
+16. ACCOUNTING FLOW
+==================================================
+
+Create a complete transaction-to-accounting map.
+
+For every transaction show:
+
+Transaction
+→ Debit
+→ Credit
+→ Ledger
+→ Trial Balance
+→ Balance Sheet/P&L
+
+Include examples.
+
+==================================================
+17. CUSTOMER ACCOUNTING
+==================================================
+
+Explain exactly how customer balances are calculated.
+
+Include:
+
+Opening balance
+Sales
+Receipts
+Advances
+Advance adjustment
+Sales returns
+Credit notes
+Debit notes
+Journal entries
+Payments
+
+Explain whether the system uses:
+
+Customer ledger
+Journal entries
+Invoices
+Separate calculations
+
+as the source of truth.
+
+==================================================
+18. VENDOR ACCOUNTING
+==================================================
+
+Document the same for vendors.
+
+==================================================
+19. INVENTORY
+==================================================
+
+Explain:
+
+Stock quantity
+Batches
+MFG
+Expiry
+FIFO
+COGS
+Inventory valuation
+Purchase
+Sale
+Sales Return
+Purchase Return
+Production
+Transfer
+Adjustment
+
+Explain the exact database flow.
+
+==================================================
+20. LOCATION ARCHITECTURE
+==================================================
+
+Explain how locations work.
+
+Document:
+
+Head Office
+Warehouses
+Users
+Location permissions
+Transaction location
+Accounting location
+Stock location
+Cash location
+Bank location
+Reports
+
+Explain:
+
+Head Office
+Warehouse
+All Locations
+
+and exactly what each filter does.
+
+==================================================
+21. GST
+==================================================
+
+Document GST calculation.
+
+Explain:
+
+Customer state
+Vendor state
+Selling location state
+Receiving location state
+
+Same-state:
+
+CGST + SGST
+
+Different-state:
+
+IGST
+
+Explain where this calculation lives in the backend.
+
+Explain whether POS and Sales share the same GST service.
+
+==================================================
+22. B2B / B2C
+==================================================
+
+Document:
+
+GSTIN detection
+B2B classification
+B2C classification
+Invoice numbering
+Serial generation
+Serial resequencing
+Month closing
+Month reopening
+
+==================================================
+23. MONTH LOCKING
+==================================================
+
+Explain the current month-close functionality.
+
+What becomes locked?
+
+What remains editable?
+
+Who can lock?
+
+Who can unlock?
+
+Does backend enforce locking?
+
+Does frontend enforce locking?
+
+Can background jobs modify locked transactions?
+
+==================================================
+24. PAYROLL
+==================================================
+
+Document:
+
+Employee
+Attendance
+Present
+Half Day
+Absent
+Leave
+Salary calculation
+Payroll
+Salary Expense
+Salary Payable
+Employee Ledger
+Salary Payment
+
+Explain exactly how attendance affects salary.
+
+==================================================
+25. IMPORT / MIGRATION
+==================================================
+
+Document the complete import system.
+
+Explain:
+
+File upload
+Validation
+Preview
+Mapping
+Master matching
+New master creation
+Ledger mapping
+Customer mapping
+Vendor mapping
+Item mapping
+Sales import
+Purchase import
+Receipt import
+Payment import
+Journal import
+Opening balance import
+
+Explain how imported transactions enter accounting.
+
+==================================================
+26. REPORTS
+==================================================
+
+For EVERY report identify:
+
+Data source
+Calculation
+Filters
+Location filtering
+Date filtering
+Opening balance
+Closing balance
+
+Document:
+
+Dashboard
+Trial Balance
+Balance Sheet
+P&L
+Cash Book
+Bank Book
+Day Book
+Customer Ledger
+Vendor Ledger
+Receivables
+Payables
+Sales
+Purchase
+Stock
+GST
+Payroll
+
+==================================================
+27. EDIT / DELETE / REVERSE
+==================================================
+
+Document what happens when every major transaction is:
+
+Created
+Edited
+Deleted
+Cancelled
+Reversed
+
+Explain whether accounting, stock, cash/bank and ledger entries are correctly reversed.
+
+==================================================
+28. PERMISSIONS
+==================================================
+
+Document every role.
+
+Explain exactly what:
+
+Admin
+Head Office user
+Warehouse user
+Other roles
+
+can create, edit, delete, view and approve.
+
+==================================================
+29. DATABASE MAP
+==================================================
+
+Create a database relationship map.
+
+For each important table explain:
+
+Purpose
+Primary key
+Foreign keys
+Important fields
+Related tables
+Transaction relationships
+
+Especially map:
+
+Sales
+Purchases
+Customers
+Vendors
+Ledgers
+Journal Entries
+Payments
+Receipts
+Stock
+Batches
+Locations
+Cash
+Bank
+Payroll
+
+==================================================
+30. API MAP
+==================================================
+
+List the major API endpoints.
+
+For each explain:
+
+Method
+Purpose
+Input
+Output
+Authentication
+Permission
+Database changes
+Accounting effects
+
+==================================================
+31. BACKGROUND JOBS
+==================================================
+
+Identify all:
+
+Scheduled jobs
+Background jobs
+Automatic calculations
+Automatic numbering
+Automatic reconciliation
+Automatic ledger posting
+Automatic GST processing
+Automatic stock processing
+
+Explain what each job changes.
+
+==================================================
+32. CURRENT DATA FLOW
+==================================================
+
+Create diagrams/text flows for:
+
+Sales
+Purchase
+Receipt
+Payment
+Expense
+Journal
+Stock
+Payroll
+Import
+
+Example:
+
+USER
+↓
+FRONTEND
+↓
+API
+↓
+BACKEND SERVICE
+↓
+DATABASE
+↓
+ACCOUNTING ENGINE
+↓
+LEDGER
+↓
+REPORTS
+↓
+DASHBOARD
+
+==================================================
+33. CURRENT BUSINESS RULES
+==================================================
+
+Extract all business rules actually implemented in code.
+
+Do not invent rules.
+
+Examples:
+
+GST rules
+Payment rules
+Credit rules
+Stock rules
+Return rules
+Discount rules
+Location rules
+Month lock rules
+Payroll rules
+Import rules
+Voucher rules
+Serial number rules
+
+==================================================
+34. CURRENT INCONSISTENCIES
+==================================================
+
+Identify:
+
+Duplicate logic
+Missing ledger postings
+Different calculations for same balance
+Frontend/backend differences
+POS/Sales differences
+Report/ledger differences
+Location inconsistencies
+GST inconsistencies
+Import inconsistencies
+Payment-history inconsistencies
+Accounting inconsistencies
+
+Do NOT fix them.
+
+Document them.
+
+==================================================
+35. KNOWN BUGS
+==================================================
+
+Create a complete bug list.
+
+For every bug:
+
+ID
+Module
+Description
+Steps to reproduce
+Expected
+Actual
+Root cause if known
+Severity
+Affected data
+Affected reports
+Recommended solution
+
+==================================================
+36. PRODUCTION VS DEVELOPMENT
+==================================================
+
+Clearly separate:
+
+Production behaviour
+Development behaviour
+Known differences
+Test-only issues
+
+Do not modify production.
+
+==================================================
+37. FINAL ERP SPECIFICATION
+==================================================
+
+At the end produce a clean, human-readable ERP specification.
+
+It should explain:
+
+WHAT the ERP does
+HOW it works
+HOW accounting works
+HOW inventory works
+HOW locations work
+HOW users work
+HOW transactions flow
+HOW reports are generated
+HOW data enters the system
+HOW data exits the system
+HOW everything connects
+
+==================================================
+38. IMPORTANT OUTPUT FORMAT
+==================================================
+
+Create a detailed document:
+
+docs/ERP_COMPLETE_FUNCTIONAL_SPECIFICATION.md
+
+Structure:
+
+1. Executive Summary
+2. Architecture
+3. Module List
+4. User Roles
+5. Location Architecture
+6. Master Data
+7. Sales
+8. POS
+9. Quotations
+10. Purchases
+11. Returns
+12. Receipts
+13. Payments
+14. Journals
+15. Expenses
+16. Cash & Bank
+17. Accounting
+18. Chart of Accounts
+19. Ledgers
+20. Inventory
+21. Production
+22. Payroll
+23. GST
+24. B2B/B2C
+25. Month Locking
+26. Import/Migration
+27. Reports
+28. Permissions
+29. Database
+30. APIs
+31. Background Jobs
+32. Business Rules
+33. Transaction Flow Maps
+34. Known Bugs
+35. Current Limitations
+36. Production Behaviour
+37. Complete End-to-End Example
+38. Final System Summary
+
+==================================================
+39. MOST IMPORTANT
+==================================================
+
+This is a DISCOVERY task.
+
+DO NOT:
+
+- Change code
+- Fix bugs
+- Delete data
+- Migrate data
+- Change database
+- Change accounting
+- Change reports
+- Change permissions
+
+Only inspect and document.
+
+The final document must be detailed enough that a developer who has never seen this ERP can understand the entire system and rebuild or modify the ERP correctly without guessing.
+
+If something cannot be determined from the code/database, clearly mark it as:
+
+"NOT VERIFIED"
+
+instead of guessing.

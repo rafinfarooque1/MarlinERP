@@ -4,7 +4,6 @@ import { usePermission } from '@/lib/usePermission';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -15,6 +14,12 @@ import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { downloadAdvancePDF } from '@/lib/pdfUtils';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
+import { PageHeader } from '@/components/app/page-header';
+import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
+import { StatusBadge } from '@/components/app/status-badge';
+import { EmptyState } from '@/components/app/empty-state';
+import { TableSkeleton } from '@/components/app/loading-skeletons';
+import { TablePager, useClientPage } from '@/components/ui/table-pager';
 
 const fmt = (n: number) =>
   new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 2 }).format(n);
@@ -227,15 +232,12 @@ export default function Advances() {
   if (!perm.isLoading && !perm.canView) {
     return (
       <AppLayout>
-        <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4 text-center">
-          <div className="w-16 h-16 rounded-2xl bg-destructive/10 flex items-center justify-center">
-            <ShieldOff className="w-8 h-8 text-destructive" />
-          </div>
-          <div>
-            <h2 className="text-xl font-bold">Access Denied</h2>
-            <p className="text-muted-foreground mt-1 text-sm">You don't have permission to view this page.</p>
-          </div>
-        </div>
+        <EmptyState
+          icon={ShieldOff}
+          title="Access Denied"
+          hint="You don't have permission to view this page."
+          className="min-h-[60vh]"
+        />
       </AppLayout>
     );
   }
@@ -266,62 +268,50 @@ export default function Advances() {
       : 'Pending',
   });
 
+  const { pageRows, pagerProps } = useClientPage(sorted);
+
   return (
     <AppLayout>
       <div className="space-y-6 max-w-5xl">
 
-        {/* Header */}
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-              <Wallet className="w-6 h-6 text-primary" /> Employee Advances
-            </h1>
-            <p className="text-muted-foreground mt-1 text-sm">
-              Cash advances disbursed to employees — recovered automatically during payroll, or in cash any time.
-            </p>
-          </div>
-          {perm.canAdd && (
+        <PageHeader
+          title="Employee Advances"
+          description="Cash advances disbursed to employees — recovered automatically during payroll, or in cash any time."
+          icon={Wallet}
+          actions={perm.canAdd && (
             <Button onClick={() => setShowNew(true)}>
               <Plus className="w-4 h-4 mr-2" /> New Advance
             </Button>
           )}
-        </div>
+        />
 
         {/* Summary cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <div className="bg-card border border-border rounded-xl p-4 flex items-center gap-4">
-            <div className="w-10 h-10 rounded-lg bg-amber-500/10 flex items-center justify-center shrink-0">
-              <Clock className="w-5 h-5 text-amber-500" />
-            </div>
-            <div>
-              <p className="text-xs text-muted-foreground">Pending Recovery</p>
-              <p className="text-lg font-bold">{fmt(totalPending)}</p>
-              <p className="text-xs text-muted-foreground">{pendingCount} advance{pendingCount !== 1 ? 's' : ''}</p>
-            </div>
-          </div>
-
-          <div className="bg-card border border-border rounded-xl p-4 flex items-center gap-4">
-            <div className="w-10 h-10 rounded-lg bg-green-500/10 flex items-center justify-center shrink-0">
-              <CheckCircle2 className="w-5 h-5 text-green-500" />
-            </div>
-            <div>
-              <p className="text-xs text-muted-foreground">Recovered</p>
-              <p className="text-lg font-bold">{fmt(totalDeducted)}</p>
-              <p className="text-xs text-muted-foreground">{list.filter(a => a.isDeducted).length} advance{list.filter(a => a.isDeducted).length !== 1 ? 's' : ''}</p>
-            </div>
-          </div>
-
-          <div className="bg-card border border-border rounded-xl p-4 flex items-center gap-4">
-            <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
-              <IndianRupee className="w-5 h-5 text-primary" />
-            </div>
-            <div>
-              <p className="text-xs text-muted-foreground">Total Disbursed</p>
-              <p className="text-lg font-bold">{fmt(totalPending + totalDeducted)}</p>
-              <p className="text-xs text-muted-foreground">{list.length} total</p>
-            </div>
-          </div>
-        </div>
+        <SummaryCardGrid className="lg:grid-cols-3">
+          <SummaryCard
+            label="Pending Recovery"
+            value={fmt(totalPending)}
+            sub={`${pendingCount} advance${pendingCount !== 1 ? 's' : ''}`}
+            icon={Clock}
+            tone="warning"
+            loading={isLoading}
+          />
+          <SummaryCard
+            label="Recovered"
+            value={fmt(totalDeducted)}
+            sub={`${list.filter(a => a.isDeducted).length} advance${list.filter(a => a.isDeducted).length !== 1 ? 's' : ''}`}
+            icon={CheckCircle2}
+            tone="positive"
+            loading={isLoading}
+          />
+          <SummaryCard
+            label="Total Disbursed"
+            value={fmt(totalPending + totalDeducted)}
+            sub={`${list.length} total`}
+            icon={IndianRupee}
+            tone="default"
+            loading={isLoading}
+          />
+        </SummaryCardGrid>
 
         {/* Filters */}
         <div className="flex flex-col sm:flex-row gap-3">
@@ -347,19 +337,15 @@ export default function Advances() {
         </div>
 
         {/* Table */}
-        <div className="bg-card border border-border rounded-xl overflow-hidden">
+        <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
           {isLoading ? (
-            <div className="flex items-center justify-center py-16 text-muted-foreground">
-              <Loader2 className="w-5 h-5 animate-spin mr-2" /> Loading…
-            </div>
+            <TableSkeleton rows={8} cols={6} />
           ) : filtered.length === 0 ? (
-            <div className="py-16 text-center text-muted-foreground">
-              <Wallet className="w-10 h-10 mx-auto mb-3 opacity-30" />
-              <p className="font-medium">No advances found</p>
-              <p className="text-sm mt-1">
-                {list.length === 0 ? 'Record the first advance using the button above.' : 'Try adjusting the filters.'}
-              </p>
-            </div>
+            <EmptyState
+              icon={Wallet}
+              title="No advances found"
+              hint={list.length === 0 ? 'Record the first advance using the button above.' : 'Try adjusting the filters.'}
+            />
           ) : (
             <Table>
               <TableHeader>
@@ -373,29 +359,23 @@ export default function Advances() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {sorted.map((a: any) => (
+                {pageRows.map((a: any) => (
                   <TableRow key={a.id}>
                     <TableCell className="font-medium">{a.employeeName}</TableCell>
                     <TableCell className="text-muted-foreground">{fmtDate(a.date)}</TableCell>
-                    <TableCell className="text-right font-mono font-semibold">{fmt(a.amount)}</TableCell>
+                    <TableCell className="text-right font-mono text-sm font-semibold">{fmt(a.amount)}</TableCell>
                     <TableCell className="text-muted-foreground max-w-[220px] truncate">{a.note || '—'}</TableCell>
                     <TableCell>
                       {a.isDeducted ? (
                         // deductedPayrollId set = withheld from a salary run;
                         // null = the employee paid it back in cash/bank.
-                        <Badge variant="outline" className="text-green-600 border-green-200 bg-green-50 dark:bg-green-950/20">
-                          <CheckCircle2 className="w-3 h-3 mr-1" /> {a.deductedPayrollId ? 'Recovered (payroll)' : 'Recovered (cash)'}
-                        </Badge>
+                        <StatusBadge status="recovered" label={a.deductedPayrollId ? 'Recovered (payroll)' : 'Recovered (cash)'} className="bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/25" />
                       ) : a.deductedPayrollId ? (
                         // Reserved by a draft/approved payroll run — recovery
                         // must happen through that run, so no cash button.
-                        <Badge variant="outline" className="text-blue-600 border-blue-200 bg-blue-50 dark:bg-blue-950/20">
-                          <Clock className="w-3 h-3 mr-1" /> In payroll
-                        </Badge>
+                        <StatusBadge status="in_transit" label="In payroll" />
                       ) : (
-                        <Badge variant="outline" className="text-amber-600 border-amber-200 bg-amber-50 dark:bg-amber-950/20">
-                          <Clock className="w-3 h-3 mr-1" /> Pending
-                        </Badge>
+                        <StatusBadge status="pending" label="Pending" />
                       )}
                     </TableCell>
                     <TableCell>
@@ -436,11 +416,7 @@ export default function Advances() {
           )}
         </div>
 
-        {filtered.length > 0 && (
-          <p className="text-xs text-muted-foreground">
-            Showing {filtered.length} of {list.length} advance{list.length !== 1 ? 's' : ''}
-          </p>
-        )}
+        {filtered.length > 0 && <TablePager {...pagerProps} />}
       </div>
 
       {showNew && <NewAdvanceDialog onClose={() => setShowNew(false)} />}

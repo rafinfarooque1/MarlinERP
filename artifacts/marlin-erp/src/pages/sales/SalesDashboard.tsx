@@ -11,7 +11,9 @@ import {
   useListSales, useListStockTransfers, customFetch,
 } from '@workspace/api-client-react';
 import { useAllOutlets, useIsLocationKindEnabled } from '@/lib/locationStructure';
-import { Badge } from '@/components/ui/badge';
+import { PageHeader } from '@/components/app/page-header';
+import { StatusBadge } from '@/components/app/status-badge';
+import { EmptyState } from '@/components/app/empty-state';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
@@ -43,19 +45,15 @@ function fmtDate(d: string) {
 // ── Badges ────────────────────────────────────────────────────────────────────
 
 function PaymentBadge({ status }: { status: string }) {
-  if (status === 'paid')
-    return <Badge className="text-[10px] bg-emerald-500/10 text-emerald-600 border-emerald-500/20">Paid</Badge>;
-  if (status === 'partially_paid')
-    return <Badge className="text-[10px] bg-amber-500/10 text-amber-600 border-amber-500/20">Partial</Badge>;
-  return <Badge className="text-[10px] bg-red-500/10 text-red-600 border-red-500/20">Unpaid</Badge>;
+  if (status === 'paid') return <StatusBadge status="paid" />;
+  if (status === 'partially_paid') return <StatusBadge status="partially_paid" />;
+  return <StatusBadge status="unpaid" />;
 }
 
 function TransferBadge({ status }: { status: string }) {
-  if (status === 'completed')
-    return <Badge className="text-[10px] bg-emerald-500/10 text-emerald-600 border-emerald-500/20">Completed</Badge>;
-  if (status === 'rejected')
-    return <Badge className="text-[10px] bg-red-500/10 text-red-600 border-red-500/20">Rejected</Badge>;
-  return <Badge className="text-[10px] bg-amber-500/10 text-amber-600 border-amber-500/20">In Transit</Badge>;
+  if (status === 'completed') return <StatusBadge status="completed" />;
+  if (status === 'rejected') return <StatusBadge status="rejected" />;
+  return <StatusBadge status="in_transit" />;
 }
 
 // ── Summary Card ──────────────────────────────────────────────────────────────
@@ -312,33 +310,32 @@ export default function SalesDashboard() {
       <div className="p-4 md:p-6 space-y-5 max-w-5xl">
 
         {/* ── Page header ── */}
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-              <TrendingUp className="w-6 h-6 text-primary" /> Dashboard
-            </h1>
-            <p className="text-sm text-muted-foreground mt-0.5 flex items-center gap-1.5">
-              <LocationIcon className="w-3.5 h-3.5" /> {locationName}
-            </p>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <CalendarDays className="w-4 h-4 text-muted-foreground" />
-            <Input
-              type="date"
-              value={selectedDate}
-              max={new Date().toISOString().split('T')[0]}
-              onChange={e => setSelectedDate(e.target.value)}
-              className="h-8 w-40 text-sm"
-            />
-            {selectedDate !== new Date().toISOString().split('T')[0] && (
-              <Button size="sm" variant="ghost" className="h-8 text-xs text-muted-foreground"
-                onClick={() => setSelectedDate(new Date().toISOString().split('T')[0])}>
-                Today
-              </Button>
-            )}
-          </div>
-        </div>
+        <PageHeader
+          title="Dashboard"
+          icon={TrendingUp}
+          actions={
+            <>
+              <CalendarDays className="w-4 h-4 text-muted-foreground" />
+              <Input
+                type="date"
+                value={selectedDate}
+                max={new Date().toISOString().split('T')[0]}
+                onChange={e => setSelectedDate(e.target.value)}
+                className="h-8 w-40 text-sm"
+              />
+              {selectedDate !== new Date().toISOString().split('T')[0] && (
+                <Button size="sm" variant="ghost" className="h-8 text-xs text-muted-foreground"
+                  onClick={() => setSelectedDate(new Date().toISOString().split('T')[0])}>
+                  Today
+                </Button>
+              )}
+            </>
+          }
+        >
+          <p className="text-sm text-muted-foreground flex items-center gap-1.5">
+            <LocationIcon className="w-3.5 h-3.5" /> {locationName}
+          </p>
+        </PageHeader>
 
         {/* ── Summary cards ── */}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -375,10 +372,7 @@ export default function SalesDashboard() {
             {salesLoading ? (
               <div className="py-12 text-center text-muted-foreground text-sm">Loading…</div>
             ) : daySales.length === 0 ? (
-              <div className="py-16 text-center text-muted-foreground space-y-2">
-                <ShoppingCart className="w-10 h-10 mx-auto opacity-20" />
-                <p className="font-medium">No sales on this date</p>
-              </div>
+              <EmptyState icon={ShoppingCart} title="No sales on this date" />
             ) : useGrouped ? (
               /* All-locations or Warehouse+outlets: grouped by location */
               <div>
@@ -474,10 +468,7 @@ export default function SalesDashboard() {
             {transfersLoading ? (
               <div className="py-12 text-center text-muted-foreground text-sm">Loading…</div>
             ) : dayTransfers.length === 0 ? (
-              <div className="py-16 text-center text-muted-foreground space-y-2">
-                <ArrowLeftRight className="w-10 h-10 mx-auto opacity-20" />
-                <p className="font-medium">No transfers on this date</p>
-              </div>
+              <EmptyState icon={ArrowLeftRight} title="No transfers on this date" />
             ) : (
               <>
                 {inTransit > 0 && (
@@ -551,10 +542,7 @@ export default function SalesDashboard() {
             {expensesLoading ? (
               <div className="py-12 text-center text-muted-foreground text-sm">Loading…</div>
             ) : dayExpenses.length === 0 ? (
-              <div className="py-16 text-center text-muted-foreground space-y-2">
-                <Receipt className="w-10 h-10 mx-auto opacity-20" />
-                <p className="font-medium">No expenses on this date</p>
-              </div>
+              <EmptyState icon={Receipt} title="No expenses on this date" />
             ) : useGrouped ? (
               <div>
                 <div className="flex gap-4 px-4 py-3 bg-rose-500/5 border-b border-border text-sm">

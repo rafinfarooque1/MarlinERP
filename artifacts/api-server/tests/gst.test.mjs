@@ -74,6 +74,9 @@ console.log(`  (seller state resolved as: ${companyState})`);
 // One state that is NOT the company's, for the inter-state fixture.
 const otherState = companyState === 'Tamil Nadu' ? 'Kerala' : 'Tamil Nadu';
 
+// Sales created by tests 3–5, cancelled by the cleanup section at the end.
+const cleanupSaleIds = [];
+
 // ── Test 1: Customer state persistence ─────────────────────────────────────
 console.log('\n[1] Customer state persistence');
 
@@ -102,7 +105,7 @@ console.log('\n[2] Vendor state persistence');
 
 const vendor = await post('/vendors', {
   name: `GSTTEST Vendor ${Date.now()}`,
-  gstNumber: '29XYZ1234A1Z9',
+  gstNumber: '29AAICM1234A1Z5',
   state: 'Karnataka',
 });
 assert('Vendor created', !vendor.error, vendor.error);
@@ -129,18 +132,42 @@ if (!outletId || !item) {
   const price = mrp > 0 ? mrp : 100;
   const today = new Date().toISOString().slice(0, 10);
 
+  // Sales attach to PINNED reusable buyers, never to the unique parties from
+  // tests 1–2: customer deletion refuses any customer with sales history
+  // (cancelled included), so a per-run buyer would leak a new master row every
+  // run. The pinned pair is found-or-created by stable name and left in place.
+  const pinnedBuyer = async (name, state) => {
+    const list = await get('/customers');
+    let row = (Array.isArray(list) ? list : []).find(c => c.name === name);
+    if (row && row.state !== state) {
+      await fetch(`${BASE}/customers/${row.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({ state }),
+      });
+      row = await get(`/customers/${row.id}`);
+    }
+    if (!row) {
+      row = await post('/customers', { name, phone: `95${String(Date.now()).slice(-8)}`, state });
+    }
+    return row;
+  };
+  const intraBuyer = await pinnedBuyer('GSTTEST Pinned Same-State Buyer', companyState);
+  const interBuyer = await pinnedBuyer('GSTTEST Pinned Other-State Buyer', otherState);
+
   // ── Test 3: Same-state sale → CGST + SGST ────────────────────────────────
   console.log(`\n[3] Same-state sale (${companyState} customer → ${companyState} company) → CGST + SGST`);
 
   const intraSale = await post('/sales', {
     outletId,
-    customerId: sameStateCustomer.id,
+    customerId: intraBuyer.id,
     saleDate: today,
     paymentMode: 'cash',
     lineItems: [{ itemId: item.id, quantity: 1, unitPrice: price, discount: 0, taxAmount: 0 }],
   });
 
   assert('Intra-state sale created', !intraSale.error, JSON.stringify(intraSale).slice(0, 200));
+  if (!intraSale.error && intraSale.id) cleanupSaleIds.push(intraSale.id);
 
   if (!intraSale.error) {
     const li = intraSale.lineItems?.[0];
@@ -162,13 +189,14 @@ if (!outletId || !item) {
 
   const interSale = await post('/sales', {
     outletId,
-    customerId: otherStateCustomer.id,
+    customerId: interBuyer.id,
     saleDate: today,
     paymentMode: 'upi',
     lineItems: [{ itemId: item.id, quantity: 2, unitPrice: price, discount: 0, taxAmount: 0 }],
   });
 
   assert('Inter-state sale created', !interSale.error, JSON.stringify(interSale).slice(0, 200));
+  if (!interSale.error && interSale.id) cleanupSaleIds.push(interSale.id);
 
   if (!interSale.error) {
     const li = interSale.lineItems?.[0];
@@ -194,6 +222,30 @@ if (!outletId || !item) {
     assert('Invoice FY segment matches sale date FY', fySeg === expectedFy, `got: ${fySeg} expected: ${expectedFy}`);
     assert('Sequential: serial is > 0', parseInt(serialSeg, 10) > 0, `got: ${inv}`);
   }
+}
+
+// ── Cleanup: the suite must leave no per-run fixtures behind ───────────────
+// Sales are cancelled (books-neutral; the rows remain as cancelled history on
+// the PINNED buyers, which are permanent fixtures). The unique parties from
+// tests 1–2 never carry sales, so they must hard-delete — a refusal is a real
+// leak and fails the suite.
+console.log('\n[cleanup] Removing suite fixtures');
+const delReq = async (path) => {
+  const r = await fetch(`${BASE}${path}`, { method: 'DELETE', headers: { Authorization: `Bearer ${authToken}` } });
+  return r.status;
+};
+for (const saleId of cleanupSaleIds) {
+  const c = await post(`/sales/${saleId}/cancel`, {});
+  assert(`Cleanup: sale ${saleId} cancelled`, !c.error, JSON.stringify(c).slice(0, 120));
+}
+for (const [label, id, path] of [
+  ['customer', sameStateCustomer?.id, `/customers/${sameStateCustomer?.id}`],
+  ['customer', otherStateCustomer?.id, `/customers/${otherStateCustomer?.id}`],
+  ['vendor', vendor?.id, `/vendors/${vendor?.id}`],
+]) {
+  if (!id) continue;
+  const status = await delReq(path);
+  assert(`Cleanup: ${label} ${id} deleted`, status === 204, `status ${status}`);
 }
 
 // ── Summary ────────────────────────────────────────────────────────────────

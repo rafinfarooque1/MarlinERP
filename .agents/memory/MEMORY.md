@@ -139,3 +139,9 @@
 - [Accounting month locking](month-locking.md) — absence-of-row = open; ONE 423 helper guards business dates; open-month payments on locked credit sales stay allowed; accepted check-then-lock race.
 - [B2C→B2B invoice reclassification](invoice-reclass.md) — GST save inside the conversion txn; compaction floor = only gaps the conversion opened; trail renames/deletes need UNCONDITIONAL location guards.
 - [Sale overpayment & one-sided entries](sale-overpayment-books.md) — overpayment = natural Cr remainder on CUST- (gross model; explicit leg only on walk-in fallback); sale EDIT is the live producer; prod-only BS gaps = data divergence, query the prod replica for clamp classes.
+- [Item Tracking endpoint](item-tracking-endpoint.md) — lifecycle view derives from SOURCE DOCUMENTS, never stock_ledger; summary buckets exclude cancelled + branch-transfer docs; history lists them flagged.
+- [List pagination & entity pickers](client-pagination-conventions.md) — every list page uses TablePager/useClientPage (or server pageSize); entity Selects become EntityCombobox (cmdk, 200-row cap).
+- [Orphan sales & control fallback](orphan-sales-control-fallback.md) — deleted customer ⇒ receivable derives onto SYS-DEBTORS itself; TB exceeds ageing by exactly the parent's own balance.
+- [Storage locations & placements](storage-placements.md) — additive layer over stock_entries (qty truth); unplaced = site total − Σ placements, derived, never stored; 1-level parent→child nesting.
+- [UI modernization sweep](ui-modernization-sweep.md) — docs/UI_CONVENTIONS.md is the binding page-style contract; page kit in components/app/*; satellite pages gate via permOwner; supersedes "sidebar frozen".
+- [Workspace reset & rollback semantics](workspace-reset-recovery.md) — merge/cancel events revert TRACKED files to HEAD (untracked survive); re-verify wiring by marker greps; surviving tests + pg_dump -s are the recovery contract.

@@ -5,12 +5,17 @@ import { useLocationContext } from '@/lib/locationContext';
 import { useListStock, useListItems, useListStockBatches, type StockBatch } from '@workspace/api-client-react';
 import { useAllOutlets, useIsLocationKindEnabled } from '@/lib/locationStructure';
 import { LocationFilter, parseLocationFilter } from '@/components/ui/LocationFilter';
-import { Package, AlertTriangle, Search, ShieldOff } from 'lucide-react';
+import { Package, AlertTriangle, Search, ShieldOff, Boxes, PackageX } from 'lucide-react';
 import { usePermission } from '@/lib/usePermission';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
+import { PageHeader } from '@/components/app/page-header';
+import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
+import { EmptyState } from '@/components/app/empty-state';
+import { TableSkeleton } from '@/components/app/loading-skeletons';
+import { TablePager, useClientPage } from '@/components/ui/table-pager';
 
 export default function SalesStock() {
   const perm = usePermission('page:/headoffice/stock');
@@ -112,6 +117,14 @@ export default function SalesStock() {
     status: r => r._status,
   });
 
+  const { pageRows, pagerProps } = useClientPage(sorted);
+
+  // Summary figures derive only from the already-fetched (and filtered) rows.
+  const totalUnits = sorted.reduce((s: number, e: any) => s + Number(e.quantity ?? 0), 0);
+  const entriesWithQty = sorted.filter((s: any) => Number(s.quantity) > 0).length;
+  const lowCount = sorted.filter((s: any) => s._status === 'Low').length;
+  const outCount = sorted.filter((s: any) => s._status === 'Out of Stock').length;
+
   const showLocationCol = isAll || isWarehouse;
   const title    = isAll ? 'Stock — All Locations' : `Stock — ${locationName}`;
   const subtitle = isAll
@@ -137,24 +150,22 @@ export default function SalesStock() {
       </AppLayout>
     );
   }
+  const colCount = showLocationCol ? (showExpiryCol ? 7 : 6) : showExpiryCol ? 5 : 4;
   return (
     <AppLayout>
       <div className="space-y-6">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-            <Package className="w-6 h-6 text-primary" />
-            {title}
-          </h1>
-          <p className="text-muted-foreground mt-1">{subtitle}</p>
-        </div>
+        <PageHeader title={title} description={subtitle} icon={Package} />
+
+        <SummaryCardGrid>
+          <SummaryCard label="Stock Entries" value={entriesWithQty.toLocaleString('en-IN')} sub="with quantity on hand" icon={Boxes} loading={isLoading} />
+          <SummaryCard label="Total Units" value={totalUnits.toLocaleString('en-IN')} icon={Package} tone="info" loading={isLoading} />
+          <SummaryCard label="Low Stock" value={lowCount.toLocaleString('en-IN')} sub="below reorder level" icon={AlertTriangle} tone="warning" loading={isLoading} />
+          <SummaryCard label="Out of Stock" value={outCount.toLocaleString('en-IN')} icon={PackageX} tone="negative" loading={isLoading} />
+        </SummaryCardGrid>
 
         <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
           {/* Filter / search bar */}
           <div className="p-3 border-b border-border bg-muted/20 flex flex-wrap items-center gap-2">
-            <LocationFilter
-              value={filterLoc}
-              onChange={v => { setFilterLoc(v); setSearch(''); }}
-            />
             <div className="flex items-center gap-2 flex-1 min-w-[160px]">
               <Search className="w-4 h-4 text-muted-foreground shrink-0" />
               <Input
@@ -164,6 +175,10 @@ export default function SalesStock() {
                 className="border-transparent bg-transparent focus-visible:ring-0 h-8"
               />
             </div>
+            <LocationFilter
+              value={filterLoc}
+              onChange={v => { setFilterLoc(v); setSearch(''); }}
+            />
           </div>
 
           <Table>
@@ -180,21 +195,23 @@ export default function SalesStock() {
             </TableHeader>
             <TableBody>
               {isLoading ? (
-                [...Array(5)].map((_, i) => (
-                  <TableRow key={i}>
-                    <TableCell colSpan={showLocationCol ? 6 : showExpiryCol ? 5 : 4}>
-                      <div className="h-8 bg-muted/30 rounded animate-pulse" />
-                    </TableCell>
-                  </TableRow>
-                ))
-              ) : sorted.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={showLocationCol ? 6 : showExpiryCol ? 5 : 4} className="text-center py-16 text-muted-foreground">
-                    <Package className="w-10 h-10 mx-auto mb-3 opacity-20" />
-                    <p>{isAll ? 'No stock across any location' : `No stock at ${locationName}`}</p>
+                  <TableCell colSpan={colCount} className="p-0">
+                    <TableSkeleton rows={8} cols={colCount} />
                   </TableCell>
                 </TableRow>
-              ) : sorted.map((entry: any, i: number) => {
+              ) : sorted.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={colCount} className="p-0">
+                    <EmptyState
+                      icon={Package}
+                      title={isAll ? 'No stock across any location' : `No stock at ${locationName}`}
+                      hint="Stock entries appear here once inventory is recorded at this location."
+                      compact
+                    />
+                  </TableCell>
+                </TableRow>
+              ) : pageRows.map((entry: any, i: number) => {
                 const item = itemMap.get(entry.itemId);
                 const qty    = Number(entry.quantity ?? 0);
                 const reorder = Number(entry.reorderLevel ?? 10);
@@ -212,7 +229,7 @@ export default function SalesStock() {
                     )}
                     {showLocationCol && (
                       <TableCell>
-                        <Badge variant="outline" className="text-[10px] capitalize">{entry.branchType}</Badge>
+                        <Badge variant="outline" className="text-xs capitalize">{entry.branchType}</Badge>
                       </TableCell>
                     )}
                     <TableCell className="text-sm text-muted-foreground">
@@ -238,13 +255,13 @@ export default function SalesStock() {
                     )}
                     <TableCell>
                       {isEmpty ? (
-                        <Badge variant="destructive" className="text-[10px]">Out of Stock</Badge>
+                        <Badge variant="destructive" className="text-xs">Out of Stock</Badge>
                       ) : isLow ? (
-                        <Badge className="text-[10px] bg-amber-500/10 text-amber-600 border-amber-500/20">
+                        <Badge className="text-xs bg-amber-500/10 text-amber-600 border-amber-500/20">
                           <AlertTriangle className="w-3 h-3 mr-1" />Low
                         </Badge>
                       ) : (
-                        <Badge className="text-[10px] bg-emerald-500/10 text-emerald-600 border-emerald-500/20">
+                        <Badge className="text-xs bg-emerald-500/10 text-emerald-600 border-emerald-500/20">
                           In Stock
                         </Badge>
                       )}
@@ -258,14 +275,16 @@ export default function SalesStock() {
           {sorted.length > 0 && (
             <div className="p-3 border-t border-border flex justify-between text-sm">
               <span className="text-muted-foreground">
-                {sorted.filter((s: any) => Number(s.quantity) > 0).length} stock entries with quantity
+                {entriesWithQty} stock entries with quantity
               </span>
               <span className="font-bold">
-                {sorted.reduce((s: number, e: any) => s + Number(e.quantity ?? 0), 0).toLocaleString('en-IN')} total units
+                {totalUnits.toLocaleString('en-IN')} total units
               </span>
             </div>
           )}
         </div>
+
+        <TablePager {...pagerProps} />
       </div>
     </AppLayout>
   );

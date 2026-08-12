@@ -238,6 +238,14 @@ function Router() {
       <Route path="/headoffice/stock">
         <PermGuard href="/headoffice/stock" pageName="Stock"><Stock /></PermGuard>
       </Route>
+      <Route path="/headoffice/stock/storage">
+        {/* Satellite tab: governed by the Stock page permission */}
+        <PermGuard href="/headoffice/stock" pageName="Storage Locations"><Stock /></PermGuard>
+      </Route>
+      <Route path="/headoffice/stock/tracking">
+        {/* Satellite tab: governed by the Stock page permission */}
+        <PermGuard href="/headoffice/stock" pageName="Item Tracking"><Stock /></PermGuard>
+      </Route>
       <Route path="/headoffice/inventory-reports">
         <PermGuard href="/headoffice/inventory-reports" pageName="Inventory Reports"><InventoryReports /></PermGuard>
       </Route>

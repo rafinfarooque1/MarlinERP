@@ -3,13 +3,17 @@ import { useTrialBalance } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Table, TableBody, TableCell, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
-import { Scale, Download, AlertTriangle, CheckCircle2, XCircle } from 'lucide-react';
+import { Scale, Download, AlertTriangle, CheckCircle2, XCircle, Wallet, TrendingUp } from 'lucide-react';
 import { downloadCSV } from '@/lib/download';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { usePermission } from '@/lib/usePermission';
 import { useLocationContext, locationFilterParams } from '@/lib/locationContext';
+import { PageHeader } from '@/components/app/page-header';
+import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
+import { EmptyState } from '@/components/app/empty-state';
+import { TableSkeleton } from '@/components/app/loading-skeletons';
 
 const inr = (n: number) => `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
 
@@ -49,33 +53,39 @@ export default function TrialBalance() {
   return (
     <AppLayout>
       <div className="space-y-6">
-        <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-              <Scale className="w-6 h-6 text-primary" /> Trial Balance
-            </h1>
-            <p className="text-muted-foreground mt-1">Net debit / credit position of every ledger</p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} className="w-38" placeholder="From" />
-            <span className="text-muted-foreground text-sm">to</span>
-            <Input type="date" value={toDate} onChange={e => setToDate(e.target.value)} className="w-38" />
-            {(fromDate || toDate) && (
-              <Button variant="outline" size="sm" onClick={() => { setFromDate(''); setToDate(''); }}>All time</Button>
-            )}
-            {perm.canDownload && rows.length > 0 && (
-              <Button variant="outline" size="sm" onClick={() => downloadCSV('trial-balance.csv', [
-                ...rows.map(r => ({
-                  Ledger: r.name, Group: r.groupName || '', Type: TYPE_LABEL[r.type ?? ''] ?? r.type ?? '',
-                  Debit: r.debit || '', Credit: r.credit || '',
-                })),
-                { Ledger: 'TOTAL', Group: '', Type: '', Debit: data?.totalDebit ?? 0, Credit: data?.totalCredit ?? 0 },
-              ])}>
-                <Download className="w-4 h-4 mr-2" /> Export
-              </Button>
-            )}
-          </div>
-        </div>
+        <PageHeader
+          title="Trial Balance"
+          description="Net debit / credit position of every ledger"
+          icon={Scale}
+          actions={
+            <div className="flex flex-wrap items-center gap-2">
+              <Input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} className="w-38" placeholder="From" />
+              <span className="text-muted-foreground text-sm">to</span>
+              <Input type="date" value={toDate} onChange={e => setToDate(e.target.value)} className="w-38" />
+              {(fromDate || toDate) && (
+                <Button variant="outline" size="sm" onClick={() => { setFromDate(''); setToDate(''); }}>All time</Button>
+              )}
+              {perm.canDownload && rows.length > 0 && (
+                <Button variant="outline" size="sm" onClick={() => downloadCSV('trial-balance.csv', [
+                  ...rows.map(r => ({
+                    Ledger: r.name, Group: r.groupName || '', Type: TYPE_LABEL[r.type ?? ''] ?? r.type ?? '',
+                    Debit: r.debit || '', Credit: r.credit || '',
+                  })),
+                  { Ledger: 'TOTAL', Group: '', Type: '', Debit: data?.totalDebit ?? 0, Credit: data?.totalCredit ?? 0 },
+                ])}>
+                  <Download className="w-4 h-4 mr-2" /> Export
+                </Button>
+              )}
+            </div>
+          }
+        />
+
+        {rows.length > 0 && (
+          <SummaryCardGrid>
+            <SummaryCard label="Total Debit" value={inr(data?.totalDebit ?? 0)} icon={TrendingUp} tone="info" loading={isLoading} />
+            <SummaryCard label="Total Credit" value={inr(data?.totalCredit ?? 0)} icon={Wallet} tone="info" loading={isLoading} />
+          </SummaryCardGrid>
+        )}
 
         {/* Company-level bucket note — postings with no location dimension
             (journal vouchers, opening balances) sit outside every location
@@ -106,6 +116,11 @@ export default function TrialBalance() {
         )}
 
         <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
+          {isLoading ? (
+            <TableSkeleton rows={6} cols={5} />
+          ) : rows.length === 0 ? (
+            <EmptyState icon={Scale} title="No postings in this period" />
+          ) : (
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
@@ -117,13 +132,7 @@ export default function TrialBalance() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {isLoading ? [...Array(6)].map((_, i) => (
-                <TableRow key={i}><TableCell colSpan={5}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
-              )) : rows.length === 0 ? (
-                <TableRow><TableCell colSpan={5} className="text-center py-16 text-muted-foreground">
-                  <Scale className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No postings in this period</p>
-                </TableCell></TableRow>
-              ) : sorted.map(r => (
+              {sorted.map(r => (
                 <TableRow key={r.ledgerId} className="hover:bg-muted/10">
                   <TableCell className="font-medium text-sm">{r.name}</TableCell>
                   <TableCell className="text-muted-foreground text-sm">{r.groupName || '—'}</TableCell>
@@ -135,16 +144,15 @@ export default function TrialBalance() {
                 </TableRow>
               ))}
             </TableBody>
-            {rows.length > 0 && (
-              <tfoot>
-                <TableRow className="bg-muted/20 border-t-2 border-border hover:bg-muted/20">
-                  <TableCell colSpan={3} className="font-bold">Total</TableCell>
-                  <TableCell className="text-right font-mono font-bold">{inr(data?.totalDebit ?? 0)}</TableCell>
-                  <TableCell className="text-right font-mono font-bold">{inr(data?.totalCredit ?? 0)}</TableCell>
-                </TableRow>
-              </tfoot>
-            )}
+            <tfoot>
+              <TableRow className="bg-muted/20 border-t-2 border-border hover:bg-muted/20">
+                <TableCell colSpan={3} className="font-bold">Total</TableCell>
+                <TableCell className="text-right font-mono font-bold">{inr(data?.totalDebit ?? 0)}</TableCell>
+                <TableCell className="text-right font-mono font-bold">{inr(data?.totalCredit ?? 0)}</TableCell>
+              </TableRow>
+            </tfoot>
           </Table>
+          )}
         </div>
       </div>
     </AppLayout>

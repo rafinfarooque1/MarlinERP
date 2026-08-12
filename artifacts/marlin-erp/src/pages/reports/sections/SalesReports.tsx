@@ -8,6 +8,7 @@ import {
 } from '@workspace/api-client-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
+import { StatusBadge as KitStatusBadge } from '@/components/app/status-badge';
 import { Building2, Store } from 'lucide-react';
 import { usePermission } from '@/lib/usePermission';
 import { downloadCSV } from '@/lib/download';
@@ -237,17 +238,9 @@ function HierarchicalLocationTable({
 }
 
 function StatusBadge({ status }: { status: string }) {
-  const map: Record<string, string> = {
-    paid: 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20',
-    partially_paid: 'bg-amber-500/10 text-amber-600 border-amber-500/20',
-    unpaid: 'bg-red-500/10 text-red-600 border-red-500/20',
-    pending: 'bg-red-500/10 text-red-600 border-red-500/20',
-  };
-  return (
-    <Badge className={`text-[10px] capitalize ${map[status] ?? 'bg-muted/20 text-muted-foreground'}`}>
-      {status?.replace('_', ' ')}
-    </Badge>
-  );
+  // Delegate colour/tone to the shared kit; keep the exact display text this
+  // report has always shown (raw status with a single underscore spaced out).
+  return <KitStatusBadge status={status} label={status?.replace('_', ' ')} className="capitalize" />;
 }
 
 // ── Register ──────────────────────────────────────────────────────────────────

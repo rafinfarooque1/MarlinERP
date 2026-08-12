@@ -11,13 +11,18 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Plus, Search, Ticket, Download, Eye, ShieldOff } from 'lucide-react';
+import { Plus, Search, Ticket, Download, Eye, ShieldOff, CheckCircle2, Percent } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV } from '@/lib/download';
-import { Badge } from '@/components/ui/badge';
 import { usePermission } from '@/lib/usePermission';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
+import { PageHeader } from '@/components/app/page-header';
+import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
+import { StatusBadge } from '@/components/app/status-badge';
+import { EmptyState } from '@/components/app/empty-state';
+import { TableSkeleton } from '@/components/app/loading-skeletons';
+import { TablePager, useClientPage } from '@/components/ui/table-pager';
 
 // Mirrors the coupons table: code, discount_type, discount_value, valid_days.
 // The server derives expiry_date from valid_days at creation time.
@@ -68,6 +73,10 @@ export default function Coupons() {
     expires: c => (c as any).expiryDate,
     status: c => (isActive(c) ? 'Active' : 'Expired'),
   });
+  const { pageRows, pagerProps } = useClientPage(sorted);
+
+  const activeCount = coupons.filter(isActive).length;
+  const totalUsage = coupons.reduce((s, c: any) => s + Number(c.usageCount ?? 0), 0);
 
   if (!perm.isLoading && !perm.canView) {
     return (
@@ -91,30 +100,40 @@ export default function Coupons() {
   return (
     <AppLayout>
       <div className="space-y-6">
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><Ticket className="w-6 h-6 text-primary" /> Coupons</h1>
-            <p className="text-muted-foreground mt-1">Discount codes and promotional offers</p>
-          </div>
-          <div className="flex gap-2">
-            {perm.canDownload && (
-            <Button variant="outline" size="sm" onClick={() => downloadCSV('coupons.csv', (filtered as any[]).map(c => ({ Code: c.code, Type: c.discountType, Value: c.discountValue, ValidDays: c.validDays, Used: c.usageCount ?? 0, ExpiresOn: c.expiryDate ?? '' })))}>
-              <Download className="w-4 h-4 mr-2" /> Export
-            </Button>
-            )}
-            {perm.canAdd && (
-            <Button onClick={() => { form.reset({ code: '', discountType: 'percentage', discountValue: 10, validDays: 30 }); setIsOpen(true); }}>
-              <Plus className="w-4 h-4 mr-2" /> Create Coupon
-            </Button>
-            )}
-          </div>
-        </div>
+        <PageHeader
+          title="Coupons"
+          description="Discount codes and promotional offers"
+          icon={Ticket}
+          actions={
+            <>
+              {perm.canDownload && (
+              <Button variant="outline" size="sm" onClick={() => downloadCSV('coupons.csv', (filtered as any[]).map(c => ({ Code: c.code, Type: c.discountType, Value: c.discountValue, ValidDays: c.validDays, Used: c.usageCount ?? 0, ExpiresOn: c.expiryDate ?? '' })))}>
+                <Download className="w-4 h-4 mr-2" /> Export
+              </Button>
+              )}
+              {perm.canAdd && (
+              <Button onClick={() => { form.reset({ code: '', discountType: 'percentage', discountValue: 10, validDays: 30 }); setIsOpen(true); }}>
+                <Plus className="w-4 h-4 mr-2" /> Create Coupon
+              </Button>
+              )}
+            </>
+          }
+        />
+
+        <SummaryCardGrid>
+          <SummaryCard label="Total Coupons" value={coupons.length} icon={Ticket} loading={isLoading} />
+          <SummaryCard label="Active" value={activeCount} icon={CheckCircle2} tone="positive" loading={isLoading} />
+          <SummaryCard label="Total Redemptions" value={totalUsage} icon={Percent} tone="info" loading={isLoading} />
+        </SummaryCardGrid>
 
         <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
           <div className="p-4 border-b border-border flex items-center gap-2 bg-muted/20">
             <Search className="w-4 h-4 text-muted-foreground" />
             <Input placeholder="Search coupon code..." value={search} onChange={e => setSearch(e.target.value)} className="border-transparent bg-transparent focus-visible:ring-0 max-w-xs max-md:max-w-full" />
           </div>
+          {isLoading ? (
+            <TableSkeleton rows={8} cols={7} />
+          ) : (
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
@@ -128,13 +147,11 @@ export default function Coupons() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {isLoading ? [...Array(3)].map((_, i) => (
-                <TableRow key={i}><TableCell colSpan={7}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
-              )) : filtered.length === 0 ? (
-                <TableRow><TableCell colSpan={7} className="text-center py-16 text-muted-foreground">
-                  <Ticket className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No coupons created</p>
+              {filtered.length === 0 ? (
+                <TableRow><TableCell colSpan={7} className="p-0">
+                  <EmptyState icon={Ticket} title="No coupons created" hint="Create your first discount code to get started." compact />
                 </TableCell></TableRow>
-              ) : sorted.map(c => (
+              ) : pageRows.map(c => (
                 <TableRow key={c.id} className="hover:bg-muted/10">
                   <TableCell className="font-mono font-bold text-primary tracking-wider">{c.code}</TableCell>
                   <TableCell className="font-bold text-emerald-500">
@@ -144,9 +161,7 @@ export default function Coupons() {
                   <TableCell className="text-sm">{(c as any).usageCount ?? 0}</TableCell>
                   <TableCell className="text-sm text-muted-foreground">{(c as any).expiryDate ? new Date((c as any).expiryDate).toLocaleDateString('en-IN') : '—'}</TableCell>
                   <TableCell>
-                    {isActive(c)
-                      ? <Badge className="bg-emerald-500/10 text-emerald-500 border-emerald-500/20">Active</Badge>
-                      : <Badge variant="secondary">Expired</Badge>}
+                    <StatusBadge status={isActive(c) ? 'active' : 'expired'} />
                   </TableCell>
                   <TableCell className="text-right">
                     <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(c)}><Eye className="w-4 h-4" /></Button>
@@ -155,6 +170,12 @@ export default function Coupons() {
               ))}
             </TableBody>
           </Table>
+          )}
+          {!isLoading && filtered.length > 0 && (
+            <div className="px-3 pb-2 border-t border-border">
+              <TablePager {...pagerProps} />
+            </div>
+          )}
         </div>
       </div>
 

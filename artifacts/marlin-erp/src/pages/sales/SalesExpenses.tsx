@@ -10,6 +10,11 @@ import { AccountCombobox } from '@/components/ui/account-combobox';
 import { entryScopeKeyDown, autoFocusFirst, focusField, useEntryShortcuts } from '@/lib/keyboard-entry';
 import { downloadPDFFromEndpoint } from '@/lib/download';
 import { Receipt, Plus, Calendar, Wallet, AlertCircle, Layers, Trash2, Loader2, ShieldOff, AlertTriangle, Printer, Paperclip, Landmark, Clock } from 'lucide-react';
+import { PageHeader } from '@/components/app/page-header';
+import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
+import { EmptyState } from '@/components/app/empty-state';
+import { TableSkeleton } from '@/components/app/loading-skeletons';
+import { TablePager, useClientPage } from '@/components/ui/table-pager';
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
@@ -218,6 +223,7 @@ export default function SalesExpenses() {
     voucher: r => r.voucherNumber,
     amount: r => Number(r.amount),
   });
+  const { pageRows: pagedExpenses, pagerProps } = useClientPage(sortedExpenses);
 
   const cashLedgerName: string | null = isSpecific ? (expenseData?.cashLedgerName ?? null) : null;
 
@@ -374,29 +380,28 @@ export default function SalesExpenses() {
     <AppLayout>
       <div className="space-y-6">
         {/* Header */}
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-              <Receipt className="w-6 h-6 text-primary" />
-              {title}
-            </h1>
-            {subtitle && <p className="text-muted-foreground mt-1 text-sm">{subtitle}</p>}
-            {isSpecific && (
-              <p className="text-muted-foreground mt-1 flex items-center gap-2 text-sm">
-                <Wallet className="w-3.5 h-3.5" />
-                {cashLedgerName ? <>Paid from: <span className="font-medium">{cashLedgerName}</span></> : 'Loading payment source…'}
-              </p>
-            )}
-          </div>
-          {/* Always offered: the form carries its own location, so this works
-              from the All-locations view too — and Bank/Credit expenses do not
-              need the location to have a till. */}
-          {perm.canAdd && locationOptions.length > 0 && (
-            <Button onClick={openAdd}>
-              <Plus className="w-4 h-4 mr-2" /> Add Expense
-            </Button>
+        <PageHeader
+          title={title}
+          icon={Receipt}
+          description={subtitle ?? undefined}
+          actions={
+            /* Always offered: the form carries its own location, so this works
+               from the All-locations view too — and Bank/Credit expenses do not
+               need the location to have a till. */
+            perm.canAdd && locationOptions.length > 0 ? (
+              <Button onClick={openAdd}>
+                <Plus className="w-4 h-4 mr-2" /> Add Expense
+              </Button>
+            ) : undefined
+          }
+        >
+          {isSpecific && (
+            <p className="text-muted-foreground flex items-center gap-2 text-sm">
+              <Wallet className="w-3.5 h-3.5" />
+              {cashLedgerName ? <>Paid from: <span className="font-medium">{cashLedgerName}</span></> : 'Loading payment source…'}
+            </p>
           )}
-        </div>
+        </PageHeader>
 
         {/* No cash ledger warning */}
         {hasCashLedgerError && (
@@ -411,27 +416,15 @@ export default function SalesExpenses() {
           </div>
         )}
 
-        {/* Summary strip */}
+        {/* Summary cards — derived only from the already-fetched expenses. */}
         {expenses.length > 0 && (
-          <div className="bg-card border border-border rounded-xl p-4 flex flex-wrap gap-4 items-center">
-            {showGrouped ? (
-              <>
-                <div className="flex items-center gap-2 text-muted-foreground text-sm">
-                  <Layers className="w-4 h-4" />
-                  <span>{grouped.length} location{grouped.length !== 1 ? 's' : ''}</span>
-                </div>
-                <div className="flex-1" />
-                <span className="text-muted-foreground text-sm">{expenses.length} expense entries</span>
-                <span className="text-xl font-bold text-red-500 font-mono">{fmt(totalExpenses)}</span>
-              </>
-            ) : (
-              <>
-                <span className="text-muted-foreground text-sm">{expenses.length} expense entries</span>
-                <div className="flex-1" />
-                <span className="text-xl font-bold text-red-500 font-mono">{fmt(totalExpenses)}</span>
-              </>
+          <SummaryCardGrid className={showGrouped ? undefined : 'lg:grid-cols-2'}>
+            <SummaryCard label="Total Spent" value={fmt(totalExpenses)} icon={Receipt} tone="negative" loading={isLoading} />
+            <SummaryCard label="Expense Entries" value={expenses.length.toLocaleString('en-IN')} icon={Layers} loading={isLoading} />
+            {showGrouped && (
+              <SummaryCard label="Locations" value={grouped.length.toLocaleString('en-IN')} icon={Wallet} tone="info" loading={isLoading} />
             )}
-          </div>
+          </SummaryCardGrid>
         )}
 
         {/* ── GROUPED VIEW (all / warehouse mode) ───────────────────────── */}
@@ -445,9 +438,8 @@ export default function SalesExpenses() {
                 </div>
               ))
             ) : grouped.length === 0 ? (
-              <div className="text-center py-16 text-muted-foreground bg-card border border-border rounded-xl">
-                <Receipt className="w-10 h-10 mx-auto mb-3 opacity-20" />
-                <p>No expenses recorded</p>
+              <div className="bg-card border border-border rounded-xl">
+                <EmptyState icon={Receipt} title="No expenses recorded" hint="Recorded expenses appear here grouped by location." />
               </div>
             ) : grouped.map(grp => (
               <div key={`${grp.locationType}-${grp.locationId}`} className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
@@ -553,19 +545,18 @@ export default function SalesExpenses() {
               </TableHeader>
               <TableBody>
                 {isLoading ? (
-                  [...Array(3)].map((_, i) => (
-                    <TableRow key={i}>
-                      <TableCell colSpan={perm.canDelete ? 8 : 7}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell>
-                    </TableRow>
-                  ))
-                ) : expenses.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={perm.canDelete ? 8 : 7} className="text-center py-16 text-muted-foreground">
-                      <Receipt className="w-10 h-10 mx-auto mb-3 opacity-20" />
-                      <p>No expenses recorded for {locationName}</p>
+                    <TableCell colSpan={perm.canDelete ? 8 : 7} className="p-0">
+                      <TableSkeleton rows={6} cols={perm.canDelete ? 8 : 7} />
                     </TableCell>
                   </TableRow>
-                ) : sortedExpenses.map((e: any) => (
+                ) : expenses.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={perm.canDelete ? 8 : 7} className="p-0">
+                      <EmptyState icon={Receipt} title={`No expenses recorded for ${locationName}`} hint="Record an expense to see it listed here." compact />
+                    </TableCell>
+                  </TableRow>
+                ) : pagedExpenses.map((e: any) => (
                   <TableRow key={e.id} className="hover:bg-muted/10">
                     <TableCell className="text-sm text-muted-foreground">
                       <div className="flex items-center gap-1">
@@ -623,6 +614,11 @@ export default function SalesExpenses() {
                 ))}
               </TableBody>
             </Table>
+            {expenses.length > 0 && (
+              <div className="px-3 border-t border-border">
+                <TablePager {...pagerProps} />
+              </div>
+            )}
           </div>
         )}
       </div>

@@ -11,8 +11,10 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from '@/components/ui/dialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Lock, LockOpen, ShieldAlert, History, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Lock, LockOpen, ShieldAlert, History, ChevronLeft, ChevronRight, CalendarClock } from 'lucide-react';
 import { toast } from 'sonner';
+import { PageHeader } from '@/components/app/page-header';
+import { EmptyState } from '@/components/app/empty-state';
 
 const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 
@@ -129,24 +131,22 @@ export default function AccountingPeriods() {
   return (
     <AppLayout>
       <div className="space-y-6 max-w-5xl">
-        <div className="flex items-start justify-between gap-4 flex-wrap">
-          <div>
-            <h1 className="text-2xl font-bold">Month Locking</h1>
-            <p className="text-sm text-muted-foreground mt-1">
-              Locking a month freezes it completely — nothing in that month can be added, changed or deleted,
-              and invoice numbers and B2B/B2C classification stay exactly as reported.
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button variant="outline" size="icon" className="h-8 w-8" onClick={() => setFyStartYear(y => y - 1)}>
-              <ChevronLeft className="w-4 h-4" />
-            </Button>
-            <span className="text-sm font-medium tabular-nums">FY {fyStartYear}-{String((fyStartYear + 1) % 100).padStart(2, '0')}</span>
-            <Button variant="outline" size="icon" className="h-8 w-8" onClick={() => setFyStartYear(y => y + 1)}>
-              <ChevronRight className="w-4 h-4" />
-            </Button>
-          </div>
-        </div>
+        <PageHeader
+          title="Month Locking"
+          description="Locking a month freezes it completely — nothing in that month can be added, changed or deleted, and invoice numbers and B2B/B2C classification stay exactly as reported."
+          icon={CalendarClock}
+          actions={
+            <div className="flex items-center gap-2">
+              <Button variant="outline" size="icon" className="h-8 w-8" onClick={() => setFyStartYear(y => y - 1)}>
+                <ChevronLeft className="w-4 h-4" />
+              </Button>
+              <span className="text-sm font-medium tabular-nums">FY {fyStartYear}-{String((fyStartYear + 1) % 100).padStart(2, '0')}</span>
+              <Button variant="outline" size="icon" className="h-8 w-8" onClick={() => setFyStartYear(y => y + 1)}>
+                <ChevronRight className="w-4 h-4" />
+              </Button>
+            </div>
+          }
+        />
 
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {months.map((ym) => {
@@ -201,9 +201,11 @@ export default function AccountingPeriods() {
             <History className="w-4 h-4" /> Lock &amp; Unlock History
           </h2>
           {events.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No months have been locked or unlocked yet.</p>
+            <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
+              <EmptyState icon={History} title="No months have been locked or unlocked yet." compact />
+            </div>
           ) : (
-            <div className="rounded-lg border overflow-x-auto">
+            <div className="bg-card border border-border rounded-xl shadow-sm overflow-x-auto">
               <Table>
                 <TableHeader>
                   <TableRow>

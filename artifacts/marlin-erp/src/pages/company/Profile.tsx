@@ -14,6 +14,7 @@ import { Building2, Save, Loader2, Upload, X, ImageIcon, ShieldOff } from 'lucid
 import { toast } from 'sonner';
 import { StateCombobox } from '@/components/ui/state-combobox';
 import { usePermission } from '@/lib/usePermission';
+import { PageHeader } from '@/components/app/page-header';
 
 const LOGO_KEY = 'marlin_company_logo';
 /**
@@ -274,10 +275,11 @@ export default function Profile() {
   return (
     <AppLayout>
       <div className="space-y-6 max-w-3xl">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><Building2 className="w-6 h-6 text-primary" /> Company Profile</h1>
-          <p className="text-muted-foreground mt-1">Legal information, contact details, and billing configuration</p>
-        </div>
+        <PageHeader
+          title="Company Profile"
+          description="Legal information, contact details, and billing configuration"
+          icon={Building2}
+        />
 
         {/* Logo Upload */}
         <div className="bg-card border border-border rounded-xl p-5 space-y-4">

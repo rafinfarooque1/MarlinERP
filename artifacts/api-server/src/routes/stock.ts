@@ -248,6 +248,44 @@ router.get("/stock", requireModuleView(["page:/", "page:/production/item-master"
     return row;
   });
 
+  // Storage placements ride along on warehouse rows so Live Stock can show
+  // WHERE inside the warehouse each quantity sits (freezer → rack). This is
+  // additive display data only — stock_entries stays the quantity truth and
+  // the unplaced remainder is implicit, never stored. Children render as
+  // "Parent > Child" so a rack is never mistaken for a top-level area.
+  const placedWhIds = [...new Set(
+    enriched.filter(r => String(r.branchType) === 'warehouse').map(r => Number(r.branchId)),
+  )];
+  if (placedWhIds.length) {
+    const { rows: placeRows } = await pool.query(
+      `SELECT sp.warehouse_id, sp.material_type, sp.item_id,
+              sp.storage_location_id, sp.quantity::numeric AS quantity,
+              sl.name, p.name AS parent_name
+         FROM storage_placements sp
+         JOIN storage_locations sl ON sl.id = sp.storage_location_id
+         LEFT JOIN storage_locations p ON p.id = sl.parent_id
+        WHERE sp.warehouse_id = ANY($1::int[])
+        ORDER BY COALESCE(p.name, sl.name), sl.name`,
+      [placedWhIds],
+    );
+    const byKey = new Map<string, unknown[]>();
+    for (const pr of placeRows) {
+      const key = `${pr.warehouse_id}:${pr.material_type}:${pr.item_id}`;
+      const list = byKey.get(key) ?? [];
+      list.push({
+        storageLocationId: pr.storage_location_id,
+        name: pr.parent_name ? `${pr.parent_name} > ${pr.name}` : pr.name,
+        quantity: Number(pr.quantity),
+      });
+      byKey.set(key, list);
+    }
+    for (const row of enriched) {
+      if (String(row.branchType) !== 'warehouse') continue;
+      const list = byKey.get(`${row.branchId}:${row.materialType}:${row.itemId}`);
+      if (list) row.storageLocations = list;
+    }
+  }
+
   if (paginated) {
     // The flag travels with the page so the table can drop its money columns
     // and its footer total. It is a rendering hint, not the control — the

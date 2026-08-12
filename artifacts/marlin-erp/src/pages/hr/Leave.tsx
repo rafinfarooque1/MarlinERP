@@ -26,6 +26,13 @@ import { Badge } from '@/components/ui/badge';
 import { usePermission } from '@/lib/usePermission';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { useOutletsEnabled, useClearOutletSelection } from '@/lib/useFeatureFlags';
+import { PageHeader } from '@/components/app/page-header';
+import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
+import { StatusBadge } from '@/components/app/status-badge';
+import { EmptyState } from '@/components/app/empty-state';
+import { FilterPanel } from '@/components/app/filter-panel';
+import { EntityCombobox } from '@/components/ui/entity-combobox';
+import { TablePager, useClientPage } from '@/components/ui/table-pager';
 
 const schema = z.object({
   employeeId: z.coerce.number().min(1, 'Employee required'),
@@ -39,12 +46,6 @@ type FormValues = z.infer<typeof schema>;
 const LEAVE_TYPE_LABEL: Record<string, string> = {
   sick: 'Sick', casual: 'Casual', annual: 'Annual', other: 'Other',
 };
-
-const statusColor = (s: string) =>
-  s === 'approved' ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20'
-  : s === 'rejected' ? 'bg-red-500/10 text-red-500 border-red-500/20'
-  : s === 'cancelled' ? 'bg-muted text-muted-foreground border-border'
-  : 'bg-amber-500/10 text-amber-500 border-amber-500/20';
 
 /** Plain YYYY-MM-DD → local-safe display; ISO timestamps pass through. */
 const fmtDate = (d?: string | null) => {
@@ -62,22 +63,6 @@ const leaveDays = (l: any) => {
   if (isNaN(from.getTime()) || isNaN(to.getTime())) return '—';
   return String(Math.round((to.getTime() - from.getTime()) / 86400000) + 1);
 };
-
-function SummaryCard({ icon: Icon, label, value, tone }: {
-  icon: any; label: string; value: number; tone: string;
-}) {
-  return (
-    <div className="bg-card border border-border rounded-xl p-4 shadow-sm flex items-center gap-3">
-      <div className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${tone}`}>
-        <Icon className="w-5 h-5" />
-      </div>
-      <div className="min-w-0">
-        <p className="text-2xl font-bold leading-tight">{value}</p>
-        <p className="text-xs text-muted-foreground truncate">{label}</p>
-      </div>
-    </div>
-  );
-}
 
 export default function Leave() {
   const perm = usePermission('page:/hr/attendance');
@@ -214,21 +199,31 @@ export default function Leave() {
     approver: (l: any) => l.approverName,
   });
 
+  const { pageRows, pagerProps } = useClientPage(sorted);
+
+  // Non-default filter values (search stays outside the panel, so excluded).
+  const activeFilterCount =
+    (statusFilter !== 'all' ? 1 : 0) +
+    (typeFilter !== 'all' ? 1 : 0) +
+    (employeeFilter !== 'all' ? 1 : 0) +
+    (branchTypeFilter !== 'all' ? 1 : 0) +
+    (branchLocId !== 'all' ? 1 : 0) +
+    (fromDate ? 1 : 0) +
+    (toDate ? 1 : 0);
+  const clearFilters = () => {
+    setStatusFilter('all'); setTypeFilter('all'); setEmployeeFilter('all');
+    setBranchTypeFilter('all'); setBranchLocId('all'); setFromDate(''); setToDate('');
+  };
+
   if (!perm.isLoading && !perm.canView) {
     return (
       <AppLayout>
-        <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4 text-center">
-          <div className="w-16 h-16 rounded-2xl bg-destructive/10 flex items-center justify-center">
-            <ShieldOff className="w-8 h-8 text-destructive" />
-          </div>
-          <div>
-            <h2 className="text-xl font-bold">Access Denied</h2>
-            <p className="text-muted-foreground mt-1 text-sm">
-              You don't have permission to view this page.<br />
-              Contact your administrator to request access.
-            </p>
-          </div>
-        </div>
+        <EmptyState
+          icon={ShieldOff}
+          title="Access Denied"
+          hint="You don't have permission to view this page. Contact your administrator to request access."
+          className="min-h-[60vh]"
+        />
       </AppLayout>
     );
   }
@@ -236,116 +231,133 @@ export default function Leave() {
   return (
     <AppLayout>
       <div className="space-y-6">
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-              <CalendarOff className="w-6 h-6 text-primary" /> Leave Approvals
+        <PageHeader
+          title="Leave Approvals"
+          description="Review, approve and track employee leave requests"
+          icon={CalendarOff}
+          actions={
+            <>
               {perm.canEdit && cards.pending > 0 && (
-                <Badge className="bg-amber-500/15 text-amber-600 border-amber-500/30 ml-1">
+                <Badge className="bg-amber-500/15 text-amber-600 border-amber-500/30 mr-1">
                   {cards.pending} pending
                 </Badge>
               )}
-            </h1>
-            <p className="text-muted-foreground mt-1">Review, approve and track employee leave requests</p>
-          </div>
-          <div className="flex gap-2">
-            {perm.canDownload && (
-            <Button variant="outline" size="sm" onClick={() => downloadCSV('leaves.csv', filtered.map(l => ({
-              Employee: l.employeeName, 'Employee ID': l.employeeId, Branch: l.branchName ?? '—', Role: l.roleName ?? '—',
-              Type: l.leaveType, From: String(l.fromDate).slice(0, 10), To: String(l.toDate).slice(0, 10), Days: leaveDays(l),
-              Reason: l.reason ?? '', 'Applied On': l.createdAt ? String(l.createdAt).slice(0, 10) : '',
-              Status: l.status, Approver: l.approverName ?? '', 'Decided On': l.approvedAt ? String(l.approvedAt).slice(0, 10) : '',
-            })))}>
-              <Download className="w-4 h-4 mr-2" /> Export
-            </Button>
-            )}
-            {perm.canAdd && <Button onClick={() => { form.reset({ employeeId: myId ?? 0, leaveType: 'casual', startDate: '', endDate: '', reason: '' }); setIsOpen(true); }}><Plus className="w-4 h-4 mr-2" /> Apply Leave</Button>}
-          </div>
-        </div>
+              {perm.canDownload && (
+              <Button variant="outline" size="sm" onClick={() => downloadCSV('leaves.csv', filtered.map(l => ({
+                Employee: l.employeeName, 'Employee ID': l.employeeId, Branch: l.branchName ?? '—', Role: l.roleName ?? '—',
+                Type: l.leaveType, From: String(l.fromDate).slice(0, 10), To: String(l.toDate).slice(0, 10), Days: leaveDays(l),
+                Reason: l.reason ?? '', 'Applied On': l.createdAt ? String(l.createdAt).slice(0, 10) : '',
+                Status: l.status, Approver: l.approverName ?? '', 'Decided On': l.approvedAt ? String(l.approvedAt).slice(0, 10) : '',
+              })))}>
+                <Download className="w-4 h-4 mr-2" /> Export
+              </Button>
+              )}
+              {perm.canAdd && <Button onClick={() => { form.reset({ employeeId: myId ?? 0, leaveType: 'casual', startDate: '', endDate: '', reason: '' }); setIsOpen(true); }}><Plus className="w-4 h-4 mr-2" /> Apply Leave</Button>}
+            </>
+          }
+        />
 
         {/* Summary cards */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-          <SummaryCard icon={Hourglass}     label="Pending requests" value={cards.pending}       tone="bg-amber-500/10 text-amber-600" />
-          <SummaryCard icon={CalendarCheck} label="Approved today"   value={cards.approvedToday} tone="bg-emerald-500/10 text-emerald-600" />
-          <SummaryCard icon={CalendarX}     label="Rejected today"   value={cards.rejectedToday} tone="bg-red-500/10 text-red-600" />
-          <SummaryCard icon={Plane}         label="On leave today"   value={cards.onLeaveToday}  tone="bg-blue-500/10 text-blue-600" />
-          <SummaryCard icon={CalendarClock} label="Upcoming leaves"  value={cards.upcoming}      tone="bg-violet-500/10 text-violet-600" />
-        </div>
+        <SummaryCardGrid className="grid-cols-2 sm:grid-cols-3 lg:grid-cols-5">
+          <SummaryCard icon={Hourglass}     label="Pending requests" value={cards.pending}       tone="warning"  loading={isLoading} />
+          <SummaryCard icon={CalendarCheck} label="Approved today"   value={cards.approvedToday} tone="positive" loading={isLoading} />
+          <SummaryCard icon={CalendarX}     label="Rejected today"   value={cards.rejectedToday} tone="negative" loading={isLoading} />
+          <SummaryCard icon={Plane}         label="On leave today"   value={cards.onLeaveToday}  tone="info"     loading={isLoading} />
+          <SummaryCard icon={CalendarClock} label="Upcoming leaves"  value={cards.upcoming}      tone="default"  loading={isLoading} />
+        </SummaryCardGrid>
 
-        {/* Filters */}
-        <div className="flex flex-wrap gap-2 items-center">
-          <Select value={statusFilter} onValueChange={setStatusFilter}>
-            <SelectTrigger className="h-8 w-36 text-xs"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Status</SelectItem>
-              <SelectItem value="pending">Pending</SelectItem>
-              <SelectItem value="approved">Approved</SelectItem>
-              <SelectItem value="rejected">Rejected</SelectItem>
-              <SelectItem value="cancelled">Cancelled</SelectItem>
-            </SelectContent>
-          </Select>
-          <Select value={typeFilter} onValueChange={setTypeFilter}>
-            <SelectTrigger className="h-8 w-32 text-xs"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Types</SelectItem>
-              <SelectItem value="sick">Sick</SelectItem>
-              <SelectItem value="casual">Casual</SelectItem>
-              <SelectItem value="annual">Annual</SelectItem>
-              <SelectItem value="other">Other</SelectItem>
-            </SelectContent>
-          </Select>
-          <Select value={employeeFilter} onValueChange={setEmployeeFilter}>
-            <SelectTrigger className="h-8 w-44 text-xs"><SelectValue placeholder="All Employees" /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Employees</SelectItem>
-              {(employees as any[]).map(e => <SelectItem key={e.id} value={String(e.id)}>{e.name}</SelectItem>)}
-            </SelectContent>
-          </Select>
-          <Select value={branchTypeFilter} onValueChange={v => { setBranchTypeFilter(v); setBranchLocId('all'); }}>
-            <SelectTrigger className="h-8 w-36 text-xs"><SelectValue placeholder="All Branches" /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Branches</SelectItem>
-              <SelectItem value="headoffice">Head Office</SelectItem>
-              <SelectItem value="warehouse">Warehouse</SelectItem>
-              {outletsEnabled && <SelectItem value="outlet">Outlet</SelectItem>}
-            </SelectContent>
-          </Select>
-          {branchTypeFilter === 'warehouse' && (
-            <Select value={branchLocId} onValueChange={setBranchLocId}>
-              <SelectTrigger className="h-8 w-44 text-xs"><SelectValue placeholder="All Warehouses" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Warehouses</SelectItem>
-                {(warehouses as any[]).map(w => <SelectItem key={w.id} value={String(w.id)}>{w.name}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          )}
-          {branchTypeFilter === 'outlet' && (
-            <Select value={branchLocId} onValueChange={setBranchLocId}>
-              <SelectTrigger className="h-8 w-44 text-xs"><SelectValue placeholder="All Outlets" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Outlets</SelectItem>
-                {(outlets as any[]).map(o => <SelectItem key={o.id} value={String(o.id)}>{o.name}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          )}
-          <div className="flex items-center gap-1.5">
-            <Input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} className="h-8 w-36 text-xs" title="From date" />
-            <span className="text-xs text-muted-foreground">→</span>
-            <Input type="date" value={toDate} onChange={e => setToDate(e.target.value)} className="h-8 w-36 text-xs" title="To date" />
-            {(fromDate || toDate) && (
-              <Button variant="ghost" size="sm" className="h-8 px-2 text-xs" onClick={() => { setFromDate(''); setToDate(''); }}>Clear</Button>
-            )}
+        {/* Toolbar: search left, filters right */}
+        <div className="flex flex-col sm:flex-row gap-3 sm:items-center sm:justify-between">
+          <div className="relative flex-1 max-w-xs">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+            <Input placeholder="Search employee name or ID..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9" />
           </div>
+          <FilterPanel activeCount={activeFilterCount} onClear={clearFilters}>
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-muted-foreground">Status</label>
+              <Select value={statusFilter} onValueChange={setStatusFilter}>
+                <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Status</SelectItem>
+                  <SelectItem value="pending">Pending</SelectItem>
+                  <SelectItem value="approved">Approved</SelectItem>
+                  <SelectItem value="rejected">Rejected</SelectItem>
+                  <SelectItem value="cancelled">Cancelled</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-muted-foreground">Type</label>
+              <Select value={typeFilter} onValueChange={setTypeFilter}>
+                <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Types</SelectItem>
+                  <SelectItem value="sick">Sick</SelectItem>
+                  <SelectItem value="casual">Casual</SelectItem>
+                  <SelectItem value="annual">Annual</SelectItem>
+                  <SelectItem value="other">Other</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-muted-foreground">Employee</label>
+              <EntityCombobox
+                options={(employees as any[]).map(e => ({ id: e.id, label: e.name }))}
+                value={employeeFilter === 'all' ? null : Number(employeeFilter)}
+                onChange={id => setEmployeeFilter(id == null ? 'all' : String(id))}
+                placeholder="All Employees"
+                clearable
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-muted-foreground">Branch</label>
+              <Select value={branchTypeFilter} onValueChange={v => { setBranchTypeFilter(v); setBranchLocId('all'); }}>
+                <SelectTrigger className="h-9 text-sm"><SelectValue placeholder="All Branches" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Branches</SelectItem>
+                  <SelectItem value="headoffice">Head Office</SelectItem>
+                  <SelectItem value="warehouse">Warehouse</SelectItem>
+                  {outletsEnabled && <SelectItem value="outlet">Outlet</SelectItem>}
+                </SelectContent>
+              </Select>
+            </div>
+            {branchTypeFilter === 'warehouse' && (
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-muted-foreground">Warehouse</label>
+                <Select value={branchLocId} onValueChange={setBranchLocId}>
+                  <SelectTrigger className="h-9 text-sm"><SelectValue placeholder="All Warehouses" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Warehouses</SelectItem>
+                    {(warehouses as any[]).map(w => <SelectItem key={w.id} value={String(w.id)}>{w.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+            {branchTypeFilter === 'outlet' && (
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-muted-foreground">Outlet</label>
+                <Select value={branchLocId} onValueChange={setBranchLocId}>
+                  <SelectTrigger className="h-9 text-sm"><SelectValue placeholder="All Outlets" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Outlets</SelectItem>
+                    {(outlets as any[]).map(o => <SelectItem key={o.id} value={String(o.id)}>{o.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-muted-foreground">From date</label>
+              <Input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} className="h-9 text-sm" title="From date" />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-muted-foreground">To date</label>
+              <Input type="date" value={toDate} onChange={e => setToDate(e.target.value)} className="h-9 text-sm" title="To date" />
+            </div>
+          </FilterPanel>
         </div>
 
         {/* Table */}
         <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
-          <div className="p-4 border-b border-border flex flex-wrap gap-3 bg-muted/20">
-            <div className="flex items-center gap-2 flex-1 min-w-[200px]">
-              <Search className="w-4 h-4 text-muted-foreground" />
-              <Input placeholder="Search employee name or ID..." value={search} onChange={e => setSearch(e.target.value)} className="border-transparent bg-transparent focus-visible:ring-0" />
-            </div>
-          </div>
           <div className="overflow-x-auto">
           <Table>
             <TableHeader>
@@ -367,10 +379,10 @@ export default function Leave() {
               {isLoading ? [...Array(3)].map((_, i) => (
                 <TableRow key={i}><TableCell colSpan={11}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
               )) : filtered.length === 0 ? (
-                <TableRow><TableCell colSpan={11} className="text-center py-16 text-muted-foreground">
-                  <CalendarOff className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No leave requests match these filters</p>
+                <TableRow><TableCell colSpan={11} className="p-0">
+                  <EmptyState icon={CalendarOff} title="No leave requests" hint="No leave requests match these filters." compact />
                 </TableCell></TableRow>
-              ) : sorted.map(l => (
+              ) : pageRows.map(l => (
                 <TableRow key={l.id} className="hover:bg-muted/10">
                   <TableCell>
                     <p className="font-semibold leading-tight">{l.employeeName}</p>
@@ -381,9 +393,9 @@ export default function Leave() {
                   <TableCell><Badge variant="outline" className="capitalize text-xs">{LEAVE_TYPE_LABEL[l.leaveType] ?? l.leaveType}</Badge></TableCell>
                   <TableCell className="text-sm whitespace-nowrap">{fmtDate(l.fromDate)}</TableCell>
                   <TableCell className="text-sm whitespace-nowrap">{fmtDate(l.toDate)}</TableCell>
-                  <TableCell className="font-mono font-bold text-primary">{leaveDays(l)}</TableCell>
+                  <TableCell className="font-mono text-sm font-bold text-primary">{leaveDays(l)}</TableCell>
                   <TableCell className="text-sm whitespace-nowrap">{fmtDate(l.createdAt)}</TableCell>
-                  <TableCell><Badge variant="outline" className={`capitalize ${statusColor(l.status || 'pending')}`}>{l.status || 'pending'}</Badge></TableCell>
+                  <TableCell><StatusBadge status={l.status || 'pending'} /></TableCell>
                   <TableCell className="text-sm">
                     {l.approverName ? (
                       <>
@@ -419,6 +431,8 @@ export default function Leave() {
           </Table>
           </div>
         </div>
+
+        {filtered.length > 0 && <TablePager {...pagerProps} />}
       </div>
 
       {/* Apply dialog */}

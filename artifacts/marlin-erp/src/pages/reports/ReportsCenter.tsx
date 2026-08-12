@@ -7,6 +7,8 @@
  */
 import { useLocation } from 'wouter';
 import { AppLayout } from '@/components/layout/AppLayout';
+import { PageHeader } from '@/components/app/page-header';
+import { EmptyState } from '@/components/app/empty-state';
 import { usePermission } from '@/lib/usePermission';
 import {
   FileBarChart2, ShoppingCart, Receipt, Boxes, Factory, Users, Landmark, TrendingUp, Lock,
@@ -69,21 +71,18 @@ export default function ReportsCenter() {
   return (
     <AppLayout>
       <div className="space-y-5">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
-            <FileBarChart2 className="w-5 h-5 text-primary" />
-          </div>
-          <div>
-            <h1 className="text-xl font-bold text-foreground">Reports Center</h1>
-            <p className="text-sm text-muted-foreground">Sales, purchases, inventory, branch transfers, production, parties, financial &amp; profitability — with CSV and PDF export</p>
-          </div>
-        </div>
+        <PageHeader
+          title="Reports Center"
+          description="Sales, purchases, inventory, branch transfers, production, parties, financial & profitability — with CSV and PDF export"
+          icon={FileBarChart2}
+        />
 
         {!isLoading && visibleCats.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-20 text-center gap-3">
-            <Lock className="w-8 h-8 text-muted-foreground" />
-            <p className="text-muted-foreground">You don't have permission to view any reports.<br />Contact your administrator to request access.</p>
-          </div>
+          <EmptyState
+            icon={Lock}
+            title="No reports available"
+            hint="You don't have permission to view any reports. Contact your administrator to request access."
+          />
         ) : (
           <>
             <div className="flex flex-wrap gap-1.5 border-b border-border pb-3">

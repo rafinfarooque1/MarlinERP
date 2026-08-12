@@ -7,7 +7,6 @@ import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
@@ -18,8 +17,14 @@ import { downloadCSV } from '@/lib/download';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { usePermission } from '@/lib/usePermission';
 import { activeProductsWithSelection } from '@/lib/productStatus';
-import { Badge } from '@/components/ui/badge';
 import { useOutletsEnabled } from '@/lib/useFeatureFlags';
+import { PageHeader } from '@/components/app/page-header';
+import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
+import { StatusBadge } from '@/components/app/status-badge';
+import { EmptyState } from '@/components/app/empty-state';
+import { TableSkeleton } from '@/components/app/loading-skeletons';
+import { TablePager, useClientPage } from '@/components/ui/table-pager';
+import { EntityCombobox } from '@/components/ui/entity-combobox';
 
 type LocationType = 'headoffice' | 'warehouse' | 'outlet';
 
@@ -133,6 +138,9 @@ export default function ItemPrices() {
     updatedAt: (ip: any) => ip.updatedAt || null,
   });
 
+  const { pageRows, pagerProps } = useClientPage(sorted);
+  const activePriceCount = filtered.filter((ip: any) => ip._active).length;
+
   const locationTypeIcon = (lt: string) => {
     if (lt === 'warehouse')  return <Warehouse className="w-3.5 h-3.5 inline mr-1 text-blue-500"   />;
     if (lt === 'headoffice') return <Building2  className="w-3.5 h-3.5 inline mr-1 text-violet-500" />;
@@ -154,47 +162,54 @@ export default function ItemPrices() {
   return (
     <AppLayout>
       <div className="space-y-6">
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-              <Tag className="w-6 h-6 text-primary" /> Item Pricing
-            </h1>
-            <p className="text-muted-foreground mt-1">Set location-specific retail prices with optional validity periods</p>
+        <PageHeader
+          title="Item Pricing"
+          description="Set location-specific retail prices with optional validity periods"
+          icon={Tag}
+          actions={
+            <>
+              {perm.canDownload && (
+                <Button variant="outline" size="sm" onClick={() => downloadCSV('item-prices.csv', filtered.map((ip: any) => ({
+                  Item: ip.itemName, Location: ip.outletName, Type: ip.locationType,
+                  'Price ₹': ip.price, 'Valid From': ip.validFrom || '', 'Valid To': ip.validTo || '',
+                })))}>
+                  <Download className="w-4 h-4 mr-2" /> Export
+                </Button>
+              )}
+              {perm.canAdd && (
+                <Button onClick={() => openSet()}><Plus className="w-4 h-4 mr-2" /> Set Price</Button>
+              )}
+            </>
+          }
+        />
+
+        <SummaryCardGrid>
+          <SummaryCard label="Price Rules" value={itemPrices.length.toLocaleString('en-IN')} icon={Tag} loading={isLoading} />
+          <SummaryCard label="Active Now" value={activePriceCount.toLocaleString('en-IN')} icon={Calendar} tone="positive" loading={isLoading} />
+        </SummaryCardGrid>
+
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex items-center gap-2 flex-1 min-w-[200px]">
+            <Search className="w-4 h-4 text-muted-foreground shrink-0" />
+            <Input placeholder="Search item or location…" value={search} onChange={e => setSearch(e.target.value)} className="max-w-xs" />
           </div>
-          <div className="flex gap-2">
-            {perm.canDownload && (
-              <Button variant="outline" size="sm" onClick={() => downloadCSV('item-prices.csv', filtered.map((ip: any) => ({
-                Item: ip.itemName, Location: ip.outletName, Type: ip.locationType,
-                'Price ₹': ip.price, 'Valid From': ip.validFrom || '', 'Valid To': ip.validTo || '',
-              })))}>
-                <Download className="w-4 h-4 mr-2" /> Export
-              </Button>
-            )}
-            {perm.canAdd && (
-              <Button onClick={() => openSet()}><Plus className="w-4 h-4 mr-2" /> Set Price</Button>
-            )}
-          </div>
+          {/* Every item, including discontinued ones, so historic prices stay
+              reviewable. Id 0 is the "All Items" sentinel — real ids are positive. */}
+          <SearchableItemSelect
+            className="w-44"
+            placeholder="All Items"
+            items={[{ id: 0, name: 'All Items' }, ...items.map((i: any) => ({
+              id: i.id, name: i.name, code: i.itemCode || null,
+            }))]}
+            value={itemFilter === 'all' ? 0 : Number(itemFilter)}
+            onChange={id => setItemFilter(id === 0 ? 'all' : String(id))}
+          />
         </div>
 
         <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
-          <div className="p-4 border-b border-border flex flex-wrap gap-3 bg-muted/20">
-            <div className="flex items-center gap-2 flex-1 min-w-[160px]">
-              <Search className="w-4 h-4 text-muted-foreground" />
-              <Input placeholder="Search item or location…" value={search} onChange={e => setSearch(e.target.value)} className="border-transparent bg-transparent focus-visible:ring-0" />
-            </div>
-            {/* Every item, including discontinued ones, so historic prices stay
-                reviewable. Id 0 is the "All Items" sentinel — real ids are positive. */}
-            <SearchableItemSelect
-              className="w-44"
-              placeholder="All Items"
-              items={[{ id: 0, name: 'All Items' }, ...items.map((i: any) => ({
-                id: i.id, name: i.name, code: i.itemCode || null,
-              }))]}
-              value={itemFilter === 'all' ? 0 : Number(itemFilter)}
-              onChange={id => setItemFilter(id === 0 ? 'all' : String(id))}
-            />
-          </div>
-
+          {isLoading ? (
+            <TableSkeleton rows={8} cols={perm.canEdit ? 7 : 6} />
+          ) : (
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
@@ -208,17 +223,13 @@ export default function ItemPrices() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {isLoading ? [...Array(4)].map((_, i) => (
-                <TableRow key={i}>
-                  <TableCell colSpan={7}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell>
-                </TableRow>
-              )) : filtered.length === 0 ? (
+              {filtered.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center py-16 text-muted-foreground">
-                    <Tag className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No prices configured yet</p>
+                  <TableCell colSpan={7} className="p-0">
+                    <EmptyState icon={Tag} title="No prices configured yet" hint="Set a location-specific price to get started." compact />
                   </TableCell>
                 </TableRow>
-              ) : sorted.map((ip: any, i: number) => {
+              ) : pageRows.map((ip: any, i: number) => {
                 const active = ip._active;
                 return (
                   <TableRow key={i} className="hover:bg-muted/10">
@@ -241,17 +252,14 @@ export default function ItemPrices() {
                       )}
                     </TableCell>
                     <TableCell>
-                      {active
-                        ? <Badge className="bg-emerald-500/10 text-emerald-500 border-emerald-500/20 text-xs">Active</Badge>
-                        : <Badge variant="outline" className="text-xs text-amber-500 border-amber-500/30">Inactive</Badge>
-                      }
+                      <StatusBadge status={active ? 'active' : 'inactive'} label={active ? 'Active' : 'Inactive'} />
                     </TableCell>
                     <TableCell className="text-right text-xs text-muted-foreground">
                       {ip.updatedAt ? new Date(ip.updatedAt).toLocaleDateString('en-IN') : '—'}
                     </TableCell>
                     {perm.canEdit && (
                       <TableCell className="text-right">
-                        <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => openSet(ip)}>
+                        <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" title="Edit price" onClick={() => openSet(ip)}>
                           <Edit2 className="w-4 h-4" />
                         </Button>
                       </TableCell>
@@ -261,7 +269,9 @@ export default function ItemPrices() {
               })}
             </TableBody>
           </Table>
+          )}
         </div>
+        {!isLoading && filtered.length > 0 && <TablePager {...pagerProps} />}
       </div>
 
       {/* ── Set Price Dialog ── */}
@@ -333,19 +343,14 @@ export default function ItemPrices() {
                       {watchedLocationType === 'warehouse' ? 'Warehouse' : 'Outlet'}
                       <span className="text-destructive"> *</span>
                     </FormLabel>
-                    <Select onValueChange={v => field.onChange(Number(v))} value={field.value ? String(field.value) : ''}>
-                      <FormControl>
-                        <SelectTrigger>
-                          <SelectValue placeholder={`Select ${watchedLocationType === 'warehouse' ? 'warehouse' : 'outlet'}`} />
-                        </SelectTrigger>
-                      </FormControl>
-                      <SelectContent>
-                        {watchedLocationType === 'warehouse'
-                          ? warehouses.map((w: any) => <SelectItem key={w.id} value={String(w.id)}>{w.name}</SelectItem>)
-                          : outlets.map((o: any)    => <SelectItem key={o.id} value={String(o.id)}>{o.name}</SelectItem>)
-                        }
-                      </SelectContent>
-                    </Select>
+                    <FormControl>
+                      <EntityCombobox
+                        options={(watchedLocationType === 'warehouse' ? warehouses : outlets).map((l: any) => ({ id: l.id, label: l.name }))}
+                        value={field.value || null}
+                        onChange={id => field.onChange(id ?? 0)}
+                        placeholder={`Select ${watchedLocationType === 'warehouse' ? 'warehouse' : 'outlet'}`}
+                      />
+                    </FormControl>
                     <FormMessage />
                   </FormItem>
                 )} />

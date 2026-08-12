@@ -5,9 +5,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
-import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
-import { Plus, Search, UserCheck, Download, Eye, BookOpen, Pencil, ShieldOff, HandCoins } from 'lucide-react';
+import { Plus, Search, UserCheck, Download, Eye, BookOpen, Pencil, ShieldOff, HandCoins, Users, Wallet } from 'lucide-react';
 import { downloadCSV } from '@/lib/download';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { usePermission } from '@/lib/usePermission';
@@ -16,6 +15,11 @@ import { PartyBalance } from '@/lib/partyBalance';
 import { CollectPaymentDialog } from './CollectPaymentDialog';
 import { CustomerFormDialog } from '@/components/customers/CustomerFormDialog';
 import { usePartyLocations, rowMatchesLocation } from '@/lib/usePartyLocations';
+import { PageHeader } from '@/components/app/page-header';
+import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
+import { EmptyState } from '@/components/app/empty-state';
+import { TableSkeleton } from '@/components/app/loading-skeletons';
+import { TablePager, useClientPage } from '@/components/ui/table-pager';
 
 function CustomerLedger({ customerId }: { customerId: number }) {
   const { data, isLoading } = useGetCustomerLedger(customerId);
@@ -129,6 +133,11 @@ export default function Customers() {
     location: c => (c as any)._locationName,
     balance: c => Number((c as any).outstandingBalance) || null,
   });
+  const { pageRows, pagerProps } = useClientPage(sorted);
+
+  const totalOutstanding = customers.reduce((s, c: any) => s + Number(c.outstandingBalance ?? 0), 0);
+  const withDues = customers.filter((c: any) => Number(c.outstandingBalance ?? 0) > 0.009).length;
+  const inr = (n: number) => `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
 
   if (!perm.isLoading && !perm.canView) {
     return (
@@ -152,22 +161,29 @@ export default function Customers() {
   return (
     <AppLayout>
       <div className="space-y-6">
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><UserCheck className="w-6 h-6 text-primary" /> Customers</h1>
-            <p className="text-muted-foreground mt-1">Registered customer accounts</p>
-          </div>
-          <div className="flex gap-2">
-            {perm.canDownload && (
-            <Button variant="outline" size="sm" onClick={() => downloadCSV('customers.csv', filtered.map(c => ({ Name: c.name, Phone: c.phone || '', Email: c.email || '', State: (c as any).state || '', GST: c.gstNumber || '', Location: loc.nameOf((c as any).locationType ?? (c as any).location_type, (c as any).locationId ?? (c as any).location_id), Address: c.address || '', Balance: c.totalPurchases || 0 })))}>
-              <Download className="w-4 h-4 mr-2" /> Export
-            </Button>
-            )}
-            {perm.canAdd && (
-            <Button onClick={() => { setEditItem(null); setIsOpen(true); }}><Plus className="w-4 h-4 mr-2" /> Add Customer</Button>
-            )}
-          </div>
-        </div>
+        <PageHeader
+          title="Customers"
+          description="Registered customer accounts"
+          icon={UserCheck}
+          actions={
+            <>
+              {perm.canDownload && (
+              <Button variant="outline" size="sm" onClick={() => downloadCSV('customers.csv', filtered.map(c => ({ Name: c.name, Phone: c.phone || '', Email: c.email || '', State: (c as any).state || '', GST: c.gstNumber || '', Location: loc.nameOf((c as any).locationType ?? (c as any).location_type, (c as any).locationId ?? (c as any).location_id), Address: c.address || '', Balance: c.totalPurchases || 0 })))}>
+                <Download className="w-4 h-4 mr-2" /> Export
+              </Button>
+              )}
+              {perm.canAdd && (
+              <Button onClick={() => { setEditItem(null); setIsOpen(true); }}><Plus className="w-4 h-4 mr-2" /> Add Customer</Button>
+              )}
+            </>
+          }
+        />
+
+        <SummaryCardGrid>
+          <SummaryCard label="Total Customers" value={customers.length} icon={Users} loading={isLoading} />
+          <SummaryCard label="With Dues" value={withDues} icon={UserCheck} tone="warning" loading={isLoading} />
+          <SummaryCard label="Total Outstanding" value={inr(totalOutstanding)} icon={Wallet} tone="negative" loading={isLoading} />
+        </SummaryCardGrid>
 
         <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
           <div className="p-4 border-b border-border flex flex-col sm:flex-row sm:items-center gap-2 bg-muted/20">
@@ -188,6 +204,9 @@ export default function Customers() {
             </Select>
           </div>
           <div className="hidden md:block">
+          {isLoading ? (
+            <TableSkeleton rows={8} cols={7} />
+          ) : (
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
@@ -201,13 +220,11 @@ export default function Customers() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {isLoading ? [...Array(3)].map((_, i) => (
-                <TableRow key={i}><TableCell colSpan={7}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
-              )) : filtered.length === 0 ? (
-                <TableRow><TableCell colSpan={7} className="text-center py-16 text-muted-foreground">
-                  <UserCheck className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>{customers.length === 0 ? 'No customers yet' : 'No customers match this search or location'}</p>
+              {filtered.length === 0 ? (
+                <TableRow><TableCell colSpan={7} className="p-0">
+                  <EmptyState icon={UserCheck} title={customers.length === 0 ? 'No customers yet' : 'No customers match this search or location'} hint={customers.length === 0 ? 'Add your first customer account.' : undefined} compact />
                 </TableCell></TableRow>
-              ) : sorted.map(c => (
+              ) : pageRows.map(c => (
                 <TableRow key={c.id} className="hover:bg-muted/10">
                   <TableCell className="font-semibold">{c.name}</TableCell>
                   <TableCell className="text-sm text-muted-foreground">{c.phone || '—'}</TableCell>
@@ -230,6 +247,7 @@ export default function Customers() {
               ))}
             </TableBody>
           </Table>
+          )}
           </div>
 
           {/* Mobile cards */}
@@ -237,10 +255,8 @@ export default function Customers() {
             {isLoading ? [...Array(3)].map((_, i) => (
               <div key={i} className="h-20 bg-muted/30 rounded-lg animate-pulse" />
             )) : filtered.length === 0 ? (
-              <div className="text-center py-16 text-muted-foreground">
-                <UserCheck className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>{customers.length === 0 ? 'No customers yet' : 'No customers match this search or location'}</p>
-              </div>
-            ) : sorted.map(c => (
+              <EmptyState icon={UserCheck} title={customers.length === 0 ? 'No customers yet' : 'No customers match this search or location'} hint={customers.length === 0 ? 'Add your first customer account.' : undefined} compact />
+            ) : pageRows.map(c => (
               <div key={c.id} className="border border-border rounded-lg p-3">
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
@@ -266,6 +282,12 @@ export default function Customers() {
               </div>
             ))}
           </div>
+
+          {!isLoading && filtered.length > 0 && (
+            <div className="px-3 pb-2 border-t border-border">
+              <TablePager {...pagerProps} />
+            </div>
+          )}
         </div>
       </div>
 

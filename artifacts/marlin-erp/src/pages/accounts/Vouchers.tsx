@@ -35,6 +35,12 @@ import { downloadVoucherPDF } from '@/lib/pdfUtils';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { useVoucherLocationChoice, parseLocKey, LocationSelectField } from '@/lib/voucherLocation';
 import { SystemReceiptDeleteDialog } from '@/components/accounts/SystemReceiptDeleteDialog';
+import { PageHeader } from '@/components/app/page-header';
+import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
+import { EmptyState } from '@/components/app/empty-state';
+import { TableSkeleton } from '@/components/app/loading-skeletons';
+import { TablePager, useClientPage } from '@/components/ui/table-pager';
+import { FileStack, Sigma } from 'lucide-react';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 const inr = (n: number) => `₹${Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
@@ -888,6 +894,8 @@ export default function Vouchers() {
 
   const total = useMemo(() => filtered.reduce((s, r) => s + r.amount, 0), [filtered]);
 
+  const { pageRows, pagerProps } = useClientPage(sorted);
+
   const canView = perm.canView || permPay.canView;
   const canAdd  = perm.canAdd  || permPay.canAdd;
   const canDel  = perm.canDelete || permPay.canDelete;
@@ -918,27 +926,30 @@ export default function Vouchers() {
   return (
     <AppLayout>
       <div className="space-y-5">
-        {/* Header */}
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-              <ReceiptText className="w-6 h-6 text-primary" /> Vouchers
-            </h1>
-            <p className="text-muted-foreground mt-0.5 text-sm">All accounting vouchers in one place</p>
-          </div>
-          <div className="flex gap-2">
-            {canDownload && (
-            <Button variant="outline" size="sm" onClick={handleExport}>
-              <Download className="w-4 h-4 mr-1" /> Export
-            </Button>
-            )}
-            {canAdd && (
-              <Button onClick={() => { setNewType('payment'); setNewOpen(true); }}>
-                <Plus className="w-4 h-4 mr-1" /> New Voucher
-              </Button>
-            )}
-          </div>
-        </div>
+        <PageHeader
+          title="Vouchers"
+          description="All accounting vouchers in one place"
+          icon={ReceiptText}
+          actions={
+            <>
+              {canDownload && (
+                <Button variant="outline" size="sm" onClick={handleExport}>
+                  <Download className="w-4 h-4 mr-1" /> Export
+                </Button>
+              )}
+              {canAdd && (
+                <Button onClick={() => { setNewType('payment'); setNewOpen(true); }}>
+                  <Plus className="w-4 h-4 mr-1" /> New Voucher
+                </Button>
+              )}
+            </>
+          }
+        />
+
+        <SummaryCardGrid>
+          <SummaryCard label="Vouchers" value={filtered.length.toLocaleString('en-IN')} icon={FileStack} tone="info" loading={isLoading} />
+          <SummaryCard label="Total Amount" value={inr(total)} icon={Sigma} tone="default" loading={isLoading} />
+        </SummaryCardGrid>
 
         {/* Type filter pills */}
         <div className="flex gap-2 flex-wrap">
@@ -972,37 +983,34 @@ export default function Vouchers() {
           })}
         </div>
 
-        {/* Summary bar */}
-        {filtered.length > 0 && (
-          <div className="bg-card border rounded-xl p-4 flex justify-between items-center">
-            <span className="text-muted-foreground text-sm">{filtered.length} voucher{filtered.length !== 1 ? 's' : ''}</span>
-            <span className="text-xl font-bold font-mono">{inr(total)}</span>
-          </div>
-        )}
-
-        {/* Table */}
-        <div className="bg-card border rounded-xl shadow-sm overflow-hidden">
-          {/* Search + date range */}
-          <div className="p-3 border-b flex flex-wrap items-center gap-2 bg-muted/20">
-            <Search className="w-4 h-4 text-muted-foreground shrink-0" />
+        {/* Search + date range */}
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="relative w-full sm:max-w-sm">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
             <Input
               placeholder="Search voucher #, account, or narration…"
               value={search}
               onChange={e => setSearch(e.target.value)}
-              className="border-transparent bg-transparent focus-visible:ring-0 max-w-sm max-md:max-w-full"
+              className="pl-9"
             />
-            <div className="flex items-center gap-1.5 ml-auto">
-              <Input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} className="h-8 w-[140px] text-xs" aria-label="From date" />
-              <span className="text-xs text-muted-foreground">to</span>
-              <Input type="date" value={toDate} onChange={e => setToDate(e.target.value)} className="h-8 w-[140px] text-xs" aria-label="To date" />
-              {(fromDate || toDate) && (
-                <Button variant="ghost" size="sm" className="h-8 px-2 text-xs" onClick={() => { setFromDate(''); setToDate(''); }}>
-                  Clear
-                </Button>
-              )}
-            </div>
           </div>
+          <div className="flex items-center gap-1.5 sm:ml-auto">
+            <Input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} className="h-9 w-[140px] text-xs" aria-label="From date" />
+            <span className="text-xs text-muted-foreground">to</span>
+            <Input type="date" value={toDate} onChange={e => setToDate(e.target.value)} className="h-9 w-[140px] text-xs" aria-label="To date" />
+            {(fromDate || toDate) && (
+              <Button variant="ghost" size="sm" className="h-9 px-2 text-xs" onClick={() => { setFromDate(''); setToDate(''); }}>
+                Clear
+              </Button>
+            )}
+          </div>
+        </div>
 
+        {/* Table */}
+        <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
+          {isLoading ? (
+            <TableSkeleton rows={8} cols={8} />
+          ) : (
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
@@ -1017,25 +1025,23 @@ export default function Vouchers() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {isLoading ? (
-                [...Array(5)].map((_, i) => (
-                  <TableRow key={i}>
-                    <TableCell colSpan={8}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell>
-                  </TableRow>
-                ))
-              ) : filtered.length === 0 ? (
+              {filtered.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={8} className="text-center py-16 text-muted-foreground">
-                    <ReceiptText className="w-10 h-10 mx-auto mb-3 opacity-20" />
-                    <p>{search || typeFilter !== 'all' ? 'No matching vouchers' : 'No vouchers yet'}</p>
-                    {canAdd && !search && typeFilter === 'all' && (
-                      <Button className="mt-4" size="sm" onClick={() => setNewOpen(true)}>
-                        <Plus className="w-4 h-4 mr-1" /> Create first voucher
-                      </Button>
-                    )}
+                  <TableCell colSpan={8} className="p-0">
+                    <EmptyState
+                      icon={ReceiptText}
+                      title={search || typeFilter !== 'all' ? 'No matching vouchers' : 'No vouchers yet'}
+                      hint={search || typeFilter !== 'all' ? 'Try a different search or filter.' : 'All accounting vouchers appear here.'}
+                      compact
+                      action={canAdd && !search && typeFilter === 'all' ? (
+                        <Button size="sm" onClick={() => setNewOpen(true)}>
+                          <Plus className="w-4 h-4 mr-1" /> Create first voucher
+                        </Button>
+                      ) : undefined}
+                    />
                   </TableCell>
                 </TableRow>
-              ) : sorted.map(row => {
+              ) : pageRows.map(row => {
                 const isJV = !['payment', 'receipt'].includes(row.type);
                 const isExpanded = expanded === row.key;
                 const jvLines: any[] = row.raw?.lines ?? [];
@@ -1176,7 +1182,9 @@ export default function Vouchers() {
               })}
             </TableBody>
           </Table>
+          )}
         </div>
+        <TablePager {...pagerProps} />
       </div>
 
       {/* Quick-create type buttons — manual types only */}

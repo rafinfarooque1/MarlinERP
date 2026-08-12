@@ -6,7 +6,6 @@ import { paymentModeLabel } from '@/lib/paymentModes';
 import { ReceiveIntoSelect, useReceiveIntoOptions, isCashOption } from '@/components/receive-into-select';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -19,17 +18,15 @@ import {
 import { useQueryClient } from '@tanstack/react-query';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { toast } from 'sonner';
-import { IndianRupee, Search, AlertTriangle, Banknote, Receipt } from 'lucide-react';
+import { IndianRupee, Search, AlertTriangle, Banknote, Receipt, Wallet, TrendingUp } from 'lucide-react';
+import { PageHeader } from '@/components/app/page-header';
+import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
+import { StatusBadge } from '@/components/app/status-badge';
+import { EmptyState } from '@/components/app/empty-state';
+import { TableSkeleton } from '@/components/app/loading-skeletons';
 
 function fmt(n: number) {
   return `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-}
-
-function PaymentStatusBadge({ status }: { status: string }) {
-  if (status === 'cancelled') return <Badge className="bg-muted text-muted-foreground border-border">Cancelled</Badge>;
-  if (status === 'paid') return <Badge className="bg-emerald-500/10 text-emerald-600 border-emerald-500/20">Paid</Badge>;
-  if (status === 'partially_paid') return <Badge className="bg-amber-500/10 text-amber-600 border-amber-500/20">Partial</Badge>;
-  return <Badge className="bg-red-500/10 text-red-600 border-red-500/20">Unpaid</Badge>;
 }
 
 /** Money can only be collected where money is owed — a cancelled invoice owes nothing. */
@@ -262,17 +259,26 @@ export default function Payments() {
     );
   }
 
+  const totalOutstanding = filtered.reduce((s: number, r: any) => s + Number(r.balanceDue ?? 0), 0);
+  const unpaidCount = (sales as any[]).filter(x => (x.paymentStatus ?? 'paid') === 'unpaid').length;
+  const partialCount = (sales as any[]).filter(x => (x.paymentStatus ?? 'paid') === 'partially_paid').length;
+
   return (
     <AppLayout>
       <div className="p-4 md:p-6 space-y-4">
-        <div className="flex items-center justify-between flex-wrap gap-3">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-              <IndianRupee className="w-6 h-6 text-primary" /> Payments
-            </h1>
-            <p className="text-sm text-muted-foreground mt-0.5">Collect outstanding payments on sales invoices</p>
-          </div>
-        </div>
+        <PageHeader
+          title="Payments"
+          description="Collect outstanding payments on sales invoices"
+          icon={IndianRupee}
+        />
+
+        {/* Summary cards */}
+        <SummaryCardGrid>
+          <SummaryCard label="Invoices" value={String((sales as any[]).length)} icon={Receipt} loading={isLoading} />
+          <SummaryCard label="Outstanding" value={fmt(totalOutstanding)} icon={Wallet} tone="negative" loading={isLoading} sub="in current view" />
+          <SummaryCard label="Unpaid" value={String(unpaidCount)} icon={AlertTriangle} tone="warning" loading={isLoading} />
+          <SummaryCard label="Partial" value={String(partialCount)} icon={TrendingUp} tone="info" loading={isLoading} />
+        </SummaryCardGrid>
 
         {/* Summary chips */}
         <div className="flex flex-wrap gap-2">
@@ -318,14 +324,15 @@ export default function Payments() {
 
         {/* Table */}
         {isLoading ? (
-          <div className="py-12 text-center text-muted-foreground">Loading…</div>
+          <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
+            <TableSkeleton rows={8} cols={9} />
+          </div>
         ) : filtered.length === 0 ? (
-          <div className="py-16 text-center text-muted-foreground space-y-2">
-            <Receipt className="w-10 h-10 mx-auto opacity-30" />
-            <p className="font-medium">No sales match these filters</p>
+          <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
+            <EmptyState icon={Receipt} title="No sales match these filters" hint="Adjust the status or search filters to see invoices." />
           </div>
         ) : (
-          <div className="rounded-lg border border-border overflow-hidden">
+          <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -352,7 +359,7 @@ export default function Payments() {
                     <TableCell className="text-right font-mono text-sm font-semibold text-red-500">
                       {Number(s.balanceDue ?? 0) > 0 ? fmt(Number(s.balanceDue)) : '—'}
                     </TableCell>
-                    <TableCell><PaymentStatusBadge status={s.paymentStatus ?? 'paid'} /></TableCell>
+                    <TableCell><StatusBadge status={s.paymentStatus ?? 'paid'} /></TableCell>
                     <TableCell className="text-right">
                       <Button variant={collectible(s) ? 'default' : 'ghost'} size="sm" onClick={() => setSelectedSale(s)}>
                         {collectible(s) ? <><IndianRupee className="w-3.5 h-3.5 mr-1" /> Collect</> : 'View'}

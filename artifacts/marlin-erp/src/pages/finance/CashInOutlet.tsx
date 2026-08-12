@@ -19,6 +19,9 @@ import { buildHierarchy } from '@/lib/locationHierarchy';
 import { useLocationCashBalances, useIsLocationKindEnabled } from '@/lib/locationStructure';
 import { useClearOutletSelection } from '@/lib/useFeatureFlags';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
+import { PageHeader } from '@/components/app/page-header';
+import { EmptyState } from '@/components/app/empty-state';
+import { TableSkeleton } from '@/components/app/loading-skeletons';
 
 function fmt(n: number) {
   return `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -234,19 +237,16 @@ export default function CashBalance() {
     <AppLayout>
       <div className="p-4 md:p-6 space-y-4">
         {/* Header */}
-        <div className="flex items-center justify-between flex-wrap gap-3">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight">Cash Balance</h1>
-            <p className="text-sm text-muted-foreground mt-0.5">
-              Track physical cash at each {outletsVisible ? 'outlet and warehouse' : 'warehouse'}, and record bank deposits
-            </p>
-          </div>
-          {tab === 'balances' && (
+        <PageHeader
+          title="Cash Balance"
+          description={`Track physical cash at each ${outletsVisible ? 'outlet and warehouse' : 'warehouse'}, and record bank deposits`}
+          icon={Banknote}
+          actions={tab === 'balances' ? (
             <Button size="sm" onClick={() => setShowDeposit(true)} disabled={!perm.canAdd || allBalances.length === 0}>
               <ArrowUpFromLine className="w-4 h-4 mr-1.5" /> Record Deposit
             </Button>
-          )}
-        </div>
+          ) : undefined}
+        />
 
         {/* Tabs */}
         <div className="flex gap-1 border-b border-border">
@@ -415,10 +415,10 @@ export default function CashBalance() {
 
                 if (displayBalances.length === 0) {
                   return (
-                    <div className="py-16 text-center text-muted-foreground space-y-2">
-                      <Banknote className="w-10 h-10 mx-auto opacity-30" />
-                      <p className="font-medium">{allBalances.length === 0 ? 'No cash balance data' : 'No locations match the filter'}</p>
-                    </div>
+                    <EmptyState
+                      icon={Banknote}
+                      title={allBalances.length === 0 ? 'No cash balance data' : 'No locations match the filter'}
+                    />
                   );
                 }
 
@@ -532,14 +532,15 @@ export default function CashBalance() {
             </div>
 
             {depositsLoading ? (
-              <div className="py-12 text-center text-muted-foreground">Loading…</div>
+              <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
+                <TableSkeleton rows={8} cols={7} />
+              </div>
             ) : deposits.length === 0 ? (
-              <div className="py-16 text-center text-muted-foreground space-y-2">
-                <ArrowUpFromLine className="w-10 h-10 mx-auto opacity-30" />
-                <p className="font-medium">No deposits found</p>
+              <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
+                <EmptyState icon={ArrowUpFromLine} title="No deposits found" />
               </div>
             ) : (
-              <div className="rounded-lg border border-border overflow-hidden">
+              <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
                 <Table>
                   <TableHeader>
                     <TableRow>

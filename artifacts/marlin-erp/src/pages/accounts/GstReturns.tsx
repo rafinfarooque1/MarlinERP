@@ -16,6 +16,9 @@ import { usePermission } from '@/lib/usePermission';
 import { GstScopeFilter, gstScopeLabel, type GstScope } from '@/components/accounts/GstScopeFilter';
 import { PaymentStatusBadge } from '@/pages/accounts/GstSummary';
 import { ExportButtons, type ReportDoc } from '@/pages/reports/shared';
+import { PageHeader } from '@/components/app/page-header';
+import { EmptyState } from '@/components/app/empty-state';
+import { TableSkeleton } from '@/components/app/loading-skeletons';
 
 const payStatusLabel = (s?: string) =>
   s === 'na' ? '—' : s === 'paid' ? 'Paid' : s === 'partially_paid' ? 'Partial' : 'Unpaid';
@@ -44,6 +47,11 @@ function HsnTable({ title, rows, loading }: { title: string; rows: HsnSummaryRow
         <h3 className="font-semibold text-sm">{title}</h3>
       </div>
       <div className="overflow-x-auto">
+        {loading ? (
+          <TableSkeleton rows={4} cols={9} />
+        ) : rows.length === 0 ? (
+          <EmptyState title="No records in this period" compact />
+        ) : (
         <Table>
           <TableHeader>
             <TableRow className="bg-muted/10">
@@ -59,11 +67,7 @@ function HsnTable({ title, rows, loading }: { title: string; rows: HsnSummaryRow
             </TableRow>
           </TableHeader>
           <TableBody>
-            {loading ? (
-              <TableRow><TableCell colSpan={9}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
-            ) : rows.length === 0 ? (
-              <TableRow><TableCell colSpan={9} className="text-center py-8 text-muted-foreground text-sm">No records in this period</TableCell></TableRow>
-            ) : sorted.map((r, i) => (
+            {sorted.map((r, i) => (
               <TableRow key={i} className="hover:bg-muted/10">
                 <TableCell className="font-mono text-xs">{r.hsnCode}</TableCell>
                 <TableCell><Badge variant="secondary">{r.taxRate}%</Badge></TableCell>
@@ -88,6 +92,7 @@ function HsnTable({ title, rows, loading }: { title: string; rows: HsnSummaryRow
             )}
           </TableBody>
         </Table>
+        )}
       </div>
     </div>
   );
@@ -312,14 +317,11 @@ export default function GstReturns() {
   return (
     <AppLayout>
       <div className="space-y-6">
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-              <FileSpreadsheet className="w-6 h-6 text-primary" /> GST Returns
-            </h1>
-            <p className="text-muted-foreground mt-1">HSN summary, GSTR-1 and GSTR-3B working data, and ledger reconciliation</p>
-          </div>
-        </div>
+        <PageHeader
+          title="GST Returns"
+          description="HSN summary, GSTR-1 and GSTR-3B working data, and ledger reconciliation"
+          icon={FileSpreadsheet}
+        />
 
         {tab !== 'gstr3b' && (
           <div className="flex items-center gap-3 flex-wrap">
@@ -370,6 +372,11 @@ export default function GstReturns() {
                 <h3 className="font-semibold text-sm">B2B Invoices (registered customers, rate-wise)</h3>
               </div>
               <div className="overflow-x-auto">
+                {g1.isLoading ? (
+                  <TableSkeleton rows={4} cols={14} />
+                ) : b2b.length === 0 ? (
+                  <EmptyState title="No B2B invoices in this period" compact />
+                ) : (
                 <Table>
                   <TableHeader>
                     <TableRow className="bg-muted/10">
@@ -390,11 +397,7 @@ export default function GstReturns() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {g1.isLoading ? (
-                      <TableRow><TableCell colSpan={14}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
-                    ) : b2b.length === 0 ? (
-                      <TableRow><TableCell colSpan={14} className="text-center py-8 text-muted-foreground text-sm">No B2B invoices in this period</TableCell></TableRow>
-                    ) : b2bSort.sorted.map((r, i) => (
+                    {b2bSort.sorted.map((r, i) => (
                       <TableRow key={i} className="hover:bg-muted/10">
                         <TableCell className="font-mono text-xs">{r.invoiceNumber}</TableCell>
                         <TableCell className="text-xs">{r.saleDate}</TableCell>
@@ -414,6 +417,7 @@ export default function GstReturns() {
                     ))}
                   </TableBody>
                 </Table>
+                )}
               </div>
             </div>
 
@@ -421,6 +425,11 @@ export default function GstReturns() {
               <div className="p-4 border-b border-border bg-muted/20">
                 <h3 className="font-semibold text-sm">B2C Small (unregistered, aggregated by place of supply & rate)</h3>
               </div>
+              {g1.isLoading ? (
+                <TableSkeleton rows={4} cols={7} />
+              ) : b2cs.length === 0 ? (
+                <EmptyState title="No B2C sales in this period" compact />
+              ) : (
               <Table>
                 <TableHeader>
                   <TableRow className="bg-muted/10">
@@ -434,11 +443,7 @@ export default function GstReturns() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {g1.isLoading ? (
-                    <TableRow><TableCell colSpan={7}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
-                  ) : b2cs.length === 0 ? (
-                    <TableRow><TableCell colSpan={7} className="text-center py-8 text-muted-foreground text-sm">No B2C sales in this period</TableCell></TableRow>
-                  ) : b2csSort.sorted.map((r, i) => (
+                  {b2csSort.sorted.map((r, i) => (
                     <TableRow key={i} className="hover:bg-muted/10">
                       <TableCell className="text-xs">{r.placeOfSupply || '—'}</TableCell>
                       <TableCell><Badge variant="secondary">{r.taxRate}%</Badge></TableCell>
@@ -451,6 +456,7 @@ export default function GstReturns() {
                   ))}
                 </TableBody>
               </Table>
+              )}
             </div>
           </TabsContent>
 
@@ -516,6 +522,9 @@ export default function GstReturns() {
             </div>
 
             <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
+              {recon.isLoading ? (
+                <TableSkeleton rows={4} cols={5} />
+              ) : (
               <Table>
                 <TableHeader>
                   <TableRow className="bg-muted/10">
@@ -527,9 +536,7 @@ export default function GstReturns() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {recon.isLoading ? (
-                    <TableRow><TableCell colSpan={5}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
-                  ) : reconSort.sorted.map((r) => (
+                  {reconSort.sorted.map((r) => (
                     <TableRow key={r.ledgerCode} className="hover:bg-muted/10">
                       <TableCell className="text-sm font-medium">{r.head}</TableCell>
                       <TableCell className="font-mono text-xs text-muted-foreground">{r.ledgerCode}</TableCell>
@@ -546,6 +553,7 @@ export default function GstReturns() {
                   ))}
                 </TableBody>
               </Table>
+              )}
             </div>
 
             {recon.data && (Math.abs(recon.data.dtxDirect) > 0.004 || Math.abs(recon.data.salesLumpResidual) > 0.004) && (

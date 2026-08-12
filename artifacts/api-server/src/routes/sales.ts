@@ -30,7 +30,7 @@ import {
 import { advanceAvailable, takeAdvanceLock, attributeAdvanceConsumption, releaseAdvanceConsumption } from "../lib/advanceLedgers";
 import { allocateSalesInvoiceNumber, salesCounterScope } from "../lib/voucherNumber";
 import { resolveLocationGst, isInterStateSupply } from "../lib/gstTransfer";
-import { validateOtherCharges, parseStoredOtherCharges, otherChargesTotal, type OtherCharge } from "../lib/otherCharges";
+import { validateOtherCharges, validateSaleOtherCharges, parseStoredOtherCharges, otherChargesTotal, type OtherCharge } from "../lib/otherCharges";
 
 const router = Router();
 
@@ -98,6 +98,55 @@ function computeLineTax(
 }
 
 const round2 = (n: number): number => Math.round(n * 100) / 100;
+
+// Render a stored sale row into the same shape the create endpoint returns,
+// flagged `idempotentReplay`. Used when a create is replayed with a
+// clientRequestId that already produced a bill — the caller (a double-click or
+// a retry) must see the ORIGINAL invoice, never a second one. The position is
+// re-read so the paid/balance figures match the live sale.
+async function buildSaleReplayResponse(
+  pgPool: { query: (sql: string, params?: any[]) => Promise<{ rows: any[] }> },
+  row: any,
+): Promise<any> {
+  const totalAmount = Number(row.total_amount);
+  const { loadPaymentPosition, computePaymentPosition } = await import("../lib/salePaymentPosition");
+  const position = await loadPaymentPosition(pgPool as any, Number(row.id))
+    ?? computePaymentPosition({ totalAmount, amountReceived: Number(row.amount_paid ?? 0), cancelledAt: row.cancelled_at });
+  const customerName = row.customer_id
+    ? (await db.select().from(customersTable).where(eq(customersTable.id, Number(row.customer_id))).limit(1))[0]?.name ?? null
+    : null;
+  const charges = parseStoredOtherCharges(row.other_charges);
+  return {
+    id: row.id,
+    invoiceNumber: row.invoice_number,
+    outletId: row.outlet_id,
+    locationType: row.location_type,
+    locationId: row.location_id,
+    customerName,
+    saleDate: row.sale_date,
+    lineItems: row.line_items ?? [],
+    subtotal: Number(row.subtotal),
+    taxTotal: Number(row.tax_total),
+    discountTotal: Number(row.discount_total),
+    billDiscount: Number(row.bill_discount ?? 0),
+    totalAmount,
+    paymentMode: row.payment_mode,
+    couponCode: row.coupon_code,
+    otherCharges: charges,
+    otherChargesTotal: otherChargesTotal(charges),
+    createdAt: row.created_at,
+    quotationId: row.quotation_id ?? null,
+    quotationNumber: row.quotation_number ?? null,
+    paymentStatus: position.status,
+    amountPaid: position.amountReceived,
+    amountReceived: position.amountReceived,
+    creditAdjustments: position.creditAdjustments,
+    amountDue: position.amountDue,
+    balanceDue: position.outstanding,
+    isCancelled: position.isCancelled,
+    idempotentReplay: true,
+  };
+}
 
 // ── Discount model ────────────────────────────────────────────────────────────
 // TWO independent discount concepts, never mixed:
@@ -567,6 +616,26 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
 
   const { pool: pgPool } = await import("@workspace/db");
 
+  // ── Idempotency (double-click / network retry) ────────────────────────────
+  // The client may stamp a stable clientRequestId on the create. An exact
+  // replay of the same key must return the ORIGINAL invoice (200,
+  // idempotentReplay) instead of raising a second bill. CreateSaleBody strips
+  // unknown keys, so read it from the raw body. The stored value is the unique
+  // identity a partial unique index keys on, so two concurrent submits cannot
+  // both insert.
+  const clientRequestId = typeof (req.body as any)?.clientRequestId === 'string'
+    ? String((req.body as any).clientRequestId).trim() || null
+    : null;
+  if (clientRequestId) {
+    const { rows: [prior] } = await pgPool.query<any>(
+      `SELECT * FROM sales WHERE client_request_id = $1 LIMIT 1`, [clientRequestId]
+    );
+    if (prior) {
+      res.status(200).json(await buildSaleReplayResponse(pgPool, prior));
+      return;
+    }
+  }
+
   // Month lock: no new sale (or its same-dated payment/receipt trail) may
   // land in a locked accounting month.
   if (await respondIfMonthLocked(res, pgPool, [parsed.data.saleDate], "sale create")) return;
@@ -740,10 +809,11 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
   // grand total that dues, receipts, credit checks and the customer Dr leg all
   // key off) but never into subtotal/tax_total — charges carry no GST, so the
   // GSTR-1 taxable value stays goods-only. Validated on the EFFECTIVE ledgers
-  // server-side, same rules as purchase-bill charges (postable expense ledger,
-  // outside SYS-PUR, not internal). CreateSaleBody strips unknown keys, so
-  // read the raw body — the same pattern as discountTotal above.
-  const ocParsed = await validateOtherCharges(pgPool, rawBody.otherCharges);
+  // server-side: a sale charge may credit an income OR expense ledger (a real
+  // recovery), but never the Sales (SYS-SAL) or Purchase (SYS-PUR) subtree, nor
+  // an internal system ledger. CreateSaleBody strips unknown keys, so read the
+  // raw body — the same pattern as discountTotal above.
+  const ocParsed = await validateSaleOtherCharges(pgPool, rawBody.otherCharges);
   if ('error' in ocParsed) { res.status(400).json({ error: ocParsed.error }); return; }
   const otherCharges = ocParsed.charges;
   const otherChargesTot = ocParsed.total;
@@ -1047,8 +1117,8 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
     const outletIdForInsert = locationType === 'outlet' ? locationId : null;
     ({ rows: [row] } = await txClient.query<any>(
       `INSERT INTO sales (invoice_number, outlet_id, location_type, location_id, customer_id, sale_date, line_items, subtotal, tax_total, discount_total, bill_discount, total_amount, payment_mode, coupon_code, amount_paid, payment_status,
-                          number_scope, invoice_series, invoice_fy, invoice_serial, other_charges)
-       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21::jsonb) RETURNING *`,
+                          number_scope, invoice_series, invoice_fy, invoice_serial, other_charges, client_request_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21::jsonb, $22) RETURNING *`,
       [invoiceNumber, outletIdForInsert, locationType, locationId,
        parsed.data.customerId ?? null, parsed.data.saleDate,
        // Stored WITH the batch trail already resolved above, so the served lots
@@ -1062,8 +1132,36 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
          ? 'paid'
          : computePaymentPosition({ totalAmount, amountReceived: appliedAdvance, cancelledAt: null }).status,
        numberAlloc.numberScope, numberAlloc.seriesPrefix, numberAlloc.fyLabel, numberAlloc.serial,
-       JSON.stringify(otherCharges)]
+       JSON.stringify(otherCharges), clientRequestId]
     ));
+
+    // ── Counter-settlement payment history (audit F-1) ───────────────────────
+    // A cash/upi/bank sale is settled the moment it exists. Write EXACTLY ONE
+    // sale_payments row for it — source 'counter', method = the sale's mode,
+    // amount = the FULL bill total, dated the sale date — so the Payment
+    // History tab and bank reconciliation can see the collection. This is a
+    // HISTORY/display row only: the derived postings already treat the
+    // amount_paid remainder as counter money (see journal.ts), and the leg
+    // simply relocates that same slice out of the remainder into a visible row,
+    // so the trial balance is unchanged by construction. No receipt, no
+    // voucher, no ledger posting. Cash needs no reconciliation (NULL); the
+    // electronic modes enter 'pending' so reconciliation can settle them.
+    // The advance-covered slice is already recorded as its own 'advance' leg
+    // above, so the counter row carries only the money that hit the till/bank.
+    if (settledAtSale) {
+      const counterAmount = round2(totalAmount - appliedAdvance);
+      if (counterAmount > 0.004) {
+        await txClient.query(
+          `INSERT INTO sale_payments
+             (sale_id, payment_date, method, amount, notes, reconciliation_status, clearing_receipt_id, outlet_id, created_by, source)
+           VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, $8, 'counter')`,
+          [row.id, parsed.data.saleDate, paymentModeIn, counterAmount,
+           `Settled at counter — ${invoiceNumber}`,
+           paymentModeIn === 'cash' ? null : 'pending',
+           outletIdForInsert, (req as any).employee?.username ?? null]
+        );
+      }
+    }
 
     // The adjusted advance is a collection like any other: a sale_payments row
     // with method 'advance'. The derived postings debit CUST-<customer> for it
@@ -1545,6 +1643,14 @@ router.put("/sales/:id", requireModuleAction("page:/sales/pos", "edit"), async (
     // come from the state visible AFTER the lock is held, or a concurrent
     // unwind is silently overwritten.
     await editTx.query(`SELECT id FROM sales WHERE id = $1 FOR UPDATE`, [id]);
+    // ── Counter-settlement history follows the edit ──────────────────────────
+    // The counter row is a restatement of the sale's own settlement, so an edit
+    // must never leave a stale one behind. Clear any existing counter leg under
+    // the row lock FIRST — before the credit re-derivation below sums the legs,
+    // so converting a cash bill to credit does not count the old counter row as
+    // a collection. A fresh counter leg for the edited total is written after
+    // the UPDATE (below) when the new mode is still settled at the counter.
+    await editTx.query(`DELETE FROM sale_payments WHERE sale_id = $1 AND source = 'counter'`, [id]);
     if (!isSettledAtSale(newPaymentMode)) {
       const { rows: [lockedPaid] } = await editTx.query<{ paid: string }>(
         `SELECT COALESCE(SUM(amount::numeric), 0) AS paid FROM sale_payments WHERE sale_id = $1`, [id]
@@ -1741,6 +1847,33 @@ router.put("/sales/:id", requireModuleAction("page:/sales/pos", "edit"), async (
        newPaymentMode, parsed.data.couponCode ?? null, newAmountPaid, newPaymentStatus, id, editedNumberScope,
        JSON.stringify(otherCharges)]
     ));
+
+    // 3b. Restate the counter-settlement history to the edited bill. The old
+    //     counter leg was cleared under the row lock above; when the edited
+    //     mode is still settled at the counter, write exactly ONE fresh leg for
+    //     the remainder that hit the till/bank (total minus any other recorded
+    //     legs — advance adjustments, collections). Cash needs no
+    //     reconciliation; electronic modes enter 'pending'. Converting to
+    //     credit leaves NO counter leg — a credit bill is never settled at the
+    //     counter, so no history is invented. History-only, no postings: the
+    //     books derive the same slice either way (see journal.ts).
+    if (isSettledAtSale(newPaymentMode)) {
+      const { rows: [nonCounter] } = await editTx.query<{ paid: string }>(
+        `SELECT COALESCE(SUM(amount::numeric), 0) AS paid FROM sale_payments WHERE sale_id = $1`, [id]
+      );
+      const counterAmount = round2(totalAmount - Number(nonCounter?.paid ?? 0));
+      if (counterAmount > 0.004) {
+        await editTx.query(
+          `INSERT INTO sale_payments
+             (sale_id, payment_date, method, amount, notes, reconciliation_status, clearing_receipt_id, outlet_id, created_by, source)
+           VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, $8, 'counter')`,
+          [id, parsed.data.saleDate, newPaymentMode, counterAmount,
+           `Settled at counter — ${existingRaw.invoice_number}`,
+           newPaymentMode === 'cash' ? null : 'pending',
+           newOutletId, (req as any).employee?.username ?? null]
+        );
+      }
+    }
 
     // 4. Ledger the reversal before the re-apply so the trail reads
     //    out → back-in → out again, and the running balance stays truthful.
@@ -1943,9 +2076,17 @@ router.post("/sales/:id/cancel", requireModuleAction("page:/sales/pos", "delete"
     // An adjusted ADVANCE is the one exception: no cash changed hands at this
     // bill — the money is still the customer's, merely parked against it — so
     // cancellation returns the slice to their advance instead of blocking.
+    // A counter-settlement leg (source='counter') is till money, NOT a banked
+    // collection — it is the sale's own settlement history, so it must never
+    // block cancellation. It leaves with the bill below, exactly as the
+    // remainder it displays would. Advance legs are handled separately (the
+    // parked money returns to the customer's advance). Only a REAL collection
+    // (a receipt-backed payment) blocks a cancel.
     const { rows: [pay] } = await tx.query<{ n: string; amt: string }>(
       `SELECT COUNT(*)::text AS n, COALESCE(SUM(amount::numeric), 0)::text AS amt
-         FROM sale_payments WHERE sale_id = $1 AND method <> 'advance'`, [id]
+         FROM sale_payments
+        WHERE sale_id = $1 AND method <> 'advance'
+          AND COALESCE(source, '') <> 'counter'`, [id]
     );
     if (Number(pay?.n ?? 0) > 0) {
       await tx.query('ROLLBACK');
@@ -1954,6 +2095,10 @@ router.post("/sales/:id/cancel", requireModuleAction("page:/sales/pos", "delete"
         code: 'PAYMENTS_RECORDED',
       }); return;
     }
+    // Remove the counter-settlement history with the bill — no orphan row may
+    // remain (audit F-1). No receipt/voucher to reverse; the derived books drop
+    // the sale's postings on their own once cancelled_at is set.
+    await tx.query(`DELETE FROM sale_payments WHERE sale_id = $1 AND source = 'counter'`, [id]);
     const { rows: [advPay] } = await tx.query<{ n: string; amt: string }>(
       `SELECT COUNT(*)::text AS n, COALESCE(SUM(amount::numeric), 0)::text AS amt
          FROM sale_payments WHERE sale_id = $1 AND method = 'advance'`, [id]

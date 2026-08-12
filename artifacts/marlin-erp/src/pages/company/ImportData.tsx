@@ -18,6 +18,8 @@ import {
   type ImportCommitResponse, type ImportApproveResponse,
 } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
+import { PageHeader } from '@/components/app/page-header';
+import { EmptyState } from '@/components/app/empty-state';
 import { usePermission } from '@/lib/usePermission';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -275,16 +277,11 @@ export default function ImportData() {
   return (
     <AppLayout>
       <div className="space-y-6 font-sans">
-        <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
-            <FileSpreadsheet className="w-6 h-6 text-primary" />
-            Import Data
-          </h1>
-          <p className="text-muted-foreground text-sm mt-1">
-            Move your old ERP into this one: upload all your files, match the old names once, run a
-            trial, compare the reports, then approve. Nothing touches your books until you approve.
-          </p>
-        </div>
+        <PageHeader
+          title="Import Data"
+          description="Move your old ERP into this one: upload all your files, match the old names once, run a trial, compare the reports, then approve. Nothing touches your books until you approve."
+          icon={FileSpreadsheet}
+        />
 
         <Tabs value={tab} onValueChange={setTab}>
           <TabsList>
@@ -535,11 +532,11 @@ export default function ImportData() {
                     )}
 
                     {hasDuplicates && (
-                      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm">
+                      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-500/25 bg-amber-500/10 p-3 text-sm">
                         <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
                         <span>Some names already exist. When committing:</span>
                         <Select value={duplicateAction} onValueChange={(v) => setDuplicateAction(v as 'skip' | 'update')}>
-                          <SelectTrigger className="w-56 h-8 bg-white"><SelectValue /></SelectTrigger>
+                          <SelectTrigger className="w-56 h-8 bg-card"><SelectValue /></SelectTrigger>
                           <SelectContent>
                             <SelectItem value="skip">Skip duplicates (keep existing)</SelectItem>
                             <SelectItem value="update">Update existing records</SelectItem>
@@ -687,7 +684,7 @@ export default function ImportData() {
                         </div>
                       )}
                       {(batch.demoSummary?.failures?.length ?? 0) > 0 && (
-                        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 space-y-1">
+                        <div className="rounded-lg border border-amber-500/25 bg-amber-500/10 p-3 space-y-1">
                           <div className="text-sm font-medium flex items-center gap-1.5">
                             <AlertTriangle className="w-4 h-4 text-amber-600" />
                             {batch.demoSummary!.failures.length} document{batch.demoSummary!.failures.length === 1 ? '' : 's'} failed in the demo — they will be LEFT OUT of the real import
@@ -780,7 +777,7 @@ export default function ImportData() {
                 {loadingHistory ? (
                   <div className="py-10 text-center text-muted-foreground"><Loader2 className="w-5 h-5 animate-spin inline" /></div>
                 ) : batches.length === 0 ? (
-                  <p className="py-10 text-center text-sm text-muted-foreground">No imports yet.</p>
+                  <EmptyState icon={FileSpreadsheet} title="No imports yet" hint="Master and older imports will appear here once you run them." />
                 ) : (
                   <div className="rounded-lg border overflow-x-auto">
                     <Table>

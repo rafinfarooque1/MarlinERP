@@ -9,6 +9,10 @@ import { BarChart3, Download, AlertTriangle, Factory, Trash2, IndianRupee, Scale
 import { downloadCSV } from '@/lib/download';
 import { usePermission } from '@/lib/usePermission';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
+import { PageHeader } from '@/components/app/page-header';
+import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
+import { EmptyState } from '@/components/app/empty-state';
+import { TableSkeleton } from '@/components/app/loading-skeletons';
 
 type Tab = 'output' | 'consumption' | 'wastage' | 'batches';
 
@@ -126,35 +130,32 @@ export default function ProductionReports() {
   };
 
   const t = totals as any;
-  const summaryCards = [
-    { icon: Factory, label: 'Batches', value: totals ? String(totals.batchCount) : '—', sub: '' },
-    { icon: Scale, label: 'Units Produced', value: totals ? qty(totals.producedQty) : '—', sub: '' },
-    { icon: Trash2, label: 'Wastage', value: totals ? `${qty(totals.wastageQty)} · ${inr(totals.wastageValue)}` : '—', sub: '' },
+  const summaryCards: Array<{ icon: typeof Factory; label: string; value: string; sub?: string; tone?: 'default' | 'positive' | 'negative' | 'warning' | 'info' }> = [
+    { icon: Factory, label: 'Batches', value: totals ? String(totals.batchCount) : '—', tone: 'info' },
+    { icon: Scale, label: 'Units Produced', value: totals ? qty(totals.producedQty) : '—', tone: 'positive' },
+    { icon: Trash2, label: 'Wastage', value: totals ? `${qty(totals.wastageQty)} · ${inr(totals.wastageValue)}` : '—', tone: 'warning' },
     {
       icon: IndianRupee, label: 'Total Production Cost', value: totals ? inr(totals.totalCost) : '—',
       // Where the batch cost came from: raw material, packing, labour, overheads.
       sub: totals
         ? `RM ${inr(t.rmCost ?? 0)} · PM ${inr(t.pmCost ?? 0)} · Labour ${inr(t.labourCost ?? 0)} · OH ${inr(t.overheadAmount ?? 0)}`
-        : '',
+        : undefined,
     },
   ];
 
   return (
     <AppLayout>
       <div className="space-y-6">
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-              <BarChart3 className="w-6 h-6 text-primary" /> Production Reports
-            </h1>
-            <p className="text-muted-foreground mt-1">Output, material consumption vs BOM, wastage, and batch cost history</p>
-          </div>
-          {perm.canDownload && (
+        <PageHeader
+          title="Production Reports"
+          description="Output, material consumption vs BOM, wastage, and batch cost history"
+          icon={BarChart3}
+          actions={perm.canDownload && (
             <Button variant="outline" size="sm" onClick={exportCurrentTab} disabled={!data}>
               <Download className="w-4 h-4 mr-2" /> Export {TABS.find(t => t.key === tab)?.label}
             </Button>
           )}
-        </div>
+        />
 
         {/* Period filter */}
         <div className="flex flex-wrap items-end gap-3 bg-card border border-border rounded-xl p-4">
@@ -177,17 +178,19 @@ export default function ProductionReports() {
         </div>
 
         {/* Summary cards */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <SummaryCardGrid>
           {summaryCards.map(c => (
-            <div key={c.label} className="bg-card border border-border rounded-xl p-4">
-              <div className="flex items-center gap-2 text-xs text-muted-foreground uppercase tracking-wider">
-                <c.icon className="w-3.5 h-3.5" /> {c.label}
-              </div>
-              <p className="text-xl font-bold font-mono mt-2">{c.value}</p>
-              {c.sub && <p className="text-[10px] text-muted-foreground font-mono mt-1">{c.sub}</p>}
-            </div>
+            <SummaryCard
+              key={c.label}
+              icon={c.icon}
+              label={c.label}
+              value={c.value}
+              sub={c.sub}
+              tone={c.tone ?? 'default'}
+              loading={isLoading}
+            />
           ))}
-        </div>
+        </SummaryCardGrid>
 
         {/* Tabs */}
         <div className="flex flex-wrap gap-2">
@@ -208,7 +211,7 @@ export default function ProductionReports() {
 
         <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
           {isLoading ? (
-            <div className="p-8 space-y-3">{[...Array(4)].map((_, i) => <div key={i} className="h-8 bg-muted/30 rounded animate-pulse" />)}</div>
+            <TableSkeleton rows={6} cols={tab === 'batches' ? 11 : tab === 'wastage' ? 7 : 6} />
           ) : tab === 'output' ? (
             <Table>
               <TableHeader>
@@ -223,8 +226,8 @@ export default function ProductionReports() {
               </TableHeader>
               <TableBody>
                 {!data || data.output.length === 0 ? (
-                  <TableRow><TableCell colSpan={6} className="text-center py-16 text-muted-foreground">
-                    <Factory className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No production in this period</p>
+                  <TableRow><TableCell colSpan={6} className="p-0">
+                    <EmptyState icon={Factory} title="No production in this period" compact />
                   </TableCell></TableRow>
                 ) : outputSort.sorted.map(o => (
                   <TableRow key={o.itemId} className="hover:bg-muted/10">
@@ -252,8 +255,8 @@ export default function ProductionReports() {
               </TableHeader>
               <TableBody>
                 {!data || data.consumption.length === 0 ? (
-                  <TableRow><TableCell colSpan={6} className="text-center py-16 text-muted-foreground">
-                    <Scale className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No material consumption in this period</p>
+                  <TableRow><TableCell colSpan={6} className="p-0">
+                    <EmptyState icon={Scale} title="No material consumption in this period" compact />
                   </TableCell></TableRow>
                 ) : consumptionSort.sorted.map(c => (
                   <TableRow key={`${c.materialType}-${c.materialId}`} className="hover:bg-muted/10">
@@ -290,8 +293,8 @@ export default function ProductionReports() {
               </TableHeader>
               <TableBody>
                 {!data || data.wastage.length === 0 ? (
-                  <TableRow><TableCell colSpan={7} className="text-center py-16 text-muted-foreground">
-                    <Trash2 className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No wastage recorded in this period</p>
+                  <TableRow><TableCell colSpan={7} className="p-0">
+                    <EmptyState icon={Trash2} title="No wastage recorded in this period" compact />
                   </TableCell></TableRow>
                 ) : wastageSort.sorted.map(w => (
                   <TableRow key={w.productionId} className="hover:bg-muted/10">
@@ -327,8 +330,8 @@ export default function ProductionReports() {
               </TableHeader>
               <TableBody>
                 {!data || data.batches.length === 0 ? (
-                  <TableRow><TableCell colSpan={11} className="text-center py-16 text-muted-foreground">
-                    <Factory className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No batches in this period</p>
+                  <TableRow><TableCell colSpan={11} className="p-0">
+                    <EmptyState icon={Factory} title="No batches in this period" compact />
                   </TableCell></TableRow>
                 ) : batchesSort.sorted.map(b => (
                   <TableRow key={b.id} className="hover:bg-muted/10">

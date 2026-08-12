@@ -125,7 +125,7 @@
   --app-font-sans: 'Outfit', sans-serif;
   --app-font-mono: 'Space Mono', monospace;
 
-  --radius: 0.25rem;
+  --radius: 0.5rem;
 
   --shadow-2xs: 0px 1px 2px 0px hsl(220 18% 70% / 0.2);
   --shadow-xs:  0px 1px 2px 0px hsl(220 18% 70% / 0.2);
@@ -204,7 +204,7 @@
   --app-font-sans: 'Outfit', sans-serif;
   --app-font-mono: 'Space Mono', monospace;
 
-  --radius: 0.25rem;
+  --radius: 0.5rem;
 
   --shadow-2xs: 0px 2px 0px 0px hsl(191 100% 50% / 0.1);
   --shadow-xs:  0px 2px 0px 0px hsl(191 100% 50% / 0.1);

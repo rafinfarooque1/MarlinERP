@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useLocation } from 'wouter';
 import { AppLayout } from '@/components/layout/AppLayout';
+import { PageHeader } from '@/components/app/page-header';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
@@ -64,14 +65,13 @@ export default function ChangePassword() {
   return (
     <AppLayout>
       <div className="max-w-lg space-y-6">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-            <KeyRound className="w-6 h-6 text-primary" /> Change Password
-          </h1>
-          <p className="text-muted-foreground mt-1">Update your account password</p>
-        </div>
+        <PageHeader
+          title="Change Password"
+          description="Update your account password"
+          icon={KeyRound}
+        />
 
-        <div className="bg-card border border-border rounded-xl p-6 space-y-4">
+        <div className="rounded-xl border border-border bg-card shadow-sm p-6 space-y-4">
           {isForced ? (
             <div className="flex items-start gap-3 p-3 bg-amber-500/10 border border-amber-500/30 rounded-lg">
               <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />

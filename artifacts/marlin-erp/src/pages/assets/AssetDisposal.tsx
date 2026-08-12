@@ -19,11 +19,17 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
-import { Plus, Archive, Download } from 'lucide-react';
+import { Plus, Archive, Download, Wallet } from 'lucide-react';
 import { usePermission } from '@/lib/usePermission';
 import { toast } from 'sonner';
 import { downloadCSV } from '@/lib/download';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
+import { TablePager, useClientPage } from '@/components/ui/table-pager';
+import { PageHeader } from '@/components/app/page-header';
+import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
+import { EmptyState } from '@/components/app/empty-state';
+import { TableSkeleton } from '@/components/app/loading-skeletons';
+import { EntityCombobox } from '@/components/ui/entity-combobox';
 import { fmt, fmtDate } from '@/pages/reports/shared';
 import { AssetsAccessDenied, ASSET_STATUS_LABELS } from './shared';
 
@@ -64,6 +70,10 @@ export default function AssetDisposal() {
     recordedBy: d => d.createdBy,
   });
 
+  const { pageRows, pagerProps } = useClientPage(sorted);
+
+  const costDisposed = disposals.reduce((s, d) => s + (Number(d.totalCost) || 0), 0);
+
   const [form, setForm] = useState({
     assetId: '', disposalType: 'sold' as AssetDisposalType, disposalDate: todayIso(), reason: '',
   });
@@ -98,18 +108,24 @@ export default function AssetDisposal() {
   return (
     <AppLayout>
       <div className="space-y-6">
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><Archive className="w-6 h-6 text-primary" /> Asset Disposal</h1>
-            <p className="text-muted-foreground mt-1">Sold, scrapped, written-off or transferred-outside assets — with history.</p>
-          </div>
-          <div className="flex gap-2">
-            {perm.canDownload && (
-              <Button variant="outline" size="sm" onClick={exportCSV}><Download className="w-4 h-4 mr-2" /> Export</Button>
-            )}
-            {perm.canAdd && <Button onClick={openAdd}><Plus className="w-4 h-4 mr-2" /> Record Disposal</Button>}
-          </div>
-        </div>
+        <PageHeader
+          title="Asset Disposal"
+          description="Sold, scrapped, written-off or transferred-outside assets — with history."
+          icon={Archive}
+          actions={
+            <>
+              {perm.canDownload && (
+                <Button variant="outline" size="sm" onClick={exportCSV}><Download className="w-4 h-4 mr-2" /> Export</Button>
+              )}
+              {perm.canAdd && <Button onClick={openAdd}><Plus className="w-4 h-4 mr-2" /> Record Disposal</Button>}
+            </>
+          }
+        />
+
+        <SummaryCardGrid>
+          <SummaryCard label="Disposals" value={String(disposals.length)} icon={Archive} tone="default" loading={isLoading} />
+          <SummaryCard label="Cost Disposed" value={fmt(costDisposed)} icon={Wallet} tone="warning" loading={isLoading} />
+        </SummaryCardGrid>
 
         <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
           <div className="p-4 border-b border-border flex flex-wrap gap-3 bg-muted/20 items-center">
@@ -134,13 +150,13 @@ export default function AssetDisposal() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {isLoading ? [...Array(5)].map((_, i) => (
-                <TableRow key={i}><TableCell colSpan={7}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
-              )) : disposals.length === 0 ? (
-                <TableRow><TableCell colSpan={7} className="text-center py-16 text-muted-foreground">
-                  <Archive className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No disposals recorded</p>
+              {isLoading ? (
+                <TableRow><TableCell colSpan={7} className="p-0"><TableSkeleton rows={8} cols={7} /></TableCell></TableRow>
+              ) : disposals.length === 0 ? (
+                <TableRow><TableCell colSpan={7} className="p-0">
+                  <EmptyState icon={Archive} title="No disposals recorded" hint="Record a disposal to see it here." compact />
                 </TableCell></TableRow>
-              ) : sorted.map(d => (
+              ) : pageRows.map(d => (
                 <TableRow key={d.id} className="hover:bg-muted/10">
                   <TableCell className="whitespace-nowrap text-sm">{fmtDate(d.disposalDate)}</TableCell>
                   <TableCell className="font-mono text-sm font-semibold whitespace-nowrap">{d.assetCode}</TableCell>
@@ -157,6 +173,9 @@ export default function AssetDisposal() {
               ))}
             </TableBody>
           </Table>
+          <div className="px-4 py-2 border-t border-border">
+            <TablePager {...pagerProps} />
+          </div>
         </div>
       </div>
 
@@ -169,14 +188,14 @@ export default function AssetDisposal() {
           <div className="space-y-4 pt-2">
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Asset <span className="text-destructive">*</span></label>
-              <Select value={form.assetId} onValueChange={v => setForm(s => ({ ...s, assetId: v }))}>
-                <SelectTrigger><SelectValue placeholder="Select asset" /></SelectTrigger>
-                <SelectContent>
-                  {(activeAssets as AssetPurchase[]).map(a => (
-                    <SelectItem key={a.id} value={String(a.id)}>{a.assetCode} — {a.assetName} ({a.currentLocationName})</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <EntityCombobox
+                options={(activeAssets as AssetPurchase[]).map(a => ({ id: a.id, label: `${a.assetCode} — ${a.assetName}`, sublabel: a.currentLocationName }))}
+                value={form.assetId ? Number(form.assetId) : null}
+                onChange={id => setForm(s => ({ ...s, assetId: id ? String(id) : '' }))}
+                placeholder="Select asset"
+                searchPlaceholder="Search assets…"
+                emptyLabel="No assets found."
+              />
               {selectedAsset && (
                 <p className="text-xs text-muted-foreground">Cost {fmt(selectedAsset.totalCost)} · at {selectedAsset.currentLocationName}</p>
               )}

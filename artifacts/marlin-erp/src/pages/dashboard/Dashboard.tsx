@@ -12,11 +12,14 @@ import {
 } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
+import { PageHeader } from '@/components/app/page-header';
+import { EmptyState } from '@/components/app/empty-state';
 import {
   ShieldOff, TrendingUp, ShoppingCart, Factory, Boxes,
   Landmark, Trophy, Users, AlertTriangle, Clock, MapPin,
   Warehouse, Store, ArrowUpRight, ArrowDownRight, Wallet,
-  Receipt, PieChart, BarChart3, Banknote, HandCoins, type LucideIcon,
+  Receipt, PieChart, BarChart3, Banknote, HandCoins,
+  LayoutDashboard, type LucideIcon,
 } from 'lucide-react';
 import { useLocation } from 'wouter';
 import {
@@ -193,9 +196,8 @@ function SectionCard({ title, icon, description, children }: {
 
 function Empty({ message }: { message: string }) {
   return (
-    <div className="h-full min-h-[140px] flex flex-col items-center justify-center text-muted-foreground py-6">
-      <Boxes className="w-8 h-8 mb-2 opacity-20" />
-      <p className="text-sm">{message}</p>
+    <div className="h-full min-h-[140px] flex items-center justify-center">
+      <EmptyState icon={Boxes} title={message} compact />
     </div>
   );
 }
@@ -469,24 +471,25 @@ export default function Dashboard() {
       <div className="space-y-6">
 
         {/* ── Header ─────────────────────────────────────────────────────── */}
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-          <div>
-            <h1 className="text-3xl font-bold tracking-tight">Business Dashboard</h1>
-            <p className="text-muted-foreground mt-1 flex items-center gap-1.5 text-sm">
-              <MapPin className="w-3.5 h-3.5" />
-              {bi?.scope.label ?? '…'} · {pLabel}
-            </p>
+        <PageHeader
+          title="Business Dashboard"
+          icon={LayoutDashboard}
+          actions={
+            <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 px-3 py-1">
+              <span className="w-2 h-2 rounded-full bg-primary mr-2 animate-pulse" />
+              Live Sync Active
+            </Badge>
+          }
+        >
+          <p className="text-muted-foreground flex items-center gap-1.5 text-sm">
+            <MapPin className="w-3.5 h-3.5" />
+            {bi?.scope.label ?? '…'} · {pLabel}
+          </p>
+          {/* ── Controls: date range (location comes from the header selector) ─ */}
+          <div className="flex flex-wrap items-center gap-3">
+            <RangeBar range={range} />
           </div>
-          <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 px-3 py-1">
-            <span className="w-2 h-2 rounded-full bg-primary mr-2 animate-pulse" />
-            Live Sync Active
-          </Badge>
-        </div>
-
-        {/* ── Controls: date range (location comes from the header selector) ─ */}
-        <div className="flex flex-wrap items-center gap-3">
-          <RangeBar range={range} />
-        </div>
+        </PageHeader>
 
         {isError && (
           <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">

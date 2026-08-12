@@ -14,25 +14,26 @@ import { Separator } from '@/components/ui/separator';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Table, TableBody, TableCell, TableHeader, TableRow } from '@/components/ui/table';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { Banknote, Warehouse, Store, RefreshCw, ArrowUpFromLine, CheckCircle2, ArrowRight } from 'lucide-react';
 import { toast } from 'sonner';
 import { useLocation as useWouter } from 'wouter';
+import { PageHeader } from '@/components/app/page-header';
+import { StatusBadge } from '@/components/app/status-badge';
+import { EmptyState } from '@/components/app/empty-state';
 
 function fmt(n: number) {
   return `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
+/** Maps deposit lifecycle to the shared status vocabulary (reconciled→settled). */
 function DepositStatusBadge({ status }: { status: string }) {
-  if (status === 'reconciled')
-    return <Badge className="bg-emerald-500/10 text-emerald-600 border-emerald-500/20">Reconciled</Badge>;
-  if (status === 'cancelled')
-    return <Badge variant="outline" className="text-muted-foreground">Cancelled</Badge>;
-  return <Badge className="bg-amber-500/10 text-amber-600 border-amber-500/20">Pending</Badge>;
+  if (status === 'reconciled') return <StatusBadge status="settled" label="Reconciled" />;
+  if (status === 'cancelled') return <StatusBadge status="cancelled" />;
+  return <StatusBadge status="pending" />;
 }
 
 export default function SalesCashBalance() {
@@ -122,27 +123,23 @@ export default function SalesCashBalance() {
       <div className="p-4 md:p-6 space-y-5 max-w-2xl">
 
         {/* Header */}
-        <div className="flex items-start justify-between">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-              <Banknote className="w-6 h-6 text-primary" /> Cash Balance
-            </h1>
-            <p className="text-sm text-muted-foreground mt-0.5 flex items-center gap-1.5">
-              <LocationIcon className="w-3.5 h-3.5" />
-              {locationName}
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            {balance && balance.availableBalance > 0 && perm.canAdd && (
-              <Button size="sm" onClick={openDeposit}>
-                <ArrowUpFromLine className="w-4 h-4 mr-1.5" /> Record Deposit
+        <PageHeader
+          title="Cash Balance"
+          icon={Banknote}
+          description={locationName}
+          actions={
+            <>
+              {balance && balance.availableBalance > 0 && perm.canAdd && (
+                <Button size="sm" onClick={openDeposit}>
+                  <ArrowUpFromLine className="w-4 h-4 mr-1.5" /> Record Deposit
+                </Button>
+              )}
+              <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground" onClick={() => refetch()} title="Refresh">
+                <RefreshCw className="w-4 h-4" />
               </Button>
-            )}
-            <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground" onClick={() => refetch()} title="Refresh">
-              <RefreshCw className="w-4 h-4" />
-            </Button>
-          </div>
-        </div>
+            </>
+          }
+        />
 
         {/* ── Deposit success banner ── */}
         {depositSuccess !== null && (
@@ -222,9 +219,8 @@ export default function SalesCashBalance() {
               {depositsLoading ? (
                 <p className="text-sm text-muted-foreground py-4 text-center">Loading…</p>
               ) : deposits.length === 0 ? (
-                <div className="rounded-lg border border-dashed border-border py-10 text-center text-muted-foreground space-y-1">
-                  <ArrowUpFromLine className="w-8 h-8 mx-auto opacity-30" />
-                  <p className="text-sm">No deposits recorded yet</p>
+                <div className="rounded-lg border border-dashed border-border">
+                  <EmptyState icon={ArrowUpFromLine} title="No deposits recorded yet" compact />
                 </div>
               ) : (
                 <div className="rounded-lg border border-border overflow-hidden">

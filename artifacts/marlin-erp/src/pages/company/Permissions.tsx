@@ -11,6 +11,7 @@ import {
 import { toast } from 'sonner';
 import { useGetMe, useListHierarchies, useListPermissions, setPermission } from '@workspace/api-client-react';
 import { usePermission } from '@/lib/usePermission';
+import { PageHeader } from '@/components/app/page-header';
 import { getPagePermRows, PAGE_PERM_KEYS } from '@/lib/moduleRegistry';
 import type { Hierarchy, Permission } from '@workspace/api-client-react';
 
@@ -218,23 +219,18 @@ export default function Permissions() {
       <div className="space-y-6 max-w-5xl">
 
         {/* ── Header ────────────────────────────────────────────────────────── */}
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-              <ShieldCheck className="w-6 h-6 text-primary" /> Permissions
-            </h1>
-            <p className="text-muted-foreground mt-1 text-sm">
-              One row for every page in the sidebar, in the order they appear there.
-              View decides whether the page is listed at all; the rest are enforced
-              by the server on every action.
-            </p>
-          </div>
-          <Button size="sm" onClick={save} disabled={saving || !dirty || isTopLevel}>
-            {saving
-              ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Saving…</>
-              : <><Save className="w-4 h-4 mr-2" />Save</>}
-          </Button>
-        </div>
+        <PageHeader
+          title="Permissions"
+          description="One row for every page in the sidebar, in the order they appear there. View decides whether the page is listed at all; the rest are enforced by the server on every action."
+          icon={ShieldCheck}
+          actions={
+            <Button size="sm" onClick={save} disabled={saving || !dirty || isTopLevel}>
+              {saving
+                ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Saving…</>
+                : <><Save className="w-4 h-4 mr-2" />Save</>}
+            </Button>
+          }
+        />
 
         {isLoading ? (
           <div className="flex items-center justify-center py-16 text-muted-foreground">

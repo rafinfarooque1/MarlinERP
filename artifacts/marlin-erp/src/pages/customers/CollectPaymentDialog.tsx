@@ -12,6 +12,7 @@ import {
 } from '@/components/ui/dialog';
 import { HandCoins } from 'lucide-react';
 import { ReceiveIntoSelect } from '@/components/receive-into-select';
+import { EmptyState } from '@/components/app/empty-state';
 import { toast } from 'sonner';
 
 const fmt = (n: unknown) => Number(n ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 });
@@ -100,11 +101,7 @@ export function CollectPaymentDialog({
         {isLoading ? (
           <div className="py-10 text-center text-sm text-muted-foreground">Loading open invoices…</div>
         ) : invoices.length === 0 ? (
-          <div className="py-10 text-center">
-            <HandCoins className="w-9 h-9 mx-auto text-muted-foreground/40 mb-2" />
-            <p className="font-medium text-sm">Nothing outstanding</p>
-            <p className="text-xs text-muted-foreground mt-1">All of this customer's invoices are fully settled.</p>
-          </div>
+          <EmptyState icon={HandCoins} title="Nothing outstanding" hint="All of this customer's invoices are fully settled." compact />
         ) : (
           <div className="space-y-4 pt-1">
             {/* Open invoices */}

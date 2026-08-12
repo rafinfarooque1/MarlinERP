@@ -14,6 +14,10 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { usePermission } from '@/lib/usePermission';
 import { GstScopeFilter, gstScopeLabel, type GstScope } from '@/components/accounts/GstScopeFilter';
 import { ExportButtons, type ReportDoc, type PdfSection } from '@/pages/reports/shared';
+import { PageHeader } from '@/components/app/page-header';
+import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
+import { EmptyState } from '@/components/app/empty-state';
+import { TableSkeleton } from '@/components/app/loading-skeletons';
 
 const fmt = (n: number) => `₹${Math.abs(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
@@ -47,6 +51,11 @@ export function GstDocumentsTable({ title, icon, rows, loading }: {
         <h3 className="font-semibold flex items-center gap-2">{icon} {title}</h3>
       </div>
       <div className="overflow-x-auto">
+        {loading ? (
+          <TableSkeleton rows={4} cols={9} />
+        ) : rows.length === 0 ? (
+          <EmptyState icon={FileText} title="No documents in this period" compact />
+        ) : (
         <Table>
           <TableHeader>
             <TableRow className="bg-muted/10">
@@ -62,11 +71,7 @@ export function GstDocumentsTable({ title, icon, rows, loading }: {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {loading ? (
-              <TableRow><TableCell colSpan={9}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
-            ) : rows.length === 0 ? (
-              <TableRow><TableCell colSpan={9} className="text-center py-8 text-muted-foreground text-sm">No documents in this period</TableCell></TableRow>
-            ) : sorted.map((r, i) => (
+            {sorted.map((r, i) => (
               <TableRow key={i} className="hover:bg-muted/10">
                 <TableCell className="text-xs whitespace-nowrap">{r.date}</TableCell>
                 <TableCell className="font-mono text-xs whitespace-nowrap">
@@ -93,6 +98,7 @@ export function GstDocumentsTable({ title, icon, rows, loading }: {
             )}
           </TableBody>
         </Table>
+        )}
       </div>
     </div>
   );
@@ -234,13 +240,12 @@ export default function GstSummary() {
   return (
     <AppLayout>
       <div className="space-y-6">
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><Receipt className="w-6 h-6 text-primary" /> GST Summary</h1>
-            <p className="text-muted-foreground mt-1">Output tax liability vs input tax credit, broken down by rate slab</p>
-          </div>
-          <ExportButtons onCSV={exportCsv} doc={buildDoc} canDownload={perm.canDownload} disabled={isLoading || docs.isLoading} />
-        </div>
+        <PageHeader
+          title="GST Summary"
+          description="Output tax liability vs input tax credit, broken down by rate slab"
+          icon={Receipt}
+          actions={<ExportButtons onCSV={exportCsv} doc={buildDoc} canDownload={perm.canDownload} disabled={isLoading || docs.isLoading} />}
+        />
 
         {/* Filters */}
         <div className="flex items-center gap-3 flex-wrap">
@@ -252,34 +257,32 @@ export default function GstSummary() {
         <GstScopeFilter value={scope} onChange={setScope} />
 
         {/* Summary Cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <div className="bg-card border border-border rounded-xl p-5">
-            <div className="flex items-center gap-2 mb-2">
-              <TrendingUp className="w-4 h-4 text-emerald-500" />
-              <p className="text-xs text-muted-foreground uppercase tracking-wider">Output Tax (Sales)</p>
-            </div>
-            <p className="text-2xl font-bold text-emerald-500 font-mono">{fmt(totalOutputTax)}</p>
-            <p className="text-xs text-muted-foreground mt-1">Tax collected from customers</p>
-          </div>
-          <div className="bg-card border border-border rounded-xl p-5">
-            <div className="flex items-center gap-2 mb-2">
-              <TrendingDown className="w-4 h-4 text-primary" />
-              <p className="text-xs text-muted-foreground uppercase tracking-wider">Input Tax Credit (Purchases)</p>
-            </div>
-            <p className="text-2xl font-bold text-primary font-mono">{fmt(totalInputTax)}</p>
-            <p className="text-xs text-muted-foreground mt-1">Tax paid to suppliers</p>
-          </div>
-          <div className="bg-card border border-border rounded-xl p-5">
-            <div className="flex items-center gap-2 mb-2">
-              <Receipt className="w-4 h-4 text-amber-500" />
-              <p className="text-xs text-muted-foreground uppercase tracking-wider">Net GST Payable</p>
-            </div>
-            <p className={`text-2xl font-bold font-mono ${netGst > 0 ? 'text-red-500' : 'text-emerald-500'}`}>
-              {fmt(netGst)}{netGst < 0 ? ' (credit)' : ''}
-            </p>
-            <p className="text-xs text-muted-foreground mt-1">Output − Input credit</p>
-          </div>
-        </div>
+        <SummaryCardGrid className="lg:grid-cols-3">
+          <SummaryCard
+            label="Output Tax (Sales)"
+            value={<span className="font-mono">{fmt(totalOutputTax)}</span>}
+            sub="Tax collected from customers"
+            icon={TrendingUp}
+            tone="positive"
+            loading={isLoading}
+          />
+          <SummaryCard
+            label="Input Tax Credit (Purchases)"
+            value={<span className="font-mono text-primary">{fmt(totalInputTax)}</span>}
+            sub="Tax paid to suppliers"
+            icon={TrendingDown}
+            tone="default"
+            loading={isLoading}
+          />
+          <SummaryCard
+            label="Net GST Payable"
+            value={<span className={`font-mono ${netGst > 0 ? 'text-red-500' : 'text-emerald-500'}`}>{fmt(netGst)}{netGst < 0 ? ' (credit)' : ''}</span>}
+            sub="Output − Input credit"
+            icon={Receipt}
+            tone="warning"
+            loading={isLoading}
+          />
+        </SummaryCardGrid>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {/* Output Tax Table */}
@@ -287,6 +290,11 @@ export default function GstSummary() {
             <div className="p-4 border-b border-border bg-muted/20">
               <h3 className="font-semibold flex items-center gap-2"><TrendingUp className="w-4 h-4 text-emerald-500" /> Output Tax (Sales)</h3>
             </div>
+            {isLoading ? (
+              <TableSkeleton rows={4} cols={6} />
+            ) : salesData.length === 0 ? (
+              <EmptyState icon={TrendingUp} title="No taxable sales in this period" compact />
+            ) : (
             <Table>
               <TableHeader>
                 <TableRow className="bg-muted/10">
@@ -299,13 +307,7 @@ export default function GstSummary() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {isLoading ? (
-                  <TableRow><TableCell colSpan={6}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
-                ) : salesData.length === 0 ? (
-                  <TableRow><TableCell colSpan={6} className="text-center py-8 text-muted-foreground text-sm">
-                    No taxable sales in this period
-                  </TableCell></TableRow>
-                ) : salesSort.sorted.map(r => (
+                {salesSort.sorted.map(r => (
                   <TableRow key={r.taxRate} className="hover:bg-muted/10">
                     <TableCell><Badge variant="secondary">{r.taxRate}%</Badge></TableCell>
                     <TableCell className="text-right font-mono text-xs">{fmt(Number(r.taxableValue))}</TableCell>
@@ -327,6 +329,7 @@ export default function GstSummary() {
                 )}
               </TableBody>
             </Table>
+            )}
           </div>
 
           {/* Input Tax Table */}
@@ -336,6 +339,11 @@ export default function GstSummary() {
                 <TrendingDown className="w-4 h-4 text-primary" /> Input Tax Credit (Purchases)
               </h3>
             </div>
+            {isLoading ? (
+              <TableSkeleton rows={4} cols={6} />
+            ) : purchasesData.length === 0 ? (
+              <EmptyState icon={TrendingDown} title="No purchase data in this period" compact />
+            ) : (
             <Table>
               <TableHeader>
                 <TableRow className="bg-muted/10">
@@ -348,13 +356,7 @@ export default function GstSummary() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {isLoading ? (
-                  <TableRow><TableCell colSpan={6}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
-                ) : purchasesData.length === 0 ? (
-                  <TableRow><TableCell colSpan={6} className="text-center py-8 text-muted-foreground text-sm">
-                    No purchase data in this period
-                  </TableCell></TableRow>
-                ) : purchasesSort.sorted.map((r, i) => (
+                {purchasesSort.sorted.map((r, i) => (
                   <TableRow key={i} className="hover:bg-muted/10">
                     <TableCell>
                       <div className="flex items-center gap-1">
@@ -376,6 +378,7 @@ export default function GstSummary() {
                 ))}
               </TableBody>
             </Table>
+            )}
           </div>
         </div>
 
@@ -384,6 +387,11 @@ export default function GstSummary() {
           <div className="p-4 border-b border-border bg-muted/20">
             <h3 className="font-semibold flex items-center gap-2"><Receipt className="w-4 h-4 text-primary" /> Month-wise Breakdown</h3>
           </div>
+          {isLoading ? (
+            <TableSkeleton rows={4} cols={6} />
+          ) : monthWise.length === 0 ? (
+            <EmptyState icon={Receipt} title="No activity in this period" compact />
+          ) : (
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
@@ -396,13 +404,7 @@ export default function GstSummary() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {isLoading ? (
-                <TableRow><TableCell colSpan={6}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
-              ) : monthWise.length === 0 ? (
-                <TableRow><TableCell colSpan={6} className="text-center py-8 text-muted-foreground text-sm">
-                  No activity in this period
-                </TableCell></TableRow>
-              ) : monthSort.sorted.map(m => (
+              {monthSort.sorted.map(m => (
                 <TableRow key={m.month} className="hover:bg-muted/10">
                   <TableCell className="text-sm font-medium">
                     {new Date(`${m.month}-01T00:00:00`).toLocaleString('en-IN', { month: 'short', year: 'numeric' })}
@@ -418,6 +420,7 @@ export default function GstSummary() {
               ))}
             </TableBody>
           </Table>
+          )}
         </div>
 
         {/* Document registers */}

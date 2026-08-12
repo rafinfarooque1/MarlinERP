@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import {
-  Plus, BookOpen, Trash2, Search, Calendar, AlertTriangle, ChevronDown, ChevronRight, Download, X,
+  Plus, BookOpen, Trash2, Search, Calendar, AlertTriangle, ChevronDown, ChevronRight, Download, X, Sigma, FileStack,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { downloadCSV } from '@/lib/download';
@@ -20,6 +20,11 @@ import { usePermission } from '@/lib/usePermission';
 import { AccountCombobox } from '@/components/ui/account-combobox';
 import { entryScopeKeyDown, autoFocusFirst, focusField, focusAndOpen, useEntryShortcuts } from '@/lib/keyboard-entry';
 import { useVoucherLocationChoice, parseLocKey, LocationSelectField } from '@/lib/voucherLocation';
+import { PageHeader } from '@/components/app/page-header';
+import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
+import { EmptyState } from '@/components/app/empty-state';
+import { TableSkeleton } from '@/components/app/loading-skeletons';
+import { TablePager, useClientPage } from '@/components/ui/table-pager';
 
 interface LineDraft { ledgerId: number; debit: string; credit: string }
 
@@ -153,6 +158,10 @@ export default function Journal() {
     amount: v => Number(v.totalAmount),
   });
 
+  const total = useMemo(() => filtered.reduce((s, v) => s + Number(v.totalAmount), 0), [filtered]);
+
+  const { pageRows, pagerProps } = useClientPage(sorted);
+
   if (!perm.isLoading && !perm.canView) {
     return (
       <AppLayout>
@@ -167,35 +176,43 @@ export default function Journal() {
   return (
     <AppLayout>
       <div className="space-y-6">
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-              <BookOpen className="w-6 h-6 text-primary" /> Journal Vouchers
-            </h1>
-            <p className="text-muted-foreground mt-1">Adjustments, accruals and non-cash entries</p>
-          </div>
-          <div className="flex gap-2">
-            {perm.canDownload && (
-              <Button variant="outline" size="sm" onClick={() => downloadCSV('journal-vouchers.csv', filtered.flatMap(v => v.lines.map(l => ({
-                Voucher: v.voucherNumber, Date: v.voucherDate, Ledger: l.ledgerName,
-                Debit: l.debit, Credit: l.credit, Narration: v.narration || '',
-              }))))}>
-                <Download className="w-4 h-4 mr-2" /> Export
-              </Button>
-            )}
-            {perm.canAdd && (
-              <Button onClick={() => { resetForm(); setIsOpen(true); }}>
-                <Plus className="w-4 h-4 mr-2" /> New Journal
-              </Button>
-            )}
-          </div>
+        <PageHeader
+          title="Journal Vouchers"
+          description="Adjustments, accruals and non-cash entries"
+          icon={BookOpen}
+          actions={
+            <>
+              {perm.canDownload && (
+                <Button variant="outline" size="sm" onClick={() => downloadCSV('journal-vouchers.csv', filtered.flatMap(v => v.lines.map(l => ({
+                  Voucher: v.voucherNumber, Date: v.voucherDate, Ledger: l.ledgerName,
+                  Debit: l.debit, Credit: l.credit, Narration: v.narration || '',
+                }))))}>
+                  <Download className="w-4 h-4 mr-2" /> Export
+                </Button>
+              )}
+              {perm.canAdd && (
+                <Button onClick={() => { resetForm(); setIsOpen(true); }}>
+                  <Plus className="w-4 h-4 mr-2" /> New Journal
+                </Button>
+              )}
+            </>
+          }
+        />
+
+        <SummaryCardGrid>
+          <SummaryCard label="Journal Vouchers" value={filtered.length.toLocaleString('en-IN')} icon={FileStack} tone="info" loading={isLoading} />
+          <SummaryCard label="Total Amount" value={inr(total)} icon={Sigma} tone="default" loading={isLoading} />
+        </SummaryCardGrid>
+
+        <div className="relative w-full sm:max-w-sm">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
+          <Input placeholder="Search voucher, ledger or narration..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9" />
         </div>
 
         <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
-          <div className="p-4 border-b border-border flex items-center gap-2 bg-muted/20">
-            <Search className="w-4 h-4 text-muted-foreground shrink-0" />
-            <Input placeholder="Search voucher, ledger or narration..." value={search} onChange={e => setSearch(e.target.value)} className="border-transparent bg-transparent focus-visible:ring-0 max-w-sm max-md:max-w-full" />
-          </div>
+          {isLoading ? (
+            <TableSkeleton rows={8} cols={6} />
+          ) : (
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
@@ -208,13 +225,11 @@ export default function Journal() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {isLoading ? [...Array(3)].map((_, i) => (
-                <TableRow key={i}><TableCell colSpan={6}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
-              )) : filtered.length === 0 ? (
-                <TableRow><TableCell colSpan={6} className="text-center py-16 text-muted-foreground">
-                  <BookOpen className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No journal vouchers yet</p>
+              {filtered.length === 0 ? (
+                <TableRow><TableCell colSpan={6} className="p-0">
+                  <EmptyState icon={BookOpen} title="No journal vouchers yet" hint="Adjustments, accruals and non-cash entries appear here." compact />
                 </TableCell></TableRow>
-              ) : sorted.map(v => (
+              ) : pageRows.map(v => (
                 <Fragment key={v.id}>
                   <TableRow className="hover:bg-muted/10 cursor-pointer" onClick={() => setExpanded(expanded === v.id ? null : v.id)}>
                     <TableCell className="pr-0">
@@ -264,7 +279,9 @@ export default function Journal() {
               ))}
             </TableBody>
           </Table>
+          )}
         </div>
+        <TablePager {...pagerProps} />
       </div>
 
       {/* ── New Journal Dialog ── */}

@@ -1,9 +1,11 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
+import { useLocation } from 'wouter';
 import { usePaginatedStock, useListWarehouses, useListOutlets, useListStockBatches, type StockBatch } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Search, BarChart3, Download, AlertTriangle, ChevronRight, ChevronDown, Layers, ShieldOff } from 'lucide-react';
 import { downloadCSV } from '@/lib/download';
@@ -11,6 +13,30 @@ import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { Badge } from '@/components/ui/badge';
 import { usePermission } from '@/lib/usePermission';
 import { useOutletsEnabled, useClearOutletSelection } from '@/lib/useFeatureFlags';
+import { PageHeader } from '@/components/app/page-header';
+import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
+import { FilterPanel } from '@/components/app/filter-panel';
+import { EmptyState } from '@/components/app/empty-state';
+import { TableSkeleton } from '@/components/app/loading-skeletons';
+import { Boxes, Wallet, Snowflake, PackageSearch } from 'lucide-react';
+import StorageLocationsTab from './StorageLocationsTab';
+import ItemTrackingTab from './ItemTrackingTab';
+
+/**
+ * Path-driven tabs — the URL is the single source of truth for the active tab
+ * so deep links and the browser back button work. No local tab state.
+ */
+export const TAB_PATHS = {
+  live:     '/headoffice/stock',
+  storage:  '/headoffice/stock/storage',
+  tracking: '/headoffice/stock/tracking',
+} as const;
+
+export const PATH_TABS: Record<string, keyof typeof TAB_PATHS> = {
+  '/headoffice/stock':          'live',
+  '/headoffice/stock/storage':  'storage',
+  '/headoffice/stock/tracking': 'tracking',
+};
 
 const money = (n: number) => `₹${(Number(n) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const dateIN = (d: string | null) => (d ? new Date(d).toLocaleDateString('en-IN') : '—');
@@ -41,6 +67,8 @@ function ExpiryBadge({ batch }: { batch: StockBatch }) {
 
 export default function Stock() {
   const perm = usePermission('page:/headoffice/stock');
+  const [location, navigate] = useLocation();
+  const activeTab = PATH_TABS[location] ?? 'live';
   const [branchType,       setBranchType]       = useState<string>('all');
   const [branchId,         setBranchId]         = useState<string>('');
   useClearOutletSelection(branchType === 'outlet', () => { setBranchType('all'); setBranchId(''); });
@@ -76,7 +104,8 @@ export default function Stock() {
   // dashes. Absent means hidden: if the answer has not arrived yet, showing
   // nothing is the safe direction.
   const canSeeValue = (stockPage as any)?.canViewValuation === true;
-  const COLS = canSeeValue ? 9 : 8;
+  // +1 vs. the money-visible column count for the new "Storage" column.
+  const COLS = canSeeValue ? 10 : 9;
   const totalRows  = stockPage?.total ?? 0;
 
   // Lots exist for all three product kinds. Omitting materialType returns every
@@ -121,6 +150,9 @@ export default function Stock() {
 
   const totalValue = filtered.reduce((s, r) => s + Number(r.stockValue || 0), 0);
 
+  const filterCount = (materialType !== 'all' ? 1 : 0) + (branchType !== 'all' ? 1 : 0);
+  const clearFilters = () => { setMaterialType('all'); setBranchType('all'); setBranchId(''); };
+
   if (!perm.isLoading && !perm.canView) {
     return (
       <AppLayout>
@@ -143,83 +175,121 @@ export default function Stock() {
   return (
     <AppLayout>
       <div className="space-y-6">
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-              <BarChart3 className="w-6 h-6 text-primary" /> Live Stock
-            </h1>
-            <p className="text-muted-foreground mt-1">
-              All inventory — Item Name (SKU), Raw Materials, and Packing Materials across all locations
-            </p>
-          </div>
-          {perm.canDownload && (
-          <Button variant="outline" size="sm" onClick={() => downloadCSV('stock.csv', filtered.map(s => ({
-            Item: s.itemName,
-            'Item Type': MAT_TYPE_LABELS[s.materialType ?? 'item'] ?? s.materialType,
-            Location: s.branchName,
-            'Location Type': s.branchType,
-            Qty: s.quantity,
-            Reserved: s.reserved || 0,
-            Available: s.available,
-            Unit: s.unit,
-            'Reorder Level': s.reorderLevel,
-            // The export follows the screen. A role that cannot see the money
-            // on screen must not be able to download it either.
-            ...(canSeeValue ? { 'Avg Cost': s.avgCost, Value: s.stockValue } : {}),
-          })))}>
-            <Download className="w-4 h-4 mr-2" /> Export
-          </Button>
+        <Tabs value={activeTab} className="space-y-6">
+          <TabsList>
+            <TabsTrigger value="live" onClick={() => navigate(TAB_PATHS.live)}>
+              <BarChart3 className="w-4 h-4 mr-2" /> Live Stock
+            </TabsTrigger>
+            <TabsTrigger value="storage" onClick={() => navigate(TAB_PATHS.storage)}>
+              <Snowflake className="w-4 h-4 mr-2" /> Storage Locations
+            </TabsTrigger>
+            <TabsTrigger value="tracking" onClick={() => navigate(TAB_PATHS.tracking)}>
+              <PackageSearch className="w-4 h-4 mr-2" /> Item Tracking
+            </TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="live" className="space-y-6 mt-0">
+        <PageHeader
+          title="Live Stock"
+          description="All inventory — Item Name (SKU), Raw Materials, and Packing Materials across all locations"
+          icon={BarChart3}
+          actions={perm.canDownload ? (
+            <Button variant="outline" size="sm" onClick={() => downloadCSV('stock.csv', filtered.map(s => ({
+              Item: s.itemName,
+              'Item Type': MAT_TYPE_LABELS[s.materialType ?? 'item'] ?? s.materialType,
+              Location: s.branchName,
+              'Location Type': s.branchType,
+              Qty: s.quantity,
+              Reserved: s.reserved || 0,
+              Available: s.available,
+              Unit: s.unit,
+              'Reorder Level': s.reorderLevel,
+              // The export follows the screen. A role that cannot see the money
+              // on screen must not be able to download it either.
+              ...(canSeeValue ? { 'Avg Cost': s.avgCost, Value: s.stockValue } : {}),
+            })))}>
+              <Download className="w-4 h-4 mr-2" /> Export
+            </Button>
+          ) : undefined}
+        />
+
+        <SummaryCardGrid>
+          <SummaryCard
+            label="Stock Entries"
+            value={totalRows.toLocaleString('en-IN')}
+            icon={Boxes}
+            loading={isLoading}
+          />
+          {canSeeValue && (
+            <SummaryCard
+              label="Total Stock Value"
+              value={money(totalValue)}
+              icon={Wallet}
+              tone="positive"
+              loading={isLoading}
+            />
           )}
+        </SummaryCardGrid>
+
+        {/* Toolbar: search left, filters right */}
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div className="relative w-full sm:max-w-xs">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+            <Input
+              placeholder="Search item or location..."
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              className="pl-9"
+            />
+          </div>
+          <FilterPanel activeCount={filterCount} onClear={clearFilters}>
+            <div className="space-y-1.5">
+              <label className="text-xs text-muted-foreground">Item type</label>
+              <Select value={materialType} onValueChange={v => setMaterialType(v)}>
+                <SelectTrigger className="w-full"><SelectValue placeholder="All Types" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Item Types</SelectItem>
+                  <SelectItem value="item">Item Name (SKU)</SelectItem>
+                  <SelectItem value="material">Raw Material</SelectItem>
+                  <SelectItem value="raw_material">Packing Material</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-xs text-muted-foreground">Location</label>
+              <Select value={branchType} onValueChange={v => { setBranchType(v); setBranchId(''); }}>
+                <SelectTrigger className="w-full"><SelectValue placeholder="All Locations" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Locations</SelectItem>
+                  <SelectItem value="headoffice">Head Office</SelectItem>
+                  <SelectItem value="warehouse">Warehouse</SelectItem>
+                  {outletsEnabled && <SelectItem value="outlet">Outlet</SelectItem>}
+                </SelectContent>
+              </Select>
+            </div>
+            {branchOptions.length > 0 && (
+              <div className="space-y-1.5">
+                <label className="text-xs text-muted-foreground">Specific location</label>
+                <Select value={branchId} onValueChange={v => setBranchId(v)}>
+                  <SelectTrigger className="w-full"><SelectValue placeholder="All" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="0">All</SelectItem>
+                    {branchOptions.map((b: any) => (
+                      <SelectItem key={b.id} value={String(b.id)}>{b.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+          </FilterPanel>
         </div>
 
         <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
-          {/* Filter bar */}
-          <div className="p-4 border-b border-border flex flex-wrap gap-3 bg-muted/20">
-            <div className="flex items-center gap-2 flex-1 min-w-[180px]">
-              <Search className="w-4 h-4 text-muted-foreground shrink-0" />
-              <Input
-                placeholder="Search item or location..."
-                value={search}
-                onChange={e => setSearch(e.target.value)}
-                className="border-transparent bg-transparent focus-visible:ring-0"
-              />
-            </div>
-
-            {/* Item Type filter */}
-            <Select value={materialType} onValueChange={v => setMaterialType(v)}>
-              <SelectTrigger className="w-44"><SelectValue placeholder="All Types" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Item Types</SelectItem>
-                <SelectItem value="item">Item Name (SKU)</SelectItem>
-                <SelectItem value="material">Raw Material</SelectItem>
-                <SelectItem value="raw_material">Packing Material</SelectItem>
-              </SelectContent>
-            </Select>
-
-            {/* Location filter */}
-            <Select value={branchType} onValueChange={v => { setBranchType(v); setBranchId(''); }}>
-              <SelectTrigger className="w-44"><SelectValue placeholder="All Locations" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Locations</SelectItem>
-                <SelectItem value="headoffice">Head Office</SelectItem>
-                <SelectItem value="warehouse">Warehouse</SelectItem>
-                {outletsEnabled && <SelectItem value="outlet">Outlet</SelectItem>}
-              </SelectContent>
-            </Select>
-
-            {branchOptions.length > 0 && (
-              <Select value={branchId} onValueChange={v => setBranchId(v)}>
-                <SelectTrigger className="w-44"><SelectValue placeholder="All" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="0">All</SelectItem>
-                  {branchOptions.map((b: any) => (
-                    <SelectItem key={b.id} value={String(b.id)}>{b.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
-          </div>
-
+          {isLoading ? (
+            <TableSkeleton rows={8} cols={COLS} />
+          ) : filtered.length === 0 ? (
+            <EmptyState icon={BarChart3} title="No stock data found" hint="Try adjusting your search or filters." />
+          ) : (
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
@@ -227,6 +297,7 @@ export default function Stock() {
                 <SortableHead k="itemName" sort={sort}>Item</SortableHead>
                 <SortableHead k="materialType" sort={sort}>Item Type</SortableHead>
                 <SortableHead k="branchName" sort={sort}>Location</SortableHead>
+                <TableHead>Storage</TableHead>
                 <SortableHead k="quantity" sort={sort} className="text-right">Quantity</SortableHead>
                 <SortableHead k="reserved" sort={sort} className="text-right">Reserved</SortableHead>
                 <SortableHead k="available" sort={sort} className="text-right">Available</SortableHead>
@@ -235,22 +306,7 @@ export default function Stock() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {isLoading ? (
-                [...Array(5)].map((_, i) => (
-                  <TableRow key={i}>
-                    <TableCell colSpan={COLS}>
-                      <div className="h-8 bg-muted/30 rounded animate-pulse" />
-                    </TableCell>
-                  </TableRow>
-                ))
-              ) : filtered.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={COLS} className="text-center py-16 text-muted-foreground">
-                    <BarChart3 className="w-10 h-10 mx-auto mb-3 opacity-20" />
-                    <p>No stock data found</p>
-                  </TableCell>
-                </TableRow>
-              ) : sorted.map((s, i) => {
+              {sorted.map((s, i) => {
                 const kind     = (s.materialType ?? 'item') as string;
                 const isItem   = kind === 'item';
                 const rowKey   = `${kind}:${s.branchType}:${s.branchId}:${s.itemId}:${i}`;
@@ -280,6 +336,19 @@ export default function Stock() {
                       <TableCell className="font-semibold">{s.itemName}</TableCell>
                       <TableCell><ItemTypeBadge type={s.materialType} /></TableCell>
                       <TableCell className="text-muted-foreground">{s.branchName || 'Head Office'}</TableCell>
+                      <TableCell>
+                        {Array.isArray(s.storageLocations) && s.storageLocations.length > 0 ? (
+                          <div className="flex flex-wrap gap-1">
+                            {s.storageLocations.map((sl: any, li: number) => (
+                              <Badge key={`${sl.storageLocationId ?? sl.name}:${li}`} variant="secondary" className="text-[10px] font-normal gap-1">
+                                {sl.name} <span className="font-mono">({Number(sl.quantity).toLocaleString('en-IN')})</span>
+                              </Badge>
+                            ))}
+                          </div>
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
+                      </TableCell>
                       <TableCell className="text-right font-mono text-sm">
                         {Number(s.quantity).toLocaleString('en-IN')}{' '}
                         <span className="text-xs font-normal text-muted-foreground">{s.unit}</span>
@@ -393,6 +462,7 @@ export default function Stock() {
               })}
             </TableBody>
           </Table>
+          )}
 
           {totalRows > 0 && (
             <div className="p-3 border-t border-border text-xs text-muted-foreground flex flex-wrap items-center justify-between gap-2">
@@ -406,6 +476,26 @@ export default function Stock() {
             </div>
           )}
         </div>
+          </TabsContent>
+
+          <TabsContent value="storage" className="space-y-6 mt-0">
+            <PageHeader
+              title="Storage Locations"
+              description="Where each product sits inside a warehouse — freezers, cold rooms, racks and shelves"
+              icon={Snowflake}
+            />
+            <StorageLocationsTab perm={{ canAdd: perm.canAdd, canEdit: perm.canEdit, canDelete: perm.canDelete }} />
+          </TabsContent>
+
+          <TabsContent value="tracking" className="space-y-6 mt-0">
+            <PageHeader
+              title="Item Tracking"
+              description="The full lifecycle of one product — purchases, sales, returns, transfers, production and stock counts"
+              icon={PackageSearch}
+            />
+            <ItemTrackingTab />
+          </TabsContent>
+        </Tabs>
       </div>
     </AppLayout>
   );

@@ -11,10 +11,13 @@ import { Table, TableBody, TableCell, TableHeader, TableRow } from '@/components
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Boxes, Download, ShieldOff, CheckCircle2, AlertTriangle, PackageX } from 'lucide-react';
+import { Boxes, Download, ShieldOff, CheckCircle2, PackageX, Search } from 'lucide-react';
 import { downloadCSV } from '@/lib/download';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { usePermission } from '@/lib/usePermission';
+import { PageHeader } from '@/components/app/page-header';
+import { EmptyState } from '@/components/app/empty-state';
+import { TableSkeleton } from '@/components/app/loading-skeletons';
 
 const fmt = (n: number) => `₹${(Number(n) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const qty = (n: number) => (Number(n) || 0).toLocaleString('en-IN');
@@ -23,7 +26,7 @@ const cap = (s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
 
 function StatCard({ label, value, accent }: { label: string; value: string; accent?: string }) {
   return (
-    <div className="bg-card border border-border rounded-xl p-5">
+    <div className="bg-card border border-border rounded-xl p-5 shadow-sm">
       <p className="text-xs text-muted-foreground uppercase tracking-wider">{label}</p>
       <p className={`text-2xl font-bold font-mono mt-1 ${accent ?? ''}`}>{value}</p>
     </div>
@@ -215,14 +218,11 @@ export default function InventoryReports() {
   return (
     <AppLayout>
       <div className="space-y-6">
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-              <Boxes className="w-6 h-6 text-primary" /> Inventory Reports
-            </h1>
-            <p className="text-muted-foreground mt-1">Valuation, expiry risk and reorder planning</p>
-          </div>
-        </div>
+        <PageHeader
+          title="Inventory Reports"
+          description="Valuation, expiry risk and reorder planning"
+          icon={Boxes}
+        />
 
         <Tabs value={tab} onValueChange={setTab}>
           <TabsList>
@@ -277,6 +277,11 @@ export default function InventoryReports() {
               <div className="p-4 border-b border-border bg-muted/20">
                 <h3 className="font-semibold text-sm">Locations Summary</h3>
               </div>
+              {valuation.isLoading ? (
+                <TableSkeleton rows={3} cols={7} />
+              ) : (val?.locations.length ?? 0) === 0 ? (
+                <EmptyState title="No stock locations" compact />
+              ) : (
               <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
@@ -291,13 +296,7 @@ export default function InventoryReports() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {valuation.isLoading ? (
-                      Array.from({ length: 3 }).map((_, i) => (
-                        <TableRow key={i}><TableCell colSpan={7}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
-                      ))
-                    ) : (val?.locations.length ?? 0) === 0 ? (
-                      <TableRow><TableCell colSpan={7} className="text-center py-8 text-muted-foreground text-sm">No stock locations</TableCell></TableRow>
-                    ) : locationSort.sorted.map((l, i) => (
+                    {locationSort.sorted.map((l, i) => (
                       <TableRow key={i} className="hover:bg-muted/10">
                         <TableCell className="text-sm font-medium">{l.branchName}</TableCell>
                         <TableCell><Badge variant="secondary" className="text-xs">{cap(l.branchType)}</Badge></TableCell>
@@ -311,15 +310,19 @@ export default function InventoryReports() {
                   </TableBody>
                 </Table>
               </div>
+              )}
             </div>
 
             <div className="flex items-center justify-between flex-wrap gap-3">
-              <Input
-                placeholder="Search item or location…"
-                value={search}
-                onChange={e => setSearch(e.target.value)}
-                className="w-64 max-md:w-full"
-              />
+              <div className="relative w-64 max-md:w-full">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                <Input
+                  placeholder="Search item or location…"
+                  value={search}
+                  onChange={e => setSearch(e.target.value)}
+                  className="pl-9 w-full"
+                />
+              </div>
               {perms.canDownload && valRows.length > 0 && (
                 <Button variant="outline" size="sm" onClick={exportValuation}><Download className="w-4 h-4 mr-2" /> Export CSV</Button>
               )}
@@ -329,6 +332,11 @@ export default function InventoryReports() {
               <div className="p-4 border-b border-border bg-muted/20">
                 <h3 className="font-semibold text-sm">Valuation Detail</h3>
               </div>
+              {valuation.isLoading ? (
+                <TableSkeleton rows={5} cols={9} />
+              ) : filteredValRows.length === 0 ? (
+                <EmptyState title="No matching stock" hint="Try adjusting your search or filters." compact />
+              ) : (
               <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
@@ -345,13 +353,7 @@ export default function InventoryReports() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {valuation.isLoading ? (
-                      Array.from({ length: 5 }).map((_, i) => (
-                        <TableRow key={i}><TableCell colSpan={9}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
-                      ))
-                    ) : filteredValRows.length === 0 ? (
-                      <TableRow><TableCell colSpan={9} className="text-center py-8 text-muted-foreground text-sm">No matching stock</TableCell></TableRow>
-                    ) : valSort.sorted.map((r, i) => (
+                    {valSort.sorted.map((r, i) => (
                       <TableRow key={i} className="hover:bg-muted/10">
                         <TableCell><Badge variant="outline" className="text-[10px]">{r.typeLabel}</Badge></TableCell>
                         <TableCell className="text-sm font-medium">{r.itemName}</TableCell>
@@ -373,6 +375,7 @@ export default function InventoryReports() {
                   </TableBody>
                 </Table>
               </div>
+              )}
             </div>
           </TabsContent>
 
@@ -424,6 +427,11 @@ export default function InventoryReports() {
             )}
 
             <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
+              {nearExpiry.isLoading ? (
+                <TableSkeleton rows={5} cols={9} />
+              ) : nearExpRows.length === 0 ? (
+                <EmptyState icon={CheckCircle2} title="No batches nearing expiry" compact />
+              ) : (
               <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
@@ -440,13 +448,7 @@ export default function InventoryReports() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {nearExpiry.isLoading ? (
-                      Array.from({ length: 5 }).map((_, i) => (
-                        <TableRow key={i}><TableCell colSpan={9}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
-                      ))
-                    ) : nearExpRows.length === 0 ? (
-                      <TableRow><TableCell colSpan={9} className="text-center py-8 text-muted-foreground text-sm">No batches nearing expiry</TableCell></TableRow>
-                    ) : nearExpSort.sorted.map((r) => (
+                    {nearExpSort.sorted.map((r) => (
                       <TableRow key={r.id} className="hover:bg-muted/10">
                         <TableCell><Badge variant="outline" className="text-[10px]">{r.typeLabel}</Badge></TableCell>
                         <TableCell className="text-sm font-medium">{r.itemName}</TableCell>
@@ -466,6 +468,7 @@ export default function InventoryReports() {
                   </TableBody>
                 </Table>
               </div>
+              )}
             </div>
           </TabsContent>
 
@@ -517,6 +520,11 @@ export default function InventoryReports() {
             )}
 
             <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
+              {expired.isLoading ? (
+                <TableSkeleton rows={5} cols={9} />
+              ) : expRows.length === 0 ? (
+                <EmptyState icon={CheckCircle2} title="No expired stock" compact />
+              ) : (
               <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
@@ -533,13 +541,7 @@ export default function InventoryReports() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {expired.isLoading ? (
-                      Array.from({ length: 5 }).map((_, i) => (
-                        <TableRow key={i}><TableCell colSpan={9}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
-                      ))
-                    ) : expRows.length === 0 ? (
-                      <TableRow><TableCell colSpan={9} className="text-center py-8 text-muted-foreground text-sm">No expired stock</TableCell></TableRow>
-                    ) : expSort.sorted.map((r) => (
+                    {expSort.sorted.map((r) => (
                       <TableRow key={r.id} className="hover:bg-muted/10">
                         <TableCell><Badge variant="outline" className="text-[10px]">{r.typeLabel}</Badge></TableCell>
                         <TableCell className="text-sm font-medium">{r.itemName}</TableCell>
@@ -557,6 +559,7 @@ export default function InventoryReports() {
                   </TableBody>
                 </Table>
               </div>
+              )}
             </div>
           </TabsContent>
 
@@ -623,6 +626,11 @@ export default function InventoryReports() {
             )}
 
             <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
+              {movement.isLoading ? (
+                <TableSkeleton rows={5} cols={8} />
+              ) : movementRows.length === 0 ? (
+                <EmptyState title="No stock in selected class" compact />
+              ) : (
               <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
@@ -638,13 +646,7 @@ export default function InventoryReports() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {movement.isLoading ? (
-                      Array.from({ length: 5 }).map((_, i) => (
-                        <TableRow key={i}><TableCell colSpan={8}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
-                      ))
-                    ) : movementRows.length === 0 ? (
-                      <TableRow><TableCell colSpan={8} className="text-center py-8 text-muted-foreground text-sm">No stock in selected class</TableCell></TableRow>
-                    ) : movementSort.sorted.map((r: any, i: number) => {
+                    {movementSort.sorted.map((r: any, i: number) => {
                       const classMap: Record<string, string> = {
                         fast: 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20',
                         slow: 'bg-amber-500/10 text-amber-600 border-amber-500/20',
@@ -671,6 +673,7 @@ export default function InventoryReports() {
                   </TableBody>
                 </Table>
               </div>
+              )}
             </div>
           </TabsContent>
 
@@ -689,6 +692,11 @@ export default function InventoryReports() {
             )}
 
             <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
+              {reorder.isLoading ? (
+                <TableSkeleton rows={5} cols={6} />
+              ) : reorderRows.length === 0 ? (
+                <EmptyState icon={PackageX} title="All stock is above reorder levels" compact />
+              ) : (
               <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
@@ -702,18 +710,7 @@ export default function InventoryReports() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {reorder.isLoading ? (
-                      Array.from({ length: 5 }).map((_, i) => (
-                        <TableRow key={i}><TableCell colSpan={6}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
-                      ))
-                    ) : reorderRows.length === 0 ? (
-                      <TableRow>
-                        <TableCell colSpan={6} className="text-center py-8 text-muted-foreground text-sm">
-                          <PackageX className="w-5 h-5 mx-auto mb-2 opacity-60" />
-                          All stock is above reorder levels
-                        </TableCell>
-                      </TableRow>
-                    ) : reorderSort.sorted.map((r, i) => (
+                    {reorderSort.sorted.map((r, i) => (
                       <TableRow key={i} className="hover:bg-muted/10">
                         <TableCell className="text-sm font-medium">{r.itemName}</TableCell>
                         <TableCell className="text-xs text-muted-foreground">{r.unit || '—'}</TableCell>
@@ -726,6 +723,7 @@ export default function InventoryReports() {
                   </TableBody>
                 </Table>
               </div>
+              )}
             </div>
           </TabsContent>
         </Tabs>

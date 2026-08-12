@@ -24,6 +24,7 @@ import {
   type FinancialStatements, type StatementTarget, type StatementExpansion,
 } from './chartCommon';
 import { ChartHierarchy } from './ChartHierarchy';
+import { PageHeader } from '@/components/app/page-header';
 
 /* ── helpers ─────────────────────────────────────────────────────────────────── */
 function computeDateRange(period: string, from: string, to: string) {
@@ -719,14 +720,11 @@ export default function ChartOfAccounts() {
       <div className="space-y-5">
 
         {/* ── Header ── */}
-        <div>
-          <h1 className="text-xl font-bold tracking-tight flex items-center gap-2">
-            <Landmark className="w-5 h-5 text-primary" /> Chart of Accounts
-          </h1>
-          <p className="text-muted-foreground mt-0.5 text-xs">
-            Account hierarchy, Balance Sheet &amp; Profit &amp; Loss · All figures computed live from transactions
-          </p>
-        </div>
+        <PageHeader
+          title="Chart of Accounts"
+          description="Account hierarchy, Balance Sheet & Profit & Loss · All figures computed live from transactions"
+          icon={Landmark}
+        />
 
         {/* ── Filter bar ── */}
         <div className="flex flex-wrap items-center gap-2">

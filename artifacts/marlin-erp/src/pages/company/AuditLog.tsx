@@ -10,11 +10,15 @@ import { Badge } from '@/components/ui/badge';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import {
   Shield, Search, ChevronLeft, ChevronRight, Eye, Plus, Pencil, Trash2,
-  Filter, Calendar, RefreshCw,
+  Calendar, RefreshCw,
   ShieldOff,
 } from 'lucide-react';
 import { Separator } from '@/components/ui/separator';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
+import { PageHeader } from '@/components/app/page-header';
+import { FilterPanel } from '@/components/app/filter-panel';
+import { TableSkeleton } from '@/components/app/loading-skeletons';
+import { EmptyState } from '@/components/app/empty-state';
 
 const MODULES = [
   { value: 'all',        label: 'All Modules' },
@@ -170,41 +174,34 @@ export default function AuditLog() {
   return (
     <AppLayout>
       <div className="space-y-6">
-        {/* Header */}
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-              <Shield className="w-6 h-6 text-primary" /> Audit Trail
-            </h1>
-            <p className="text-muted-foreground mt-1">Read-only log of all create, update, and delete actions</p>
-          </div>
-          <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isFetching}>
-            <RefreshCw className={`w-4 h-4 mr-2 ${isFetching ? 'animate-spin' : ''}`} /> Refresh
-          </Button>
-        </div>
+        <PageHeader
+          title="Audit Trail"
+          description="Read-only log of all create, update, and delete actions"
+          icon={Shield}
+          actions={
+            <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isFetching}>
+              <RefreshCw className={`w-4 h-4 mr-2 ${isFetching ? 'animate-spin' : ''}`} /> Refresh
+            </Button>
+          }
+        />
 
-        {/* Filters */}
-        <div className="bg-card border border-border rounded-xl p-4 space-y-3">
-          <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
-            <Filter className="w-4 h-4" /> Filters
-            {hasFilters && (
-              <button onClick={resetFilters} className="ml-auto text-xs text-primary hover:underline">
-                Clear all
-              </button>
-            )}
+        {/* Toolbar: search on the left, filters on the right */}
+        <div className="flex flex-col sm:flex-row sm:items-start gap-3">
+          <div className="relative flex-1 max-w-sm">
+            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              placeholder="Search descriptions…"
+              value={searchInput}
+              onChange={e => setSearchInput(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') { setSearch(searchInput); setPage(1); } }}
+              className="pl-9"
+            />
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
-            {/* Search */}
-            <div className="relative lg:col-span-2">
-              <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                placeholder="Search descriptions…"
-                value={searchInput}
-                onChange={e => setSearchInput(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter') { setSearch(searchInput); setPage(1); } }}
-                className="pl-9"
-              />
-            </div>
+          <FilterPanel
+            className="sm:ml-auto"
+            activeCount={(module !== 'all' ? 1 : 0) + (action !== 'all' ? 1 : 0) + (dateFrom ? 1 : 0) + (dateTo ? 1 : 0)}
+            onClear={resetFilters}
+          >
             {/* Module */}
             <Select value={module} onValueChange={v => { setModule(v); setPage(1); }}>
               <SelectTrigger><SelectValue placeholder="Module" /></SelectTrigger>
@@ -224,14 +221,14 @@ export default function AuditLog() {
               <Calendar className="w-4 h-4 text-muted-foreground shrink-0" />
               <Input type="date" value={dateFrom} onChange={e => { setDateFrom(e.target.value); setPage(1); }} className="text-sm" />
             </div>
-          </div>
-          {/* Date To (separate row for readability) */}
-          {dateFrom && (
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-muted-foreground w-24">To date</span>
-              <Input type="date" value={dateTo} min={dateFrom} onChange={e => { setDateTo(e.target.value); setPage(1); }} className="text-sm max-w-[180px]" />
-            </div>
-          )}
+            {/* Date To */}
+            {dateFrom && (
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground shrink-0">To</span>
+                <Input type="date" value={dateTo} min={dateFrom} onChange={e => { setDateTo(e.target.value); setPage(1); }} className="text-sm" />
+              </div>
+            )}
+          </FilterPanel>
         </div>
 
         {/* Summary */}
@@ -244,6 +241,9 @@ export default function AuditLog() {
 
         {/* Table */}
         <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
+          {isLoading ? (
+            <TableSkeleton rows={8} cols={7} />
+          ) : (
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
@@ -257,17 +257,15 @@ export default function AuditLog() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {isLoading ? (
-                [...Array(8)].map((_, i) => (
-                  <TableRow key={i}>
-                    <TableCell colSpan={7}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell>
-                  </TableRow>
-                ))
-              ) : logs.length === 0 ? (
+              {logs.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center py-16 text-muted-foreground">
-                    <Shield className="w-10 h-10 mx-auto mb-3 opacity-20" />
-                    <p>{hasFilters ? 'No logs match your filters' : 'No audit logs yet — actions will appear here as you use the system'}</p>
+                  <TableCell colSpan={7} className="p-0">
+                    <EmptyState
+                      icon={Shield}
+                      title={hasFilters ? 'No logs match your filters' : 'No audit logs yet'}
+                      hint={hasFilters ? undefined : 'Actions will appear here as you use the system.'}
+                      compact
+                    />
                   </TableCell>
                 </TableRow>
               ) : (
@@ -307,6 +305,7 @@ export default function AuditLog() {
               )}
             </TableBody>
           </Table>
+          )}
 
           {/* Pagination */}
           {totalPages > 1 && (

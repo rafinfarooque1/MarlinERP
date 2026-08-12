@@ -194,7 +194,19 @@ export const SATELLITE_PAGE_OWNER: Record<string, string> = {
   '/sales/stock':           '/headoffice/stock',
   '/sales/cash-balance':    '/accounts/cash-in-outlet',
   '/sales/transfers':       '/transfers',
+  // Stock page satellites — path-driven tabs governed by the Stock page.
+  '/headoffice/stock/storage':  '/headoffice/stock',
+  '/headoffice/stock/tracking': '/headoffice/stock',
 };
+
+/**
+ * Resolves any reachable path to the `page:` permission key that gates it:
+ * a satellite resolves to its owning page's key, everything else to its own.
+ * Satellite paths never appear in the sidebar — they are governed here.
+ */
+export function permOwner(path: string): string {
+  return pagePermKey(SATELLITE_PAGE_OWNER[path] ?? path);
+}
 
 /** One row in the permissions table — maps to a nav link the user can see */
 export interface PermNavRow {

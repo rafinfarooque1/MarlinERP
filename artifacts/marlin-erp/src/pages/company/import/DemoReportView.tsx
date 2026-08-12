@@ -146,7 +146,7 @@ export function DemoReportView({ batchId = null, migrationId = null, open, onOpe
         {/* Older packs were computed company-wide and carry no location — the
             label only appears on packs that are genuinely scoped. */}
         {report?.location?.name && (
-          <div className="flex items-start gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-900">
+          <div className="flex items-start gap-2 rounded-lg border border-blue-500/25 bg-blue-500/10 px-3 py-2 text-sm text-blue-900 dark:text-blue-300">
             <MapPin className="w-4 h-4 shrink-0 mt-0.5" />
             <span>
               <span className="font-semibold">Figures for {report.location.name} only.</span>{' '}

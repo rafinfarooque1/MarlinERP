@@ -30,6 +30,12 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
+import { PageHeader } from '@/components/app/page-header';
+import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
+import { StatusBadge } from '@/components/app/status-badge';
+import { EmptyState } from '@/components/app/empty-state';
+import { TableSkeleton } from '@/components/app/loading-skeletons';
+import { Wallet, UserMinus } from 'lucide-react';
 
 const schema = z.object({
   name: z.string().min(1, 'Name required'),
@@ -397,6 +403,7 @@ export default function Employees() {
 
   const activeCount   = employees.filter(e => e.isActive).length;
   const inactiveCount = employees.filter(e => !e.isActive).length;
+  const activeMonthlySalary = employees.filter(e => e.isActive).reduce((sum, e) => sum + Number((e as any).salary || 0), 0);
 
   if (!perm.isLoading && !perm.canView) {
     return (
@@ -413,24 +420,32 @@ export default function Employees() {
   return (
     <AppLayout>
       <div className="space-y-6">
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><Users className="w-6 h-6 text-primary" /> Employee Directory</h1>
-            <p className="text-muted-foreground mt-1">Personnel, roles, branch assignments, and pay structures</p>
-          </div>
-          <div className="flex gap-2">
-            {perm.canDownload && (
-              <Button variant="outline" size="sm" onClick={() => downloadCSV('employees.csv', filtered.map(e => ({ Name: e.name, Username: e.username, Role: e.hierarchyName, Branch: e.branchName, Type: e.branchType, Salary: e.salary, 'Production Staff': (e as any).isProductionStaff ? 'Yes' : 'No', Status: statusLabel(e), 'Last Working Day': (e as any).lastWorkingDate || '' })))}>
-                <Download className="w-4 h-4 mr-2" /> Export
-              </Button>
-            )}
-            {perm.canAdd && (
-              <Button onClick={() => { form.reset({ name: '', username: '', email: '', phone: '', hierarchyId: 0, branchType: 'headoffice', branchId: 0, salary: 0, joinDate: new Date().toISOString().split('T')[0] }); setIsOpen(true); }}>
-                <Plus className="w-4 h-4 mr-2" /> Add Employee
-              </Button>
-            )}
-          </div>
-        </div>
+        <PageHeader
+          title="Employee Directory"
+          description="Personnel, roles, branch assignments, and pay structures"
+          icon={Users}
+          actions={
+            <>
+              {perm.canDownload && (
+                <Button variant="outline" size="sm" onClick={() => downloadCSV('employees.csv', filtered.map(e => ({ Name: e.name, Username: e.username, Role: e.hierarchyName, Branch: e.branchName, Type: e.branchType, Salary: e.salary, 'Production Staff': (e as any).isProductionStaff ? 'Yes' : 'No', Status: statusLabel(e), 'Last Working Day': (e as any).lastWorkingDate || '' })))}>
+                  <Download className="w-4 h-4 mr-2" /> Export
+                </Button>
+              )}
+              {perm.canAdd && (
+                <Button onClick={() => { form.reset({ name: '', username: '', email: '', phone: '', hierarchyId: 0, branchType: 'headoffice', branchId: 0, salary: 0, joinDate: new Date().toISOString().split('T')[0] }); setIsOpen(true); }}>
+                  <Plus className="w-4 h-4 mr-2" /> Add Employee
+                </Button>
+              )}
+            </>
+          }
+        />
+
+        <SummaryCardGrid>
+          <SummaryCard label="Total Employees" value={String(employees.length)} icon={Users} loading={isLoading} />
+          <SummaryCard label="Active" value={String(activeCount)} icon={UserCheck} tone="positive" loading={isLoading} />
+          <SummaryCard label="Resigned / Left" value={String(inactiveCount)} icon={UserMinus} tone="warning" loading={isLoading} />
+          <SummaryCard label="Active Monthly Basic" value={`₹${activeMonthlySalary.toLocaleString('en-IN')}`} icon={Wallet} tone="info" loading={isLoading} />
+        </SummaryCardGrid>
 
         {/* Filters */}
         <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-center flex-wrap">
@@ -492,12 +507,10 @@ export default function Employees() {
             </TableHeader>
             <TableBody>
               {isLoading ? (
-                [...Array(4)].map((_, i) => (
-                  <TableRow key={i}><TableCell colSpan={6}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
-                ))
+                <TableRow><TableCell colSpan={6} className="p-0"><TableSkeleton rows={4} cols={6} /></TableCell></TableRow>
               ) : filtered.length === 0 ? (
-                <TableRow><TableCell colSpan={6} className="text-center py-16 text-muted-foreground">
-                  <Users className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No employees found</p>
+                <TableRow><TableCell colSpan={6} className="p-0">
+                  <EmptyState icon={Users} title="No employees found" hint={search ? 'No employees match your search or filters.' : 'Add your first employee to get started.'} compact />
                 </TableCell></TableRow>
               ) : sorted.map(emp => (
                 <TableRow key={emp.id} className={`hover:bg-muted/10 ${!emp.isActive ? 'opacity-60' : ''}`}>
@@ -522,10 +535,10 @@ export default function Employees() {
                   <TableCell className="font-mono text-sm">₹{Number(emp.salary || 0).toLocaleString('en-IN')}</TableCell>
                   <TableCell>
                     {emp.isActive ? (
-                      <Badge className="bg-emerald-500/10 text-emerald-500 border-emerald-500/20">Active</Badge>
+                      <StatusBadge status="active" label="Active" />
                     ) : (
                       <div>
-                        <Badge variant="outline" className="text-rose-400 border-rose-400/30 bg-rose-400/5">{statusLabel(emp)}</Badge>
+                        <StatusBadge status="inactive" label={statusLabel(emp)} />
                         {(emp as any).lastWorkingDate && (
                           <div className="text-[10px] text-muted-foreground mt-0.5">till {new Date((emp as any).lastWorkingDate).toLocaleDateString('en-IN')}</div>
                         )}
@@ -911,9 +924,9 @@ export default function Employees() {
                 <span className="text-xs text-muted-foreground uppercase tracking-wider">Status</span>
                 <div className="flex items-center justify-between">
                   {viewItem.isActive ? (
-                    <Badge className="bg-emerald-500/10 text-emerald-500 border-emerald-500/20">Active</Badge>
+                    <StatusBadge status="active" label="Active" />
                   ) : (
-                    <Badge variant="outline" className="text-rose-400 border-rose-400/30 bg-rose-400/5">{statusLabel(viewItem)}</Badge>
+                    <StatusBadge status="inactive" label={statusLabel(viewItem)} />
                   )}
                   {viewItem.isActive ? (
                     <Button variant="outline" size="sm" className="h-7 text-xs text-rose-500 border-rose-400/30 hover:bg-rose-500/10" onClick={() => { setViewItem(null); openMarkAsLeft(viewItem); }}>
