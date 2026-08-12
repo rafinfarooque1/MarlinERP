@@ -5,12 +5,13 @@ import {
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import {
   Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList,
 } from '@/components/ui/command';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
+import { TablePager, useClientPage } from '@/components/ui/table-pager';
 import {
   Check, ChevronsUpDown, PackageSearch, ShoppingCart, Receipt, Undo2, ArrowLeftRight, Factory, ClipboardCheck,
 } from 'lucide-react';
@@ -90,6 +91,49 @@ function ProductPicker({ value, onPick }: { value: PickedProduct | null; onPick:
   );
 }
 
+/** One row of the unified, date-wise activity list. */
+interface ActivityRow {
+  key: string;
+  kind: 'purchase' | 'sale' | 'sales_return' | 'purchase_return' | 'transfer' | 'production' | 'adjustment';
+  date: string | null;
+  /** Document id — tiebreak so same-day rows keep entry order. */
+  docId: number;
+  ref: string;
+  detail: string;
+  /** Muted secondary detail (batch no., against-invoice, reason…). */
+  sub?: string;
+  /** Signed stock effect: + into stock, − out of stock, null = movement (transfer). */
+  qty: number | null;
+  /** Unsigned quantity for transfers. */
+  moveQty?: number;
+  amount?: number | null;
+  amountIsRate?: boolean;
+  location: string;
+  cancelled?: boolean;
+  isBranchTransfer?: boolean;
+  transferStatus?: string;
+}
+
+const TYPE_META: Record<ActivityRow['kind'], { label: string; icon: any; badge: string }> = {
+  purchase:        { label: 'Purchase',        icon: ShoppingCart,   badge: 'bg-emerald-500/10 text-emerald-600 border-emerald-500/30' },
+  sale:            { label: 'Sale',            icon: Receipt,        badge: 'bg-blue-500/10 text-blue-600 border-blue-500/30' },
+  sales_return:    { label: 'Sales Return',    icon: Undo2,          badge: 'bg-amber-500/10 text-amber-600 border-amber-500/30' },
+  purchase_return: { label: 'Purchase Return', icon: Undo2,          badge: 'bg-orange-500/10 text-orange-600 border-orange-500/30' },
+  transfer:        { label: 'Transfer',        icon: ArrowLeftRight, badge: 'bg-sky-500/10 text-sky-600 border-sky-500/30' },
+  production:      { label: 'Production',      icon: Factory,        badge: 'bg-violet-500/10 text-violet-600 border-violet-500/30' },
+  adjustment:      { label: 'Adjustment',      icon: ClipboardCheck, badge: 'bg-slate-500/10 text-slate-600 border-slate-500/30' },
+};
+
+function TypeBadge({ kind }: { kind: ActivityRow['kind'] }) {
+  const m = TYPE_META[kind];
+  const Icon = m.icon;
+  return (
+    <Badge variant="outline" className={`font-normal whitespace-nowrap ${m.badge}`}>
+      <Icon className="w-3 h-3 mr-1" />{m.label}
+    </Badge>
+  );
+}
+
 function RowFlags({ cancelled, isBranchTransfer }: { cancelled?: boolean; isBranchTransfer?: boolean }) {
   if (!cancelled && !isBranchTransfer) return null;
   return (
@@ -102,37 +146,117 @@ function RowFlags({ cancelled, isBranchTransfer }: { cancelled?: boolean; isBran
 
 export default function ItemTrackingTab() {
   const [picked, setPicked] = useState<PickedProduct | null>(null);
+  const [typeFilter, setTypeFilter] = useState<string>('all');
   const { data, isLoading, isFetching } = useItemTracking(picked ? { materialType: picked.materialType, itemId: picked.itemId } : null);
-
-  const purchases = data?.purchaseHistory ?? [];
-  const sales = data?.salesHistory ?? [];
-  const { sorted: sortedPurchases, sort: pSort } = useTableSort(purchases, {
-    date: r => r.purchaseDate, vendor: r => r.vendorName, qty: r => r.quantity,
-    rate: r => r.rate ?? 0, batch: r => r.batchNumber, location: r => r.location,
-  });
-  const { sorted: sortedSales, sort: sSort } = useTableSort(sales, {
-    date: r => r.saleDate, customer: r => r.customerName, qty: r => r.quantity,
-    rate: r => r.unitPrice, gst: r => r.gst, location: r => r.location,
-  });
 
   const s = data?.summary;
   const unit = data?.item.unit ?? '';
   const isItem = data?.item.materialType === 'item';
   const showValue = data?.canViewValuation === true;
 
-  const returnCount = (data?.salesReturns.length ?? 0) + (data?.purchaseReturns.length ?? 0);
+  // ── Merge every document family into ONE chronological list ────────────────
+  const allRows = useMemo<ActivityRow[]>(() => {
+    if (!data) return [];
+    const rows: ActivityRow[] = [];
+    for (const r of data.purchaseHistory ?? []) {
+      rows.push({
+        key: `pur-${r.purchaseId}-${rows.length}`, kind: 'purchase', date: r.purchaseDate, docId: r.purchaseId,
+        ref: r.invoiceNumber || '—', detail: r.vendorName || '—',
+        sub: r.batchNumber ? `Batch ${r.batchNumber}` : undefined,
+        qty: Number(r.quantity), amount: (r as any).rate ?? null, amountIsRate: true,
+        location: r.location, cancelled: r.cancelled, isBranchTransfer: r.isBranchTransfer,
+      });
+    }
+    for (const r of data.salesHistory ?? []) {
+      rows.push({
+        key: `sal-${r.saleId}-${rows.length}`, kind: 'sale', date: r.saleDate, docId: r.saleId,
+        ref: r.invoiceNumber, detail: r.customerName,
+        qty: -Number(r.quantity), amount: r.unitPrice, amountIsRate: true,
+        location: r.location, cancelled: r.cancelled, isBranchTransfer: r.isBranchTransfer,
+      });
+    }
+    for (const r of data.salesReturns ?? []) {
+      rows.push({
+        key: `sr-${r.returnId}-${rows.length}`, kind: 'sales_return', date: r.returnDate, docId: r.returnId,
+        ref: r.returnNumber, detail: r.customerName, sub: r.againstInvoice ? `against ${r.againstInvoice}` : undefined,
+        qty: Number(r.quantity), amount: r.amount, location: r.location,
+      });
+    }
+    for (const r of data.purchaseReturns ?? []) {
+      rows.push({
+        key: `pr-${r.returnId}-${rows.length}`, kind: 'purchase_return', date: r.returnDate, docId: r.returnId,
+        ref: r.returnNumber, detail: r.vendorName || '—', sub: r.againstInvoice ? `against ${r.againstInvoice}` : undefined,
+        qty: -Number(r.quantity), location: r.location,
+      });
+    }
+    for (const r of data.transfers ?? []) {
+      rows.push({
+        key: `tr-${r.transferId}-${rows.length}`, kind: 'transfer', date: r.transferDate, docId: r.transferId,
+        ref: r.challanNumber, detail: `${r.from} → ${r.to}`,
+        qty: null, moveQty: Number(r.quantity), location: r.from, transferStatus: r.status,
+      });
+    }
+    for (const r of data.production ?? []) {
+      const consumed = (r as any).role === 'consumed';
+      rows.push({
+        key: `prod-${r.productionId}-${rows.length}`, kind: 'production', date: r.productionDate, docId: r.productionId,
+        ref: r.batchNumber || '—', detail: consumed ? 'Used in production' : 'Produced',
+        qty: consumed ? -Number(r.quantity) : Number(r.quantity),
+        amount: (r as any).costPerUnit ?? null, amountIsRate: true, location: r.location,
+      });
+    }
+    for (const r of data.adjustments ?? []) {
+      rows.push({
+        key: `adj-${r.verificationId}-${rows.length}`, kind: 'adjustment', date: r.verifyDate, docId: r.verificationId,
+        ref: r.countedQty != null ? `Counted ${qty3(r.countedQty)}` : '—',
+        detail: r.reason ? r.reason.replace(/_/g, ' ') : 'Stock count',
+        sub: r.createdBy ? `by ${r.createdBy}` : undefined,
+        qty: Number(r.variance), location: r.location,
+      });
+    }
+    // Date-wise, newest first; same-day rows keep document order (newest doc first).
+    rows.sort((a, b) => {
+      const da = a.date ?? ''; const db = b.date ?? '';
+      if (da !== db) return da < db ? 1 : -1;
+      return b.docId - a.docId;
+    });
+    return rows;
+  }, [data]);
+
+  const counts = useMemo(() => {
+    const c: Record<string, number> = {};
+    for (const r of allRows) c[r.kind] = (c[r.kind] ?? 0) + 1;
+    return c;
+  }, [allRows]);
+
+  const filtered = useMemo(
+    () => (typeFilter === 'all' ? allRows : allRows.filter(r => r.kind === typeFilter)),
+    [allRows, typeFilter],
+  );
+
+  const { sorted, sort } = useTableSort(filtered, {
+    date: r => r.date,
+    type: r => TYPE_META[r.kind].label,
+    ref: r => r.ref,
+    detail: r => r.detail,
+    qty: r => (r.qty ?? r.moveQty ?? 0),
+    amount: r => r.amount ?? null,
+    location: r => r.location,
+  });
+  const { pageRows, pagerProps } = useClientPage(sorted, 50);
+
   const emptyState = useMemo(() => (
     <EmptyState
       icon={PackageSearch}
       title="Pick a product to track"
-      hint="Choose a product above to see its full history — purchases, sales, returns, transfers, production and stock counts."
+      hint="Choose a product above to see its full history — purchases, sales, returns, transfers, production and stock counts — in one date-wise list."
     />
   ), []);
 
   return (
     <div className="space-y-4">
       <div className="flex flex-col sm:flex-row sm:items-center gap-3">
-        <ProductPicker value={picked} onPick={setPicked} />
+        <ProductPicker value={picked} onPick={p => { setPicked(p); setTypeFilter('all'); pagerProps.onPageChange(1); }} />
         {picked && data ? (
           <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
             <Badge variant="outline">{KIND_LABELS[data.item.materialType]}</Badge>
@@ -175,238 +299,73 @@ export default function ItemTrackingTab() {
           ) : null}
 
           {s!.truncated ? (
-            <p className="text-xs text-amber-600">Showing the latest 200 entries per section — older history is not included in the totals above.</p>
+            <p className="text-xs text-amber-600">Showing the latest 200 entries per activity type — older history is not included in the totals above.</p>
           ) : null}
 
-          <Tabs defaultValue={isItem ? 'sales' : 'purchases'}>
-            <TabsList className="flex-wrap h-auto">
-              <TabsTrigger value="purchases"><ShoppingCart className="w-3.5 h-3.5 mr-1" />Purchases ({purchases.length})</TabsTrigger>
-              {isItem ? <TabsTrigger value="sales"><Receipt className="w-3.5 h-3.5 mr-1" />Sales ({sales.length})</TabsTrigger> : null}
-              <TabsTrigger value="returns"><Undo2 className="w-3.5 h-3.5 mr-1" />Returns ({returnCount})</TabsTrigger>
-              <TabsTrigger value="transfers"><ArrowLeftRight className="w-3.5 h-3.5 mr-1" />Transfers ({data.transfers.length})</TabsTrigger>
-              <TabsTrigger value="production"><Factory className="w-3.5 h-3.5 mr-1" />Production ({data.production.length})</TabsTrigger>
-              {isItem ? <TabsTrigger value="adjustments"><ClipboardCheck className="w-3.5 h-3.5 mr-1" />Adjustments ({data.adjustments.length})</TabsTrigger> : null}
-            </TabsList>
+          {/* Unified date-wise activity list */}
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-sm font-medium">All Activity ({filtered.length})</p>
+            <Select value={typeFilter} onValueChange={v => { setTypeFilter(v); pagerProps.onPageChange(1); }}>
+              <SelectTrigger className="w-[210px] h-9" aria-label="Filter by type">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All types ({allRows.length})</SelectItem>
+                {(Object.keys(TYPE_META) as ActivityRow['kind'][])
+                  .filter(k => (counts[k] ?? 0) > 0)
+                  .map(k => (
+                    <SelectItem key={k} value={k}>{TYPE_META[k].label}s ({counts[k]})</SelectItem>
+                  ))}
+              </SelectContent>
+            </Select>
+          </div>
 
-            <TabsContent value="purchases" className="mt-3">
-              <div className="rounded-xl border border-border bg-card shadow-sm overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <SortableHead k="date" sort={pSort}>Date</SortableHead>
-                      <TableHead>Invoice</TableHead>
-                      <SortableHead k="vendor" sort={pSort}>Vendor</SortableHead>
-                      <SortableHead k="batch" sort={pSort}>Batch</SortableHead>
-                      <SortableHead k="qty" sort={pSort} className="text-right">Qty</SortableHead>
-                      {showValue ? <SortableHead k="rate" sort={pSort} className="text-right">Rate</SortableHead> : null}
-                      <SortableHead k="location" sort={pSort}>Location</SortableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {sortedPurchases.length === 0 ? (
-                      <TableRow><TableCell colSpan={showValue ? 7 : 6} className="text-center text-muted-foreground py-8">No purchases recorded.</TableCell></TableRow>
-                    ) : sortedPurchases.map((r, i) => (
-                      <TableRow key={`${r.purchaseId}-${i}`} className={r.cancelled ? 'opacity-50' : ''}>
-                        <TableCell className="whitespace-nowrap">{dateIN(r.purchaseDate)}</TableCell>
-                        <TableCell className="font-mono text-xs">{r.invoiceNumber || '—'}<RowFlags cancelled={r.cancelled} isBranchTransfer={r.isBranchTransfer} /></TableCell>
-                        <TableCell>{r.vendorName || '—'}</TableCell>
-                        <TableCell className="font-mono text-xs">{r.batchNumber || '—'}</TableCell>
-                        <TableCell className="text-right font-mono">{qty3(r.quantity)}</TableCell>
-                        {showValue ? <TableCell className="text-right font-mono">{r.rate != null ? money(r.rate) : '—'}</TableCell> : null}
-                        <TableCell className="text-muted-foreground">{r.location}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
-            </TabsContent>
-
-            {isItem ? (
-              <TabsContent value="sales" className="mt-3">
-                <div className="rounded-xl border border-border bg-card shadow-sm overflow-x-auto">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <SortableHead k="date" sort={sSort}>Date</SortableHead>
-                        <TableHead>Invoice</TableHead>
-                        <SortableHead k="customer" sort={sSort}>Customer</SortableHead>
-                        <SortableHead k="qty" sort={sSort} className="text-right">Qty</SortableHead>
-                        <SortableHead k="rate" sort={sSort} className="text-right">Rate (incl. GST)</SortableHead>
-                        <TableHead className="text-right">Discount</TableHead>
-                        <SortableHead k="gst" sort={sSort} className="text-right">GST</SortableHead>
-                        <SortableHead k="location" sort={sSort}>Location</SortableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {sortedSales.length === 0 ? (
-                        <TableRow><TableCell colSpan={8} className="text-center text-muted-foreground py-8">No sales recorded.</TableCell></TableRow>
-                      ) : sortedSales.map((r, i) => (
-                        <TableRow key={`${r.saleId}-${i}`} className={r.cancelled ? 'opacity-50' : ''}>
-                          <TableCell className="whitespace-nowrap">{dateIN(r.saleDate)}</TableCell>
-                          <TableCell className="font-mono text-xs">{r.invoiceNumber}<RowFlags cancelled={r.cancelled} isBranchTransfer={r.isBranchTransfer} /></TableCell>
-                          <TableCell>{r.customerName}</TableCell>
-                          <TableCell className="text-right font-mono">{qty3(r.quantity)}</TableCell>
-                          <TableCell className="text-right font-mono">{money(r.unitPrice)}</TableCell>
-                          <TableCell className="text-right font-mono">{r.discount ? money(r.discount) : '—'}</TableCell>
-                          <TableCell className="text-right font-mono">{money(r.gst)}</TableCell>
-                          <TableCell className="text-muted-foreground">{r.location}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </div>
-              </TabsContent>
-            ) : null}
-
-            <TabsContent value="returns" className="mt-3 space-y-4">
-              <div>
-                <p className="text-sm font-medium mb-2">Sales Returns ({data.salesReturns.length})</p>
-                <div className="rounded-xl border border-border bg-card shadow-sm overflow-x-auto">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Date</TableHead><TableHead>Return No.</TableHead><TableHead>Against Invoice</TableHead>
-                        <TableHead>Customer</TableHead><TableHead className="text-right">Qty</TableHead>
-                        <TableHead className="text-right">Amount</TableHead><TableHead>Location</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {data.salesReturns.length === 0 ? (
-                        <TableRow><TableCell colSpan={7} className="text-center text-muted-foreground py-6">No sales returns.</TableCell></TableRow>
-                      ) : data.salesReturns.map((r, i) => (
-                        <TableRow key={`${r.returnId}-${i}`}>
-                          <TableCell className="whitespace-nowrap">{dateIN(r.returnDate)}</TableCell>
-                          <TableCell className="font-mono text-xs">{r.returnNumber}</TableCell>
-                          <TableCell className="font-mono text-xs">{r.againstInvoice}</TableCell>
-                          <TableCell>{r.customerName}</TableCell>
-                          <TableCell className="text-right font-mono">{qty3(r.quantity)}</TableCell>
-                          <TableCell className="text-right font-mono">{money(r.amount)}</TableCell>
-                          <TableCell className="text-muted-foreground">{r.location}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </div>
-              </div>
-              <div>
-                <p className="text-sm font-medium mb-2">Purchase Returns ({data.purchaseReturns.length})</p>
-                <div className="rounded-xl border border-border bg-card shadow-sm overflow-x-auto">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Date</TableHead><TableHead>Return No.</TableHead><TableHead>Against Invoice</TableHead>
-                        <TableHead>Vendor</TableHead><TableHead className="text-right">Qty</TableHead><TableHead>Location</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {data.purchaseReturns.length === 0 ? (
-                        <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground py-6">No purchase returns.</TableCell></TableRow>
-                      ) : data.purchaseReturns.map((r, i) => (
-                        <TableRow key={`${r.returnId}-${i}`}>
-                          <TableCell className="whitespace-nowrap">{dateIN(r.returnDate)}</TableCell>
-                          <TableCell className="font-mono text-xs">{r.returnNumber}</TableCell>
-                          <TableCell className="font-mono text-xs">{r.againstInvoice || '—'}</TableCell>
-                          <TableCell>{r.vendorName || '—'}</TableCell>
-                          <TableCell className="text-right font-mono">{qty3(r.quantity)}</TableCell>
-                          <TableCell className="text-muted-foreground">{r.location}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </div>
-              </div>
-            </TabsContent>
-
-            <TabsContent value="transfers" className="mt-3">
-              <div className="rounded-xl border border-border bg-card shadow-sm overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Date</TableHead><TableHead>Challan</TableHead><TableHead>From</TableHead>
-                      <TableHead>To</TableHead><TableHead className="text-right">Qty</TableHead><TableHead>Status</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {data.transfers.length === 0 ? (
-                      <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground py-8">No transfers.</TableCell></TableRow>
-                    ) : data.transfers.map((r, i) => (
-                      <TableRow key={`${r.transferId}-${i}`} className={r.status === 'rejected' ? 'opacity-50' : ''}>
-                        <TableCell className="whitespace-nowrap">{dateIN(r.transferDate)}</TableCell>
-                        <TableCell className="font-mono text-xs">{r.challanNumber}</TableCell>
-                        <TableCell>{r.from}</TableCell>
-                        <TableCell>{r.to}</TableCell>
-                        <TableCell className="text-right font-mono">{qty3(r.quantity)}</TableCell>
-                        <TableCell>
-                          <StatusBadge status={r.status} />
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
-            </TabsContent>
-
-            <TabsContent value="production" className="mt-3">
-              <div className="rounded-xl border border-border bg-card shadow-sm overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Date</TableHead><TableHead>Batch</TableHead>
-                      <TableHead className="text-right">{isItem ? 'Produced Qty' : 'Used Qty'}</TableHead>
-                      {showValue && isItem ? <TableHead className="text-right">Cost / Unit</TableHead> : null}
-                      <TableHead>Location</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {data.production.length === 0 ? (
-                      <TableRow><TableCell colSpan={showValue && isItem ? 5 : 4} className="text-center text-muted-foreground py-8">No production records.</TableCell></TableRow>
-                    ) : data.production.map((r, i) => (
-                      <TableRow key={`${r.productionId}-${i}`}>
-                        <TableCell className="whitespace-nowrap">{dateIN(r.productionDate)}</TableCell>
-                        <TableCell className="font-mono text-xs">{r.batchNumber || '—'}</TableCell>
-                        <TableCell className="text-right font-mono">{qty3(r.quantity)}</TableCell>
-                        {showValue && isItem ? <TableCell className="text-right font-mono">{r.costPerUnit != null ? money(r.costPerUnit) : '—'}</TableCell> : null}
-                        <TableCell className="text-muted-foreground">{r.location}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
-            </TabsContent>
-
-            {isItem ? (
-              <TabsContent value="adjustments" className="mt-3">
-                <div className="rounded-xl border border-border bg-card shadow-sm overflow-x-auto">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Date</TableHead><TableHead>Location</TableHead>
-                        <TableHead className="text-right">Counted Qty</TableHead>
-                        <TableHead className="text-right">Adjustment</TableHead>
-                        <TableHead>Reason</TableHead><TableHead>By</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {data.adjustments.length === 0 ? (
-                        <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground py-8">No stock-count adjustments.</TableCell></TableRow>
-                      ) : data.adjustments.map((r, i) => (
-                        <TableRow key={`${r.verificationId}-${i}`}>
-                          <TableCell className="whitespace-nowrap">{dateIN(r.verifyDate)}</TableCell>
-                          <TableCell>{r.location}</TableCell>
-                          <TableCell className="text-right font-mono">{r.countedQty != null ? qty3(r.countedQty) : '—'}</TableCell>
-                          <TableCell className={`text-right font-mono ${r.variance < 0 ? 'text-red-500' : 'text-emerald-600'}`}>
-                            {r.variance > 0 ? '+' : ''}{qty3(r.variance)}
-                          </TableCell>
-                          <TableCell className="text-muted-foreground capitalize">{r.reason?.replace(/_/g, ' ') ?? '—'}</TableCell>
-                          <TableCell className="text-muted-foreground">{r.createdBy ?? '—'}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </div>
-              </TabsContent>
-            ) : null}
-          </Tabs>
+          <div className="rounded-xl border border-border bg-card shadow-sm overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <SortableHead k="date" sort={sort}>Date</SortableHead>
+                  <SortableHead k="type" sort={sort}>Type</SortableHead>
+                  <SortableHead k="ref" sort={sort}>Reference</SortableHead>
+                  <SortableHead k="detail" sort={sort}>Details</SortableHead>
+                  <SortableHead k="qty" sort={sort} className="text-right">Qty</SortableHead>
+                  <SortableHead k="amount" sort={sort} className="text-right">Rate / Amount</SortableHead>
+                  <SortableHead k="location" sort={sort}>Location</SortableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {pageRows.length === 0 ? (
+                  <TableRow><TableCell colSpan={7} className="text-center text-muted-foreground py-8">No activity recorded.</TableCell></TableRow>
+                ) : pageRows.map(r => (
+                  <TableRow key={r.key} className={r.cancelled || r.transferStatus === 'rejected' ? 'opacity-50' : ''}>
+                    <TableCell className="whitespace-nowrap">{dateIN(r.date)}</TableCell>
+                    <TableCell>
+                      <TypeBadge kind={r.kind} />
+                      {r.transferStatus ? <span className="ml-1 inline-flex align-middle"><StatusBadge status={r.transferStatus} /></span> : null}
+                    </TableCell>
+                    <TableCell className="font-mono text-xs whitespace-nowrap">
+                      {r.ref}<RowFlags cancelled={r.cancelled} isBranchTransfer={r.isBranchTransfer} />
+                    </TableCell>
+                    <TableCell>
+                      <span>{r.detail}</span>
+                      {r.sub ? <span className="ml-1.5 text-xs text-muted-foreground">{r.sub}</span> : null}
+                    </TableCell>
+                    <TableCell className={`text-right font-mono whitespace-nowrap ${
+                      r.qty == null ? '' : r.qty < 0 ? 'text-red-500' : 'text-emerald-600'
+                    }`}>
+                      {r.qty == null ? qty3(r.moveQty ?? 0) : `${r.qty > 0 ? '+' : r.qty < 0 ? '−' : ''}${qty3(Math.abs(r.qty))}`}
+                    </TableCell>
+                    <TableCell className="text-right font-mono whitespace-nowrap">
+                      {r.amount != null ? money(r.amount) : '—'}
+                      {r.amount != null && r.amountIsRate ? <span className="text-[10px] text-muted-foreground ml-0.5">/{unit || 'unit'}</span> : null}
+                    </TableCell>
+                    <TableCell className="text-muted-foreground whitespace-nowrap">{r.location}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+          <TablePager {...pagerProps} isFetching={isFetching} />
         </>
       )}
     </div>

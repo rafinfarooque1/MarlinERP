@@ -3703,8 +3703,68 @@ await pool.query(`
   );
   CREATE INDEX IF NOT EXISTS idx_advances_employee ON employee_advances (employee_id);
 
+  -- Which journal vouchers this advance produced (disbursement at creation,
+  -- recovery when paid back in cash). Edit/delete need the link to keep the
+  -- books in sync; rows are backfilled below by matching the system vouchers.
+  ALTER TABLE employee_advances ADD COLUMN IF NOT EXISTS journal_voucher_id INTEGER;
+  ALTER TABLE employee_advances ADD COLUMN IF NOT EXISTS recovery_voucher_id INTEGER;
+
   ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS general_settings JSONB;
 `);
+
+// Backfill advance→voucher links for rows created before the columns existed.
+// Idempotent (only fills NULLs) and STRICTLY unambiguous: a link is written
+// only when exactly ONE unlinked advance and exactly ONE candidate voucher
+// share the matching key. Insertion order is NOT a durable correlation (the
+// pre-link flow wrote the advance and its voucher in separate transactions,
+// so concurrent creates can interleave) — an ambiguous group stays NULL, and
+// edit/delete on those rows simply leaves the voucher for manual handling
+// rather than risking touching a sibling advance's entry.
+try {
+  await pool.query(`
+    WITH advs AS (
+      SELECT ea.id, ea.employee_id, ea.amount::numeric AS amt, ea.date AS d,
+             COUNT(*) OVER (PARTITION BY ea.employee_id, ea.amount::numeric, ea.date) AS cnt
+      FROM employee_advances ea WHERE ea.journal_voucher_id IS NULL
+    ), jvs AS (
+      SELECT jv.id AS jv_id, SUBSTRING(al.code FROM 9)::int AS emp_id,
+             l.debit::numeric AS amt, jv.voucher_date AS d,
+             COUNT(*) OVER (PARTITION BY al.code, l.debit::numeric, jv.voucher_date) AS cnt
+      FROM journal_vouchers jv
+      JOIN journal_voucher_lines l ON l.voucher_id = jv.id AND l.debit > 0
+      JOIN account_ledgers al ON al.id = l.ledger_id AND al.code ~ '^ADV-EMP-[0-9]+$'
+      WHERE jv.source_module = 'payroll' AND jv.narration LIKE 'Advance to %'
+        AND jv.id NOT IN (SELECT journal_voucher_id FROM employee_advances WHERE journal_voucher_id IS NOT NULL)
+    )
+    UPDATE employee_advances ea SET journal_voucher_id = jvs.jv_id
+    FROM advs JOIN jvs ON jvs.emp_id = advs.employee_id AND jvs.amt = advs.amt AND jvs.d = advs.d
+    WHERE ea.id = advs.id AND advs.cnt = 1 AND jvs.cnt = 1;
+  `);
+  // Recovery vouchers are dated when the cash came back (not the advance
+  // date), so the key is employee+amount only — and the same one-to-one rule
+  // applies: any ambiguity (two equal repaid advances) is left unlinked.
+  await pool.query(`
+    WITH advs AS (
+      SELECT ea.id, ea.employee_id, ea.amount::numeric AS amt,
+             COUNT(*) OVER (PARTITION BY ea.employee_id, ea.amount::numeric) AS cnt
+      FROM employee_advances ea
+      WHERE ea.recovery_voucher_id IS NULL AND ea.is_deducted = TRUE AND ea.deducted_payroll_id IS NULL
+    ), jvs AS (
+      SELECT jv.id AS jv_id, SUBSTRING(al.code FROM 9)::int AS emp_id, l.credit::numeric AS amt,
+             COUNT(*) OVER (PARTITION BY al.code, l.credit::numeric) AS cnt
+      FROM journal_vouchers jv
+      JOIN journal_voucher_lines l ON l.voucher_id = jv.id AND l.credit > 0
+      JOIN account_ledgers al ON al.id = l.ledger_id AND al.code ~ '^ADV-EMP-[0-9]+$'
+      WHERE jv.source_module = 'payroll' AND jv.narration LIKE 'Advance recovery from %'
+        AND jv.id NOT IN (SELECT recovery_voucher_id FROM employee_advances WHERE recovery_voucher_id IS NOT NULL)
+    )
+    UPDATE employee_advances ea SET recovery_voucher_id = jvs.jv_id
+    FROM advs JOIN jvs ON jvs.emp_id = advs.employee_id AND jvs.amt = advs.amt
+    WHERE ea.id = advs.id AND advs.cnt = 1 AND jvs.cnt = 1;
+  `);
+} catch (e) {
+  console.error("[migrate] employee_advances voucher-link backfill failed:", e);
+}
 
 // ── Multi-punch attendance ────────────────────────────────────────────────────
 // A punch pair is one continuous work session; a day can hold several. The

@@ -2,7 +2,8 @@ import { disabledWarehouseError, WAREHOUSE_DISABLED_CODE } from "../lib/warehous
 import { Router, type Response } from "express";
 import { requireModuleAction, requireModuleView, hasModuleAction } from "../middleware/permissions";
 import { clearLoginFailures } from "../middleware/auth";
-import { nextVoucherNumber } from "../lib/voucherNumber";
+import { nextVoucherNumber, financialYearLabel } from "../lib/voucherNumber";
+import { isIsoDate } from "../lib/dateInput";
 import {
   db, pool, hierarchiesTable, employeesTable, payrollTable, attendanceTable,
   leavesTable, warehousesTable, outletsTable, payComponentsTable,
@@ -29,7 +30,7 @@ import {
 } from "../lib/attendanceFactor";
 import { ownLocationScope, scopeCashLedgerIds } from "../lib/moneyScope";
 import {
-  respondIfMonthLocked, isMonthLocked, monthLockedBody,
+  respondIfMonthLocked, isMonthLocked, monthLockedBody, ymOfDate,
 } from "../lib/periodLock";
 import {
   CreateHierarchyBody, UpdateHierarchyBody, DeleteHierarchyParams,
@@ -2443,6 +2444,12 @@ router.post("/hr/advances", requireModuleAction("page:/hr/advances", "add"), asy
            VALUES ($1, $2, $3, 0), ($1, $4, 0, $3)`,
           [jv.id, advLedgerId, Number(amount).toFixed(2), resolvedAdv.id],
         );
+        // Remember which voucher this advance produced — edit/delete keep the
+        // books in sync through this link.
+        await client.query(
+          `UPDATE employee_advances SET journal_voucher_id = $1 WHERE id = $2`,
+          [jv.id, row.id],
+        );
         await client.query("COMMIT");
       } catch (e) { await client.query("ROLLBACK").catch(() => {}); console.warn("[advances] JV error:", e); }
       finally { client.release(); }
@@ -2519,7 +2526,8 @@ router.post("/hr/advances/:id/recover", requireModuleAction("page:/hr/advances",
     );
     // deducted_payroll_id stays NULL: settled-with-no-payroll = cash recovery.
     const { rows: [updated] } = await client.query(
-      `UPDATE employee_advances SET is_deducted = TRUE WHERE id = $1 RETURNING *`, [id],
+      `UPDATE employee_advances SET is_deducted = TRUE, recovery_voucher_id = $2 WHERE id = $1 RETURNING *`,
+      [id, jv.id],
     );
     await client.query("COMMIT");
 
@@ -2534,6 +2542,192 @@ router.post("/hr/advances/:id/recover", requireModuleAction("page:/hr/advances",
       isDeducted: updated.is_deducted, deductedPayrollId: updated.deducted_payroll_id,
       createdAt: updated.created_at,
     });
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
+});
+
+// Edit a pending advance (amount / date / note). Only an advance no payroll
+// run has touched may change — once it is settled or reserved, the recovery
+// figures were built on the stored amount, so an edit would desync the books.
+// The linked disbursement voucher is updated in the same transaction.
+router.patch("/hr/advances/:id", requireModuleAction("page:/hr/advances", "edit"), async (req, res): Promise<void> => {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid advance id" }); return; }
+  const b = (req.body ?? {}) as Record<string, unknown>;
+
+  // Validate the decimal STRING (≤ 2dp) — number inputs post strings and
+  // NUMERIC does the maths, so never round-trip through float formatting.
+  let newAmount: string | undefined;
+  if (b.amount !== undefined) {
+    const s = String(b.amount).trim();
+    if (!/^\d+(\.\d{1,2})?$/.test(s) || Number(s) <= 0) {
+      res.status(400).json({ error: "Amount must be a positive number with at most 2 decimals" }); return;
+    }
+    newAmount = Number(s).toFixed(2);
+  }
+  let newDate: string | undefined;
+  if (b.date !== undefined) {
+    if (!isIsoDate(b.date)) {
+      res.status(400).json({ error: "date must be a real calendar date in YYYY-MM-DD form" }); return;
+    }
+    newDate = b.date;
+  }
+  const noteProvided = b.note !== undefined;
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows: [adv] } = await client.query(
+      `SELECT *, date::text AS date_text FROM employee_advances WHERE id = $1 FOR UPDATE`, [id],
+    );
+    if (!adv) { await client.query("ROLLBACK"); res.status(404).json({ error: "Advance not found" }); return; }
+    if (adv.is_deducted) {
+      await client.query("ROLLBACK");
+      res.status(400).json({ error: "This advance is already recovered — it can no longer be edited. Delete it and record a fresh one if it was wrong." });
+      return;
+    }
+    if (adv.deducted_payroll_id !== null) {
+      await client.query("ROLLBACK");
+      res.status(400).json({ error: "This advance is reserved by a payroll run. Remove it from that run first." });
+      return;
+    }
+
+    const oldDate: string = adv.date_text;
+    const effDate = newDate ?? oldDate;
+    // Month lock: an edit may neither touch an advance inside a locked month
+    // nor move it into/out of one — check BOTH the stored date and the new one.
+    for (const d of [oldDate, effDate]) {
+      const ym = ymOfDate(d);
+      if (ym && await isMonthLocked(client, ym.year, ym.month)) {
+        await client.query("ROLLBACK");
+        res.status(423).json(monthLockedBody(ym.year, ym.month));
+        return;
+      }
+    }
+
+    const effAmount = newAmount ?? Number(adv.amount).toFixed(2);
+    const { rows: [updated] } = await client.query(
+      `UPDATE employee_advances SET amount = $2, date = $3, note = $4
+       WHERE id = $1 RETURNING *, date::text AS date_text`,
+      [id, effAmount, effDate, noteProvided ? (String(b.note ?? "").trim() || null) : adv.note],
+    );
+
+    // Keep the disbursement voucher in lockstep (date, amount, both legs).
+    if (adv.journal_voucher_id) {
+      const { rows: [jv] } = await client.query(
+        `SELECT * FROM journal_vouchers WHERE id = $1 FOR UPDATE`, [adv.journal_voucher_id],
+      );
+      if (jv) {
+        // Voucher numbers are FY-scoped: a date moved into another financial
+        // year needs a number from that year's sequence; same-FY edits keep it.
+        let vn = String(jv.voucher_number);
+        const curFy = vn.split("/")[1] ?? "";
+        let fyStart = 4;
+        try {
+          const { rows } = await client.query(`SELECT fy_start_month FROM company_settings LIMIT 1`);
+          fyStart = Number(rows[0]?.fy_start_month ?? 4) || 4;
+        } catch { /* defaults */ }
+        if (financialYearLabel(effDate, fyStart) !== curFy) {
+          vn = await nextVoucherNumber(client, "journal", effDate);
+        }
+        await client.query(
+          `UPDATE journal_vouchers SET voucher_number = $2, voucher_date = $3, total_amount = $4 WHERE id = $1`,
+          [jv.id, vn, effDate, effAmount],
+        );
+        await client.query(`UPDATE journal_voucher_lines SET debit = $2 WHERE voucher_id = $1 AND debit > 0`, [jv.id, effAmount]);
+        await client.query(`UPDATE journal_voucher_lines SET credit = $2 WHERE voucher_id = $1 AND credit > 0`, [jv.id, effAmount]);
+      }
+    }
+    await client.query("COMMIT");
+
+    const [emp] = await db.select().from(employeesTable).where(eq(employeesTable.id, Number(updated.employee_id))).limit(1);
+    logActivity({ action: "UPDATE", module: "payroll", entityType: "employee_advance", entityId: id,
+      description: `Advance to ${emp?.name ?? `Employee #${updated.employee_id}`} edited`,
+      metadata: {
+        old: { amount: Number(adv.amount), date: oldDate, note: adv.note },
+        new: { amount: Number(updated.amount), date: updated.date_text, note: updated.note },
+      },
+    }).catch(() => {});
+
+    res.json({
+      id: updated.id, employeeId: updated.employee_id, employeeName: emp?.name ?? "",
+      amount: Number(updated.amount), date: updated.date_text, note: updated.note,
+      isDeducted: updated.is_deducted, deductedPayrollId: updated.deducted_payroll_id,
+      createdAt: updated.created_at,
+    });
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
+});
+
+// Delete an advance recorded in error. A pending advance and a CASH-recovered
+// one can go — their system vouchers (disbursement, and recovery if any) are
+// removed in the same transaction, so the books unwind mechanically. An
+// advance a payroll run deducted or reserved cannot be deleted: the salary
+// figures were built on it.
+router.delete("/hr/advances/:id", requireModuleAction("page:/hr/advances", "delete"), async (req, res): Promise<void> => {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid advance id" }); return; }
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows: [adv] } = await client.query(
+      `SELECT *, date::text AS date_text FROM employee_advances WHERE id = $1 FOR UPDATE`, [id],
+    );
+    if (!adv) { await client.query("ROLLBACK"); res.status(404).json({ error: "Advance not found" }); return; }
+    if (adv.deducted_payroll_id !== null) {
+      await client.query("ROLLBACK");
+      res.status(400).json({
+        error: adv.is_deducted
+          ? "This advance was recovered through a payroll run — it cannot be deleted."
+          : "This advance is reserved by a payroll run. Remove it from that run first.",
+      });
+      return;
+    }
+
+    const voucherIds = [adv.journal_voucher_id, adv.recovery_voucher_id]
+      .filter((v): v is number => v !== null && v !== undefined);
+    const lockDates: string[] = [adv.date_text];
+    const voucherNumbers: string[] = [];
+    if (voucherIds.length) {
+      const { rows: jvs } = await client.query(
+        `SELECT id, voucher_number, voucher_date::text AS d FROM journal_vouchers WHERE id = ANY($1) FOR UPDATE`,
+        [voucherIds],
+      );
+      for (const jv of jvs) { lockDates.push(jv.d); voucherNumbers.push(jv.voucher_number); }
+    }
+    // Month lock: the advance date AND every voucher it posted (a cash
+    // recovery is dated the day the money came back) must be in open months.
+    for (const d of Array.from(new Set(lockDates))) {
+      const ym = ymOfDate(d);
+      if (ym && await isMonthLocked(client, ym.year, ym.month)) {
+        await client.query("ROLLBACK");
+        res.status(423).json(monthLockedBody(ym.year, ym.month));
+        return;
+      }
+    }
+
+    if (voucherIds.length) {
+      await client.query(`DELETE FROM journal_voucher_lines WHERE voucher_id = ANY($1)`, [voucherIds]);
+      await client.query(`DELETE FROM journal_vouchers WHERE id = ANY($1)`, [voucherIds]);
+    }
+    await client.query(`DELETE FROM employee_advances WHERE id = $1`, [id]);
+    await client.query("COMMIT");
+
+    const [emp] = await db.select().from(employeesTable).where(eq(employeesTable.id, Number(adv.employee_id))).limit(1);
+    logActivity({ action: "DELETE", module: "payroll", entityType: "employee_advance", entityId: id,
+      description: `Advance of ₹${Number(adv.amount).toLocaleString("en-IN")} to ${emp?.name ?? `Employee #${adv.employee_id}`} deleted`,
+      metadata: { amount: Number(adv.amount), date: adv.date_text, wasRecovered: adv.is_deducted, vouchersRemoved: voucherNumbers },
+    }).catch(() => {});
+
+    res.json({ success: true, vouchersRemoved: voucherNumbers });
   } catch (e) {
     await client.query("ROLLBACK").catch(() => {});
     throw e;

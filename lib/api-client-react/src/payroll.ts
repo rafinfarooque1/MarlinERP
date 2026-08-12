@@ -262,3 +262,30 @@ export const useRecoverAdvance = () =>
         body: JSON.stringify(receiveLedgerId ? { receiveLedgerId } : {}),
       }),
   });
+
+/**
+ * Edit a pending advance (amount / date / note). The server refuses advances
+ * a payroll run has reserved or already settled, and keeps the linked journal
+ * entry in sync automatically.
+ */
+export const useUpdateAdvance = () =>
+  useMutation<EmployeeAdvance, Error, { id: number; amount?: number | string; date?: string; note?: string | null }>({
+    mutationFn: ({ id, ...body }) =>
+      customFetch<EmployeeAdvance>(`/api/hr/advances/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+  });
+
+/**
+ * Delete an advance recorded in error. Pending and cash-recovered advances can
+ * go (their journal entries are removed with them); payroll-settled ones cannot.
+ */
+export const useDeleteAdvance = () =>
+  useMutation<{ success: boolean; vouchersRemoved: string[] }, Error, { id: number }>({
+    mutationFn: ({ id }) =>
+      customFetch<{ success: boolean; vouchersRemoved: string[] }>(`/api/hr/advances/${id}`, {
+        method: "DELETE",
+      }),
+  });

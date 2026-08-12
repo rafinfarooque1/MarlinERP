@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useListAdvances, useAddAdvance, useRecoverAdvance, useListEmployees, useGetCompanySettings, useCashBankLedgersFlat } from '@workspace/api-client-react';
+import { useListAdvances, useAddAdvance, useRecoverAdvance, useUpdateAdvance, useDeleteAdvance, useListEmployees, useGetCompanySettings, useCashBankLedgersFlat } from '@workspace/api-client-react';
 import { usePermission } from '@/lib/usePermission';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
@@ -9,7 +9,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
-import { ShieldOff, Plus, Search, Wallet, Clock, CheckCircle2, Loader2, IndianRupee, FileDown, HandCoins } from 'lucide-react';
+import { ShieldOff, Plus, Search, Wallet, Clock, CheckCircle2, Loader2, IndianRupee, FileDown, HandCoins, Pencil, Trash2, AlertTriangle } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { downloadAdvancePDF } from '@/lib/pdfUtils';
@@ -217,6 +217,142 @@ function RecoverAdvanceDialog({ advance, onClose }: { advance: any; onClose: () 
   );
 }
 
+// ── Edit Advance Dialog ───────────────────────────────────────────────────────
+/**
+ * Fix a pending advance's amount, date or note. The server refuses advances a
+ * payroll run has reserved or already settled, and keeps the journal entry it
+ * posted in sync — so the books always match what's shown here.
+ */
+function EditAdvanceDialog({ advance, onClose }: { advance: any; onClose: () => void }) {
+  const qc = useQueryClient();
+  const mutation = useUpdateAdvance();
+
+  const [amount, setAmount] = useState(String(advance.amount ?? ''));
+  const [date, setDate]     = useState((advance.date ?? '').split('T')[0]);
+  const [note, setNote]     = useState(advance.note ?? '');
+
+  const submit = () => {
+    const amt = Number(amount);
+    if (!amt || amt <= 0) { toast.error('Enter a valid amount'); return; }
+    mutation.mutate(
+      { id: advance.id, amount, date, note: note.trim() || null },
+      {
+        onSuccess: () => {
+          toast.success('Advance updated');
+          qc.invalidateQueries({ queryKey: ['/api/hr/advances'] });
+          onClose();
+        },
+        onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed to update the advance'),
+      },
+    );
+  };
+
+  return (
+    <Dialog open onOpenChange={onClose}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Pencil className="w-5 h-5 text-primary" /> Edit Advance
+          </DialogTitle>
+        </DialogHeader>
+
+        <div className="space-y-4 py-2">
+          <div className="rounded-lg border bg-muted/30 px-4 py-3 text-sm">
+            <div className="flex justify-between"><span className="text-muted-foreground">Employee</span><span className="font-medium">{advance.employeeName}</span></div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label>Amount (₹) <span className="text-destructive">*</span></Label>
+              <Input type="number" min="1" value={amount} onChange={e => setAmount(e.target.value)} />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Date</Label>
+              <Input type="date" value={date} onChange={e => setDate(e.target.value)} />
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label>Reason / Note</Label>
+            <Textarea value={note} onChange={e => setNote(e.target.value)} rows={2} />
+          </div>
+
+          <p className="text-xs text-muted-foreground bg-muted/40 rounded-lg px-3 py-2">
+            The journal entry posted for this advance is updated automatically to match.
+          </p>
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={mutation.isPending}>Cancel</Button>
+          <Button onClick={submit} disabled={mutation.isPending}>
+            {mutation.isPending ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Saving…</> : 'Save Changes'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ── Delete Advance Dialog ─────────────────────────────────────────────────────
+/**
+ * Remove an advance recorded in error. Pending and cash-recovered advances can
+ * go — the journal entries they posted are removed with them. Advances settled
+ * through a payroll run can't be deleted (the salary figures were built on them);
+ * the server enforces this and the button is hidden for those rows.
+ */
+function DeleteAdvanceDialog({ advance, onClose }: { advance: any; onClose: () => void }) {
+  const qc = useQueryClient();
+  const mutation = useDeleteAdvance();
+
+  const submit = () => {
+    mutation.mutate(
+      { id: advance.id },
+      {
+        onSuccess: () => {
+          toast.success(`Advance of ${fmt(advance.amount)} deleted`);
+          qc.invalidateQueries({ queryKey: ['/api/hr/advances'] });
+          onClose();
+        },
+        onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed to delete the advance'),
+      },
+    );
+  };
+
+  return (
+    <Dialog open onOpenChange={onClose}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <AlertTriangle className="w-5 h-5 text-destructive" /> Delete Advance?
+          </DialogTitle>
+        </DialogHeader>
+
+        <div className="space-y-4 py-2">
+          <div className="rounded-lg border bg-muted/30 px-4 py-3 text-sm space-y-1">
+            <div className="flex justify-between"><span className="text-muted-foreground">Employee</span><span className="font-medium">{advance.employeeName}</span></div>
+            <div className="flex justify-between"><span className="text-muted-foreground">Date</span><span>{fmtDate(advance.date)}</span></div>
+            <div className="flex justify-between"><span className="text-muted-foreground">Amount</span><span className="font-bold font-mono">{fmt(advance.amount)}</span></div>
+          </div>
+
+          <p className="text-sm text-muted-foreground">
+            {advance.isDeducted
+              ? 'This advance was recovered in cash. Deleting it removes BOTH journal entries — the original payment out and the cash recovery — as if the advance never happened.'
+              : 'Deleting removes the advance and the journal entry posted when it was paid out, as if it never happened.'}
+            {' '}This cannot be undone.
+          </p>
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={mutation.isPending}>Cancel</Button>
+          <Button variant="destructive" onClick={submit} disabled={mutation.isPending}>
+            {mutation.isPending ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Deleting…</> : 'Delete Advance'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 export default function Advances() {
   const perm = usePermission('page:/hr/advances');
@@ -228,6 +364,8 @@ export default function Advances() {
   const [statusFilter, setStatus] = useState<'all' | 'pending' | 'deducted'>('all');
   const [showNew,   setShowNew]   = useState(false);
   const [recoverTarget, setRecoverTarget] = useState<any>(null);
+  const [editTarget,    setEditTarget]    = useState<any>(null);
+  const [deleteTarget,  setDeleteTarget]  = useState<any>(null);
 
   if (!perm.isLoading && !perm.canView) {
     return (
@@ -390,6 +528,16 @@ export default function Advances() {
                           <HandCoins className="h-3.5 w-3.5 mr-1" /> Recover
                         </Button>
                       )}
+                      {perm.canEdit && !a.isDeducted && !a.deductedPayrollId && (
+                        <Button
+                          variant="ghost" size="icon"
+                          className="h-7 w-7 text-muted-foreground hover:text-primary"
+                          title="Edit advance"
+                          onClick={() => setEditTarget(a)}
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                        </Button>
+                      )}
                       {perm.canDownload && (
                       <Button
                         variant="ghost" size="icon"
@@ -407,6 +555,18 @@ export default function Advances() {
                         <FileDown className="h-3.5 w-3.5" />
                       </Button>
                       )}
+                      {/* Delete: pending or cash-recovered rows only — an advance a
+                          payroll run touched keeps its history (server enforces too). */}
+                      {perm.canDelete && !a.deductedPayrollId && (
+                        <Button
+                          variant="ghost" size="icon"
+                          className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                          title="Delete advance"
+                          onClick={() => setDeleteTarget(a)}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      )}
                       </div>
                     </TableCell>
                   </TableRow>
@@ -421,6 +581,8 @@ export default function Advances() {
 
       {showNew && <NewAdvanceDialog onClose={() => setShowNew(false)} />}
       {recoverTarget && <RecoverAdvanceDialog advance={recoverTarget} onClose={() => setRecoverTarget(null)} />}
+      {editTarget && <EditAdvanceDialog advance={editTarget} onClose={() => setEditTarget(null)} />}
+      {deleteTarget && <DeleteAdvanceDialog advance={deleteTarget} onClose={() => setDeleteTarget(null)} />}
     </AppLayout>
   );
 }
