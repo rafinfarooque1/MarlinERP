@@ -1246,14 +1246,32 @@ export async function renderInvoicePdf(data: InvoiceData): Promise<{ buffer: Buf
   }
 
   // ══════════════════════════════════════════════════════════════════════════
-  // 6. SIGNATURE + FOOTER — anchored to the page floor, per the reference
+  // 6. FOOTER
+  // Invoices end cleanly after the last content panel: no signature block, no
+  // decorative sign-off, no "computer-generated" note, and no floor-anchored
+  // reserve (owner request, Aug 2026). Only the user-configured footer text
+  // from Company Settings still prints, flowing directly after the content.
+  // Quotations keep the full floor-anchored signature + sign-off — the
+  // removal was asked for invoices only, and the validity line is part of a
+  // quotation's meaning.
   // ══════════════════════════════════════════════════════════════════════════
   const footerLines = issuer.invoiceFooter ? wrap(issuer.invoiceFooter, CW - 10, 6.6) : [];
+  if (!isQuotation) {
+    if (footerLines.length) {
+      const fh = 2.6 + footerLines.length * 3.4;
+      if (y + fh > BOT) { doc.addPage(); y = M; }
+      let noteY = y + 2.6;
+      for (const t of footerLines) {
+        txt(t, PW / 2, noteY, { size: 6.6, color: INK, align: "center" });
+        noteY += 3.4;
+      }
+    }
+  } else {
   const SIGN_H = 11;
   const FOOT_H = 10.2 + footerLines.length * 3.4;
   if (y + SIGN_H + FOOT_H > PH - 3) { doc.addPage(); y = M; }
 
-  // Signed for the location that issued the invoice, not the company as a whole.
+  // Signed for the location that issued the document, not the company as a whole.
   // Compact and borderless so the page closes like the reference does.
   const signY = Math.max(y, PH - 6 - FOOT_H - SIGN_H);
   const signX = M + CW - 58;
@@ -1294,18 +1312,15 @@ export async function renderInvoicePdf(data: InvoiceData): Promise<{ buffer: Buf
     txt(t, PW / 2, noteY, { size: 6.6, color: INK, align: "center" });
     noteY += 3.4;
   }
-  if (isQuotation) {
-    // The validity line is part of the document's meaning, not decoration:
-    // it is what makes the offer time-bound.
-    if (q?.validTill) {
-      const vt = new Date(q.validTill).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
-      txt(`This quotation is valid until ${vt}.`, PW / 2, noteY, { bold: true, size: 7, color: NAVY, align: "center" });
-      noteY += 3.6;
-    }
-    txt("This is a computer-generated quotation, not a tax invoice.", PW / 2, noteY, { size: 6.6, color: MUT, align: "center" });
-  } else {
-    txt("This is a computer-generated invoice.", PW / 2, noteY, { size: 6.6, color: MUT, align: "center" });
+  // The validity line is part of the document's meaning, not decoration:
+  // it is what makes the offer time-bound.
+  if (q?.validTill) {
+    const vt = new Date(q.validTill).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+    txt(`This quotation is valid until ${vt}.`, PW / 2, noteY, { bold: true, size: 7, color: NAVY, align: "center" });
+    noteY += 3.6;
   }
+  txt("This is a computer-generated quotation, not a tax invoice.", PW / 2, noteY, { size: 6.6, color: MUT, align: "center" });
+  } // end quotation-only signature + footer
 
   // ── Quotation watermark — light diagonal text on every page ────────────────
   // Drawn last so it sits over the content. Opacity via GState when the jsPDF

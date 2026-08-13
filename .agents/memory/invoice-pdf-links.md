@@ -49,6 +49,11 @@ ONE canonical renderer: `api-server/src/services/invoicePdf.ts` (jsPDF + qrcode 
 - ALL /api routes require `Authorization: Bearer` (base64 `id:x`); `credentials: 'include'` alone → 401. `downloadPDFFromEndpoint` (marlin-erp `lib/download.ts`) attaches the token from localStorage `marlin_auth_token` — any new direct `fetch` to the API must do the same rather than relying on cookies.
 - **How to apply:** when a PDF/download flow 401s with "Authentication required", check the Bearer header first, not the server.
 
+## Footer policy (owner request, Aug 2026)
+- INVOICES have NO footer/signature block: no "Thank You" sign-off, no "For <trade name>"/signatory/"Authorised Signatory", no "computer-generated" note, no floor-anchored reserve — the page ends after the last content panel. Only Company Settings footer text (if set) flows after content.
+- QUOTATIONS keep the full floor-anchored signature + sign-off + validity + note — the removal was invoices-only. Don't "unify" them back.
+- The regression suite asserts the ABSENCE of these strings on invoices; re-adding any of them will fail tests.
+
 ## Rebuild lessons (reference-design renderer)
 - **pdfimages counts alpha as an image**: a PNG logo with an alpha channel embeds as image + soft mask, so "logo present" asserts `count >= 2` over the QR-only baseline of 1 — never `=== 2`.
 - **Dev DB never produces IGST**: `company_settings.state` is empty in dev and interstate = company state ≠ customer state, so every dev sale computes CGST/SGST. Tests of the IGST rendering path must pin the company state (by id) and restore it.

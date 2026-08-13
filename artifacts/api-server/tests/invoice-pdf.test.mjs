@@ -308,8 +308,11 @@ let s1;
   assert('Warehouse UPI handle under the QR', t.includes('marlinblr@okhdfcbank'));
   assert('Scan & Pay panel present', t.includes('SCAN & PAY'));
   assert('Payment mode Credit stated', /Payment Mode/.test(t) && t.includes('Credit'));
-  assert('Signatory from the warehouse', t.includes('S. Raghavan'));
-  assert('Script sign-off present', t.includes('Thank You For Your Business!'));
+  // Owner request (Aug 2026): invoices carry NO footer/signature block — the
+  // sign-off, signatory and "computer-generated" note are quotation-only now.
+  assert('No signature block on the invoice', !t.includes('S. Raghavan') && !/Authori[sz]ed Signatory/.test(t));
+  assert('No script sign-off on the invoice', !t.includes('Thank You For Your Business!'));
+  assert('No computer-generated note on the invoice', !t.includes('computer-generated'));
   assert('E&OE marked on the total row', t.includes('TOTAL (E&OE)'));
   assert('No placeholder junk', !/N\/A|undefined|\bnull\b/.test(t));
   assert('Only the QR image is embedded (lettermark fallback)', pdfImageCount(pdf.file) === 1, `imgs=${pdfImageCount(pdf.file)}`);
