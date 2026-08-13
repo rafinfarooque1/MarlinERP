@@ -1,0 +1,2564 @@
+MASTER ERP COMPLETE MODERNIZATION, WORKFLOW, ACCOUNTING, UI/UX AND VALIDATION PROMPT
+
+IMPORTANT:
+This is an existing production ERP.
+
+Do NOT blindly rewrite existing modules.
+
+First inspect the complete existing application, database schema, backend services, APIs, frontend routes, accounting engine, inventory engine, permissions, migrations, reports and existing tests.
+
+The existing ERP functionality is the baseline.
+
+The objective is to improve, simplify and correct the ERP without breaking anything that already works.
+
+============================================================
+0. NON-NEGOTIABLE ERP PRINCIPLES
+============================================================
+
+1. Accounting must have ONE source of truth.
+
+Every transaction must create the correct accounting/ledger entry.
+
+No report may independently calculate a balance differently from the ledger.
+
+2. Every financial transaction must flow through the correct ledger.
+
+Sale
+→ Customer / Cash / Bank
+→ Sales income
+→ GST
+→ Stock
+
+Purchase
+→ Vendor / Cash / Bank
+→ Purchase / Stock
+→ GST
+
+Receipt Voucher
+→ Cash/Bank
+→ Correct party/account
+
+Payment Voucher
+→ Cash/Bank
+→ Correct party/account
+
+Journal
+→ Correct debit/credit ledgers
+
+Payroll
+→ Salary Expense
+→ Salary Payable
+→ Employee-specific accounting
+
+3. Reports must be generated from the same underlying accounting source.
+
+Trial Balance
+Balance Sheet
+P&L
+Ledger
+Customer balances
+Vendor balances
+Receivables
+Payables
+Dashboard
+Cash Book
+Bank Book
+Day Book
+GST reports
+
+must reconcile.
+
+4. Never create a frontend-only balance.
+
+5. Never duplicate accounting logic in multiple modules.
+
+6. Do not silently change historical accounting data.
+
+7. Any migration must be:
+- backed up
+- tested
+- reversible where practical
+- audited
+- reconciled after completion
+
+8. Existing month-locking must remain protected.
+
+A locked month must not be modified unless an authorized Admin explicitly reopens it.
+
+9. Existing GST logic must remain correct.
+
+10. Existing permissions must remain enforced at backend level, not just hidden in UI.
+
+============================================================
+1. GLOBAL ERP UI/UX MODERNIZATION
+============================================================
+
+Modernize the complete ERP UI.
+
+The ERP must feel like one professional enterprise application.
+
+Do not redesign only one page.
+
+Apply one consistent design system across:
+
+Dashboard
+POS
+Sales
+Quotation
+Purchase
+Purchase Return
+Sales Return
+Customers
+Vendors
+Employees
+Attendance
+Payroll
+Accounts
+Chart of Accounts
+Ledger
+Receipt Voucher
+Payment Voucher
+Journal Voucher
+Cash & Bank
+Day Book
+Cash Book
+Bank Book
+Trial Balance
+P&L
+Balance Sheet
+GST
+Inventory
+Storage Locations
+Item Tracking
+Production
+Assets
+Outstanding
+Reports
+Settings
+
+Design requirements:
+
+- modern professional ERP
+- clean layout
+- consistent spacing
+- consistent typography
+- consistent buttons
+- consistent cards
+- consistent tables
+- consistent dialogs
+- consistent dropdowns
+- consistent tabs
+- consistent status badges
+- responsive layouts
+- mobile friendly
+- tablet friendly
+- desktop friendly
+
+Do not use unnecessarily large popups.
+
+Avoid horizontal scrolling wherever possible.
+
+Long content should adapt vertically.
+
+Use shared reusable UI components.
+
+============================================================
+2. GLOBAL POPUP / DIALOG RULE
+============================================================
+
+This is a global ERP rule.
+
+Any important transaction popup/dialog such as:
+
+New Sale
+New Purchase
+New Quotation
+New Voucher
+New Journal
+Stock Transfer
+etc.
+
+must NOT close when the user clicks outside the popup.
+
+Do not allow accidental loss of entered data.
+
+Popup may close only when:
+
+- Cancel is explicitly clicked
+- Save/Complete/Dispatch is completed
+- explicit Close action is used where appropriate
+
+If the form contains unsaved data, show a confirmation before abandoning it.
+
+The popup must be responsive to screen size.
+
+Do not use a fixed width that causes horizontal scrolling.
+
+For large screens:
+Use appropriate max-width/max-height.
+
+For mobile:
+Use nearly full-screen layout.
+
+For tablets:
+Adapt automatically.
+
+Long item names must wrap instead of forcing horizontal scrolling.
+
+Forms must remain usable without side-to-side scrolling.
+
+============================================================
+3. LOCATION AND ACCESS CONTROL
+============================================================
+
+Location visibility must depend on the user's assigned location and role.
+
+HEAD OFFICE USERS:
+
+Current Location selector should contain:
+
+- All Locations
+- Head Office
+- permitted warehouses/outlets
+
+If user selects:
+
+All Locations
+→ show consolidated data from all locations.
+
+Head Office
+→ show ONLY Head Office data.
+
+Warehouse A
+→ show ONLY Warehouse A data.
+
+Warehouse users:
+
+→ show only their assigned warehouse/location.
+
+They must NOT see:
+
+All Locations
+Other warehouses
+Other outlet data
+
+unless explicitly permitted.
+
+If a user has only one permitted location:
+
+Automatically select that location.
+
+Do not force unnecessary manual selection.
+
+Location restrictions must be enforced on backend APIs too.
+
+Never rely only on frontend hiding.
+
+============================================================
+4. COMPANY PROFILE
+============================================================
+
+Company Profile should be managed centrally.
+
+Company profile configuration should belong to:
+
+Settings / Company Profile
+
+Do not display company-profile editing everywhere.
+
+Logo, company name, address, GST information etc. must come from the central company profile.
+
+============================================================
+5. POINT OF SALE — COMPLETE UPDATE
+============================================================
+
+POS existing functionality must remain.
+
+Current POS list should continue showing relevant information such as:
+
+- date
+- location
+- customer
+- status
+- paid
+- tax
+- total
+
+Modernize the POS UI.
+
+NEW SALE FORM:
+
+Location
+Date
+Customer
+Payment Method
+Items
+Discount
+Other Charges
+Totals
+Payment
+Status
+
+LOCATION:
+
+Use the global location rules.
+
+If employee belongs to one warehouse/location:
+
+Automatically select that location.
+
+If Head Office user:
+
+Allow permitted locations.
+
+PAYMENT METHOD:
+
+Do NOT hardcode Cash/Credit only.
+
+Payment methods must come from the Cash & Bank configuration for the selected location.
+
+Example:
+
+Cash
+Bank
+UPI
+Card
+other configured accounts
+
+Only payment accounts assigned to that location should appear.
+
+If a walk-in customer pays directly through Cash/Bank/UPI/Card:
+
+The payment must be recorded correctly.
+
+CREDIT:
+
+Credit / Pay Later must create UNPAID status.
+
+PARTIAL PAYMENT:
+
+Example:
+
+Invoice = ₹1,000
+Paid = ₹500
+Balance = ₹500
+
+Show:
+
+PARTIALLY PAID
+
+The ₹500 payment must automatically create/use the correct receipt/payment accounting flow.
+
+The POS Collect Payment function must use the same receipt backend.
+
+Do not create a separate payment engine.
+
+OVERPAYMENT:
+
+If invoice balance is ₹1,000 and customer pays ₹1,200:
+
+Show warning.
+
+Require confirmation.
+
+The excess ₹200 must follow the existing customer-credit/sundry-debtor credit-balance accounting model.
+
+Do NOT create a separate Customer Advance Liability.
+
+Customer advances/credits are represented as negative Sundry Debtor balances according to the ERP accounting model.
+
+Prevent duplicate payment through idempotency protection.
+
+============================================================
+6. POS CUSTOMER PRICE HISTORY
+============================================================
+
+When an item is selected for a customer:
+
+Show:
+
+MRP
+Current selling price
+Discount
+
+Near MRP/current price show a small warning/history icon.
+
+Clicking it opens a small read-only information panel.
+
+Show the customer's recent selling prices for that same item.
+
+Example:
+
+Last Sale:
+₹165 — 10 Aug
+
+Previous:
+₹170 — 05 Aug
+
+Previous:
+₹160 — 01 Aug
+
+Only the relevant recent price history is required.
+
+Do not clutter the POS screen.
+
+This is informational only.
+
+It must NOT automatically change the current selling price.
+
+============================================================
+7. POS OTHER CHARGES
+============================================================
+
+Sales Other Charges must show ONLY ledgers belonging to:
+
+DIRECT INCOME
+
+Do not show:
+
+Direct Expense
+Indirect Expense
+Indirect Income
+unrelated ledgers
+
+Example:
+
+Packing Charge
+Delivery Charge
+Freight Recovery
+
+must only appear if correctly configured under Direct Income.
+
+The selected charge must post to the selected ledger.
+
+============================================================
+8. POS DISCOUNT
+============================================================
+
+Support:
+
+- item-level discount per unit
+- bill-level discount
+- percentage discount
+- amount discount
+
+Calculations must be transparent.
+
+Do not double-discount.
+
+Tax calculation must use the correct taxable value according to existing GST logic.
+
+============================================================
+9. QUOTATION
+============================================================
+
+Quotation already works.
+
+Do not break existing quotation functionality.
+
+Apply the same UI improvements.
+
+Popup must not close by outside click.
+
+Location:
+
+Warehouse user:
+→ assigned warehouse only.
+
+Head Office:
+→ permitted locations.
+
+Sales Person:
+
+Do NOT allow free-text entry.
+
+Use searchable dropdown.
+
+Only active employees assigned to the selected location should appear.
+
+Payment Terms:
+
+Use standardized selectable payment terms.
+
+Do not rely on arbitrary free text where a master list is appropriate.
+
+Item selection should use searchable dropdowns.
+
+============================================================
+10. EXPENSE MODULE
+============================================================
+
+Remove the standalone Expense module from Operations.
+
+Expenses should be handled through the existing accounting/payment flow.
+
+Do not maintain duplicate expense-entry systems.
+
+Expense accounting must continue through the correct ledger/payment voucher flow.
+
+Do not delete historical accounting records.
+
+Only remove the redundant operational UI/module if it is truly duplicate functionality.
+
+============================================================
+11. RECEIPT VOUCHER
+============================================================
+
+Receipt Voucher remains a primary accounting module.
+
+Fields include:
+
+Location
+Date
+Party Type
+Received From
+Ledger
+Amount
+Reference
+Narration
+
+Party Types already supported:
+
+Customer
+Vendor
+Employee
+Other Ledger
+
+Preserve this structure.
+
+CUSTOMER:
+
+Customer Party Type
+→ only customer list
+
+VENDOR:
+
+Vendor Party Type
+→ only vendor list
+
+EMPLOYEE:
+
+Employee Party Type
+→ only employee list for the selected location
+
+For Employee:
+
+Selectable ledger must be:
+
+Salary Payable
+Salary Expense
+
+OTHER LEDGER:
+
+Other Ledger Party Type
+→ every appropriate Chart of Accounts ledger must be available.
+
+Do not restrict Other Ledger incorrectly.
+
+SYSTEM-GENERATED RECEIPTS:
+
+System-generated receipts must be clearly identifiable.
+
+Example:
+
+REC/2026-27/0428
+
+Show a clear:
+
+SYSTEM GENERATED
+
+label/badge.
+
+Do not confuse system-generated records with manually created receipts.
+
+DELETE:
+
+Delete button must be visible only to Admin.
+
+Other permissions such as:
+
+View
+Edit
+Download
+Print
+
+must follow role permissions.
+
+If a voucher is deleted:
+
+Delete the entire accounting route/dependency safely.
+
+Do not leave orphan ledger entries.
+
+Do not allow deletion if month locking/dependencies prevent it.
+
+============================================================
+12. PAYMENT VOUCHER
+============================================================
+
+Payment Voucher must follow the exact same party-type architecture.
+
+Party Type:
+
+Customer
+Vendor
+Employee
+Other Ledger
+
+Customer:
+→ customer list only
+
+Vendor:
+→ vendor list only
+
+Employee:
+→ employees in selected location only
+
+Employee ledger options:
+
+Salary Payable
+Salary Expense
+
+Other Ledger:
+→ all appropriate Chart of Accounts ledgers
+
+Admin-only deletion.
+
+Role-based permissions for other actions.
+
+System-generated vs manual vouchers must be clearly distinguished.
+
+============================================================
+13. EMPLOYEE ADVANCE
+============================================================
+
+There must NOT be a separate accounting engine for Employee Advance.
+
+Employee Advance is essentially a Payment Voucher shortcut.
+
+When an employee receives an advance:
+
+Select Employee
+Select bank/cash account
+Enter amount
+
+Backend accounting must post directly to:
+
+Employee-specific Salary Payable
+
+Do not post new advances to Current Assets / Employee Advance.
+
+Do not create a separate recovery accounting flow.
+
+Salary advance must be deducted/adjusted through Payroll against Salary Payable.
+
+REMOVE:
+
+Employee Advance Recovery option.
+
+============================================================
+14. EXISTING EMPLOYEE ADVANCE MIGRATION
+============================================================
+
+There are already existing Employee Advance entries in:
+
+Current Assets → Employee Advance
+
+Only those existing employee advance entries should be migrated.
+
+For each employee:
+
+Existing Employee Advance balance
+→ transfer to the corresponding Employee Salary Payable balance.
+
+Do NOT simply delete the old entries.
+
+Create proper accounting migration entries.
+
+Preserve audit history.
+
+After migration:
+
+Old Employee Advance accounting flow should be disabled/archived.
+
+New employee advances must use Salary Payable only.
+
+Reconcile:
+
+Before migration balance
+After migration balance
+Employee Salary Payable
+Dashboard
+Payroll
+
+============================================================
+15. SALES RETURN
+============================================================
+
+Sales Return must continue using the original sale's selling rate.
+
+Do NOT use current MRP automatically.
+
+If original invoice sold:
+
+₹150
+
+Return should use:
+
+₹150
+
+unless explicitly edited under permitted rules.
+
+Admin-only Delete button must be available for Sales Return.
+
+Deletion must safely reverse the entire accounting/inventory route.
+
+Respect month lock.
+
+============================================================
+16. PURCHASE RETURN
+============================================================
+
+Purchase Return must use the appropriate original purchase rate.
+
+Admin-only Delete button.
+
+Delete must reverse the complete accounting/inventory route safely.
+
+Respect month lock.
+
+============================================================
+17. PURCHASE — COMPLETE UI UPDATE
+============================================================
+
+Remove the current small/fixed purchase popup.
+
+Purchase should use a professional full-page/full-screen transaction UI.
+
+Responsive to desktop/tablet/mobile.
+
+Purchase Header:
+
+Vendor
+Purchase Date
+Vendor Invoice Number
+Vendor Invoice Date
+Location
+Reference
+
+Vendor Invoice Date is mandatory where applicable.
+
+Item section:
+
+Item
+Batch
+Manufacture Date
+Expiry Date
+Quantity
+Purchase Rate
+MRP
+Discount
+GST
+Total
+
+Do not force horizontal scrolling.
+
+Long item names must wrap.
+
+OTHER CHARGES:
+
+Purchase Other Charges must show ONLY:
+
+DIRECT EXPENSE
+
+ledgers.
+
+Do not show:
+
+Indirect Expense
+Direct Income
+Indirect Income
+unrelated ledgers
+
+Examples:
+
+Freight
+Loading
+Packing
+Transport
+
+only when configured as Direct Expense.
+
+============================================================
+18. STOCK / INVENTORY
+============================================================
+
+Stock UI should be modernized.
+
+When opening an item:
+
+Show a structured inventory detail view.
+
+Include:
+
+Item Name
+SKU
+Unit
+MRP
+Unit Cost
+Current Quantity
+Batch
+Location
+Manufacture Date
+Expiry Date
+Shelf
+Shelf Life
+Quantity
+
+Do not hide important fields.
+
+Make the item detail UI clean and easy to understand.
+
+============================================================
+19. STOCK EXPORT
+============================================================
+
+Stock reports must support:
+
+Excel
+PDF
+
+Ensure the files actually download and contain complete data.
+
+Do not export only the visible page if the report is supposed to represent the full filtered dataset.
+
+============================================================
+20. STORAGE LOCATIONS
+============================================================
+
+Maintain Storage Locations.
+
+Modernize UI.
+
+Hierarchy:
+
+Warehouse
+→ Storage Location
+→ Sub-location
+→ Rack/Shelf if configured
+
+Example:
+
+Frozen Hub
+→ Freezer 1
+→ Rack A
+→ Shelf 1
+
+Allow managers/admins with permission to:
+
+Create
+Edit
+Move
+Allocate
+Deactivate
+
+Normal users see only permitted functions.
+
+Stock allocation must reconcile.
+
+Warehouse Total:
+
+Allocated stock + Unassigned stock
+
+must equal actual warehouse stock.
+
+Internal movement must not change warehouse total.
+
+============================================================
+21. ITEM TRACKING
+============================================================
+
+Item Tracking must show the complete item lifecycle.
+
+For an item show:
+
+Current Stock
+Locations
+Purchases
+Sales
+Returns
+Transfers
+Adjustments
+Production where applicable
+
+Timeline:
+
+Purchase
+→ receipt
+→ storage
+→ movement
+→ sale
+→ return
+→ adjustment
+
+Show:
+
+Date
+Reference
+Source
+Customer/Vendor
+Quantity
+Rate/value if permitted
+Location
+Running balance
+
+============================================================
+22. INVENTORY STOCK LEDGER
+============================================================
+
+The standalone "Stock Ledger" option in Inventory should be removed from the navigation/UI.
+
+Do not delete underlying historical stock data if other services depend on it.
+
+Only remove the redundant standalone module/menu if functionality is already covered by:
+
+Live Stock
+Item Tracking
+Storage Locations
+Stock movements/reports
+
+============================================================
+23. CUSTOMER MODULE
+============================================================
+
+Customer list remains.
+
+Show:
+
+Customer
+Phone
+GSTIN
+State
+B2B/B2C
+Outstanding
+Status
+
+Top summary:
+
+Total Outstanding
+
+Customer balance must come from accounting.
+
+Customer ledger must show all relevant transactions.
+
+Customer credit balances must appear as negative Sundry Debtor balances.
+
+Do NOT create a separate customer advance liability merely because a customer has a credit balance.
+
+============================================================
+24. VENDOR MODULE
+============================================================
+
+Show:
+
+Vendor
+Phone
+GSTIN
+State
+Outstanding
+Status
+
+Vendor ledger must reconcile with:
+
+Purchases
+Payments
+Returns
+Payables
+
+============================================================
+25. OUTSTANDING
+============================================================
+
+Outstanding has:
+
+Receivables
+Payables
+
+Keep both.
+
+REMOVE:
+
+Collection action/button.
+
+Do not create a second payment/collection flow here.
+
+Receipt Voucher handles customer receipts.
+
+Payment Voucher handles vendor/other payments.
+
+============================================================
+26. LEDGER STATEMENT
+============================================================
+
+Ledger Statement must be professional and readable.
+
+Ledger selection dropdown:
+
+Show only the ledger name.
+
+Do NOT show backend/system codes such as:
+
+STD SALES
+(STD)
+etc.
+
+If the internal ledger name is stored with a system code, display the clean human-readable name.
+
+Ledger statement:
+
+Date
+Description
+Reference
+Debit
+Credit
+Balance
+
+Every transaction must be identifiable.
+
+Clicking a transaction should open its source document where appropriate.
+
+Export:
+
+Excel
+PDF
+
+Both must work.
+
+============================================================
+27. CASH & BANK
+============================================================
+
+Keep existing:
+
+Cash Balance
+Bank Balance
+Reconciliation
+Account Assignment
+Voucher views
+
+Do not break existing functionality.
+
+Improve UI consistency.
+
+Payment methods used by POS must come from Cash & Bank configuration for the selected location.
+
+============================================================
+28. JOURNAL VOUCHER
+============================================================
+
+Modernize Journal Voucher UI.
+
+Responsive popup/full-screen behavior.
+
+No fixed width causing horizontal scrolling.
+
+Long ledger names must wrap.
+
+Use searchable ledger selectors.
+
+Debit/Credit must be clearly displayed.
+
+Trial balance must remain balanced after every journal.
+
+============================================================
+29. DAY BOOK / CASH BOOK / BANK BOOK
+============================================================
+
+Keep existing functionality.
+
+Add working exports:
+
+Excel
+PDF
+
+Do not leave buttons that appear to work but produce failed downloads.
+
+Test every export.
+
+============================================================
+30. TRIAL BALANCE
+============================================================
+
+Trial Balance is critical.
+
+Total Debit must equal Total Credit.
+
+If mismatch exists:
+
+Show a prominent error state.
+
+Do not silently show an apparently valid report.
+
+Show:
+
+Difference Amount
+Debit
+Credit
+Difference
+
+Provide diagnostic information where possible.
+
+Do not allow final reconciliation status to show "OK" if difference exists.
+
+Run automated validation.
+
+============================================================
+31. GST SUMMARY
+============================================================
+
+GST Summary must support:
+
+Excel
+PDF
+CSV where currently applicable
+
+Remove redundant Print Download option if requested.
+
+Fix all broken downloads.
+
+Every download button must be tested.
+
+GST Summary must include correct:
+
+Invoice numbers
+Dates
+Customers/Vendors
+Taxable values
+GST
+CGST
+SGST
+IGST
+Invoice value
+Purchase/sales classification
+etc.
+
+============================================================
+32. GST RECONCILIATION
+============================================================
+
+GST reconciliation must clearly show:
+
+Matched
+Mismatch
+Difference Amount
+
+If difference exists:
+
+Show the amount.
+
+Show why the difference occurred.
+
+Allow drill-down to affected records/invoices.
+
+Examples:
+
+Invoice missing
+Tax mismatch
+Taxable value mismatch
+GSTIN mismatch
+Place of supply mismatch
+Duplicate
+Timing difference
+etc.
+
+Do not simply display:
+
+Difference = ₹X
+
+without explanation.
+
+============================================================
+33. GSTR-1
+============================================================
+
+B2B must show:
+
+Serial Number
+Invoice Number
+Date
+Customer
+GSTIN
+Place of Supply
+Location/Warehouse
+Taxable Value
+CGST
+SGST
+IGST
+Invoice Value
+Payment Status
+Payment Mode
+
+B2C must also be invoice-wise and comparable to B2B.
+
+B2C should include:
+
+Serial
+Invoice Number
+Date
+Customer/walk-in identifier where applicable
+Place of Supply
+Rate
+Taxable Value
+CGST
+SGST
+IGST
+Invoice Value
+Payment Status
+Payment Mode
+Location
+
+Do not omit Invoice Value from B2C.
+
+Maintain correct GST reporting rules.
+
+============================================================
+34. ALL ERP EXPORT VALIDATION
+============================================================
+
+Perform a complete export audit throughout the ERP.
+
+Find every:
+
+Excel
+PDF
+CSV
+
+download button.
+
+Test every button.
+
+Confirm:
+
+File is generated
+File downloads
+File opens
+Correct data
+Correct filters
+Correct totals
+Correct date range
+Correct columns
+No blank file
+No corrupted file
+
+Do this throughout the ERP.
+
+Do not assume an export works because the button exists.
+
+============================================================
+35. ATTENDANCE
+============================================================
+
+Modernize Attendance UI.
+
+Warehouse/location-wise employee table.
+
+Show:
+
+Employee
+Location
+Date
+Present
+Absent
+Half Day
+Holiday
+Leave
+Status
+
+Improve visual clarity.
+
+Holiday management can remain.
+
+Attendance must feed Payroll.
+
+============================================================
+36. EMPLOYEE RESIGNATION
+============================================================
+
+Employee must support resignation.
+
+Fields:
+
+Resignation Date
+Last Working Date
+Reason if configured
+
+Salary must calculate only until Last Working Date.
+
+After Last Working Date:
+
+No salary
+No attendance-based payroll
+No payable salary
+No expense
+
+Historical records remain.
+
+Do not delete the employee.
+
+Employee status:
+
+Active
+Resigned
+
+============================================================
+37. PAYROLL — COMPLETE REDESIGN
+============================================================
+
+Simplify Payroll.
+
+REMOVE from Payroll Settings:
+
+Salary Credit Date
+Work Days Per Month
+Accrued Daily
+manual month-day configuration
+Paid Casual Leave Per Month
+Paid Sick Leave Per Month
+
+Do NOT hardcode 30 days.
+
+Payroll period days must automatically come from the actual calendar month.
+
+Example:
+
+July → 31 days
+August → 31 days
+September → 30 days
+February → actual days
+
+Payroll must calculate automatically.
+
+============================================================
+38. PAYROLL UI
+============================================================
+
+Payroll page should automatically generate the current payroll calculation.
+
+REMOVE:
+
+Generate
+Regenerate
+
+manual buttons.
+
+Opening payroll for a month should automatically calculate/recalculate based on current attendance and valid data.
+
+Do not require the user to press Generate.
+
+============================================================
+39. PAYROLL FIELDS
+============================================================
+
+Show:
+
+Employee
+Branch/Location
+Calendar Days
+Present Days
+Leave Days
+LOP Days
+Gross Pay
+Deductions
+Advance Adjustment
+Net Pay
+
+Remove unnecessary:
+
+Accrued Daily
+
+============================================================
+40. PAYROLL ABSENCE / LEAVE ASSIGNMENT
+============================================================
+
+If employee is absent:
+
+Example:
+
+Month = 30 days
+Present = 27
+Absent = 3
+
+Before payroll approval, user must be able to classify the 3 absent days.
+
+Options can include:
+
+Casual Leave
+Sick Leave
+Paid Leave where configured
+LOP
+Holiday where appropriate
+
+If the 3 days are approved as paid leave:
+
+Salary should remain full according to the payroll rules.
+
+If classified as LOP:
+
+Salary deduction applies.
+
+The payroll UI must clearly show:
+
+3 absent days
+→ selected classification
+→ financial effect
+
+Do not require manually typing "3" into an arbitrary deduction field.
+
+Provide a simple selection/edit mechanism.
+
+Allow correction before approval.
+
+After approval:
+
+Payroll becomes locked according to existing controls.
+
+============================================================
+41. PAYROLL ADVANCE ADJUSTMENT
+============================================================
+
+If employee salary = ₹20,000
+
+Advance already paid = ₹5,000
+
+Payroll should show:
+
+Gross Salary = ₹20,000
+Advance Adjustment = ₹5,000
+Remaining Salary Payable = ₹15,000
+
+The advance must come from Employee Salary Payable accounting.
+
+Do not create a second recovery accounting flow.
+
+============================================================
+42. PAYROLL ACCOUNTING
+============================================================
+
+Approved payroll must post:
+
+Salary Expense
+→ Salary Payable
+
+Employee-specific balances must reconcile.
+
+If advance exists:
+
+Salary Payable must reflect the amount already paid.
+
+No duplicate expense.
+
+No duplicate payable.
+
+No salary for employees after Last Working Date.
+
+============================================================
+43. ASSETS
+============================================================
+
+Maintain:
+
+Asset Purchase
+Asset Register
+Asset Transfer
+Asset Disposal
+
+Do not break existing functionality.
+
+Apply global UI standards.
+
+============================================================
+44. WAREHOUSE DISPATCH / OUTING MODULE
+============================================================
+
+Create/modernize a warehouse operational dispatch board.
+
+This is NOT an accounting module.
+
+It is NOT a second sales module.
+
+POS sale is the financial source.
+
+When POS sale is created:
+
+The relevant sale should appear in the warehouse dispatch queue.
+
+Warehouse staff should see:
+
+Customer Name
+Phone
+Address
+Sale/Invoice Reference
+Items
+Quantities
+Required delivery/dispatch information
+
+Do NOT show unnecessary:
+
+Sale amount
+Profit
+Accounting details
+
+Workflow:
+
+SALE CREATED
+→ READY
+→ DISPATCHED
+
+Warehouse employee can mark:
+
+Ready
+
+Then:
+
+Dispatch
+
+This is operational information only.
+
+IMPORTANT:
+
+Changing Ready/Dispatched status must NOT:
+
+create another sale
+create another purchase
+change stock again
+create another accounting entry
+change dashboard sales
+change revenue
+change customer balance
+
+POS sale already controls stock/accounting.
+
+Warehouse Dispatch is only a fulfillment workflow.
+
+Allow invoice/bill download/view where appropriate.
+
+============================================================
+45. DASHBOARD — COMPLETE REDESIGN
+============================================================
+
+Use the provided dashboard screenshot as the visual reference for the existing primary dashboard structure.
+
+Keep the useful business KPIs but modernize the presentation.
+
+DEFAULT FILTER:
+
+Current dashboard filter options include:
+
+Today
+Yesterday
+Last Day / existing equivalent
+This Month
+
+Change default from:
+
+This Month
+
+to:
+
+Today
+
+The dashboard should open showing today's business.
+
+============================================================
+46. DASHBOARD PRIMARY KPI CARDS
+============================================================
+
+Primary dashboard should include the existing important business metrics:
+
+Sales
+Inventory Value
+Purchases
+COGS
+Gross Profit
+Receivables
+Payables
+Bank Balance
+Net Profit
+Cash Balance
+Payments
+Receipts
+
+Use the existing actual ERP figures.
+
+Do not invent values.
+
+Cards should be professional and visually consistent.
+
+Each card must be clickable where a meaningful drill-down exists.
+
+============================================================
+47. DASHBOARD DRILL-DOWN
+============================================================
+
+Every KPI must navigate to the correct source.
+
+SALES:
+
+Click
+→ Sales report / POS sales as appropriate.
+
+PURCHASE:
+
+Click
+→ Purchase module/report.
+
+INVENTORY VALUE:
+
+Click
+→ Stock / Inventory.
+
+EXPENSE:
+
+Click
+→ P&L / Indirect Expense section where applicable.
+
+RECEIVABLES:
+
+Click
+→ Receivables / Outstanding.
+
+PAYABLES:
+
+Click
+→ Payables / Outstanding.
+
+PAYMENTS:
+
+Click
+→ Payment Voucher.
+
+RECEIPTS:
+
+Click
+→ Receipt Voucher.
+
+CASH BALANCE:
+
+Click
+→ Cash Book / Cash account.
+
+BANK BALANCE:
+
+Click
+→ Bank Book / Bank account.
+
+GROSS PROFIT:
+
+Click
+→ P&L / Gross Profit section.
+
+NET PROFIT:
+
+Click
+→ P&L / Net Profit section.
+
+Do not merely link to an unrelated page.
+
+============================================================
+48. DASHBOARD LOCATION FILTER
+============================================================
+
+Dashboard must obey the global location rules.
+
+Head Office user:
+
+All Locations
+Head Office
+Other permitted warehouses
+
+All Locations:
+→ consolidated dashboard
+
+Head Office:
+→ Head Office dashboard only
+
+Warehouse:
+→ that warehouse only
+
+Warehouse users:
+→ only their location
+
+============================================================
+49. DASHBOARD IMAGE EXPORT / SHARE
+============================================================
+
+Add a button on the main dashboard:
+
+Download Dashboard Image
+
+The generated image must capture the main dashboard snapshot.
+
+Include:
+
+Business Dashboard title
+Selected Location
+Selected Date/Period
+All primary KPI cards
+Relevant visible summary information
+
+On mobile:
+
+Generate a share-ready image.
+
+Where supported, provide share action.
+
+On desktop/laptop:
+
+Download clean image such as PNG.
+
+The image must be professionally formatted.
+
+Do not simply use a low-quality browser screenshot.
+
+The output should be suitable for:
+
+WhatsApp
+Email
+Management sharing
+Internal reporting
+
+============================================================
+50. DASHBOARD SECONDARY CONTENT
+============================================================
+
+The existing:
+
+Sales Trend
+Payment Mix
+
+do NOT need to remain as primary dashboard sections.
+
+Remove them if they do not add useful decision-making value.
+
+Instead use the lower dashboard area for more useful business intelligence.
+
+Keep useful existing widgets such as:
+
+Sales by Location
+Top Items
+Top Customers
+Inventory
+Production
+
+Then add a modern management dashboard section.
+
+============================================================
+51. ADVANCED MANAGEMENT DASHBOARD
+============================================================
+
+Create a second-level business intelligence section below the main KPI dashboard.
+
+Potential widgets:
+
+Today Sales
+Today Collection
+Today Outstanding
+Today Purchase
+Gross Profit
+Net Profit
+Stock Value
+Low Stock Alerts
+Top Selling Items
+Top Customers
+Customer Outstanding Ageing
+Vendor Payable Ageing
+Location Performance
+Cash Position
+Bank Position
+Pending Dispatches
+Pending Receivables
+Pending Payables
+Recent Transactions
+
+Only show metrics that can be reliably calculated from existing ERP data.
+
+Do not invent predictive numbers.
+
+============================================================
+52. BUSINESS INSIGHTS
+============================================================
+
+Where data supports it, show useful management insights.
+
+Examples:
+
+Highest-selling item
+Highest-value customer
+Location with highest sales
+Location with lowest sales
+Low-stock items
+Large receivables
+Overdue payables
+Gross margin trend
+Net profit trend
+Pending dispatches
+Cash position
+
+Insights must be based on actual ERP data.
+
+Do not create fake AI-style statements.
+
+============================================================
+53. DASHBOARD PERFORMANCE
+============================================================
+
+Dashboard must respect filters.
+
+If:
+
+Today
+→ all cards and widgets use today.
+
+If:
+
+This Month
+→ all cards and widgets use this month.
+
+If:
+
+Location A
+→ all figures use Location A.
+
+If:
+
+All Locations
+→ consolidated figures.
+
+No widget should accidentally use a different date or location filter.
+
+============================================================
+54. REPORT CONSISTENCY
+============================================================
+
+Dashboard figures must reconcile with reports.
+
+For example:
+
+Dashboard Sales
+=
+Sales Report
+
+Dashboard Receivables
+=
+Receivables Report
+
+Dashboard Payables
+=
+Payables Report
+
+Dashboard Cash
+=
+Cash Book
+
+Dashboard Bank
+=
+Bank Book
+
+Dashboard GP
+=
+P&L GP
+
+Dashboard NP
+=
+P&L NP
+
+Dashboard Inventory
+=
+Stock valuation source
+
+No independent dashboard arithmetic that can drift from reports.
+
+============================================================
+55. GLOBAL SEARCH / FILTER / SORT
+============================================================
+
+Long lists must support:
+
+Search
+Filter
+Sort Ascending
+Sort Descending
+Pagination
+
+Searchable dropdowns must contain:
+
+Search bar
+Scrollable results
+Keyboard-friendly selection where practical
+
+Apply throughout ERP.
+
+Examples:
+
+Customers
+Vendors
+Employees
+Items
+Ledgers
+Banks
+Cash accounts
+Warehouses
+Storage Locations
+Sub-locations
+Materials
+
+============================================================
+56. GLOBAL TABLE DESIGN
+============================================================
+
+All tables:
+
+Readable headers
+Sticky header where appropriate
+Correct numeric alignment
+Currency right-aligned
+Dates consistently formatted
+Status badges
+Action menu
+Pagination
+
+Currency format:
+
+₹1,23,456.00
+
+No overlapping columns.
+
+No unnecessary horizontal scrolling.
+
+============================================================
+57. GLOBAL EXPORT STANDARD
+============================================================
+
+Where reports currently support exports, ensure working:
+
+Excel
+PDF
+CSV where applicable
+
+Every export must actually work.
+
+Apply to:
+
+Ledger
+Stock
+Day Book
+Cash Book
+Bank Book
+GST
+GSTR
+Reports
+Dashboard where specified
+
+============================================================
+58. PERMISSIONS HEALTH CHECK
+============================================================
+
+Do a complete read-only permission audit throughout the ERP.
+
+Check every:
+
+Role
+Permission
+Module
+Action
+
+Actions:
+
+View
+Create
+Edit
+Delete
+Export
+Print
+Approve
+Cancel
+Reopen
+Location access
+
+Admin-only functions must remain protected.
+
+Especially verify:
+
+Voucher deletion
+Sales Return deletion
+Purchase Return deletion
+Month reopening
+Location access
+All Locations access
+Payroll approval
+Storage movement
+Company settings
+
+Do not change permissions blindly.
+
+Report:
+
+Working
+Missing
+Too broad
+Too restrictive
+
+Fix only genuine permission bugs.
+
+============================================================
+59. MONTH LOCKING
+============================================================
+
+If a month is locked:
+
+Nothing in that month can be changed.
+
+No:
+
+Sale edit
+Purchase edit
+Voucher edit
+Delete
+Return modification
+Journal modification
+Payroll modification
+GST modification
+
+unless authorized Admin reopens the month.
+
+Voucher numbering must remain locked.
+
+All Locations reporting can still view locked data.
+
+============================================================
+60. GST / PLACE OF SUPPLY
+============================================================
+
+Maintain correct GST logic.
+
+Same-state customer/location:
+
+CGST + SGST
+
+Different-state:
+
+IGST
+
+This logic must be consistent in:
+
+POS
+Sales
+Quotation where applicable
+Purchase
+Returns
+GST reports
+GSTR
+
+Customer GSTIN and Vendor GSTIN must persist correctly.
+
+============================================================
+61. B2B / B2C
+============================================================
+
+If a customer receives GSTIN after bills have already been generated and the month remains open:
+
+Existing eligible bills should be reclassified from B2C to B2B according to the existing numbering/business rules.
+
+B2C numbering gaps created by conversion must be handled automatically.
+
+Do not modify locked months.
+
+Month closing must lock the numbering state.
+
+Only authorized Admin can reopen.
+
+============================================================
+62. ACCOUNTING LEDGER INTEGRITY AUDIT
+============================================================
+
+After all changes, run a complete ledger audit.
+
+For every transaction verify:
+
+Sale
+→ ledger entries
+
+Purchase
+→ ledger entries
+
+Receipt
+→ ledger entries
+
+Payment
+→ ledger entries
+
+Journal
+→ ledger entries
+
+Payroll
+→ ledger entries
+
+Returns
+→ ledger entries
+
+Charges
+→ ledger entries
+
+Stock-related accounting
+→ correct postings
+
+Verify customer ledger.
+
+Verify vendor ledger.
+
+Verify employee ledger.
+
+Verify cash ledger.
+
+Verify bank ledger.
+
+Verify income ledgers.
+
+Verify expense ledgers.
+
+No transaction should exist only in a report/UI without the corresponding accounting source.
+
+============================================================
+63. ACCOUNTING RECONCILIATION
+============================================================
+
+Run:
+
+Trial Balance
+Balance Sheet
+P&L
+Customer balances
+Vendor balances
+Receivables
+Payables
+Cash
+Bank
+GST
+Inventory
+
+Compare all.
+
+Trial Balance:
+
+Debit = Credit
+
+Balance Sheet:
+
+Assets = Liabilities + Equity
+
+Customer:
+
+Ledger = Outstanding = Dashboard
+
+Vendor:
+
+Ledger = Outstanding = Dashboard
+
+Cash:
+
+Ledger = Cash Book = Dashboard
+
+Bank:
+
+Ledger = Bank Book = Dashboard
+
+GP:
+
+P&L = Dashboard
+
+NP:
+
+P&L = Dashboard
+
+============================================================
+64. NO DUPLICATE ACCOUNTING
+============================================================
+
+Test:
+
+POS payment
+Receipt
+Payment Voucher
+System-generated receipt
+Partial payment
+Overpayment
+Edit
+Cancel
+Return
+
+Ensure one financial event is not counted twice.
+
+System-generated records must not be mistaken for manual receipts.
+
+============================================================
+65. PURCHASE / SALES STOCK FLOW
+============================================================
+
+Sale:
+
+Stock decreases once.
+
+Purchase:
+
+Stock increases once.
+
+Sales Return:
+
+Stock increases according to return.
+
+Purchase Return:
+
+Stock decreases according to return.
+
+Do not double-adjust stock.
+
+============================================================
+66. STOCK TRANSFER — DO NOT IMPLEMENT YET
+============================================================
+
+IMPORTANT:
+
+Stock Transfer redesign is intentionally postponed.
+
+Do NOT change the Stock Transfer accounting/business logic in this master implementation.
+
+Do NOT redesign it now.
+
+Leave it unchanged until a separate Stock Transfer specification is provided.
+
+============================================================
+67. DATA SAFETY
+============================================================
+
+Before migrations:
+
+Backup/checkpoint.
+
+Before modifying historical data:
+
+Create audit trail.
+
+Never delete accounting records just to make a report look correct.
+
+Never create fake transactions to make totals match.
+
+If historical data is inconsistent:
+
+Identify
+→ explain
+→ propose correction
+→ migrate safely
+→ reconcile
+
+============================================================
+68. TESTING
+============================================================
+
+After implementation run automated and manual tests.
+
+Test:
+
+POS cash
+POS credit
+POS partial payment
+POS overpayment
+POS customer
+POS walk-in
+POS GST
+POS charges
+POS location
+
+Quotation
+Purchase
+Purchase return
+Sales return
+
+Receipt
+Payment
+Journal
+
+Customer
+Vendor
+Employee
+
+Employee resignation
+Employee advance
+Payroll
+Attendance
+
+Stock
+Storage
+Item tracking
+
+GST
+GSTR
+Reconciliation
+
+Cash
+Bank
+Ledger
+Trial Balance
+P&L
+Balance Sheet
+
+Dashboard
+
+Exports
+
+Permissions
+
+Month Lock
+
+============================================================
+69. UI REGRESSION TEST
+============================================================
+
+Test on:
+
+Desktop
+Laptop
+Tablet
+Mobile-sized viewport
+
+Check every transaction popup.
+
+There must be:
+
+No accidental close
+No broken scroll
+No clipped buttons
+No invisible Save
+No horizontal overflow
+No overlapping columns
+No broken dropdown
+
+============================================================
+70. EXPORT REGRESSION TEST
+============================================================
+
+Automatically test every export button.
+
+Verify actual files.
+
+For each:
+
+Excel
+PDF
+CSV
+
+Open generated file and verify:
+
+Headers
+Rows
+Totals
+Dates
+Filters
+Location
+Formatting
+
+============================================================
+71. FINAL FULL ERP HEALTH CHECK
+============================================================
+
+Before declaring completion, run a complete ERP health check.
+
+Check:
+
+Accounting
+Inventory
+GST
+Payroll
+Permissions
+Locations
+Reports
+Exports
+Dashboard
+UI
+Backend
+Database
+Migrations
+
+Report all findings.
+
+Do not say "complete" simply because the code compiles.
+
+============================================================
+72. FINAL REPORT
+============================================================
+
+At the end provide:
+
+1. Modules inspected
+2. Modules changed
+3. UI changes
+4. Backend changes
+5. Database migrations
+6. Permission changes
+7. Accounting changes
+8. Inventory changes
+9. Payroll changes
+10. GST changes
+11. Dashboard changes
+12. Export fixes
+13. Tests executed
+14. Number of tests passed
+15. Number of tests failed
+16. Reconciliation results
+17. Remaining issues
+18. Any intentionally deferred work
+
+IMPORTANT:
+
+Do NOT report success without evidence.
+
+If something cannot be verified, say:
+
+CANNOT VERIFY
+
+Do not guess.
+
+============================================================
+73. IMPLEMENTATION ORDER
+============================================================
+
+Work in this order:
+
+PHASE 1
+Read-only audit of current ERP.
+
+PHASE 2
+Create checkpoint/backup.
+
+PHASE 3
+Global UI design system and responsive dialog system.
+
+PHASE 4
+POS.
+
+PHASE 5
+Quotation.
+
+PHASE 6
+Purchase / Purchase Return.
+
+PHASE 7
+Receipt / Payment / Journal Vouchers.
+
+PHASE 8
+Accounts / Ledger / Cash / Bank / Reports.
+
+PHASE 9
+Inventory / Storage / Item Tracking.
+
+PHASE 10
+Customers / Vendors / Outstanding.
+
+PHASE 11
+HR / Employees / Attendance.
+
+PHASE 12
+Employee Advance migration.
+
+PHASE 13
+Payroll.
+
+PHASE 14
+Warehouse Dispatch.
+
+PHASE 15
+GST / GSTR / Reconciliation.
+
+PHASE 16
+Dashboard.
+
+PHASE 17
+Permissions health check.
+
+PHASE 18
+Full regression.
+
+PHASE 19
+Accounting reconciliation.
+
+PHASE 20
+Export verification.
+
+PHASE 21
+Final ERP health report.
+
+============================================================
+FINAL REQUIREMENT
+============================================================
+
+The final ERP must behave as ONE integrated system.
+
+The fundamental flow must be:
+
+USER ACTION
+↓
+MODULE
+↓
+BACKEND SERVICE
+↓
+ACCOUNTING / INVENTORY ENGINE
+↓
+LEDGER
+↓
+REPORTS
+↓
+DASHBOARD
+
+There must never be:
+
+MODULE
+→ separate calculation
+→ separate report
+→ different balance
+
+Everything must reconcile.
+
+The objective is not merely to make the ERP look better.
+
+The objective is:
+
+PROFESSIONAL UI
++
+SIMPLE WORKFLOW
++
+CORRECT LOCATION CONTROL
++
+CORRECT ACCOUNTING
++
+CORRECT LEDGER
++
+CORRECT INVENTORY
++
+CORRECT GST
++
+CORRECT PAYROLL
++
+CORRECT REPORTS
++
+WORKING EXPORTS
++
+CORRECT PERMISSIONS
++
+SAFE DATA
++
+FULL RECONCILIATION
++
+NO REGRESSIONS
+
+Do not implement Stock Transfer changes in this phase.
+
+Complete all other specified requirements, test them, reconcile them, and provide the final verification report.
