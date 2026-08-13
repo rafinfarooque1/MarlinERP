@@ -30,7 +30,9 @@
  *     creation and reclass use), so no new number can be drawn at this
  *     location while the rename is in flight;
  *   • one transaction — every validation failure rolls the whole thing back;
- *   • a location can be migrated ONCE (sales_number_formats row = done);
+ *   • a location can be migrated ONCE (sales_number_formats row = done) —
+ *     unless a super admin deliberately clears the lock via reset-lock below,
+ *     which reopens the screen for a CORRECTED re-run and nothing else;
  *   • every rename lands in invoice_renumber_log: who, when, old, new.
  */
 import { Router, type IRouter } from "express";
@@ -83,8 +85,13 @@ type Plan = {
   rows: PlanRow[];
   /** SB2x-prefixed bills whose number has no parseable identity — never touched. */
   oddShaped: number;
+  /** A completed migration batch exists for this scope — this is a corrected
+   *  re-run after a deliberate lock reset, not a first migration. */
+  isRerun: boolean;
   perSeries: Record<string, { count: number; firstNew: string; lastNew: string; lastSerial: number }>;
 };
+
+type PlanError = { error: string; status: number; code?: string };
 
 function parseTarget(body: any): { locationType: string; locationId: number; b2cStart: number; b2bStart: number } | string {
   const locationType = String(body?.locationType ?? "");
@@ -117,7 +124,7 @@ async function computePlan(
   q: Q,
   opts: { locationType: string; locationId: number; b2cStart: number; b2bStart: number },
   forUpdate: boolean,
-): Promise<Plan | { error: string; status: number }> {
+): Promise<Plan | PlanError> {
   const name = await locationName(q, opts.locationType, opts.locationId);
   if (!name) return { error: "Location not found", status: 404 };
   const scope = await salesCounterScope(q as any, { type: opts.locationType, id: opts.locationId });
@@ -129,6 +136,7 @@ async function computePlan(
   if (fmtRow) {
     return {
       status: 409,
+      code: "ALREADY_MIGRATED",
       error: `This location's invoice numbering was already migrated (by ${fmtRow.created_by ?? "an administrator"} on ${new Date(fmtRow.created_at).toLocaleDateString("en-IN")}). It cannot be renumbered a second time.`,
     };
   }
@@ -159,15 +167,29 @@ async function computePlan(
     [scope]
   );
 
-  // The target shape must not already exist at this location — a short-FY
-  // bill here means a previous attempt half-landed; a human must look first.
+  // The target shape must not already exist at this location — UNLESS a
+  // super admin deliberately cleared the migration lock via reset-lock, which
+  // records a durable series='RESET' event row in invoice_renumber_log inside
+  // the same transaction that deletes the marker. Renumbering FROM the
+  // current short-FY state is then exactly the point, and
+  // legacy_invoice_number's COALESCE keeps the original pre-migration number
+  // through any number of re-runs. The RESET event (not merely "some batch
+  // exists") is what authorises the re-run: a marker row deleted by hand in
+  // SQL, or short-FY bills with no reset on record, still fail closed here —
+  // manual tampering and genuinely half-landed states need a human first.
   const { rows: [preShort] } = await q.query(
     `SELECT count(*)::int AS c FROM sales
       WHERE number_scope = $1 AND invoice_series IN ('SB2B','SB2C')
         AND invoice_fy ~ '^[0-9]{2}-[0-9]{2}$'`,
     [scope]
   );
-  if (Number(preShort?.c ?? 0) > 0) {
+  const { rows: [resetEv] } = await q.query(
+    `SELECT count(*)::int AS c FROM invoice_renumber_log
+      WHERE number_scope = $1 AND series = 'RESET'`,
+    [scope]
+  );
+  const isRerun = Number(resetEv?.c ?? 0) > 0;
+  if (Number(preShort?.c ?? 0) > 0 && !isRerun) {
     return { status: 409, error: "Some bills at this location already carry the new number format — resolve those first." };
   }
 
@@ -199,7 +221,7 @@ async function computePlan(
     s.lastSerial = serial;
   }
 
-  return { scope, locationName: name, rows: planRows, oddShaped: Number(odd?.c ?? 0), perSeries };
+  return { scope, locationName: name, rows: planRows, oddShaped: Number(odd?.c ?? 0), isRerun, perSeries };
 }
 
 /** Trail-integrity counts, measured with the SAME predicates before and after. */
@@ -236,7 +258,7 @@ router.post("/admin/sales-renumber/preview", async (req, res): Promise<void> => 
   if (typeof target === "string") { res.status(400).json({ error: target }); return; }
 
   const plan = await computePlan(pool as unknown as Q, target, false);
-  if ("error" in plan) { res.status(plan.status).json({ error: plan.error }); return; }
+  if ("error" in plan) { res.status(plan.status).json({ error: plan.error, code: plan.code }); return; }
   const trail = await trailCounts(pool as unknown as Q, plan.scope);
 
   res.json({
@@ -290,7 +312,7 @@ router.post("/admin/sales-renumber/apply", async (req, res): Promise<void> => {
     const plan = await computePlan(client as unknown as Q, target, true);
     if ("error" in plan) {
       await client.query("ROLLBACK");
-      res.status(plan.status).json({ error: plan.error });
+      res.status(plan.status).json({ error: plan.error, code: plan.code });
       return;
     }
     if (plan.rows.length !== expectedTotal) {
@@ -353,14 +375,48 @@ router.post("/admin/sales-renumber/apply", async (req, res): Promise<void> => {
     // Advance the continuous counters to the last serial just issued — a
     // renumbering that leaves the allocator behind bricks the next sale on
     // the unique index (invisible to every read-only check).
+    //
+    // First migration: never rewind an existing counter (GREATEST) — deleted
+    // bills may have consumed higher serials that must not be re-issued.
+    // Corrected RE-RUN after a lock reset: the whole scope was just rebuilt,
+    // so the counter must FOLLOW the corrected sequence — GREATEST would
+    // preserve the old run's high-water mark and leave a permanent hole in
+    // the bill book (e.g. correct top bill 7533 but next bill drawn at 7590).
+    // Rewinding is safe here because this transaction holds the exclusive
+    // scope lock, every SB2x bill in scope was renumbered under FOR UPDATE,
+    // and the floors below still cover every SB2x serial the plan does not
+    // renumber: branch-transfer twins, and serials the log proves were issued
+    // to bills that no longer exist (a bill renumbered in a previous batch
+    // and deleted afterwards must never have its number re-issued to a new
+    // sale). The one residue this cannot see is a bill BOTH created and
+    // deleted after the previous migration — no durable trace of its serial
+    // survives anywhere; that is the documented, super-admin-accepted cost of
+    // a corrected re-run. The duplicate self-check above the COMMIT backstops
+    // everything visible.
     for (const [series, key] of [["SB2C", "b2c"], ["SB2B", "b2b"]] as const) {
-      const last = plan.perSeries[series]?.lastSerial
+      const planLast = plan.perSeries[series]?.lastSerial
         ?? (series === "SB2C" ? target.b2cStart - 1 : target.b2bStart - 1);
+      const { rows: [outside] } = await client.query(
+        `SELECT COALESCE(MAX(invoice_serial), 0)::int AS m FROM sales
+          WHERE number_scope = $1 AND invoice_series = $2 AND branch_transfer_id IS NOT NULL`,
+        [plan.scope, series]
+      );
+      const { rows: [ghost] } = await client.query(
+        `SELECT COALESCE(MAX((split_part(l.new_number, '/', 3))::int), 0)::int AS m
+           FROM invoice_renumber_log l
+          WHERE l.number_scope = $1 AND l.series = $2
+            AND split_part(l.new_number, '/', 3) ~ '^[0-9]+$'
+            AND NOT EXISTS (SELECT 1 FROM sales s WHERE s.id = l.sale_id)`,
+        [plan.scope, series]
+      );
+      const last = Math.max(planLast, Number(outside?.m ?? 0), Number(ghost?.m ?? 0));
       await client.query(
         `INSERT INTO voucher_sequences (voucher_type, fy_label, last_number)
          VALUES ($1, 'ALL', $2)
          ON CONFLICT (voucher_type, fy_label)
-         DO UPDATE SET last_number = GREATEST(voucher_sequences.last_number, EXCLUDED.last_number)`,
+         DO UPDATE SET last_number = ${plan.isRerun
+           ? "EXCLUDED.last_number"
+           : "GREATEST(voucher_sequences.last_number, EXCLUDED.last_number)"}`,
         [`${SALES_SERIES[key].counter}@${plan.scope}`, last]
       );
     }
@@ -412,6 +468,118 @@ router.post("/admin/sales-renumber/apply", async (req, res): Promise<void> => {
     await client.query("ROLLBACK").catch(() => {});
     console.error("[admin/sales-renumber] apply failed:", (err as Error).message);
     res.status(500).json({ error: `Renumbering failed and NOTHING was changed: ${(err as Error).message}` });
+  } finally {
+    client.release();
+  }
+});
+
+// ── Reset the migration lock — deliberate, super-admin, ONE location ────────
+// Deletes exactly one sales_number_formats row so the migration screen reopens
+// for that location and a CORRECTED renumbering can be run. Nothing else is
+// touched: invoices, receipts, quotations, ledgers, counters and the
+// invoice_renumber_log audit trail all stay exactly as they are. Duplicate
+// protection is unchanged — the corrected apply recreates the row, which
+// locks the location again.
+//
+// Window to know about: between the reset and the corrected apply, the
+// location's allocator falls back to the DEFAULT number format (long FY,
+// zero-padded, per-FY counters). Any bill created in that window is included
+// in the corrected re-run and folded into the book series.
+router.post("/admin/sales-renumber/reset-lock", async (req, res): Promise<void> => {
+  if (!(await requireLevelOne(req, res))) return;
+  const locationType = String(req.body?.locationType ?? "");
+  const locationId = Number(req.body?.locationId);
+  if (!["warehouse", "outlet", "headoffice"].includes(locationType)) {
+    res.status(400).json({ error: "locationType must be warehouse, outlet or headoffice" });
+    return;
+  }
+  if (locationType !== "headoffice" && (!Number.isInteger(locationId) || locationId <= 0)) {
+    res.status(400).json({ error: "locationId is required" });
+    return;
+  }
+  if (req.body?.confirm !== true) {
+    res.status(400).json({ error: "confirm: true is required — this reopens a one-time migration" });
+    return;
+  }
+  const locId = locationType === "headoffice" ? 0 : locationId;
+  const actor = String((req as any).employee?.username ?? "admin");
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const name = await locationName(client as unknown as Q, locationType, locId);
+    if (!name) {
+      await client.query("ROLLBACK");
+      res.status(404).json({ error: "Location not found" });
+      return;
+    }
+    const scope = await salesCounterScope(client as any, { type: locationType, id: locId });
+    // Exclusive scope lock: the format row must never vanish from under an
+    // allocator mid-draw or an apply mid-migration for this scope.
+    await acquireSalesScopeLockExclusive(client as any, scope);
+    const { rows: [marker] } = await client.query(
+      `SELECT number_scope, created_by, created_at FROM sales_number_formats
+        WHERE number_scope = $1 FOR UPDATE`,
+      [scope]
+    );
+    if (!marker) {
+      await client.query("ROLLBACK");
+      res.status(404).json({ error: `${name} has no migration lock — its numbering was never migrated (or the lock was already cleared).` });
+      return;
+    }
+    const { rows: batches } = await client.query(
+      `SELECT batch_id, count(*)::int AS bills, min(performed_by) AS performed_by, min(performed_at) AS performed_at
+         FROM invoice_renumber_log WHERE number_scope = $1
+        GROUP BY batch_id ORDER BY min(performed_at)`,
+      [scope]
+    );
+    const { rowCount } = await client.query(
+      `DELETE FROM sales_number_formats WHERE number_scope = $1`, [scope]);
+    if (rowCount !== 1) throw new Error(`expected to delete exactly 1 marker row, deleted ${rowCount}`);
+
+    // The durable audit of the unlock, committed ATOMICALLY with it. This
+    // series='RESET' row is also what authorises the corrected re-run in
+    // computePlan — deleting the marker by hand in SQL leaves no such row,
+    // so the half-landed tripwire still fails closed. sale_id 0 = no sale.
+    const resetBatchId = `SRNRESET-${Date.now()}`;
+    await client.query(
+      `INSERT INTO invoice_renumber_log
+         (batch_id, sale_id, location_type, location_id, number_scope, series, old_number, new_number, performed_by)
+       VALUES ($1, 0, $2, $3, $4, 'RESET', $5, $6, $7)`,
+      [
+        resetBatchId, locationType, locId, scope,
+        `lock created by ${marker.created_by ?? "unknown"} at ${new Date(marker.created_at).toISOString()}`,
+        "migration lock cleared — corrected re-run permitted",
+        actor,
+      ]
+    );
+    await client.query("COMMIT");
+
+    logActivity({
+      action: "DELETE",
+      module: "sales",
+      entityType: "invoice_renumber_lock",
+      description: `Cleared the invoice-numbering migration lock for ${name} (${scope}) — originally migrated by ${marker.created_by ?? "an administrator"}. The location can now be renumbered again; the previous renumber audit log is preserved.`,
+      user: actor,
+      metadata: { scope, locationType, locationId: locId, clearedCreatedBy: marker.created_by, clearedCreatedAt: marker.created_at, priorBatches: batches },
+    }).catch(() => {});
+
+    res.json({
+      locationName: name,
+      scope,
+      resetBatchId,
+      cleared: { createdBy: marker.created_by ?? null, createdAt: marker.created_at },
+      priorBatches: batches.map((b) => ({
+        batchId: b.batch_id,
+        bills: Number(b.bills),
+        performedBy: b.performed_by,
+        performedAt: b.performed_at,
+      })),
+    });
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    console.error("[admin/sales-renumber] reset-lock failed:", (err as Error).message);
+    res.status(500).json({ error: `Reset failed and nothing was changed: ${(err as Error).message}` });
   } finally {
     client.release();
   }

@@ -21,3 +21,10 @@ description: Per-location invoice number formats (short FY, no padding, continuo
 - Fail closed on SB2x-prefixed rows with unstamped identity (`oddShaped`) — "renumber everything" must never silently skip rows.
 - Proof standard: financial statements bitwise identical before/after, receipt pairing count unchanged, orphan count not increased, dup check 0 — all in-txn, throwing rolls everything back. `invoice_renumber_log` keeps the permanent old→new record per bill.
 - Ragiguda (warehouse:1) migrated Aug 2026: B2C from 7490, B2B from 130, continuous.
+
+## Reset-lock & corrected re-runs (Aug 2026)
+- `POST /admin/sales-renumber/reset-lock` (level-1 + `confirm:true`) deletes exactly the one marker row under the exclusive scope lock and, IN THE SAME TXN, inserts a `series='RESET'` event row into `invoice_renumber_log` (sale_id 0). That row is BOTH the durable audit and the re-run authorisation.
+- Re-run eligibility = the RESET row exists, NOT "some batch exists": a marker deleted by hand in SQL leaves no RESET row, so the half-landed 409 still fails closed. Preview's marker 409 carries `code:"ALREADY_MIGRATED"`; the UI renders it as an inline panel with the clear-lock button.
+- Counter semantics differ by run: first run keeps GREATEST (never rewind); a re-run SETs the `'ALL'` counter to max(plan lastSerial, branch-transfer SB2x serials, log-recorded serials whose sale no longer exists). The last floor stops re-issuing numbers of bills renumbered earlier then deleted; a bill both created AND deleted after the prior migration leaves no trace anywhere — accepted, documented residue.
+- Window between reset and corrected apply: the allocator falls back to the default long format; the re-run folds those bills in. `invoice_renumber_log` and counters are never touched by reset.
+- Legacy preservation across any number of re-runs is the COALESCE: `legacy_invoice_number` always keeps the ORIGINAL pre-migration number, verified by checksum in rehearsal.

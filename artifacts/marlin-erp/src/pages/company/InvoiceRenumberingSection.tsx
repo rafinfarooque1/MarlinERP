@@ -84,6 +84,10 @@ export default function InvoiceRenumberingSection() {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [applying, setApplying] = useState(false);
   const [result, setResult] = useState<ApplyResult | null>(null);
+  /** Set when preview is refused because this location was already migrated. */
+  const [locked, setLocked] = useState<string | null>(null);
+  const [resetOpen, setResetOpen] = useState(false);
+  const [resetting, setResetting] = useState(false);
 
   const locations = useMemo(() => {
     const list = (warehouses as any[]).map((w) => ({
@@ -112,6 +116,7 @@ export default function InvoiceRenumberingSection() {
     if (!target) return;
     setPreviewing(true);
     setResult(null);
+    setLocked(null);
     try {
       const p = await customFetch<Preview>('/api/admin/sales-renumber/preview', {
         method: 'POST',
@@ -120,9 +125,34 @@ export default function InvoiceRenumberingSection() {
       });
       setPreview(p);
     } catch (e: any) {
-      toast.error(e?.data?.error || e.message || 'Preview failed');
+      // Already-migrated is not a toast-and-forget error: surface it inline
+      // with the (super-admin) escape hatch to clear the migration lock.
+      if (e?.data?.code === 'ALREADY_MIGRATED') {
+        setLocked(String(e.data.error));
+      } else {
+        toast.error(e?.data?.error || e.message || 'Preview failed');
+      }
     } finally {
       setPreviewing(false);
+    }
+  };
+
+  const runReset = async () => {
+    if (!selected) return;
+    setResetting(true);
+    try {
+      const r = await customFetch<{ locationName: string }>('/api/admin/sales-renumber/reset-lock', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ locationType: selected.locationType, locationId: selected.locationId, confirm: true }),
+      });
+      setLocked(null);
+      setResetOpen(false);
+      toast.success(`Migration lock cleared for ${r.locationName}. Run a new preview when you're ready — until the corrected migration is applied, new bills there use the standard long number format.`);
+    } catch (e: any) {
+      toast.error(e?.data?.error || e.message || 'Could not clear the migration lock');
+    } finally {
+      setResetting(false);
     }
   };
 
@@ -166,7 +196,7 @@ export default function InvoiceRenumberingSection() {
         <div className="grid gap-3 sm:grid-cols-3">
           <div>
             <label className="text-xs font-medium text-muted-foreground">Location</label>
-            <Select value={locationKey} onValueChange={setLocationKey}>
+            <Select value={locationKey} onValueChange={(v) => { setLocationKey(v); setLocked(null); }}>
               <SelectTrigger className="mt-1"><SelectValue placeholder="Choose location" /></SelectTrigger>
               <SelectContent>
                 {locations.map((l) => <SelectItem key={l.key} value={l.key}>{l.label}</SelectItem>)}
@@ -194,6 +224,23 @@ export default function InvoiceRenumberingSection() {
           </Button>
           <p className="text-xs text-muted-foreground">Nothing changes until you review and confirm the full list.</p>
         </div>
+
+        {locked && selected && (
+          <div className="rounded-lg border border-amber-600/30 bg-amber-500/5 p-4 text-sm space-y-2">
+            <p className="font-medium flex items-center gap-1.5 text-amber-700 dark:text-amber-400">
+              <TriangleAlert className="w-4 h-4 shrink-0" /> {locked}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              If the previous migration needs to be corrected, a super administrator can clear the migration
+              lock for this location only. Nothing else changes — invoices, receipts, ledgers and the
+              renumbering audit log all stay exactly as they are — and the location locks again automatically
+              once the corrected migration is applied.
+            </p>
+            <Button variant="outline" size="sm" onClick={() => setResetOpen(true)}>
+              Clear migration lock for {selected.label}…
+            </Button>
+          </div>
+        )}
 
         {result && (
           <div className="rounded-lg border border-green-600/30 bg-green-500/5 p-4 text-sm space-y-1">
@@ -271,7 +318,7 @@ export default function InvoiceRenumberingSection() {
               <TriangleAlert className="w-5 h-5 text-destructive" /> This can be done only once
             </AlertDialogTitle>
             <AlertDialogDescription>
-              {preview?.total} invoices at {preview?.locationName} will be permanently renumbered onto the bill-book series, and all future bills at this location will continue it. The old numbers stay searchable, but this cannot be run again for this location.
+              {preview?.total} invoices at {preview?.locationName} will be permanently renumbered onto the bill-book series, and all future bills at this location will continue it. The old numbers stay searchable, but this cannot be run again for this location unless a super administrator clears the migration lock.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -282,6 +329,41 @@ export default function InvoiceRenumberingSection() {
               disabled={applying}
             >
               {applying ? <><Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> Renumbering…</> : 'Yes, renumber now'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* ── Clear-migration-lock confirmation ──────────────────────────────── */}
+      <AlertDialog open={resetOpen} onOpenChange={setResetOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <TriangleAlert className="w-5 h-5 text-amber-600" /> Clear the migration lock?
+            </AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2">
+                <p>
+                  This removes only the &ldquo;already migrated&rdquo; lock for{' '}
+                  <span className="font-medium text-foreground">{selected?.label}</span> so a corrected
+                  renumbering can be run. No invoice numbers, receipts, ledgers or reports change now, and the
+                  previous renumbering&rsquo;s audit log is kept.
+                </p>
+                <p>
+                  Until the corrected migration is applied, new bills at this location will print the standard
+                  long number format — run the corrected migration soon after clearing. The one-time protection
+                  returns automatically once it is applied.
+                </p>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={resetting}>Go back</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => { e.preventDefault(); void runReset(); }}
+              disabled={resetting}
+            >
+              {resetting ? <><Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> Clearing…</> : 'Yes, clear the lock'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
