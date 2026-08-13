@@ -45,6 +45,7 @@
 - [Attachment ACL](attachment-acl.md) — "signed in" is not authorisation in a location-scoped app; readable only if you uploaded it (id in path) or may see the record; 404 not 403; presigned PUT can't bind content-type.
 - [Invoice numbering vs sequence](invoice-numbering-sequence.md) — renumbering strands allocators; SB2B/SB2C sales series rules: EVERY sales producer (POS + importer) must use the allocator, renames pair-rename receipts.
 - [Per-location invoice numbering](per-location-invoice-numbering.md) — identity = 4 stamped columns + plain unique indexes (CASE index broke publish); every producer stamps; receipt deletes need the location guard.
+- [Sales number format override](sales-number-format-override.md) — per-scope short-FY/no-pad/continuous formats; shared/exclusive scope lock protocol for ALL number producers; renumber = once, trail in same txn, books bitwise identical.
 - [Scratch-DB experiments](scratch-db-experiments.md) — `A && B &` backgrounds the WHOLE chain (vars lost) and `psql ""` silently hits dev; print current_database() before any scratch write.
 - [Cross-env record identity](cross-env-record-identity.md) — dev and prod imported the same documents separately: ids and PUR- batch numbers differ; match by invoice/voucher number; prod data fixes go through the app.
 - [Sale cancellation](sale-cancellation.md) — a terminal state obliges EVERY write path (payments, returns) to refuse it after the row lock; filtering it from reports is not enough.

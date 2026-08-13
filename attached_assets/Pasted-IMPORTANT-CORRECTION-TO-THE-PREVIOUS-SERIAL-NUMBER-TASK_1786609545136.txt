@@ -1,0 +1,270 @@
+IMPORTANT CORRECTION TO THE PREVIOUS SERIAL-NUMBER TASK:
+
+I DO want the existing/old invoices to be renumbered.
+
+For ONLY the warehouse/location:
+
+FROZEN HUB - RAGIGUDA
+
+rebuild the invoice serial sequence so that the existing bills AND all future bills use the new numbering format.
+
+Do NOT change invoice numbers belonging to any other warehouse/location.
+
+==================================================
+1. OLD BILLS MUST ALSO BE RENumbered
+==================================================
+
+For all existing sales invoices belonging to:
+
+Frozen Hub - Ragiguda
+
+renumber them according to their existing chronological invoice order.
+
+Do not simply change the display format.
+
+Actually update the stored invoice number/reference in the backend.
+
+The numbering must be continuous and deterministic.
+
+B2C sequence:
+
+7490
+7491
+7492
+7493
+...
+
+B2B sequence:
+
+130
+131
+132
+133
+...
+
+Determine the correct chronological order using the existing invoice date and the existing creation/order information.
+
+Do not randomly assign numbers.
+
+==================================================
+2. NEW FORMAT
+==================================================
+
+Change:
+
+SB2C/2026-27/0000009
+
+to:
+
+SB2C/26-27/7490
+
+and:
+
+SB2B/2026-27/0000009
+
+to:
+
+SB2B/26-27/130
+
+Financial year must display as:
+
+26-27
+
+NOT:
+
+2026-27
+
+Remove all leading zero padding.
+
+==================================================
+3. ONLY FROZEN HUB - RAGIGUDA
+==================================================
+
+This migration applies ONLY to:
+
+Frozen Hub - Ragiguda
+
+Do NOT modify historical invoice numbers belonging to:
+
+- Frozen Hub - Calicut
+- Head Office
+- Any other warehouse
+- Any other location
+
+Their existing numbering must remain untouched.
+
+==================================================
+4. PRESERVE EVERY REFERENCE
+==================================================
+
+This is a historical renumbering, so before changing invoice numbers, identify every place that references the old invoice number.
+
+This includes:
+
+- Sales records
+- POS records
+- Customer ledger
+- Receipt vouchers
+- Payment records
+- Sales returns
+- Credit notes
+- Customer statements
+- GST/B2B/B2C records
+- Reports
+- Dashboard
+- PDF invoices
+- Print invoices
+- WhatsApp/share references
+- Audit logs
+- Search indexes
+- API responses
+- Any foreign-key/reference fields
+
+When an invoice number changes, every internal reference that is supposed to point to that invoice must continue pointing to the SAME invoice.
+
+Do not create duplicate invoices.
+
+Do not create new accounting entries.
+
+Do not change:
+
+- Invoice amount
+- GST
+- Customer
+- Items
+- Quantity
+- Rate
+- Discount
+- Payment status
+- Ledger postings
+- Stock
+- Receipts
+- Payments
+- Returns
+
+ONLY the invoice serial/reference should change.
+
+==================================================
+5. ACCOUNTING SAFETY
+==================================================
+
+Renumbering must NOT create a new accounting transaction.
+
+Do NOT repost:
+
+- Sales
+- GST
+- Receivables
+- Cash
+- Bank
+- Stock
+
+This is a reference-number migration only.
+
+After migration, Trial Balance, Balance Sheet, P&L, Customer Ledgers, Vendor Ledgers, Stock and GST totals must remain exactly unchanged.
+
+==================================================
+6. MONTH LOCKING
+==================================================
+
+Historical bills may be inside locked months.
+
+Because this is an ADMIN-controlled serial migration, do not treat this as a normal invoice edit.
+
+Create a controlled/admin migration operation that can update the invoice references while preserving the accounting transaction dates and month-lock integrity.
+
+Do NOT allow normal users to perform this operation.
+
+Record:
+
+- Who performed migration
+- Date/time
+- Old invoice number
+- New invoice number
+- Invoice ID
+- Location
+- B2B/B2C type
+
+==================================================
+7. BACKUP / PREVIEW BEFORE APPLYING
+==================================================
+
+Before changing anything, generate a preview.
+
+Show:
+
+OLD NUMBER → NEW NUMBER
+
+Example:
+
+SB2C/2026-27/0000001 → SB2C/26-27/7490
+SB2C/2026-27/0000002 → SB2C/26-27/7491
+SB2C/2026-27/0000003 → SB2C/26-27/7492
+
+B2B:
+
+SB2B/2026-27/0000001 → SB2B/26-27/130
+SB2B/2026-27/0000002 → SB2B/26-27/131
+
+Do not apply the migration if duplicate/conflicting numbers are detected.
+
+==================================================
+8. FUTURE NUMBERING
+==================================================
+
+After historical migration is complete, the next new invoice must continue from the next available number.
+
+For example, if the last migrated B2C invoice is:
+
+SB2C/26-27/7512
+
+the next new B2C invoice must be:
+
+SB2C/26-27/7513
+
+Likewise, if the last B2B invoice is:
+
+SB2B/26-27/145
+
+the next new B2B invoice must be:
+
+SB2B/26-27/146
+
+Do not reset the sequence again.
+
+==================================================
+9. CRITICAL VALIDATION
+==================================================
+
+Before finalizing, verify:
+
+- Every old Ragiguda B2C invoice received exactly one new serial.
+- Every old Ragiguda B2B invoice received exactly one new serial.
+- No duplicate serial numbers.
+- No missing serial numbers caused by the migration.
+- No other warehouse was modified.
+- Every receipt still points to the correct sale.
+- Every return still points to the correct sale.
+- Customer ledgers still show the same transactions.
+- Reports still show the same totals.
+- GST data is unchanged.
+- Stock is unchanged.
+- Trial Balance is unchanged.
+
+Finally test creation of a new:
+
+B2C invoice
+
+and a new:
+
+B2B invoice
+
+to confirm they continue from the migrated sequence.
+
+IMPORTANT:
+
+Do not perform this migration blindly.
+
+First inspect the existing invoice-number architecture and all dependencies/references.
+
+Create the migration safely, run the preview and validation, then apply it ONLY to Frozen Hub - Ragiguda.

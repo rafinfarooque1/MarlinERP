@@ -2527,6 +2527,50 @@ async function runMigrations() {
     }
   }
 
+  // ── Sales number FORMAT overrides + admin renumber audit ──────────────────
+  // sales_number_formats: opt-in per-scope printed format (short FY label, no
+  // zero padding, continuous serial across FYs). Rows are created ONLY by the
+  // admin renumber operation (routes/adminRenumber.ts) — a location migrated
+  // onto its old physical bill-book numbering (e.g. SB2C/26-27/7490). Every
+  // allocator reads this via getSalesNumberFormat(); absence = default format.
+  // invoice_renumber_log: the permanent OLD → NEW record of every admin
+  // renumbering, per invoice — who ran it, when, and both numbers.
+  try {
+    await pool.query(
+      `CREATE TABLE IF NOT EXISTS sales_number_formats (
+         number_scope TEXT PRIMARY KEY,
+         fy_short     BOOLEAN NOT NULL DEFAULT false,
+         pad          INTEGER NOT NULL DEFAULT 6,
+         continuous   BOOLEAN NOT NULL DEFAULT false,
+         created_by   TEXT,
+         created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+       )`
+    );
+    await pool.query(
+      `CREATE TABLE IF NOT EXISTS invoice_renumber_log (
+         id            SERIAL PRIMARY KEY,
+         batch_id      TEXT NOT NULL,
+         sale_id       INTEGER NOT NULL,
+         location_type TEXT,
+         location_id   INTEGER,
+         number_scope  TEXT,
+         series        TEXT,
+         old_number    TEXT NOT NULL,
+         new_number    TEXT NOT NULL,
+         performed_by  TEXT,
+         performed_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+       )`
+    );
+    await pool.query(
+      `CREATE INDEX IF NOT EXISTS idx_invoice_renumber_log_batch ON invoice_renumber_log (batch_id)`
+    );
+    await pool.query(
+      `CREATE INDEX IF NOT EXISTS idx_invoice_renumber_log_sale ON invoice_renumber_log (sale_id)`
+    );
+  } catch (e) {
+    console.error('[migration] sales_number_formats FAILED:', (e as Error).message);
+  }
+
   // Forward-only reconcile for the per-location SB2B/SB2C counters, every
   // boot: anything that rewrites invoice numbers (manual fixes, restores) can
   // strand an allocator behind numbers already in use, which bricks new sales
@@ -2538,31 +2582,43 @@ async function runMigrations() {
   // location has no rows here and starts at 000001 on first sale). The scope
   // expression must mirror salesCounterScope(): HO by type alone, and an
   // outlet folded onto its warehouse twin when both share one cash ledger.
+  //
+  // Format-aware: a scope with a CONTINUOUS format override keys its counter
+  // row on 'ALL' instead of the FY segment (the sequence never resets in
+  // April), so its reconcile target must fold every FY's max onto that one
+  // row — otherwise a renumbered location would seed stray per-FY rows the
+  // allocator no longer reads, while the row it DOES read fell behind.
   try {
     for (const series of Object.keys(SALES_SERIES) as SalesSeries[]) {
       const { prefix, counter } = SALES_SERIES[series];
       await pool.query(
         `INSERT INTO voucher_sequences (voucher_type, fy_label, last_number)
-         SELECT $1 || '@' || x.scope, x.fy, MAX(x.suffix)
+         SELECT $1 || '@' || y.scope,
+                CASE WHEN y.continuous THEN 'ALL' ELSE y.fy END,
+                MAX(y.suffix)
            FROM (
-             SELECT CASE
-                      WHEN s.location_type = 'headoffice' THEN 'headoffice'
-                      WHEN s.location_type = 'outlet' AND tw.id IS NOT NULL THEN 'warehouse:' || tw.id::text
-                      ELSE s.location_type || ':' || COALESCE(s.location_id, 0)::text
-                    END AS scope,
-                    split_part(s.invoice_number, '/', 2) AS fy,
-                    (split_part(s.invoice_number, '/', 3))::int AS suffix
-               FROM sales s
-               LEFT JOIN outlets o ON s.location_type = 'outlet' AND o.id = s.location_id
-               LEFT JOIN LATERAL (
-                 SELECT w.id FROM warehouses w
-                  WHERE o.cash_ledger_id IS NOT NULL AND w.cash_ledger_id = o.cash_ledger_id
-                  ORDER BY w.id LIMIT 1
-               ) tw ON true
-              WHERE s.invoice_number LIKE $2 || '/%'
-                AND split_part(s.invoice_number, '/', 3) ~ '^[0-9]+$'
-           ) x
-          GROUP BY x.scope, x.fy
+             SELECT x.scope, x.fy, x.suffix, COALESCE(f.continuous, false) AS continuous
+               FROM (
+                 SELECT CASE
+                          WHEN s.location_type = 'headoffice' THEN 'headoffice'
+                          WHEN s.location_type = 'outlet' AND tw.id IS NOT NULL THEN 'warehouse:' || tw.id::text
+                          ELSE s.location_type || ':' || COALESCE(s.location_id, 0)::text
+                        END AS scope,
+                        split_part(s.invoice_number, '/', 2) AS fy,
+                        (split_part(s.invoice_number, '/', 3))::int AS suffix
+                   FROM sales s
+                   LEFT JOIN outlets o ON s.location_type = 'outlet' AND o.id = s.location_id
+                   LEFT JOIN LATERAL (
+                     SELECT w.id FROM warehouses w
+                      WHERE o.cash_ledger_id IS NOT NULL AND w.cash_ledger_id = o.cash_ledger_id
+                      ORDER BY w.id LIMIT 1
+                   ) tw ON true
+                  WHERE s.invoice_number LIKE $2 || '/%'
+                    AND split_part(s.invoice_number, '/', 3) ~ '^[0-9]+$'
+               ) x
+               LEFT JOIN sales_number_formats f ON f.number_scope = x.scope
+           ) y
+          GROUP BY y.scope, CASE WHEN y.continuous THEN 'ALL' ELSE y.fy END
          ON CONFLICT (voucher_type, fy_label)
          DO UPDATE SET last_number = GREATEST(voucher_sequences.last_number, EXCLUDED.last_number)`,
         [counter, prefix]

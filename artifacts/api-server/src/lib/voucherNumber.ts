@@ -114,6 +114,101 @@ export function salesInvoiceNumber(series: SalesSeries, fyLabel: string, seq: nu
   return `${SALES_SERIES[series].prefix}/${fyLabel}/${String(seq).padStart(6, "0")}`;
 }
 
+// ── Per-location number FORMAT overrides ────────────────────────────────────
+//
+// The default printed shape is SB2C/2026-27/000001 (full FY label, 6-digit
+// zero padding, serials restart every FY). A location migrated onto its old
+// physical bill-book numbering (admin renumber operation) instead prints
+// SB2C/26-27/7490 — short FY label, no padding, and ONE serial sequence that
+// keeps counting across financial years ("continuous": the physical book
+// never restarted in April, so neither does the migrated sequence).
+//
+// The override lives in sales_number_formats keyed on the folded counter
+// scope. Every producer that prints or allocates a sales number must go
+// through these helpers so the format can never fork between producers.
+export type SalesNumberFormat = {
+  /** Print the FY segment short — "26-27" instead of "2026-27". */
+  fyShort: boolean;
+  /** Zero-pad width for the serial segment; 0 = no padding. */
+  pad: number;
+  /** ONE running serial across financial years (never resets in April). */
+  continuous: boolean;
+};
+
+export const DEFAULT_SALES_NUMBER_FORMAT: SalesNumberFormat = {
+  fyShort: false,
+  pad: 6,
+  continuous: false,
+};
+
+/**
+ * Per-scope allocation locks. Every producer that draws or rewrites sales
+ * numbers for a scope participates: allocators and the B2C→B2B reclass take
+ * the SHARED side (concurrent with each other), the admin renumber migration
+ * takes the EXCLUSIVE side (blocks all of them for the scope, and only that
+ * scope). Acquire this BEFORE any counter or sale row lock so the migration
+ * can never end up in a lock cycle with a producer.
+ */
+export async function acquireSalesScopeLockShared(q: Queryable, scope: string): Promise<void> {
+  await q.query(`SELECT pg_advisory_xact_lock_shared(hashtext('sales_scope:' || $1))`, [scope]);
+}
+
+export async function acquireSalesScopeLockExclusive(q: Queryable, scope: string): Promise<void> {
+  await q.query(`SELECT pg_advisory_xact_lock(hashtext('sales_scope:' || $1))`, [scope]);
+}
+
+/** "2026-27" → "26-27". Idempotent — an already-short label passes through. */
+export function shortFyLabel(fyLabel: string): string {
+  const m = /^(\d{4})-(\d{2})$/.exec(fyLabel);
+  return m ? `${m[1].slice(2)}-${m[2]}` : fyLabel;
+}
+
+/**
+ * The fy_label the COUNTER row is keyed on. A continuous sequence uses one
+ * fixed key ('ALL') so the same voucher_sequences row keeps counting across
+ * FY rollovers; the printed FY segment still follows the sale date.
+ */
+export function salesCounterFyLabel(fmt: SalesNumberFormat, fyLabel: string): string {
+  return fmt.continuous ? "ALL" : fyLabel;
+}
+
+export function formatSalesInvoiceNumber(
+  series: SalesSeries,
+  fyLabel: string,
+  seq: number,
+  fmt: SalesNumberFormat = DEFAULT_SALES_NUMBER_FORMAT,
+): string {
+  const fy = fmt.fyShort ? shortFyLabel(fyLabel) : fyLabel;
+  const serial = fmt.pad > 0 ? String(seq).padStart(fmt.pad, "0") : String(seq);
+  return `${SALES_SERIES[series].prefix}/${fy}/${serial}`;
+}
+
+/**
+ * Load the number format for a counter scope. Missing row (or the table not
+ * yet migrated) means the default format — overrides are strictly opt-in,
+ * created only by the admin renumber operation.
+ */
+export async function getSalesNumberFormat(
+  q: Queryable,
+  scope: string,
+): Promise<SalesNumberFormat> {
+  try {
+    const { rows: [row] } = await q.query(
+      `SELECT fy_short, pad, continuous FROM sales_number_formats WHERE number_scope = $1`,
+      [scope]
+    );
+    if (!row) return DEFAULT_SALES_NUMBER_FORMAT;
+    return {
+      fyShort: Boolean(row.fy_short),
+      pad: Number(row.pad ?? 6),
+      continuous: Boolean(row.continuous),
+    };
+  } catch {
+    /* sales_number_formats not migrated yet — default format */
+    return DEFAULT_SALES_NUMBER_FORMAT;
+  }
+}
+
 /** The location a sale is billed from, as stamped on the sales row. */
 export type SaleLocation = { type: string; id: number | null | undefined };
 
@@ -234,12 +329,29 @@ export async function allocateSalesInvoiceNumber(
   }
   const fyLabel = financialYearLabel(saleDate, fyStartMonth);
   const scope = await salesCounterScope(q, location);
-  const serial = await nextScopedSerial(q, SALES_SERIES[series].counter, scope, fyLabel);
+  // SHARED scope lock: normal allocations never block each other (shared vs
+  // shared is free), but the admin renumber migration takes the EXCLUSIVE
+  // side of this same lock, so while a location's history is being rebuilt
+  // no sale — whatever its FY — can draw a number at that scope and slip
+  // past the migration in the old format. Held to end of transaction; a
+  // non-transactional caller acquires and releases it within the statement.
+  await acquireSalesScopeLockShared(q, scope);
+  // Format override (admin renumber migration): decides the printed shape AND
+  // which counter row issues the serial (continuous scopes never reset in
+  // April — their counter is keyed 'ALL' instead of the FY label).
+  const fmt = await getSalesNumberFormat(q, scope);
+  const serial = await nextScopedSerial(
+    q, SALES_SERIES[series].counter, scope, salesCounterFyLabel(fmt, fyLabel)
+  );
+  const printedFy = fmt.fyShort ? shortFyLabel(fyLabel) : fyLabel;
   return {
-    invoiceNumber: salesInvoiceNumber(series, fyLabel, serial),
+    invoiceNumber: formatSalesInvoiceNumber(series, fyLabel, serial, fmt),
     numberScope: scope,
     seriesPrefix: SALES_SERIES[series].prefix,
-    fyLabel,
+    // Stamped identity mirrors the PRINTED segments — invoice_fy must equal
+    // what split_part(invoice_number,'/',2) yields, or the shape-driven boot
+    // backfill and the identity unique index would disagree with the number.
+    fyLabel: printedFy,
     serial,
   };
 }

@@ -1,0 +1,23 @@
+---
+name: Sales number format override & admin renumbering
+description: Per-location invoice number formats (short FY, no padding, continuous serial), the once-per-location renumber migration, and the scope lock protocol every number producer must follow.
+---
+
+## Format overrides (`sales_number_formats`)
+- Keyed on the folded counter scope (e.g. `warehouse:1`). Row present ⇒ that location prints `SB2C/26-27/7490` style: `fy_short` (short FY segment), `pad=0` (no zero padding), `continuous` (ONE serial across financial years — counter row keyed `'ALL'` instead of the FY label).
+- Rows are created ONLY by the admin renumber apply. Absence = default format (`SB2C/2026-27/000001`, per-FY counters). `getSalesNumberFormat` defaults on missing row OR missing table.
+- **Every producer must go through the format helpers** (`formatSalesInvoiceNumber`, `salesCounterFyLabel`): the sale-creation allocator, the B2C→B2B reclass, and the every-boot counter reconcile (which folds cross-FY max onto the `'ALL'` row for continuous scopes). A producer that hardcodes the shape forks the series.
+- Stamped `invoice_fy` = the PRINTED segment (`26-27`), so `split_part(invoice_number,'/',2)` and the identity columns always agree. `shortFyLabel` is idempotent.
+- Books-shape predicates match on `SB2B/%`/`SB2C/%` prefixes and receipt↔sale number equality — both survive the format change by construction, but any NEW consumer that regex-parses the FY segment must accept both `\d{4}-\d{2}` and `\d{2}-\d{2}`.
+
+## Scope lock protocol (deadlock + escape prevention)
+- `acquireSalesScopeLockShared(q, scope)` in every allocator/reclass, `acquireSalesScopeLockExclusive` in the renumber migration — advisory xact lock on `hashtext('sales_scope:'||scope)`, taken BEFORE any counter or sale-row lock.
+- **Why:** counter-row pre-locking alone cannot block a concurrent sale dated in an FY with no counter row yet (it INSERTs a fresh row and escapes the migration in the old format), and apply-takes-counters-first vs reclass-takes-rows-first is a direct deadlock cycle. Shared/shared is free, so normal sales stay concurrent.
+- **How to apply:** any future producer that draws or rewrites sales numbers must take the shared side first; any future bulk rewrite takes the exclusive side.
+
+## Renumber migration rules
+- Once per location — the format row IS the "already applied" marker (409 on re-run). Preview (read-only mapping) → apply (one txn, expectedTotal recheck). Cancelled bills keep their chronological slot; order = `sale_date, invoice_serial, id` per series; `branch_transfer_id IS NOT NULL` rows excluded.
+- Trail renamed in the SAME txn via reclass's `renameTrail` (receipts with unconditional location guard, sale-bound quotations, payment notes). Old number kept in `legacy_invoice_number` (COALESCE — never overwrite an earlier legacy value).
+- Fail closed on SB2x-prefixed rows with unstamped identity (`oddShaped`) — "renumber everything" must never silently skip rows.
+- Proof standard: financial statements bitwise identical before/after, receipt pairing count unchanged, orphan count not increased, dup check 0 — all in-txn, throwing rolls everything back. `invoice_renumber_log` keeps the permanent old→new record per bill.
+- Ragiguda (warehouse:1) migrated Aug 2026: B2C from 7490, B2B from 130, continuous.

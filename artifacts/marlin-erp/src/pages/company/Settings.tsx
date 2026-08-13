@@ -12,9 +12,10 @@ import {
 import { Settings2, Save, Loader2, Bell, Receipt, DollarSign, Globe, Store, ScanBarcode, Trash2, TriangleAlert, CalendarRange, CalendarOff, FileText, Plus, ShieldCheck, ShieldOff, Upload } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
-import { customFetch } from '@workspace/api-client-react';
+import { customFetch, useGetMe, useListHierarchies } from '@workspace/api-client-react';
 import { Textarea } from '@/components/ui/textarea';
 import { PageHeader } from '@/components/app/page-header';
+import InvoiceRenumberingSection from './InvoiceRenumberingSection';
 
 interface SettingGroup {
   icon: React.ElementType;
@@ -936,6 +937,11 @@ function WeeklyOffsEditor({ rules, onChange }: {
 export default function Settings() {
   const perm = usePermission('page:/company/settings');
   const queryClient = useQueryClient();
+  // Level-1 (super administrator) gate for the invoice renumbering section —
+  // same derivation AppLayout uses. The server enforces this independently.
+  const { data: me } = useGetMe();
+  const { data: hierarchies = [] } = useListHierarchies();
+  const isSuperAdmin = (hierarchies as any[]).find((h: any) => h.id === (me as any)?.hierarchyId)?.level === 1;
   const [values, setValues] = useState<Record<string, any>>(getDefaults);
   const [loadingGeneral, setLoadingGeneral] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -1093,6 +1099,9 @@ export default function Settings() {
 
         {/* ── Security: password policy (server-persisted) ─────────────────── */}
         <SecuritySection canEdit={perm.canEdit} />
+
+        {/* ── Invoice renumbering (super-admin only, once per location) ────── */}
+        {isSuperAdmin && <InvoiceRenumberingSection />}
 
         {/* ── Danger Zone ──────────────────────────────────────────────────── */}
         {perm.canDelete && (

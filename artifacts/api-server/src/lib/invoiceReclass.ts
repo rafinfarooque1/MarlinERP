@@ -25,8 +25,12 @@ import { pool } from "@workspace/db";
 import { logActivity } from "./audit";
 import {
   SALES_SERIES,
-  salesInvoiceNumber,
   nextScopedSerial,
+  getSalesNumberFormat,
+  formatSalesInvoiceNumber,
+  salesCounterFyLabel,
+  acquireSalesScopeLockShared,
+  type SalesNumberFormat,
 } from "./voucherNumber";
 import { ymOfDate, isMonthLocked, monthLabel } from "./periodLock";
 
@@ -58,17 +62,17 @@ const iso = (d: unknown): string =>
  * ambiguous across location scopes, the receipt rename is additionally bound
  * to the sale's stored location so another scope's receipt is never touched.
  */
-async function renameTrail(
+export async function renameTrail(
   tx: Q,
   sale: { id: number; location_type: string | null; location_id: number | null; outlet_id: number | null },
   oldNumber: string,
   newNumber: string,
-): Promise<void> {
+): Promise<{ receipts: number; quotations: number }> {
   // Invoice-number STRINGS repeat across location scopes, and receipts can
   // exist that no live sale accounts for (orphans from deleted sales, legacy
   // imports). The location predicate is therefore UNCONDITIONAL — a
   // "currently unique among sales" check says nothing about receipts.
-  await tx.query(
+  const { rowCount: receipts } = await tx.query(
     `UPDATE receipts
         SET voucher_number = $1,
             narration = replace(COALESCE(narration, ''), $2, $1)
@@ -77,21 +81,24 @@ async function renameTrail(
     [newNumber, oldNumber,
      sale.location_type ?? "outlet", sale.location_id ?? sale.outlet_id],
   );
+  let quotations = 0;
   const { rows: [quotReg] } = await tx.query(`SELECT to_regclass('public.quotations') AS reg`);
   if (quotReg?.reg != null) {
     // Sale-bound only. Never fall back to a bare number match — the same
     // printed number can belong to another location's quotation.
-    await tx.query(
+    const { rowCount: qc } = await tx.query(
       `UPDATE quotations SET converted_invoice_number = $1
         WHERE converted_invoice_number = $2 AND converted_sale_id = $3`,
       [newNumber, oldNumber, sale.id],
-    ).catch(() => { /* pre-converted_sale_id schema: skip rather than guess */ });
+    ).catch(() => ({ rowCount: 0 } as any)); /* pre-converted_sale_id schema: skip rather than guess */
+    quotations = qc ?? 0;
   }
   await tx.query(
     `UPDATE sale_payments SET notes = replace(notes, $2, $1)
       WHERE sale_id = $3 AND notes LIKE '%' || $2 || '%'`,
     [newNumber, oldNumber, sale.id],
   );
+  return { receipts: receipts ?? 0, quotations };
 }
 
 /**
@@ -171,6 +178,19 @@ export async function convertCustomerB2CToB2B(opts: {
     for (const [key, groupSales] of groups) {
       const [scope, fy] = key.split("|");
 
+      // Shared scope lock BEFORE any sale-row or counter lock — concurrent
+      // with normal allocation, mutually exclusive with the admin renumber
+      // migration (which takes the exclusive side before ITS row locks), so
+      // the two can never deadlock over counters vs sale rows.
+      await acquireSalesScopeLockShared(client, scope);
+
+      // The scope's printed format + counter keying. A renumbered scope
+      // (admin migration) prints short-FY unpadded numbers and runs ONE
+      // continuous counter keyed 'ALL' across financial years — reclass must
+      // draw and format through the same rules or the two producers fork.
+      const fmt: SalesNumberFormat = await getSalesNumberFormat(client, scope);
+      const counterFy = salesCounterFyLabel(fmt, fy);
+
       // 1. Take the group's B2C counter row lock first (creates it at 0 if it
       //    never drew) — same lock sale creation takes, so ordering is safe.
       const b2cKey = `${SALES_SERIES.b2c.counter}@${scope}`;
@@ -180,7 +200,7 @@ export async function convertCustomerB2CToB2B(opts: {
          ON CONFLICT (voucher_type, fy_label)
          DO UPDATE SET last_number = voucher_sequences.last_number
          RETURNING last_number`,
-        [b2cKey, fy],
+        [b2cKey, counterFy],
       );
 
       // 2. Lock EVERY B2C row of the scope+FY — compaction moves rows that
@@ -198,8 +218,8 @@ export async function convertCustomerB2CToB2B(opts: {
       // 3. Convert this customer's eligible bills to the B2B series.
       const convertedIds = new Set<number>();
       for (const s of groupSales) {
-        const serial = await nextScopedSerial(client, SALES_SERIES.b2b.counter, scope, fy);
-        const newNumber = salesInvoiceNumber("b2b", fy, serial);
+        const serial = await nextScopedSerial(client, SALES_SERIES.b2b.counter, scope, counterFy);
+        const newNumber = formatSalesInvoiceNumber("b2b", fy, serial, fmt);
         const oldNumber = String(s.invoice_number);
         await client.query(
           `UPDATE sales
@@ -243,7 +263,7 @@ export async function convertCustomerB2CToB2B(opts: {
         next += 1;
         if (next === r.serial) continue;
         const oldNumber = String(r.invoice_number);
-        const newNumber = salesInvoiceNumber("b2c", fy, next);
+        const newNumber = formatSalesInvoiceNumber("b2c", fy, next, fmt);
         await client.query(
           `UPDATE sales SET invoice_number = $1, invoice_serial = $2 WHERE id = $3`,
           [newNumber, next, r.id],
@@ -256,11 +276,25 @@ export async function convertCustomerB2CToB2B(opts: {
       }
       // Movable rows at or below the floor keep their serials; `next` may end
       // below them only when nothing moved — never move the counter UP here.
-      const maxInUse = Math.max(
+      let maxInUse = Math.max(
         next,
         ...movable.filter((m) => m.serial <= floor).map((m) => m.serial),
         floor,
       );
+
+      // A CONTINUOUS counter is shared across every FY of the scope, but this
+      // group only locked and inspected ONE FY's rows — walking the counter
+      // back to this group's max could hand out serials another FY already
+      // uses. Floor the walk-back at the scope-wide max serial actually in use.
+      if (fmt.continuous) {
+        const { rows: [mx] } = await client.query(
+          `SELECT COALESCE(MAX(invoice_serial), 0) AS mx
+             FROM sales
+            WHERE number_scope = $1 AND invoice_series = 'SB2C'`,
+          [scope],
+        );
+        maxInUse = Math.max(maxInUse, Number(mx?.mx ?? 0));
+      }
 
       // 5. Walk the B2C counter back to the highest serial still in use —
       //    otherwise the numbers just vacated become permanent tail gaps.
@@ -270,7 +304,7 @@ export async function convertCustomerB2CToB2B(opts: {
         `UPDATE voucher_sequences
             SET last_number = $3
           WHERE voucher_type = $1 AND fy_label = $2 AND last_number > $3`,
-        [b2cKey, fy, maxInUse],
+        [b2cKey, counterFy, maxInUse],
       );
     }
 
