@@ -15,7 +15,8 @@ import { Textarea } from '@/components/ui/textarea';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
+import { DialogClose, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
+import { TransactionDialog, TransactionDialogContent } from '@/components/ui/transaction-dialog';
 import { Separator } from '@/components/ui/separator';
 import {
   Building2, Download, Printer, BadgeCheck, Wallet, IndianRupee, AlertTriangle,
@@ -32,12 +33,13 @@ import { PageHeader } from '@/components/app/page-header';
 import { StatusBadge } from '@/components/app/status-badge';
 import { EmptyState } from '@/components/app/empty-state';
 import { TableSkeleton } from '@/components/app/loading-skeletons';
+import { inr as inrBase } from '@/lib/currency';
 
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
 const inr = (n: number | null | undefined) =>
-  n === null || n === undefined ? '—' : `₹${Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-const inr0 = (n: number) => `₹${Number(n).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
+  n === null || n === undefined ? '—' : inrBase(n);
+const inr0 = inrBase;
 const dmy = (s: string | null | undefined) => {
   if (!s) return '—';
   const d = new Date(s);
@@ -779,8 +781,12 @@ export default function RentManagement() {
       </Sheet>
 
       {/* ── Pay dialog ────────────────────────────────────────────────────── */}
-      <Dialog open={!!paying} onOpenChange={o => !o && setPaying(null)}>
-        <DialogContent>
+      <TransactionDialog
+        open={!!paying}
+        dirty={payForm.amount !== (paying ? String(paying.outstanding) : '') || payForm.paymentMode !== 'bank' || payForm.paymentDate !== today() || payForm.referenceNumber !== '' || payForm.remarks !== ''}
+        onOpenChange={o => !o && setPaying(null)}
+      >
+        <TransactionDialogContent>
           <DialogHeader>
             <DialogTitle>Record rent payment</DialogTitle>
             <DialogDescription>
@@ -816,13 +822,13 @@ export default function RentManagement() {
           </div>
 
           <DialogFooter>
-            <Button variant="outline" onClick={() => setPaying(null)}>Cancel</Button>
+            <DialogClose asChild><Button variant="outline">Cancel</Button></DialogClose>
             <Button onClick={doPay} disabled={payPeriod.isPending}>
               {payPeriod.isPending ? 'Posting…' : 'Post payment'}
             </Button>
           </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        </TransactionDialogContent>
+      </TransactionDialog>
     </AppLayout>
   );
 }

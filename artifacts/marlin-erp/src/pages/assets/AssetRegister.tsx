@@ -17,7 +17,8 @@ import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
+import { DialogClose, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
+import { TransactionDialog, TransactionDialogContent } from '@/components/ui/transaction-dialog';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
@@ -108,6 +109,23 @@ export default function AssetRegister() {
   const [xfer, setXfer] = useState({ to: '', transferDate: todayIso(), approvedBy: '', reason: '' });
   // Disposal dialog state
   const [disp, setDisp] = useState({ disposalType: 'sold' as AssetDisposalType, disposalDate: todayIso(), reason: '' });
+
+  // Unsaved-data guards for the three entry dialogs (compared against the
+  // values each open* handler seeds).
+  const editDirty = !!editTarget && (
+    edit.categoryId !== (editTarget.categoryId ? String(editTarget.categoryId) : '0') ||
+    edit.invoiceNumber !== (editTarget.invoiceNumber || '') ||
+    edit.serialNumber !== (editTarget.serialNumber || '') ||
+    edit.assetTag !== (editTarget.assetTag || '') ||
+    edit.warrantyStart !== (editTarget.warrantyStart || '') ||
+    edit.warrantyEnd !== (editTarget.warrantyEnd || '') ||
+    edit.usefulLifeMonths !== (editTarget.usefulLifeMonths != null ? String(editTarget.usefulLifeMonths) : '') ||
+    edit.paymentStatus !== editTarget.paymentStatus ||
+    edit.notes !== (editTarget.notes || '') ||
+    edit.attachmentPath !== editTarget.attachmentPath
+  );
+  const xferDirty = xfer.to !== '' || xfer.approvedBy !== '' || xfer.reason !== '' || xfer.transferDate !== todayIso();
+  const dispDirty = disp.disposalType !== 'sold' || disp.reason !== '' || disp.disposalDate !== todayIso();
 
   const openEdit = (a: AssetPurchase) => {
     setEdit({
@@ -365,8 +383,8 @@ export default function AssetRegister() {
       </Sheet>
 
       {/* Edit dialog — descriptive fields only */}
-      <Dialog open={!!editTarget} onOpenChange={v => !v && setEditTarget(null)}>
-        <DialogContent className="max-w-xl max-h-[90vh] overflow-y-auto">
+      <TransactionDialog open={!!editTarget} dirty={editDirty} onOpenChange={v => !v && setEditTarget(null)}>
+        <TransactionDialogContent className="sm:max-w-xl">
           <DialogHeader>
             <DialogTitle>Edit Asset — {editTarget?.assetCode}</DialogTitle>
             <DialogDescription>Money figures are fixed at purchase time (a voucher was posted from them); descriptive details can change.</DialogDescription>
@@ -427,15 +445,15 @@ export default function AssetRegister() {
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setEditTarget(null)}>Cancel</Button>
+            <DialogClose asChild><Button variant="outline">Cancel</Button></DialogClose>
             <Button onClick={submitEdit} disabled={updateAsset.isPending}>{updateAsset.isPending ? 'Saving…' : 'Save Changes'}</Button>
           </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        </TransactionDialogContent>
+      </TransactionDialog>
 
       {/* Transfer dialog */}
-      <Dialog open={!!transferTarget} onOpenChange={v => !v && setTransferTarget(null)}>
-        <DialogContent className="sm:max-w-md">
+      <TransactionDialog open={!!transferTarget} dirty={xferDirty} onOpenChange={v => !v && setTransferTarget(null)}>
+        <TransactionDialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2"><ArrowRightLeft className="w-5 h-5 text-primary" /> Transfer Asset</DialogTitle>
             <DialogDescription>
@@ -468,15 +486,15 @@ export default function AssetRegister() {
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setTransferTarget(null)}>Cancel</Button>
+            <DialogClose asChild><Button variant="outline">Cancel</Button></DialogClose>
             <Button onClick={submitTransfer} disabled={createTransfer.isPending}>{createTransfer.isPending ? 'Transferring…' : 'Transfer'}</Button>
           </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        </TransactionDialogContent>
+      </TransactionDialog>
 
       {/* Disposal dialog */}
-      <Dialog open={!!disposeTarget} onOpenChange={v => !v && setDisposeTarget(null)}>
-        <DialogContent className="sm:max-w-md">
+      <TransactionDialog open={!!disposeTarget} dirty={dispDirty} onOpenChange={v => !v && setDisposeTarget(null)}>
+        <TransactionDialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-destructive"><Archive className="w-5 h-5" /> Dispose Asset</DialogTitle>
             <DialogDescription>
@@ -506,11 +524,11 @@ export default function AssetRegister() {
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setDisposeTarget(null)}>Cancel</Button>
+            <DialogClose asChild><Button variant="outline">Cancel</Button></DialogClose>
             <Button variant="destructive" onClick={submitDisposal} disabled={createDisposal.isPending}>{createDisposal.isPending ? 'Recording…' : 'Dispose Asset'}</Button>
           </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        </TransactionDialogContent>
+      </TransactionDialog>
     </AppLayout>
   );
 }

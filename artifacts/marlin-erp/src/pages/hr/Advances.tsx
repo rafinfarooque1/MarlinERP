@@ -5,7 +5,8 @@ import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { Dialog, DialogClose, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { TransactionDialog, TransactionDialogContent } from '@/components/ui/transaction-dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
@@ -20,9 +21,9 @@ import { StatusBadge } from '@/components/app/status-badge';
 import { EmptyState } from '@/components/app/empty-state';
 import { TableSkeleton } from '@/components/app/loading-skeletons';
 import { TablePager, useClientPage } from '@/components/ui/table-pager';
+import { inr } from '@/lib/currency';
 
-const fmt = (n: number) =>
-  new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 2 }).format(n);
+const fmt = inr;
 
 const fmtDate = (s?: string | null) =>
   s ? new Date(s).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
@@ -62,8 +63,8 @@ function NewAdvanceDialog({ onClose }: { onClose: () => void }) {
   };
 
   return (
-    <Dialog open onOpenChange={onClose}>
-      <DialogContent className="sm:max-w-md">
+    <TransactionDialog open dirty={employeeId !== '' || amount !== '' || note !== '' || payFrom !== 'auto' || date !== new Date().toISOString().split('T')[0]} onOpenChange={onClose}>
+      <TransactionDialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Wallet className="w-5 h-5 text-primary" /> Record Advance Payment
@@ -133,13 +134,13 @@ function NewAdvanceDialog({ onClose }: { onClose: () => void }) {
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={onClose} disabled={saving}>Cancel</Button>
+          <DialogClose asChild><Button variant="outline" disabled={saving}>Cancel</Button></DialogClose>
           <Button onClick={submit} disabled={saving}>
             {saving ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Saving…</> : 'Record Advance'}
           </Button>
         </DialogFooter>
-      </DialogContent>
-    </Dialog>
+      </TransactionDialogContent>
+    </TransactionDialog>
   );
 }
 
@@ -171,8 +172,8 @@ function RecoverAdvanceDialog({ advance, onClose }: { advance: any; onClose: () 
   };
 
   return (
-    <Dialog open onOpenChange={onClose}>
-      <DialogContent className="sm:max-w-md">
+    <TransactionDialog open dirty={receiveIn !== 'auto'} onOpenChange={onClose}>
+      <TransactionDialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <HandCoins className="w-5 h-5 text-primary" /> Recover Advance in Cash
@@ -207,13 +208,13 @@ function RecoverAdvanceDialog({ advance, onClose }: { advance: any; onClose: () 
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={onClose} disabled={mutation.isPending}>Cancel</Button>
+          <DialogClose asChild><Button variant="outline" disabled={mutation.isPending}>Cancel</Button></DialogClose>
           <Button onClick={submit} disabled={mutation.isPending}>
             {mutation.isPending ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Recording…</> : 'Record Recovery'}
           </Button>
         </DialogFooter>
-      </DialogContent>
-    </Dialog>
+      </TransactionDialogContent>
+    </TransactionDialog>
   );
 }
 
@@ -248,8 +249,8 @@ function EditAdvanceDialog({ advance, onClose }: { advance: any; onClose: () => 
   };
 
   return (
-    <Dialog open onOpenChange={onClose}>
-      <DialogContent className="sm:max-w-md">
+    <TransactionDialog open dirty={amount !== String(advance.amount ?? '') || date !== (advance.date ?? '').split('T')[0] || note !== (advance.note ?? '')} onOpenChange={onClose}>
+      <TransactionDialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Pencil className="w-5 h-5 text-primary" /> Edit Advance
@@ -283,13 +284,13 @@ function EditAdvanceDialog({ advance, onClose }: { advance: any; onClose: () => 
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={onClose} disabled={mutation.isPending}>Cancel</Button>
+          <DialogClose asChild><Button variant="outline" disabled={mutation.isPending}>Cancel</Button></DialogClose>
           <Button onClick={submit} disabled={mutation.isPending}>
             {mutation.isPending ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Saving…</> : 'Save Changes'}
           </Button>
         </DialogFooter>
-      </DialogContent>
-    </Dialog>
+      </TransactionDialogContent>
+    </TransactionDialog>
   );
 }
 

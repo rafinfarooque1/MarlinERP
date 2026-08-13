@@ -106,6 +106,76 @@ import { FilterPanel } from '@/components/app/filter-panel';
 - These are furniture changes: never alter what data is fetched or how rows
   are filtered/computed.
 
+## Transaction dialogs (dialog safety — binding for ALL dialog work)
+
+Any dialog that records or edits a business document (sale, quotation,
+purchase, receipt/payment/journal voucher, production batch, stock entry —
+anything a user types money or line items into) uses the shared wrapper in
+`components/ui/transaction-dialog.tsx`, never a raw `<Dialog>`:
+
+```tsx
+<TransactionDialog open={isOpen} dirty={form.formState.isDirty} onOpenChange={...}>
+  <TransactionDialogContent className="sm:max-w-3xl">
+    ...unchanged body...
+    <DialogClose asChild><Button variant="outline">Cancel</Button></DialogClose>
+  </TransactionDialogContent>
+</TransactionDialog>
+```
+
+Behavior it guarantees (do not re-implement per page):
+- While `dirty`, clicking outside the dialog does NOTHING (the accidental
+  path is silently ignored — no popup spam).
+- While `dirty`, Escape / the ✕ button / a `DialogClose`-wrapped Cancel show
+  a "Discard unsaved changes?" confirmation; only Discard closes.
+- A clean form closes like a normal dialog. Programmatic closes after a
+  successful save (`setIsOpen(false)`) bypass the guard by construction.
+
+Dirty convention:
+- react-hook-form pages pass `form.formState.isDirty`, OR-ing any prefill
+  flag that `form.reset(...)` hides (e.g. Sales' convert-from-quotation).
+- Manual-state forms compute a boolean by comparing each field with the
+  value it was initialized from (see `accounts/Journal.tsx`, `Vouchers.tsx`).
+- Cancel buttons are wrapped in `<DialogClose asChild>` — never
+  `onClick={() => setIsOpen(false)}`, which would skip the guard.
+
+Responsive contract (baked into `TransactionDialogContent`):
+- Phones: near-fullscreen (viewport minus a small inset).
+- Desktop: unchanged — pages set width via `sm:max-w-*` ONLY (no bare
+  `max-w-*`, which would break the mobile fullscreen); height is capped with
+  internal vertical scrolling.
+- No horizontal scrolling ever; long item/ledger names wrap (`break-words`
+  is on the content — don't add `whitespace-nowrap` to name cells).
+
+Coverage & recorded exceptions:
+- Converted (money/stock document entry): Sales, Quotations, Purchases,
+  Receipt, Payment, Journal, Vouchers (contra/notes quick-entry), Contra,
+  Credit/Debit Notes, Production batches, Move Stock (storage placements),
+  Expenses (accounts + sales), Returns, Sales cash balance, Cash-in-outlet
+  deposit + reconcile, Collect Payment (customers + outstanding), Asset
+  purchases/register/transfers/disposal, HR Advances (new/recover/edit),
+  Payroll (edit/pay/advance), Rent payment.
+- **Stock Transfer screens (`Transfers.tsx`) are an explicit, owner-approved
+  exception** — the owner deferred all Stock Transfer UI changes; do not
+  convert them until that module's own task lifts the deferral.
+- Deliberately raw (not business-document entry): master-data forms
+  (items, parties, warehouses, employees, ledgers, prices, coupons…),
+  delete/approve/confirm prompts, read-only detail viewers, and workflow
+  wizards (import, backup/restore, renumbering, reconciliation batch match,
+  period locks, stock verification detail). New master forms MAY adopt the
+  wrapper, but it is only mandatory for transaction entry.
+
+## Currency format (the ONE money format)
+
+Every money figure renders as `₹1,23,456.00` — Indian digit grouping
+(`en-IN`), exactly two decimals. The shared formatter is `inr()` from
+`@/lib/currency`; new and modernized surfaces must import it instead of
+hand-rolling `toLocaleString`/`toFixed` variants. Legacy pages carry local
+`inr()` helpers with byte-identical output — fold them into the import as
+each module is modernized (never as a drive-by on a page you aren't
+otherwise touching; money figures must stay byte-identical in a sweep).
+PDFs keep `Rs.`-prefixed `pdfMoney` where jsPDF's WinAnsi fonts can't
+render `₹` (see `pdf-unicode-fonts`).
+
 ## Verification (mandatory before you report done)
 
 1. `cd artifacts/marlin-erp && npx tsc --noEmit` → must pass clean.

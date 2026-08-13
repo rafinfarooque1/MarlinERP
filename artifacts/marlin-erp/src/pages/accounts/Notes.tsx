@@ -7,7 +7,8 @@ import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { Dialog, DialogClose, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { TransactionDialog, TransactionDialogContent } from '@/components/ui/transaction-dialog';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -29,6 +30,7 @@ import { EmptyState } from '@/components/app/empty-state';
 import { TableSkeleton } from '@/components/app/loading-skeletons';
 import { TablePager, useClientPage } from '@/components/ui/table-pager';
 import { FileStack } from 'lucide-react';
+import { inr } from '@/lib/currency';
 
 const schema = z.object({
   voucherDate: z.string().min(1, 'Date required'),
@@ -40,7 +42,6 @@ const schema = z.object({
 });
 type FormValues = z.infer<typeof schema>;
 
-const inr = (n: number) => `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
 const today = () => new Date().toISOString().split('T')[0];
 
 function NotesTab({ noteType }: { noteType: 'credit_note' | 'debit_note' }) {
@@ -203,8 +204,8 @@ function NotesTab({ noteType }: { noteType: 'credit_note' | 'debit_note' }) {
       <TablePager {...pagerProps} />
 
       {/* ── New Note Dialog ── */}
-      <Dialog open={isOpen} onOpenChange={v => { setIsOpen(v); if (!v) form.reset(); }}>
-        <DialogContent className="sm:max-w-lg" onOpenAutoFocus={autoFocusFirst}>
+      <TransactionDialog open={isOpen} dirty={form.formState.isDirty} onOpenChange={v => { setIsOpen(v); if (!v) form.reset(); }}>
+        <TransactionDialogContent className="sm:max-w-lg" onOpenAutoFocus={autoFocusFirst}>
           <DialogHeader><DialogTitle>New {isCN ? 'Credit' : 'Debit'} Note</DialogTitle></DialogHeader>
           <Form {...form}>
             <form
@@ -259,15 +260,15 @@ function NotesTab({ noteType }: { noteType: 'credit_note' | 'debit_note' }) {
               )} />
 
               <DialogFooter className="max-md:sticky max-md:bottom-0 max-md:z-20 max-md:-mx-4 max-md:px-4 max-md:py-2 max-md:bg-background/95 max-md:backdrop-blur max-md:border-t max-md:border-border">
-                <Button variant="outline" type="button" onClick={() => setIsOpen(false)}>Cancel</Button>
+                <DialogClose asChild><Button variant="outline" type="button">Cancel</Button></DialogClose>
                 <Button type="submit" disabled={createMutation.isPending}>
                   {createMutation.isPending ? 'Recording…' : `Record ${isCN ? 'Credit' : 'Debit'} Note`}
                 </Button>
               </DialogFooter>
             </form>
           </Form>
-        </DialogContent>
-      </Dialog>
+        </TransactionDialogContent>
+      </TransactionDialog>
 
       {/* ── Delete Confirmation ── */}
       <Dialog open={!!deleteTarget} onOpenChange={v => !v && setDeleteTarget(null)}>

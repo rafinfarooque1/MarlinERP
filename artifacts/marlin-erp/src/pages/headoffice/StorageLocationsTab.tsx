@@ -16,8 +16,9 @@ import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import {
-  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+  Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
+import { TransactionDialog, TransactionDialogContent } from '@/components/ui/transaction-dialog';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
@@ -549,8 +550,8 @@ export default function StorageLocationsTab({ perm }: { perm: Perm }) {
       </Dialog>
 
       {/* Move dialog */}
-      <Dialog open={moveRow != null} onOpenChange={o => { if (!o) setMoveRow(null); }}>
-        <DialogContent className="max-w-md">
+      <TransactionDialog open={moveRow != null} dirty={moveTo !== '' || moveQty !== ''} onOpenChange={o => { if (!o) setMoveRow(null); }}>
+        <TransactionDialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Move Stock — {moveRow?.itemName}</DialogTitle>
             <DialogDescription>
@@ -596,14 +597,14 @@ export default function StorageLocationsTab({ perm }: { perm: Perm }) {
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setMoveRow(null)}>Cancel</Button>
+            <DialogClose asChild><Button variant="outline">Cancel</Button></DialogClose>
             <Button onClick={submitMove}
               disabled={moveStock.isPending || !moveTo || !(Number(moveQty) > 0) || Number(moveQty) > moveMax}>
               {moveStock.isPending ? 'Moving…' : 'Move'}
             </Button>
           </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        </TransactionDialogContent>
+      </TransactionDialog>
     </div>
   );
 }

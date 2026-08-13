@@ -10,7 +10,8 @@ import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
+import { Dialog, DialogClose, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
+import { TransactionDialog, TransactionDialogContent } from '@/components/ui/transaction-dialog';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -35,6 +36,7 @@ import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
 import { EmptyState } from '@/components/app/empty-state';
 import { TableSkeleton } from '@/components/app/loading-skeletons';
 import { TablePager, useClientPage } from '@/components/ui/table-pager';
+import { inr as inrBase } from '@/lib/currency';
 
 const schema = z.object({
   itemId: z.coerce.number().min(1, 'Item required'),
@@ -87,8 +89,8 @@ const defaultValues: FormValues = {
 
 const inr = (n: number | null | undefined, dashWhenNull = true) =>
   n === null || n === undefined
-    ? (dashWhenNull ? '—' : '₹0.00')
-    : `₹${Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+    ? (dashWhenNull ? '—' : inrBase(0))
+    : inrBase(Number(n));
 const fmtQty = (n: number) => Number(n).toLocaleString('en-IN', { maximumFractionDigits: 3 });
 
 export default function ProductionList() {
@@ -474,8 +476,8 @@ export default function ProductionList() {
       </div>
 
       {/* Create Dialog */}
-      <Dialog open={isOpen} onOpenChange={setIsOpen}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto" onOpenAutoFocus={autoFocusFirst}>
+      <TransactionDialog open={isOpen} dirty={form.formState.isDirty} onOpenChange={setIsOpen}>
+        <TransactionDialogContent className="sm:max-w-2xl" onOpenAutoFocus={autoFocusFirst}>
           <DialogHeader>
             <DialogTitle>Record Production Batch</DialogTitle>
             <DialogDescription>Log a finished-goods run with the materials it consumed.</DialogDescription>
@@ -751,17 +753,17 @@ export default function ProductionList() {
               )} />
 
               <DialogFooter>
-                <Button variant="outline" type="button" onClick={() => setIsOpen(false)}>Cancel</Button>
+                <DialogClose asChild><Button variant="outline" type="button">Cancel</Button></DialogClose>
                 <Button type="submit" disabled={createMutation.isPending}>{createMutation.isPending ? 'Recording…' : 'Record Batch'}</Button>
               </DialogFooter>
             </form>
           </Form>
-        </DialogContent>
-      </Dialog>
+        </TransactionDialogContent>
+      </TransactionDialog>
 
       {/* Edit Dialog */}
-      <Dialog open={!!editItem} onOpenChange={v => !v && setEditItem(null)}>
-        <DialogContent className="sm:max-w-md">
+      <TransactionDialog open={!!editItem} dirty={editForm.formState.isDirty} onOpenChange={v => { if (!v) setEditItem(null); }}>
+        <TransactionDialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Edit Batch B-{editItem && String(editItem.id).padStart(4, '0')}</DialogTitle>
             <DialogDescription>Update the production date or notes. Line items cannot be changed.</DialogDescription>
@@ -775,13 +777,13 @@ export default function ProductionList() {
                 <FormItem><FormLabel>Notes</FormLabel><FormControl><Textarea placeholder="Optional notes..." rows={3} {...field} /></FormControl></FormItem>
               )} />
               <DialogFooter>
-                <Button variant="outline" type="button" onClick={() => setEditItem(null)}>Cancel</Button>
+                <DialogClose asChild><Button variant="outline" type="button">Cancel</Button></DialogClose>
                 <Button type="submit" disabled={updateMutation.isPending}>{updateMutation.isPending ? 'Saving…' : 'Save Changes'}</Button>
               </DialogFooter>
             </form>
           </Form>
-        </DialogContent>
-      </Dialog>
+        </TransactionDialogContent>
+      </TransactionDialog>
 
       {/* Delete Confirmation */}
       <Dialog open={!!deleteTarget} onOpenChange={v => !v && setDeleteTarget(null)}>

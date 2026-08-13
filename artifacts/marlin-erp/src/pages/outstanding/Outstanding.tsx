@@ -11,12 +11,14 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import {
-  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+  DialogClose, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
+import { TransactionDialog, TransactionDialogContent } from '@/components/ui/transaction-dialog';
 import { HandCoins, ChevronDown, ChevronRight, Search, Wallet, Phone, ShieldOff } from 'lucide-react';
 import { toast } from 'sonner';
 import { PageHeader } from '@/components/app/page-header';
 import { EmptyState } from '@/components/app/empty-state';
+import { inr } from '@/lib/currency';
 
 const fmt = (n: unknown) => Number(n ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 });
 const fmt0 = (n: unknown) => Number(n ?? 0).toLocaleString('en-IN', { maximumFractionDigits: 0 });
@@ -64,13 +66,13 @@ function CollectPaymentDialog({ item, onOpenChange }: { item: any | null; onOpen
     if (!item) return;
     const amt = Number(amount);
     if (!Number.isFinite(amt) || amt <= 0) { toast.error('Enter a valid amount'); return; }
-    if (amt > Number(item.balanceDue) + 0.01) { toast.error(`Amount exceeds balance due (₹${fmt(item.balanceDue)})`); return; }
+    if (amt > Number(item.balanceDue) + 0.01) { toast.error(`Amount exceeds balance due (${inr(item.balanceDue)})`); return; }
     if (!ledgerId) { toast.error('Pick the Cash / Bank account the money went into'); return; }
     createPayment.mutate(
       { saleId: item.saleId, data: { receivedInLedgerId: ledgerId, amount: amt, referenceNumber: reference.trim() || undefined, paymentDate } },
       {
         onSuccess: () => {
-          toast.success(`₹${fmt(amt)} recorded against ${item.invoiceNumber || `Sale #${item.saleId}`}`);
+          toast.success(`${inr(amt)} recorded against ${item.invoiceNumber || `Sale #${item.saleId}`}`);
           qc.invalidateQueries({ queryKey: getCollectionsQueryKey() });
           qc.invalidateQueries({ queryKey: getReceivablesAgingQueryKey() });
           qc.invalidateQueries({ queryKey: getPayablesAgingQueryKey() });
@@ -82,12 +84,12 @@ function CollectPaymentDialog({ item, onOpenChange }: { item: any | null; onOpen
   };
 
   return (
-    <Dialog open={!!item} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+    <TransactionDialog open={!!item} dirty={amount !== String(item?.balanceDue ?? '') || ledgerId !== 0 || reference !== '' || paymentDate !== today()} onOpenChange={onOpenChange}>
+      <TransactionDialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Collect Payment</DialogTitle>
           <DialogDescription>
-            {item && <>Against <span className="font-mono">{item.invoiceNumber || `Sale #${item.saleId}`}</span> · {item.customerName || 'Walk-in'} · balance ₹{fmt(item.balanceDue)}</>}
+            {item && <>Against <span className="font-mono">{item.invoiceNumber || `Sale #${item.saleId}`}</span> · {item.customerName || 'Walk-in'} · balance {inr(item.balanceDue)}</>}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4 pt-1">
@@ -118,13 +120,13 @@ function CollectPaymentDialog({ item, onOpenChange }: { item: any | null; onOpen
           </div>
         </div>
         <DialogFooter className="pt-2">
-          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <DialogClose asChild><Button variant="outline">Cancel</Button></DialogClose>
           <Button onClick={submit} disabled={createPayment.isPending}>
             {createPayment.isPending ? 'Recording…' : 'Record Payment'}
           </Button>
         </DialogFooter>
-      </DialogContent>
-    </Dialog>
+      </TransactionDialogContent>
+    </TransactionDialog>
   );
 }
 
@@ -222,12 +224,12 @@ export default function Outstanding() {
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
             <div className="bg-card border border-border rounded-xl p-3">
               <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Aged Bills</p>
-              <p className="text-lg font-bold font-mono mt-1">₹{fmt0(totals?.totalDue)}</p>
+              <p className="text-lg font-bold font-mono mt-1">{inr(totals?.totalDue)}</p>
             </div>
             {BUCKETS.map(b => (
               <div key={b.key} className="bg-card border border-border rounded-xl p-3">
                 <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{b.label}</p>
-                <p className={`text-lg font-bold font-mono mt-1 ${b.cls}`}>₹{fmt0(totals?.[b.key])}</p>
+                <p className={`text-lg font-bold font-mono mt-1 ${b.cls}`}>{inr(totals?.[b.key])}</p>
               </div>
             ))}
             {/* The control figure. It comes from the party ledgers, so it equals
@@ -235,7 +237,7 @@ export default function Outstanding() {
                 buckets to the left show only the part that maps to dated bills. */}
             <div className="bg-card border border-border rounded-xl p-3">
               <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Balance (ledger)</p>
-              <p className="text-lg font-bold font-mono mt-1 text-primary">₹{fmt0(totals?.netDue)}</p>
+              <p className="text-lg font-bold font-mono mt-1 text-primary">{inr(totals?.netDue)}</p>
             </div>
           </div>
         )}
@@ -247,7 +249,7 @@ export default function Outstanding() {
         {tab !== 'collections' && Number((totals as any)?.[tab === 'receivables' ? 'uninvoiced' : 'unbilled']) > 0.004 && (
           <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-sm">
             <span className="font-medium text-amber-600">
-              ₹{fmt((totals as any)[tab === 'receivables' ? 'uninvoiced' : 'unbilled'])}
+              {inr((totals as any)[tab === 'receivables' ? 'uninvoiced' : 'unbilled'])}
             </span>{' '}
             <span className="text-muted-foreground">
               of the ledger balance has no dated {tab === 'receivables' ? 'invoice' : 'bill'} behind it
@@ -285,19 +287,19 @@ export default function Outstanding() {
                               <p className="font-medium">{c.name}</p>
                               {c.phone && <p className="text-xs text-muted-foreground flex items-center gap-1"><Phone className="w-3 h-3" />{c.phone}</p>}
                               {Number(c.advance) > 0 && (
-                                <p className="text-[11px] text-amber-600 dark:text-amber-500">Credit balance (advance): ₹{fmt(c.advance)}</p>
+                                <p className="text-[11px] text-amber-600 dark:text-amber-500">Credit balance (advance): {inr(c.advance)}</p>
                               )}
                             </div>
                           </div>
                         </td>
-                        <td className="px-3 py-2.5 text-right font-mono text-xs">{Number(c.creditLimit) > 0 ? `₹${fmt0(c.creditLimit)}` : '—'}</td>
+                        <td className="px-3 py-2.5 text-right font-mono text-xs">{Number(c.creditLimit) > 0 ? `${inr(c.creditLimit)}` : '—'}</td>
                         {BUCKETS.map(b => (
                           <td key={b.key} className={`px-3 py-2.5 text-right font-mono ${Number(c[b.key]) > 0 ? b.cls : 'text-muted-foreground/50'}`}>
-                            {Number(c[b.key]) > 0 ? `₹${fmt0(c[b.key])}` : '—'}
+                            {Number(c[b.key]) > 0 ? `${inr(c[b.key])}` : '—'}
                           </td>
                         ))}
-                        <td className="px-3 py-2.5 text-right font-mono text-emerald-600">{Number(c.creditNotes) > 0 ? `-₹${fmt0(c.creditNotes)}` : '—'}</td>
-                        <td className="px-4 py-2.5 text-right font-mono font-bold">₹{fmt(c.netDue)}</td>
+                        <td className="px-3 py-2.5 text-right font-mono text-emerald-600">{Number(c.creditNotes) > 0 ? `-${inr(c.creditNotes)}` : '—'}</td>
+                        <td className="px-4 py-2.5 text-right font-mono font-bold">{inr(c.netDue)}</td>
                       </tr>
                       {expanded === c.customerId && (
                         <tr className="border-t border-border bg-muted/10">
@@ -325,9 +327,9 @@ export default function Outstanding() {
                                         {inv.daysOverdue > 0 ? `${inv.daysOverdue} d` : 'current'}
                                       </Badge>
                                     </td>
-                                    <td className="py-1.5 text-right font-mono">₹{fmt(inv.total)}</td>
-                                    <td className="py-1.5 text-right font-mono">₹{fmt(inv.paid)}</td>
-                                    <td className="py-1.5 text-right font-mono font-semibold">₹{fmt(inv.balance)}</td>
+                                    <td className="py-1.5 text-right font-mono">{inr(inv.total)}</td>
+                                    <td className="py-1.5 text-right font-mono">{inr(inv.paid)}</td>
+                                    <td className="py-1.5 text-right font-mono font-semibold">{inr(inv.balance)}</td>
                                   </tr>
                                 ))}
                               </tbody>
@@ -371,20 +373,20 @@ export default function Outstanding() {
                               <p className="font-medium">{v.name}</p>
                               {v.phone && <p className="text-xs text-muted-foreground flex items-center gap-1"><Phone className="w-3 h-3" />{v.phone}</p>}
                               {Number(v.advance) > 0 && (
-                                <p className="text-[11px] text-amber-600 dark:text-amber-500">Advance with vendor: ₹{fmt(v.advance)}</p>
+                                <p className="text-[11px] text-amber-600 dark:text-amber-500">Advance with vendor: {inr(v.advance)}</p>
                               )}
                             </div>
                           </div>
                         </td>
-                        <td className="px-3 py-2.5 text-right font-mono text-xs">₹{fmt0(v.totalBilled)}</td>
-                        <td className="px-3 py-2.5 text-right font-mono text-xs">₹{fmt0(v.totalPaid)}</td>
+                        <td className="px-3 py-2.5 text-right font-mono text-xs">{inr(v.totalBilled)}</td>
+                        <td className="px-3 py-2.5 text-right font-mono text-xs">{inr(v.totalPaid)}</td>
                         {BUCKETS.map(b => (
                           <td key={b.key} className={`px-3 py-2.5 text-right font-mono ${Number(v[b.key]) > 0 ? b.cls : 'text-muted-foreground/50'}`}>
-                            {Number(v[b.key]) > 0 ? `₹${fmt0(v[b.key])}` : '—'}
+                            {Number(v[b.key]) > 0 ? `${inr(v[b.key])}` : '—'}
                           </td>
                         ))}
-                        <td className="px-3 py-2.5 text-right font-mono text-emerald-600">{Number(v.debitNotes) > 0 ? `-₹${fmt0(v.debitNotes)}` : '—'}</td>
-                        <td className="px-4 py-2.5 text-right font-mono font-bold">₹{fmt(v.netDue)}</td>
+                        <td className="px-3 py-2.5 text-right font-mono text-emerald-600">{Number(v.debitNotes) > 0 ? `-${inr(v.debitNotes)}` : '—'}</td>
+                        <td className="px-4 py-2.5 text-right font-mono font-bold">{inr(v.netDue)}</td>
                       </tr>
                       {expanded === v.vendorId && (
                         <tr className="border-t border-border bg-muted/10">
@@ -408,16 +410,16 @@ export default function Outstanding() {
                                     <td className="py-1.5 text-right">
                                       <Badge variant="outline" className={`font-mono text-[10px] ${bucketBadge(b.bucket)}`}>{b.daysOld} d</Badge>
                                     </td>
-                                    <td className="py-1.5 text-right font-mono">₹{fmt(b.total)}</td>
-                                    <td className="py-1.5 text-right font-mono">₹{fmt(b.allocated)}</td>
-                                    <td className="py-1.5 text-right font-mono font-semibold">₹{fmt(b.balance)}</td>
+                                    <td className="py-1.5 text-right font-mono">{inr(b.total)}</td>
+                                    <td className="py-1.5 text-right font-mono">{inr(b.allocated)}</td>
+                                    <td className="py-1.5 text-right font-mono font-semibold">{inr(b.balance)}</td>
                                   </tr>
                                 ))}
                               </tbody>
                             </table>
                             {Number(v.unallocatedCredit) > 0 && (
                               <p className="text-[11px] text-muted-foreground mt-2">
-                                ₹{fmt(v.unallocatedCredit)} paid but not yet allocated to specific bills.
+                                {inr(v.unallocatedCredit)} paid but not yet allocated to specific bills.
                               </p>
                             )}
                           </td>
@@ -467,9 +469,9 @@ export default function Outstanding() {
                           {it.daysOverdue > 0 ? `${it.daysOverdue} d` : 'current'}
                         </Badge>
                       </td>
-                      <td className="px-3 py-2.5 text-right font-mono">₹{fmt(it.totalAmount)}</td>
-                      <td className="px-3 py-2.5 text-right font-mono">₹{fmt(it.amountPaid)}</td>
-                      <td className="px-3 py-2.5 text-right font-mono font-bold">₹{fmt(it.balanceDue)}</td>
+                      <td className="px-3 py-2.5 text-right font-mono">{inr(it.totalAmount)}</td>
+                      <td className="px-3 py-2.5 text-right font-mono">{inr(it.amountPaid)}</td>
+                      <td className="px-3 py-2.5 text-right font-mono font-bold">{inr(it.balanceDue)}</td>
                       {perm.canAdd && (
                         <td className="px-4 py-2.5 text-right">
                           <Button size="sm" variant="outline" className="h-7" onClick={() => setCollectItem(it)}>

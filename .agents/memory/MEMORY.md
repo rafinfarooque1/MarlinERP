@@ -145,5 +145,6 @@
 - [List pagination & entity pickers](client-pagination-conventions.md) — every list page uses TablePager/useClientPage (or server pageSize); entity Selects become EntityCombobox (cmdk, 200-row cap).
 - [Orphan sales & control fallback](orphan-sales-control-fallback.md) — deleted customer ⇒ receivable derives onto SYS-DEBTORS itself; TB exceeds ageing by exactly the parent's own balance.
 - [Storage locations & placements](storage-placements.md) — additive layer over stock_entries (qty truth); unplaced = site total − Σ placements, derived, never stored; 1-level parent→child nesting.
+- [Transaction dialog guard](transaction-dialog-guard.md) — every close path (Cancel AND Close buttons) must be DialogClose-wrapped or the dirty guard is bypassed; sm:max-w-* only; exceptions recorded in UI_CONVENTIONS.md.
 - [UI modernization sweep](ui-modernization-sweep.md) — docs/UI_CONVENTIONS.md is the binding page-style contract; page kit in components/app/*; satellite pages gate via permOwner; supersedes "sidebar frozen".
 - [Workspace reset & rollback semantics](workspace-reset-recovery.md) — merge/cancel events revert TRACKED files to HEAD (untracked survive); re-verify wiring by marker greps; surviving tests + pg_dump -s are the recovery contract.

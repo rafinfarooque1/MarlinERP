@@ -12,7 +12,8 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { Dialog, DialogClose, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { TransactionDialog, TransactionDialogContent } from '@/components/ui/transaction-dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
@@ -43,10 +44,10 @@ import { TablePager, useClientPage } from '@/components/ui/table-pager';
 import { FileStack, Sigma } from 'lucide-react';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
-const inr = (n: number) => `₹${Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
 const today = () => new Date().toISOString().split('T')[0];
 
 import { isSystemLedger } from '@/lib/systemLedgers';
+import { inr } from '@/lib/currency';
 
 type VoucherType = 'payment' | 'receipt' | 'journal' | 'contra' | 'credit_note' | 'debit_note';
 
@@ -248,9 +249,15 @@ function NewVoucherDialog({ onClose, defaultType }: { onClose: () => void; defau
       return next;
     }));
 
+  // Anything typed that would be lost on close (type/location are choices,
+  // not data entry — they don't count).
+  const dirty = date !== today() || narration !== '' || amount !== '' || reason !== ''
+    || fromId !== 0 || toId !== 0 || partyId !== 0 || counterLedgerId !== 0
+    || lines.some(l => l.ledgerId > 0 || l.debit !== '' || l.credit !== '');
+
   return (
-    <Dialog open onOpenChange={onClose}>
-      <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
+    <TransactionDialog open dirty={dirty} onOpenChange={o => { if (!o) onClose(); }}>
+      <TransactionDialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <ReceiptText className="h-5 w-5 text-primary" /> New Voucher
@@ -413,11 +420,11 @@ function NewVoucherDialog({ onClose, defaultType }: { onClose: () => void; defau
         )}
 
         <DialogFooter>
-          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <DialogClose asChild><Button variant="outline">Cancel</Button></DialogClose>
           <Button onClick={submit} disabled={isPending}>Save Voucher</Button>
         </DialogFooter>
-      </DialogContent>
-    </Dialog>
+      </TransactionDialogContent>
+    </TransactionDialog>
   );
 }
 
@@ -541,9 +548,29 @@ function EditVoucherDialog({ row, onClose }: { row: UnifiedRow; onClose: () => v
   const meta = TYPE_META[type];
   const Icon = meta.icon;
 
+  // Compare every field with the value it was initialized from — the voucher
+  // as stored. Only a real difference arms the unsaved-changes guard.
+  const initialLines: JLine[] = existing.length
+    ? existing.map((l: any) => ({
+        ledgerId: l.ledgerId,
+        debit:  Number(l.debit)  > 0 ? String(Number(l.debit))  : '',
+        credit: Number(l.credit) > 0 ? String(Number(l.credit)) : '',
+      }))
+    : [{ ledgerId: 0, debit: '', credit: '' }, { ledgerId: 0, debit: '', credit: '' }];
+  const dirty = date !== (v.voucherDate ?? '').slice(0, 10)
+    || narration !== (v.narration ?? '')
+    || reason !== (v.reason ?? '')
+    || amount !== String(Number(v.totalAmount ?? 0) || '')
+    || fromId !== (crLine?.ledgerId ?? 0)
+    || toId !== (drLine?.ledgerId ?? 0)
+    || partyId !== (v.partyId ?? 0)
+    || counterLedgerId !== ((type === 'credit_note' ? drLine?.ledgerId : crLine?.ledgerId) ?? 0)
+    || (v.locationType ? locKey !== `${v.locationType}:${v.locationId ?? 0}` : false)
+    || JSON.stringify(lines) !== JSON.stringify(initialLines);
+
   return (
-    <Dialog open onOpenChange={onClose}>
-      <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
+    <TransactionDialog open dirty={dirty} onOpenChange={o => { if (!o) onClose(); }}>
+      <TransactionDialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Pencil className="h-5 w-5 text-primary" /> Edit Voucher
@@ -642,7 +669,7 @@ function EditVoucherDialog({ row, onClose }: { row: UnifiedRow; onClose: () => v
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <DialogClose asChild><Button variant="outline">Cancel</Button></DialogClose>
           <Button
             onClick={submit}
             disabled={updateJV.isPending || (type === 'journal' && !balanced)}
@@ -650,8 +677,8 @@ function EditVoucherDialog({ row, onClose }: { row: UnifiedRow; onClose: () => v
             {updateJV.isPending ? 'Saving…' : 'Save Changes'}
           </Button>
         </DialogFooter>
-      </DialogContent>
-    </Dialog>
+      </TransactionDialogContent>
+    </TransactionDialog>
   );
 }
 
@@ -693,6 +720,15 @@ function EditMoneyVoucherDialog({ row, onClose }: { row: UnifiedRow; onClose: ()
   const [refNo, setRefNo]   = useState<string>(v.referenceNumber ?? '');
   const [narration, setNarr] = useState<string>(v.narration ?? '');
 
+  // Compare with the stored voucher — only a real change arms the guard.
+  const dirty = date !== String((isPayment ? v.paymentDate : v.receiptDate) ?? '').slice(0, 10)
+    || fromId !== (isPayment ? (v.paidFromLedgerId ?? 0) : (v.receivedFromLedgerId ?? 0))
+    || toId !== (isPayment ? (v.paidToLedgerId ?? 0) : (v.receivedInLedgerId ?? 0))
+    || amount !== String(Number(v.amount ?? 0) || '')
+    || refNo !== (v.referenceNumber ?? '')
+    || narration !== (v.narration ?? '')
+    || (v.locationType ? locKey !== `${v.locationType}:${v.locationId ?? 0}` : false);
+
   const onErr = (e: any) => toast.error(e?.data?.error || e.message || 'Could not save the changes');
   const onOk  = () => { toast.success(`${row.voucherNumber} updated`); qc.invalidateQueries(); onClose(); };
 
@@ -726,8 +762,8 @@ function EditMoneyVoucherDialog({ row, onClose }: { row: UnifiedRow; onClose: ()
   const isPending = updatePayment.isPending || updateReceipt.isPending;
 
   return (
-    <Dialog open onOpenChange={onClose}>
-      <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
+    <TransactionDialog open dirty={dirty} onOpenChange={o => { if (!o) onClose(); }}>
+      <TransactionDialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Pencil className="h-5 w-5 text-primary" /> Edit {meta.label} Voucher
@@ -785,13 +821,13 @@ function EditMoneyVoucherDialog({ row, onClose }: { row: UnifiedRow; onClose: ()
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <DialogClose asChild><Button variant="outline">Cancel</Button></DialogClose>
           <Button onClick={submit} disabled={isPending}>
             {isPending ? 'Saving…' : 'Save Changes'}
           </Button>
         </DialogFooter>
-      </DialogContent>
-    </Dialog>
+      </TransactionDialogContent>
+    </TransactionDialog>
   );
 }
 

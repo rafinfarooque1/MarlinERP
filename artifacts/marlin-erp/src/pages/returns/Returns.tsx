@@ -12,8 +12,9 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Separator } from '@/components/ui/separator';
 import {
-  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+  DialogClose, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
+import { TransactionDialog, TransactionDialogContent } from '@/components/ui/transaction-dialog';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { BillCombobox } from '@/components/ui/bill-combobox';
 import { Undo2, Plus, Search, Eye, Pencil, PackageX, ShieldOff, Wallet, Receipt } from 'lucide-react';
@@ -26,6 +27,7 @@ import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
 import { StatusBadge } from '@/components/app/status-badge';
 import { EmptyState } from '@/components/app/empty-state';
 import { TableSkeleton } from '@/components/app/loading-skeletons';
+import { inr } from '@/lib/currency';
 
 const fmt = (n: unknown) => Number(n ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 });
 // Paise rounding — must match the API's r2 so estimates equal the note total.
@@ -54,6 +56,14 @@ function NewSalesReturnDialog({ open, onOpenChange, editing }: { open: boolean; 
       ? Object.fromEntries((editing.lineItems || []).map((li: any) => [li.lineIndex, String(li.quantity)]))
       : {},
   );
+
+  // Unsaved-data guard: a picked invoice, typed quantities/reason, or (in edit
+  // mode) any change from the stored return counts as dirty.
+  const dirty = editing
+    ? returnDate !== String(editing.returnDate).slice(0, 10)
+      || reason !== (editing.reason ?? '')
+      || JSON.stringify(qty) !== JSON.stringify(Object.fromEntries((editing.lineItems || []).map((li: any) => [li.lineIndex, String(li.quantity)])))
+    : saleId !== 0 || reason !== '' || returnDate !== today() || Object.values(qty).some(v => Number(v) > 0);
 
   const itemName = (id: number) => (items as any[]).find(i => i.id === id)?.name || `Item #${id}`;
 
@@ -131,7 +141,7 @@ function NewSalesReturnDialog({ open, onOpenChange, editing }: { open: boolean; 
         { id: editing.id, returnDate, reason: reason.trim() || undefined, lines: selected.map(({ lineIndex, quantity }) => ({ lineIndex, quantity })) },
         {
           onSuccess: (r: any) => {
-            toast.success(`${editing.returnNumber} updated — new value ₹${fmt(r?.totalAmount)}`);
+            toast.success(`${editing.returnNumber} updated — new value ${inr(r?.totalAmount)}`);
             invalidateDashboard(queryClient);
             onOpenChange(false);
           },
@@ -147,7 +157,7 @@ function NewSalesReturnDialog({ open, onOpenChange, editing }: { open: boolean; 
         onSuccess: (r: any) => {
           toast.success(
             r?.refundMode === 'cash'
-              ? `${r.returnNumber} recorded — cash refund ₹${fmt(r.totalAmount)}`
+              ? `${r.returnNumber} recorded — cash refund ${inr(r.totalAmount)}`
               : `${r?.returnNumber} recorded — Credit Note ${r?.creditNoteNumber ?? ''} issued`,
           );
           invalidateDashboard(queryClient);
@@ -160,8 +170,8 @@ function NewSalesReturnDialog({ open, onOpenChange, editing }: { open: boolean; 
   };
 
   return (
-    <Dialog open={open} onOpenChange={v => { if (!v) reset(); onOpenChange(v); }}>
-      <DialogContent className="sm:max-w-3xl max-h-[90vh] overflow-y-auto">
+    <TransactionDialog open={open} dirty={dirty} onOpenChange={v => { if (!v) reset(); onOpenChange(v); }}>
+      <TransactionDialogContent className="sm:max-w-3xl">
         <DialogHeader>
           <DialogTitle>{editing ? `Edit ${editing.returnNumber}` : 'New Sales Return'}</DialogTitle>
           <DialogDescription>
@@ -225,10 +235,10 @@ function NewSalesReturnDialog({ open, onOpenChange, editing }: { open: boolean; 
                         <td className="text-right px-2 py-2">{r.sold}</td>
                         <td className="text-right px-2 py-2">{r.returned > 0 ? r.returned : '—'}</td>
                         <td className="text-right px-2 py-2 font-semibold">{r.remaining}</td>
-                        <td className="text-right px-2 py-2 font-mono">₹{fmt(r.li.unitPrice)}</td>
-                        <td className="text-right px-2 py-2 font-mono">{r.discount > 0 ? `−₹${fmt(r.discount)}` : '—'}</td>
+                        <td className="text-right px-2 py-2 font-mono">{inr(r.li.unitPrice)}</td>
+                        <td className="text-right px-2 py-2 font-mono">{r.discount > 0 ? `−${inr(r.discount)}` : '—'}</td>
                         <td className="text-right px-2 py-2">{r.gstRate > 0 ? `${r.gstRate}%` : '—'}</td>
-                        <td className="text-right px-2 py-2 font-mono font-semibold">₹{fmt(r.effRate)}</td>
+                        <td className="text-right px-2 py-2 font-mono font-semibold">{inr(r.effRate)}</td>
                         <td className="text-right px-3 py-1.5">
                           <Input
                             type="number" min={0} max={r.remaining} step="any" disabled={r.remaining === 0}
@@ -254,19 +264,19 @@ function NewSalesReturnDialog({ open, onOpenChange, editing }: { open: boolean; 
               </div>
               <div className="flex justify-between items-center rounded-lg bg-primary/5 border border-primary/20 px-3 py-2 text-sm">
                 <span className="text-muted-foreground">Approx. refund value (incl. GST)</span>
-                <span className="font-mono font-bold text-primary">₹{fmt(estRefund)}</span>
+                <span className="font-mono font-bold text-primary">{inr(estRefund)}</span>
               </div>
             </>
           )}
         </div>
         <DialogFooter className="pt-2">
-          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <DialogClose asChild><Button variant="outline">Cancel</Button></DialogClose>
           <Button onClick={submit} disabled={isPending || !sale} data-testid="button-submit-sales-return">
             {isPending ? 'Saving…' : editing ? 'Save Changes' : 'Record Return'}
           </Button>
         </DialogFooter>
-      </DialogContent>
-    </Dialog>
+      </TransactionDialogContent>
+    </TransactionDialog>
   );
 }
 
@@ -288,6 +298,14 @@ function NewPurchaseReturnDialog({ open, onOpenChange, editing }: { open: boolea
       ? Object.fromEntries((editing.lineItems || []).map((li: any) => [li.lineIndex, String(li.quantity)]))
       : {},
   );
+
+  // Unsaved-data guard: a picked bill, typed quantities/reason, or (in edit
+  // mode) any change from the stored return counts as dirty.
+  const dirty = editing
+    ? returnDate !== String(editing.returnDate).slice(0, 10)
+      || reason !== (editing.reason ?? '')
+      || JSON.stringify(qty) !== JSON.stringify(Object.fromEntries((editing.lineItems || []).map((li: any) => [li.lineIndex, String(li.quantity)])))
+    : purchaseId !== 0 || reason !== '' || returnDate !== today() || Object.values(qty).some(v => Number(v) > 0);
 
   // Full list, newest first — the combobox searches over all of it and only
   // caps how many rows it renders at once.
@@ -359,7 +377,7 @@ function NewPurchaseReturnDialog({ open, onOpenChange, editing }: { open: boolea
         { id: editing.id, returnDate, reason: reason.trim() || undefined, lines: selected.map(({ lineIndex, quantity }) => ({ lineIndex, quantity })) },
         {
           onSuccess: (r: any) => {
-            toast.success(`${editing.returnNumber} updated — new value ₹${fmt(r?.totalAmount)}`);
+            toast.success(`${editing.returnNumber} updated — new value ${inr(r?.totalAmount)}`);
             invalidateDashboard(queryClient);
             onOpenChange(false);
           },
@@ -384,8 +402,8 @@ function NewPurchaseReturnDialog({ open, onOpenChange, editing }: { open: boolea
   };
 
   return (
-    <Dialog open={open} onOpenChange={v => { if (!v) reset(); onOpenChange(v); }}>
-      <DialogContent className="sm:max-w-3xl max-h-[90vh] overflow-y-auto">
+    <TransactionDialog open={open} dirty={dirty} onOpenChange={v => { if (!v) reset(); onOpenChange(v); }}>
+      <TransactionDialogContent className="sm:max-w-3xl">
         <DialogHeader>
           <DialogTitle>{editing ? `Edit ${editing.returnNumber}` : 'New Purchase Return'}</DialogTitle>
           <DialogDescription>
@@ -456,10 +474,10 @@ function NewPurchaseReturnDialog({ open, onOpenChange, editing }: { open: boolea
                         <td className="text-right px-2 py-2">{r.bought}</td>
                         <td className="text-right px-2 py-2">{r.returned > 0 ? r.returned : '—'}</td>
                         <td className="text-right px-2 py-2 font-semibold">{r.remaining}</td>
-                        <td className="text-right px-2 py-2 font-mono">₹{fmt(r.li.unitCost)}</td>
-                        <td className="text-right px-2 py-2 font-mono">{r.discount > 0 ? `−₹${fmt(r.discount)}` : '—'}</td>
+                        <td className="text-right px-2 py-2 font-mono">{inr(r.li.unitCost)}</td>
+                        <td className="text-right px-2 py-2 font-mono">{r.discount > 0 ? `−${inr(r.discount)}` : '—'}</td>
                         <td className="text-right px-2 py-2">{r.gstRate > 0 ? `${r.gstRate}%` : '—'}</td>
-                        <td className="text-right px-2 py-2 font-mono font-semibold">₹{fmt(r.effRate)}</td>
+                        <td className="text-right px-2 py-2 font-mono font-semibold">{inr(r.effRate)}</td>
                         <td className="text-right px-3 py-1.5">
                           <Input
                             type="number" min={0} max={r.remaining} step="any" disabled={r.remaining === 0}
@@ -484,19 +502,19 @@ function NewPurchaseReturnDialog({ open, onOpenChange, editing }: { open: boolea
               </div>
               <div className="flex justify-between items-center rounded-lg bg-primary/5 border border-primary/20 px-3 py-2 text-sm">
                 <span className="text-muted-foreground">Approx. debit value (incl. GST)</span>
-                <span className="font-mono font-bold text-primary">₹{fmt(estValue)}</span>
+                <span className="font-mono font-bold text-primary">{inr(estValue)}</span>
               </div>
             </>
           )}
         </div>
         <DialogFooter className="pt-2">
-          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <DialogClose asChild><Button variant="outline">Cancel</Button></DialogClose>
           <Button onClick={submit} disabled={isPending || !purchase} data-testid="button-submit-purchase-return">
             {isPending ? 'Saving…' : editing ? 'Save Changes' : 'Record Return'}
           </Button>
         </DialogFooter>
-      </DialogContent>
-    </Dialog>
+      </TransactionDialogContent>
+    </TransactionDialog>
   );
 }
 
@@ -572,7 +590,7 @@ export default function Returns() {
           <SummaryCard
             label="Sales Returns"
             value={srCount.toLocaleString('en-IN')}
-            sub={`₹${fmt(srTotal)} credited`}
+            sub={`${inr(srTotal)} credited`}
             icon={Receipt}
             tone="info"
             loading={srLoading}
@@ -580,7 +598,7 @@ export default function Returns() {
           <SummaryCard
             label="Purchase Returns"
             value={prCount.toLocaleString('en-IN')}
-            sub={`₹${fmt(prTotal)} debited`}
+            sub={`${inr(prTotal)} debited`}
             icon={Wallet}
             tone="info"
             loading={prLoading}
@@ -638,7 +656,7 @@ export default function Returns() {
                           <td className="px-3 py-2.5 whitespace-nowrap">{dfmt(r.returnDate)}</td>
                           <td className="px-3 py-2.5 font-mono text-xs">{r.invoiceNumber || `Sale #${r.saleId}`}</td>
                           <td className="px-3 py-2.5">{r.customerName || 'Walk-in'}</td>
-                          <td className="px-3 py-2.5 text-right font-mono font-semibold">₹{fmt(r.totalAmount)}</td>
+                          <td className="px-3 py-2.5 text-right font-mono font-semibold">{inr(r.totalAmount)}</td>
                           <td className="px-3 py-2.5">
                             {r.refundMode === 'cash'
                               ? <StatusBadge status="partial" label="Cash refund" />
@@ -658,7 +676,7 @@ export default function Returns() {
                           <td className="px-3 py-2.5 whitespace-nowrap">{dfmt(r.returnDate)}</td>
                           <td className="px-3 py-2.5 font-mono text-xs">{r.invoiceNumber || `PB #${String(r.purchaseId).padStart(4, '0')}`}</td>
                           <td className="px-3 py-2.5">{r.vendorName}</td>
-                          <td className="px-3 py-2.5 text-right font-mono font-semibold">₹{fmt(r.totalAmount)}</td>
+                          <td className="px-3 py-2.5 text-right font-mono font-semibold">{inr(r.totalAmount)}</td>
                           <td className="px-3 py-2.5"><StatusBadge status="converted" label={r.debitNoteNumber || 'Debit Note'} className="font-mono" /></td>
                           <td className="px-4 py-2.5 text-right whitespace-nowrap">
                             <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setView({ kind: 'purchase', doc: r })} data-testid={`button-view-pr-${r.id}`}><Eye className="w-4 h-4" /></Button>
@@ -728,13 +746,13 @@ export default function Returns() {
                           )}
                         </td>
                         <td className="text-right px-2 py-2">{li.quantity}</td>
-                        <td className="text-right px-2 py-2 font-mono">₹{fmt(
+                        <td className="text-right px-2 py-2 font-mono">{inr(
                           Number(li.quantity) > 0 && li.grossAmount != null
                             ? Number(li.grossAmount) / Number(li.quantity)
                             : (li.unitPrice ?? li.unitCost),
                         )}</td>
-                        <td className="text-right px-2 py-2 font-mono">₹{fmt(li.taxAmount)}</td>
-                        <td className="text-right px-3 py-2 font-mono font-semibold">₹{fmt(li.grossAmount ?? li.lineTotal ?? Number(li.quantity ?? 0) * Number(li.unitPrice ?? li.unitCost ?? 0))}</td>
+                        <td className="text-right px-2 py-2 font-mono">{inr(li.taxAmount)}</td>
+                        <td className="text-right px-3 py-2 font-mono font-semibold">{inr(li.grossAmount ?? li.lineTotal ?? Number(li.quantity ?? 0) * Number(li.unitPrice ?? li.unitCost ?? 0))}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -742,10 +760,10 @@ export default function Returns() {
               </div>
 
               <div className="bg-muted/20 rounded-lg p-4 space-y-2 text-sm mb-4">
-                <div className="flex justify-between"><span className="text-muted-foreground">Subtotal</span><span className="font-mono">₹{fmt(view.doc.subtotal)}</span></div>
-                <div className="flex justify-between"><span className="text-muted-foreground">GST</span><span className="font-mono">₹{fmt(view.doc.taxTotal)}</span></div>
+                <div className="flex justify-between"><span className="text-muted-foreground">Subtotal</span><span className="font-mono">{inr(view.doc.subtotal)}</span></div>
+                <div className="flex justify-between"><span className="text-muted-foreground">GST</span><span className="font-mono">{inr(view.doc.taxTotal)}</span></div>
                 <Separator />
-                <div className="flex justify-between font-bold"><span>Total</span><span className="font-mono text-primary">₹{fmt(view.doc.totalAmount)}</span></div>
+                <div className="flex justify-between font-bold"><span>Total</span><span className="font-mono text-primary">{inr(view.doc.totalAmount)}</span></div>
                 <div className="flex justify-between text-xs pt-1">
                   <span className="text-muted-foreground">{view.kind === 'sales' ? 'Refund' : 'Adjustment'}</span>
                   <span className="font-mono font-semibold">

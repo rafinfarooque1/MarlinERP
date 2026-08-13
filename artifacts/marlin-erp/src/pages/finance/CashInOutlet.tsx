@@ -5,7 +5,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { DialogClose, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { TransactionDialog, TransactionDialogContent } from '@/components/ui/transaction-dialog';
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
@@ -22,10 +23,9 @@ import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { PageHeader } from '@/components/app/page-header';
 import { EmptyState } from '@/components/app/empty-state';
 import { TableSkeleton } from '@/components/app/loading-skeletons';
+import { inr } from '@/lib/currency';
 
-function fmt(n: number) {
-  return `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-}
+const fmt = inr;
 
 function DepositStatusBadge({ status }: { status: string }) {
   if (status === 'reconciled') return <Badge className="bg-emerald-500/10 text-emerald-600 border-emerald-500/20">Reconciled</Badge>;
@@ -587,8 +587,12 @@ export default function CashBalance() {
       </div>
 
       {/* ── Create Deposit Dialog ── */}
-      <Dialog open={showDeposit} onOpenChange={setShowDeposit}>
-        <DialogContent className="max-w-md">
+      <TransactionDialog
+        open={showDeposit}
+        dirty={depLocationUid !== '' || depAmount !== '' || depRef !== '' || depBankLedgerId !== '' || depNotes !== '' || depDate !== new Date().toISOString().split('T')[0]}
+        onOpenChange={setShowDeposit}
+      >
+        <TransactionDialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Record Cash Deposit</DialogTitle>
           </DialogHeader>
@@ -673,17 +677,21 @@ export default function CashBalance() {
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setShowDeposit(false)}>Cancel</Button>
+            <DialogClose asChild><Button variant="outline">Cancel</Button></DialogClose>
             <Button onClick={handleCreateDeposit} disabled={createDepositMutation.isPending}>
               {createDepositMutation.isPending ? 'Recording…' : 'Record Deposit'}
             </Button>
           </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        </TransactionDialogContent>
+      </TransactionDialog>
 
       {/* ── Reconcile Deposit Dialog ── */}
-      <Dialog open={reconcileDepositId > 0} onOpenChange={o => { if (!o) setReconcileDepositId(0); }}>
-        <DialogContent className="max-w-md">
+      <TransactionDialog
+        open={reconcileDepositId > 0}
+        dirty={recBankRef !== '' || recCharges !== '0' || recDate !== new Date().toISOString().split('T')[0] || recBankLedgerId !== (selectedDeposit?.destinationBankLedgerId ? String(selectedDeposit.destinationBankLedgerId) : '')}
+        onOpenChange={o => { if (!o) setReconcileDepositId(0); }}
+      >
+        <TransactionDialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Confirm Bank Receipt</DialogTitle>
           </DialogHeader>
@@ -737,13 +745,13 @@ export default function CashBalance() {
             </div>
           )}
           <DialogFooter>
-            <Button variant="outline" onClick={() => setReconcileDepositId(0)}>Cancel</Button>
+            <DialogClose asChild><Button variant="outline">Cancel</Button></DialogClose>
             <Button onClick={handleReconcile} disabled={reconcileMutation.isPending}>
               {reconcileMutation.isPending ? 'Processing…' : 'Confirm Receipt'}
             </Button>
           </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        </TransactionDialogContent>
+      </TransactionDialog>
     </AppLayout>
   );
 }

@@ -17,7 +17,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
+import { Dialog, DialogClose, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
+import { TransactionDialog, TransactionDialogContent } from '@/components/ui/transaction-dialog';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
@@ -319,8 +320,8 @@ export default function AssetPurchases() {
       </div>
 
       {/* New purchase dialog */}
-      <Dialog open={isOpen} onOpenChange={setIsOpen}>
-        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+      <TransactionDialog open={isOpen} dirty={form.formState.isDirty} onOpenChange={setIsOpen}>
+        <TransactionDialogContent className="sm:max-w-3xl">
           <DialogHeader>
             <DialogTitle>New Asset Purchase</DialogTitle>
             <DialogDescription>Posts Dr Fixed Assets / Cr {wMode === 'credit' ? "vendor's ledger" : wMode === 'cash' ? 'Cash' : 'Bank'} — no stock movement.</DialogDescription>
@@ -454,13 +455,13 @@ export default function AssetPurchases() {
               </div>
 
               <DialogFooter>
-                <Button variant="outline" type="button" onClick={() => setIsOpen(false)}>Cancel</Button>
+                <DialogClose asChild><Button variant="outline" type="button">Cancel</Button></DialogClose>
                 <Button type="submit" disabled={createPurchase.isPending}>{createPurchase.isPending ? 'Recording…' : 'Record Purchase'}</Button>
               </DialogFooter>
             </form>
           </Form>
-        </DialogContent>
-      </Dialog>
+        </TransactionDialogContent>
+      </TransactionDialog>
 
       {/* Delete confirmation */}
       <Dialog open={!!deleteTarget} onOpenChange={v => !v && setDeleteTarget(null)}>

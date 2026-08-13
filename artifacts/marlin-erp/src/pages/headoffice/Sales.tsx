@@ -21,7 +21,8 @@ import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { DialogClose, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { TransactionDialog, TransactionDialogContent } from '@/components/ui/transaction-dialog';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -64,6 +65,7 @@ import { useQueryClient, useQuery } from '@tanstack/react-query';
 import { Badge } from '@/components/ui/badge';
 import { downloadCSV } from '@/lib/download';
 import { Separator } from '@/components/ui/separator';
+import { inr } from '@/lib/currency';
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
@@ -433,7 +435,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
     const totalPaying = validRows.reduce((s, r) => s + Number(r.amount), 0);
     const balanceDue = Number((viewItem as any).balanceDue ?? 0);
     if (totalPaying > balanceDue + 0.001) {
-      toast.error(`Total ₹${totalPaying.toFixed(2)} exceeds balance due ₹${balanceDue.toFixed(2)}`); return;
+      toast.error(`Total ${inr(totalPaying)} exceeds balance due ${inr(balanceDue)}`); return;
     }
     try {
       let lastResult: any;
@@ -444,8 +446,8 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
         });
       }
       const label = validRows.length > 1
-        ? `${validRows.length} payments totalling ₹${totalPaying.toLocaleString('en-IN')}`
-        : `₹${totalPaying.toLocaleString('en-IN')} into ${optionFor(validRows[0].ledgerId)?.name ?? 'the selected account'}`;
+        ? `${validRows.length} payments totalling ${inr(totalPaying)}`
+        : `${inr(totalPaying)} into ${optionFor(validRows[0].ledgerId)?.name ?? 'the selected account'}`;
       toast.success(`Payment collected — ${label}`);
       // Re-read the sale rather than patching the panel by hand: the server owns
       // the outstanding figure (credit notes included) and the QR built from it,
@@ -1019,7 +1021,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
               setCreditWarning({ payload, info });
             } else {
               toast.error(
-                `Credit limit exceeded: outstanding ₹${Number(info.currentOutstanding ?? 0).toLocaleString('en-IN')} + this sale ₹${Number(info.saleAmount ?? 0).toLocaleString('en-IN')} would pass the ₹${Number(info.creditLimit ?? 0).toLocaleString('en-IN')} limit. Ask a manager to override or collect payment first.`,
+                `Credit limit exceeded: outstanding ${inr(Number(info.currentOutstanding ?? 0))} + this sale ${inr(Number(info.saleAmount ?? 0))} would pass the ${inr(Number(info.creditLimit ?? 0))} limit. Ask a manager to override or collect payment first.`,
                 { duration: 8000 },
               );
             }
@@ -1249,21 +1251,21 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
           />
           <SummaryCard
             label="Loaded Total"
-            value={`₹${filtered.reduce((s, r) => s + Number(r.totalAmount || 0), 0).toLocaleString('en-IN')}`}
+            value={`${inr(filtered.reduce((s, r) => s + Number(r.totalAmount || 0), 0))}`}
             icon={IndianRupee}
             tone="positive"
             loading={isLoading}
           />
           <SummaryCard
             label="Tax Collected"
-            value={`₹${filtered.reduce((s, r) => s + Number((r as any).taxTotal || 0), 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`}
+            value={`${inr(filtered.reduce((s, r) => s + Number((r as any).taxTotal || 0), 0))}`}
             icon={FileDown}
             tone="info"
             loading={isLoading}
           />
           <SummaryCard
             label="Balance Due"
-            value={`₹${filtered.reduce((s, r) => s + Number((r as any).balanceDue || 0), 0).toLocaleString('en-IN')}`}
+            value={`${inr(filtered.reduce((s, r) => s + Number((r as any).balanceDue || 0), 0))}`}
             icon={AlertTriangle}
             tone="warning"
             loading={isLoading}
@@ -1336,21 +1338,21 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                     <StatusBadge status={(sale as any).paymentStatus ?? 'paid'} />
                   </TableCell>
                   <TableCell className="text-right font-mono text-xs text-muted-foreground">
-                    {Number(sale.taxTotal) > 0 ? `₹${Number(sale.taxTotal).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` : '—'}
+                    {Number(sale.taxTotal) > 0 ? `${inr(Number(sale.taxTotal))}` : '—'}
                   </TableCell>
                   <TableCell className="text-right font-mono text-xs">
                     {(() => {
                       const d = Number((sale as any).discountTotal ?? 0)
                         + (((sale as any).lineItems as any[]) ?? []).reduce((s: number, li: any) => s + Number(li?.discount ?? 0), 0);
                       return d > 0
-                        ? <span className="text-amber-600">₹{d.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                        ? <span className="text-amber-600">{inr(d)}</span>
                         : <span className="text-muted-foreground">—</span>;
                     })()}
                   </TableCell>
                   <TableCell className="text-right">
-                    <p className="font-mono font-bold text-emerald-500">₹{Number(sale.totalAmount).toLocaleString('en-IN')}</p>
+                    <p className="font-mono font-bold text-emerald-500">{inr(Number(sale.totalAmount))}</p>
                     {Number((sale as any).balanceDue ?? 0) > 0.004 && (
-                      <p className="text-[10px] text-red-500 font-mono">Due: ₹{Number((sale as any).balanceDue ?? 0).toLocaleString('en-IN')}</p>
+                      <p className="text-[10px] text-red-500 font-mono">Due: {inr(Number((sale as any).balanceDue ?? 0))}</p>
                     )}
                   </TableCell>
                   <TableCell className="text-right">
@@ -1407,9 +1409,9 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                       </div>
                       <div className="flex items-end justify-between gap-2 pt-1">
                         <div>
-                          <p className="font-mono font-bold text-emerald-500 text-sm">₹{Number(sale.totalAmount).toLocaleString('en-IN')}</p>
+                          <p className="font-mono font-bold text-emerald-500 text-sm">{inr(Number(sale.totalAmount))}</p>
                           {balanceDue > 0.004 && (
-                            <p className="text-[10px] text-red-500 font-mono">Due: ₹{balanceDue.toLocaleString('en-IN')}</p>
+                            <p className="text-[10px] text-red-500 font-mono">Due: {inr(balanceDue)}</p>
                           )}
                         </div>
                         <div className="flex gap-1">
@@ -1445,7 +1447,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
               </span>
               <div className="flex items-center gap-3">
                 <span className="font-bold text-emerald-500">
-                  Loaded total: ₹{filtered.reduce((s, r) => s + Number(r.totalAmount || 0), 0).toLocaleString('en-IN')}
+                  Loaded total: {inr(filtered.reduce((s, r) => s + Number(r.totalAmount || 0), 0))}
                 </span>
                 {hasNextPage && (
                   <Button variant="outline" size="sm" className="h-7 px-3 text-xs" disabled={isFetchingNextPage} onClick={() => void fetchNextPage()}>
@@ -1459,8 +1461,12 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
       </div>
 
       {/* Sale Dialog */}
-      <Dialog open={isOpen} onOpenChange={v => { setIsOpen(v); if (!v) { setEditItem(null); setConvertFrom(null); form.reset(effectiveDefaultValues); } }}>
-        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto" onOpenAutoFocus={autoFocusFirst}>
+      <TransactionDialog
+        open={isOpen}
+        dirty={form.formState.isDirty || (!!convertFrom && !editItem)}
+        onOpenChange={v => { setIsOpen(v); if (!v) { setEditItem(null); setConvertFrom(null); form.reset(effectiveDefaultValues); } }}
+      >
+        <TransactionDialogContent className="sm:max-w-3xl" onOpenAutoFocus={autoFocusFirst}>
           <DialogHeader><DialogTitle>{editItem
             ? `Edit Sale — ${editItem.invoiceNumber}`
             : convertFrom
@@ -1613,7 +1619,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                 <label className="flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-sm cursor-pointer">
                   <Checkbox checked={applyAdvance} onCheckedChange={v => setApplyAdvance(v === true)} />
                   <span>
-                    Apply available advance of <span className="font-mono font-semibold">₹{Number(customerAdvance!.available).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span> to this sale
+                    Apply available advance of <span className="font-mono font-semibold">{inr(Number(customerAdvance!.available))}</span> to this sale
                   </span>
                 </label>
               )}
@@ -1649,14 +1655,14 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                       <Check className="w-4 h-4" />
                       {appliedCoupon.discountType === 'percentage'
                         ? `${appliedCoupon.discountValue}% off`
-                        : `₹${Number(appliedCoupon.discountValue).toLocaleString('en-IN')} off`}
+                        : `${inr(Number(appliedCoupon.discountValue))} off`}
                     </div>
                   )}
                   {watchCouponCode && !appliedCoupon && (
                     preservedBillDiscount !== null && preservedBillDiscount > 0 ? (
                       <div className="flex items-center gap-1.5 px-3 py-2 rounded-md bg-amber-500/10 border border-amber-500/30 text-amber-600 text-sm">
                         <AlertTriangle className="w-3.5 h-3.5" />
-                        Coupon no longer active — keeping the original ₹{preservedBillDiscount.toLocaleString('en-IN')} discount
+                        Coupon no longer active — keeping the original {inr(preservedBillDiscount)} discount
                       </div>
                     ) : (
                       <div className="flex items-center gap-1.5 px-3 py-2 rounded-md bg-destructive/10 border border-destructive/20 text-destructive text-sm">
@@ -1758,7 +1764,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                                   return (
                                     <FormItem>
                                       <FormLabel className="text-xs">
-                                        MRP (₹) {floor > 0 && <span className="text-[10px] text-muted-foreground font-normal">min ₹{floor.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>}
+                                        MRP (₹) {floor > 0 && <span className="text-[10px] text-muted-foreground font-normal">min {inr(floor)}</span>}
                                       </FormLabel>
                                       <FormControl>
                                         <Input
@@ -1820,7 +1826,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                                   unitDisc > 0 ? (
                                     <div className="pt-5">
                                       <p className="text-[10px] text-muted-foreground font-medium">
-                                        Disc ₹{unitDisc.toLocaleString('en-IN', { minimumFractionDigits: 2 })}/unit (existing)
+                                        Disc {inr(unitDisc)}/unit (existing)
                                       </p>
                                     </div>
                                   ) : null
@@ -1843,7 +1849,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                                     <FormMessage className="text-[10px]" />
                                     {unitDisc > 0 && unitPrice > 0 && (
                                       <p className="text-[10px] text-emerald-600 font-medium mt-0.5">
-                                        Effective ₹{Math.max(0, unitPrice - unitDisc).toLocaleString('en-IN', { minimumFractionDigits: 2 })}/unit
+                                        Effective {inr(Math.max(0, unitPrice - unitDisc))}/unit
                                       </p>
                                     )}
                                   </FormItem>
@@ -1855,17 +1861,17 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                                 {itemId > 0 ? (
                                   unitPrice > 0 ? (
                                     <>
-                                      <p className="text-xs text-muted-foreground">Subtotal ₹{gst.lineSubtotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</p>
+                                      <p className="text-xs text-muted-foreground">Subtotal {inr(gst.lineSubtotal)}</p>
                                       {taxRate > 0 && (
                                         <p className="text-xs text-amber-500 font-medium">
-                                          {isInterState ? 'IGST' : 'CGST+SGST'} ({taxRate}%) = ₹{gst.taxAmount.toFixed(2)}
+                                          {isInterState ? 'IGST' : 'CGST+SGST'} ({taxRate}%) = {inr(gst.taxAmount)}
                                         </p>
                                       )}
                                       {taxRate === 0 && <p className="text-xs text-muted-foreground/50">No GST</p>}
                                       {disc > 0 && (
-                                        <p className="text-xs text-emerald-600 font-medium">Disc −₹{Math.min(disc, qty * unitPrice).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</p>
+                                        <p className="text-xs text-emerald-600 font-medium">Disc −{inr(Math.min(disc, qty * unitPrice))}</p>
                                       )}
-                                      <p className="font-mono font-bold text-primary text-sm">₹{lineTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</p>
+                                      <p className="font-mono font-bold text-primary text-sm">{inr(lineTotal)}</p>
                                     </>
                                   ) : (
                                     <p className="text-xs text-amber-400 italic">No MRP</p>
@@ -1949,13 +1955,13 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                       {(totals.itemDiscountTotal > 0 || totals.billDiscount > 0) && (
                         <div className="flex justify-between text-muted-foreground">
                           <span>Gross Item Value</span>
-                          <span className="font-mono">₹{totals.grossItemValue.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                          <span className="font-mono">{inr(totals.grossItemValue)}</span>
                         </div>
                       )}
                       {totals.itemDiscountTotal > 0 && (
                         <div className="flex justify-between text-emerald-600 font-medium">
                           <span>Item Discounts (off MRP)</span>
-                          <span className="font-mono">−₹{totals.itemDiscountTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                          <span className="font-mono">−{inr(totals.itemDiscountTotal)}</span>
                         </div>
                       )}
                       {/* Bill discount — ONE pre-tax amount on the whole invoice,
@@ -1982,13 +1988,13 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                       ) : Number(form.watch('billDiscount') ?? 0) > 0 ? (
                         <div className="flex justify-between items-center gap-2">
                           <span className="text-emerald-600 font-medium">Bill Discount (pre-tax, existing)</span>
-                          <span className="font-mono text-xs">−₹{Number(form.watch('billDiscount') ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                          <span className="font-mono text-xs">−{inr(Number(form.watch('billDiscount') ?? 0))}</span>
                         </div>
                       ) : null}
                       {/* Subtotal */}
                       <div className="flex justify-between text-muted-foreground">
                         <span>Taxable Amount</span>
-                        <span className="font-mono">₹{totals.subtotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                        <span className="font-mono">{inr(totals.subtotal)}</span>
                       </div>
 
                       {/* GST lines */}
@@ -2000,7 +2006,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                                 IGST (inter-state)
                                 <span className="text-[10px] text-muted-foreground/60 font-normal">→ Duty &amp; Tax</span>
                               </span>
-                              <span className="font-mono text-amber-500">₹{totals.igstTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                              <span className="font-mono text-amber-500">{inr(totals.igstTotal)}</span>
                             </div>
                           ) : (
                             <>
@@ -2009,21 +2015,21 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                                   CGST
                                   <span className="text-[10px] text-muted-foreground/60 font-normal">→ Duty &amp; Tax</span>
                                 </span>
-                                <span className="font-mono">₹{totals.cgstTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                                <span className="font-mono">{inr(totals.cgstTotal)}</span>
                               </div>
                               <div className="flex justify-between text-muted-foreground">
                                 <span className="flex items-center gap-1.5">
                                   SGST
                                   <span className="text-[10px] text-muted-foreground/60 font-normal">→ Duty &amp; Tax</span>
                                 </span>
-                                <span className="font-mono">₹{totals.sgstTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                                <span className="font-mono">{inr(totals.sgstTotal)}</span>
                               </div>
                             </>
                           )}
                           {/* Total tax callout */}
                           <div className="flex justify-between text-xs py-1 px-2 rounded bg-amber-500/8 text-amber-600 border border-amber-500/15">
                             <span className="font-medium">Total Output GST (to Duty &amp; Tax)</span>
-                            <span className="font-mono font-semibold">₹{totals.taxTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                            <span className="font-mono font-semibold">{inr(totals.taxTotal)}</span>
                           </div>
                         </>
                       )}
@@ -2043,7 +2049,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                             {appliedCoupon?.discountType === 'percentage' && <span className="text-xs text-muted-foreground ml-1">({appliedCoupon.discountValue}%)</span>}
                             {!appliedCoupon && preservedBillDiscount !== null && preservedBillDiscount > 0 && <span className="text-xs text-muted-foreground ml-1">(original)</span>}
                           </span>
-                          <span className="font-mono">−₹{totals.discountAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                          <span className="font-mono">−{inr(totals.discountAmount)}</span>
                         </div>
                       )}
 
@@ -2052,19 +2058,19 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                       {totals.otherTotal > 0 && (
                         <div className="flex justify-between">
                           <span>Other Charges</span>
-                          <span className="font-mono">+₹{totals.otherTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                          <span className="font-mono">+{inr(totals.otherTotal)}</span>
                         </div>
                       )}
 
                       <div className="flex justify-between font-bold text-base">
                         <span>{totals.discountAmount > 0 || totals.otherTotal > 0 ? 'Amount Payable' : 'Grand Total'}</span>
-                        <span className="font-mono text-primary">₹{totals.finalAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                        <span className="font-mono text-primary">{inr(totals.finalAmount)}</span>
                       </div>
                     </div>
                   </div>
                 )}
                 <div className="flex gap-2 justify-end w-full">
-                  <Button variant="outline" type="button" onClick={() => { setIsOpen(false); setEditItem(null); form.reset(effectiveDefaultValues); }}>Cancel</Button>
+                  <DialogClose asChild><Button variant="outline" type="button">Cancel</Button></DialogClose>
                   <Button type="submit" disabled={(editItem ? updateMutation.isPending : createMutation.isPending) || !watchLocationId || (!editItem && availableItems.length === 0) || totals.finalAmount === 0}>
                     {editItem
                       ? (updateMutation.isPending ? 'Saving…' : 'Save Changes')
@@ -2074,8 +2080,8 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
               </DialogFooter>
             </form>
           </Form>
-        </DialogContent>
-      </Dialog>
+        </TransactionDialogContent>
+      </TransactionDialog>
 
       {/* ── Quick Create Customer — THE shared form (identical to Customers page) ── */}
       <CustomerFormDialog
@@ -2170,17 +2176,17 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                         </div>
                         <div className="mt-2 flex justify-between text-xs text-muted-foreground">
                           <span>
-                            {li.quantity} × ₹{Number(li.unitPrice).toFixed(2)}
+                            {li.quantity} × {inr(Number(li.unitPrice))}
                             {Number(li.discount ?? 0) > 0 && (
-                              <span className="text-emerald-600"> − ₹{Number(li.discount).toFixed(2)} disc</span>
+                              <span className="text-emerald-600"> − {inr(Number(li.discount))} disc</span>
                             )}
                           </span>
-                          <span>Taxable: ₹{Number(lineSubtotal).toFixed(2)}</span>
+                          <span>Taxable: {inr(Number(lineSubtotal))}</span>
                         </div>
                         {(li.taxAmount ?? 0) > 0 && (
                           <div className="mt-1 flex justify-between text-xs text-amber-600">
                             <span>{li.taxType === 'igst' ? `IGST ${li.taxRate}%` : `CGST ${(li.taxRate ?? 0) / 2}% + SGST ${(li.taxRate ?? 0) / 2}%`}</span>
-                            <span>₹{Number(li.taxAmount).toFixed(2)}</span>
+                            <span>{inr(Number(li.taxAmount))}</span>
                           </div>
                         )}
                       </div>
@@ -2196,24 +2202,24 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                   return itemDisc > 0 ? (
                     <div className="flex justify-between text-emerald-600">
                       <span>Item Discounts (off MRP)</span>
-                      <span className="font-mono">−₹{itemDisc.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                      <span className="font-mono">−{inr(itemDisc)}</span>
                     </div>
                   ) : null;
                 })()}
                 <div className="flex justify-between text-muted-foreground">
                   <span>Subtotal</span>
-                  <span className="font-mono">₹{Number(viewItem.subtotal ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                  <span className="font-mono">{inr(Number(viewItem.subtotal ?? 0))}</span>
                 </div>
                 {Number(viewItem.taxTotal) > 0 && (
                   <div className="flex justify-between text-amber-600">
                     <span>Total Tax</span>
-                    <span className="font-mono">₹{Number(viewItem.taxTotal).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                    <span className="font-mono">{inr(Number(viewItem.taxTotal))}</span>
                   </div>
                 )}
                 {Number(viewItem.discountTotal ?? 0) > 0 && (
                   <div className="flex justify-between text-emerald-600">
                     <span>Bill Discount{viewItem.couponCode ? ` (${viewItem.couponCode})` : ''}</span>
-                    <span className="font-mono">−₹{Number(viewItem.discountTotal).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                    <span className="font-mono">−{inr(Number(viewItem.discountTotal))}</span>
                   </div>
                 )}
                 {/* Other Charges — stored { ledgerId, amount } rows; names come
@@ -2222,14 +2228,14 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                   (((viewItem.otherCharges ?? viewItem.other_charges) ?? []) as any[]).map((c: any, i: number) => (
                     <div key={i} className="flex justify-between text-muted-foreground">
                       <span>{ledgerNameById.get(Number(c?.ledgerId)) ?? 'Other Charge'}</span>
-                      <span className="font-mono">+₹{Number(c?.amount ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                      <span className="font-mono">+{inr(Number(c?.amount ?? 0))}</span>
                     </div>
                   ))
                 )}
                 <Separator />
                 <div className="flex justify-between font-bold text-base">
                   <span>Grand Total</span>
-                  <span className="font-mono text-primary">₹{Number(viewItem.totalAmount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                  <span className="font-mono text-primary">{inr(Number(viewItem.totalAmount))}</span>
                 </div>
               </div>
 
@@ -2260,16 +2266,16 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                 <div className="space-y-1 text-xs text-muted-foreground">
                   <div className="flex justify-between">
                     <span>Invoice Total</span>
-                    <span className="font-mono font-semibold text-foreground">₹{Number(viewItem.totalAmount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                    <span className="font-mono font-semibold text-foreground">{inr(Number(viewItem.totalAmount))}</span>
                   </div>
                   <div className="flex justify-between">
                     <span>Amount Received</span>
-                    <span className="font-mono text-emerald-600">₹{Number((viewItem as any).amountReceived ?? (viewItem as any).amountPaid ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                    <span className="font-mono text-emerald-600">{inr(Number((viewItem as any).amountReceived ?? (viewItem as any).amountPaid ?? 0))}</span>
                   </div>
                   {(Number((viewItem as any).creditAdjustments ?? 0) > 0) && (
                     <div className="flex justify-between text-sky-600">
                       <span>Less Credit Notes</span>
-                      <span className="font-mono">−₹{Number((viewItem as any).creditAdjustments).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                      <span className="font-mono">−{inr(Number((viewItem as any).creditAdjustments))}</span>
                     </div>
                   )}
                   {(viewItem as any).paymentStatus === 'cancelled' ? (
@@ -2280,7 +2286,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                   ) : (Number((viewItem as any).balanceDue ?? 0) > 0) ? (
                     <div className="flex justify-between font-semibold text-red-600">
                       <span>Balance Due</span>
-                      <span className="font-mono">₹{Number((viewItem as any).balanceDue ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                      <span className="font-mono">{inr(Number((viewItem as any).balanceDue ?? 0))}</span>
                     </div>
                   ) : (
                     <div className="flex justify-between font-semibold text-emerald-600">
@@ -2301,7 +2307,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                           {p.referenceNumber && <span className="font-mono ml-1.5 text-muted-foreground text-[10px]">#{p.referenceNumber}</span>}
                           <span className="ml-1.5 text-muted-foreground">{p.paymentDate}</span>
                         </div>
-                        <span className="font-mono font-semibold">₹{Number(p.amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                        <span className="font-mono font-semibold">{inr(Number(p.amount))}</span>
                       </div>
                     ))}
                   </div>
@@ -2401,12 +2407,12 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                             <div className="text-xs border-t border-border pt-1.5 space-y-0.5">
                               <div className="flex justify-between">
                                 <span className="text-muted-foreground">Total collecting</span>
-                                <span className="font-mono font-semibold">₹{total.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                                <span className="font-mono font-semibold">{inr(total)}</span>
                               </div>
                               {over > 0.001
-                                ? <div className="flex justify-between text-red-600"><span>Exceeds balance by</span><span className="font-mono">₹{over.toFixed(2)}</span></div>
+                                ? <div className="flex justify-between text-red-600"><span>Exceeds balance by</span><span className="font-mono">{inr(over)}</span></div>
                                 : total < bal - 0.001
-                                ? <div className="flex justify-between text-amber-600"><span>Still due after</span><span className="font-mono">₹{(bal - total).toFixed(2)}</span></div>
+                                ? <div className="flex justify-between text-amber-600"><span>Still due after</span><span className="font-mono">{inr((bal - total))}</span></div>
                                 : <div className="text-emerald-600 text-center text-[10px] font-semibold">Full balance collected ✓</div>
                               }
                             </div>
@@ -2451,7 +2457,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                   <p className="text-xs font-bold text-emerald-600 uppercase tracking-widest mb-2">✓ Payment Received</p>
                   <div className="flex justify-between text-sm font-semibold">
                     <span>Paid in full</span>
-                    <span className="font-mono">₹{Number((viewItem as any).amountReceived ?? (viewItem as any).amountPaid ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                    <span className="font-mono">{inr(Number((viewItem as any).amountReceived ?? (viewItem as any).amountPaid ?? 0))}</span>
                   </div>
                   {viewItemPayments.length > 0 ? (
                     <p className="text-[11px] text-muted-foreground mt-1">
@@ -2477,7 +2483,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                   )}
                   <p className="text-xs text-muted-foreground mt-2 font-mono">{(viewItem as any).outletUpiId}</p>
                   <p className="text-[10px] text-muted-foreground uppercase tracking-wide mt-1">Amount Due</p>
-                  <p className="text-base font-bold">₹{Number((viewItem as any).upiQrAmount ?? (viewItem as any).balanceDue ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</p>
+                  <p className="text-base font-bold">{inr(Number((viewItem as any).upiQrAmount ?? (viewItem as any).balanceDue ?? 0))}</p>
                   <p className="text-xs text-muted-foreground">{viewItem.invoiceNumber}</p>
                   {/* A part collection being keyed in gets its own, smaller QR so
                       it can never be mistaken for the invoice's balance. */}
@@ -2485,7 +2491,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                     <div className="mt-3 pt-3 border-t border-teal-500/20">
                       <p className="text-[10px] font-semibold text-teal-700 dark:text-teal-400 uppercase tracking-wide">Or collect this part payment now</p>
                       <img src={collectQrUrl} alt="UPI QR for part payment" className="w-32 h-32 mx-auto rounded-lg border border-border shadow-sm mt-2" />
-                      <p className="text-sm font-bold mt-1">₹{Math.min(Number(paymentAmount) || 0, Number((viewItem as any).balanceDue ?? 0)).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</p>
+                      <p className="text-sm font-bold mt-1">{inr(Math.min(Number(paymentAmount) || 0, Number((viewItem as any).balanceDue ?? 0)))}</p>
                       <p className="text-[10px] text-muted-foreground">Asks for the amount entered above, not the full balance.</p>
                     </div>
                   )}
@@ -2494,7 +2500,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                 <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-xs text-amber-700 dark:text-amber-400">
                   <p className="font-semibold">UPI payment QR not available</p>
                   <p className="mt-0.5 opacity-80">
-                    ₹{Number((viewItem as any).balanceDue ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })} is outstanding, but{' '}
+                    {inr(Number((viewItem as any).balanceDue ?? 0))} is outstanding, but{' '}
                     {(viewItem as any).outletUpiId
                       ? <>the invoice QR is switched off in Company Settings → Invoice Payments.</>
                       : <>no UPI ID is set for <strong>{viewItem.outletName}</strong> or in Company Settings → Invoice Payments.</>}
@@ -2560,7 +2566,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                     <div key={k as string} className="flex justify-between px-3 py-1.5">
                       <span className="text-xs text-muted-foreground">{k}</span>
                       <span className={`font-mono text-xs font-semibold ${k === 'Projected outstanding' ? 'text-red-500' : ''}`}>
-                        ₹{Number(v ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                        {inr(Number(v ?? 0))}
                       </span>
                     </div>
                   ))}

@@ -16,7 +16,8 @@ import { Textarea } from '@/components/ui/textarea';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { DialogClose, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { TransactionDialog, TransactionDialogContent } from '@/components/ui/transaction-dialog';
 import { Separator } from '@/components/ui/separator';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import {
@@ -35,6 +36,7 @@ import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
 import { StatusBadge } from '@/components/app/status-badge';
 import { EmptyState } from '@/components/app/empty-state';
 import { TableSkeleton } from '@/components/app/loading-skeletons';
+import { inr } from '@/lib/currency';
 
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
@@ -67,9 +69,7 @@ function statusBadge(status: string, paidAmt: number, netPay: number) {
   return <StatusBadge status="draft" />;
 }
 
-function fmt(n: number) {
-  return `₹${Number(n ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-}
+const fmt = inr;
 
 // ── Edit Extra Amount dialog ───────────────────────────────────────────────
 function EditDialog({ item, onClose }: { item: EnrichedPayrollRecord; onClose: () => void }) {
@@ -91,8 +91,8 @@ function EditDialog({ item, onClose }: { item: EnrichedPayrollRecord; onClose: (
   };
 
   return (
-    <Dialog open onOpenChange={onClose}>
-      <DialogContent>
+    <TransactionDialog open dirty={amount !== String(item.extraAmount ?? 0) || note !== (item.extraNote ?? '')} onOpenChange={onClose}>
+      <TransactionDialogContent>
         <DialogHeader>
           <DialogTitle>Edit Payroll — {item.employeeName}</DialogTitle>
         </DialogHeader>
@@ -107,11 +107,11 @@ function EditDialog({ item, onClose }: { item: EnrichedPayrollRecord; onClose: (
           </div>
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <DialogClose asChild><Button variant="outline">Cancel</Button></DialogClose>
           <Button onClick={save} disabled={mutation.isPending}>Save</Button>
         </DialogFooter>
-      </DialogContent>
-    </Dialog>
+      </TransactionDialogContent>
+    </TransactionDialog>
   );
 }
 
@@ -143,8 +143,8 @@ function PayDialog({ item, onClose }: { item: EnrichedPayrollRecord; onClose: ()
   };
 
   return (
-    <Dialog open onOpenChange={onClose}>
-      <DialogContent>
+    <TransactionDialog open dirty={amount !== String(remaining.toFixed(2)) || mode !== 'cash' || payFrom !== 'auto'} onOpenChange={onClose}>
+      <TransactionDialogContent>
         <DialogHeader>
           <DialogTitle>Pay Salary — {item.employeeName}</DialogTitle>
         </DialogHeader>
@@ -194,11 +194,11 @@ function PayDialog({ item, onClose }: { item: EnrichedPayrollRecord; onClose: ()
           </div>
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <DialogClose asChild><Button variant="outline">Cancel</Button></DialogClose>
           <Button onClick={pay} disabled={mutation.isPending || Number(amount) <= 0}>Pay</Button>
         </DialogFooter>
-      </DialogContent>
-    </Dialog>
+      </TransactionDialogContent>
+    </TransactionDialog>
   );
 }
 
@@ -429,8 +429,8 @@ function NewAdvanceDialog({ employees, onClose }: { employees: any[]; onClose: (
   };
 
   return (
-    <Dialog open onOpenChange={onClose}>
-      <DialogContent>
+    <TransactionDialog open dirty={empId !== (employees[0]?.id ? String(employees[0].id) : '') || amount !== '' || note !== '' || payFrom !== 'auto' || date !== new Date().toISOString().split('T')[0]} onOpenChange={onClose}>
+      <TransactionDialogContent>
         <DialogHeader><DialogTitle>Record Employee Advance</DialogTitle></DialogHeader>
         <div className="space-y-4 py-2">
           <div className="space-y-1">
@@ -469,11 +469,11 @@ function NewAdvanceDialog({ employees, onClose }: { employees: any[]; onClose: (
           </div>
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <DialogClose asChild><Button variant="outline">Cancel</Button></DialogClose>
           <Button onClick={save} disabled={mutation.isPending}>Record</Button>
         </DialogFooter>
-      </DialogContent>
-    </Dialog>
+      </TransactionDialogContent>
+    </TransactionDialog>
   );
 }
 

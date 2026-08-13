@@ -23,7 +23,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
+import { DialogClose, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
+import { TransactionDialog, TransactionDialogContent } from '@/components/ui/transaction-dialog';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
@@ -32,6 +33,7 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import { toast } from 'sonner';
+import { inr } from '@/lib/currency';
 
 /** Payment methods, in the order they appear in the form. */
 const PAYMENT_MODES = [
@@ -78,7 +80,7 @@ function PaymentModeTag({ mode }: { mode?: string }) {
 
 const TODAY = new Date().toISOString().split('T')[0];
 
-const fmt = (n: number) => `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+const fmt = inr;
 
 /**
  * Print the payment voucher for a location expense. The server builds it from
@@ -660,8 +662,8 @@ export default function SalesExpenses() {
 
       {/* Add Expense — reachable from any view; the form picks the location. */}
       {locationOptions.length > 0 && (
-        <Dialog open={isOpen} onOpenChange={setIsOpen}>
-          <DialogContent className="sm:max-w-md max-h-[90vh] overflow-y-auto" onOpenAutoFocus={autoFocusFirst}>
+        <TransactionDialog open={isOpen} dirty={form.formState.isDirty} onOpenChange={setIsOpen}>
+          <TransactionDialogContent className="sm:max-w-md" onOpenAutoFocus={autoFocusFirst}>
             <DialogHeader>
               <DialogTitle className="flex items-center gap-2">
                 <Receipt className="w-5 h-5 text-primary" /> Record Expense
@@ -823,7 +825,7 @@ export default function SalesExpenses() {
                       {overBalance ? (
                         <p className="text-xs text-destructive flex items-center gap-1 mt-1">
                           <AlertTriangle className="w-3 h-3 shrink-0" />
-                          Exceeds available cash (₹{formAvailableCash.toLocaleString('en-IN', { minimumFractionDigits: 2 })})
+                          Exceeds available cash ({inr(formAvailableCash)})
                         </p>
                       ) : watchMode === 'cash' && hasKnownCash && amountNum > 0 ? (
                         <p className="text-xs text-muted-foreground mt-1">
@@ -869,15 +871,15 @@ export default function SalesExpenses() {
                 )} />
 
                 <DialogFooter>
-                  <Button variant="outline" type="button" onClick={() => setIsOpen(false)}>Cancel</Button>
+                  <DialogClose asChild><Button variant="outline" type="button">Cancel</Button></DialogClose>
                   <Button type="submit" disabled={submitting || overBalance || (watchMode === 'cash' && hasKnownCash && formAvailableCash <= 0)}>
                     {submitting ? 'Saving…' : 'Record Expense'}
                   </Button>
                 </DialogFooter>
               </form>
             </Form>
-          </DialogContent>
-        </Dialog>
+          </TransactionDialogContent>
+        </TransactionDialog>
       )}
     </AppLayout>
   );

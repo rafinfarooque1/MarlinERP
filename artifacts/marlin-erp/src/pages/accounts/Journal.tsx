@@ -7,7 +7,8 @@ import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { Dialog, DialogClose, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { TransactionDialog, TransactionDialogContent } from '@/components/ui/transaction-dialog';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -25,10 +26,10 @@ import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
 import { EmptyState } from '@/components/app/empty-state';
 import { TableSkeleton } from '@/components/app/loading-skeletons';
 import { TablePager, useClientPage } from '@/components/ui/table-pager';
+import { inr } from '@/lib/currency';
 
 interface LineDraft { ledgerId: number; debit: string; credit: string }
 
-const inr = (n: number) => `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
 const today = () => new Date().toISOString().split('T')[0];
 const EMPTY_LINE: LineDraft = { ledgerId: 0, debit: '', credit: '' };
 
@@ -60,6 +61,11 @@ export default function Journal() {
   const totalDr = lines.reduce((s, l) => s + (Number(l.debit) || 0), 0);
   const totalCr = lines.reduce((s, l) => s + (Number(l.credit) || 0), 0);
   const balanced = Math.abs(totalDr - totalCr) < 0.005 && totalDr > 0;
+
+  // Anything typed into the entry dialog that would be lost on close.
+  const entryDirty = narration !== '' || voucherDate !== today()
+    || lines.length !== 2
+    || lines.some(l => l.ledgerId > 0 || l.debit !== '' || l.credit !== '');
 
   const setLine = (i: number, patch: Partial<LineDraft>) =>
     setLines(prev => prev.map((l, idx) => {
@@ -285,8 +291,8 @@ export default function Journal() {
       </div>
 
       {/* ── New Journal Dialog ── */}
-      <Dialog open={isOpen} onOpenChange={v => { setIsOpen(v); if (!v) resetForm(); }}>
-        <DialogContent className="sm:max-w-2xl" onOpenAutoFocus={autoFocusFirst}>
+      <TransactionDialog open={isOpen} dirty={entryDirty} onOpenChange={v => { setIsOpen(v); if (!v) resetForm(); }}>
+        <TransactionDialogContent className="sm:max-w-2xl" onOpenAutoFocus={autoFocusFirst}>
           <DialogHeader><DialogTitle>New Journal Voucher</DialogTitle></DialogHeader>
           <div
             ref={scopeRef}
@@ -382,14 +388,14 @@ export default function Journal() {
             </div>
 
             <DialogFooter className="max-md:sticky max-md:bottom-0 max-md:z-20 max-md:-mx-4 max-md:px-4 max-md:py-2 max-md:bg-background/95 max-md:backdrop-blur max-md:border-t max-md:border-border">
-              <Button variant="outline" type="button" onClick={() => setIsOpen(false)}>Cancel</Button>
+              <DialogClose asChild><Button variant="outline" type="button">Cancel</Button></DialogClose>
               <Button onClick={submit} disabled={createMutation.isPending || !balanced}>
                 {createMutation.isPending ? 'Recording…' : 'Record Journal'}
               </Button>
             </DialogFooter>
           </div>
-        </DialogContent>
-      </Dialog>
+        </TransactionDialogContent>
+      </TransactionDialog>
 
       {/* ── Delete Confirmation ── */}
       <Dialog open={!!deleteTarget} onOpenChange={v => !v && setDeleteTarget(null)}>

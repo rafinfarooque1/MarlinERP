@@ -4,7 +4,8 @@ import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { Dialog, DialogClose, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { TransactionDialog, TransactionDialogContent } from '@/components/ui/transaction-dialog';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
@@ -27,6 +28,7 @@ import { EmptyState } from '@/components/app/empty-state';
 import { TableSkeleton } from '@/components/app/loading-skeletons';
 import { TablePager, useClientPage } from '@/components/ui/table-pager';
 import { FileStack } from 'lucide-react';
+import { inr } from '@/lib/currency';
 
 const schema = z.object({
   receiptDate: z.string().min(1, 'Date required'),
@@ -169,7 +171,7 @@ export default function ReceiptPage() {
 
         <SummaryCardGrid>
           <SummaryCard label="Receipt Vouchers" value={filtered.length.toLocaleString('en-IN')} icon={FileStack} tone="info" loading={isLoading} />
-          <SummaryCard label="Total Received" value={`₹${total.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`} icon={ArrowDownRight} tone="positive" loading={isLoading} />
+          <SummaryCard label="Total Received" value={`${inr(total)}`} icon={ArrowDownRight} tone="positive" loading={isLoading} />
         </SummaryCardGrid>
 
         <div className="relative w-full sm:max-w-sm">
@@ -215,7 +217,7 @@ export default function ReceiptPage() {
                       : <span className="text-muted-foreground">—</span>}
                   </TableCell>
                   <TableCell className="text-muted-foreground text-sm max-w-[200px] truncate">{r.narration || '—'}</TableCell>
-                  <TableCell className="text-right font-mono font-bold text-emerald-500">₹{Number(r.amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</TableCell>
+                  <TableCell className="text-right font-mono font-bold text-emerald-500">{inr(Number(r.amount))}</TableCell>
                   <TableCell className="text-right">
                     {r.origin === 'system' ? (
                       // System-generated (sale settlements, credit clearings) — owned
@@ -239,8 +241,8 @@ export default function ReceiptPage() {
       </div>
 
       {/* ── New Receipt Dialog ── */}
-      <Dialog open={isOpen} onOpenChange={v => { setIsOpen(v); if (!v) form.reset(); }}>
-        <DialogContent className="sm:max-w-lg">
+      <TransactionDialog open={isOpen} dirty={form.formState.isDirty} onOpenChange={v => { setIsOpen(v); if (!v) form.reset(); }}>
+        <TransactionDialogContent className="sm:max-w-lg">
           <DialogHeader><DialogTitle>New Receipt Voucher</DialogTitle></DialogHeader>
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4 pt-2">
@@ -315,21 +317,21 @@ export default function ReceiptPage() {
               )} />
 
               <DialogFooter className="max-md:sticky max-md:bottom-0 max-md:z-20 max-md:-mx-4 max-md:px-4 max-md:py-2 max-md:bg-background/95 max-md:backdrop-blur max-md:border-t max-md:border-border">
-                <Button variant="outline" type="button" onClick={() => setIsOpen(false)}>Cancel</Button>
+                <DialogClose asChild><Button variant="outline" type="button">Cancel</Button></DialogClose>
                 <Button type="submit" disabled={createMutation.isPending}>
                   {createMutation.isPending ? 'Recording…' : 'Record Receipt'}
                 </Button>
               </DialogFooter>
             </form>
           </Form>
-        </DialogContent>
-      </Dialog>
+        </TransactionDialogContent>
+      </TransactionDialog>
 
       {/* ── Delete Confirmation ── */}
       <Dialog open={!!deleteTarget} onOpenChange={v => !v && setDeleteTarget(null)}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader><DialogTitle className="text-destructive flex items-center gap-2"><Trash2 className="w-5 h-5" />Delete Receipt</DialogTitle></DialogHeader>
-          <p className="text-sm text-muted-foreground py-2">Delete receipt voucher <span className="font-semibold text-foreground">{deleteTarget?.voucherNumber}</span> of ₹{Number(deleteTarget?.amount || 0).toLocaleString('en-IN')}? This cannot be undone.</p>
+          <p className="text-sm text-muted-foreground py-2">Delete receipt voucher <span className="font-semibold text-foreground">{deleteTarget?.voucherNumber}</span> of {inr(Number(deleteTarget?.amount || 0))}? This cannot be undone.</p>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDeleteTarget(null)}>Cancel</Button>
             <Button variant="destructive" onClick={handleDelete} disabled={deleteMutation.isPending}>Delete</Button>

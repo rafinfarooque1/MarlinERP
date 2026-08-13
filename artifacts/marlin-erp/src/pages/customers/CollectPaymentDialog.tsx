@@ -8,12 +8,14 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import {
-  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+  DialogClose, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
+import { TransactionDialog, TransactionDialogContent } from '@/components/ui/transaction-dialog';
 import { HandCoins } from 'lucide-react';
 import { ReceiveIntoSelect } from '@/components/receive-into-select';
 import { EmptyState } from '@/components/app/empty-state';
 import { toast } from 'sonner';
+import { inr } from '@/lib/currency';
 
 const fmt = (n: unknown) => Number(n ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 });
 const dfmt = (d?: string | null) => (d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—');
@@ -69,14 +71,14 @@ export function CollectPaymentDialog({
     const amt = Number(amount);
     if (!Number.isFinite(amt) || amt <= 0) { toast.error('Enter a valid amount'); return; }
     if (amt > Number(activeInv.balance) + 0.01) {
-      toast.error(`Amount exceeds outstanding (₹${fmt(activeInv.balance)})`); return;
+      toast.error(`Amount exceeds outstanding (${inr(activeInv.balance)})`); return;
     }
     if (!ledgerId) { toast.error('Pick the Cash / Bank account the money went into'); return; }
     createPayment.mutate(
       { saleId: activeInv.saleId, data: { receivedInLedgerId: ledgerId, amount: amt, referenceNumber: reference.trim() || undefined, paymentDate } },
       {
         onSuccess: () => {
-          toast.success(`₹${fmt(amt)} recorded against ${activeInv.invoiceNumber || `Sale #${activeInv.saleId}`}`);
+          toast.success(`${inr(amt)} recorded against ${activeInv.invoiceNumber || `Sale #${activeInv.saleId}`}`);
           invalidate();
           setSelected(null);
           setAmount('');
@@ -89,12 +91,16 @@ export function CollectPaymentDialog({
   const totalDue = Number(customer?.netDue ?? customer?.totalDue ?? 0);
 
   return (
-    <Dialog open={customerId != null} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-2xl">
+    <TransactionDialog
+      open={customerId != null}
+      dirty={selected != null || amount !== '' || ledgerId !== 0 || reference !== ''}
+      onOpenChange={onOpenChange}
+    >
+      <TransactionDialogContent className="sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2"><HandCoins className="w-5 h-5 text-primary" /> Collect Payment</DialogTitle>
           <DialogDescription>
-            {customerName || customer?.name || 'Customer'} · Total outstanding <span className="font-mono font-semibold text-foreground">₹{fmt(totalDue)}</span>
+            {customerName || customer?.name || 'Customer'} · Total outstanding <span className="font-mono font-semibold text-foreground">{inr(totalDue)}</span>
           </DialogDescription>
         </DialogHeader>
 
@@ -129,9 +135,9 @@ export function CollectPaymentDialog({
                           <Badge variant="outline" className="ml-1 font-mono text-[9px] text-red-600 border-red-500/40">{inv.daysOverdue}d</Badge>
                         )}
                       </td>
-                      <td className="px-3 py-2 text-right font-mono">₹{fmt(inv.total)}</td>
-                      <td className="px-3 py-2 text-right font-mono text-emerald-600">₹{fmt(inv.paid)}</td>
-                      <td className="px-3 py-2 text-right font-mono font-semibold">₹{fmt(inv.balance)}</td>
+                      <td className="px-3 py-2 text-right font-mono">{inr(inv.total)}</td>
+                      <td className="px-3 py-2 text-right font-mono text-emerald-600">{inr(inv.paid)}</td>
+                      <td className="px-3 py-2 text-right font-mono font-semibold">{inr(inv.balance)}</td>
                       <td className="px-3 py-2 text-right">
                         <Button size="sm" variant={selected === inv.saleId ? 'default' : 'outline'} className="h-6 px-2 text-[11px]" onClick={() => pick(inv)}>
                           {selected === inv.saleId ? 'Selected' : 'Collect'}
@@ -148,7 +154,7 @@ export function CollectPaymentDialog({
               <div className="rounded-lg border border-border p-4 space-y-4 bg-muted/10">
                 <p className="text-sm font-medium">
                   Collecting against <span className="font-mono">{activeInv.invoiceNumber || `Sale #${activeInv.saleId}`}</span>
-                  <span className="text-muted-foreground font-normal"> · outstanding ₹{fmt(activeInv.balance)}</span>
+                  <span className="text-muted-foreground font-normal"> · outstanding {inr(activeInv.balance)}</span>
                 </p>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="space-y-1.5">
@@ -180,14 +186,14 @@ export function CollectPaymentDialog({
         )}
 
         <DialogFooter className="pt-2">
-          <Button variant="outline" onClick={() => onOpenChange(false)}>Close</Button>
+          <DialogClose asChild><Button variant="outline">Close</Button></DialogClose>
           {activeInv && (
             <Button onClick={submit} disabled={createPayment.isPending}>
               {createPayment.isPending ? 'Recording…' : 'Record Payment'}
             </Button>
           )}
         </DialogFooter>
-      </DialogContent>
-    </Dialog>
+      </TransactionDialogContent>
+    </TransactionDialog>
   );
 }

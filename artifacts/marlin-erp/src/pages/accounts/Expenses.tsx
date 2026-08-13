@@ -6,7 +6,8 @@ import { AccountCombobox } from '@/components/ui/account-combobox';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { DialogClose, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { TransactionDialog, TransactionDialogContent } from '@/components/ui/transaction-dialog';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -32,6 +33,7 @@ import { PageHeader } from '@/components/app/page-header';
 import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
 import { EmptyState } from '@/components/app/empty-state';
 import { TableSkeleton } from '@/components/app/loading-skeletons';
+import { inr } from '@/lib/currency';
 
 const schema = z.object({
   description: z.string().min(1, 'Description required'),
@@ -97,7 +99,7 @@ function LocationDrilldown({ loc, onBack, canDownload }: { loc: LocationExpenseS
         <div className="bg-card border border-border rounded-xl p-4 flex justify-between items-center">
           <span className="text-muted-foreground text-sm">{expenses.length} expense entries</span>
           <span className="text-xl font-bold text-red-500 font-mono">
-            ₹{expenses.reduce((s, e) => s + e.amount, 0).toLocaleString('en-IN')}
+            {inr(expenses.reduce((s, e) => s + e.amount, 0))}
           </span>
         </div>
       )}
@@ -155,7 +157,7 @@ function LocationDrilldown({ loc, onBack, canDownload }: { loc: LocationExpenseS
                   <Badge variant="outline" className="text-xs">{e.expenseLedgerName || '—'}</Badge>
                 </TableCell>
                 <TableCell className="text-right font-mono font-bold text-red-500">
-                  ₹{e.amount.toLocaleString('en-IN')}
+                  {inr(e.amount)}
                 </TableCell>
                 <TableCell className="text-right whitespace-nowrap">
                   {canDownload && (
@@ -192,7 +194,7 @@ function LocationDrilldown({ loc, onBack, canDownload }: { loc: LocationExpenseS
             <div className="mt-6 space-y-4">
               {[
                 ...(viewItem.voucherNumber ? [['Voucher', viewItem.voucherNumber]] : []),
-                ['Amount', `₹${viewItem.amount.toLocaleString('en-IN')}`],
+                ['Amount', `${inr(viewItem.amount)}`],
                 ['Date', new Date(viewItem.expenseDate).toLocaleDateString('en-IN')],
                 ['Category', viewItem.category || 'Uncategorised'],
                 ['Expense Account', viewItem.expenseLedgerName || '—'],
@@ -257,7 +259,7 @@ function ByLocationTab({ canDownload }: { canDownload: boolean }) {
             {locationsWithExpenses.length} location{locationsWithExpenses.length !== 1 ? 's' : ''} with expenses
           </span>
           <span className="text-xl font-bold text-red-500 font-mono">
-            ₹{grandTotal.toLocaleString('en-IN')} total
+            {inr(grandTotal)} total
           </span>
         </div>
       )}
@@ -304,7 +306,7 @@ function ByLocationTab({ canDownload }: { canDownload: boolean }) {
                       </TableCell>
                       <TableCell className="text-center text-sm">{loc.count}</TableCell>
                       <TableCell className="text-right font-mono font-bold text-red-500">
-                        ₹{loc.total.toLocaleString('en-IN')}
+                        {inr(loc.total)}
                       </TableCell>
                       <TableCell className="text-right">
                         <ChevronRight className="w-4 h-4 text-muted-foreground" />
@@ -523,7 +525,7 @@ export default function Expenses() {
             {filtered.length > 0 && (
               <SummaryCardGrid className="lg:grid-cols-2">
                 <SummaryCard label="Expense Entries" value={String(filtered.length)} icon={LayoutList} tone="default" loading={isLoading} />
-                <SummaryCard label="Total Spend" value={<span className="font-mono text-red-500">₹{total.toLocaleString('en-IN')}</span>} icon={Receipt} tone="negative" loading={isLoading} />
+                <SummaryCard label="Total Spend" value={<span className="font-mono text-red-500">{inr(total)}</span>} icon={Receipt} tone="negative" loading={isLoading} />
               </SummaryCardGrid>
             )}
 
@@ -600,7 +602,7 @@ export default function Expenses() {
                       <TableCell className="text-sm text-muted-foreground">{e.locationName || 'Head Office'}</TableCell>
                       <TableCell className="text-sm text-muted-foreground">{e.paymentAccountName || '—'}</TableCell>
                       <TableCell className="text-right font-mono font-bold text-red-500">
-                        ₹{Number(e.amount).toLocaleString('en-IN')}
+                        {inr(Number(e.amount))}
                       </TableCell>
                       <TableCell className="text-right whitespace-nowrap">
                         {perm.canDownload && (
@@ -633,8 +635,8 @@ export default function Expenses() {
       </div>
 
       {/* Add Expense Dialog */}
-      <Dialog open={isOpen} onOpenChange={setIsOpen}>
-        <DialogContent className="sm:max-w-md max-h-[90vh] overflow-y-auto" onOpenAutoFocus={autoFocusFirst}>
+      <TransactionDialog open={isOpen} dirty={form.formState.isDirty} onOpenChange={setIsOpen}>
+        <TransactionDialogContent className="sm:max-w-md" onOpenAutoFocus={autoFocusFirst}>
           <DialogHeader><DialogTitle>Record Expense</DialogTitle></DialogHeader>
           <Form {...form}>
             <form
@@ -727,15 +729,15 @@ export default function Expenses() {
                 <FormItem><FormLabel>Notes</FormLabel><FormControl><Textarea rows={2} {...field} /></FormControl></FormItem>
               )} />
               <DialogFooter>
-                <Button variant="outline" type="button" onClick={() => setIsOpen(false)}>Cancel</Button>
+                <DialogClose asChild><Button variant="outline" type="button">Cancel</Button></DialogClose>
                 <Button type="submit" disabled={createMutation.isPending}>
                   {createMutation.isPending ? 'Saving…' : 'Record Expense'}
                 </Button>
               </DialogFooter>
             </form>
           </Form>
-        </DialogContent>
-      </Dialog>
+        </TransactionDialogContent>
+      </TransactionDialog>
 
       {/* View Expense Sheet */}
       <Sheet open={!!viewItem} onOpenChange={v => !v && setViewItem(null)}>
@@ -751,7 +753,7 @@ export default function Expenses() {
             <div className="mt-6 space-y-4">
               {[
                 ['Voucher', viewItem.expenseNumber ?? viewItem.voucherNumber ?? 'Not numbered'],
-                ['Amount', `₹${Number(viewItem.amount).toLocaleString('en-IN')}`],
+                ['Amount', `${inr(Number(viewItem.amount))}`],
                 ['Date', new Date(viewItem.expenseDate).toLocaleDateString('en-IN')],
                 ['Category', viewItem.category || 'Uncategorised'],
                 ['Expense Account', viewItem.ledgerAccountName || '—'],

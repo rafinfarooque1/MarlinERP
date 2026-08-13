@@ -11,7 +11,8 @@ import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
+import { Dialog, DialogClose, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
+import { TransactionDialog, TransactionDialogContent } from '@/components/ui/transaction-dialog';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -40,6 +41,7 @@ import { PageHeader } from '@/components/app/page-header';
 import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
 import { EmptyState } from '@/components/app/empty-state';
 import { TableSkeleton } from '@/components/app/loading-skeletons';
+import { inr } from '@/lib/currency';
 
 const GST_RATES = [0, 5, 12, 18, 28] as const;
 
@@ -557,8 +559,8 @@ export default function Purchases() {
         <SummaryCardGrid>
           <SummaryCard label="Bills (this page)" value={filtered.length.toLocaleString('en-IN')} sub={`${totalPurchases.toLocaleString('en-IN')} total`} icon={FileText} tone="info" loading={isLoading} />
           <SummaryCard label="Vendors (this page)" value={new Set(filtered.map((p: any) => p.vendorId)).size.toLocaleString('en-IN')} icon={Receipt} loading={isLoading} />
-          <SummaryCard label="Tax (this page)" value={`₹${fmt(pageTaxTotal)}`} icon={Receipt} tone="warning" loading={isLoading} />
-          <SummaryCard label="Payable (this page)" value={`₹${fmt(pagePayableTotal)}`} icon={Wallet} tone="default" loading={isLoading} />
+          <SummaryCard label="Tax (this page)" value={`${inr(pageTaxTotal)}`} icon={Receipt} tone="warning" loading={isLoading} />
+          <SummaryCard label="Payable (this page)" value={`${inr(pagePayableTotal)}`} icon={Wallet} tone="default" loading={isLoading} />
         </SummaryCardGrid>
 
         <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
@@ -601,9 +603,9 @@ export default function Purchases() {
                   )}
                   <TableCell><Badge variant="secondary">{(p.lineItems as any[])?.length || 0} items</Badge></TableCell>
                   <TableCell className="text-right font-mono text-xs text-muted-foreground">
-                    {Number((p as any).taxTotal || 0) > 0 ? `₹${fmt(Number((p as any).taxTotal || 0))}` : '—'}
+                    {Number((p as any).taxTotal || 0) > 0 ? `${inr(Number((p as any).taxTotal || 0))}` : '—'}
                   </TableCell>
-                  <TableCell className="text-right font-mono font-bold text-primary">₹{fmt(Number(p.totalAmount) + Number((p as any).otherChargesTotal || 0))}</TableCell>
+                  <TableCell className="text-right font-mono font-bold text-primary">{inr(Number(p.totalAmount) + Number((p as any).otherChargesTotal || 0))}</TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
                       <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(p)}><Eye className="w-4 h-4" /></Button>
@@ -654,11 +656,11 @@ export default function Purchases() {
                         <div className="text-muted-foreground truncate">Loc: {(p as any).locationName ?? 'Head Office'}</div>
                       )}
                       <div className="text-muted-foreground">
-                        Tax: {Number((p as any).taxTotal || 0) > 0 ? `₹${fmt(Number((p as any).taxTotal || 0))}` : '—'}
+                        Tax: {Number((p as any).taxTotal || 0) > 0 ? `${inr(Number((p as any).taxTotal || 0))}` : '—'}
                       </div>
                     </div>
                     <div className="mt-2 flex items-center justify-between gap-2">
-                      <span className="font-mono font-bold text-primary text-sm">₹{fmt(Number(p.totalAmount) + Number((p as any).otherChargesTotal || 0))}</span>
+                      <span className="font-mono font-bold text-primary text-sm">{inr(Number(p.totalAmount) + Number((p as any).otherChargesTotal || 0))}</span>
                       <div className="flex gap-1">
                         <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(p)}><Eye className="w-4 h-4" /></Button>
                         {perm.canEdit && (
@@ -693,8 +695,12 @@ export default function Purchases() {
       </div>
 
       {/* ── New / Edit Purchase Bill Dialog ── */}
-      <Dialog open={isOpen} onOpenChange={v => { setIsOpen(v); if (!v) { setEditingId(null); resetForm(); } }}>
-        <DialogContent className="sm:max-w-6xl max-h-[90vh] overflow-y-auto" onOpenAutoFocus={autoFocusFirst}>
+      <TransactionDialog
+        open={isOpen}
+        dirty={form.formState.isDirty}
+        onOpenChange={v => { setIsOpen(v); if (!v) { setEditingId(null); resetForm(); } }}
+      >
+        <TransactionDialogContent className="sm:max-w-6xl" onOpenAutoFocus={autoFocusFirst}>
           <DialogHeader>
             <DialogTitle>
               {editingId !== null ? `Edit Purchase Bill #${String(editingId).padStart(4, '0')}` : 'New Purchase Bill'}
@@ -758,7 +764,7 @@ export default function Purchases() {
                   <label className="sm:col-span-2 lg:col-span-4 flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-sm cursor-pointer">
                     <Checkbox checked={applyAdvance} onCheckedChange={v => setApplyAdvance(v === true)} />
                     <span>
-                      Adjust available advance of <span className="font-mono font-semibold">₹{Number(vendorAdvance!.available).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span> against this bill
+                      Adjust available advance of <span className="font-mono font-semibold">{inr(Number(vendorAdvance!.available))}</span> against this bill
                     </span>
                   </label>
                 )}
@@ -920,7 +926,7 @@ export default function Purchases() {
                           <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
                           <SelectContent>{GST_RATES.map(r => <SelectItem key={r} value={String(r)}>{r}%</SelectItem>)}</SelectContent>
                         </Select>
-                        <div className="text-right text-sm font-mono font-medium tabular-nums whitespace-nowrap">₹{fmt(calc.lineTotal)}</div>
+                        <div className="text-right text-sm font-mono font-medium tabular-nums whitespace-nowrap">{inr(calc.lineTotal)}</div>
                         <Button type="button" variant="ghost" size="icon" tabIndex={-1} className="h-8 w-8 text-destructive justify-self-end" onClick={() => remove(index)} disabled={fields.length === 1}>
                           <X className="w-3.5 h-3.5" />
                         </Button>
@@ -1009,24 +1015,24 @@ export default function Purchases() {
                 <div className="bg-muted/20 rounded-lg p-4 space-y-2 text-sm">
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Subtotal {priceMode === 'inclusive' ? '(GST incl.)' : ''}</span>
-                    <span className="font-mono">₹{fmt(bill.subtotal)}</span>
+                    <span className="font-mono">{inr(bill.subtotal)}</span>
                   </div>
                   {bill.discountTotal > 0 && (
-                    <div className="flex justify-between"><span className="text-muted-foreground">(-) Discount</span><span className="font-mono text-red-500">-₹{fmt(bill.discountTotal)}</span></div>
+                    <div className="flex justify-between"><span className="text-muted-foreground">(-) Discount</span><span className="font-mono text-red-500">-{inr(bill.discountTotal)}</span></div>
                   )}
-                  <div className="flex justify-between"><span className="text-muted-foreground">Taxable Amount</span><span className="font-mono">₹{fmt(bill.taxableTotal)}</span></div>
+                  <div className="flex justify-between"><span className="text-muted-foreground">Taxable Amount</span><span className="font-mono">{inr(bill.taxableTotal)}</span></div>
                   <Separator />
-                  {bill.cgstTotal > 0 && <div className="flex justify-between"><span className="text-muted-foreground">CGST</span><span className="font-mono">₹{fmt(bill.cgstTotal)}</span></div>}
-                  {bill.sgstTotal > 0 && <div className="flex justify-between"><span className="text-muted-foreground">SGST</span><span className="font-mono">₹{fmt(bill.sgstTotal)}</span></div>}
-                  {bill.igstTotal > 0 && <div className="flex justify-between"><span className="text-muted-foreground">IGST</span><span className="font-mono">₹{fmt(bill.igstTotal)}</span></div>}
-                  {Math.abs(bill.roundOff) > 0.001 && <div className="flex justify-between"><span className="text-muted-foreground">Round Off</span><span className="font-mono">{bill.roundOff > 0 ? '+' : ''}₹{fmt(Math.abs(bill.roundOff))}</span></div>}
+                  {bill.cgstTotal > 0 && <div className="flex justify-between"><span className="text-muted-foreground">CGST</span><span className="font-mono">{inr(bill.cgstTotal)}</span></div>}
+                  {bill.sgstTotal > 0 && <div className="flex justify-between"><span className="text-muted-foreground">SGST</span><span className="font-mono">{inr(bill.sgstTotal)}</span></div>}
+                  {bill.igstTotal > 0 && <div className="flex justify-between"><span className="text-muted-foreground">IGST</span><span className="font-mono">{inr(bill.igstTotal)}</span></div>}
+                  {Math.abs(bill.roundOff) > 0.001 && <div className="flex justify-between"><span className="text-muted-foreground">Round Off</span><span className="font-mono">{bill.roundOff > 0 ? '+' : ''}{inr(Math.abs(bill.roundOff))}</span></div>}
                   <Separator />
-                  <div className="flex justify-between font-bold text-base pt-1"><span>{otherTotal > 0 ? 'Goods Total' : 'Grand Total'}</span><span className="font-mono text-primary">₹{bill.totalAmount.toLocaleString('en-IN')}</span></div>
+                  <div className="flex justify-between font-bold text-base pt-1"><span>{otherTotal > 0 ? 'Goods Total' : 'Grand Total'}</span><span className="font-mono text-primary">{inr(bill.totalAmount)}</span></div>
                   {otherTotal > 0 && (
                     <>
-                      <div className="flex justify-between"><span className="text-muted-foreground">(+) Other Charges</span><span className="font-mono">₹{fmt(otherTotal)}</span></div>
+                      <div className="flex justify-between"><span className="text-muted-foreground">(+) Other Charges</span><span className="font-mono">{inr(otherTotal)}</span></div>
                       <Separator />
-                      <div className="flex justify-between font-bold text-base"><span>Total Payable</span><span className="font-mono text-primary">₹{grandPayable.toLocaleString('en-IN')}</span></div>
+                      <div className="flex justify-between font-bold text-base"><span>Total Payable</span><span className="font-mono text-primary">{inr(grandPayable)}</span></div>
                     </>
                   )}
                   {priceMode === 'inclusive' && (
@@ -1038,7 +1044,7 @@ export default function Purchases() {
               </div>
 
               <DialogFooter className="max-md:sticky max-md:bottom-0 max-md:z-20 max-md:-mx-4 max-md:-mb-4 max-md:px-4 max-md:py-2 max-md:bg-background/95 max-md:backdrop-blur max-md:border-t max-md:border-border">
-                <Button variant="outline" type="button" onClick={() => { setIsOpen(false); setEditingId(null); resetForm(); }}>Cancel</Button>
+                <DialogClose asChild><Button variant="outline" type="button">Cancel</Button></DialogClose>
                 <Button type="submit" disabled={createMutation.isPending || updateMutation.isPending}>
                   {(createMutation.isPending || updateMutation.isPending) ? 'Saving…' : editingId !== null ? 'Save Changes' : 'Save Purchase Bill'}
                 </Button>
@@ -1047,13 +1053,13 @@ export default function Purchases() {
                     Placed last so flex-col-reverse renders it at the top. */}
                 <div className="flex md:hidden items-center justify-between w-full text-sm font-bold pb-1">
                   <span>{otherTotal > 0 ? 'Total Payable' : 'Grand Total'}</span>
-                  <span className="font-mono text-primary">₹{grandPayable.toLocaleString('en-IN')}</span>
+                  <span className="font-mono text-primary">{inr(grandPayable)}</span>
                 </div>
               </DialogFooter>
             </form>
           </Form>
-        </DialogContent>
-      </Dialog>
+        </TransactionDialogContent>
+      </TransactionDialog>
 
       {/* ── View Bill Sheet ── */}
       <Sheet open={!!viewItem} onOpenChange={v => !v && setViewItem(null)}>
@@ -1103,13 +1109,13 @@ export default function Purchases() {
                         </td>
                         <td className="px-2 py-2 font-mono text-muted-foreground">{li.hsnCode || '—'}</td>
                         <td className="text-right px-2 py-2">{li.quantity}</td>
-                        <td className="text-right px-2 py-2 font-mono">₹{fmt(Number(li.unitCost))}</td>
+                        <td className="text-right px-2 py-2 font-mono">{inr(Number(li.unitCost))}</td>
                         <td className="text-right px-2 py-2">{Number(li.discount || 0) > 0 ? `${li.discount}%` : '—'}</td>
-                        <td className="text-right px-2 py-2 font-mono">₹{fmt(Number(li.taxableValue || (li.quantity * li.unitCost)))}</td>
-                        <td className="text-right px-2 py-2 font-mono">{Number(li.cgst || 0) > 0 ? `₹${fmt(Number(li.cgst))}` : '—'}</td>
-                        <td className="text-right px-2 py-2 font-mono">{Number(li.sgst || 0) > 0 ? `₹${fmt(Number(li.sgst))}` : '—'}</td>
-                        <td className="text-right px-2 py-2 font-mono">{Number(li.igst || 0) > 0 ? `₹${fmt(Number(li.igst))}` : '—'}</td>
-                        <td className="text-right px-3 py-2 font-mono font-bold">₹{fmt(Number(li.lineTotal || li.quantity * li.unitCost))}</td>
+                        <td className="text-right px-2 py-2 font-mono">{inr(Number(li.taxableValue || (li.quantity * li.unitCost)))}</td>
+                        <td className="text-right px-2 py-2 font-mono">{Number(li.cgst || 0) > 0 ? `${inr(Number(li.cgst))}` : '—'}</td>
+                        <td className="text-right px-2 py-2 font-mono">{Number(li.sgst || 0) > 0 ? `${inr(Number(li.sgst))}` : '—'}</td>
+                        <td className="text-right px-2 py-2 font-mono">{Number(li.igst || 0) > 0 ? `${inr(Number(li.igst))}` : '—'}</td>
+                        <td className="text-right px-3 py-2 font-mono font-bold">{inr(Number(li.lineTotal || li.quantity * li.unitCost))}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -1123,27 +1129,27 @@ export default function Purchases() {
                   <span className="font-medium">{(viewItem as any).priceMode === 'inclusive' ? 'GST inclusive' : 'GST exclusive'}</span>
                 </div>
                 {Number(viewItem.discountTotal || 0) > 0 && (
-                  <div className="flex justify-between"><span className="text-muted-foreground">(-) Discount</span><span className="font-mono text-red-500">-₹{fmt(Number(viewItem.discountTotal))}</span></div>
+                  <div className="flex justify-between"><span className="text-muted-foreground">(-) Discount</span><span className="font-mono text-red-500">-{inr(Number(viewItem.discountTotal))}</span></div>
                 )}
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Taxable Amount</span>
-                  <span className="font-mono">₹{fmt(((viewItem.lineItems as any[]) ?? []).reduce((s, l) => s + Number(l.taxableValue || 0), 0))}</span>
+                  <span className="font-mono">{inr(((viewItem.lineItems as any[]) ?? []).reduce((s, l) => s + Number(l.taxableValue || 0), 0))}</span>
                 </div>
                 {Number(viewItem.taxTotal || 0) > 0 && (
-                  <div className="flex justify-between"><span className="text-muted-foreground">Tax</span><span className="font-mono">₹{fmt(Number(viewItem.taxTotal))}</span></div>
+                  <div className="flex justify-between"><span className="text-muted-foreground">Tax</span><span className="font-mono">{inr(Number(viewItem.taxTotal))}</span></div>
                 )}
                 {Math.abs(Number(viewItem.roundOff || 0)) > 0.001 && (
-                  <div className="flex justify-between"><span className="text-muted-foreground">Round Off</span><span className="font-mono">₹{fmt(Number(viewItem.roundOff))}</span></div>
+                  <div className="flex justify-between"><span className="text-muted-foreground">Round Off</span><span className="font-mono">{inr(Number(viewItem.roundOff))}</span></div>
                 )}
                 <Separator />
-                <div className="flex justify-between font-bold text-base"><span>{(((viewItem as any).otherCharges as any[]) ?? []).length > 0 ? 'Goods Total' : 'Grand Total'}</span><span className="font-mono text-primary">₹{fmt(Number(viewItem.totalAmount))}</span></div>
+                <div className="flex justify-between font-bold text-base"><span>{(((viewItem as any).otherCharges as any[]) ?? []).length > 0 ? 'Goods Total' : 'Grand Total'}</span><span className="font-mono text-primary">{inr(Number(viewItem.totalAmount))}</span></div>
                 {(((viewItem as any).otherCharges as any[]) ?? []).length > 0 && (
                   <>
                     {(((viewItem as any).otherCharges as any[]) ?? []).map((c: any, i: number) => (
-                      <div key={i} className="flex justify-between"><span className="text-muted-foreground">(+) {c.ledgerName || `Ledger #${c.ledgerId}`}</span><span className="font-mono">₹{fmt(Number(c.amount))}</span></div>
+                      <div key={i} className="flex justify-between"><span className="text-muted-foreground">(+) {c.ledgerName || `Ledger #${c.ledgerId}`}</span><span className="font-mono">{inr(Number(c.amount))}</span></div>
                     ))}
                     <Separator />
-                    <div className="flex justify-between font-bold text-base"><span>Total Payable</span><span className="font-mono text-primary">₹{fmt(Number(viewItem.totalAmount) + Number((viewItem as any).otherChargesTotal ?? 0))}</span></div>
+                    <div className="flex justify-between font-bold text-base"><span>Total Payable</span><span className="font-mono text-primary">{inr(Number(viewItem.totalAmount) + Number((viewItem as any).otherChargesTotal ?? 0))}</span></div>
                   </>
                 )}
               </div>

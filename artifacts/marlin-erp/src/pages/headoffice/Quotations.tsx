@@ -28,7 +28,8 @@ import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { DialogClose, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { TransactionDialog, TransactionDialogContent } from '@/components/ui/transaction-dialog';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -68,6 +69,7 @@ import { PageHeader } from '@/components/app/page-header';
 import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
 import { EmptyState } from '@/components/app/empty-state';
 import { TablePager } from '@/components/ui/table-pager';
+import { inr } from '@/lib/currency';
 
 // ── GST math (mirror of Sales.tsx / server buildSaleLines) ────────────────────
 
@@ -434,7 +436,7 @@ export default function Quotations() {
     return saved !== undefined && saved > 0 ? Math.min(master, saved) : master;
   };
   const mrpFloorMessage = (floor: number) =>
-    `Quotation MRP cannot be lower than the Item Master MRP (₹${floor.toFixed(2)}). Increase the MRP or use a discount if you want to quote a lower selling price.`;
+    `Quotation MRP cannot be lower than the Item Master MRP (${inr(floor)}). Increase the MRP or use a discount if you want to quote a lower selling price.`;
 
   // GST state determination (same as Sales)
   const companyState = ((companySettings as any)?.state ?? '').trim().toLowerCase();
@@ -795,7 +797,7 @@ export default function Quotations() {
           <SummaryCard label="Total Quotations" value={totalQuotes.toLocaleString('en-IN')} icon={FileText} loading={isLoading} />
           <SummaryCard
             label="This Page Value"
-            value={`₹${quotes.reduce((s, r) => s + Number(r.totalAmount || 0), 0).toLocaleString('en-IN')}`}
+            value={`${inr(quotes.reduce((s, r) => s + Number(r.totalAmount || 0), 0))}`}
             icon={FileText}
             tone="info"
             sub={`${quotes.length} shown`}
@@ -873,7 +875,7 @@ export default function Quotations() {
                   <TableCell className="text-sm">{q.locationName}</TableCell>
                   <TableCell><StatusBadge status={q.status} /></TableCell>
                   <TableCell className="text-right">
-                    <p className="font-mono font-bold text-primary">₹{Number(q.totalAmount).toLocaleString('en-IN')}</p>
+                    <p className="font-mono font-bold text-primary">{inr(Number(q.totalAmount))}</p>
                   </TableCell>
                   <TableCell className={cn('text-sm', q.status === 'expired' ? 'text-amber-600' : 'text-muted-foreground')}>{fmtDay(q.validTill)}</TableCell>
                   <TableCell className="text-sm text-muted-foreground">{q.salesperson || '—'}</TableCell>
@@ -927,7 +929,7 @@ export default function Quotations() {
           {totalQuotes > 0 && (
             <div className="p-3 border-t border-border flex flex-wrap items-center justify-between gap-3">
               <span className="font-bold text-primary text-sm">
-                Page total: ₹{quotes.reduce((s, r) => s + Number(r.totalAmount || 0), 0).toLocaleString('en-IN')}
+                Page total: {inr(quotes.reduce((s, r) => s + Number(r.totalAmount || 0), 0))}
               </span>
               <TablePager
                 page={page}
@@ -944,8 +946,12 @@ export default function Quotations() {
       </div>
 
       {/* Quotation Dialog */}
-      <Dialog open={isOpen} onOpenChange={v => { setIsOpen(v); if (!v) { setEditItem(null); form.reset(effectiveDefaults); } }}>
-        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto" onOpenAutoFocus={autoFocusFirst}>
+      <TransactionDialog
+        open={isOpen}
+        dirty={form.formState.isDirty}
+        onOpenChange={v => { setIsOpen(v); if (!v) { setEditItem(null); form.reset(effectiveDefaults); } }}
+      >
+        <TransactionDialogContent className="sm:max-w-3xl" onOpenAutoFocus={autoFocusFirst}>
           <DialogHeader><DialogTitle>{editItem ? `Edit Quotation — ${editItem.quotationNumber}` : 'New Quotation'}</DialogTitle></DialogHeader>
           <Form {...form}>
             <form
@@ -1122,14 +1128,14 @@ export default function Quotations() {
                       <Check className="w-4 h-4" />
                       {appliedCoupon.discountType === 'percentage'
                         ? `${appliedCoupon.discountValue}% off`
-                        : `₹${Number(appliedCoupon.discountValue).toLocaleString('en-IN')} off`}
+                        : `${inr(Number(appliedCoupon.discountValue))} off`}
                     </div>
                   )}
                   {watchCouponCode && !appliedCoupon && (
                     preservedBillDiscount !== null && preservedBillDiscount > 0 ? (
                       <div className="flex items-center gap-1.5 px-3 py-2 rounded-md bg-amber-500/10 border border-amber-500/30 text-amber-600 text-sm">
                         <AlertTriangle className="w-3.5 h-3.5" />
-                        Coupon no longer active — keeping the original ₹{preservedBillDiscount.toLocaleString('en-IN')} discount
+                        Coupon no longer active — keeping the original {inr(preservedBillDiscount)} discount
                       </div>
                     ) : (
                       <div className="flex items-center gap-1.5 px-3 py-2 rounded-md bg-destructive/10 border border-destructive/20 text-destructive text-sm">
@@ -1205,7 +1211,7 @@ export default function Quotations() {
                                   <FormItem>
                                     <FormLabel className="text-xs">
                                       MRP (₹){masterMrp > 0 && (
-                                        <span className="text-[10px] text-muted-foreground font-normal ml-1">Item Master ₹{masterMrp.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                                        <span className="text-[10px] text-muted-foreground font-normal ml-1">Item Master {inr(masterMrp)}</span>
                                       )}
                                     </FormLabel>
                                     <FormControl><Input
@@ -1255,7 +1261,7 @@ export default function Quotations() {
                                   unitDisc > 0 ? (
                                     <div className="pt-5">
                                       <p className="text-[10px] text-muted-foreground font-medium">
-                                        Disc ₹{unitDisc.toLocaleString('en-IN', { minimumFractionDigits: 2 })}/unit (existing)
+                                        Disc {inr(unitDisc)}/unit (existing)
                                       </p>
                                     </div>
                                   ) : null
@@ -1278,7 +1284,7 @@ export default function Quotations() {
                                     <FormMessage className="text-[10px]" />
                                     {unitDisc > 0 && unitPrice > 0 && (
                                       <p className="text-[10px] text-emerald-600 font-medium mt-0.5">
-                                        Effective ₹{Math.max(0, unitPrice - unitDisc).toLocaleString('en-IN', { minimumFractionDigits: 2 })}/unit
+                                        Effective {inr(Math.max(0, unitPrice - unitDisc))}/unit
                                       </p>
                                     )}
                                   </FormItem>
@@ -1290,17 +1296,17 @@ export default function Quotations() {
                                 {itemId > 0 ? (
                                   unitPrice > 0 ? (
                                     <>
-                                      <p className="text-xs text-muted-foreground">Subtotal ₹{gst.lineSubtotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</p>
+                                      <p className="text-xs text-muted-foreground">Subtotal {inr(gst.lineSubtotal)}</p>
                                       {taxRate > 0 && (
                                         <p className="text-xs text-amber-500 font-medium">
-                                          {isInterState ? 'IGST' : 'CGST+SGST'} ({taxRate}%) = ₹{gst.taxAmount.toFixed(2)}
+                                          {isInterState ? 'IGST' : 'CGST+SGST'} ({taxRate}%) = {inr(gst.taxAmount)}
                                         </p>
                                       )}
                                       {taxRate === 0 && <p className="text-xs text-muted-foreground/50">No GST</p>}
                                       {disc > 0 && (
-                                        <p className="text-xs text-emerald-600 font-medium">Disc −₹{Math.min(disc, qty * unitPrice).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</p>
+                                        <p className="text-xs text-emerald-600 font-medium">Disc −{inr(Math.min(disc, qty * unitPrice))}</p>
                                       )}
-                                      <p className="font-mono font-bold text-primary text-sm">₹{lineTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</p>
+                                      <p className="font-mono font-bold text-primary text-sm">{inr(lineTotal)}</p>
                                     </>
                                   ) : (
                                     <p className="text-xs text-amber-400 italic">No MRP</p>
@@ -1335,13 +1341,13 @@ export default function Quotations() {
                       {(totals.itemDiscountTotal > 0 || totals.billDiscount > 0) && (
                         <div className="flex justify-between text-muted-foreground">
                           <span>Gross Item Value</span>
-                          <span className="font-mono">₹{totals.grossItemValue.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                          <span className="font-mono">{inr(totals.grossItemValue)}</span>
                         </div>
                       )}
                       {totals.itemDiscountTotal > 0 && (
                         <div className="flex justify-between text-emerald-600 font-medium">
                           <span>Item Discounts (off MRP)</span>
-                          <span className="font-mono">−₹{totals.itemDiscountTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                          <span className="font-mono">−{inr(totals.itemDiscountTotal)}</span>
                         </div>
                       )}
                       {discountsEnabled ? (
@@ -1364,12 +1370,12 @@ export default function Quotations() {
                       ) : Number(form.watch('billDiscount') ?? 0) > 0 ? (
                         <div className="flex justify-between items-center gap-2">
                           <span className="text-emerald-600 font-medium">Bill Discount (pre-tax, existing)</span>
-                          <span className="font-mono text-xs">−₹{Number(form.watch('billDiscount') ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                          <span className="font-mono text-xs">−{inr(Number(form.watch('billDiscount') ?? 0))}</span>
                         </div>
                       ) : null}
                       <div className="flex justify-between text-muted-foreground">
                         <span>Taxable Amount</span>
-                        <span className="font-mono">₹{totals.subtotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                        <span className="font-mono">{inr(totals.subtotal)}</span>
                       </div>
 
                       {totals.taxTotal > 0 && (
@@ -1377,23 +1383,23 @@ export default function Quotations() {
                           {isInterState ? (
                             <div className="flex justify-between">
                               <span className="text-amber-500">IGST (inter-state)</span>
-                              <span className="font-mono text-amber-500">₹{totals.igstTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                              <span className="font-mono text-amber-500">{inr(totals.igstTotal)}</span>
                             </div>
                           ) : (
                             <>
                               <div className="flex justify-between text-muted-foreground">
                                 <span>CGST</span>
-                                <span className="font-mono">₹{totals.cgstTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                                <span className="font-mono">{inr(totals.cgstTotal)}</span>
                               </div>
                               <div className="flex justify-between text-muted-foreground">
                                 <span>SGST</span>
-                                <span className="font-mono">₹{totals.sgstTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                                <span className="font-mono">{inr(totals.sgstTotal)}</span>
                               </div>
                             </>
                           )}
                           <div className="flex justify-between text-xs py-1 px-2 rounded bg-amber-500/8 text-amber-600 border border-amber-500/15">
                             <span className="font-medium">Total GST (indicative — posted only when a sale is made)</span>
-                            <span className="font-mono font-semibold">₹{totals.taxTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                            <span className="font-mono font-semibold">{inr(totals.taxTotal)}</span>
                           </div>
                         </>
                       )}
@@ -1412,13 +1418,13 @@ export default function Quotations() {
                             {appliedCoupon?.discountType === 'percentage' && <span className="text-xs text-muted-foreground ml-1">({appliedCoupon.discountValue}%)</span>}
                             {!appliedCoupon && preservedBillDiscount !== null && preservedBillDiscount > 0 && <span className="text-xs text-muted-foreground ml-1">(original)</span>}
                           </span>
-                          <span className="font-mono">−₹{totals.discountAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                          <span className="font-mono">−{inr(totals.discountAmount)}</span>
                         </div>
                       )}
 
                       <div className="flex justify-between font-bold text-base">
                         <span>Quoted Total</span>
-                        <span className="font-mono text-primary">₹{totals.finalAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                        <span className="font-mono text-primary">{inr(totals.finalAmount)}</span>
                       </div>
                     </div>
                   </div>
@@ -1429,10 +1435,10 @@ export default function Quotations() {
                   {hasItems && (
                     <div className="flex md:hidden items-center justify-between w-full text-sm font-bold">
                       <span>Quoted Total</span>
-                      <span className="font-mono text-primary">₹{totals.finalAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                      <span className="font-mono text-primary">{inr(totals.finalAmount)}</span>
                     </div>
                   )}
-                  <Button variant="outline" type="button" onClick={() => { setIsOpen(false); setEditItem(null); form.reset(effectiveDefaults); }}>Cancel</Button>
+                  <DialogClose asChild><Button variant="outline" type="button">Cancel</Button></DialogClose>
                   <Button type="submit" disabled={(editItem ? updateMutation.isPending : createMutation.isPending) || !watchLocationId || totals.finalAmount === 0}>
                     {editItem
                       ? (updateMutation.isPending ? 'Saving…' : 'Save Changes')
@@ -1442,8 +1448,8 @@ export default function Quotations() {
               </DialogFooter>
             </form>
           </Form>
-        </DialogContent>
-      </Dialog>
+        </TransactionDialogContent>
+      </TransactionDialog>
 
       {/* ── Quick Create Customer — THE shared form (identical to Customers page) ── */}
       <CustomerFormDialog
@@ -1567,20 +1573,20 @@ export default function Quotations() {
                         </div>
                         <div className="mt-2 flex justify-between text-xs text-muted-foreground">
                           <span>
-                            {li.quantity} × ₹{Number(li.unitPrice).toFixed(2)}
+                            {li.quantity} × {inr(Number(li.unitPrice))}
                             {Number(li.masterMrp ?? 0) > 0 && Number(li.unitPrice) > Number(li.masterMrp) && (
-                              <span className="text-sky-600"> (MRP raised from ₹{Number(li.masterMrp).toFixed(2)})</span>
+                              <span className="text-sky-600"> (MRP raised from {inr(Number(li.masterMrp))})</span>
                             )}
                             {Number(li.discount ?? 0) > 0 && (
-                              <span className="text-emerald-600"> − ₹{Number(li.discount).toFixed(2)} disc</span>
+                              <span className="text-emerald-600"> − {inr(Number(li.discount))} disc</span>
                             )}
                           </span>
-                          <span>Taxable: ₹{Number(lineSubtotal).toFixed(2)}</span>
+                          <span>Taxable: {inr(Number(lineSubtotal))}</span>
                         </div>
                         {(li.taxAmount ?? 0) > 0 && (
                           <div className="mt-1 flex justify-between text-xs text-amber-600">
                             <span>{li.taxType === 'igst' ? `IGST ${li.taxRate}%` : `CGST ${(li.taxRate ?? 0) / 2}% + SGST ${(li.taxRate ?? 0) / 2}%`}</span>
-                            <span>₹{Number(li.taxAmount).toFixed(2)}</span>
+                            <span>{inr(Number(li.taxAmount))}</span>
                           </div>
                         )}
                       </div>
@@ -1596,30 +1602,30 @@ export default function Quotations() {
                   return itemDisc > 0 ? (
                     <div className="flex justify-between text-emerald-600">
                       <span>Item Discounts (off MRP)</span>
-                      <span className="font-mono">−₹{itemDisc.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                      <span className="font-mono">−{inr(itemDisc)}</span>
                     </div>
                   ) : null;
                 })()}
                 <div className="flex justify-between text-muted-foreground">
                   <span>Subtotal</span>
-                  <span className="font-mono">₹{Number(viewItem.subtotal ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                  <span className="font-mono">{inr(Number(viewItem.subtotal ?? 0))}</span>
                 </div>
                 {Number(viewItem.taxTotal) > 0 && (
                   <div className="flex justify-between text-amber-600">
                     <span>Total Tax</span>
-                    <span className="font-mono">₹{Number(viewItem.taxTotal).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                    <span className="font-mono">{inr(Number(viewItem.taxTotal))}</span>
                   </div>
                 )}
                 {Number(viewItem.discountTotal ?? 0) > 0 && (
                   <div className="flex justify-between text-emerald-600">
                     <span>Discount{viewItem.couponCode ? ` (${viewItem.couponCode})` : ''}</span>
-                    <span className="font-mono">−₹{Number(viewItem.discountTotal).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                    <span className="font-mono">−{inr(Number(viewItem.discountTotal))}</span>
                   </div>
                 )}
                 <Separator />
                 <div className="flex justify-between font-bold text-base">
                   <span>Quoted Total</span>
-                  <span className="font-mono text-primary">₹{Number(viewItem.totalAmount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                  <span className="font-mono text-primary">{inr(Number(viewItem.totalAmount))}</span>
                 </div>
                 {viewItem.validTill && (
                   <p className="text-xs text-muted-foreground pt-1">This quotation is valid until {fmtDay(viewItem.validTill)}.</p>

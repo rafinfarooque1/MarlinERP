@@ -14,7 +14,8 @@ import { Separator } from '@/components/ui/separator';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { DialogClose, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { TransactionDialog, TransactionDialogContent } from '@/components/ui/transaction-dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHeader, TableRow } from '@/components/ui/table';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
@@ -24,10 +25,9 @@ import { useLocation as useWouter } from 'wouter';
 import { PageHeader } from '@/components/app/page-header';
 import { StatusBadge } from '@/components/app/status-badge';
 import { EmptyState } from '@/components/app/empty-state';
+import { inr } from '@/lib/currency';
 
-function fmt(n: number) {
-  return `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-}
+const fmt = inr;
 
 /** Maps deposit lifecycle to the shared status vocabulary (reconciled→settled). */
 function DepositStatusBadge({ status }: { status: string }) {
@@ -254,8 +254,12 @@ export default function SalesCashBalance() {
       </div>
 
       {/* ── Deposit Dialog ── */}
-      <Dialog open={showDeposit} onOpenChange={setShowDeposit}>
-        <DialogContent className="max-w-md">
+      <TransactionDialog
+        open={showDeposit}
+        dirty={depAmount !== (balance ? String(balance.availableBalance) : '') || depDate !== new Date().toISOString().split('T')[0] || depRef !== '' || depBankId !== '' || depNotes !== ''}
+        onOpenChange={setShowDeposit}
+      >
+        <TransactionDialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Record Cash Deposit</DialogTitle>
           </DialogHeader>
@@ -317,14 +321,14 @@ export default function SalesCashBalance() {
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setShowDeposit(false)}>Cancel</Button>
+            <DialogClose asChild><Button variant="outline">Cancel</Button></DialogClose>
             <Button onClick={handleCreateDeposit} disabled={createDeposit.isPending || !depBankId}>
               <CheckCircle2 className="w-4 h-4 mr-1.5" />
               {createDeposit.isPending ? 'Saving…' : 'Deposit to Bank'}
             </Button>
           </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        </TransactionDialogContent>
+      </TransactionDialog>
     </AppLayout>
   );
 }
