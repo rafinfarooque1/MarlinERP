@@ -75,12 +75,17 @@ const NAME_A = "ZZ Test Freezer A (fixture)";
 const NAME_B = "ZZ Test Freezer B (fixture)";
 const NAME_P = "ZZ Test Parent Freezer (fixture)";
 const NAME_R = "ZZ Test Rack (fixture)";
+const NAME_S = "ZZ Test Shelf (fixture)";
 
-// Remove any leftovers from a previous crashed run (children before parents).
+// Remove any leftovers from a previous crashed run (deepest first: shelves,
+// then racks, then roots — the FK forbids deleting a parent that has kids).
 async function sweepFixtures() {
   const rows = await q(
-    `SELECT id FROM storage_locations WHERE name IN ($1, $2, $3, $4)
-      ORDER BY (parent_id IS NULL)`, [NAME_A, NAME_B, NAME_P, NAME_R]);
+    `SELECT sl.id FROM storage_locations sl
+       LEFT JOIN storage_locations p ON p.id = sl.parent_id
+      WHERE sl.name IN ($1, $2, $3, $4, $5)
+      ORDER BY (p.parent_id IS NOT NULL) DESC, (sl.parent_id IS NOT NULL) DESC`,
+    [NAME_A, NAME_B, NAME_P, NAME_R, NAME_S]);
   for (const r of rows) {
     await q(`DELETE FROM storage_placements WHERE storage_location_id = $1`, [r.id]);
     await q(`DELETE FROM storage_locations WHERE id = $1`, [r.id]);
@@ -89,7 +94,7 @@ async function sweepFixtures() {
 
 await setupUser();
 await sweepFixtures();
-let locA = null, locB = null, locP = null, locR = null;
+let locA = null, locB = null, locP = null, locR = null, locS = null;
 let tb0 = null;
 try {
   console.log("\n[0] Authentication (probe user)");
@@ -243,8 +248,16 @@ try {
   locR = cR.data?.id;
   assert("Create sub-location → 201 with pathLabel", cR.status === 201 && cR.data?.pathLabel === `${NAME_P} › ${NAME_R}`,
     `status=${cR.status} path=${cR.data?.pathLabel}`);
-  const gc = await post("/storage-locations", { warehouseId: WH, name: "ZZ Too Deep", parentId: locR });
-  assert("Grandchild (2 levels deep) → 400", gc.status === 400, `status=${gc.status}`);
+  // Third level (shelf inside the rack) is allowed; a FOURTH level is not.
+  const cS = await post("/storage-locations", { warehouseId: WH, name: NAME_S, parentId: locR });
+  locS = cS.data?.id;
+  assert("Create shelf (3rd level) → 201 with 3-part pathLabel",
+    cS.status === 201 && cS.data?.pathLabel === `${NAME_P} › ${NAME_R} › ${NAME_S}` && cS.data?.depth === 2,
+    `status=${cS.status} path=${cS.data?.pathLabel} depth=${cS.data?.depth}`);
+  const gg = await post("/storage-locations", { warehouseId: WH, name: "ZZ Too Deep", parentId: locS });
+  assert("Great-grandchild (4th level) → 400", gg.status === 400, `status=${gg.status}`);
+  const dupS = await post("/storage-locations", { warehouseId: WH, name: NAME_S.toUpperCase(), parentId: locR });
+  assert("Duplicate shelf name under same rack → 409", dupS.status === 409, `status=${dupS.status}`);
   const dupR = await post("/storage-locations", { warehouseId: WH, name: NAME_R.toUpperCase(), parentId: locP });
   assert("Duplicate name under same parent → 409", dupR.status === 409, `status=${dupR.status}`);
   const rootSameName = await post("/storage-locations", { warehouseId: WH, name: NAME_R });
@@ -256,19 +269,29 @@ try {
   const badParent = await post("/storage-locations", { warehouseId: WH, name: "ZZ Orphan", parentId: 999999 });
   assert("Unknown parent → 404", badParent.status === 404, `status=${badParent.status}`);
 
-  // Move stock into the rack, verify list rollup, then hierarchy guards.
+  // Move stock into the rack AND the shelf, verify list rollups, then guards.
   const mvR = await post("/storage-placements/move", {
     warehouseId: WH, materialType: "item", itemId: ITEM,
     fromStorageLocationId: null, toStorageLocationId: locR, quantity: 1,
   });
   assert("Unassigned → rack (1) → 200", mvR.status === 200, `status=${mvR.status} ${JSON.stringify(mvR.data).slice(0, 120)}`);
+  const mvS = await post("/storage-placements/move", {
+    warehouseId: WH, materialType: "item", itemId: ITEM,
+    fromStorageLocationId: null, toStorageLocationId: locS, quantity: 0.5,
+  });
+  assert("Unassigned → shelf (0.5) → 200", mvS.status === 200, `status=${mvS.status} ${JSON.stringify(mvS.data).slice(0, 120)}`);
   const listS = await get(`/storage-locations?warehouseId=${WH}`);
   const rowP = (listS.data ?? []).find(l => l.id === locP);
   const rowR = (listS.data ?? []).find(l => l.id === locR);
-  assert("Parent rolls up child qty (childPlacedQty=1)", r3(Number(rowP?.childPlacedQty ?? 0)) === 1, `got=${rowP?.childPlacedQty}`);
+  const rowS = (listS.data ?? []).find(l => l.id === locS);
+  assert("Root rolls up child + grandchild qty (childPlacedQty=1.5)", r3(Number(rowP?.childPlacedQty ?? 0)) === 1.5, `got=${rowP?.childPlacedQty}`);
+  assert("Rack rolls up shelf qty (childPlacedQty=0.5)", r3(Number(rowR?.childPlacedQty ?? 0)) === 0.5, `got=${rowR?.childPlacedQty}`);
   assert("Parent childCount = 1", Number(rowP?.childCount) === 1, `got=${rowP?.childCount}`);
   assert("Child carries parentId + pathLabel", rowR?.parentId === locP && rowR?.pathLabel === `${NAME_P} › ${NAME_R}`,
     `parentId=${rowR?.parentId} path=${rowR?.pathLabel}`);
+  assert("Shelf carries parentId + 3-part pathLabel + depth 2",
+    rowS?.parentId === locR && rowS?.pathLabel === `${NAME_P} › ${NAME_R} › ${NAME_S}` && rowS?.depth === 2,
+    `parentId=${rowS?.parentId} path=${rowS?.pathLabel} depth=${rowS?.depth}`);
 
   // Matrix placement name uses the path label
   const mS = await get(`/storage-stock?warehouseId=${WH}`);
@@ -276,25 +299,57 @@ try {
   const pR = rowSM?.placements.find(p => p.storageLocationId === locR);
   assert("Matrix placement shows 'Parent > Rack' label", typeof pR?.name === "string" && pR.name.includes(NAME_P) && pR.name.includes(NAME_R),
     `name=${pR?.name}`);
+  const pS = rowSM?.placements.find(p => p.storageLocationId === locS);
+  assert("Matrix placement shows 'Parent > Rack > Shelf' label",
+    typeof pS?.name === "string" && pS.name === `${NAME_P} > ${NAME_R} > ${NAME_S}`, `name=${pS?.name}`);
+
+  // Live Stock rides the same 3-part label.
+  const stockList3 = await get(`/stock?branchType=warehouse&branchId=${WH}`);
+  const stockRow3 = (Array.isArray(stockList3.data) ? stockList3.data : stockList3.data?.rows ?? [])
+    .find(r => r.materialType === "item" && r.itemId === ITEM && Number(r.branchId) === WH);
+  const slShelf = stockRow3?.storageLocations?.find(p => p.storageLocationId === locS);
+  assert("Live Stock row lists shelf placement with full path",
+    slShelf?.name === `${NAME_P} > ${NAME_R} > ${NAME_S}` && r3(Number(slShelf?.quantity ?? 0)) === 0.5,
+    JSON.stringify(stockRow3?.storageLocations ?? null).slice(0, 250));
 
   const delParentWithChild = await del(`/storage-locations/${locP}`);
   assert("Delete parent with sub-location → 400", delParentWithChild.status === 400, `status=${delParentWithChild.status}`);
 
-  // Disable the PARENT: rack refuses incoming stock (effective disabled) but empties out.
+  // Disable the ROOT: rack AND shelf refuse incoming stock (effective
+  // disabled through the whole ancestor chain) but both still empty out.
   await patch(`/storage-locations/${locP}`, { isDisabled: true });
   const intoChildOfDisabled = await post("/storage-placements/move", {
     warehouseId: WH, materialType: "item", itemId: ITEM,
     fromStorageLocationId: null, toStorageLocationId: locR, quantity: 0.5,
   });
   assert("Move INTO rack of disabled parent → 400", intoChildOfDisabled.status === 400, `status=${intoChildOfDisabled.status}`);
+  const intoShelfOfDisabled = await post("/storage-placements/move", {
+    warehouseId: WH, materialType: "item", itemId: ITEM,
+    fromStorageLocationId: null, toStorageLocationId: locS, quantity: 0.5,
+  });
+  assert("Move INTO shelf of disabled grandparent → 400", intoShelfOfDisabled.status === 400, `status=${intoShelfOfDisabled.status}`);
+  const shelfDisabledInList = await get(`/storage-locations?warehouseId=${WH}`);
+  const rowS2 = (shelfDisabledInList.data ?? []).find(l => l.id === locS);
+  assert("Shelf reports effectiveDisabled while root disabled", rowS2?.effectiveDisabled === true && rowS2?.isDisabled === false,
+    `effective=${rowS2?.effectiveDisabled} own=${rowS2?.isDisabled}`);
   const outOfChild = await post("/storage-placements/move", {
     warehouseId: WH, materialType: "item", itemId: ITEM,
     fromStorageLocationId: locR, toStorageLocationId: null, quantity: 1,
   });
   assert("Empty rack while parent disabled → 200", outOfChild.status === 200, `status=${outOfChild.status}`);
+  const outOfShelf = await post("/storage-placements/move", {
+    warehouseId: WH, materialType: "item", itemId: ITEM,
+    fromStorageLocationId: locS, toStorageLocationId: null, quantity: 0.5,
+  });
+  assert("Empty shelf while root disabled → 200", outOfShelf.status === 200, `status=${outOfShelf.status}`);
   await patch(`/storage-locations/${locP}`, { isDisabled: false });
 
-  // Delete child first, then parent.
+  // Delete deepest first: shelf, then rack, then root.
+  const delRackWithShelf = await del(`/storage-locations/${locR}`);
+  assert("Delete rack with shelf under it → 400", delRackWithShelf.status === 400, `status=${delRackWithShelf.status}`);
+  const delS = await del(`/storage-locations/${locS}`);
+  assert("Delete empty shelf → 204", delS.status === 204, `status=${delS.status}`);
+  if (delS.status === 204) locS = null;
   const delR = await del(`/storage-locations/${locR}`);
   assert("Delete empty rack → 204", delR.status === 204, `status=${delR.status}`);
   if (delR.status === 204) locR = null;
@@ -315,9 +370,9 @@ try {
   assert("Trial balance identical (Dr)", tb1.totalDr === tb0.totalDr, `before=${tb0.totalDr} after=${tb1.totalDr}`);
   assert("Trial balance identical (Cr)", tb1.totalCr === tb0.totalCr, `before=${tb0.totalCr} after=${tb1.totalCr}`);
 } finally {
-  // Cleanup — placements first (FK), then locations (children before parents),
+  // Cleanup — placements first (FK), then locations (deepest before parents),
   // then the probe user.
-  for (const id of [locA, locB, locR, locP].filter(Boolean)) {
+  for (const id of [locA, locB, locS, locR, locP].filter(Boolean)) {
     await q(`DELETE FROM storage_placements WHERE storage_location_id = $1`, [id]);
     await q(`DELETE FROM storage_locations WHERE id = $1`, [id]);
   }

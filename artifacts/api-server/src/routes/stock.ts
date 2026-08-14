@@ -249,10 +249,11 @@ router.get("/stock", requireModuleView(["page:/", "page:/production/item-master"
   });
 
   // Storage placements ride along on warehouse rows so Live Stock can show
-  // WHERE inside the warehouse each quantity sits (freezer → rack). This is
-  // additive display data only — stock_entries stays the quantity truth and
-  // the unplaced remainder is implicit, never stored. Children render as
-  // "Parent > Child" so a rack is never mistaken for a top-level area.
+  // WHERE inside the warehouse each quantity sits (freezer → rack → shelf).
+  // This is additive display data only — stock_entries stays the quantity
+  // truth and the unplaced remainder is implicit, never stored. Descendants
+  // render as "Parent > Child" / "Root > Parent > Child" so a rack or shelf
+  // is never mistaken for a top-level area.
   const placedWhIds = [...new Set(
     enriched.filter(r => String(r.branchType) === 'warehouse').map(r => Number(r.branchId)),
   )];
@@ -260,12 +261,13 @@ router.get("/stock", requireModuleView(["page:/", "page:/production/item-master"
     const { rows: placeRows } = await pool.query(
       `SELECT sp.warehouse_id, sp.material_type, sp.item_id,
               sp.storage_location_id, sp.quantity::numeric AS quantity,
-              sl.name, p.name AS parent_name
+              sl.name, p.name AS parent_name, gp.name AS grandparent_name
          FROM storage_placements sp
          JOIN storage_locations sl ON sl.id = sp.storage_location_id
          LEFT JOIN storage_locations p ON p.id = sl.parent_id
+         LEFT JOIN storage_locations gp ON gp.id = p.parent_id
         WHERE sp.warehouse_id = ANY($1::int[])
-        ORDER BY COALESCE(p.name, sl.name), sl.name`,
+        ORDER BY COALESCE(gp.name, p.name, sl.name), COALESCE(p.name, sl.name), sl.name`,
       [placedWhIds],
     );
     const byKey = new Map<string, unknown[]>();
@@ -274,7 +276,7 @@ router.get("/stock", requireModuleView(["page:/", "page:/production/item-master"
       const list = byKey.get(key) ?? [];
       list.push({
         storageLocationId: pr.storage_location_id,
-        name: pr.parent_name ? `${pr.parent_name} > ${pr.name}` : pr.name,
+        name: [pr.grandparent_name, pr.parent_name, pr.name].filter(Boolean).join(' > '),
         quantity: Number(pr.quantity),
       });
       byKey.set(key, list);

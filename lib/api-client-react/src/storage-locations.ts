@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { customFetch } from './custom-fetch';
 
 /** Storage locations (freezers / cold rooms) inside a warehouse.
- *  One optional level of sub-locations (racks / shelves) via parentId. */
+ *  Up to two levels of sub-locations via parentId (freezer → rack → shelf). */
 export interface StorageLocation {
   id: number;
   warehouseId: number;
@@ -10,16 +10,19 @@ export interface StorageLocation {
   name: string;
   /** null = top-level storage location; set = sub-location (rack/shelf). */
   parentId: number | null;
+  /** Immediate parent's name (rack's freezer, shelf's rack). */
   parentName: string | null;
-  /** "Parent › Name" for sub-locations, plain name for roots. */
+  /** Full path — "Freezer › Rack › Shelf" — plain name for roots. */
   pathLabel: string;
-  /** Number of sub-locations under this root (0 for sub-locations). */
+  /** 0 = root (freezer), 1 = rack, 2 = shelf. */
+  depth: number;
+  /** Number of DIRECT sub-locations under this location. */
   childCount: number;
   isDisabled: boolean;
-  /** Disabled itself OR parent disabled — what actually blocks moves in. */
+  /** Disabled itself OR any ancestor disabled — what actually blocks moves in. */
   effectiveDisabled: boolean;
   placedQty: number;
-  /** Σ placements sitting in this root's sub-locations (0 for sub-locations). */
+  /** Σ placements sitting in this location's descendants (children + grandchildren). */
   childPlacedQty: number;
   itemCount: number;
 }

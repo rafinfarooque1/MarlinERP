@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import {
   useListWarehouses,
   useStorageLocations,
@@ -206,6 +206,48 @@ export default function StorageLocationsTab({ perm }: { perm: Perm }) {
 
   const reconciles = totals.overAssigned === 0;
 
+  // ── One sub-location row (rack at depth 1, shelf at depth 2) ───────────────
+  const SubLocationRow = ({ loc, depth, canAddChild }: { loc: StorageLocation; depth: 1 | 2; canAddChild: boolean }) => (
+    <div className={`flex items-center justify-between gap-2 rounded-md border border-border/70 bg-muted/20 px-2.5 py-1.5 ${depth === 2 ? 'ml-5' : ''} ${loc.isDisabled ? 'opacity-60' : ''}`}>
+      <div className="flex items-center gap-1.5 min-w-0 text-sm">
+        <CornerDownRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+        <span className="font-medium truncate">{loc.name}</span>
+        <span className="text-xs text-muted-foreground shrink-0">
+          {loc.placedQty > 0 ? `${qty3(loc.placedQty)} qty` : 'empty'}
+        </span>
+        {loc.isDisabled && <Badge variant="outline" className="text-[10px] shrink-0">Disabled</Badge>}
+      </div>
+      {(perm.canEdit || perm.canDelete || perm.canAdd) && (
+        <span className="flex items-center gap-0.5 shrink-0">
+          {perm.canAdd && canAddChild && depth === 1 && (
+            <Button variant="ghost" size="icon" className="h-6 w-6" title="Add shelf inside"
+              onClick={() => openAdd(loc)}>
+              <Plus className="w-3 h-3" />
+            </Button>
+          )}
+          {perm.canEdit && (
+            <>
+              <Button variant="ghost" size="icon" className="h-6 w-6" title="Rename"
+                onClick={() => { setEditLoc(loc); setEditName(loc.name); }}>
+                <Pencil className="w-3 h-3" />
+              </Button>
+              <Button variant="ghost" size="icon" className="h-6 w-6" title={loc.isDisabled ? 'Enable' : 'Disable'}
+                onClick={() => toggleDisabled(loc)}>
+                {loc.isDisabled ? <CircleCheck className="w-3 h-3" /> : <Ban className="w-3 h-3" />}
+              </Button>
+            </>
+          )}
+          {perm.canDelete && (
+            <Button variant="ghost" size="icon" className="h-6 w-6 text-destructive" title="Delete"
+              onClick={() => setDeleteLoc(loc)}>
+              <Trash2 className="w-3 h-3" />
+            </Button>
+          )}
+        </span>
+      )}
+    </div>
+  );
+
   // ── One storage-location card (root + its sub-locations) ───────────────────
   const LocationCard = ({ loc }: { loc: StorageLocation }) => {
     const kids = childrenOf.get(loc.id) ?? [];
@@ -261,43 +303,20 @@ export default function StorageLocationsTab({ perm }: { perm: Perm }) {
           </div>
         </div>
 
-        {/* Sub-locations */}
+        {/* Sub-locations — racks under the root, shelves nested under each rack */}
         {kids.length > 0 && (
           <div className="px-4 pb-3 space-y-1">
-            {kids.map(kid => (
-              <div key={kid.id} className={`flex items-center justify-between gap-2 rounded-md border border-border/70 bg-muted/20 px-2.5 py-1.5 ${kid.isDisabled ? 'opacity-60' : ''}`}>
-                <div className="flex items-center gap-1.5 min-w-0 text-sm">
-                  <CornerDownRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                  <span className="font-medium truncate">{kid.name}</span>
-                  <span className="text-xs text-muted-foreground shrink-0">
-                    {kid.placedQty > 0 ? `${qty3(kid.placedQty)} qty` : 'empty'}
-                  </span>
-                  {kid.isDisabled && <Badge variant="outline" className="text-[10px] shrink-0">Disabled</Badge>}
-                </div>
-                {(perm.canEdit || perm.canDelete) && (
-                  <span className="flex items-center gap-0.5 shrink-0">
-                    {perm.canEdit && (
-                      <>
-                        <Button variant="ghost" size="icon" className="h-6 w-6" title="Rename"
-                          onClick={() => { setEditLoc(kid); setEditName(kid.name); }}>
-                          <Pencil className="w-3 h-3" />
-                        </Button>
-                        <Button variant="ghost" size="icon" className="h-6 w-6" title={kid.isDisabled ? 'Enable' : 'Disable'}
-                          onClick={() => toggleDisabled(kid)}>
-                          {kid.isDisabled ? <CircleCheck className="w-3 h-3" /> : <Ban className="w-3 h-3" />}
-                        </Button>
-                      </>
-                    )}
-                    {perm.canDelete && (
-                      <Button variant="ghost" size="icon" className="h-6 w-6 text-destructive" title="Delete"
-                        onClick={() => setDeleteLoc(kid)}>
-                        <Trash2 className="w-3 h-3" />
-                      </Button>
-                    )}
-                  </span>
-                )}
-              </div>
-            ))}
+            {kids.map(kid => {
+              const shelves = childrenOf.get(kid.id) ?? [];
+              return (
+                <Fragment key={kid.id}>
+                  <SubLocationRow loc={kid} depth={1} canAddChild={!loc.isDisabled && !kid.isDisabled} />
+                  {shelves.map(shelf => (
+                    <SubLocationRow key={shelf.id} loc={shelf} depth={2} canAddChild={false} />
+                  ))}
+                </Fragment>
+              );
+            })}
           </div>
         )}
         {perm.canAdd && !loc.isDisabled && kids.length === 0 && (
@@ -490,13 +509,16 @@ export default function StorageLocationsTab({ perm }: { perm: Perm }) {
             <DialogTitle>{addParent ? `Add Sub-location in "${addParent.name}"` : 'Add Storage Location'}</DialogTitle>
             <DialogDescription>
               {addParent
-                ? 'A rack, shelf or section inside this storage location.'
+                ? (addParent.parentId != null
+                    ? 'A shelf or bin inside this rack.'
+                    : 'A rack, shelf or section inside this storage location.')
                 : 'A freezer or cold room inside this warehouse.'}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-2">
             <label className="text-sm font-medium">Name</label>
-            <Input value={addName} onChange={e => setAddName(e.target.value)} placeholder={addParent ? 'e.g. Rack 1' : 'e.g. Freezer 1'}
+            <Input value={addName} onChange={e => setAddName(e.target.value)}
+              placeholder={addParent ? (addParent.parentId != null ? 'e.g. Shelf 1' : 'e.g. Rack 1') : 'e.g. Freezer 1'}
               onKeyDown={e => { if (e.key === 'Enter') submitAdd(); }} autoFocus />
           </div>
           <DialogFooter>

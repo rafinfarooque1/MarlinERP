@@ -12,7 +12,8 @@
  * Design invariants (see routes/storageLocations.ts):
  *  - stock_entries stays the quantity truth; placements only annotate WHERE
  *    stock sits. Unassigned = warehouse total − Σ placements, derived.
- *  - Hierarchy is at most 1 level deep (parent must be a root).
+ *  - Hierarchy is at most 3 levels deep (freezer → rack → shelf); depth is
+ *    validated in the route, not in DDL.
  *  - Name uniqueness is scoped: roots unique per warehouse, children unique
  *    per parent — two partial unique indexes, NOT a COALESCE expression index
  *    (expression indexes break the publish schema differ).

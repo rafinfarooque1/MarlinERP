@@ -223,6 +223,29 @@ export default function ItemTrackingTab() {
     return rows;
   }, [data]);
 
+  // ── Running stock balance per row ───────────────────────────────────────────
+  // Walked BACKWARDS from the summary's current stock (the only trustworthy
+  // anchor): the newest row's balance IS current stock, and each older row's
+  // balance subtracts the effect of the row after it. Anchoring at the new end
+  // means a truncated history never needs a fake "opening balance of zero" —
+  // the oldest visible rows are simply where the visible walk stops.
+  // Effects mirror the summary's exclusion rules: cancelled documents,
+  // GST branch-transfer twins and rejected transfers count 0; accepted
+  // transfers move stock BETWEEN locations, so the global balance is
+  // unchanged (0) for them too.
+  const balances = useMemo(() => {
+    const m = new Map<string, number>();
+    if (!data || !s) return m;
+    let bal = Number(s.currentStock);
+    for (const r of allRows) { // allRows is newest-first
+      m.set(r.key, Math.round(bal * 1000) / 1000);
+      const excluded = r.cancelled || r.isBranchTransfer || r.transferStatus === 'rejected';
+      const effect = excluded || r.qty == null ? 0 : Number(r.qty);
+      bal -= effect; // balance after the NEXT older row
+    }
+    return m;
+  }, [allRows, data, s]);
+
   const counts = useMemo(() => {
     const c: Record<string, number> = {};
     for (const r of allRows) c[r.kind] = (c[r.kind] ?? 0) + 1;
@@ -299,7 +322,11 @@ export default function ItemTrackingTab() {
           ) : null}
 
           {s!.truncated ? (
-            <p className="text-xs text-amber-600">Showing the latest 200 entries per activity type — older history is not included in the totals above.</p>
+            <p className="text-xs text-amber-600">
+              Older history omitted — showing the latest 200 entries per activity type. The totals above cover
+              only these entries. The Balance column is anchored to current stock and walked backwards, so it
+              stays correct for the rows shown; the oldest visible balance is NOT an opening balance.
+            </p>
           ) : null}
 
           {/* Unified date-wise activity list */}
@@ -329,13 +356,16 @@ export default function ItemTrackingTab() {
                   <SortableHead k="ref" sort={sort}>Reference</SortableHead>
                   <SortableHead k="detail" sort={sort}>Details</SortableHead>
                   <SortableHead k="qty" sort={sort} className="text-right">Qty</SortableHead>
+                  <TableHead className="text-right" title="Total stock across all locations after this entry — walked backwards from current stock">
+                    Balance
+                  </TableHead>
                   <SortableHead k="amount" sort={sort} className="text-right">Rate / Amount</SortableHead>
                   <SortableHead k="location" sort={sort}>Location</SortableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {pageRows.length === 0 ? (
-                  <TableRow><TableCell colSpan={7} className="text-center text-muted-foreground py-8">No activity recorded.</TableCell></TableRow>
+                  <TableRow><TableCell colSpan={8} className="text-center text-muted-foreground py-8">No activity recorded.</TableCell></TableRow>
                 ) : pageRows.map(r => (
                   <TableRow key={r.key} className={r.cancelled || r.transferStatus === 'rejected' ? 'opacity-50' : ''}>
                     <TableCell className="whitespace-nowrap">{dateIN(r.date)}</TableCell>
@@ -354,6 +384,12 @@ export default function ItemTrackingTab() {
                       r.qty == null ? '' : r.qty < 0 ? 'text-red-500' : 'text-emerald-600'
                     }`}>
                       {r.qty == null ? qty3(r.moveQty ?? 0) : `${r.qty > 0 ? '+' : r.qty < 0 ? '−' : ''}${qty3(Math.abs(r.qty))}`}
+                    </TableCell>
+                    <TableCell className={`text-right font-mono whitespace-nowrap ${
+                      r.cancelled || r.isBranchTransfer || r.transferStatus === 'rejected' || r.qty == null
+                        ? 'text-muted-foreground' : ''
+                    }`}>
+                      {balances.has(r.key) ? qty3(balances.get(r.key)!) : '—'}
                     </TableCell>
                     <TableCell className="text-right font-mono whitespace-nowrap">
                       {r.amount != null ? money(r.amount) : '—'}

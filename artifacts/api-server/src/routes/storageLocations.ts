@@ -70,13 +70,16 @@ router.get("/storage-locations", requireModuleView(PAGE), async (req, res): Prom
     conds.push(`sl.warehouse_id = ANY($${params.length}::int[])`);
   }
   const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
-  // Roots first, each followed by its children (sorted by the root's name so
-  // families stay together). childPlacedQty rolls sub-location placements up
-  // into the parent card without double counting: every placement row is
-  // counted exactly once (own vs child buckets are disjoint).
+  // Hierarchy is capped at three levels (freezer → rack → shelf), so parent
+  // and grandparent are plain self-joins — no recursion. Families sort
+  // together: root first, then each level-1 child followed by its own
+  // children. childPlacedQty rolls up EVERY descendant placement (children +
+  // grandchildren) without double counting: each placement row belongs to
+  // exactly one bucket (own vs descendant are disjoint).
   const { rows } = await pool.query(
     `SELECT sl.id, sl.warehouse_id, w.name AS warehouse_name, sl.name, sl.disabled_at,
             sl.parent_id, ps.name AS parent_name, ps.disabled_at AS parent_disabled_at,
+            gs.name AS grandparent_name, gs.disabled_at AS grandparent_disabled_at,
             COALESCE(p.placed_qty, 0)::numeric AS placed_qty,
             COALESCE(p.item_count, 0)::int     AS item_count,
             (SELECT COUNT(*) FROM storage_locations c WHERE c.parent_id = sl.id)::int AS child_count,
@@ -84,16 +87,23 @@ router.get("/storage-locations", requireModuleView(PAGE), async (req, res): Prom
               SELECT SUM(cp.quantity) FROM storage_placements cp
                JOIN storage_locations c ON c.id = cp.storage_location_id
               WHERE c.parent_id = sl.id
+                 OR c.parent_id IN (SELECT c2.id FROM storage_locations c2 WHERE c2.parent_id = sl.id)
             ), 0)::numeric AS child_placed_qty
        FROM storage_locations sl
        JOIN warehouses w ON w.id = sl.warehouse_id
        LEFT JOIN storage_locations ps ON ps.id = sl.parent_id
+       LEFT JOIN storage_locations gs ON gs.id = ps.parent_id
        LEFT JOIN (
          SELECT storage_location_id, SUM(quantity) AS placed_qty, COUNT(*) AS item_count
            FROM storage_placements GROUP BY storage_location_id
        ) p ON p.storage_location_id = sl.id
        ${where}
-       ORDER BY w.name, LOWER(COALESCE(ps.name, sl.name)), (sl.parent_id IS NOT NULL), LOWER(sl.name)`, params);
+       ORDER BY w.name,
+                LOWER(COALESCE(gs.name, ps.name, sl.name)),
+                (sl.parent_id IS NOT NULL),
+                LOWER(CASE WHEN sl.parent_id IS NULL THEN '' WHEN ps.parent_id IS NULL THEN sl.name ELSE ps.name END),
+                (ps.parent_id IS NOT NULL),
+                LOWER(sl.name)`, params);
   res.json(rows.map((r: any) => ({
     id: Number(r.id),
     warehouseId: Number(r.warehouse_id),
@@ -101,10 +111,11 @@ router.get("/storage-locations", requireModuleView(PAGE), async (req, res): Prom
     name: String(r.name),
     parentId: r.parent_id == null ? null : Number(r.parent_id),
     parentName: r.parent_name == null ? null : String(r.parent_name),
-    pathLabel: r.parent_name == null ? String(r.name) : `${r.parent_name} › ${r.name}`,
+    pathLabel: [r.grandparent_name, r.parent_name, r.name].filter((x: unknown) => x != null).join(" › "),
+    depth: r.grandparent_name != null ? 2 : r.parent_name != null ? 1 : 0,
     childCount: Number(r.child_count),
     isDisabled: r.disabled_at != null,
-    effectiveDisabled: r.disabled_at != null || r.parent_disabled_at != null,
+    effectiveDisabled: r.disabled_at != null || r.parent_disabled_at != null || r.grandparent_disabled_at != null,
     placedQty: r3(Number(r.placed_qty)),
     childPlacedQty: r3(Number(r.child_placed_qty)),
     itemCount: Number(r.item_count),
@@ -124,20 +135,32 @@ router.post("/storage-locations", requireModuleAction(PAGE, "add"), async (req, 
   if (!wh) { res.status(404).json({ error: "Warehouse not found" }); return; }
   if (wh.disabled) { res.status(400).json({ error: `${wh.name} is disabled — enable the warehouse before adding storage locations.` }); return; }
 
+  // Nesting is capped at THREE levels (freezer → rack → shelf): the parent may
+  // itself be a sub-location, but never a grand-child. Depth is validated on
+  // the parent's own ancestry, so existing two-level data needs no change.
   let parentName: string | null = null;
+  let grandparentName: string | null = null;
   if (parentId !== null) {
     const { rows: [parent] } = await pool.query(
-      `SELECT id, warehouse_id, name, parent_id, disabled_at FROM storage_locations WHERE id = $1`, [parentId]);
+      `SELECT p.id, p.warehouse_id, p.name, p.parent_id, p.disabled_at,
+              gp.name AS gp_name, gp.parent_id AS gp_parent_id, gp.disabled_at AS gp_disabled_at
+         FROM storage_locations p
+         LEFT JOIN storage_locations gp ON gp.id = p.parent_id
+        WHERE p.id = $1`, [parentId]);
     if (!parent || Number(parent.warehouse_id) !== warehouseId) {
       res.status(404).json({ error: "Parent storage location not found in this warehouse" }); return;
     }
-    if (parent.parent_id != null) {
-      res.status(400).json({ error: "Sub-locations can only go one level deep — pick a top-level storage location as the parent." }); return;
+    if (parent.parent_id != null && parent.gp_parent_id != null) {
+      res.status(400).json({ error: "Storage locations can only nest three levels deep (e.g. Freezer → Rack → Shelf) — pick a higher-level location as the parent." }); return;
     }
     if (parent.disabled_at != null) {
       res.status(400).json({ error: `"${parent.name}" is disabled — enable it before adding sub-locations.` }); return;
     }
+    if (parent.gp_disabled_at != null) {
+      res.status(400).json({ error: `"${parent.gp_name}" is disabled — enable it before adding sub-locations inside it.` }); return;
+    }
     parentName = String(parent.name);
+    grandparentName = parent.gp_name == null ? null : String(parent.gp_name);
   }
 
   try {
@@ -153,7 +176,8 @@ router.post("/storage-locations", requireModuleAction(PAGE, "add"), async (req, 
     }).catch(() => {});
     res.status(201).json({
       id: Number(row.id), warehouseId, name, parentId, parentName,
-      pathLabel: parentName ? `${parentName} › ${name}` : name,
+      pathLabel: [grandparentName, parentName, name].filter(Boolean).join(" › "),
+      depth: grandparentName != null ? 2 : parentName != null ? 1 : 0,
       childCount: 0, isDisabled: false, effectiveDisabled: false,
       placedQty: 0, childPlacedQty: 0, itemCount: 0,
     });
@@ -283,13 +307,14 @@ router.get("/storage-stock", requireModuleView(PAGE), async (req, res): Promise<
               SUM(sp.quantity)::numeric AS qty,
               json_agg(json_build_object(
                 'storageLocationId', sp.storage_location_id,
-                'name', CASE WHEN ps.id IS NULL THEN sl.name ELSE ps.name || ' > ' || sl.name END,
+                'name', COALESCE(gs.name || ' > ', '') || COALESCE(ps.name || ' > ', '') || sl.name,
                 'quantity', sp.quantity,
-                'isDisabled', (sl.disabled_at IS NOT NULL OR ps.disabled_at IS NOT NULL)
-              ) ORDER BY LOWER(CASE WHEN ps.id IS NULL THEN sl.name ELSE ps.name || ' > ' || sl.name END)) AS placements
+                'isDisabled', (sl.disabled_at IS NOT NULL OR ps.disabled_at IS NOT NULL OR gs.disabled_at IS NOT NULL)
+              ) ORDER BY LOWER(COALESCE(gs.name || ' > ', '') || COALESCE(ps.name || ' > ', '') || sl.name)) AS placements
          FROM storage_placements sp
          JOIN storage_locations sl ON sl.id = sp.storage_location_id
          LEFT JOIN storage_locations ps ON ps.id = sl.parent_id
+         LEFT JOIN storage_locations gs ON gs.id = ps.parent_id
         WHERE sp.warehouse_id = $1
         GROUP BY sp.material_type, sp.item_id
      ), u AS (
@@ -367,13 +392,17 @@ router.post("/storage-placements/move", requireModuleAction(PAGE, "edit"), async
 
     // Both endpoint locations must belong to THIS warehouse. Destination must
     // be active; a disabled source stays movable so it can be emptied out.
-    // Effective disabled = own flag OR the parent's flag (disabling a freezer
-    // freezes its racks too, without touching the child rows).
+    // Effective disabled = own flag OR any ancestor's flag (disabling a
+    // freezer freezes its racks AND shelves too, without touching the child
+    // rows). The hierarchy is capped at three levels, so grandparent is the
+    // deepest ancestor possible.
     const locIds = [fromId, toId].filter((x): x is number => x !== null);
     const { rows: locs } = await client.query(
-      `SELECT sl.id, sl.name, sl.disabled_at, ps.disabled_at AS parent_disabled_at
+      `SELECT sl.id, sl.name, sl.disabled_at, ps.disabled_at AS parent_disabled_at,
+              gs.disabled_at AS grandparent_disabled_at
          FROM storage_locations sl
          LEFT JOIN storage_locations ps ON ps.id = sl.parent_id
+         LEFT JOIN storage_locations gs ON gs.id = ps.parent_id
         WHERE sl.id = ANY($1::int[]) AND sl.warehouse_id = $2 FOR UPDATE OF sl`, [locIds, warehouseId]);
     const locById = new Map(locs.map((l: any) => [Number(l.id), l]));
     for (const lid of locIds) {
@@ -381,7 +410,7 @@ router.post("/storage-placements/move", requireModuleAction(PAGE, "edit"), async
     }
     if (toId !== null) {
       const dest = locById.get(toId)!;
-      if (dest.disabled_at != null || dest.parent_disabled_at != null) {
+      if (dest.disabled_at != null || dest.parent_disabled_at != null || dest.grandparent_disabled_at != null) {
         await client.query("ROLLBACK");
         res.status(400).json({ error: `"${dest.name}" is disabled — enable it before moving stock in.` });
         return;

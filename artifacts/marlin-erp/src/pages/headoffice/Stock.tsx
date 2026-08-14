@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useLocation } from 'wouter';
 import { usePaginatedStock, useListWarehouses, useListOutlets, useListStockBatches, type StockBatch } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Search, BarChart3, Download, AlertTriangle, ChevronRight, ChevronDown, Layers, ShieldOff } from 'lucide-react';
+import { Search, BarChart3, Download, AlertTriangle, ChevronRight, ShieldOff } from 'lucide-react';
 import { downloadCSV } from '@/lib/download';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { Badge } from '@/components/ui/badge';
@@ -21,6 +21,7 @@ import { TableSkeleton } from '@/components/app/loading-skeletons';
 import { Boxes, Wallet, Snowflake, PackageSearch } from 'lucide-react';
 import StorageLocationsTab from './StorageLocationsTab';
 import ItemTrackingTab from './ItemTrackingTab';
+import StockItemDetailSheet from './StockItemDetailSheet';
 
 /**
  * Path-driven tabs — the URL is the single source of truth for the active tab
@@ -39,7 +40,6 @@ export const PATH_TABS: Record<string, keyof typeof TAB_PATHS> = {
 };
 
 const money = (n: number) => `₹${(Number(n) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-const dateIN = (d: string | null) => (d ? new Date(d).toLocaleDateString('en-IN') : '—');
 
 const MAT_TYPE_LABELS: Record<string, string> = {
   item:        'Item Name (SKU)',
@@ -55,16 +55,6 @@ function ItemTypeBadge({ type }: { type?: string }) {
   return <Badge variant="outline" className="text-xs text-emerald-500 border-emerald-500/30">Item Name (SKU)</Badge>;
 }
 
-function ExpiryBadge({ batch }: { batch: StockBatch }) {
-  if (batch.status === 'expired')
-    return <Badge variant="destructive" className="text-[10px]">Expired {Math.abs(batch.daysToExpiry ?? 0)}d ago</Badge>;
-  if (batch.status === 'near_expiry')
-    return <Badge className="text-[10px] bg-amber-500/10 text-amber-600 border-amber-500/20">{batch.daysToExpiry}d left</Badge>;
-  if (batch.status === 'no_expiry')
-    return <span className="text-xs text-muted-foreground">—</span>;
-  return <Badge variant="outline" className="text-[10px] text-emerald-500 border-emerald-500/30">{batch.daysToExpiry}d</Badge>;
-}
-
 export default function Stock() {
   const perm = usePermission('page:/headoffice/stock');
   const [location, navigate] = useLocation();
@@ -75,7 +65,10 @@ export default function Stock() {
   const [materialType,     setMaterialType]     = useState<string>('all');
   const [search,           setSearch]           = useState('');
   const [debouncedSearch,  setDebouncedSearch]  = useState('');
-  const [expanded,         setExpanded]         = useState<Set<string>>(new Set());
+  // Identity of the row whose detail sheet is open — `kind:branchType:branchId:itemId`.
+  // Stored as a key (not the row object) so a background refetch keeps the
+  // sheet fed with fresh data instead of a stale snapshot.
+  const [detailKey,        setDetailKey]        = useState<string | null>(null);
   const { data: warehouses = [] } = useListWarehouses();
   const { data: outlets    = [] } = useListOutlets();
   const { outletsEnabled } = useOutletsEnabled();
@@ -104,7 +97,8 @@ export default function Stock() {
   // dashes. Absent means hidden: if the answer has not arrived yet, showing
   // nothing is the safe direction.
   const canSeeValue = (stockPage as any)?.canViewValuation === true;
-  // +1 vs. the money-visible column count for the new "Storage" column.
+  // Item, Type, Location, Storage, Qty, Reserved, Available, [Value], Status,
+  // trailing detail-chevron.
   const COLS = canSeeValue ? 10 : 9;
   const totalRows  = stockPage?.total ?? 0;
 
@@ -142,11 +136,14 @@ export default function Stock() {
   });
   const branchOptions = branchType === 'warehouse' ? warehouses : branchType === 'outlet' ? outlets : [];
 
-  const toggle = (key: string) => setExpanded(prev => {
-    const next = new Set(prev);
-    if (next.has(key)) next.delete(key); else next.add(key);
-    return next;
-  });
+  // Resolve the open detail row from CURRENT data. If a refetch dropped the
+  // row (filters changed, stock moved), the sheet simply closes.
+  const detailRow = useMemo(() => {
+    if (!detailKey) return null;
+    return (stock as any[]).find(s =>
+      `${s.materialType ?? 'item'}:${s.branchType}:${s.branchId}:${s.itemId}` === detailKey) ?? null;
+  }, [detailKey, stock]);
+  const detailBatches = detailKey ? (batchMap.get(detailKey) ?? []) : [];
 
   const totalValue = filtered.reduce((s, r) => s + Number(r.stockValue || 0), 0);
 
@@ -293,7 +290,6 @@ export default function Stock() {
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
-                <TableHead className="w-8" />
                 <SortableHead k="itemName" sort={sort}>Item</SortableHead>
                 <SortableHead k="materialType" sort={sort}>Item Type</SortableHead>
                 <SortableHead k="branchName" sort={sort}>Location</SortableHead>
@@ -303,36 +299,26 @@ export default function Stock() {
                 <SortableHead k="available" sort={sort} className="text-right">Available</SortableHead>
                 {canSeeValue && <SortableHead k="stockValue" sort={sort} className="text-right">Value</SortableHead>}
                 <TableHead className="text-right">Status</TableHead>
+                <TableHead className="w-8" />
               </TableRow>
             </TableHeader>
             <TableBody>
               {sorted.map((s, i) => {
                 const kind     = (s.materialType ?? 'item') as string;
                 const isItem   = kind === 'item';
-                const rowKey   = `${kind}:${s.branchType}:${s.branchId}:${s.itemId}:${i}`;
                 const batchKey = `${kind}:${s.branchType}:${s.branchId}:${s.itemId}`;
+                const rowKey   = `${batchKey}:${i}`;
                 const rowBatches = batchMap.get(batchKey) ?? [];
-                const hasLots  = rowBatches.length > 0;
-                const tracked    = rowBatches.reduce((sum, b) => sum + Number(b.quantity), 0);
-                const untracked  = Math.round((Number(s.quantity) - tracked) * 1000) / 1000;
                 const low  = !!s.lowStock;
                 const worst = rowBatches.some(b => b.status === 'expired') ? 'expired'
                   : rowBatches.some(b => b.status === 'near_expiry') ? 'near_expiry' : null;
-                const isOpen = expanded.has(rowKey);
 
                 return (
-                  <Fragment key={rowKey}>
                     <TableRow
-                      className={`hover:bg-muted/10 ${hasLots ? 'cursor-pointer' : ''} ${low ? 'bg-red-500/5' : ''}`}
-                      onClick={() => hasLots && toggle(rowKey)}
+                      key={rowKey}
+                      className={`hover:bg-muted/10 cursor-pointer ${low ? 'bg-red-500/5' : ''}`}
+                      onClick={() => setDetailKey(batchKey)}
                     >
-                      <TableCell className="pr-0">
-                        {hasLots
-                          ? (isOpen
-                              ? <ChevronDown  className="w-4 h-4 text-muted-foreground" />
-                              : <ChevronRight className="w-4 h-4 text-muted-foreground" />)
-                          : <span className="w-4 h-4 block" />}
-                      </TableCell>
                       <TableCell className="font-semibold">{s.itemName}</TableCell>
                       <TableCell><ItemTypeBadge type={s.materialType} /></TableCell>
                       <TableCell className="text-muted-foreground">{s.branchName || 'Head Office'}</TableCell>
@@ -380,84 +366,10 @@ export default function Stock() {
                             : <Badge variant="outline" className="text-xs text-muted-foreground">In stock</Badge>}
                         </div>
                       </TableCell>
+                      <TableCell className="pl-0 pr-3">
+                        <ChevronRight className="w-4 h-4 text-muted-foreground" />
+                      </TableCell>
                     </TableRow>
-
-                    {/* Expanded lot detail — every product kind that has lots */}
-                    {isOpen && hasLots && (
-                      <TableRow className="bg-muted/5 hover:bg-muted/5">
-                        <TableCell />
-                        <TableCell colSpan={COLS - 1} className="py-3">
-                          {rowBatches.length === 0 && untracked <= 0 ? (
-                            <p className="text-xs text-muted-foreground flex items-center gap-2">
-                              <Layers className="w-3.5 h-3.5" /> No batch records for this stock
-                            </p>
-                          ) : (
-                            <div className="rounded-lg border border-border overflow-hidden max-w-3xl">
-                              <table className="w-full text-xs">
-                                <thead>
-                                  <tr className="bg-muted/20 text-muted-foreground">
-                                    <th className="text-left px-3 py-1.5 font-medium">Batch</th>
-                                    <th className="text-left px-3 py-1.5 font-medium">Location</th>
-                                    <th className="text-left px-3 py-1.5 font-medium">Mfg</th>
-                                    <th className="text-left px-3 py-1.5 font-medium">Expiry</th>
-                                    <th className="text-left px-3 py-1.5 font-medium">Shelf Life</th>
-                                    <th className="text-right px-3 py-1.5 font-medium">Qty</th>
-                                    <th className="text-right px-3 py-1.5 font-medium">Rsvd</th>
-                                    <th className="text-right px-3 py-1.5 font-medium">Avail</th>
-                                    <th className="text-right px-3 py-1.5 font-medium">MRP</th>
-                                    {canSeeValue && <th className="text-right px-3 py-1.5 font-medium">Unit Cost</th>}
-                                    {canSeeValue && <th className="text-right px-3 py-1.5 font-medium">Value</th>}
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  {rowBatches.map(b => {
-                                    const hasReserved = Number(b.reserved || 0) > 0;
-                                    const toneMap: Record<string, string> = {
-                                      critical: 'bg-red-500/10 text-red-600 border-red-500/20',
-                                      warn: 'bg-amber-500/10 text-amber-600 border-amber-500/20',
-                                      caution: 'bg-yellow-500/10 text-yellow-600 border-yellow-500/20',
-                                      ok: 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20',
-                                      none: 'bg-muted/20 text-muted-foreground border-muted',
-                                    };
-                                    return (
-                                      <tr key={b.id} className="border-t border-border/60">
-                                        <td className="px-3 py-1.5 font-mono">{b.batchNumber}</td>
-                                        <td className="px-3 py-1.5 text-muted-foreground text-[11px]">{b.branchName}</td>
-                                        <td className="px-3 py-1.5">{dateIN(b.mfgDate)}</td>
-                                        <td className="px-3 py-1.5">{dateIN(b.expiryDate)}</td>
-                                        <td className="px-3 py-1.5">
-                                          <Badge className={`text-[10px] ${toneMap[b.tone] ?? toneMap.none}`}>{b.bucketLabel}</Badge>
-                                        </td>
-                                        <td className="px-3 py-1.5 text-right font-mono">{Number(b.quantity).toLocaleString('en-IN')}</td>
-                                        <td className="px-3 py-1.5 text-right font-mono">
-                                          {hasReserved ? (
-                                            <span className="text-amber-600 font-semibold">{Number(b.reserved).toLocaleString('en-IN')}</span>
-                                          ) : (
-                                            <span className="text-muted-foreground">—</span>
-                                          )}
-                                        </td>
-                                        <td className="px-3 py-1.5 text-right font-mono font-semibold">{Number(b.available).toLocaleString('en-IN')}</td>
-                                        <td className="px-3 py-1.5 text-right font-mono">{b.mrp != null ? money(b.mrp) : '—'}</td>
-                                        {canSeeValue && <td className="px-3 py-1.5 text-right font-mono">{Number(b.unitCost ?? 0) > 0 ? money(Number(b.unitCost)) : '—'}</td>}
-                                        {canSeeValue && <td className="px-3 py-1.5 text-right font-mono">{money(Number(b.value ?? 0))}</td>}
-                                      </tr>
-                                    );
-                                  })}
-                                  {untracked > 0 && (
-                                    <tr className="border-t border-border/60 text-muted-foreground">
-                                      <td className="px-3 py-1.5 italic" colSpan={5}>Untracked (no batch record)</td>
-                                      <td className="px-3 py-1.5 text-right font-mono">{untracked.toLocaleString('en-IN')}</td>
-                                      <td colSpan={canSeeValue ? 5 : 3} />
-                                    </tr>
-                                  )}
-                                </tbody>
-                              </table>
-                            </div>
-                          )}
-                        </TableCell>
-                      </TableRow>
-                    )}
-                  </Fragment>
                 );
               })}
             </TableBody>
@@ -476,6 +388,14 @@ export default function Stock() {
             </div>
           )}
         </div>
+
+        {/* Structured item detail — opened by clicking any stock row */}
+        <StockItemDetailSheet
+          row={detailRow}
+          batches={detailBatches}
+          canSeeValue={canSeeValue}
+          onOpenChange={open => { if (!open) setDetailKey(null); }}
+        />
           </TabsContent>
 
           <TabsContent value="storage" className="space-y-6 mt-0">
