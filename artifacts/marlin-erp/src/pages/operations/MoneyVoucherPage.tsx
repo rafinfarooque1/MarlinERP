@@ -30,6 +30,8 @@ import {
   AlertTriangle, Lock, Printer, FileDown, Pencil, RotateCcw, Save, X,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { useQueryClient } from '@tanstack/react-query';
+import { invalidateDashboard } from '@/lib/invalidateDashboard';
 import { Form, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Textarea } from '@/components/ui/textarea';
 import { SystemReceiptDeleteDialog } from '@/components/accounts/SystemReceiptDeleteDialog';
@@ -156,6 +158,9 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
   const createM = (isReceipt ? useCreateReceipt : useCreatePayment)();
   const updateM = (isReceipt ? useUpdateReceipt : useUpdatePayment)();
   const deleteM = (isReceipt ? useDeleteReceipt : useDeletePayment)();
+  // Money vouchers move cash/bank — the dashboard's Payments/Receipts and
+  // balance tiles must refresh without a manual reload.
+  const queryClient = useQueryClient();
   const { data: allAccounts = [] } = useListAccountsFlat();
   const { data: cashBankAccounts = [] } = useCashBankLedgersFlat();
   const { data: me } = useGetMe();
@@ -300,6 +305,7 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
       updateM.mutate({ id: editing.id, ...toBody(values) } as any, {
         onSuccess: (r: any) => {
           toast.success(`${C.title} ${editing.voucherNumber} updated`);
+          invalidateDashboard(queryClient);
           setLastSaved({ id: editing.id, voucherNumber: editing.voucherNumber });
           resetForm();
           if (printTab) void pdfIntoTab(printTab, kind, editing.id);
@@ -319,6 +325,7 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
       createM.mutate(body, {
         onSuccess: (r: any) => {
           toast.success(`${C.title} ${r?.voucherNumber ?? ''} saved`);
+          invalidateDashboard(queryClient);
           if (r?.id) setLastSaved({ id: r.id, voucherNumber: r.voucherNumber ?? String(r.id) });
           resetForm();
           if (printTab && r?.id) void pdfIntoTab(printTab, kind, r.id);
@@ -732,7 +739,7 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
           <DialogFooter>
             <Button variant="outline" onClick={() => setDeleteTarget(null)}>Cancel</Button>
             <Button variant="destructive" disabled={deleteM.isPending} onClick={() => deleteM.mutate(deleteTarget.id, {
-              onSuccess: () => { toast.success('Voucher deleted'); setDeleteTarget(null); if (editing?.id === deleteTarget.id) resetForm(); },
+              onSuccess: () => { toast.success('Voucher deleted'); invalidateDashboard(queryClient); setDeleteTarget(null); if (editing?.id === deleteTarget.id) resetForm(); },
               onError: (e: any) => toast.error(e?.data?.error || e.message || 'Delete failed'),
             })}>Delete</Button>
           </DialogFooter>

@@ -13,7 +13,7 @@ import { usePermission } from '@/lib/usePermission';
 import { downloadCSV } from '@/lib/download';
 import {
   fmt, pdfMoney, fmtDate, titleCase, periodLabel,
-  useDateRange, RangeBar, ReportPicker, SummaryCards, RTable, ExportButtons, exportReportPdf,
+  useDateRange, RangeBar, ReportPicker, SummaryCards, RTable, ExportButtons, exportReportPdf, reportViewFromUrl,
   type RangeState, type Col,
 } from '../shared';
 
@@ -287,7 +287,8 @@ export default function PartiesSection({ canCustomers = true, canVendors = true 
 }) {
   const { canDownload } = usePermission('page:/reports/sales');
   const range = useDateRange('fy');
-  const [report, setReport] = useState<PartyReport>('customerStatement');
+  const [report, setReport] = useState<PartyReport>(() =>
+    reportViewFromUrl<PartyReport>(['customerStatement', 'vendorStatement', 'receivables', 'payables']) ?? 'customerStatement');
   // Sub-tabs are permission-gated: customer-side needs 'Customers', vendor-side 'Vendors'
   const isCustomerSide = (r: PartyReport) => r === 'customerStatement' || r === 'receivables';
   const active: PartyReport = (isCustomerSide(report) ? canCustomers : canVendors)

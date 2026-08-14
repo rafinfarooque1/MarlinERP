@@ -11,7 +11,7 @@ import { usePermission } from '@/lib/usePermission';
 import { downloadCSV } from '@/lib/download';
 import {
   fmt, num, pdfMoney, fmtDate, periodLabel,
-  useDateRange, RangeBar, ReportPicker, SummaryCards, RTable, ExportButtons, exportReportPdf,
+  useDateRange, RangeBar, ReportPicker, SummaryCards, RTable, ExportButtons, exportReportPdf, reportViewFromUrl,
   type RangeState, type Col,
 } from '../shared';
 
@@ -226,7 +226,8 @@ function ByMaterialReport({ range, canDownload }: { range: RangeState; canDownlo
 export default function PurchasesSection() {
   const { canDownload } = usePermission('page:/reports/sales');
   const range = useDateRange('month');
-  const [report, setReport] = useState<PurchaseReport>('register');
+  const [report, setReport] = useState<PurchaseReport>(() =>
+    reportViewFromUrl<PurchaseReport>(['register', 'byVendor', 'byMaterial']) ?? 'register');
   return (
     <div className="space-y-4">
       <ReportPicker

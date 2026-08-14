@@ -241,10 +241,11 @@ router.get("/reports/fin/trial-balance", requireModuleView(REPORTS_KEY), async (
 // report opens on something useful instead of an empty ledger picker.
 // ═══════════════════════════════════════════════════════════════════════════
 
-async function bookReport(req: any, rootCode: string) {
+async function bookReport(req: any, rootCodes: string | string[]) {
   const { from, to } = range(req);
+  const codes = Array.isArray(rootCodes) ? rootCodes : [rootCodes];
   const chart = await loadChart();
-  const rootIds = chart.idsUnder([rootCode]);
+  const rootIds = chart.idsUnder(codes);
 
   const requested = Number(req.query.ledgerId);
   const scopeIds = Number.isFinite(requested) && requested > 0 && rootIds.has(requested)
@@ -299,7 +300,11 @@ async function bookReport(req: any, rootCode: string) {
     fromDate: from, toDate: to,
     scope: Number.isFinite(requested) && requested > 0 && rootIds.has(requested)
       ? { ledgerId: requested, name: chart.byId.get(requested)?.name ?? "" }
-      : { ledgerId: null, name: rootCode === "STD-BANK" ? "All bank accounts" : "All cash accounts" },
+      : {
+          ledgerId: null,
+          name: codes.length > 1 ? "All cash & bank accounts"
+            : codes[0] === "STD-BANK" ? "All bank accounts" : "All cash accounts",
+        },
     openingBalance: opening,
     entries,
     totalReceipts: r2(entries.reduce((s, e) => s + e.receipt, 0)),
@@ -318,6 +323,15 @@ router.get("/reports/fin/cash", requireModuleView(REPORTS_KEY), async (req, res)
 router.get("/reports/fin/bank", requireModuleView(REPORTS_KEY), async (req, res): Promise<void> => {
   if (!headOfficeOnly(req)) { res.json({ entries: [], accounts: [] }); return; }
   res.json(await bookReport(req, "STD-BANK"));
+});
+
+// Combined movement book over BOTH subtrees. This is the drill target for the
+// dashboard Payments/Receipts tiles, whose moneyFlows figures sum cash AND
+// bank debits/credits for the range — the Cash Book alone would exclude every
+// bank movement and could never reconcile with those tiles.
+router.get("/reports/fin/cash-bank", requireModuleView(REPORTS_KEY), async (req, res): Promise<void> => {
+  if (!headOfficeOnly(req)) { res.json({ entries: [], accounts: [] }); return; }
+  res.json(await bookReport(req, ["STD-CASH", "STD-BANK"]));
 });
 
 // ═══════════════════════════════════════════════════════════════════════════

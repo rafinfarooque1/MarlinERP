@@ -879,6 +879,9 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
     profit: {
       gross: accounting ? accounting.profit.gross : null,
       net: accounting ? accounting.profit.net : null,
+      // COGS from the same P&L summary — the tile equals the statement's
+      // "Cost of Goods Sold" line for the same range and location.
+      cogs: accounting ? accounting.profit.cogs : null,
       companyWide: !postingLoc,
     },
     // Bank only — physical cash stays in the separate `cash` figures, matching

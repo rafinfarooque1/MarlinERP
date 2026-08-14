@@ -8,7 +8,7 @@
  * brand-styled). Money in PDFs uses "Rs." — the helvetica base-14 font has no
  * ₹ glyph. CSV/UI keep ₹.
  */
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -37,6 +37,40 @@ export function periodLabel(from?: string, to?: string): string {
   if (from) return `From ${f(from)}`;
   if (to) return `Up to ${f(to)}`;
   return 'All time';
+}
+
+// ── Dashboard drill-down params ───────────────────────────────────────────────
+// A dashboard KPI tile opens its source report pre-filtered to the tile's own
+// range: /reports/<cat>?view=<subreport>&range=<preset>[&from=&to=][#anchor].
+// Location is NOT carried in the URL — the global header location selector
+// already follows the user between pages (x-location headers on every read),
+// which is exactly the location the dashboard figures used.
+// Sections read these params once on mount (useDateRange / reportViewFromUrl),
+// then strip them so in-page changes aren't resurrected by refresh/back.
+const DRILL_KEYS = ['range', 'from', 'to', 'view'] as const;
+
+function readDrillParam(key: (typeof DRILL_KEYS)[number]): string | null {
+  return new URLSearchParams(window.location.search).get(key);
+}
+
+/** Remove consumed drill params from the URL (keeps any #anchor). Idempotent. */
+export function stripDrillParams(): void {
+  const url = new URL(window.location.href);
+  let had = false;
+  for (const k of DRILL_KEYS) if (url.searchParams.has(k)) { url.searchParams.delete(k); had = true; }
+  if (!had) return;
+  const qs = url.searchParams.toString();
+  window.history.replaceState(null, '', `${url.pathname}${qs ? `?${qs}` : ''}${url.hash}`);
+}
+
+/**
+ * Initial sub-report for a section root, taken from a `?view=` drill param when
+ * it names one of this section's reports. Call inside a useState initializer —
+ * the param is stripped after mount by useDateRange's effect.
+ */
+export function reportViewFromUrl<T extends string>(valid: readonly T[]): T | undefined {
+  const v = readDrillParam('view');
+  return v !== null && (valid as readonly string[]).includes(v) ? (v as T) : undefined;
 }
 
 // ── Date range state ──────────────────────────────────────────────────────────
@@ -110,9 +144,17 @@ export interface RangeState {
 }
 
 export function useDateRange(initial: RangePreset = 'month'): RangeState {
-  const [preset, setPreset] = useState<RangePreset>(initial);
-  const [customFrom, setCustomFrom] = useState('');
-  const [customTo, setCustomTo] = useState('');
+  // A dashboard drill-down can override the initial preset via ?range=
+  // (plus ?from/?to when the preset is 'custom'); read once, then strip.
+  const [preset, setPreset] = useState<RangePreset>(() => {
+    const r = readDrillParam('range');
+    return r !== null && PRESETS.some((p) => p.value === r) ? (r as RangePreset) : initial;
+  });
+  const [customFrom, setCustomFrom] = useState(() =>
+    readDrillParam('range') === 'custom' ? (readDrillParam('from') ?? '') : '');
+  const [customTo, setCustomTo] = useState(() =>
+    readDrillParam('range') === 'custom' ? (readDrillParam('to') ?? '') : '');
+  useEffect(() => { stripDrillParams(); }, []);
   // FY presets follow the company's configured FY start month (defaults to
   // April). Cached by react-query, so this costs one fetch per session.
   const { data: settings } = useGetCompanySettings();

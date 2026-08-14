@@ -1,8 +1,12 @@
 import { useMemo, useRef, useState, useLayoutEffect } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import {
   useGetDashboardBi,
   useAssetSummary,
+  getStockAlerts,
+  customFetch,
   type DashboardBiFilters,
+  type ReceivablesAging,
 } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { usePermission } from '@/lib/usePermission';
@@ -11,7 +15,9 @@ import {
   Card, CardContent, CardHeader, CardTitle, CardDescription,
 } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
+import { toast } from 'sonner';
 import { PageHeader } from '@/components/app/page-header';
 import { EmptyState } from '@/components/app/empty-state';
 import {
@@ -19,7 +25,7 @@ import {
   Landmark, Trophy, Users, AlertTriangle, Clock, MapPin,
   Warehouse, Store, ArrowUpRight, ArrowDownRight, Wallet,
   Receipt, PieChart, BarChart3, Banknote, HandCoins,
-  LayoutDashboard, type LucideIcon,
+  LayoutDashboard, Share2, Loader2, Hourglass, ChevronRight, type LucideIcon,
 } from 'lucide-react';
 import { useLocation } from 'wouter';
 import {
@@ -206,7 +212,9 @@ function Empty({ message }: { message: string }) {
 
 export default function Dashboard() {
   const dashPerm = usePermission('page:/');
-  const range = useDateRange('month');
+  // The dashboard is the owner's daily console — it opens on Today. The
+  // RangeBar keeps every other preset one tap away.
+  const range = useDateRange('today');
   // Location comes from the shared header GlobalLocationSelector — no local picker.
   const { locationState } = useLocationContext();
 
@@ -264,7 +272,74 @@ export default function Dashboard() {
   const mf = bi?.moneyFlows;
 
   const [, navigate] = useLocation();
-  const drill = (anchor: string) => () => navigate(`/reports/financial#${anchor}`);
+  // Every KPI card drills into its source report carrying the dashboard's own
+  // date range (?view= picks the sub-report, ?range=/from/to seed useDateRange
+  // in the section — both read once on mount, then stripped). Location is NOT
+  // in the URL: the global header location selector follows the user between
+  // pages and is exactly the location context these figures were computed
+  // under, so the target report opens on the same slice by construction.
+  const drillQs = (view: string) => {
+    const p = new URLSearchParams({ view, range: range.preset });
+    if (range.preset === 'custom') {
+      if (range.customFrom) p.set('from', range.customFrom);
+      if (range.customTo) p.set('to', range.customTo);
+    }
+    return p.toString();
+  };
+  const drillTo = (path: string, view: string, anchor = '') => () =>
+    navigate(`${path}?${drillQs(view)}${anchor ? `#${anchor}` : ''}`);
+  const drill = (anchor: string) => drillTo('/reports/financial', 'pnl', anchor);
+
+  // ── Export / Share: capture the dashboard as one PNG (client-side) ────────
+  // Rendered off the live DOM with html2canvas (lazy-loaded — it's only paid
+  // for on tap). Mobile browsers get the native share sheet (WhatsApp etc.);
+  // everywhere else the image downloads.
+  const captureRef = useRef<HTMLDivElement>(null);
+  const [sharing, setSharing] = useState(false);
+  const shareDashboard = async () => {
+    const el = captureRef.current;
+    if (!el) {
+      // Should be unreachable — the button lives inside the captured div.
+      console.error('[dashboard] share: capture root not mounted');
+      toast.error('Could not capture the dashboard image');
+      return;
+    }
+    if (sharing) return;
+    console.debug('[dashboard] share: capturing…');
+    setSharing(true);
+    try {
+      // html-to-image renders via SVG <foreignObject>, so the BROWSER paints
+      // the clone — modern color functions (Tailwind v4 emits oklab/oklch,
+      // which html2canvas could not parse) work for free.
+      const { toBlob } = await import('html-to-image');
+      const blob = await toBlob(el, {
+        backgroundColor: getComputedStyle(document.body).backgroundColor || '#ffffff',
+        pixelRatio: Math.min(2, Math.max(1, window.devicePixelRatio || 1)),
+        cacheBust: true,
+      });
+      if (!blob) throw new Error('empty canvas');
+      const file = new File([blob], `dashboard-${new Date().toISOString().slice(0, 10)}.png`, { type: 'image/png' });
+      if (typeof navigator.canShare === 'function' && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: 'Business Dashboard' });
+      } else {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = file.name;
+        a.click();
+        URL.revokeObjectURL(url);
+        toast.success('Dashboard image downloaded');
+      }
+    } catch (e: any) {
+      // The user closing the share sheet is not an error.
+      if (e?.name !== 'AbortError') {
+        console.error('[dashboard] share failed', e);
+        toast.error('Could not capture the dashboard image');
+      }
+    } finally {
+      setSharing(false);
+    }
+  };
 
   // Fixed two-per-row pair layout (owner's spec), identical on desktop and
   // mobile: Sales|Purchases, Inventory|Expenses, Payables|Receivables,
@@ -276,11 +351,11 @@ export default function Dashboard() {
 
   const summaryCards: SummaryCard[] = [
     // ── Row 1: Sales · Purchases ────────────────────────────────────────────
-    { label: 'Sales', value: fmt(s?.total ?? 0), tone: 'pos' },
-    { label: 'Purchases', value: fmt(bi?.purchases.total ?? 0) },
+    { label: 'Sales', value: fmt(s?.total ?? 0), tone: 'pos', onClick: drillTo('/reports/sales', 'register') },
+    { label: 'Purchases', value: fmt(bi?.purchases.total ?? 0), onClick: drillTo('/reports/purchases', 'register') },
     // ── Row 2: Inventory · Expenses ─────────────────────────────────────────
     ...(hasInventory
-      ? [{ label: 'Inventory Value', value: fmt(bi!.inventory.valuation ?? 0), tone: 'info' as CardTone }]
+      ? [{ label: 'Inventory Value', value: fmt(bi!.inventory.valuation ?? 0), tone: 'info' as CardTone, onClick: drillTo('/reports/inventory', 'valuation') }]
       : []),
     // Expenses and the balance tiles come from the accounting postings, which
     // carry no location. The API returns null for a single-location login
@@ -300,6 +375,10 @@ export default function Dashboard() {
       // When Inventory is permission-hidden, Expenses takes the whole row so
       // the later pairs (Payables|Receivables etc.) stay aligned.
       className: hasInventory ? undefined : 'md:col-span-2',
+      // The tile is Direct + Indirect expenses off the P&L build, so it drills
+      // into the P&L's own "Total Expenses" memo line — never the operational
+      // expense report, which measures location expenses (a different figure).
+      onClick: drillTo('/reports/financial', 'pnl', 'pl-expenses'),
     },
     // ── Row 3: Payables · Receivables ───────────────────────────────────────
     // Balance Sheet positions taken from the accounting ledgers, so they carry
@@ -318,39 +397,58 @@ export default function Dashboard() {
       hint: (bi?.payables as any)?.salaryPayable != null
         ? `Suppliers ${fmt(bi!.payables.total ?? 0)} · Salary ${fmt((bi!.payables as any).salaryPayable)} · Rent ${fmt((bi!.payables as any).rentPayable ?? 0)}`
         : undefined,
+      // allPayables spans trade creditors + accrued salary + accrued rent, so
+      // the Balance Sheet liabilities table (which shows all three lines) is
+      // the report that equals it — vendor-only Payables Ageing matches just
+      // the Suppliers figure in the hint.
+      onClick: drillTo('/reports/financial', 'balanceSheet', 'bs-liabilities'),
     },
     {
       label: 'Receivables',
       value: bi?.receivables?.total == null ? '—' : fmt(bi.receivables.total),
       tone: bi?.receivables?.total == null ? 'default' : (bi?.receivables?.overdue ?? 0) > 0 ? 'warn' : 'info',
+      onClick: drillTo('/reports/parties', 'receivables'),
     },
     // ── Row 4: Payments · Receipts ──────────────────────────────────────────
-    // Period money out / in over the cash and bank books; the hint splits the
-    // figure by book, so it always reconciles with the number above it.
+    // Period money out / in over the cash AND bank books; the hint splits the
+    // figure by book, so it always reconciles with the number above it. Both
+    // tiles drill into the combined Cash & Bank book — the Cash Book alone
+    // excludes bank movements and could never equal these figures.
     {
       label: 'Payments',
       value: mf == null ? '—' : fmt(mf.totalOut),
       tone: mf == null ? 'default' : mf.totalOut > 0 ? 'neg' : 'default',
       hint: mf == null ? undefined : `Cash ${fmt(mf.cashOut)} · Bank ${fmt(mf.bankOut)}`,
+      onClick: drillTo('/reports/financial', 'cashBank'),
     },
     {
       label: 'Receipts',
       value: mf == null ? '—' : fmt(mf.totalIn),
       tone: mf == null ? 'default' : mf.totalIn > 0 ? 'pos' : 'default',
       hint: mf == null ? undefined : `Cash ${fmt(mf.cashIn)} · Bank ${fmt(mf.bankIn)}`,
+      onClick: drillTo('/reports/financial', 'cashBank'),
     },
     // ── Row 5: Cash · Bank ──────────────────────────────────────────────────
     {
       label: 'Cash Balance',
       value: bi?.cash?.balance == null ? '—' : fmt(bi.cash.balance),
       tone: bi?.cash?.balance == null ? 'default' : bi.cash.balance >= 0 ? 'pos' : 'neg',
+      onClick: drillTo('/reports/financial', 'cash'),
     },
     {
       label: 'Bank Balance',
       value: bi?.bank?.balance == null ? '—' : fmt(bi.bank.balance),
       tone: bi?.bank?.balance == null ? 'default' : bi.bank.balance >= 0 ? 'pos' : 'neg',
+      onClick: drillTo('/reports/financial', 'bank'),
     },
-    // ── Row 6: GP · NP — click either to open the Profit & Loss report ──────
+    // ── Row 6: COGS · GP — both read the P&L's own summary, never a re-sum ──
+    {
+      label: 'COGS',
+      value: pf?.cogs == null ? '—' : fmt(pf.cogs),
+      tone: 'default',
+      hint: 'Cost of Goods Sold · tap for P&L',
+      onClick: drill('pl-cogs'),
+    },
     {
       label: 'GP',
       value: pf?.gross == null ? '—' : fmt(pf.gross),
@@ -358,12 +456,14 @@ export default function Dashboard() {
       hint: 'Gross Profit · tap for P&L',
       onClick: drill('pl-gross-profit'),
     },
+    // ── Row 7: NP — the bottom line takes the full row ──────────────────────
     {
       label: 'NP',
       value: pf?.net == null ? '—' : fmt(pf.net),
       tone: pf?.net == null ? 'default' : pf.net >= 0 ? 'pos' : 'neg',
       hint: 'Net Profit · tap for P&L',
       onClick: drill('pl-net-profit'),
+      className: 'md:col-span-2',
     },
   ];
 
@@ -374,10 +474,10 @@ export default function Dashboard() {
   // Payments|Receipts, Cash|Bank, GP|NP; when Inventory is permission-hidden,
   // Expenses spans its full row so every later semantic pair stays intact.
   const mobileCards: MobileKpi[] = [
-    { label: 'Sales', icon: TrendingUp, value: fmt(s?.total ?? 0), tone: 'pos' },
-    { label: 'Purchases', icon: ShoppingCart, value: fmt(bi?.purchases.total ?? 0) },
+    { label: 'Sales', icon: TrendingUp, value: fmt(s?.total ?? 0), tone: 'pos', onClick: drillTo('/reports/sales', 'register') },
+    { label: 'Purchases', icon: ShoppingCart, value: fmt(bi?.purchases.total ?? 0), onClick: drillTo('/reports/purchases', 'register') },
     ...(hasInventory
-      ? [{ label: 'Inventory', icon: Boxes, value: fmt(bi!.inventory.valuation ?? 0), tone: 'info' as CardTone }]
+      ? [{ label: 'Inventory', icon: Boxes, value: fmt(bi!.inventory.valuation ?? 0), tone: 'info' as CardTone, onClick: drillTo('/reports/inventory', 'valuation') }]
       : []),
     {
       label: 'Expenses',
@@ -392,6 +492,7 @@ export default function Dashboard() {
           ]
         : undefined,
       spanTwo: !hasInventory,
+      onClick: drillTo('/reports/financial', 'pnl', 'pl-expenses'),
     },
     {
       label: 'Payables',
@@ -405,12 +506,14 @@ export default function Dashboard() {
             { label: 'Rent', value: rup((bi!.payables as any).rentPayable) },
           ]
         : undefined,
+      onClick: drillTo('/reports/financial', 'balanceSheet', 'bs-liabilities'),
     },
     {
       label: 'Receivables',
       icon: ArrowDownRight,
       value: bi?.receivables?.total == null ? '—' : fmt(bi.receivables.total),
       tone: bi?.receivables?.total == null ? 'default' : (bi?.receivables?.overdue ?? 0) > 0 ? 'warn' : 'info',
+      onClick: drillTo('/reports/parties', 'receivables'),
     },
     {
       label: 'Payments',
@@ -423,6 +526,7 @@ export default function Dashboard() {
             { label: 'Cash', value: rup(mf.cashOut) },
             { label: 'Bank', value: rup(mf.bankOut) },
           ],
+      onClick: drillTo('/reports/financial', 'cashBank'),
     },
     {
       label: 'Receipts',
@@ -435,18 +539,28 @@ export default function Dashboard() {
             { label: 'Cash', value: rup(mf.cashIn) },
             { label: 'Bank', value: rup(mf.bankIn) },
           ],
+      onClick: drillTo('/reports/financial', 'cashBank'),
     },
     {
       label: 'Cash',
       icon: Wallet,
       value: bi?.cash?.balance == null ? '—' : fmt(bi.cash.balance),
       tone: bi?.cash?.balance == null ? 'default' : bi.cash.balance >= 0 ? 'pos' : 'neg',
+      onClick: drillTo('/reports/financial', 'cash'),
     },
     {
       label: 'Bank',
       icon: Landmark,
       value: bi?.bank?.balance == null ? '—' : fmt(bi.bank.balance),
       tone: bi?.bank?.balance == null ? 'default' : bi.bank.balance >= 0 ? 'pos' : 'neg',
+      onClick: drillTo('/reports/financial', 'bank'),
+    },
+    {
+      label: 'COGS',
+      icon: Boxes,
+      value: pf?.cogs == null ? '—' : fmt(pf.cogs),
+      desc: 'Cost of Goods Sold',
+      onClick: drill('pl-cogs'),
     },
     {
       label: 'GP',
@@ -463,22 +577,29 @@ export default function Dashboard() {
       tone: pf?.net == null ? 'default' : pf.net >= 0 ? 'pos' : 'neg',
       desc: 'Net Profit',
       onClick: drill('pl-net-profit'),
+      spanTwo: true,
     },
   ];
 
   return (
     <AppLayout>
-      <div className="space-y-6">
+      <div className="space-y-6" ref={captureRef}>
 
         {/* ── Header ─────────────────────────────────────────────────────── */}
         <PageHeader
           title="Business Dashboard"
           icon={LayoutDashboard}
           actions={
-            <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 px-3 py-1">
-              <span className="w-2 h-2 rounded-full bg-primary mr-2 animate-pulse" />
-              Live Sync Active
-            </Badge>
+            <div className="flex items-center gap-2">
+              <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 px-3 py-1 max-md:hidden">
+                <span className="w-2 h-2 rounded-full bg-primary mr-2 animate-pulse" />
+                Live Sync Active
+              </Badge>
+              <Button variant="outline" size="sm" onClick={shareDashboard} disabled={sharing} data-testid="button-share-dashboard">
+                {sharing ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Share2 className="w-4 h-4 mr-1.5" />}
+                Share
+              </Button>
+            </div>
           }
         >
           <p className="text-muted-foreground flex items-center gap-1.5 text-sm">
@@ -500,7 +621,7 @@ export default function Dashboard() {
         {/* ── Summary cards ──────────────────────────────────────────────── */}
         {isLoading ? (
           <div className="grid grid-cols-2 gap-2.5 md:gap-3">
-            {[...Array(12)].map((_, i) => <Skeleton key={i} className="h-24 md:h-[68px] rounded-xl md:rounded-lg" />)}
+            {[...Array(14)].map((_, i) => <Skeleton key={i} className="h-24 md:h-[68px] rounded-xl md:rounded-lg" />)}
           </div>
         ) : (
           <>
@@ -735,8 +856,177 @@ export default function Dashboard() {
             )}
           </SectionCard>
         </div>
+
+        {/* ── Receivables ageing + stock alerts ───────────────────────────── */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <AgeingSnapshot asOf={range.to || undefined} onOpen={drillTo('/reports/parties', 'receivables')} />
+          <StockAlertsCard
+            expiringSoonCount={bi?.inventory.expiringSoonCount ?? 0}
+            onOpenReorder={drillTo('/reports/inventory', 'reorder')}
+            onOpenExpiry={drillTo('/reports/inventory', 'near_expiry')}
+          />
+        </div>
       </div>
     </AppLayout>
+  );
+}
+
+/**
+ * Receivables ageing snapshot — reads the SAME endpoint as the Parties →
+ * Receivables report (as-of the dashboard range end), so every figure here
+ * equals that report opened from the card. Hidden entirely for users who
+ * can't open that report (the endpoint would 403 for them anyway).
+ */
+function AgeingSnapshot({ asOf, onOpen }: { asOf?: string; onOpen: () => void }) {
+  const outstandingPerm = usePermission('page:/outstanding');
+  const customersPerm = usePermission('page:/customers');
+  const canView = outstandingPerm.canView || customersPerm.canView;
+  const { locationState } = useLocationContext();
+  // The endpoint follows the global x-location headers, so the header context
+  // must be part of the key or a location switch would serve a stale slice.
+  // First element mirrors getReceivablesAgingQueryKey() — the existing
+  // returns/receipts invalidations refresh this widget too.
+  const locKey = JSON.stringify(locationFilterParams(locationState));
+  const { data, isLoading } = useQuery({
+    queryKey: ['/api/outstanding/receivables', asOf ?? '', locKey],
+    queryFn: () => customFetch<ReceivablesAging>(`/api/outstanding/receivables${asOf ? `?asOf=${asOf}` : ''}`),
+    enabled: canView,
+  });
+  if (!canView) return null;
+
+  const t = data?.totals;
+  const buckets = [
+    { label: '0–30 d', value: t?.b0_30 ?? 0 },
+    { label: '31–60 d', value: t?.b31_60 ?? 0 },
+    { label: '61–90 d', value: t?.b61_90 ?? 0 },
+    { label: '> 90 d', value: t?.b90p ?? 0 },
+  ];
+  const top = (data?.customers ?? [])
+    .filter((c) => c.netDue > 0)
+    .sort((a, b) => b.netDue - a.netDue)
+    .slice(0, 5);
+  const topMax = Math.max(0, ...top.map((c) => c.netDue));
+
+  return (
+    <SectionCard
+      title="Receivables Ageing"
+      icon={<Hourglass className="w-5 h-5 text-amber-600" />}
+      description={data ? `Net due ${fmt(t?.netDue ?? 0)} as of ${fmtDate(data.asOf)}` : undefined}
+    >
+      {isLoading ? (
+        <div className="space-y-3">{[...Array(4)].map((_, i) => <Skeleton key={i} className="h-8" />)}</div>
+      ) : !data ? (
+        <Empty message="No receivables data" />
+      ) : (
+        <div className="space-y-3">
+          <div className="grid grid-cols-4 gap-2">
+            {buckets.map((b) => (
+              <div key={b.label} className="rounded-lg border border-border bg-muted/10 p-2 text-center min-w-0">
+                <p className="text-[10px] text-muted-foreground whitespace-nowrap">{b.label}</p>
+                <p className="text-xs font-bold font-mono truncate" title={fmt(b.value)}>{compactINR(fmt(b.value))}</p>
+              </div>
+            ))}
+          </div>
+          {top.length === 0 ? (
+            <p className="text-sm text-muted-foreground text-center py-3">Nothing outstanding — all collected.</p>
+          ) : (
+            <div className="space-y-2">
+              {top.map((c) => (
+                <BarRow
+                  key={c.customerId}
+                  label={c.name}
+                  sub={c.b90p > 0 ? `${fmt(c.b90p)} over 90 d` : undefined}
+                  value={c.netDue}
+                  max={topMax}
+                  color={c.b90p > 0 ? 'hsl(var(--destructive))' : 'hsl(var(--chart-2))'}
+                  valueLabel={fmt(c.netDue)}
+                />
+              ))}
+            </div>
+          )}
+          <Button variant="ghost" size="sm" className="w-full justify-between" onClick={onOpen}>
+            Open receivables report
+            <ChevronRight className="w-4 h-4" />
+          </Button>
+        </div>
+      )}
+    </SectionCard>
+  );
+}
+
+/**
+ * Low-stock + near-expiry alerts — item-level detail behind the Inventory
+ * card's alert counts, from the existing /dashboard/stock-alerts endpoint
+ * (same LBAC + view-location scoping as every other dashboard figure).
+ */
+function StockAlertsCard({ expiringSoonCount, onOpenReorder, onOpenExpiry }: {
+  expiringSoonCount: number;
+  onOpenReorder: () => void;
+  onOpenExpiry: () => void;
+}) {
+  const { locationState } = useLocationContext();
+  const locKey = JSON.stringify(locationFilterParams(locationState));
+  const { data, isLoading } = useQuery({
+    // Same first element as the generated getGetStockAlertsQueryKey() so the
+    // shared /api/dashboard invalidation predicate refreshes this widget.
+    queryKey: ['/api/dashboard/stock-alerts', locKey],
+    queryFn: () => getStockAlerts(),
+  });
+  const alerts = data ?? [];
+
+  return (
+    <SectionCard
+      title="Stock Alerts"
+      icon={<AlertTriangle className="w-5 h-5 text-destructive" />}
+      description="Below reorder level, plus items expiring within 30 days"
+    >
+      {isLoading ? (
+        <div className="space-y-3">{[...Array(4)].map((_, i) => <Skeleton key={i} className="h-8" />)}</div>
+      ) : (
+        <div className="space-y-3">
+          {alerts.length === 0 ? (
+            <p className="text-sm text-muted-foreground text-center py-3">No items below reorder level.</p>
+          ) : (
+            <div className="space-y-2">
+              {alerts.slice(0, 6).map((a, i) => (
+                <div key={`${a.itemId}-${a.branchName}-${i}`} className="flex items-center justify-between gap-2 p-2 rounded-lg border border-border bg-muted/10">
+                  <div className="min-w-0">
+                    <p className="font-medium text-sm truncate">{a.itemName || `Item #${a.itemId}`}</p>
+                    <p className="text-[10px] text-muted-foreground truncate">{a.branchName}</p>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <p className="font-bold text-sm font-mono text-destructive">{num(a.quantity ?? 0)}</p>
+                    {(a as any).reorderLevel != null && (
+                      <p className="text-[10px] text-muted-foreground">reorder at {num((a as any).reorderLevel)}</p>
+                    )}
+                  </div>
+                </div>
+              ))}
+              {alerts.length > 6 && (
+                <p className="text-[11px] text-muted-foreground text-center">+{alerts.length - 6} more in the reorder report</p>
+              )}
+            </div>
+          )}
+          <div className="flex items-center justify-between gap-2 p-2 rounded-lg border border-border bg-muted/10">
+            <div className="flex items-center gap-2 min-w-0">
+              <Clock className="w-4 h-4 text-amber-600 shrink-0" />
+              <span className="text-sm truncate">Expiring ≤ 30 days</span>
+            </div>
+            <span className={`font-bold text-sm font-mono ${expiringSoonCount > 0 ? 'text-amber-600' : ''}`}>{num(expiringSoonCount)}</span>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <Button variant="ghost" size="sm" className="justify-between" onClick={onOpenReorder}>
+              Reorder report
+              <ChevronRight className="w-4 h-4" />
+            </Button>
+            <Button variant="ghost" size="sm" className="justify-between" onClick={onOpenExpiry}>
+              Near-expiry report
+              <ChevronRight className="w-4 h-4" />
+            </Button>
+          </div>
+        </div>
+      )}
+    </SectionCard>
   );
 }
 

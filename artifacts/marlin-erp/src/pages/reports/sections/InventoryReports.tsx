@@ -16,7 +16,7 @@ import { usePermission } from '@/lib/usePermission';
 import { downloadCSV } from '@/lib/download';
 import {
   fmt, num, pdfMoney, fmtDate, titleCase,
-  useDateRange, RangeBar, ReportPicker, SummaryCards, LocationBadge, RTable, ExportButtons, exportReportPdf,
+  useDateRange, RangeBar, ReportPicker, SummaryCards, LocationBadge, RTable, ExportButtons, exportReportPdf, reportViewFromUrl,
   periodLabel, type Col,
 } from '../shared';
 
@@ -877,7 +877,9 @@ export default function InventorySection() {
   // table of ₹0.00 — a figure that reads as "stock is worthless" rather than
   // "you may not see this". Hide them instead; the transfer registers stay.
   const canSeeValuation = usePermission('page:/headoffice/inventory-reports').canView;
-  const [report, setReport] = useState<InvReport>(canSeeValuation ? 'valuation' : 'transfers');
+  const [report, setReport] = useState<InvReport>(() =>
+    reportViewFromUrl<InvReport>(['valuation', 'near_expiry', 'expired', 'movement', 'reorder', 'transfers', 'gst_transfers'])
+    ?? (canSeeValuation ? 'valuation' : 'transfers'));
   const options: { value: InvReport; label: string }[] = [
     ...(canSeeValuation ? COST_REPORTS : []),
     { value: 'transfers', label: 'Transfer Register' },

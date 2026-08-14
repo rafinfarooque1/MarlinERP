@@ -1,4 +1,6 @@
-@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Space+Mono:ital,wght@0,400;0,700;1,400;1,700&display=swap');
+/* Outfit + Space Mono load from index.html with crossorigin="anonymous" (a CSS
+   @import sheet is CORS-opaque, which broke font embedding in the dashboard
+   image capture). */
 @import 'tailwindcss';
 @import 'tw-animate-css';
 @plugin "@tailwindcss/typography";

@@ -31,13 +31,13 @@ import { downloadCSV } from '@/lib/download';
 import {
   fmt, num, pdfMoney, periodLabel, fmtDate,
   useDateRange, useLocationFilter, RangeBar, LocationFilter, ReportPicker, SummaryCards, RTable,
-  ExportButtons,
+  ExportButtons, reportViewFromUrl,
   type RangeState, type LocationFilterState, type LocationOption, type Col, type ReportDoc,
 } from '../shared';
 
 type FinReport =
   | 'pnl' | 'balanceSheet' | 'trialBalance' | 'dayBook' | 'ledgers'
-  | 'cash' | 'bank' | 'gst' | 'expenses' | 'salary' | 'books';
+  | 'cash' | 'bank' | 'cashBank' | 'gst' | 'expenses' | 'salary' | 'books';
 
 const MONEY_COL = { label: 'Amount', align: 'right' as const, width: 1.4 };
 
@@ -414,20 +414,25 @@ function PnlReport({ range, loc, canDownload }: { range: RangeState; loc: Locati
     { name: 'Add: Direct Expenses', amount: pl.expenses.directExpenses.total },
     { name: 'Goods Available for Sale', amount: goodsAvailable, kind: 'sub' },
     { name: 'Less: Closing Stock', amount: pl.incomes.closingStock, less: true },
-    { name: 'Cost of Goods Sold (COGS)', amount: s?.costOfGoodsSold ?? 0, kind: 'sub' },
+    { name: 'Cost of Goods Sold (COGS)', amount: s?.costOfGoodsSold ?? 0, kind: 'sub', id: 'pl-cogs' },
     { name: `Gross ${(s?.grossProfit ?? 0) >= 0 ? 'Profit' : 'Loss'} (GP)`, amount: Math.abs(s?.grossProfit ?? 0), kind: 'total', id: 'pl-gross-profit' },
     { name: 'Add: Other Income', amount: s?.otherIncome ?? 0 },
     { name: 'Less: Indirect Expenses', amount: otherIndirect, less: true },
     { name: 'Less: Financial Charges', amount: financialCharges, less: true },
     { name: 'Less: Depreciation', amount: depreciation, less: true },
+    // Memo subtotal like COGS above: Direct + Indirect expenses, the exact
+    // figure the dashboard Expenses tile shows (which drills to #pl-expenses).
+    // Both addends are the statement's own group totals, never a re-sum.
+    { name: 'Total Expenses (Direct + Indirect)', amount: pl.expenses.directExpenses.total + pl.expenses.indirectExpenses.total, kind: 'sub', id: 'pl-expenses' },
     { name: `Net ${(s?.netProfit ?? 0) >= 0 ? 'Profit' : 'Loss'} (NP)`, amount: Math.abs(s?.netProfit ?? 0), kind: 'total', id: 'pl-net-profit' },
   ] : [];
 
-  // Dashboard GP/NP tiles link here with #pl-gross-profit / #pl-net-profit.
+  // Dashboard COGS/GP/NP tiles link here with #pl-cogs / #pl-gross-profit /
+  // #pl-net-profit.
   useEffect(() => {
     if (isLoading) return undefined;
     const h = window.location.hash.slice(1);
-    if (h !== 'pl-gross-profit' && h !== 'pl-net-profit') return undefined;
+    if (h !== 'pl-gross-profit' && h !== 'pl-net-profit' && h !== 'pl-cogs' && h !== 'pl-expenses') return undefined;
     const el = document.getElementById(h);
     if (!el) return undefined;
     el.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -607,6 +612,19 @@ function BalanceSheetReport({ range, loc, canDownload }: { range: RangeState; lo
   const { options, loading: locLoading } = useLocationOptions();
   const { data, isLoading } = useFinancialStatements(range, loc);
   const bs = data?.balanceSheet;
+
+  // Dashboard Payables tile links here with #bs-liabilities — same scroll +
+  // highlight treatment as the P&L anchors.
+  useEffect(() => {
+    if (isLoading) return undefined;
+    if (window.location.hash.slice(1) !== 'bs-liabilities') return undefined;
+    const el = document.getElementById('bs-liabilities');
+    if (!el) return undefined;
+    el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    el.classList.add('bg-primary/10');
+    const t = setTimeout(() => el.classList.remove('bg-primary/10'), 2500);
+    return () => clearTimeout(t);
+  }, [isLoading]);
   const locLabel = loc.key ? (options.find((o) => `${o.type}:${o.id}` === loc.key)?.name ?? loc.key) : COMPANY_WIDE;
 
   const liabilityLines: Line[] = bs ? [
@@ -684,7 +702,10 @@ function BalanceSheetReport({ range, loc, canDownload }: { range: RangeState; lo
       ]} />
 
       <div className="grid lg:grid-cols-2 gap-4">
-        <div className="space-y-2">
+        {/* The dashboard Payables tile links here with #bs-liabilities: its
+            figure is Sundry Creditors + Salary Payable + Rent Payable, the
+            three liability lines shown in this table. */}
+        <div className="space-y-2" id="bs-liabilities">
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-semibold text-muted-foreground">Liabilities</h3>
             <DisclosureControls expandAll={liaCol.expandAll} collapseAll={liaCol.collapseAll} disabled={isLoading || !liaCol.hasCollapsible} />
@@ -912,12 +933,12 @@ interface BookPayload {
   companyLevel?: CompanyLevel | null;
 }
 
-function BookReport({ kind, range, loc, canDownload }: { kind: 'cash' | 'bank'; range: RangeState; loc: LocationFilterState; canDownload: boolean }) {
+function BookReport({ kind, range, loc, canDownload }: { kind: 'cash' | 'bank' | 'cash-bank'; range: RangeState; loc: LocationFilterState; canDownload: boolean }) {
   const [ledgerId, setLedgerId] = useState(0);
   const { options, loading: locLoading } = useLocationOptions();
   const { data, isLoading } = useReport<BookPayload>(`/api/reports/fin/${kind}`, qs(range, { ledgerId, locationType: loc.type, locationId: loc.id }));
   const rows = data?.entries ?? [];
-  const label = kind === 'cash' ? 'Cash' : 'Bank';
+  const label = kind === 'cash' ? 'Cash' : kind === 'bank' ? 'Bank' : 'Cash & Bank';
 
   const doc = (): ReportDoc => ({
     title: `${label} Book`,
@@ -1361,7 +1382,8 @@ export default function FinancialSection() {
   const { canDownload } = usePermission('page:/reports/sales');
   const range = useDateRange('fy');
   const loc = useLocationFilter();
-  const [report, setReport] = useState<FinReport>('pnl');
+  const [report, setReport] = useState<FinReport>(() =>
+    reportViewFromUrl<FinReport>(['pnl', 'balanceSheet', 'trialBalance', 'dayBook', 'ledgers', 'cash', 'bank', 'cashBank', 'gst', 'expenses', 'salary', 'books']) ?? 'pnl');
   const cap = { canDownload };
   return (
     <div className="space-y-4">
@@ -1374,6 +1396,7 @@ export default function FinancialSection() {
           { value: 'dayBook', label: 'Day Book' },
           { value: 'cash', label: 'Cash' },
           { value: 'bank', label: 'Bank' },
+          { value: 'cashBank', label: 'Cash & Bank' },
           { value: 'gst', label: 'GST' },
           { value: 'expenses', label: 'Expenses' },
           { value: 'salary', label: 'Salary' },
@@ -1388,6 +1411,7 @@ export default function FinancialSection() {
       {report === 'dayBook' && <DayBookReport range={range} loc={loc} {...cap} />}
       {report === 'cash' && <BookReport kind="cash" range={range} loc={loc} {...cap} />}
       {report === 'bank' && <BookReport kind="bank" range={range} loc={loc} {...cap} />}
+      {report === 'cashBank' && <BookReport kind="cash-bank" range={range} loc={loc} {...cap} />}
       {report === 'gst' && <GstReport range={range} {...cap} />}
       {report === 'expenses' && <ExpenseReport range={range} loc={loc} {...cap} />}
       {report === 'salary' && <SalaryReport range={range} {...cap} />}

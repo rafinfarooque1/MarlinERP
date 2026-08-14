@@ -154,3 +154,5 @@
 - [Dispatch board](dispatch-board.md) — per-document status layer pattern: additive table, absence-of-row = initial status, forward-only transitions re-checked under the row lock; books-unchanged provable by hash.
 - [Books drill-down & exports](books-drilldown.md) — statement/day-book rows carry provenance keys mapped in ONE drilldown.ts; targets open via ?view= params; new export pages must join REPORT_EXPORT_PAGES.
 - [Workspace reset & rollback semantics](workspace-reset-recovery.md) — merge/cancel events revert TRACKED files to HEAD (untracked survive); re-verify wiring by marker greps; surviving tests + pg_dump -s are the recovery contract.
+- [Dashboard drill-downs & parity](dashboard-drilldowns.md) — tile → report via ?view/range params (stripped on mount, location rides headers); parity suite pins every tile == its report's total.
+- [Client-side image capture](dashboard-share-capture.md) — html2canvas chokes on Tailwind v4 oklab; use html-to-image + crossorigin font links; prebundle lazy deps; never disable the button on isLoading.

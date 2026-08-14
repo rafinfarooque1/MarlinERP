@@ -51,7 +51,7 @@ export interface CompanyFinancials {
    * figures is what guarantees the dashboard tiles always reconcile with the
    * Profit & Loss statement for the same period and location slice.
    */
-  profit: { gross: number; net: number };
+  profit: { gross: number; net: number; cogs: number };
   /** Cumulative to `toDate` — a balance is a position, not a period flow. */
   bankBalance: number;
   cashBalance: number;
@@ -300,6 +300,10 @@ export async function companyFinancials(
     profit: {
       gross: r2(books.profitAndLoss.summary.grossProfit),
       net: r2(books.profitAndLoss.summary.netProfit),
+      // COGS off the same P&L summary (opening stock + purchases + direct
+      // expenses − closing stock) — the dashboard tile must equal the
+      // "Cost of Goods Sold" line on the statement, never a re-sum.
+      cogs: r2(books.profitAndLoss.summary.costOfGoodsSold),
     },
     ...controls,
   };

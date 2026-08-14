@@ -17,7 +17,7 @@ import { useEnabledOutlets, useAllOutlets } from '@/lib/locationStructure';
 import { useClearOutletSelection } from '@/lib/useFeatureFlags';
 import {
   fmt, num, pdfMoney, fmtDate, titleCase, periodLabel,
-  useDateRange, RangeBar, ReportPicker, SummaryCards, LocationBadge, RTable, ExportButtons, exportReportPdf,
+  useDateRange, RangeBar, ReportPicker, SummaryCards, LocationBadge, RTable, ExportButtons, exportReportPdf, reportViewFromUrl,
   type RangeState, type Col,
 } from '../shared';
 
@@ -722,7 +722,8 @@ function CombinedReport({ range, canDownload }: { range: RangeState; canDownload
 export default function SalesSection() {
   const { canDownload } = usePermission('page:/reports/sales');
   const range = useDateRange('month');
-  const [report, setReport] = useState<SalesReport>('register');
+  const [report, setReport] = useState<SalesReport>(() =>
+    reportViewFromUrl<SalesReport>(['register', 'byItem', 'byLocation', 'discounts', 'combined']) ?? 'register');
   return (
     <div className="space-y-4">
       <ReportPicker

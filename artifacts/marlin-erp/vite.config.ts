@@ -84,6 +84,10 @@ export default defineConfig({
       '@radix-ui/react-toggle',
       '@radix-ui/react-toggle-group',
       '@radix-ui/react-tooltip',
+      // Lazily imported on the dashboard Share button. Pre-bundled so the
+      // first click doesn't trigger a dev-server "new dependency" page reload
+      // that silently discards the capture.
+      'html-to-image',
     ],
   },
   root: path.resolve(import.meta.dirname),

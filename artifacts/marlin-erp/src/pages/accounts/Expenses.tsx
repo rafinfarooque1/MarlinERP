@@ -21,6 +21,7 @@ import { usePermission } from '@/lib/usePermission';
 import { useOutletsEnabled } from '@/lib/useFeatureFlags';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
+import { invalidateDashboard } from '@/lib/invalidateDashboard';
 import { downloadCSV, downloadPDFFromEndpoint } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
 import { useDateRange, RangeBar } from '@/pages/reports/shared';
@@ -414,6 +415,8 @@ export default function Expenses() {
         queryClient.invalidateQueries({
           predicate: q => String(q.queryKey[0] ?? '').startsWith('/api/expenses'),
         });
+        // Expenses feed the dashboard's Expenses/NP tiles — refresh it too.
+        invalidateDashboard(queryClient);
         setIsOpen(false);
         form.reset(blankForm);
       },
