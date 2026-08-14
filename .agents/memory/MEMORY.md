@@ -19,6 +19,7 @@
 - [RBAC & branch scoping](rbac-branch-scoping.md) — two gates: page right (403) runs BEFORE location scope (404); body location is a request not authority; scope SQL needs the caller's table alias.
 - [Sales location gate](location-context-gate.md) — /sales/* pages render blank (null) in fresh sessions until a location is picked at /sales; not a crash — navigate via the picker in tests.
 - [Stock Ledger](stock-ledger.md) — append-only audit table; txn_date = business date (backdating, Closing(D)=Opening(D+1)); write strategy varies by route; running balance via window fn.
+- [GST recon attribution](gst-recon-attribution.md) — head diffs decompose EXACTLY into doc diffs + JV entries; legacy aggregates filter cancelled at aggregation-time; GSTR-3B invariant is conservation, not out−itc.
 - [GST transfer classification](gst-transfer-classification.md) — auto-detects internal/intrastate/interstate from GSTIN; JVs created inside transactions at dispatch+approve; STD-BRANCH-DEBTOR/CREDITOR auto-provisioned.
 - [Unified sidebar architecture](unified-sidebar.md) — ONE nav for all users; Sales/Accounts switcher removed; getNavGroups() replaces getAccountsNavGroups()+getSalesNavItems(); getPermissionGroups() replaces getPermissionSegments().
 - [Phase 1 stabilization changes](phase1-stabilization.md) — default-deny perms + seeding migration, 8-hr token expiry, payroll COA posting, negative-stock DB constraint, opening-balances table, CORS/body limits.

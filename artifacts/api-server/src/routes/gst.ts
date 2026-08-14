@@ -254,6 +254,7 @@ router.get("/gst/gstr1", requireModuleView("page:/accounts/gst-returns"), async 
   };
 
   const b2b: any[] = [];
+  const b2c: any[] = [];
   const b2csMap = new Map<string, any>();
   let b2bCount = 0, b2cCount = 0;
   for (const s of sales) {
@@ -288,6 +289,22 @@ router.get("/gst/gstr1", requireModuleView("page:/accounts/gst-returns"), async 
       }
     } else {
       b2cCount++;
+      // Invoice-wise B2C rows: same shape as B2B (minus GSTIN), with the
+      // invoice value and the actual settlement status/mode. The aggregated
+      // b2cs table below is untouched — that is the return's B2CS format;
+      // this listing is the working detail behind it.
+      const pay = paySummaries.get(Number(s.id));
+      for (const g of groups) {
+        b2c.push({
+          invoiceNumber: s.invoice_number, saleDate: iso(s.sale_date),
+          customerName: partyName || "Walk-in", placeOfSupply: pos,
+          invoiceValue: round2(Number(s.total_amount)), ...g,
+          isBranchTransfer: s.branch_transfer_id != null,
+          warehouseName: locNames.name(s.loc_type, s.loc_id),
+          paymentStatus: pay?.paymentStatus ?? "unpaid",
+          paymentModes: pay?.paymentModes ?? "Credit",
+        });
+      }
       for (const g of groups) {
         const key = `${pos}|${g.taxRate}`;
         const e = b2csMap.get(key) ?? { placeOfSupply: pos, taxRate: g.taxRate, taxableValue: 0, cgst: 0, sgst: 0, igst: 0, taxAmount: 0 };
@@ -304,7 +321,7 @@ router.get("/gst/gstr1", requireModuleView("page:/accounts/gst-returns"), async 
 
   const sumRows = (rows: any[], k: string) => round2(rows.reduce((s, r) => s + Number(r[k] ?? 0), 0));
   res.json({
-    b2b, b2cs,
+    b2b, b2c, b2cs,
     totals: {
       invoiceCount: sales.length, b2bInvoices: b2bCount, b2cInvoices: b2cCount,
       taxableValue: round2(sumRows(b2b, "taxableValue") + sumRows(b2cs, "taxableValue")),
@@ -402,28 +419,59 @@ router.get("/gst/reconciliation", requireModuleView("page:/accounts/gst-returns"
   }
   const { fromDate, toDate } = parseRange(req);
 
-  // Register side: line-item sums from sales & purchases
+  // Register side: line-item sums from sales & purchases. Cancelled documents
+  // are OUT of the register (same rule as every GST report) — but a cancelled
+  // BRANCH-TRANSFER invoice still posts to the ledgers until its credit note
+  // reverses it (see buildDerivedPostings), so those rows are fetched too:
+  // they are exactly the kind of books-vs-register difference the drill-down
+  // must attribute, not hide.
   const sp: any[] = [];
   const { rows: sales } = await pool.query(
-    `SELECT tax_total, line_items FROM sales WHERE cancelled_at IS NULL${rangeFilter("sale_date", fromDate, toDate, sp)}`, sp
+    `SELECT s.id, s.invoice_number, s.sale_date, s.tax_total, s.line_items,
+            s.branch_transfer_id, s.party_name, s.cancelled_at, c.name AS customer_name
+     FROM sales s LEFT JOIN customers c ON c.id = s.customer_id
+     WHERE (s.cancelled_at IS NULL OR s.branch_transfer_id IS NOT NULL)${rangeFilter("s.sale_date", fromDate, toDate, sp)}`, sp
   );
   let regOutC = 0, regOutS = 0, regOutI = 0, salesTaxTotal = 0;
+  const saleReg = new Map<number, { cgst: number; sgst: number; igst: number }>();
   for (const s of sales) {
-    salesTaxTotal += Number(s.tax_total ?? 0);
+    let cg = 0, sg = 0, ig = 0;
     for (const li of (s.line_items ?? []) as any[]) {
       const h = lineTaxHeads(li);
-      regOutC += h.cgst; regOutS += h.sgst; regOutI += h.igst;
+      cg += h.cgst; sg += h.sgst; ig += h.igst;
+    }
+    if (s.cancelled_at == null) {
+      // Aggregates cover exactly the register (non-cancelled) set — unchanged.
+      salesTaxTotal += Number(s.tax_total ?? 0);
+      regOutC += cg; regOutS += sg; regOutI += ig;
+      saleReg.set(Number(s.id), { cgst: round2(cg), sgst: round2(sg), igst: round2(ig) });
+    } else {
+      saleReg.set(Number(s.id), { cgst: 0, sgst: 0, igst: 0 });
     }
   }
+  // Journal derivation posts EVERY purchase (there is no cancelled filter on
+  // its purchases query), so fetch them all here too and keep the register
+  // aggregates on the non-cancelled subset only — identical to before.
   const pp: any[] = [];
   const { rows: purchases } = await pool.query(
-    `SELECT line_items FROM purchases WHERE cancelled_at IS NULL${rangeFilter("purchase_date", fromDate, toDate, pp)}`, pp
+    `SELECT p.id, p.invoice_number, p.purchase_date, p.line_items,
+            p.branch_transfer_id, p.party_name, p.cancelled_at, v.name AS vendor_name
+     FROM purchases p LEFT JOIN vendors v ON v.id = p.vendor_id
+     WHERE 1=1${rangeFilter("p.purchase_date", fromDate, toDate, pp)}`, pp
   );
   let regInpC = 0, regInpS = 0, regInpI = 0;
+  const purchReg = new Map<number, { cgst: number; sgst: number; igst: number }>();
   for (const p of purchases) {
+    let cg = 0, sg = 0, ig = 0;
     for (const li of (p.line_items ?? []) as any[]) {
       const h = lineTaxHeads(li);
-      regInpC += h.cgst; regInpS += h.sgst; regInpI += h.igst;
+      cg += h.cgst; sg += h.sgst; ig += h.igst;
+    }
+    if (p.cancelled_at == null) {
+      regInpC += cg; regInpS += sg; regInpI += ig;
+      purchReg.set(Number(p.id), { cgst: round2(cg), sgst: round2(sg), igst: round2(ig) });
+    } else {
+      purchReg.set(Number(p.id), { cgst: 0, sgst: 0, igst: 0 });
     }
   }
   regOutC = round2(regOutC); regOutS = round2(regOutS); regOutI = round2(regOutI);
@@ -447,6 +495,130 @@ router.get("/gst/reconciliation", requireModuleView("page:/accounts/gst-returns"
   const creditOf = (code: string) => { const e = net.get(idByCode.get(code) ?? -1); return round2((e?.credit ?? 0) - (e?.debit ?? 0)); };
   const debitOf = (code: string) => { const e = net.get(idByCode.get(code) ?? -1); return round2((e?.debit ?? 0) - (e?.credit ?? 0)); };
 
+  // Per-entry attribution on the six head ledgers + the Duty & Tax lump.
+  // Sign convention matches the head rows: output heads count credit − debit,
+  // input heads debit − credit — so per-head differences decompose EXACTLY
+  // into per-document differences plus non-document (JV) postings.
+  type HeadKey = "cgst" | "sgst" | "igst";
+  const headLedger = new Map<number, { head: HeadKey; side: "out" | "inp"; code: string }>();
+  const bind = (code: string, head: HeadKey, side: "out" | "inp") => {
+    const id = idByCode.get(code);
+    if (id != null) headLedger.set(Number(id), { head, side, code });
+  };
+  bind("STD-OUT-CGST", "cgst", "out"); bind("STD-OUT-SGST", "sgst", "out"); bind("STD-OUT-IGST", "igst", "out");
+  bind("STD-INP-CGST", "cgst", "inp"); bind("STD-INP-SGST", "sgst", "inp"); bind("STD-INP-IGST", "igst", "inp");
+  const dtxId = idByCode.get("STD-DTX");
+  type EntryAgg = {
+    out: { cgst: number; sgst: number; igst: number };
+    inp: { cgst: number; sgst: number; igst: number };
+    dtx: number;
+    source: string; voucherNumber: string | null; date: string; description: string;
+  };
+  const byEntry = new Map<string, EntryAgg>();
+  for (const p of postings) {
+    const hl = headLedger.get(p.ledgerId);
+    const isDtx = dtxId != null && p.ledgerId === Number(dtxId);
+    if (!hl && !isDtx) continue;
+    let e = byEntry.get(p.entryId);
+    if (!e) {
+      e = {
+        out: { cgst: 0, sgst: 0, igst: 0 }, inp: { cgst: 0, sgst: 0, igst: 0 }, dtx: 0,
+        source: p.source, voucherNumber: p.voucherNumber ?? null, date: iso(p.date), description: p.description ?? "",
+      };
+      byEntry.set(p.entryId, e);
+    }
+    if (hl) {
+      if (hl.side === "out") e.out[hl.head] += p.credit - p.debit;
+      else e.inp[hl.head] += p.debit - p.credit;
+    } else {
+      e.dtx += p.credit - p.debit;
+    }
+  }
+
+  // Diff each register document against its own ledger postings.
+  const r2h = (h: { cgst: number; sgst: number; igst: number }) =>
+    ({ cgst: round2(h.cgst), sgst: round2(h.sgst), igst: round2(h.igst) });
+  const zero = { cgst: 0, sgst: 0, igst: 0 };
+  const consumed = new Set<string>();
+  const mismatchOut: any[] = [];
+  const mismatchIn: any[] = [];
+  const attributeDoc = (
+    docType: "sale" | "purchase", id: number, documentNumber: string, date: string,
+    partyName: string, cancelled: boolean, isBranchTransfer: boolean,
+    register: { cgst: number; sgst: number; igst: number },
+  ) => {
+    const key = `${docType}:${id}`;
+    const entry = byEntry.get(key);
+    consumed.add(key);
+    const ledger = r2h(entry ? (docType === "sale" ? entry.out : entry.inp) : zero);
+    const dtx = round2(entry?.dtx ?? 0);
+    const diff = {
+      cgst: round2(ledger.cgst - register.cgst),
+      sgst: round2(ledger.sgst - register.sgst),
+      igst: round2(ledger.igst - register.igst),
+    };
+    const total = round2(diff.cgst + diff.sgst + diff.igst);
+    const off = Math.abs(diff.cgst) >= 0.01 || Math.abs(diff.sgst) >= 0.01 || Math.abs(diff.igst) >= 0.01;
+    if (!off) return;
+    const ledgerTotal = round2(ledger.cgst + ledger.sgst + ledger.igst);
+    const registerTotal = round2(register.cgst + register.sgst + register.igst);
+    let reason: string;
+    if (cancelled) reason = "Cancelled invoice still posts to the ledgers until its credit note reverses it";
+    else if (ledgerTotal < 0.01 && registerTotal >= 0.01 && Math.abs(dtx) >= 0.01)
+      reason = "Tax posted to Duty & Tax as a lump — line detail does not reconcile with the document's tax total";
+    else if (ledgerTotal < 0.01 && registerTotal >= 0.01)
+      reason = "No GST head posting derived for this document";
+    else if (registerTotal < 0.01 && ledgerTotal >= 0.01)
+      reason = "Ledger posting without matching register tax";
+    else reason = "Head split differs between the ledgers and the register";
+    (docType === "sale" ? mismatchOut : mismatchIn).push({
+      docType, id, documentNumber, date, partyName, cancelled, isBranchTransfer,
+      ledger, register: r2h(register), difference: diff, differenceTotal: total,
+      dtxAmount: dtx, reason,
+    });
+  };
+  for (const s of sales) {
+    attributeDoc(
+      "sale", Number(s.id), String(s.invoice_number ?? `Sale #${s.id}`), iso(s.sale_date),
+      String(s.party_name || s.customer_name || "Walk-in"), s.cancelled_at != null,
+      s.branch_transfer_id != null, saleReg.get(Number(s.id)) ?? zero,
+    );
+  }
+  for (const p of purchases) {
+    attributeDoc(
+      "purchase", Number(p.id), String(p.invoice_number ?? `Purchase #${p.id}`), iso(p.purchase_date),
+      String(p.party_name || p.vendor_name || ""), p.cancelled_at != null,
+      p.branch_transfer_id != null, purchReg.get(Number(p.id)) ?? zero,
+    );
+  }
+
+  // Everything else that touched a GST head ledger in the period — journal
+  // vouchers (GST payments, credit/debit notes, transfer JVs…) have no
+  // register twin, so each one is a named contributor to the difference.
+  // One row per (entry, head) keeps the table flat and the sums per head
+  // exactly decomposable.
+  const headLabel: Record<string, string> = {
+    "STD-OUT-CGST": "Output CGST", "STD-OUT-SGST": "Output SGST", "STD-OUT-IGST": "Output IGST",
+    "STD-INP-CGST": "Input CGST", "STD-INP-SGST": "Input SGST", "STD-INP-IGST": "Input IGST",
+  };
+  const otherEntries: any[] = [];
+  for (const [key, e] of byEntry) {
+    if (consumed.has(key)) continue;
+    const emit = (code: string, amount: number) => {
+      const amt = round2(amount);
+      if (Math.abs(amt) < 0.01) return;
+      otherEntries.push({
+        entryId: key, source: e.source, voucherNumber: e.voucherNumber, date: e.date,
+        description: e.description, head: headLabel[code], ledgerCode: code, amount: amt,
+      });
+    };
+    emit("STD-OUT-CGST", e.out.cgst); emit("STD-OUT-SGST", e.out.sgst); emit("STD-OUT-IGST", e.out.igst);
+    emit("STD-INP-CGST", e.inp.cgst); emit("STD-INP-SGST", e.inp.sgst); emit("STD-INP-IGST", e.inp.igst);
+  }
+  otherEntries.sort((a, b) => a.date.localeCompare(b.date) || a.entryId.localeCompare(b.entryId));
+  mismatchOut.sort((a, b) => a.date.localeCompare(b.date) || a.id - b.id);
+  mismatchIn.sort((a, b) => a.date.localeCompare(b.date) || a.id - b.id);
+
   const rows = [
     { head: "Output CGST", ledgerCode: "STD-OUT-CGST", ledgerAmount: creditOf("STD-OUT-CGST"), registerAmount: regOutC },
     { head: "Output SGST", ledgerCode: "STD-OUT-SGST", ledgerAmount: creditOf("STD-OUT-SGST"), registerAmount: regOutS },
@@ -458,6 +630,8 @@ router.get("/gst/reconciliation", requireModuleView("page:/accounts/gst-returns"
 
   const dtxDirect = creditOf("STD-DTX");
   const splitTotal = round2(regOutC + regOutS + regOutI);
+  const salesChecked = sales.filter((s: any) => s.cancelled_at == null).length;
+  const purchasesChecked = purchases.filter((p: any) => p.cancelled_at == null).length;
   res.json({
     rows,
     dtxDirect,
@@ -465,6 +639,17 @@ router.get("/gst/reconciliation", requireModuleView("page:/accounts/gst-returns"
     salesLumpResidual: round2(salesTaxTotal - splitTotal),
     matched: rows.every(r => Math.abs(r.difference) < 0.05),
     note: "Duty & Tax (direct) holds legacy GST lumps and rounding residuals from sales recorded without line-level tax detail.",
+    // Bill-level drill-down: which documents (and which non-document journal
+    // postings) the head differences decompose into — plus explicit evidence
+    // of how many documents were checked when everything matches.
+    mismatchDocs: { outward: mismatchOut, inward: mismatchIn },
+    otherEntries,
+    checked: {
+      sales: salesChecked,
+      purchases: purchasesChecked,
+      salesMismatched: mismatchOut.length,
+      purchasesMismatched: mismatchIn.length,
+    },
   });
 });
 

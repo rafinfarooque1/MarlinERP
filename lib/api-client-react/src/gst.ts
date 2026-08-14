@@ -43,6 +43,25 @@ export interface Gstr1B2bRow {
   paymentModes?: string;
 }
 
+/** Invoice-wise B2C row — B2B shape minus GSTIN (unregistered buyers). */
+export interface Gstr1B2cRow {
+  invoiceNumber: string;
+  saleDate: string;
+  customerName: string;
+  placeOfSupply: string;
+  invoiceValue: number;
+  taxRate: number;
+  taxableValue: number;
+  cgst: number;
+  sgst: number;
+  igst: number;
+  taxAmount: number;
+  isBranchTransfer?: boolean;
+  warehouseName?: string;
+  paymentStatus?: string;
+  paymentModes?: string;
+}
+
 export interface Gstr1B2csRow {
   placeOfSupply: string;
   taxRate: number;
@@ -55,6 +74,8 @@ export interface Gstr1B2csRow {
 
 export interface Gstr1Response {
   b2b: Gstr1B2bRow[];
+  /** Invoice-wise B2C detail behind the aggregated b2cs table. */
+  b2c: Gstr1B2cRow[];
   b2cs: Gstr1B2csRow[];
   totals: {
     invoiceCount: number;
@@ -95,6 +116,41 @@ export interface GstReconRow {
   difference: number;
 }
 
+export interface GstReconHeads {
+  cgst: number;
+  sgst: number;
+  igst: number;
+}
+
+/** A document whose ledger postings differ from its register tax heads. */
+export interface GstReconMismatchDoc {
+  docType: 'sale' | 'purchase';
+  id: number;
+  documentNumber: string;
+  date: string;
+  partyName: string;
+  cancelled: boolean;
+  isBranchTransfer: boolean;
+  ledger: GstReconHeads;
+  register: GstReconHeads;
+  difference: GstReconHeads;
+  differenceTotal: number;
+  dtxAmount: number;
+  reason: string;
+}
+
+/** A non-document posting (journal voucher…) on a GST head ledger. */
+export interface GstReconOtherEntry {
+  entryId: string;
+  source: string;
+  voucherNumber: string | null;
+  date: string;
+  description: string;
+  head: string;
+  ledgerCode: string;
+  amount: number;
+}
+
 export interface GstReconResponse {
   rows: GstReconRow[];
   dtxDirect: number;
@@ -102,6 +158,14 @@ export interface GstReconResponse {
   salesLumpResidual: number;
   matched: boolean;
   note: string;
+  mismatchDocs: { outward: GstReconMismatchDoc[]; inward: GstReconMismatchDoc[] };
+  otherEntries: GstReconOtherEntry[];
+  checked: {
+    sales: number;
+    purchases: number;
+    salesMismatched: number;
+    purchasesMismatched: number;
+  };
 }
 
 export interface GstScopeParams {

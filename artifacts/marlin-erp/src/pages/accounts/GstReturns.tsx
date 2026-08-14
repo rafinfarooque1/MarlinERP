@@ -1,8 +1,11 @@
 import { useState } from 'react';
+import { useLocation } from 'wouter';
+import { toast } from 'sonner';
 import {
   useGetHsnSummary, useGetGstr1, useGetGstr3b, useGetGstReconciliation, useGetGstFilters,
-  type HsnSummaryRow, type Gstr3bResponse,
+  type HsnSummaryRow, type Gstr3bResponse, type GstReconMismatchDoc,
 } from '@workspace/api-client-react';
+import { resolveDrill } from '@/lib/drilldown';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -122,12 +125,18 @@ function Gstr3bCard({ title, heads, total, totalLabel, accent }: {
 
 export default function GstReturns() {
   const perms = usePermission('page:/accounts/gst-returns');
+  const [, navigate] = useLocation();
   const now = new Date();
   const fyStart = `${now.getMonth() + 1 < 4 ? now.getFullYear() - 1 : now.getFullYear()}-04-01`;
   const [fromDate, setFromDate] = useState(fyStart);
   const [toDate, setToDate] = useState(now.toISOString().split('T')[0]);
   const [month, setMonth] = useState(now.toISOString().slice(0, 7));
-  const [tab, setTab] = useState('hsn');
+  // Deep-linkable tab (?tab=gstr1|gstr3b|recon) — same query-param convention
+  // the drill-down targets use.
+  const [tab, setTab] = useState(() => {
+    const t = new URLSearchParams(window.location.search).get('tab');
+    return t && ['hsn', 'gstr1', 'gstr3b', 'recon'].includes(t) ? t : 'hsn';
+  });
   const [scope, setScope] = useState<GstScope>({});
 
   const hsn = useGetHsnSummary({ fromDate, toDate, ...scope });
@@ -150,15 +159,37 @@ export default function GstReturns() {
   }
 
   const b2b = g1.data?.b2b ?? [];
+  const b2c = g1.data?.b2c ?? [];
   const b2cs = g1.data?.b2cs ?? [];
   const d3b: Gstr3bResponse | undefined = g3b.data;
   const reconRows = recon.data?.rows ?? [];
+  const mismatchDocs = [
+    ...(recon.data?.mismatchDocs?.outward ?? []),
+    ...(recon.data?.mismatchDocs?.inward ?? []),
+  ];
+  const otherEntries = recon.data?.otherEntries ?? [];
+  const reconChecked = recon.data?.checked;
 
   const b2bSort = useTableSort(b2b, {
     invoice: r => r.invoiceNumber,
     date: r => r.saleDate,
     customer: r => r.customerName,
     gstin: r => r.gstin,
+    pos: r => r.placeOfSupply,
+    warehouse: r => r.warehouseName,
+    rate: r => Number(r.taxRate),
+    taxable: r => Number(r.taxableValue),
+    cgst: r => Number(r.cgst),
+    sgst: r => Number(r.sgst),
+    igst: r => Number(r.igst),
+    invoiceValue: r => Number(r.invoiceValue),
+    payStatus: r => r.paymentStatus,
+    payMode: r => r.paymentModes,
+  });
+  const b2cSort = useTableSort(b2c, {
+    invoice: r => r.invoiceNumber,
+    date: r => r.saleDate,
+    customer: r => r.customerName,
     pos: r => r.placeOfSupply,
     warehouse: r => r.warehouseName,
     rate: r => Number(r.taxRate),
@@ -178,6 +209,23 @@ export default function GstReturns() {
     sgst: r => Number(r.sgst),
     igst: r => Number(r.igst),
     taxAmount: r => Number(r.taxAmount),
+  });
+  const mismatchSort = useTableSort(mismatchDocs, {
+    type: r => r.docType,
+    doc: r => r.documentNumber,
+    date: r => r.date,
+    party: r => r.partyName,
+    register: r => r.register.cgst + r.register.sgst + r.register.igst,
+    ledger: r => r.ledger.cgst + r.ledger.sgst + r.ledger.igst,
+    diff: r => Number(r.differenceTotal),
+    reason: r => r.reason,
+  });
+  const otherSort = useTableSort(otherEntries, {
+    date: r => r.date,
+    source: r => r.source,
+    voucher: r => r.voucherNumber ?? '',
+    head: r => r.head,
+    amount: r => Number(r.amount),
   });
   const reconSort = useTableSort(reconRows, {
     head: r => r.head,
@@ -207,8 +255,16 @@ export default function GstReturns() {
         'Total Tax': r.taxAmount, 'Invoice Value': r.invoiceValue,
         'Payment Status': payStatusLabel(r.paymentStatus), 'Payment Mode': r.paymentModes ?? '',
       })),
+      ...b2c.map(r => ({
+        Section: 'B2C (Invoices)', 'Invoice No': r.invoiceNumber, Date: r.saleDate, Customer: r.customerName,
+        GSTIN: '', 'Place of Supply': r.placeOfSupply, Warehouse: r.warehouseName ?? '',
+        'Rate %': r.taxRate,
+        'Taxable Value': r.taxableValue, CGST: r.cgst, SGST: r.sgst, IGST: r.igst,
+        'Total Tax': r.taxAmount, 'Invoice Value': r.invoiceValue,
+        'Payment Status': payStatusLabel(r.paymentStatus), 'Payment Mode': r.paymentModes ?? '',
+      })),
       ...b2cs.map(r => ({
-        Section: 'B2C (Small)', 'Invoice No': '', Date: '', Customer: '', GSTIN: '',
+        Section: 'B2C (Small, aggregated)', 'Invoice No': '', Date: '', Customer: '', GSTIN: '',
         'Place of Supply': r.placeOfSupply, Warehouse: '', 'Rate %': r.taxRate,
         'Taxable Value': r.taxableValue, CGST: r.cgst, SGST: r.sgst, IGST: r.igst,
         'Total Tax': r.taxAmount, 'Invoice Value': '', 'Payment Status': '', 'Payment Mode': '',
@@ -226,11 +282,36 @@ export default function GstReturns() {
     ]);
   };
   const exportRecon = () => {
-    downloadCSV(`gst-reconciliation-${fromDate}-to-${toDate}.csv`, reconRows.map(r => ({
-      Head: r.head, Ledger: r.ledgerCode, 'Ledger Amount': r.ledgerAmount,
-      'Register Amount': r.registerAmount, Difference: r.difference,
-    })));
+    downloadCSV(`gst-reconciliation-${fromDate}-to-${toDate}.csv`, [
+      ...reconRows.map(r => ({
+        Section: 'Heads', Head: r.head, Ledger: r.ledgerCode, Document: '', Date: '', Party: '',
+        'Ledger Amount': r.ledgerAmount, 'Register Amount': r.registerAmount, Difference: r.difference, Reason: '',
+      })),
+      ...mismatchDocs.map(r => ({
+        Section: r.docType === 'sale' ? 'Mismatch (Outward)' : 'Mismatch (Inward)',
+        Head: '', Ledger: '', Document: r.documentNumber, Date: r.date, Party: r.partyName,
+        'Ledger Amount': r.ledger.cgst + r.ledger.sgst + r.ledger.igst,
+        'Register Amount': r.register.cgst + r.register.sgst + r.register.igst,
+        Difference: r.differenceTotal, Reason: r.reason,
+      })),
+      ...otherEntries.map(r => ({
+        Section: 'Other GST-Ledger Entries', Head: r.head, Ledger: r.ledgerCode,
+        Document: r.voucherNumber ?? r.entryId, Date: r.date, Party: r.description,
+        'Ledger Amount': r.amount, 'Register Amount': '', Difference: r.amount, Reason: '',
+      })),
+    ]);
   };
+
+  // Drill-down: a mismatch row opens its source document, an "other entry"
+  // opens the voucher that posted it. Same provenance-key mapping the ledger
+  // statement and day book use.
+  const openEntry = (entryId: string, source?: string | null) => {
+    const t = resolveDrill(entryId, source);
+    if (!t) return;
+    if (t.kind === 'link') navigate(t.href);
+    else toast.info(t.reason);
+  };
+  const openDoc = (d: GstReconMismatchDoc) => openEntry(`${d.docType}:${d.id}`, d.docType);
 
   // ── PDF / Excel documents (exactly the on-screen filtered rows) ─────────────
   const metaRows: [string, string][] = [['Scope', scopeText]];
@@ -271,6 +352,21 @@ export default function GstReturns() {
         ]),
       },
       {
+        heading: 'B2C Invoices',
+        columns: [
+          { label: 'Invoice' }, { label: 'Date' }, { label: 'Customer' },
+          { label: 'Warehouse' }, { label: 'Rate' },
+          { label: 'Taxable', align: 'right' as const }, { label: 'Tax', align: 'right' as const },
+          { label: 'Invoice Value', align: 'right' as const },
+          { label: 'Payment Status' }, { label: 'Payment Mode' },
+        ],
+        rows: b2c.map(r => [
+          r.invoiceNumber, r.saleDate, r.customerName, r.warehouseName ?? '',
+          `${r.taxRate}%`, r.taxableValue, r.taxAmount, r.invoiceValue,
+          payStatusLabel(r.paymentStatus), r.paymentModes ?? '',
+        ]),
+      },
+      {
         heading: 'B2C Small (aggregated)',
         columns: [
           { label: 'Place of Supply' }, { label: 'Rate' },
@@ -281,6 +377,7 @@ export default function GstReturns() {
         rows: b2cs.map(r => [r.placeOfSupply || '—', `${r.taxRate}%`, r.taxableValue, r.cgst, r.sgst, r.igst, r.taxAmount]),
       },
     ],
+    footerNote: 'Credit/debit notes are reported separately as vouchers and are not netted against GSTR-1 figures under the current rules.',
   });
   const gstr3bDoc = (): ReportDoc => ({
     title: 'GSTR-3B Working', subtitle: month, metaRows, filename: `gstr3b-${month}`,
@@ -301,17 +398,48 @@ export default function GstReturns() {
   });
   const reconDoc = (): ReportDoc => ({
     title: 'GST Reconciliation', subtitle: `${fromDate} to ${toDate}`,
-    metaRows: [['Scope', 'Company-wide (ledgers are not GSTIN-scoped)']],
+    metaRows: [
+      ['Scope', 'Company-wide (ledgers are not GSTIN-scoped)'],
+      ['Documents checked', `${reconChecked?.sales ?? 0} sales, ${reconChecked?.purchases ?? 0} purchase bills`],
+      ['Documents with differences', String(mismatchDocs.length)],
+    ],
     filename: `gst-reconciliation-${fromDate}-to-${toDate}`,
-    sections: [{
-      columns: [
-        { label: 'Head' }, { label: 'Ledger' },
-        { label: 'Ledger Amount', align: 'right' as const },
-        { label: 'Register Amount', align: 'right' as const },
-        { label: 'Difference', align: 'right' as const },
-      ],
-      rows: reconRows.map(r => [r.head, r.ledgerCode, r.ledgerAmount, r.registerAmount, r.difference]),
-    }],
+    sections: [
+      {
+        heading: 'Tax Heads',
+        columns: [
+          { label: 'Head' }, { label: 'Ledger' },
+          { label: 'Ledger Amount', align: 'right' as const },
+          { label: 'Register Amount', align: 'right' as const },
+          { label: 'Difference', align: 'right' as const },
+        ],
+        rows: reconRows.map(r => [r.head, r.ledgerCode, r.ledgerAmount, r.registerAmount, r.difference]),
+      },
+      ...(mismatchDocs.length ? [{
+        heading: 'Documents with Differences',
+        columns: [
+          { label: 'Type' }, { label: 'Document' }, { label: 'Date' }, { label: 'Party' },
+          { label: 'Register Tax', align: 'right' as const },
+          { label: 'Ledger Tax', align: 'right' as const },
+          { label: 'Difference', align: 'right' as const },
+          { label: 'Reason' },
+        ],
+        rows: mismatchDocs.map(r => [
+          r.docType === 'sale' ? 'Sale' : 'Purchase', r.documentNumber, r.date, r.partyName,
+          r.register.cgst + r.register.sgst + r.register.igst,
+          r.ledger.cgst + r.ledger.sgst + r.ledger.igst,
+          r.differenceTotal, r.reason,
+        ]),
+      }] : []),
+      ...(otherEntries.length ? [{
+        heading: 'Other Postings on GST Ledgers (journal vouchers etc.)',
+        columns: [
+          { label: 'Date' }, { label: 'Source' }, { label: 'Voucher' },
+          { label: 'Head' }, { label: 'Amount', align: 'right' as const }, { label: 'Description' },
+        ],
+        rows: otherEntries.map(r => [r.date, r.source, r.voucherNumber ?? r.entryId, r.head, r.amount, r.description]),
+      }] : []),
+    ],
   });
 
   return (
@@ -423,6 +551,58 @@ export default function GstReturns() {
 
             <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
               <div className="p-4 border-b border-border bg-muted/20">
+                <h3 className="font-semibold text-sm">B2C Invoices (unregistered customers, invoice-wise)</h3>
+              </div>
+              <div className="overflow-x-auto">
+                {g1.isLoading ? (
+                  <TableSkeleton rows={4} cols={13} />
+                ) : b2c.length === 0 ? (
+                  <EmptyState title="No B2C invoices in this period" compact />
+                ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow className="bg-muted/10">
+                      <SortableHead k="invoice" sort={b2cSort.sort}>Invoice</SortableHead>
+                      <SortableHead k="date" sort={b2cSort.sort}>Date</SortableHead>
+                      <SortableHead k="customer" sort={b2cSort.sort}>Customer</SortableHead>
+                      <SortableHead k="pos" sort={b2cSort.sort}>POS</SortableHead>
+                      <SortableHead k="warehouse" sort={b2cSort.sort}>Warehouse</SortableHead>
+                      <SortableHead k="rate" sort={b2cSort.sort}>Rate</SortableHead>
+                      <SortableHead k="taxable" sort={b2cSort.sort} className="text-right">Taxable</SortableHead>
+                      <SortableHead k="cgst" sort={b2cSort.sort} className="text-right">CGST</SortableHead>
+                      <SortableHead k="sgst" sort={b2cSort.sort} className="text-right">SGST</SortableHead>
+                      <SortableHead k="igst" sort={b2cSort.sort} className="text-right">IGST</SortableHead>
+                      <SortableHead k="invoiceValue" sort={b2cSort.sort} className="text-right">Invoice Value</SortableHead>
+                      <SortableHead k="payStatus" sort={b2cSort.sort}>Payment Status</SortableHead>
+                      <SortableHead k="payMode" sort={b2cSort.sort}>Payment Mode</SortableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {b2cSort.sorted.map((r, i) => (
+                      <TableRow key={i} className="hover:bg-muted/10">
+                        <TableCell className="font-mono text-xs">{r.invoiceNumber}</TableCell>
+                        <TableCell className="text-xs">{r.saleDate}</TableCell>
+                        <TableCell className="text-xs">{r.customerName}</TableCell>
+                        <TableCell className="text-xs">{r.placeOfSupply || '—'}</TableCell>
+                        <TableCell className="text-xs">{r.warehouseName ?? '—'}</TableCell>
+                        <TableCell><Badge variant="secondary">{r.taxRate}%</Badge></TableCell>
+                        <TableCell className="text-right font-mono text-xs">{fmt(r.taxableValue)}</TableCell>
+                        <TableCell className="text-right font-mono text-xs">{fmt(r.cgst)}</TableCell>
+                        <TableCell className="text-right font-mono text-xs">{fmt(r.sgst)}</TableCell>
+                        <TableCell className="text-right font-mono text-xs">{fmt(r.igst)}</TableCell>
+                        <TableCell className="text-right font-mono text-xs font-bold">{fmt(r.invoiceValue)}</TableCell>
+                        <TableCell><PaymentStatusBadge status={r.paymentStatus ?? 'unpaid'} /></TableCell>
+                        <TableCell className="text-xs whitespace-nowrap">{r.paymentModes ?? '—'}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+                )}
+              </div>
+            </div>
+
+            <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
+              <div className="p-4 border-b border-border bg-muted/20">
                 <h3 className="font-semibold text-sm">B2C Small (unregistered, aggregated by place of supply & rate)</h3>
               </div>
               {g1.isLoading ? (
@@ -458,6 +638,10 @@ export default function GstReturns() {
               </Table>
               )}
             </div>
+
+            <p className="text-xs text-muted-foreground">
+              Credit/debit notes are reported separately as vouchers and are not netted against these GSTR-1 figures under the current rules.
+            </p>
           </TabsContent>
 
           {/* ── GSTR-3B ─────────────────────────────────────────────────── */}
@@ -555,6 +739,114 @@ export default function GstReturns() {
               </Table>
               )}
             </div>
+
+            {/* Explicit matched evidence — a clean state names what was checked. */}
+            {recon.data?.matched && reconChecked && mismatchDocs.length === 0 && (
+              <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-xl p-4 text-sm text-emerald-700 dark:text-emerald-400">
+                <p className="font-medium flex items-center gap-1.5">
+                  <CheckCircle2 className="w-4 h-4" />
+                  All {reconChecked.sales.toLocaleString('en-IN')} sales invoices and {reconChecked.purchases.toLocaleString('en-IN')} purchase bills reconcile with the GST ledgers
+                </p>
+                <p className="text-xs opacity-80 mt-1">
+                  Every document's ledger postings were compared head-by-head against its register tax.
+                  {otherEntries.length > 0 && ` ${otherEntries.length} journal posting${otherEntries.length === 1 ? '' : 's'} on the GST ledgers (listed below) ${otherEntries.length === 1 ? 'is' : 'are'} included in the ledger balances.`}
+                </p>
+              </div>
+            )}
+
+            {/* Bill-level mismatch drill-down */}
+            {mismatchDocs.length > 0 && (
+              <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
+                <div className="p-4 border-b border-border bg-muted/20">
+                  <h3 className="font-semibold text-sm">Documents with differences ({mismatchDocs.length} of {(reconChecked?.sales ?? 0) + (reconChecked?.purchases ?? 0)} checked)</h3>
+                  <p className="text-xs text-muted-foreground mt-1">Each row is a bill whose ledger postings differ from its register tax. Click a row to open the document.</p>
+                </div>
+                <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="bg-muted/10">
+                      <SortableHead k="type" sort={mismatchSort.sort}>Type</SortableHead>
+                      <SortableHead k="doc" sort={mismatchSort.sort}>Document</SortableHead>
+                      <SortableHead k="date" sort={mismatchSort.sort}>Date</SortableHead>
+                      <SortableHead k="party" sort={mismatchSort.sort}>Party</SortableHead>
+                      <SortableHead k="register" sort={mismatchSort.sort} className="text-right">Register Tax</SortableHead>
+                      <SortableHead k="ledger" sort={mismatchSort.sort} className="text-right">Ledger Tax</SortableHead>
+                      <SortableHead k="diff" sort={mismatchSort.sort} className="text-right">Difference</SortableHead>
+                      <SortableHead k="reason" sort={mismatchSort.sort}>Why</SortableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {mismatchSort.sorted.map((r) => (
+                      <TableRow
+                        key={`${r.docType}:${r.id}`}
+                        className="hover:bg-muted/10 cursor-pointer"
+                        title={r.docType === 'sale' ? 'Open sale invoice' : 'Open purchase bill'}
+                        onClick={() => openDoc(r)}
+                      >
+                        <TableCell>
+                          <Badge variant="secondary">{r.docType === 'sale' ? 'Sale' : 'Purchase'}</Badge>
+                          {r.cancelled && <Badge className="ml-1 bg-red-500/15 text-red-600 hover:bg-red-500/15 border-0">Cancelled</Badge>}
+                        </TableCell>
+                        <TableCell className="font-mono text-xs text-primary font-semibold">{r.documentNumber}</TableCell>
+                        <TableCell className="text-xs">{r.date}</TableCell>
+                        <TableCell className="text-xs">{r.partyName || '—'}</TableCell>
+                        <TableCell className="text-right font-mono text-xs">{fmt(r.register.cgst + r.register.sgst + r.register.igst)}</TableCell>
+                        <TableCell className="text-right font-mono text-xs">{fmt(r.ledger.cgst + r.ledger.sgst + r.ledger.igst)}</TableCell>
+                        <TableCell className="text-right">
+                          <Badge className="bg-red-500/15 text-red-600 hover:bg-red-500/15 border-0 font-mono">{r.differenceTotal > 0 ? '+' : '−'}{fmt(r.differenceTotal)}</Badge>
+                        </TableCell>
+                        <TableCell className="text-xs text-muted-foreground max-w-72">{r.reason}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+                </div>
+              </div>
+            )}
+
+            {/* Non-document postings on the GST ledgers */}
+            {otherEntries.length > 0 && (
+              <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
+                <div className="p-4 border-b border-border bg-muted/20">
+                  <h3 className="font-semibold text-sm">Other postings on GST ledgers ({otherEntries.length})</h3>
+                  <p className="text-xs text-muted-foreground mt-1">Journal vouchers and other entries with no register document — they move the ledger side of the comparison. Click a row to open the voucher.</p>
+                </div>
+                <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="bg-muted/10">
+                      <SortableHead k="date" sort={otherSort.sort}>Date</SortableHead>
+                      <SortableHead k="source" sort={otherSort.sort}>Source</SortableHead>
+                      <SortableHead k="voucher" sort={otherSort.sort}>Voucher</SortableHead>
+                      <SortableHead k="head" sort={otherSort.sort}>Tax Head</SortableHead>
+                      <SortableHead k="amount" sort={otherSort.sort} className="text-right">Amount</SortableHead>
+                      <TableHead>Description</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {otherSort.sorted.map((r, i) => {
+                      const drill = resolveDrill(r.entryId, r.source);
+                      return (
+                        <TableRow
+                          key={`${r.entryId}|${r.ledgerCode}|${i}`}
+                          className={`hover:bg-muted/10 ${drill ? 'cursor-pointer' : ''}`}
+                          title={drill ? (drill.kind === 'link' ? drill.label : 'No document — click for details') : undefined}
+                          onClick={() => openEntry(r.entryId, r.source)}
+                        >
+                          <TableCell className="text-xs">{r.date}</TableCell>
+                          <TableCell><Badge variant="secondary">{r.source}</Badge></TableCell>
+                          <TableCell className="font-mono text-xs text-primary font-semibold">{r.voucherNumber ?? '—'}</TableCell>
+                          <TableCell className="text-xs">{r.head}</TableCell>
+                          <TableCell className="text-right font-mono text-xs">{r.amount < 0 ? `−${fmt(r.amount)}` : fmt(r.amount)}</TableCell>
+                          <TableCell className="text-xs text-muted-foreground max-w-96 truncate">{r.description}</TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+                </div>
+              </div>
+            )}
 
             {recon.data && (Math.abs(recon.data.dtxDirect) > 0.004 || Math.abs(recon.data.salesLumpResidual) > 0.004) && (
               <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-4 text-sm text-amber-700 dark:text-amber-400">
