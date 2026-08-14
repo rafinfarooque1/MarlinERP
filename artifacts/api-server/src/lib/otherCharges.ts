@@ -83,20 +83,26 @@ export async function validateOtherCharges(
 
 /**
  * Sale Other Charges — the SALE side of the same "other charges" idea (packing,
- * freight, hamali, courier, packing-income recovery…). It differs from the
- * PURCHASE validator above on ONE axis only: a sale charge may credit an
- * INCOME ledger (a real recovery the customer pays on top of goods) OR an
- * expense ledger (an expense recovery — a credit balance on an expense ledger
- * is normal here, see books.ts). What it must NEVER do is route into the SALES
- * (SYS-SAL) subtree — that would masquerade extra recovery as goods revenue and
- * inflate the GSTR-1 taxable value / turnover — nor into PURCHASE (SYS-PUR),
- * nor onto an internal system ledger. Purchase charges stay expense-only via
- * validateOtherCharges above.
+ * delivery, courier recovery…). A NEW charge must credit a postable ledger
+ * under DIRECT INCOME (SYS-DIRINC): the customer is paying real recovery on
+ * top of the goods, and that is income — parking it on an expense ledger
+ * quietly understates both sides of the P&L, and routing it into the SALES
+ * (SYS-SAL) subtree would masquerade recovery as goods revenue and inflate the
+ * GSTR-1 taxable value / turnover.
+ *
+ * GRANDFATHERING: historical sales were allowed income-or-expense ledgers.
+ * Their stored meaning is preserved forever — an EDIT passes the sale's
+ * already-stored charge ledger ids via `grandfatheredLedgerIds`, and those
+ * ledgers keep passing under the OLD rule (income or expense, never SYS-SAL /
+ * SYS-PUR / internal). Only genuinely new picks are held to Direct Income.
+ * Purchase charges stay expense-only via validateOtherCharges above.
  */
 export async function validateSaleOtherCharges(
   q: Queryable,
   raw: unknown,
+  opts?: { grandfatheredLedgerIds?: ReadonlySet<number> },
 ): Promise<{ error: string } | { charges: OtherCharge[]; total: number }> {
+  const grandfathered = opts?.grandfatheredLedgerIds ?? new Set<number>();
   if (raw === undefined || raw === null) return { charges: [], total: 0 };
   if (!Array.isArray(raw)) return { error: "Other charges must be a list of { ledgerId, amount }" };
   if (raw.length === 0) return { charges: [], total: 0 };
@@ -128,7 +134,8 @@ export async function validateSaleOtherCharges(
      )
      SELECT l.id, l.name, l.type, l.is_group, l.is_system_group, l.is_active, l.code,
             EXISTS (SELECT 1 FROM up WHERE up.start_id = l.id AND up.code = 'SYS-SAL') AS under_sales,
-            EXISTS (SELECT 1 FROM up WHERE up.start_id = l.id AND up.code = 'SYS-PUR') AS under_purchase
+            EXISTS (SELECT 1 FROM up WHERE up.start_id = l.id AND up.code = 'SYS-PUR') AS under_purchase,
+            EXISTS (SELECT 1 FROM up WHERE up.start_id = l.id AND up.code = 'SYS-DIRINC' AND up.id <> up.start_id) AS under_direct_income
        FROM account_ledgers l WHERE l.id = ANY($1::int[])`,
     [ids],
   );
@@ -137,14 +144,22 @@ export async function validateSaleOtherCharges(
     const l = byId.get(id);
     if (!l) return { error: `Other charge ledger #${id} is not in the Chart of Accounts` };
     const label = `"${l.name}"`;
-    if (l.is_group || l.is_system_group) return { error: `${label} is a group — pick a postable income or expense ledger under it` };
+    if (l.is_group || l.is_system_group) return { error: `${label} is a group — pick a postable Direct Income ledger under it` };
     if (l.is_active === false) return { error: `${label} is inactive — reactivate it in the Chart of Accounts or pick another ledger` };
-    if (String(l.type) !== "income" && String(l.type) !== "expense") {
-      return { error: `${label} is not an income or expense ledger — sale charges must post to a P&L account` };
+    if (grandfathered.has(id)) {
+      // Stored historical meaning: the OLD income-or-expense rule, verbatim.
+      if (String(l.type) !== "income" && String(l.type) !== "expense") {
+        return { error: `${label} is not an income or expense ledger — sale charges must post to a P&L account` };
+      }
+      if (l.under_sales) return { error: `${label} sits under Sales in the Chart of Accounts — record the charge on a separate income/expense ledger, not the Sales account` };
+      if (l.under_purchase) return { error: `${label} sits under Purchase in the Chart of Accounts — record the charge on a freight/expense or income ledger, not a purchase account` };
+      if (l.code && SYSTEM_CODE_RE.test(String(l.code))) return { error: `${label} is an internal system ledger — pick a normal income or expense ledger` };
+      continue;
     }
-    if (l.under_sales) return { error: `${label} sits under Sales in the Chart of Accounts — record the charge on a separate income/expense ledger, not the Sales account` };
-    if (l.under_purchase) return { error: `${label} sits under Purchase in the Chart of Accounts — record the charge on a freight/expense or income ledger, not a purchase account` };
-    if (l.code && SYSTEM_CODE_RE.test(String(l.code))) return { error: `${label} is an internal system ledger — pick a normal income or expense ledger` };
+    if (String(l.type) !== "income" || !l.under_direct_income) {
+      return { error: `${label} is not a Direct Income ledger — sale charges are customer recoveries and must post under Direct Income (e.g. Packing & Delivery Recovery)` };
+    }
+    if (l.code && SYSTEM_CODE_RE.test(String(l.code))) return { error: `${label} is an internal system ledger — pick a normal Direct Income ledger` };
   }
 
   return { charges, total: r2(charges.reduce((s, c) => s + c.amount, 0)) };

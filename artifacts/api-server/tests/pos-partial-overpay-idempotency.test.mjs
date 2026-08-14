@@ -14,8 +14,8 @@
  *      allowOverpayment is sent; accepted only for a registered customer,
  *      whose excess lands as usable advance (credit on CUST-); the invoice
  *      itself reads paid with zero balance.
- *   5. Sale other charges may post to an INCOME ledger (income-or-expense),
- *      but never into the Sales (SYS-SAL) subtree; purchase charges stay
+ *   5. Sale other charges post to a Direct Income (SYS-DIRINC) ledger — the
+ *      Sales (SYS-SAL) subtree stays barred; purchase charges stay
  *      expense-only.
  *   6. The trial balance ends exactly where it started (self-cleaning:
  *      system-deletes its receipts, cancels its sales, removes fixtures).
@@ -203,8 +203,8 @@ try {
   assert("Walk-in overpay refused even WITH consent", wo.status === 400, `status=${wo.status} ${JSON.stringify(wo.data).slice(0, 150)}`);
 
   // ── [5] Sale other-charge ledger typing ───────────────────────────────────
-  console.log("\n[5] Sale charges: income ledger OK, Sales subtree barred");
-  // Derive an income ledger OUTSIDE the SYS-SAL subtree, or create a probe one.
+  console.log("\n[5] Sale charges: Direct Income ledger OK, Sales subtree barred");
+  // Derive a postable ledger UNDER SYS-DIRINC, or create a probe one there.
   let incomeLedgerId = null, createdProbeLedger = false;
   const chart = (await get("/accounts/chart/flat")).data ?? [];
   const byId = new Map(chart.map(a => [Number(a.id), a]));
@@ -217,16 +217,16 @@ try {
     return false;
   };
   const incomeOK = chart.find(a => a.type === "income" && !a.isGroup && !a.isSystemGroup
-    && !underCode(a, "SYS-SAL") && !underCode(a, "SYS-PUR") && !/^(SYS|STD|CUST|VEND|CBA|SAL|ADV|CADV|VADV)-/i.test(String(a.code ?? "x")));
+    && underCode(a, "SYS-DIRINC") && !/^(SYS|STD|CUST|VEND|CBA|SAL|ADV|CADV|VADV)-/i.test(String(a.code ?? "x")));
   if (incomeOK) incomeLedgerId = incomeOK.id;
   else {
-    const grp = chart.find(a => a.type === "income" && a.isGroup && !underCode(a, "SYS-SAL"));
+    const grp = chart.find(a => a.isGroup && String(a.code ?? "").toUpperCase() === "SYS-DIRINC");
     if (grp) {
       const mk = await post("/accounts/chart", { name: `ZZ Probe Packing Income ${Date.now()}`, type: "income", parentId: grp.id });
       incomeLedgerId = mk.data?.id ?? null; createdProbeLedger = !!incomeLedgerId;
     }
   }
-  assert("Found/created an income charge ledger", !!incomeLedgerId);
+  assert("Found/created a Direct Income charge ledger", !!incomeLedgerId);
   if (incomeLedgerId) {
     const s5 = await post("/sales", saleBody("cash", null, {
       clientRequestId: uuid(),

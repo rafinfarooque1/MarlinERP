@@ -31,6 +31,7 @@ import { advanceAvailable, takeAdvanceLock, attributeAdvanceConsumption, release
 import { allocateSalesInvoiceNumber, salesCounterScope } from "../lib/voucherNumber";
 import { resolveLocationGst, isInterStateSupply } from "../lib/gstTransfer";
 import { validateOtherCharges, validateSaleOtherCharges, parseStoredOtherCharges, otherChargesTotal, type OtherCharge } from "../lib/otherCharges";
+import { resolveReceiveIntoAccount, postSaleCollectionReceipt, type ReceiveIntoAccount } from "../lib/saleCollection";
 
 const router = Router();
 
@@ -866,11 +867,47 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
     });
     return;
   }
+  // ── Creation-time payment via an explicit "Receive Into" account ──────────
+  // Modern POS path: the caller names the ACTUAL Cash & Bank account the money
+  // went into (the same selector payment collection uses) and the server
+  // derives the cash/bank/upi method from the account itself — ONE collection
+  // engine (lib/saleCollection), shared with POST /sales/:id/payments.
+  // CreateSaleBody strips unknown keys, so read the raw body like
+  // clientRequestId/billDiscount above.
+  const receivedInLedgerIdRaw = Number(rawBody.receivedInLedgerId);
+  const receivedInLedgerId = Number.isInteger(receivedInLedgerIdRaw) && receivedInLedgerIdRaw > 0
+    ? receivedInLedgerIdRaw : null;
+  const allowOverpayment = rawBody.allowOverpayment === true;
+  const payReferenceNumber = typeof rawBody.referenceNumber === 'string'
+    ? String(rawBody.referenceNumber).trim() || null : null;
+  let receiveAccount: ReceiveIntoAccount | null = null;
+  // null = "the full remainder after any advance adjustment" (pay in full now).
+  let amountReceivedIn: number | null = null;
+  if (receivedInLedgerId) {
+    if (paymentModeIn === 'credit') {
+      res.status(400).json({ error: "Pick either Credit (pay later) or a Receive-Into account — not both." });
+      return;
+    }
+    const resolvedAcc = await resolveReceiveIntoAccount(pgPool, locationType, locationId, receivedInLedgerId);
+    if ('error' in resolvedAcc) { res.status(400).json({ error: resolvedAcc.error }); return; }
+    receiveAccount = resolvedAcc;
+    const rawAmt = rawBody.amountReceived;
+    if (rawAmt !== undefined && rawAmt !== null && rawAmt !== '') {
+      const amt = Number(rawAmt);
+      if (!Number.isFinite(amt) || amt <= 0) {
+        res.status(400).json({ error: 'amountReceived must be a positive amount' }); return;
+      }
+      if (Math.abs(amt * 100 - Math.round(amt * 100)) > 1e-6) {
+        res.status(400).json({ error: 'amountReceived cannot go beyond paise (2 decimal places)' }); return;
+      }
+      amountReceivedIn = Math.round(amt * 100) / 100;
+    }
+  }
+
   // cash/bank/upi are settled at the counter — mark them paid immediately so
   // outstanding, collections, and the credit check only track true credit
   // exposure. Only 'credit' (pay later) sales are credit-controlled.
   const settledAtSale = isSettledAtSale(paymentModeIn);
-  const isCreditControlled = !!parsed.data.customerId && paymentModeIn === 'credit';
   const overrideRequested = rawBody.creditOverride === true;
   // Opt-in adjustment of the customer's advance balance against this bill.
   // Read from the raw body (like creditOverride): zod strips unknown keys.
@@ -889,9 +926,11 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
 
   // Server-side authorization for the override flag. The dialog is offered to
   // everyone, so this check is the only thing standing between a cashier and
-  // selling past a customer's credit limit.
+  // selling past a customer's credit limit. Resolved whenever the flag is sent
+  // with a customer: a partial creation-time payment also lands on credit, and
+  // whether it does is only known inside the transaction (after the advance).
   let overrideAllowed = false;
-  if (isCreditControlled && overrideRequested) {
+  if (!!parsed.data.customerId && overrideRequested) {
     overrideAllowed = await hasModuleAction(req.employee?.hierarchyId, CREDIT_OVERRIDE_PAGES, "edit");
   }
 
@@ -983,6 +1022,66 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
       if (appliedAdvance <= 0.004) appliedAdvance = 0;
     }
 
+    // ── Creation-time collection: final figures and the sale's stored mode ──
+    // Decided here — after the advance — because whether the bill ends up
+    // paid, partially paid (remainder on credit) or overpaid depends on how
+    // much of it the advance already covered.
+    let counterPay: { amount: number } | null = null;
+    let saleMode = paymentModeIn;
+    if (receiveAccount) {
+      const remainderDue = round2(totalAmount - appliedAdvance);
+      const amt = amountReceivedIn ?? Math.max(0, remainderDue);
+      if (amt <= 0.004) {
+        await txClient.query('ROLLBACK');
+        res.status(400).json({ error: 'Nothing left to receive — the advance already covers this bill. Record it on credit or without the advance adjustment.' });
+        return;
+      }
+      const paidTotal = round2(appliedAdvance + amt);
+      if (paidTotal > totalAmount + 0.001) {
+        // ── Overpayment gate — same contract as payment collection ──────────
+        // Refused by default with a machine-readable code so the client can
+        // offer the "hold the excess as advance" confirmation. Consent is
+        // honoured ONLY for a registered customer: the excess lands as a
+        // credit on their CUST- ledger (the natural Cr remainder in the
+        // derived books). A walk-in has no ledger to hold it — refused even
+        // WITH consent.
+        const excess = round2(paidTotal - totalAmount);
+        const overpaymentAllowed = parsed.data.customerId != null;
+        if (!allowOverpayment || !overpaymentAllowed) {
+          await txClient.query('ROLLBACK');
+          res.status(400).json({
+            error: overpaymentAllowed
+              ? `Amount received (₹${amt.toFixed(2)}) exceeds the bill's remainder (₹${remainderDue.toFixed(2)}) by ₹${excess.toFixed(2)}. Confirm to hold the excess as customer advance.`
+              : `Amount received (₹${amt.toFixed(2)}) exceeds the bill's remainder (₹${remainderDue.toFixed(2)}). A walk-in sale cannot hold the excess as advance — collect only what is owed.`,
+            code: 'EXCEEDS_OUTSTANDING',
+            excess,
+            balanceDue: remainderDue,
+            overpaymentAllowed,
+          });
+          return;
+        }
+        saleMode = receiveAccount.method;
+      } else if (paidTotal < totalAmount - 0.004) {
+        // Partial payment: the remainder is a receivable, so the bill lives on
+        // the customer's credit — a walk-in has no account to owe it.
+        if (!parsed.data.customerId) {
+          await txClient.query('ROLLBACK');
+          res.status(400).json({
+            error: `Amount received (₹${amt.toFixed(2)}) is less than the bill (₹${remainderDue.toFixed(2)}). A walk-in must pay in full — pick a customer to leave a balance due.`,
+            code: 'PARTIAL_REQUIRES_CUSTOMER',
+          });
+          return;
+        }
+        saleMode = 'credit';
+      } else {
+        saleMode = receiveAccount.method;
+      }
+      counterPay = { amount: amt };
+    }
+
+    // Credit control judges the sale's EFFECTIVE mode: a straight credit sale,
+    // or a partial creation-time payment whose remainder just landed on credit.
+    const isCreditControlled = !!parsed.data.customerId && saleMode === 'credit';
     if (isCreditControlled) {
       // Serialize concurrent credit sales for this customer; the lock is
       // released automatically at COMMIT/ROLLBACK.
@@ -1004,10 +1103,11 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
         const { currentPartyStatement } = await import("../lib/ledgerBalances");
         const st = await currentPartyStatement("customer", parsed.data.customerId!, { q: txClient });
         const currentOutstanding = Math.max(0, Math.round(Number(st.closing ?? 0) * 100) / 100);
-        // The advance being adjusted against this bill is money already in
-        // hand — it never becomes exposure, so the credit check sees only the
-        // slice the customer will actually owe.
-        const projectedOutstanding = Math.round((currentOutstanding + totalAmount - appliedAdvance) * 100) / 100;
+        // The advance being adjusted against this bill — and any money being
+        // received right now at the counter — is already in hand: it never
+        // becomes exposure, so the credit check sees only the slice the
+        // customer will actually owe.
+        const projectedOutstanding = Math.round((currentOutstanding + totalAmount - appliedAdvance - (counterPay?.amount ?? 0)) * 100) / 100;
         const exceeded = projectedOutstanding > creditLimit + 0.009;
         if (exceeded && !(overrideRequested && overrideAllowed)) {
           await txClient.query('ROLLBACK');
@@ -1124,13 +1224,19 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
        // Stored WITH the batch trail already resolved above, so the served lots
        // are committed with the bill rather than patched in afterwards.
        JSON.stringify(lineItemsWithBatches), subtotal, taxTotal, discountTotal, billDiscount, totalAmount,
-       paymentModeIn, parsed.data.couponCode ?? null,
-       // Counter-settled modes are fully paid at once; a credit sale starts
-       // with whatever slice the customer's advance just covered.
-       settledAtSale ? totalAmount : appliedAdvance,
-       settledAtSale
-         ? 'paid'
-         : computePaymentPosition({ totalAmount, amountReceived: appliedAdvance, cancelledAt: null }).status,
+       saleMode, parsed.data.couponCode ?? null,
+       // Counter-settled modes are fully paid at once; a creation-time
+       // collection carries advance + money received (which may exceed the
+       // bill — consented overpayment); a plain credit sale starts with
+       // whatever slice the customer's advance just covered.
+       counterPay
+         ? round2(appliedAdvance + counterPay.amount)
+         : settledAtSale ? totalAmount : appliedAdvance,
+       counterPay
+         ? computePaymentPosition({ totalAmount, amountReceived: round2(appliedAdvance + counterPay.amount), cancelledAt: null }).status
+         : settledAtSale
+           ? 'paid'
+           : computePaymentPosition({ totalAmount, amountReceived: appliedAdvance, cancelledAt: null }).status,
        numberAlloc.numberScope, numberAlloc.seriesPrefix, numberAlloc.fyLabel, numberAlloc.serial,
        JSON.stringify(otherCharges), clientRequestId]
     ));
@@ -1148,7 +1254,9 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
     // electronic modes enter 'pending' so reconciliation can settle them.
     // The advance-covered slice is already recorded as its own 'advance' leg
     // above, so the counter row carries only the money that hit the till/bank.
-    if (settledAtSale) {
+    // When an explicit Receive-Into account was picked, the receipt-backed
+    // collection row below IS the settlement history — no bare counter row.
+    if (settledAtSale && !counterPay) {
       const counterAmount = round2(totalAmount - appliedAdvance);
       if (counterAmount > 0.004) {
         await txClient.query(
@@ -1161,6 +1269,37 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
            outletIdForInsert, (req as any).employee?.username ?? null]
         );
       }
+    }
+
+    // ── Creation-time collection: receipt + payment row, ONE engine ─────────
+    // The same posting routine the collect flow uses: cash into the picked
+    // cash account/till, electronic money direct-posted or through Electronic
+    // Clearing ('pending') by the account's reconciliation switch. Committing
+    // with the sale means a replayed clientRequestId can never double-post.
+    if (counterPay && receiveAccount) {
+      const posted = await postSaleCollectionReceipt(txClient, {
+        method: receiveAccount.method,
+        account: receiveAccount,
+        locType: locationType,
+        locId: locationId,
+        amount: counterPay.amount,
+        pDate: parsed.data.saleDate,
+        invoiceNumber,
+        referenceNumber: payReferenceNumber,
+      });
+      if ('error' in posted) {
+        await txClient.query('ROLLBACK');
+        res.status(500).json({ error: posted.error });
+        return;
+      }
+      await txClient.query(
+        `INSERT INTO sale_payments
+           (sale_id, payment_date, method, amount, reference_number, notes, reconciliation_status, clearing_receipt_id, outlet_id, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+        [row.id, parsed.data.saleDate, receiveAccount.method, counterPay.amount, payReferenceNumber,
+         `Received at billing — ${invoiceNumber}`, posted.reconciliationStatus, posted.clearingReceiptId,
+         outletIdForInsert, (req as any).employee?.username ?? null]
+      );
     }
 
     // The adjusted advance is a collection like any other: a sale_payments row
@@ -1231,8 +1370,10 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
 
     // Debit routing follows settlement semantics: cash → location cash ledger,
     // upi/card (settled, awaiting bank) → Electronic Payment Clearing, and only
-    // true credit sales → the customer debtor ledger.
-    if (salesLedgerId) {
+    // true credit sales → the customer debtor ledger. When a Receive-Into
+    // account was picked, the collection receipt above already IS the money
+    // trail — a second legacy trail receipt would double-display it.
+    if (salesLedgerId && !counterPay) {
       let debitLedgerId = cashLedgerId;
       if (clearsThroughBank(paymentModeIn) && elecClrLedgerId) debitLedgerId = elecClrLedgerId;
       else if (paymentModeIn === 'credit' && custLedgerId) debitLedgerId = custLedgerId;
@@ -1504,12 +1645,19 @@ router.put("/sales/:id", requireModuleAction("page:/sales/pos", "edit"), async (
   // A supplied list REPLACES the stored one (full-body PUT semantics, same as
   // the line items); an ABSENT field preserves what the invoice already
   // carries, so a payment-mode or quantity fix never silently wipes charges.
-  // Same validation as creation — see POST.
+  // Same SALE validation as creation (new picks must be Direct Income), with
+  // the invoice's already-stored charge ledgers grandfathered so a historical
+  // expense-ledger charge keeps its stored meaning through unrelated edits.
   let otherCharges: OtherCharge[];
   if (rawBody.otherCharges === undefined) {
     otherCharges = parseStoredOtherCharges(existingRaw.other_charges);
   } else {
-    const ocParsed = await validateOtherCharges(pgPool, rawBody.otherCharges);
+    const storedChargeLedgerIds = new Set(
+      parseStoredOtherCharges(existingRaw.other_charges).map((c) => c.ledgerId),
+    );
+    const ocParsed = await validateSaleOtherCharges(pgPool, rawBody.otherCharges, {
+      grandfatheredLedgerIds: storedChargeLedgerIds,
+    });
     if ('error' in ocParsed) { res.status(400).json({ error: ocParsed.error }); return; }
     otherCharges = ocParsed.charges;
   }
@@ -2227,6 +2375,61 @@ router.post("/sales/:id/cancel", requireModuleAction("page:/sales/pos", "delete"
 // drizzle version grouped warehouse sales under their fallback outlet_id,
 // losing them from the breakdown (bug #37).
 // No mapped consumer; serves the POS and Dashboard sales figures.
+// ── Customer price history ────────────────────────────────────────────────────
+// Read-only helper for the POS item picker: the last few prices THIS customer
+// actually paid for THIS item, so the operator can quote consistently. Derived
+// from source documents (sales.line_items), never stock_ledger; cancelled
+// invoices and branch-transfer documents are excluded. Informational only —
+// nothing here ever auto-applies a price. Registered BEFORE /sales/:id so the
+// literal path wins the route match.
+router.get("/sales/price-history", requireModuleView("page:/sales/pos"), async (req, res): Promise<void> => {
+  const customerId = Number(req.query.customerId);
+  const itemId = Number(req.query.itemId);
+  if (!Number.isInteger(customerId) || customerId <= 0 || !Number.isInteger(itemId) || itemId <= 0) {
+    res.status(400).json({ error: "customerId and itemId are required" });
+    return;
+  }
+  const limitRaw = Number(req.query.limit);
+  const limit = Number.isInteger(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 10) : 5;
+
+  // LBAC: only sales the caller may see feed the history — a branch user never
+  // learns what another location charged.
+  const phScope = await getUserDataScope((req as any).employee);
+  const phParams: any[] = [customerId, itemId];
+  const phScopeCond = scopeSalesWhere(phScope, phParams);
+  phParams.push(limit);
+
+  const { pool: pgPool } = await import("@workspace/db");
+  const { rows } = await pgPool.query(
+    `SELECT s.id, s.invoice_number, s.sale_date,
+            (li->>'quantity')::numeric   AS quantity,
+            (li->>'unitPrice')::numeric  AS unit_price,
+            (li->>'unitDiscount')::numeric AS unit_discount,
+            (li->>'discount')::numeric   AS line_discount
+       FROM sales s
+       CROSS JOIN LATERAL jsonb_array_elements(s.line_items) li
+      WHERE s.customer_id = $1
+        AND (li->>'itemId')::numeric = $2
+        AND s.cancelled_at IS NULL
+        AND s.branch_transfer_id IS NULL
+        AND ${phScopeCond}
+      ORDER BY s.sale_date DESC, s.id DESC
+      LIMIT $${phParams.length}`,
+    phParams,
+  );
+  res.json(rows.map((r: any) => ({
+    saleId: Number(r.id),
+    invoiceNumber: r.invoice_number,
+    saleDate: r.sale_date instanceof Date ? r.sale_date.toISOString().slice(0, 10) : String(r.sale_date).slice(0, 10),
+    quantity: Number(r.quantity ?? 0),
+    unitPrice: Number(r.unit_price ?? 0),
+    // Per-unit item discount when the sale stored one; older rows only carry
+    // the line-total discount figure, surfaced as-is (absent ≠ zero).
+    unitDiscount: r.unit_discount != null ? Number(r.unit_discount) : null,
+    lineDiscount: r.line_discount != null ? Number(r.line_discount) : null,
+  })));
+});
+
 router.get("/sales/summary", requireModuleView(["page:/sales/pos", "page:/"]), async (req, res): Promise<void> => {
   // LBAC: scope summary to the employee's assigned location
   const { getUserDataScope, scopeSalesWhere } = await import("../lib/dataScope");

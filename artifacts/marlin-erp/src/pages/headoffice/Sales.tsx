@@ -48,6 +48,7 @@ import {
   Plus, Search, Trash2, CreditCard, Calendar, Receipt,
   Download, Eye, PackageOpen, FileDown, AlertTriangle,
   UserPlus, Check, ChevronsUpDown, Banknote, IndianRupee, Pencil, Printer,
+  History,
 } from 'lucide-react';
 
 // ── WhatsApp brand icon (inline SVG) ──────────────────────────────────────────
@@ -178,6 +179,69 @@ const defaultFormValues: FormValues = {
   otherCharges: [],
 };
 
+/** Stable idempotency key for payment/sale submits — one per logical intent. */
+const newRequestId = (): string =>
+  (globalThis.crypto as any)?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+/**
+ * Read-only price history: the last few prices THIS customer actually paid for
+ * the selected item, straight from their past invoices (location-scoped on the
+ * server). Informational only — clicking a row never applies a price.
+ */
+function PriceHistoryButton({ customerId, itemId }: { customerId?: number | null; itemId: number }) {
+  const [open, setOpen] = useState(false);
+  const enabled = !!customerId && Number(customerId) > 0 && itemId > 0;
+  const { data: history = [], isLoading } = useQuery<any[]>({
+    queryKey: ['/api/sales/price-history', Number(customerId) || 0, itemId],
+    queryFn: () => customFetch(`/api/sales/price-history?customerId=${customerId}&itemId=${itemId}`) as Promise<any[]>,
+    enabled: enabled && open,
+  });
+  if (!enabled) return null;
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          type="button" variant="ghost" size="icon" tabIndex={-1}
+          className="h-8 w-8 shrink-0 text-muted-foreground"
+          title="This customer's recent prices for this item"
+          data-testid={`button-price-history-${itemId}`}
+        >
+          <History className="w-3.5 h-3.5" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-80 p-3" onOpenAutoFocus={e => e.preventDefault()}>
+        <p className="text-xs font-semibold mb-2">Recent prices for this customer</p>
+        {isLoading ? (
+          <p className="text-xs text-muted-foreground">Loading…</p>
+        ) : history.length === 0 ? (
+          <p className="text-xs text-muted-foreground">No previous sales of this item to this customer.</p>
+        ) : (
+          <div className="space-y-1" data-testid="list-price-history">
+            {history.map((h: any) => (
+              <div key={h.saleId} className="flex items-center justify-between gap-2 text-xs">
+                <div className="min-w-0 flex-1">
+                  <span className="text-muted-foreground">{new Date(h.saleDate).toLocaleDateString('en-IN')}</span>
+                  <span className="ml-1.5 font-mono text-[10px] text-muted-foreground break-all">{h.invoiceNumber}</span>
+                </div>
+                <div className="shrink-0 text-right">
+                  <span className="font-mono font-semibold">{inr(Number(h.unitPrice))}</span>
+                  {Number(h.unitDiscount ?? 0) > 0 && (
+                    <span className="ml-1 text-emerald-600">(−{inr(Number(h.unitDiscount))}/u)</span>
+                  )}
+                  <span className="ml-1 text-muted-foreground">× {Number(h.quantity)}</span>
+                </div>
+              </div>
+            ))}
+            <p className="pt-1 mt-1 text-[10px] text-muted-foreground border-t border-border">
+              Informational only — prices are never auto-applied.
+            </p>
+          </div>
+        )}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 // ── Component ──────────────────────────────────────────────────────────────────
 
 interface SalesProps {
@@ -299,10 +363,20 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   // Credit-limit override: holds the rejected payload + 409 details while the
   // manager decides whether to proceed anyway.
   const [creditWarning, setCreditWarning] = useState<{ payload: any; info: any } | null>(null);
+  // Overpayment consent — creation-time (holds the pending create payload) and
+  // collect-flow (holds the confirmed rows' excess) confirmations. The server
+  // refuses the excess without the explicit allowOverpayment flag either way.
+  const [overpayWarning, setOverpayWarning] = useState<{ payload: any; excess: number } | null>(null);
+  const [collectOverpay, setCollectOverpay] = useState<{ excess: number } | null>(null);
+  // Idempotency: ONE id per opened create form, stable across credit-limit and
+  // overpayment confirm retries, so a double-click or a retry after a network
+  // blip can never record the sale (and its money) twice.
+  const createRequestIdRef = useRef<string>(newRequestId());
 
-  // Multi-method payment state — each row has its own method, amount and reference
-  type PRow = { id: number; ledgerId: number; amount: string; ref: string };
-  const [paymentRows, setPaymentRows] = useState<PRow[]>([{ id: 1, ledgerId: 0, amount: '', ref: '' }]);
+  // Multi-method payment state — each row has its own method, amount, reference
+  // and a stable idempotency key assigned when the row is created.
+  type PRow = { id: number; ledgerId: number; amount: string; ref: string; rid: string };
+  const [paymentRows, setPaymentRows] = useState<PRow[]>([{ id: 1, ledgerId: 0, amount: '', ref: '', rid: newRequestId() }]);
   const [paymentDate, setPaymentDate] = useState(new Date().toISOString().split('T')[0]);
   const [showPaymentForm, setShowPaymentForm] = useState(false);
   // Real Cash & Bank accounts of the SALE's location — the destinations the
@@ -435,14 +509,38 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
     const totalPaying = validRows.reduce((s, r) => s + Number(r.amount), 0);
     const balanceDue = Number((viewItem as any).balanceDue ?? 0);
     if (totalPaying > balanceDue + 0.001) {
-      toast.error(`Total ${inr(totalPaying)} exceeds balance due ${inr(balanceDue)}`); return;
+      // Overpayment: a registered customer may hold the excess as a credit on
+      // their own ledger — after an explicit confirmation. A walk-in has no
+      // ledger to hold it, so the hard stop stays (the server refuses too).
+      const custId = Number((viewItem as any).customerId ?? (viewItem as any).customer_id ?? 0);
+      if (!custId) {
+        toast.error(`Total ${inr(totalPaying)} exceeds balance due ${inr(balanceDue)} — a walk-in bill cannot hold the excess as advance.`);
+        return;
+      }
+      setCollectOverpay({ excess: Math.round((totalPaying - balanceDue) * 100) / 100 });
+      return;
     }
+    await doCollectPayment(false);
+  };
+
+  const doCollectPayment = async (allowOverpayment: boolean) => {
+    if (!viewItem) return;
+    const validRows = paymentRows.filter(r => Number(r.amount) > 0);
+    const totalPaying = validRows.reduce((s, r) => s + Number(r.amount), 0);
     try {
       let lastResult: any;
       for (const row of validRows) {
         lastResult = await createPaymentMutation.mutateAsync({
           saleId: viewItem.id,
-          data: { receivedInLedgerId: row.ledgerId, amount: Number(row.amount), referenceNumber: row.ref || undefined, paymentDate },
+          data: {
+            receivedInLedgerId: row.ledgerId, amount: Number(row.amount),
+            referenceNumber: row.ref || undefined, paymentDate,
+            // Replay protection: the id was minted when the ROW was created,
+            // so a retry after a timeout resubmits the same intent instead of
+            // collecting twice.
+            clientRequestId: row.rid,
+            ...(allowOverpayment ? { allowOverpayment: true } : {}),
+          } as any,
         });
       }
       const label = validRows.length > 1
@@ -460,7 +558,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
         setViewItem((prev: any) => prev ? { ...prev, paymentStatus: lastResult.newPaymentStatus, amountPaid: lastResult.newAmountPaid } : null);
       }
       invalidateSalesData();
-      setPaymentRows([{ id: Date.now(), ledgerId: 0, amount: '', ref: '' }]);
+      setPaymentRows([{ id: Date.now(), ledgerId: 0, amount: '', ref: '', rid: newRequestId() }]);
       setShowPaymentForm(false);
     } catch (e: any) {
       toast.error(e?.data?.error || e?.message || 'Failed to collect payment');
@@ -504,25 +602,41 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   const { fields, append, remove } = useFieldArray({ control: form.control, name: 'lineItems' });
   const { fields: chargeFields, append: appendCharge, remove: removeCharge } = useFieldArray({ control: form.control, name: 'otherCharges' });
 
-  // Expense ledgers offered for Other Charges — postable, non-internal, and
-  // outside the Purchase (SYS-PUR) subtree. Mirrors the server's validation
-  // (shared with purchase-bill charges), so anything pickable here is accepted
-  // there; a ledger created in Chart of Accounts appears automatically.
+  // Direct Income ledgers offered for Sale Other Charges — a charge is a
+  // recovery the customer pays on top of the goods (Packing & Delivery
+  // Recovery…), so a NEW pick must be a postable income ledger under Direct
+  // Income (SYS-DIRINC), mirroring the server's validation. Historical sales
+  // could charge income-or-expense ledgers: when EDITING such a sale its
+  // stored ledgers stay selectable (the server grandfathers them), labelled
+  // "(legacy)" so the mixed-legacy state is visible, never silently rewritten.
   const { data: allAccounts = [] } = useListAccountsFlat();
-  const expenseLedgers = useMemo(() => {
+  const chargeLedgers = useMemo(() => {
     const byId = new Map((allAccounts as any[]).map((a: any) => [Number(a.id), a]));
-    const underPurchaseGroup = (a: any): boolean => {
+    const underGroupCode = (a: any, code: string): boolean => {
       const seen = new Set<number>();
-      for (let cur = a; cur && !seen.has(Number(cur.id)); cur = cur.parentId != null ? byId.get(Number(cur.parentId)) : undefined) {
+      for (let cur = a.parentId != null ? byId.get(Number(a.parentId)) : undefined;
+           cur && !seen.has(Number(cur.id));
+           cur = cur.parentId != null ? byId.get(Number(cur.parentId)) : undefined) {
         seen.add(Number(cur.id));
-        if (String(cur.code ?? '').toUpperCase() === 'SYS-PUR') return true;
+        if (String(cur.code ?? '').toUpperCase() === code) return true;
       }
       return false;
     };
-    return (allAccounts as any[])
-      .filter((a: any) => a.type === 'expense' && !a.isGroup && !a.isSystemGroup && !isSystemLedger(a.code) && !underPurchaseGroup(a))
-      .sort((x: any, y: any) => String(x.name).localeCompare(String(y.name)));
-  }, [allAccounts]);
+    const direct = (allAccounts as any[])
+      .filter((a: any) => a.type === 'income' && !a.isGroup && !a.isSystemGroup && !isSystemLedger(a.code) && underGroupCode(a, 'SYS-DIRINC'))
+      .sort((x: any, y: any) => String(x.name).localeCompare(String(y.name)))
+      .map((a: any) => ({ id: Number(a.id), name: String(a.name), legacy: false }));
+    const inList = new Set(direct.map(d => d.id));
+    const storedIds = new Set(
+      (((editItem?.otherCharges ?? editItem?.other_charges) ?? []) as any[])
+        .map((c: any) => Number(c?.ledgerId))
+        .filter((n: number) => Number.isInteger(n) && n > 0),
+    );
+    const legacy = (allAccounts as any[])
+      .filter((a: any) => storedIds.has(Number(a.id)) && !inList.has(Number(a.id)))
+      .map((a: any) => ({ id: Number(a.id), name: String(a.name), legacy: true }));
+    return [...direct, ...legacy];
+  }, [allAccounts, editItem]);
   // Resolve a charge's ledger name for the view sheet — stored rows carry only
   // the ledger id.
   const ledgerNameById = useMemo(
@@ -632,6 +746,36 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   const watchCustomerId = form.watch('customerId');
   const watchPaymentMode = form.watch('paymentMode');
 
+  // ── Creation-time collection ("Receive Into" at billing) ──────────────────
+  // The FORM's location drives which Cash & Bank accounts are offered — the
+  // same location-assigned set (and the same component) the collect flow uses.
+  // The server re-validates the account and derives cash/bank/UPI from it.
+  const { options: formReceiveOptions } = useReceiveIntoOptions(watchLocationType, watchLocationId);
+  const [receiveLedgerId, setReceiveLedgerId] = useState(0);
+  // '' = "the full remainder after any advance" (pay in full — the default).
+  const [amountReceivedStr, setAmountReceivedStr] = useState('');
+  const [payReference, setPayReference] = useState('');
+
+  // Fresh idempotency key + clean receive state every time the form opens.
+  useEffect(() => {
+    if (isOpen) {
+      createRequestIdRef.current = newRequestId();
+      setReceiveLedgerId(0);
+      setAmountReceivedStr('');
+      setPayReference('');
+    }
+  }, [isOpen]);
+  // Keep the picked account valid for the form's location, and default to the
+  // location's own cash till so a plain cash sale needs no extra click.
+  useEffect(() => {
+    if (!isOpen || editItem) return;
+    setReceiveLedgerId(prev => {
+      if (prev > 0 && formReceiveOptions.some(o => o.id === prev)) return prev;
+      const cash = formReceiveOptions.find(o => isCashOption(o));
+      return cash?.id ?? formReceiveOptions[0]?.id ?? 0;
+    });
+  }, [isOpen, editItem, formReceiveOptions]);
+
   // Advance adjustment: does the selected customer have money parked with us?
   // Only queried for registered customers; walk-ins have no advance ledger.
   const { data: customerAdvance } = usePartyAdvance('customer', editItem ? null : (watchCustomerId || null));
@@ -656,6 +800,18 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
     }
     return CREATE_PAYMENT_MODE_OPTIONS;
   }, [watchPaymentMode]);
+  // Create mode with location-assigned accounts available: 'cash' becomes
+  // "Receive Now" — the actual Cash/Bank/UPI method follows from the account
+  // picked below, not from this select. Locations without assigned accounts
+  // keep the legacy plain-cash option.
+  const createModeOptions = useMemo(() =>
+    formReceiveOptions.length > 0
+      ? [
+          { value: 'cash' as const, label: '💰 Receive Now (Cash / Bank / UPI)' },
+          { value: 'credit' as const, label: '🕒 Credit (pay later)' },
+        ]
+      : CREATE_PAYMENT_MODE_OPTIONS,
+    [formReceiveOptions.length]);
 
   const { data: outletPrices = [] } = useListItemPrices(
     { outletId: watchLocationId },
@@ -938,14 +1094,32 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
       priceMode: (li.taxable ? 'exclusive' : 'inclusive') as 'exclusive' | 'inclusive',
       taxAmount: 0, // backend recomputes authoritatively
     }));
-    // Synchronous re-entrancy lock: two rapid Ctrl+S / Enter submits can both
-    // pass an isPending check before React Query publishes the pending state.
-    // The ref flips immediately, so only the first ever reaches mutate().
-    // Placed AFTER the validation early-returns so a failed validation never
-    // leaves the lock stuck. Released in onSettled (success or error).
-    if (submitLockRef.current) return;
-    submitLockRef.current = true;
-    const { discountAmount, billDiscount } = computeCartTotals();
+    // ── Creation-time collection fields (create mode, non-credit) ───────────
+    // Sent only when the location has assigned Cash & Bank accounts; locations
+    // without them keep the legacy plain-cash submit. The server re-validates
+    // everything authoritatively.
+    const payNow = !editItem && data.paymentMode !== 'credit' && formReceiveOptions.length > 0;
+    let payFields: Record<string, unknown> = {};
+    if (payNow) {
+      if (!receiveLedgerId) {
+        toast.error('Pick the Cash / Bank account the money went into.');
+        return;
+      }
+      if (amountReceivedStr !== '') {
+        const amt = Number(amountReceivedStr);
+        if (!Number.isFinite(amt) || amt <= 0) {
+          toast.error('Enter a valid amount received.');
+          return;
+        }
+      }
+      const refTrim = payReference.trim();
+      payFields = {
+        receivedInLedgerId: receiveLedgerId,
+        ...(amountReceivedStr !== '' ? { amountReceived: Number(amountReceivedStr) } : {}),
+        ...(refTrim ? { referenceNumber: refTrim } : {}),
+      };
+    }
+    const { discountAmount, billDiscount, finalAmount } = computeCartTotals();
     const payload = {
       ...data,
       locationType: data.locationType,
@@ -966,9 +1140,46 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
       // Advance adjustment — opt-in; the server caps at what the books hold.
       ...(!editItem && applyAdvance && (customerAdvance?.available ?? 0) > 0.004
         ? { useAdvance: true } : {}),
+      // Money received at billing — see payFields above.
+      ...payFields,
+      // Replay protection on the create itself (stable across the credit-limit
+      // and overpayment confirmation retries below).
+      ...(!editItem ? { clientRequestId: createRequestIdRef.current } : {}),
     } as any;
 
+    // ── Overpayment pre-confirmation ─────────────────────────────────────────
+    // Mirrors the server's gate so the cashier confirms BEFORE the request:
+    // a registered customer may hold the excess as advance (their ledger keeps
+    // the credit); a walk-in has nowhere to hold it — hard stop. The server
+    // enforces both authoritatively (EXCEEDS_OUTSTANDING without the flag).
+    if (payNow && amountReceivedStr !== '') {
+      const advApplied = applyAdvance && data.customerId
+        ? Math.min(Number(customerAdvance?.available ?? 0), finalAmount)
+        : 0;
+      const paidTotal = Math.round((advApplied + Number(amountReceivedStr)) * 100) / 100;
+      if (paidTotal > finalAmount + 0.004) {
+        if (!data.customerId) {
+          toast.error('Amount received exceeds the bill — a walk-in sale cannot hold the excess as advance. Collect only what is owed.');
+          return;
+        }
+        setOverpayWarning({ payload, excess: Math.round((paidTotal - finalAmount) * 100) / 100 });
+        return;
+      }
+      if (paidTotal < finalAmount - 0.004 && !data.customerId) {
+        toast.error('A walk-in must pay in full — pick a customer to leave a balance due.');
+        focusField('customerId', scopeRef.current);
+        return;
+      }
+    }
+
     if (editItem) {
+      // Synchronous re-entrancy lock: two rapid Ctrl+S / Enter submits can both
+      // pass an isPending check before React Query publishes the pending state.
+      // The ref flips immediately, so only the first ever reaches mutate().
+      // Placed AFTER the validation early-returns so a failed validation never
+      // leaves the lock stuck. Released in onSettled (success or error).
+      if (submitLockRef.current) return;
+      submitLockRef.current = true;
       // Edit mode — PUT to existing sale
       updateMutation.mutate({ saleId: editItem.id, data: payload }, {
         onSuccess: (updated: any) => {
@@ -984,54 +1195,87 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
         onSettled: () => { submitLockRef.current = false; },
       });
     } else {
-      // Create mode — POST new sale
-      createMutation.mutate({ data: payload }, {
-        onSuccess: (created: any) => {
-          toast.success(convertFrom
-            ? `Quotation ${convertFrom.quotationNumber} converted — invoice ${created?.invoiceNumber ?? ''} recorded`
-            : 'Sale recorded successfully');
-          invalidateSalesData();
-          if (convertFrom) {
-            queryClient.invalidateQueries({
-              predicate: q => String(q.queryKey[0] ?? '').startsWith('/api/quotations'),
-            });
-            setConvertFrom(null);
-          }
+      // Create mode — POST new sale (shared with the confirmation retries).
+      runCreate(payload);
+    }
+  };
+
+  // Create-mode POST, shared by the plain submit and the credit-limit /
+  // overpayment confirmation retries (which resend the SAME payload — same
+  // clientRequestId — plus the consent flag). Takes the re-entrancy lock
+  // itself so every entry point is double-submit safe.
+  const runCreate = (payload: any) => {
+    if (submitLockRef.current) return;
+    submitLockRef.current = true;
+    createMutation.mutate({ data: payload }, {
+      onSuccess: (created: any) => {
+        toast.success(convertFrom
+          ? `Quotation ${convertFrom.quotationNumber} converted — invoice ${created?.invoiceNumber ?? ''} recorded`
+          : 'Sale recorded successfully');
+        invalidateSalesData();
+        if (convertFrom) {
+          queryClient.invalidateQueries({
+            predicate: q => String(q.queryKey[0] ?? '').startsWith('/api/quotations'),
+          });
+          setConvertFrom(null);
+        }
+        setIsOpen(false);
+        form.reset(effectiveDefaultValues);
+      },
+      onError: (e: any) => {
+        if (e?.status === 409 && e?.data?.code === 'QUOTATION_ALREADY_CONVERTED') {
+          toast.error(
+            `${convertFrom?.quotationNumber ?? 'This quotation'} was already converted to ${e?.data?.convertedInvoiceNumber ?? 'a sale'} — a quotation can only become one invoice.`,
+            { duration: 8000 },
+          );
+          queryClient.invalidateQueries({
+            predicate: q => String(q.queryKey[0] ?? '').startsWith('/api/quotations'),
+          });
+          setConvertFrom(null);
           setIsOpen(false);
           form.reset(effectiveDefaultValues);
-        },
-        onError: (e: any) => {
-          if (e?.status === 409 && e?.data?.code === 'QUOTATION_ALREADY_CONVERTED') {
+          return;
+        }
+        const info = e?.data;
+        if (e?.status === 409 && info?.code === 'CREDIT_LIMIT_EXCEEDED') {
+          if (perm.canEdit) {
+            // Managers may override — show the warning dialog
+            setCreditWarning({ payload, info });
+          } else {
             toast.error(
-              `${convertFrom?.quotationNumber ?? 'This quotation'} was already converted to ${e?.data?.convertedInvoiceNumber ?? 'a sale'} — a quotation can only become one invoice.`,
+              `Credit limit exceeded: outstanding ${inr(Number(info.currentOutstanding ?? 0))} + this sale ${inr(Number(info.saleAmount ?? 0))} would pass the ${inr(Number(info.creditLimit ?? 0))} limit. Ask a manager to override or collect payment first.`,
               { duration: 8000 },
             );
-            queryClient.invalidateQueries({
-              predicate: q => String(q.queryKey[0] ?? '').startsWith('/api/quotations'),
-            });
-            setConvertFrom(null);
-            setIsOpen(false);
-            form.reset(effectiveDefaultValues);
-            return;
           }
-          const info = e?.data;
-          if (e?.status === 409 && info?.code === 'CREDIT_LIMIT_EXCEEDED') {
-            if (perm.canEdit) {
-              // Managers may override — show the warning dialog
-              setCreditWarning({ payload, info });
-            } else {
-              toast.error(
-                `Credit limit exceeded: outstanding ${inr(Number(info.currentOutstanding ?? 0))} + this sale ${inr(Number(info.saleAmount ?? 0))} would pass the ${inr(Number(info.creditLimit ?? 0))} limit. Ask a manager to override or collect payment first.`,
-                { duration: 8000 },
-              );
-            }
-            return;
+          return;
+        }
+        // Server-side overpayment gate (authoritative; normally pre-empted by
+        // the client-side confirm above, but advance-cap drift can land here).
+        if (e?.status === 400 && info?.code === 'EXCEEDS_OUTSTANDING') {
+          if (info?.overpaymentAllowed) {
+            setOverpayWarning({ payload, excess: Number(info.excess ?? 0) });
+          } else {
+            toast.error(info?.error || 'Amount received exceeds the bill — a walk-in sale cannot hold the excess.');
           }
-          toast.error(e?.data?.error || e.message || 'Could not record sale');
-        },
-        onSettled: () => { submitLockRef.current = false; },
-      });
-    }
+          return;
+        }
+        if (e?.status === 400 && info?.code === 'PARTIAL_REQUIRES_CUSTOMER') {
+          toast.error('A walk-in must pay in full — pick a customer to leave a balance due.');
+          return;
+        }
+        toast.error(e?.data?.error || e.message || 'Could not record sale');
+      },
+      onSettled: () => { submitLockRef.current = false; },
+    });
+  };
+
+  // Cashier confirmed holding the excess as the customer's advance: retry the
+  // SAME payload (same idempotency key) with the explicit consent flag.
+  const proceedDespiteOverpay = () => {
+    if (!overpayWarning) return;
+    const payload = { ...overpayWarning.payload, allowOverpayment: true };
+    setOverpayWarning(null);
+    runCreate(payload);
   };
 
   // Manager confirmed: retry the same sale with the credit-override flag set.
@@ -1599,7 +1843,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                     <Select onValueChange={field.onChange} value={field.value}>
                       <FormControl><SelectTrigger><SelectValue placeholder="Select mode" /></SelectTrigger></FormControl>
                       <SelectContent>
-                        {paymentModeOptions.map(m => (
+                        {(editItem ? paymentModeOptions : createModeOptions).map(m => (
                           <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
                         ))}
                       </SelectContent>
@@ -1611,6 +1855,77 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                   </FormItem>
                 )} />
               </div>
+
+              {/* Receive Into at billing — create mode, non-credit, only when
+                  the location has assigned Cash & Bank accounts (locations
+                  without them keep the legacy plain-cash submit). The picked
+                  account determines the stored method (cash/bank/UPI) — same
+                  resolver as the collect flow. Amount left blank = pay in
+                  full. The server re-validates everything authoritatively. */}
+              {!editItem && watchPaymentMode !== 'credit' && formReceiveOptions.length > 0 && (() => {
+                const advApplied = applyAdvance && watchCustomerId
+                  ? Math.min(Number(customerAdvance?.available ?? 0), totals.finalAmount)
+                  : 0;
+                const remainder = Math.max(0, Math.round((totals.finalAmount - advApplied) * 100) / 100);
+                const recvNum = amountReceivedStr === '' ? remainder : (Number(amountReceivedStr) || 0);
+                const paidTotal = Math.round((advApplied + recvNum) * 100) / 100;
+                const due = Math.round((totals.finalAmount - paidTotal) * 100) / 100;
+                const selected = formReceiveOptions.find(o => o.id === receiveLedgerId);
+                return (
+                  <div className="rounded-lg border border-border bg-muted/20 p-3 space-y-3" data-testid="section-receive-now">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                      <div className="flex flex-col gap-1.5">
+                        <span className="text-sm font-medium">Receive Into <span className="text-destructive">*</span></span>
+                        <ReceiveIntoSelect
+                          locationType={watchLocationType}
+                          locationId={watchLocationId}
+                          value={receiveLedgerId}
+                          onChange={setReceiveLedgerId}
+                        />
+                      </div>
+                      <div className="flex flex-col gap-1.5">
+                        <span className="text-sm font-medium">Amount Received <span className="text-xs text-muted-foreground font-normal">(blank = full)</span></span>
+                        <Input
+                          type="number" min="0" step="0.01" inputMode="decimal"
+                          placeholder={remainder > 0 ? remainder.toFixed(2) : ''}
+                          value={amountReceivedStr}
+                          onChange={e => setAmountReceivedStr(e.target.value)}
+                          data-testid="input-amount-received"
+                        />
+                      </div>
+                      {selected && !isCashOption(selected) && (
+                        <div className="flex flex-col gap-1.5">
+                          <span className="text-sm font-medium">Reference <span className="text-xs text-muted-foreground font-normal">(UTR / txn no.)</span></span>
+                          <Input
+                            value={payReference}
+                            onChange={e => setPayReference(e.target.value)}
+                            placeholder="Optional"
+                            data-testid="input-payment-reference"
+                          />
+                        </div>
+                      )}
+                    </div>
+                    {totals.finalAmount > 0 && (
+                      <p className="text-xs" data-testid="text-payment-preview">
+                        {advApplied > 0 && <>Advance applied: <span className="font-mono">{inr(advApplied)}</span> · </>}
+                        {paidTotal <= totals.finalAmount + 0.004 && due <= 0.004 && (
+                          <span className="text-emerald-600 font-medium">PAID in full</span>
+                        )}
+                        {due > 0.004 && (
+                          <span className="text-amber-600 font-medium">
+                            PARTIALLY PAID — {inr(due)} due{!watchCustomerId ? ' (walk-ins must pay in full)' : ''}
+                          </span>
+                        )}
+                        {paidTotal > totals.finalAmount + 0.004 && (
+                          <span className="text-destructive font-medium">
+                            Overpayment of {inr(Math.round((paidTotal - totals.finalAmount) * 100) / 100)} — needs confirmation, held as customer advance
+                          </span>
+                        )}
+                      </p>
+                    )}
+                  </div>
+                );
+              })()}
 
               {/* Advance adjustment — a customer with money parked beyond their
                   bills can have it auto-applied to this invoice. Create only:
@@ -1722,23 +2037,30 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
 
                         return (
                           <div key={field.id} data-kbd-row={index} className="p-3 bg-muted/20 rounded-lg border border-border space-y-2">
-                            {/* Row 1: Item selector */}
+                            {/* Row 1: Item selector + (for registered customers)
+                                a read-only price-history popover — the last few
+                                prices THIS customer paid for the item. */}
                             <FormField control={form.control} name={`lineItems.${index}.itemId`} render={({ field: f }) => (
                               <FormItem>
                                 <FormLabel className="text-xs">Item</FormLabel>
-                                <FormControl><SearchableItemSelect
-                                  className="h-8 text-xs"
-                                  columns={['available', 'mrp', 'gst']}
-                                  advanceOnSelect
-                                  data-testid={`input-line-item-${index}`}
-                                  items={lineItemOptions(Number(f.value))}
-                                  value={f.value}
-                                  onChange={id => {
-                                    f.onChange(id);
-                                    // Auto-fill from Item Master MRP — read-only in sale
-                                    form.setValue(`lineItems.${index}.unitPrice`, getPrice(id));
-                                  }}
-                                /></FormControl>
+                                <div className="flex items-center gap-1">
+                                  <div className="flex-1 min-w-0">
+                                    <FormControl><SearchableItemSelect
+                                      className="h-8 text-xs"
+                                      columns={['available', 'mrp', 'gst']}
+                                      advanceOnSelect
+                                      data-testid={`input-line-item-${index}`}
+                                      items={lineItemOptions(Number(f.value))}
+                                      value={f.value}
+                                      onChange={id => {
+                                        f.onChange(id);
+                                        // Auto-fill from Item Master MRP — read-only in sale
+                                        form.setValue(`lineItems.${index}.unitPrice`, getPrice(id));
+                                      }}
+                                    /></FormControl>
+                                  </div>
+                                  <PriceHistoryButton customerId={watchCustomerId} itemId={Number(f.value) || 0} />
+                                </div>
                               </FormItem>
                             )} />
 
@@ -1895,15 +2217,16 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                 )}
               </div>
 
-              {/* ── Other Charges — Packing & Transport, freight, hamali,
-                  courier… Flat amounts the customer owes on top of the goods:
-                  added to the invoice total, no GST on them, posted to the
-                  chosen expense ledger (an expense recovery). Same ledger
-                  list as purchase-bill charges. ── */}
+              {/* ── Other Charges — packing / delivery / freight recoveries the
+                  customer owes on top of the goods: added to the invoice
+                  total, no GST on them, posted to the chosen DIRECT INCOME
+                  ledger in the books. Historical sales with legacy expense
+                  ledgers keep their stored meaning ("(legacy)" entries when
+                  editing). ── */}
               <div>
                 <h3 className="text-sm font-semibold mb-2">
                   Other Charges{' '}
-                  <span className="text-xs font-normal text-muted-foreground">(Packing &amp; Transport, freight, hamali… — added to the invoice total, no GST)</span>
+                  <span className="text-xs font-normal text-muted-foreground">(packing / delivery recovery… — added to the invoice total, no GST, posts to a Direct Income ledger)</span>
                 </h3>
                 {chargeFields.length > 0 && (
                   <div className="space-y-2">
@@ -1912,10 +2235,10 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                         <FormField control={form.control} name={`otherCharges.${ci}.ledgerId`} render={({ field }) => (
                           <FormItem>
                             <Select value={field.value ? String(field.value) : ''} onValueChange={v => field.onChange(Number(v))}>
-                              <FormControl><SelectTrigger className="h-9 text-xs" data-testid={`select-other-charge-ledger-${ci}`}><SelectValue placeholder="Expense ledger" /></SelectTrigger></FormControl>
+                              <FormControl><SelectTrigger className="h-9 text-xs" data-testid={`select-other-charge-ledger-${ci}`}><SelectValue placeholder="Income ledger" /></SelectTrigger></FormControl>
                               <SelectContent>
-                                {expenseLedgers.length === 0 && <div className="px-3 py-2 text-xs text-muted-foreground">No expense ledgers — create one under Accounts → Chart of Accounts</div>}
-                                {expenseLedgers.map((l: any) => <SelectItem key={l.id} value={String(l.id)}>{l.name}</SelectItem>)}
+                                {chargeLedgers.length === 0 && <div className="px-3 py-2 text-xs text-muted-foreground">No Direct Income ledgers — create one under Accounts → Chart of Accounts (e.g. Packing &amp; Delivery Recovery)</div>}
+                                {chargeLedgers.map((l) => <SelectItem key={l.id} value={String(l.id)}>{l.name}{l.legacy ? ' (legacy)' : ''}</SelectItem>)}
                               </SelectContent>
                             </Select>
                             <FormMessage />
@@ -2167,12 +2490,12 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                     const lineSubtotal = li.lineSubtotal ?? (li.quantity * li.unitPrice);
                     return (
                       <div key={i} className="p-3 bg-muted/20 rounded-lg text-sm border border-border">
-                        <div className="flex justify-between items-start">
-                          <div>
-                            <p className="font-medium">{itemName}</p>
+                        <div className="flex justify-between items-start gap-2">
+                          <div className="min-w-0 flex-1">
+                            <p className="font-medium break-words">{itemName}</p>
                             {hsnCode && <p className="text-xs text-muted-foreground">HSN: {hsnCode}</p>}
                           </div>
-                          <Badge variant="secondary" className="text-xs">{li.taxRate ?? 0}% GST</Badge>
+                          <Badge variant="secondary" className="text-xs shrink-0">{li.taxRate ?? 0}% GST</Badge>
                         </div>
                         <div className="mt-2 flex justify-between text-xs text-muted-foreground">
                           <span>
@@ -2321,7 +2644,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                     {!showPaymentForm ? (
                       <Button size="sm" className="w-full h-8" onClick={() => {
                         const bal = Number((viewItem as any).balanceDue ?? 0).toFixed(2);
-                        setPaymentRows([{ id: Date.now(), ledgerId: 0, amount: bal, ref: '' }]);
+                        setPaymentRows([{ id: Date.now(), ledgerId: 0, amount: bal, ref: '', rid: newRequestId() }]);
                         setPaymentDate(new Date().toISOString().split('T')[0]);
                         setShowPaymentForm(true);
                       }}>
@@ -2390,7 +2713,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                           const remaining = bal - total;
                           return remaining > 0.001 ? (
                             <button
-                              onClick={() => setPaymentRows(rs => [...rs, { id: Date.now(), ledgerId: 0, amount: remaining.toFixed(2), ref: '' }])}
+                              onClick={() => setPaymentRows(rs => [...rs, { id: Date.now(), ledgerId: 0, amount: remaining.toFixed(2), ref: '', rid: newRequestId() }])}
                               className="flex items-center gap-1 text-xs text-primary hover:underline"
                             >
                               <Plus className="w-3 h-3" /> Split into another account
@@ -2585,6 +2908,72 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
               disabled={createMutation.isPending}
             >
               {createMutation.isPending ? 'Recording…' : 'Proceed anyway'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Overpayment confirmation — creation-time collection. The excess is
+          held as the customer's advance (a credit on their own ledger); the
+          server refuses it without the explicit allowOverpayment flag. */}
+      <AlertDialog open={!!overpayWarning} onOpenChange={v => { if (!v) setOverpayWarning(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2 text-amber-600">
+              <AlertTriangle className="w-5 h-5" /> Amount received exceeds the bill
+            </AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2 text-sm text-muted-foreground">
+                <span className="block">
+                  The customer is paying <span className="font-mono font-semibold text-foreground">{inr(Number(overpayWarning?.excess ?? 0))}</span> more
+                  than this invoice. The excess will be held as their advance and
+                  auto-offered against their next bill.
+                </span>
+                <span className="block">Record the overpayment?</span>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={createMutation.isPending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-amber-600 text-white hover:bg-amber-700"
+              onClick={e => { e.preventDefault(); proceedDespiteOverpay(); }}
+              disabled={createMutation.isPending}
+              data-testid="button-confirm-overpay"
+            >
+              {createMutation.isPending ? 'Recording…' : 'Yes, hold as advance'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Overpayment confirmation — collect flow (existing sale). */}
+      <AlertDialog open={!!collectOverpay} onOpenChange={v => { if (!v) setCollectOverpay(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2 text-amber-600">
+              <AlertTriangle className="w-5 h-5" /> Payment exceeds balance due
+            </AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2 text-sm text-muted-foreground">
+                <span className="block">
+                  This collection is <span className="font-mono font-semibold text-foreground">{inr(Number(collectOverpay?.excess ?? 0))}</span> more
+                  than what is owed on the invoice. The excess will be held as the
+                  customer's advance and auto-offered against their next bill.
+                </span>
+                <span className="block">Record the overpayment?</span>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={createPaymentMutation.isPending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-amber-600 text-white hover:bg-amber-700"
+              onClick={e => { e.preventDefault(); const go = async () => { setCollectOverpay(null); await doCollectPayment(true); }; void go(); }}
+              disabled={createPaymentMutation.isPending}
+              data-testid="button-confirm-collect-overpay"
+            >
+              {createPaymentMutation.isPending ? 'Collecting…' : 'Yes, hold as advance'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

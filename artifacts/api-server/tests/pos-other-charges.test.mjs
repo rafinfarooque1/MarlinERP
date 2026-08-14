@@ -9,8 +9,10 @@
  *   · Books: revenue = total − tax − charges; each charge posts Cr to its own
  *     expense ledger; the Dr side (cash/clearing/customer) carries the FULL
  *     total. Trial balance stays balanced.
- *   · Validation on the EFFECTIVE ledger: postable, active, expense-type,
- *     outside SYS-PUR, not a system ledger; amounts > 0, paise precision.
+ *   · Validation on the EFFECTIVE ledger (NEW sales): postable, active,
+ *     INCOME-type, strictly under Direct Income (SYS-DIRINC), not a system
+ *     ledger; amounts > 0, paise precision. Historical sales that charged
+ *     expense ledgers are grandfathered on EDIT (stored ids stay legal).
  *   · Edit REPLACES the stored list when supplied, preserves it when the field
  *     is absent, clears it on []. No duplicate postings after an edit.
  *   · Cancel reverses everything (derived postings skip cancelled sales).
@@ -23,6 +25,7 @@
  */
 
 import pg from 'pg';
+import bcrypt from 'bcryptjs';
 import { execSync } from 'node:child_process';
 import { writeFileSync, unlinkSync } from 'node:fs';
 
@@ -84,7 +87,7 @@ async function stmtEntries(accountId, inv) {
   return entries.filter(e => JSON.stringify(e).includes(inv));
 }
 
-const fixtures = { vendorId: 0, itemA: 0, customerId: 0, ledgerPack: 0, ledgerFreight: 0 };
+const fixtures = { vendorId: 0, itemA: 0, customerId: 0, ledgerPack: 0, ledgerFreight: 0, ledgerLegacyExp: 0 };
 const createdPurchases = [];
 const createdSales = [];
 
@@ -112,15 +115,38 @@ async function cleanup() {
   await sql(`DELETE FROM account_ledgers WHERE name LIKE $1 AND code LIKE 'CUST-%'`, [`${TAG}%`]);
   await sql(`DELETE FROM customers WHERE name LIKE $1`, [`${TAG}%`]);
   // Charge ledgers last — nothing references them once the sales are gone.
-  await sql(`DELETE FROM account_ledgers WHERE name LIKE $1 AND type = 'expense' AND is_group = false`, [`${TAG}%`]);
+  await sql(`DELETE FROM account_ledgers WHERE name LIKE $1 AND type IN ('expense','income') AND is_group = false`, [`${TAG}%`]);
+}
+
+// Level-1 probe user, provisioned directly in the DB (never 'admin') when no
+// TEST_USERNAME/TEST_PASSWORD pair is exported — same pattern as the
+// partial/overpay suite.
+const PROBE_USER = 'pos_charges_probe';
+const PROBE_PASS = 'Probe#Charges1';
+async function setupProbeUser() {
+  await teardownProbeUser();
+  await sql(
+    `INSERT INTO employees (name, username, password_hash, hierarchy_id, branch_type, branch_id, salary, join_date, is_active, must_change_password)
+     SELECT 'POS Charges Probe', $1, $2, (SELECT MIN(id) FROM hierarchies), 'headoffice', 1, 1, CURRENT_DATE, true, false`,
+    [PROBE_USER, bcrypt.hashSync(PROBE_PASS, 10)]);
+}
+async function teardownProbeUser() {
+  await sql(`DELETE FROM login_lockouts WHERE username = $1`, [PROBE_USER]);
+  await sql(`DELETE FROM login_attempts WHERE username = $1`, [PROBE_USER]);
+  await sql(`DELETE FROM employees WHERE username = $1`, [PROBE_USER]);
 }
 
 // ───────────────────────────────────────────────────────────────────────────
 console.log('\n[0] Authentication and fixtures');
 
-const loginRes = await post('/auth/login', { username: process.env.TEST_USERNAME || 'admin', password: process.env.TEST_PASSWORD || 'marlin1458' });
+let usingProbe = false;
+if (!process.env.TEST_USERNAME) { await setupProbeUser(); usingProbe = true; }
+const loginRes = await post('/auth/login', {
+  username: process.env.TEST_USERNAME || PROBE_USER,
+  password: process.env.TEST_USERNAME ? process.env.TEST_PASSWORD : PROBE_PASS,
+});
 authToken = loginRes.data?.token ?? '';
-assert('Admin login returns a token', !!authToken, `status=${loginRes.status}`);
+assert('Admin-level login returns a token', !!authToken, `status=${loginRes.status}`);
 if (!authToken) { console.error('FATAL: no token'); process.exit(1); }
 
 await cleanup(); // in case a previous run died mid-way
@@ -134,8 +160,18 @@ fixtures.itemA = (await sql(
    VALUES ($1,'KG','08119010',5,100,'FG-ZZTEST-OC','2900000000311','active') RETURNING id`,
   [`${TAG} OC Item A5`])).rows[0].id;
 
-// Charge ledgers: postable expense ledgers OUTSIDE the SYS-PUR subtree —
-// exactly what the dropdown offers and the server accepts.
+// Charge ledgers: postable INCOME ledgers under Direct Income (SYS-DIRINC) —
+// exactly what the dropdown offers and the server accepts for NEW sales.
+const { rows: [dirInc] } = await sql(`SELECT id FROM account_ledgers WHERE code = 'SYS-DIRINC'`);
+assert('Direct Income group (SYS-DIRINC) exists to parent the charge ledgers', !!dirInc);
+for (const [key, name] of [['ledgerPack', 'Packing & Transport'], ['ledgerFreight', 'Freight Recovered']]) {
+  fixtures[key] = (await sql(
+    `INSERT INTO account_ledgers (name, type, section, parent_id, is_system_group, description)
+     VALUES ($1, 'income', 'profit_loss', $2, false, 'disposable test fixture') RETURNING id`,
+    [`${TAG} ${name}`, dirInc.id])).rows[0].id;
+}
+// A legacy-style expense ledger (outside SYS-PUR) — refused on NEW sales,
+// grandfathered when a historical sale already stores it.
 const { rows: [expGroup] } = await sql(
   `WITH RECURSIVE pur AS (
      SELECT id FROM account_ledgers WHERE code = 'SYS-PUR'
@@ -144,13 +180,11 @@ const { rows: [expGroup] } = await sql(
    SELECT id FROM account_ledgers
     WHERE type = 'expense' AND is_group = true AND id NOT IN (SELECT id FROM pur)
     ORDER BY id LIMIT 1`);
-assert('An expense group outside SYS-PUR exists to parent the charge ledgers', !!expGroup);
-for (const [key, name] of [['ledgerPack', 'Packing & Transport'], ['ledgerFreight', 'Freight Recovered']]) {
-  fixtures[key] = (await sql(
-    `INSERT INTO account_ledgers (name, type, section, parent_id, is_system_group, description)
-     VALUES ($1, 'expense', 'profit_loss', $2, false, 'disposable test fixture') RETURNING id`,
-    [`${TAG} ${name}`, expGroup.id])).rows[0].id;
-}
+assert('An expense group outside SYS-PUR exists for the legacy fixture', !!expGroup);
+fixtures.ledgerLegacyExp = (await sql(
+  `INSERT INTO account_ledgers (name, type, section, parent_id, is_system_group, description)
+   VALUES ($1, 'expense', 'profit_loss', $2, false, 'disposable test fixture') RETURNING id`,
+  [`${TAG} Legacy Cartage`, expGroup.id])).rows[0].id;
 
 // Registered customer with headroom for a credit sale.
 {
@@ -182,7 +216,7 @@ async function createSale(lineItems, extra = {}) {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
-console.log('\n[A] Validation: only a postable, non-system expense ledger is accepted');
+console.log('\n[A] Validation: NEW sales accept only postable Direct Income ledgers');
 {
   const badAmount = await createSale(
     [{ itemId: fixtures.itemA, quantity: 1, unitPrice: 100 }],
@@ -194,23 +228,26 @@ console.log('\n[A] Validation: only a postable, non-system expense ledger is acc
     { otherCharges: [{ ledgerId: fixtures.ledgerPack, amount: 10.005 }] });
   assert('Sub-paise amount refused (400)', badPrecision.status === 400, `status=${badPrecision.status}`);
 
-  const { rows: [nonExpense] } = await sql(
-    `SELECT id FROM account_ledgers WHERE type <> 'expense' AND is_group = false ORDER BY id LIMIT 1`);
-  const badType = await createSale(
+  const badExpense = await createSale(
     [{ itemId: fixtures.itemA, quantity: 1, unitPrice: 100 }],
-    { otherCharges: [{ ledgerId: nonExpense.id, amount: 10 }] });
-  assert('Non-expense ledger refused (400)', badType.status === 400, `status=${badType.status}`);
+    { otherCharges: [{ ledgerId: fixtures.ledgerLegacyExp, amount: 10 }] });
+  assert('Expense ledger refused on a NEW sale (400)', badExpense.status === 400, `status=${badExpense.status}`);
 
-  const { rows: [purLedger] } = await sql(
-    `WITH RECURSIVE pur AS (
-       SELECT id FROM account_ledgers WHERE code = 'SYS-PUR'
-       UNION ALL SELECT l.id FROM account_ledgers l JOIN pur p ON l.parent_id = p.id
-     ) SELECT l.id FROM account_ledgers l JOIN pur p ON l.id = p.id WHERE l.is_group = false LIMIT 1`);
-  if (purLedger) {
-    const badPur = await createSale(
+  // An income ledger OUTSIDE the SYS-DIRINC subtree (e.g. under Sales) is
+  // barred too — the rule is "Direct Income", not "any income".
+  const { rows: [incomeElsewhere] } = await sql(
+    `WITH RECURSIVE di AS (
+       SELECT id FROM account_ledgers WHERE code = 'SYS-DIRINC'
+       UNION ALL SELECT l.id FROM account_ledgers l JOIN di d ON l.parent_id = d.id
+     )
+     SELECT id FROM account_ledgers
+      WHERE type = 'income' AND is_group = false AND id NOT IN (SELECT id FROM di)
+      ORDER BY id LIMIT 1`);
+  if (incomeElsewhere) {
+    const badOutside = await createSale(
       [{ itemId: fixtures.itemA, quantity: 1, unitPrice: 100 }],
-      { otherCharges: [{ ledgerId: purLedger.id, amount: 10 }] });
-    assert('Ledger under SYS-PUR refused (400)', badPur.status === 400, `status=${badPur.status}`);
+      { otherCharges: [{ ledgerId: incomeElsewhere.id, amount: 10 }] });
+    assert('Income ledger outside SYS-DIRINC refused (400)', badOutside.status === 400, `status=${badOutside.status}`);
   }
 }
 
@@ -319,6 +356,40 @@ console.log('\n[F] Edit semantics: replace / preserve / clear — never duplicat
 }
 
 // ───────────────────────────────────────────────────────────────────────────
+console.log('\n[F2] Grandfathering: a historical expense-ledger charge stays legal on EDIT');
+{
+  // Simulate a pre-rule sale that charged an expense ledger: create clean,
+  // then plant the stored jsonb directly (the API would refuse it today).
+  const legacy = await createSale([{ itemId: fixtures.itemA, quantity: 1, unitPrice: 100 }]);
+  assert('Legacy carrier sale created', legacy.status === 201, JSON.stringify(legacy.data).slice(0, 150));
+  await sql(`UPDATE sales SET other_charges = $1::jsonb WHERE id = $2`,
+    [JSON.stringify([{ ledgerId: fixtures.ledgerLegacyExp, amount: 40 }]), legacy.data.id]);
+
+  const base = {
+    outletId: WH, locationType: 'warehouse', locationId: WH, saleDate: '2026-08-02',
+    paymentMode: 'cash', lineItems: [{ itemId: fixtures.itemA, quantity: 1, unitPrice: 100 }],
+  };
+  // Edit that KEEPS the stored legacy ledger — grandfathered, accepted.
+  const keep = await put(`/sales/${legacy.data.id}`, { ...base, otherCharges: [{ ledgerId: fixtures.ledgerLegacyExp, amount: 40 }] });
+  assert('Edit keeping the stored expense charge accepted (grandfathered)', keep.status === 200, `status=${keep.status} ${JSON.stringify(keep.data).slice(0, 150)}`);
+  let row = await saleRow(legacy.data.id);
+  assert('Legacy charge stored and priced into the total (100 + 40)', near(row.total, 140) && (row.other_charges ?? []).length === 1, `total=${row.total}`);
+  const expEntries = await stmtEntries(fixtures.ledgerLegacyExp, row.invoice_number);
+  assert('Legacy charge still posts to ITS OWN (expense) ledger', expEntries.length === 1 && near(expEntries[0].credit ?? 0, 40), JSON.stringify(expEntries).slice(0, 150));
+
+  // Edit swapping to a Direct Income ledger — plainly legal.
+  const swap = await put(`/sales/${legacy.data.id}`, { ...base, otherCharges: [{ ledgerId: fixtures.ledgerFreight, amount: 40 }] });
+  assert('Edit swapping legacy → Direct Income accepted', swap.status === 200, `status=${swap.status}`);
+
+  // Grandfathering is PER SALE: an edit may not introduce an expense ledger
+  // the sale never stored (saleB only ever charged the income ledgers).
+  const smuggle = await put(`/sales/${saleB.id}`, { ...base, lineItems: [{ itemId: fixtures.itemA, quantity: 10, unitPrice: 100 }], otherCharges: [{ ledgerId: fixtures.ledgerLegacyExp, amount: 10 }] });
+  assert('Edit introducing a NEW expense charge refused (400)', smuggle.status === 400, `status=${smuggle.status} ${JSON.stringify(smuggle.data).slice(0, 150)}`);
+  const tb = await snapshotTB();
+  assert('Trial balance balanced after the grandfather dance', tb.balanced && near(tb.totalDr, tb.totalCr), `Dr=${tb.totalDr} Cr=${tb.totalCr}`);
+}
+
+// ───────────────────────────────────────────────────────────────────────────
 console.log('\n[G] Ledger delete guard: a ledger referenced by a sale cannot be deleted');
 {
   const res = await del(`/accounts/chart/${fixtures.ledgerPack}`);
@@ -406,6 +477,7 @@ await cleanup();
     `before Dr=${tbBefore.totalDr} after Dr=${tb.totalDr}`);
 }
 
+if (usingProbe) await teardownProbeUser();
 await pool.end();
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failures.length) { console.error('FAILED:', failures.join(' | ')); process.exit(1); }

@@ -4273,6 +4273,33 @@ await pool.query(`
   }
 }
 
+// One-time: seed a ready-to-use "Packing & Delivery Recovery" ledger under
+// Direct Income so the Sale Other Charges picker (Direct-Income-only) has a
+// sensible default on day one. Guarded by migration_log, NOT by data shape:
+// if the user renames or deletes it, a restart must not resurrect it.
+{
+  const { rows: [done] } = await pool.query(
+    `SELECT 1 FROM migration_log WHERE name = 'seed_packing_delivery_recovery_v1'`
+  );
+  if (!done) {
+    const { rows: [dirInc] } = await pool.query(
+      `SELECT id FROM account_ledgers WHERE code = 'SYS-DIRINC'`
+    );
+    if (dirInc) {
+      await pool.query(
+        `INSERT INTO account_ledgers (name, type, section, parent_id, is_system_group, description)
+         SELECT $1, 'income', 'profit_loss', $2, false, $3
+         WHERE NOT EXISTS (
+           SELECT 1 FROM account_ledgers WHERE parent_id = $2 AND LOWER(name) = LOWER($1)
+         )`,
+        ['Packing & Delivery Recovery', dirInc.id,
+         'Packing, delivery and courier charges recovered from customers on sale invoices'],
+      );
+    }
+    await pool.query(`INSERT INTO migration_log (name) VALUES ('seed_packing_delivery_recovery_v1')`);
+  }
+}
+
 // One-time: give every pre-existing expense an audit number in date order and
 // attribute it to Head Office, which is where all of them were recorded.
 {

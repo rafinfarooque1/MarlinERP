@@ -2,12 +2,12 @@ import { Router } from "express";
 import { requireModuleAction, requireModuleView } from "../middleware/permissions";
 import { pool } from "@workspace/db";
 import { logActivity } from "../lib/audit";
-import { nextVoucherNumber } from "../lib/voucherNumber";
+import { resolveReceiveIntoAccount, postSaleCollectionReceipt, type ReceiveIntoAccount } from "../lib/saleCollection";
 import { optionalIsoDate } from "../lib/dateInput";
 import { respondIfMonthLocked } from "../lib/periodLock";
-import { COLLECTION_METHODS, paymentModeLabel } from "../lib/paymentModes";
+import { COLLECTION_METHODS } from "../lib/paymentModes";
 import { getUserDataScope, scopeSalesWhere } from "../lib/dataScope";
-import { callerLocation, scopeCashLedgerIds, locationOwnedLedgerMap, ledgerIdsUnderCodes } from "../lib/moneyScope";
+import { callerLocation } from "../lib/moneyScope";
 import { loadPaymentPosition, computePaymentPosition } from "../lib/salePaymentPosition";
 
 const router = Router();
@@ -255,56 +255,19 @@ router.post("/sales/:id/payments", requireModuleAction(["page:/sales/pos", "page
     // location — money collected for a Ragiguda invoice lands in a Ragiguda
     // account, never another branch's. The method is derived from the
     // account's own type, so the books and reports keep their cash/bank/UPI
-    // classification without the client naming it.
-    let override: { ledgerId: number; name: string; requiresRecon: boolean } | null = null;
+    // classification without the client naming it. Shared with creation-time
+    // payments on POST /sales — ONE engine (see lib/saleCollection).
+    let override: ReceiveIntoAccount | null = null;
     if (receivedInLedgerId) {
-      const { rows: [led] } = await client.query(
-        `SELECT al.id, al.name, COALESCE(al.is_active, true) AS is_active,
-                cb.account_type, cb.requires_reconciliation
-           FROM account_ledgers al
-           LEFT JOIN cash_bank_accounts cb ON cb.ledger_id = al.id
-          WHERE al.id = $1
-          LIMIT 1`,
-        [receivedInLedgerId],
-      );
-      if (!led || led.is_active !== true) {
+      const resolved = await resolveReceiveIntoAccount(client, locType, locId, receivedInLedgerId);
+      if ("error" in resolved) {
         await client.query("ROLLBACK");
-        res.status(400).json({ error: "That Cash & Bank account is not available. Pick an active account." });
+        res.status(400).json({ error: resolved.error });
         return;
       }
-      let allowed: Set<number>;
-      if (locType === "headoffice") {
-        // Head Office's set is the whole cash+bank tree minus every ledger a
-        // branch owns (tills and branch-assigned accounts) — the same set the
-        // voucher pickers offer for Head Office.
-        const tree = await ledgerIdsUnderCodes(["STD-CASH", "STD-BANK"]);
-        const owned = await locationOwnedLedgerMap();
-        allowed = new Set([...tree].filter((id) => !owned.has(id)));
-      } else {
-        const scope = locType === "warehouse"
-          ? { isHeadOffice: false, warehouseIds: [locId], outletIds: [] }
-          : { isHeadOffice: false, warehouseIds: [], outletIds: [locId] };
-        allowed = new Set(await scopeCashLedgerIds(scope));
-      }
-      if (!allowed.has(Number(led.id))) {
-        await client.query("ROLLBACK");
-        res.status(400).json({
-          error: `"${led.name}" does not belong to the location that made this sale. Pick one of that location's own Cash & Bank accounts.`,
-        });
-        return;
-      }
-      const cashTree = await ledgerIdsUnderCodes(["STD-CASH"]);
-      const isCashDest = led.account_type != null
-        ? led.account_type === "cash"
-        : cashTree.has(Number(led.id));
-      method = isCashDest ? "cash" : led.account_type === "upi" ? "upi" : "bank";
-      override = {
-        ledgerId: Number(led.id),
-        name: String(led.name),
-        requiresRecon: !isCashDest && led.requires_reconciliation === true,
-      };
+      override = resolved;
+      method = resolved.method;
     }
-    const isElectronic = method !== "cash";
 
     // 2. Duplicate-submission guard: same sale+method+amount within 10 seconds.
     // When the caller picked an explicit destination, the destination is part
@@ -326,139 +289,28 @@ router.post("/sales/:id/payments", requireModuleAction(["page:/sales/pos", "page
       return;
     }
 
-    if (!isElectronic) {
-      // ── CASH PAYMENT ────────────────────────────────────────────────────
-      // Resolve cash ledger based on location type (warehouse or outlet)
-      const cashLedgerCode = locType === 'warehouse'
-        ? `WH-CASH-${locId}`
-        : `OUTLET-CASH-${locId}`;
-      // The location's own cash_ledger_id is authoritative; the code convention
-      // is only a fallback. Mirror locations (a warehouse row twinned with an
-      // outlet) share one till, and that ledger's code can only name one of the
-      // pair — so a code-only lookup made cash collection impossible at the
-      // other half. Same resolution order as the cash-in-outlet read path: a
-      // till you can see is a till you can collect into.
-      const { rows: [locRow] } = await client.query(
-        locType === 'warehouse'
-          ? `SELECT cash_ledger_id FROM warehouses WHERE id = $1`
-          : `SELECT cash_ledger_id FROM outlets WHERE id = $1`,
-        [locId],
-      );
-      // An explicitly picked cash account (a cash-type Cash & Bank account, or
-      // the till itself) wins over the till convention — already validated
-      // against the sale's location above.
-      let cashLedger: { id: number } | null = override ? { id: override.ledgerId } : null;
-      if (!cashLedger && locRow?.cash_ledger_id != null) {
-        const { rows } = await client.query(
-          `SELECT id FROM account_ledgers WHERE id = $1`, [Number(locRow.cash_ledger_id)],
-        );
-        if (rows[0]) cashLedger = { id: Number(rows[0].id) };
-      }
-      if (!cashLedger) {
-        const { rows } = await client.query(
-          `SELECT id FROM account_ledgers WHERE code = $1`, [cashLedgerCode],
-        );
-        if (rows[0]) cashLedger = { id: Number(rows[0].id) };
-      }
-      if (!cashLedger) {
-        await client.query("ROLLBACK");
-        res.status(500).json({ error: `Cash ledger (${cashLedgerCode}) not found for this location. Go to Accounts → Warehouses/Outlets and provision ledgers first.` });
-        return;
-      }
-
-      // Get STD-SALES ledger for the "received from" counterpart
-      const { rows: [salesLedger] } = await client.query(
-        `SELECT id FROM account_ledgers WHERE code = 'STD-SALES'`
-      );
-      if (!salesLedger) {
-        await client.query("ROLLBACK");
-        res.status(500).json({ error: "Sales ledger not configured." });
-        return;
-      }
-
-      const voucherNum = await nextVoucherNumber(client, "receipt", pDate);
-      const { rows: [receipt] } = await client.query(
-        `INSERT INTO receipts (voucher_number, receipt_date, received_from_ledger_id, received_in_ledger_id, amount, narration, location_type, location_id, source)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'sale') RETURNING id`,
-        [voucherNum, pDate, salesLedger.id, cashLedger.id, parsedAmount,
-          `Cash payment for invoice ${(await client.query(`SELECT invoice_number FROM sales WHERE id=$1`,[saleId])).rows[0]?.invoice_number ?? saleId}`,
-          locType, locId]
-      );
-      clearingReceiptId = receipt.id;
-      reconciliationStatus = null; // cash — no reconciliation needed
-
-    } else {
-      // ── ELECTRONIC PAYMENT ──────────────────────────────────────────────
-      // Route the money by the location's OWN account assignment: a Cash &
-      // Bank account assigned to the sale's location whose type matches the
-      // method (UPI → upi account, bank/card/transfer → bank account).
-      //
-      //   · assigned account, reconciliation OFF → post straight into that
-      //     account's ledger; the bank balance moves now, nothing to reconcile.
-      //   · assigned account, reconciliation ON  → Electronic Clearing +
-      //     pending, and Reconciliation moves it to the bank on settlement.
-      //   · no assignment → the legacy company-wide clearing flow, unchanged.
-      //
-      // HO sales match HO-assigned accounts on TYPE alone: cash_bank_accounts
-      // stores headoffice with a NULL id while sales use the placeholder id 1,
-      // so an id comparison would never match (ho-location-convention).
-      // An explicitly picked account (modern path) takes the assignment's
-      // place outright — same downstream routing, but the account is the one
-      // the user named rather than the location's first assignment.
-      const wantType = method === "upi" ? "upi" : "bank";
-      const { rows: [assigned] } = override
-        ? { rows: [{ ledger_id: override.ledgerId, requires_reconciliation: override.requiresRecon, name: override.name }] }
-        : await client.query(
-            `SELECT cb.ledger_id, cb.requires_reconciliation, cb.name
-               FROM cash_bank_accounts cb
-               JOIN account_ledgers al ON al.id = cb.ledger_id AND COALESCE(al.is_active, true)
-              WHERE cb.account_type = $1 AND cb.ledger_id IS NOT NULL
-                AND cb.location_type = $2
-                AND (cb.location_type = 'headoffice' OR cb.location_id = $3)
-              ORDER BY cb.id LIMIT 1`,
-            [wantType, locType, locId],
-          );
-      const directLedgerId = assigned && assigned.requires_reconciliation !== true
-        ? Number(assigned.ledger_id) : null;
-
-      let receiveInLedgerId: number;
-      if (directLedgerId != null) {
-        receiveInLedgerId = directLedgerId;
-      } else {
-        const { rows: [clearingLedger] } = await client.query(
-          `SELECT id FROM account_ledgers WHERE code = 'STD-ELEC-CLR'`
-        );
-        if (!clearingLedger) {
-          await client.query("ROLLBACK");
-          res.status(500).json({ error: "Electronic payment clearing ledger not configured." });
-          return;
-        }
-        receiveInLedgerId = Number(clearingLedger.id);
-      }
-
-      const { rows: [salesLedger] } = await client.query(
-        `SELECT id FROM account_ledgers WHERE code = 'STD-SALES'`
-      );
-      if (!salesLedger) {
-        await client.query("ROLLBACK");
-        res.status(500).json({ error: "Sales ledger not configured." });
-        return;
-      }
-
-      const voucherNum = await nextVoucherNumber(client, "receipt", pDate);
-      const { rows: [invRow] } = await client.query(`SELECT invoice_number FROM sales WHERE id=$1`, [saleId]);
-      const { rows: [receipt] } = await client.query(
-        `INSERT INTO receipts (voucher_number, receipt_date, received_from_ledger_id, received_in_ledger_id, amount, narration, location_type, location_id, source)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'sale') RETURNING id`,
-        [voucherNum, pDate, salesLedger.id, receiveInLedgerId, parsedAmount,
-          `${paymentModeLabel(method)} payment for invoice ${invRow?.invoice_number ?? saleId}${directLedgerId != null ? ` into ${assigned.name}` : ""}${referenceNumber ? ` — Ref: ${referenceNumber}` : ""}`,
-          locType, locId]
-      );
-      clearingReceiptId = receipt.id;
-      // Direct-posted money is already in the bank — there is nothing left to
-      // reconcile, so it must never appear on the pending list.
-      reconciliationStatus = directLedgerId != null ? null : "pending";
+    // 3. Post the receipt through the shared collection engine — the same
+    // routine POST /sales uses for creation-time payments, so cash-till
+    // resolution, direct-post vs clearing, and reconciliation status can
+    // never drift between the two entry points.
+    const { rows: [invRow] } = await client.query(`SELECT invoice_number FROM sales WHERE id=$1`, [saleId]);
+    const posted = await postSaleCollectionReceipt(client, {
+      method,
+      account: override,
+      locType,
+      locId,
+      amount: parsedAmount,
+      pDate,
+      invoiceNumber: invRow?.invoice_number ?? String(saleId),
+      referenceNumber: referenceNumber ?? null,
+    });
+    if ("error" in posted) {
+      await client.query("ROLLBACK");
+      res.status(500).json({ error: posted.error });
+      return;
     }
+    clearingReceiptId = posted.clearingReceiptId;
+    reconciliationStatus = posted.reconciliationStatus;
 
     // 4. Insert sale_payment record
     const { rows: [salePayment] } = await client.query(

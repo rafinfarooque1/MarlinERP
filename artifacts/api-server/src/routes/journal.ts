@@ -1196,11 +1196,13 @@ export async function buildDerivedPostings(opts: { toDate?: string; q?: Q } = {}
   for (const s of sales) {
     const total = Number(s.total_amount);
     const tax = Number(s.tax_total ?? 0);
-    // Other Charges on the sale (Packing & Transport, freight, hamali…): the
-    // customer owes them — they are inside total_amount — but they are not
-    // revenue. Each one credits its own expense ledger (an expense RECOVERY),
-    // so the sales-revenue credit must derive as total − tax − charges or the
-    // P&L would inflate by every charge collected. The stored ledger id is
+    // Other Charges on the sale (packing / delivery recovery…): the customer
+    // owes them — they are inside total_amount — but they are not GOODS
+    // revenue. Each one credits its own stored ledger: Direct Income for
+    // modern sales, or a legacy expense ledger (an expense RECOVERY —
+    // grandfathered, its stored meaning is preserved). Either way the
+    // sales-revenue credit must derive as total − tax − charges or the P&L
+    // would inflate by every charge collected. The stored ledger id is
     // posted as-is: the chart's delete guard (loadLedgerUsage) refuses to
     // delete a ledger any sale's charges reference, so it cannot dangle.
     const saleCharges: Array<{ ledgerId: number; amount: number }> = [];
@@ -1246,10 +1248,11 @@ export async function buildDerivedPostings(opts: { toDate?: string; q?: Q } = {}
         push({ entryId: eid, date: s.sale_date, ledgerId: stdDtx, debit: 0, credit: tax, source: "sale", voucherNumber: s.invoice_number, description: `GST on ${inv}`, ...sLoc });
       }
     }
-    // Cr each charge's expense ledger — balanced by the Dr side below, which
-    // carries the FULL total_amount (customer / cash / clearing), charges
-    // included. Branch-transfer invoices never carry charges (no producer),
-    // so this loop is empty for them by construction.
+    // Cr each charge's stored ledger (Direct Income, or a grandfathered
+    // legacy expense ledger) — balanced by the Dr side below, which carries
+    // the FULL total_amount (customer / cash / clearing), charges included.
+    // Branch-transfer invoices never carry charges (no producer), so this
+    // loop is empty for them by construction.
     for (const c of saleCharges) {
       push({ entryId: eid, date: s.sale_date, ledgerId: c.ledgerId, debit: 0, credit: c.amount, source: "sale", voucherNumber: s.invoice_number, description: `Sale charge — ${inv}`, ...sLoc });
     }
