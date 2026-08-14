@@ -1,10 +1,32 @@
 ---
-name: Advance recovery vs payroll claims
-description: cash recovery and payroll deduction of employee advances serialize on row locks; whole-amount only
+name: Employee advance settlement invariants
+description: advances live as a debit on the ledger payroll credits; one settlement path; settling any claim needs per-row proof, never a global marker
 ---
 
-Model: an employee advance settles by exactly ONE of two paths — payroll deduction (claimed at generate via deducted_payroll_id, closed at approval) or cash recovery (POST /hr/advances/:id/recover: JV Dr till / Cr ADV-EMP-<id>, sets is_deducted=TRUE with deducted_payroll_id NULL). "is_deducted TRUE + deducted_payroll_id NULL" MEANS recovered in cash. Whole remaining amount only — partial recovery would leave a remainder no other flow can see (payroll also takes advances whole).
+**Invariant 1 — the debit must sit where the credit will land.** An employee
+advance is only safe to settle through payroll if the disbursed money is a
+debit on the very ledger the payroll settlement credits (Salary Payable, since
+the Aug 2026 owner decision folded the separate Current-Asset advance flow).
+If the debit lives elsewhere — or nowhere, because a historical create path
+inserted the row before its voucher and swallowed voucher failures — settling
+the row credits money the books never received and strands a liability.
 
-**Why:** the two paths raced — payroll generate used unlocked pool statements, so an advance could be cash-recovered between its selection and its claim, then approval re-marked it payroll-recovered: settled twice, books wrong.
+**Invariant 2 — per-row evidence, never a global marker.** "The migration ran"
+proves nothing about any individual row: a row whose backing entry silently
+failed migrates zero while the marker still gets written. Every row a
+settlement path consumes must carry its own confirmed link to the posting that
+put the money on the offset ledger; settlement fails closed on rows without
+one. Migrations that move balances must reconcile aggregate ledger balances
+against the per-row sums BEFORE writing their marker, and refuse (retry next
+boot, loud log + boot_status) on any mismatch rather than completing.
 
-**How to apply:** payroll generate runs release→SELECT FOR UPDATE→payroll write→claim as ONE transaction per employee, asserting the claim rowCount; recovery locks the same row (FOR UPDATE) and refuses claimed rows; approval closes claims with `AND deducted_payroll_id = <run id>` and asserts the count, throwing "regenerate the draft" on mismatch. Never weaken any of the three — each guards a different interleaving. Any new settlement path for advances must take the row lock first and preserve the one-path invariant.
+**Invariant 3 — one settlement path.** Two paths (payroll deduction + cash
+recovery) raced and double-settled; cash recovery is retired. Any new
+settlement path must take the advance row lock first and preserve the
+one-path rule.
+
+**How to apply:** when adding any advance producer/consumer, ask (a) does the
+money land on the ledger settlement offsets, (b) does the row carry proof,
+(c) does it serialize on the row lock. Test the swallowed-voucher case:
+fabricate a row with no backing entry and prove approval refuses with zero
+residue.

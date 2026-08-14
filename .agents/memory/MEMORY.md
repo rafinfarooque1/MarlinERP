@@ -101,8 +101,8 @@
 - [Quotations module](quotations-module.md) — parallel doc store, zero books impact by construction; one-sale-per-quote via 2 partial uniques + FOR UPDATE; explicit JSX generics break the vite build; pdftotext for PDF checks.
 - [Money voucher provenance](money-voucher-provenance.md) — payments/receipts store `source`; every producer must stamp it; edit rights derive from it and NULL fails closed; never re-sweep NULL→manual.
 - [Admin system receipt delete](system-receipt-delete.md) — level-1-only unwind for source='sale' receipts; trail slice = paid−Σlegs, never raw amount; amount_paid writers must SUM under the sale row lock.
-- [Advance recovery vs payroll](advance-recovery.md) — one settlement path per advance; generate/recover/approve all serialize on the advance row lock; is_deducted TRUE + NULL payroll id = cash recovery.
-- [Advance voucher links](advance-voucher-links.md) — advances stamp their JV ids; edit/delete keep books in lockstep; backfills must never pair by row order — ambiguity stays NULL.
+- [Advance settlement](advance-recovery.md) — the debit must sit on the ledger settlement credits (Salary Payable); ONE settlement path; settling a row needs per-row proof, never a global migration marker.
+- [Advance voucher links](advance-voucher-links.md) — row + voucher created in ONE txn with the link stamped; consumers fail closed on NULL links; backfills reconcile amounts, never pair by row order.
 - [Dashboard money flows](dashboard-kpi-sources.md) — Dashboard UI reads /dashboard/bi (NOT /summary); moneyFlows follows the selected range+location (todayMoney = legacy mirror); /summary stays today-anchored.
 - [P&L returns split & GP/NP tiles](pnl-returns-split.md) — GP/NP tiles read the P&L's own summary (never recomputed); returns recovered from note-sourced postings on the sales/purchases subtrees; statement splits must be remainder-based.
 - [Shared surface guards](shared-surface-guards.md) — a second page over existing endpoints: widen the lookup GETs too, bind any-of guards to the request kind, seed new page keys + regenerate pagePermissions.

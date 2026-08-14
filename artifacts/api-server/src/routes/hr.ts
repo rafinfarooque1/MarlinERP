@@ -676,13 +676,6 @@ async function postSalaryApproval(opts: {
     await provisionSalaryLedgers(pool, employeeId, empLabel);
   if (!salExpId || !salPayId) throw new Error("Could not provision the employee's salary ledgers");
 
-  const advLedgerId = advanceRec > 0.004
-    ? await findOrProvisionLedger(
-        `ADV-EMP-${employeeId}`, `Advance to ${empLabel}`, 'asset', 'SYS-CURA',
-        `Salary advance paid to ${empLabel}`)
-    : null;
-  if (advanceRec > 0.004 && !advLedgerId) throw new Error("Could not provision the employee's advance ledger");
-
   // Statutory legs are recognised for the first time here: only a payroll run
   // knows PF, ESI, other withholdings and the advance it recovered, so daily
   // accrual never touches them and they are posted in full.
@@ -696,7 +689,11 @@ async function postSalaryApproval(opts: {
   if (pfPayable       > 0.004) fixedCredits.push([await requireLedgerId('STD-PF-PAY'),  pfPayable]);
   if (esiPayable      > 0.004) fixedCredits.push([await requireLedgerId('STD-ESI-PAY'), esiPayable]);
   if (otherDeductions > 0.004) fixedCredits.push([await requireLedgerId('STD-EMP-DED'), otherDeductions]);
-  if (advanceRec      > 0.004 && advLedgerId) fixedCredits.push([advLedgerId, advanceRec]);
+  // NO advance leg (owner decision, Aug 2026): the advance already sits as a
+  // DEBIT on this employee's Salary Payable ledger (it was disbursed as
+  // Dr Salary Payable / Cr till, or moved there by the one-time migration).
+  // Approval credits Salary Payable with the FULL net (before the advance
+  // offset) and the existing debit nets it down to the cash actually owed.
 
   const client = await pool.connect();
   try {
@@ -827,7 +824,10 @@ async function postSalaryApproval(opts: {
       else if (signed < -0.004) opposite.push([ledgerId, round2(-signed)]);
     };
     place(debits, credits, salExpId, round2(salaryCost - accrued));
-    place(credits, debits, salPayId, round2(netPay - accrued));
+    // Salary Payable is credited with the full net INCLUDING the advance
+    // recovered — the advance's debit is already sitting on this same ledger,
+    // so the remaining balance after this voucher is exactly the cash to pay.
+    place(credits, debits, salPayId, round2(netPay + advanceRec - accrued));
 
     const debitTotal  = round2(debits.reduce((s, [, amt]) => s + amt, 0));
     const creditTotal = round2(credits.reduce((s, [, amt]) => s + amt, 0));
@@ -874,6 +874,26 @@ async function postSalaryApproval(opts: {
     // would settle an advance twice. Refuse and ask for a regenerate instead.
     const claimedIds: number[] = Array.isArray(pr.advance_ids) ? pr.advance_ids.map(Number) : [];
     if (claimedIds.length) {
+      // A claimed LEGACY advance (old ADV-EMP flow, no payment voucher) only
+      // nets correctly on Salary Payable if ITS OWN balance was confirmed
+      // moved there — the boot migration stamps `migrated_voucher_id` on every
+      // pending legacy row it reconciled against the transferred ledger
+      // balance. A global "migration ran" marker is NOT proof for this row:
+      // the old create path could leave a pending row with no ledger debit at
+      // all (swallowed voucher failure), and settling such a row would credit
+      // Salary Payable against money the books never received. Per-row
+      // evidence or refusal — nothing in between.
+      const { rows: unconfirmedLegacy } = await client.query(
+        `SELECT id FROM employee_advances
+          WHERE id = ANY($1::int[]) AND payment_voucher_id IS NULL AND migrated_voucher_id IS NULL`,
+        [claimedIds],
+      );
+      if (unconfirmedLegacy.length) {
+        throw new Error(
+          `Advance #${unconfirmedLegacy.map((r: any) => r.id).join(", #")} predates the Salary Payable migration and has no confirmed transferred balance. ` +
+          `Approving would settle money the books never received. Restart the server so the boot migration can reconcile it (it logs any mismatch), resolve the advance row, then regenerate this payroll.`,
+        );
+      }
       const closed = await client.query(
         `UPDATE employee_advances SET is_deducted = TRUE, deducted_payroll_id = $1
           WHERE id = ANY($2::int[]) AND is_deducted = FALSE AND deducted_payroll_id = $1`,
@@ -2388,23 +2408,35 @@ router.get("/hr/advances", async (req, res): Promise<void> => {
     id: r.id, employeeId: r.employee_id, employeeName: r.employee_name,
     amount: Number(r.amount), date: r.date, note: r.note,
     isDeducted: r.is_deducted, deductedPayrollId: r.deducted_payroll_id,
+    // NULL = legacy row from the old ADV-EMP flow. Pending legacy rows are
+    // locked for edit/delete (their balance was migrated to Salary Payable);
+    // the UI hides those buttons on this flag.
+    paymentVoucherId: r.payment_voucher_id ?? null,
     createdAt: r.created_at,
   })));
 });
 
 router.post("/hr/advances", requireModuleAction("page:/hr/advances", "add"), async (req, res): Promise<void> => {
-  const { employeeId, amount, date, note } = req.body;
-  if (!employeeId || !amount) { res.status(400).json({ error: "employeeId and amount are required" }); return; }
+  const { employeeId, date, note } = req.body;
+  // Validate the decimal STRING (≤ 2dp) — number inputs post strings and
+  // NUMERIC does the maths, so never round-trip through float formatting.
+  const amtStr = String(req.body.amount ?? "").trim();
+  if (!employeeId || !amtStr) { res.status(400).json({ error: "employeeId and amount are required" }); return; }
+  if (!/^\d+(\.\d{1,2})?$/.test(amtStr) || Number(amtStr) <= 0) {
+    res.status(400).json({ error: "Amount must be a positive number with at most 2 decimals" }); return;
+  }
+  const amount = Number(amtStr).toFixed(2);
   const today = new Date().toISOString().split("T")[0];
   const advDate = date ?? today;
+  if (!isIsoDate(advDate)) { res.status(400).json({ error: "date must be a real calendar date in YYYY-MM-DD form" }); return; }
 
   // Month lock: an advance is a new payment dated advDate — it may not be
   // recorded into a locked accounting period.
   if (await respondIfMonthLocked(res, pool, [advDate], "employee advance")) return;
 
-  // Resolve the paying account BEFORE the advance row exists: an invalid
-  // account must reject the whole request, not leave an advance with no
-  // accounting behind it.
+  // Resolve the paying account BEFORE anything is written: an invalid account
+  // must reject the whole request, not leave an advance with no accounting
+  // behind it.
   const resolvedAdv = await resolvePayLedger((req as any).employee, req.body.payLedgerId, 'STD-CASH');
   if ('error' in resolvedAdv) { res.status(400).json({ error: resolvedAdv.error }); return; }
   {
@@ -2412,143 +2444,70 @@ router.post("/hr/advances", requireModuleAction("page:/hr/advances", "add"), asy
     if (disabledMsg) { res.status(409).json({ error: disabledMsg, code: WAREHOUSE_DISABLED_CODE }); return; }
   }
 
-  const { rows: [row] } = await pool.query(
-    `INSERT INTO employee_advances (employee_id, amount, date, note, is_deducted)
-     VALUES ($1, $2, $3, $4, false) RETURNING *`,
-    [employeeId, String(Number(amount)), advDate, note ?? null],
-  );
   const [emp] = await db.select().from(employeesTable).where(eq(employeesTable.id, Number(employeeId))).limit(1);
+  if (!emp) { res.status(404).json({ error: "Employee not found" }); return; }
 
-  // Accounting: Dr Advance-to-Employee / Cr Cash
-  try {
-    const advLedgerId = await findOrProvisionLedger(
-      `ADV-EMP-${employeeId}`,
-      `Advance - ${emp?.name ?? `Employee #${employeeId}`}`,
-      'asset', 'SYS-CURA',
-      `Advance recoverable from ${emp?.name ?? `Employee #${employeeId}`}`,
-    );
-    if (advLedgerId && Number(amount) > 0.004) {
-      const client = await pool.connect();
-      try {
-        await client.query("BEGIN");
-        const vn = await nextVoucherNumber(client, "journal", advDate);
-        const { rows: [jv] } = await client.query(
-          `INSERT INTO journal_vouchers (voucher_type, voucher_number, voucher_date, narration, total_amount, created_by,
-                                        origin, source_module, location_type, location_id)
-           VALUES ('journal', $1, $2, $3, $4, $5, 'system', 'payroll', $6, $7) RETURNING id`,
-          [vn, advDate, `Advance to ${emp?.name ?? `Employee #${employeeId}`}`, Number(amount).toFixed(2), req.employee?.username ?? "system",
-           resolvedAdv.locationType, resolvedAdv.locationId],
-        );
-        await client.query(
-          `INSERT INTO journal_voucher_lines (voucher_id, ledger_id, debit, credit)
-           VALUES ($1, $2, $3, 0), ($1, $4, 0, $3)`,
-          [jv.id, advLedgerId, Number(amount).toFixed(2), resolvedAdv.id],
-        );
-        // Remember which voucher this advance produced — edit/delete keep the
-        // books in sync through this link.
-        await client.query(
-          `UPDATE employee_advances SET journal_voucher_id = $1 WHERE id = $2`,
-          [jv.id, row.id],
-        );
-        await client.query("COMMIT");
-      } catch (e) { await client.query("ROLLBACK").catch(() => {}); console.warn("[advances] JV error:", e); }
-      finally { client.release(); }
-    }
-  } catch (e) { console.warn("[advances] Accounting error:", e); }
+  // Books (owner decision, Aug 2026): an advance is a PAYMENT VOUCHER against
+  // the employee's Salary Payable ledger — Dr Salary Payable / Cr till — which
+  // drives the payable negative until payroll accrues against it. There is NO
+  // separate Employee Advance asset ledger and NO separate recovery flow any
+  // more. The voucher is stamped source='employee_advance' so the manual
+  // voucher endpoints refuse to edit or delete it (this endpoint owns it).
+  // Voucher and advance row commit together or not at all — the old flow wrote
+  // them in separate transactions and swallowed voucher errors, which could
+  // leave an advance with no accounting behind it.
+  const { payableLedgerId } = await provisionSalaryLedgers(pool, Number(employeeId), emp.name);
+  if (!payableLedgerId) {
+    res.status(500).json({ error: "Could not provision the employee's Salary Payable ledger. No advance was recorded." });
+    return;
+  }
 
-  res.status(201).json({
-    id: row.id, employeeId: row.employee_id, employeeName: emp?.name ?? "",
-    amount: Number(row.amount), date: row.date, note: row.note,
-    isDeducted: row.is_deducted, deductedPayrollId: row.deducted_payroll_id,
-    createdAt: row.created_at,
-  });
-});
-
-// Recover an outstanding advance in CASH (the employee hands the money back)
-// instead of waiting for the payroll deduction. Whole-advance only — payroll's
-// deduction model also takes advances whole, so partial recovery would leave a
-// remainder no other flow can see. Books: Dr chosen till / Cr Advance ledger.
-// The row is claimed atomically (is_deducted flips under the row lock), so a
-// racing payroll generation and a cash recovery can never both settle it.
-router.post("/hr/advances/:id/recover", requireModuleAction("page:/hr/advances", "edit"), async (req, res): Promise<void> => {
-  const id = parseInt(req.params.id, 10);
-  if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid advance id" }); return; }
-  const today = new Date().toISOString().split("T")[0];
-
-  // Month lock: cash recovery posts a voucher dated today — it may not land in a
-  // locked accounting period. (The original advance document is untouched, so
-  // an old advance can still be recovered into an open month.)
-  if (await respondIfMonthLocked(res, pool, [today], "advance recovery")) return;
-
+  let row: any;
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    const { rows: [adv] } = await client.query(
-      `SELECT * FROM employee_advances WHERE id = $1 FOR UPDATE`, [id],
+    const vn = await nextVoucherNumber(client, "payment", advDate);
+    const { rows: [pv] } = await client.query(
+      `INSERT INTO payments (voucher_number, payment_date, paid_from_ledger_id, paid_to_ledger_id, amount, narration,
+                             location_type, location_id, created_by, source)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'employee_advance') RETURNING id, voucher_number`,
+      [vn, advDate, resolvedAdv.id, payableLedgerId, amount,
+       `Advance to ${emp.name}`, resolvedAdv.locationType, resolvedAdv.locationId,
+       (req as any).employee?.username ?? "system"],
     );
-    if (!adv) { await client.query("ROLLBACK"); res.status(404).json({ error: "Advance not found" }); return; }
-    if (adv.is_deducted) { await client.query("ROLLBACK"); res.status(400).json({ error: "This advance is already settled." }); return; }
-    if (adv.deducted_payroll_id !== null) {
-      await client.query("ROLLBACK");
-      res.status(400).json({ error: "This advance is reserved by a payroll run. Remove it from that run first." });
-      return;
-    }
-    const [emp] = await db.select().from(employeesTable).where(eq(employeesTable.id, Number(adv.employee_id))).limit(1);
-
-    // Which till or bank account the money comes back INTO — same rules as
-    // paying out (branch users: own till only).
-    const resolvedIn = await resolvePayLedger((req as any).employee, req.body?.receiveLedgerId, 'STD-CASH');
-    if ('error' in resolvedIn) { await client.query("ROLLBACK"); res.status(400).json({ error: resolvedIn.error }); return; }
-
-    const { rows: [advLedger] } = await client.query(
-      `SELECT id FROM account_ledgers WHERE code = $1 LIMIT 1`, [`ADV-EMP-${adv.employee_id}`],
-    );
-    if (!advLedger) {
-      await client.query("ROLLBACK");
-      res.status(500).json({ error: "Advance ledger is missing for this employee — cannot post the recovery." });
-      return;
-    }
-
-    const amt = Number(adv.amount).toFixed(2);
-    const vn = await nextVoucherNumber(client, "journal", today);
-    const { rows: [jv] } = await client.query(
-      `INSERT INTO journal_vouchers (voucher_type, voucher_number, voucher_date, narration, total_amount, created_by,
-                                    origin, source_module, location_type, location_id)
-       VALUES ('journal', $1, $2, $3, $4, $5, 'system', 'payroll', $6, $7) RETURNING id`,
-      [vn, today, `Advance recovery from ${emp?.name ?? `Employee #${adv.employee_id}`}`, amt,
-       (req as any).employee?.username ?? "system", resolvedIn.locationType, resolvedIn.locationId],
-    );
-    // Dr Cash/Bank (money back in) / Cr Advance-to-Employee
-    await client.query(
-      `INSERT INTO journal_voucher_lines (voucher_id, ledger_id, debit, credit)
-       VALUES ($1, $2, $3, 0), ($1, $4, 0, $3)`,
-      [jv.id, resolvedIn.id, amt, advLedger.id],
-    );
-    // deducted_payroll_id stays NULL: settled-with-no-payroll = cash recovery.
-    const { rows: [updated] } = await client.query(
-      `UPDATE employee_advances SET is_deducted = TRUE, recovery_voucher_id = $2 WHERE id = $1 RETURNING *`,
-      [id, jv.id],
+    const { rows: [inserted] } = await client.query(
+      `INSERT INTO employee_advances (employee_id, amount, date, note, is_deducted, payment_voucher_id)
+       VALUES ($1, $2, $3, $4, false, $5) RETURNING *`,
+      [employeeId, amount, advDate, note ?? null, pv.id],
     );
     await client.query("COMMIT");
-
-    logActivity({ action: "UPDATE", module: "payroll", entityType: "employee_advance", entityId: id,
-      description: `Advance of ₹${Number(adv.amount).toLocaleString("en-IN")} recovered in cash from ${emp?.name ?? `Employee #${adv.employee_id}`}`,
-      metadata: { voucherNumber: vn, receivedInto: resolvedIn.id },
-    }).catch(() => {});
-
-    res.json({
-      id: updated.id, employeeId: updated.employee_id, employeeName: emp?.name ?? "",
-      amount: Number(updated.amount), date: updated.date, note: updated.note,
-      isDeducted: updated.is_deducted, deductedPayrollId: updated.deducted_payroll_id,
-      createdAt: updated.created_at,
-    });
+    row = { ...inserted, voucher_number: pv.voucher_number };
   } catch (e) {
     await client.query("ROLLBACK").catch(() => {});
     throw e;
   } finally {
     client.release();
   }
+
+  logActivity({ action: "CREATE", module: "payroll", entityType: "employee_advance", entityId: row.id,
+    description: `Advance of ₹${Number(amount).toLocaleString("en-IN")} to ${emp.name} — payment voucher ${row.voucher_number} against Salary Payable`,
+    metadata: { amount: Number(amount), date: advDate, paymentVoucherId: row.payment_voucher_id, voucherNumber: row.voucher_number },
+  }).catch(() => {});
+
+  res.status(201).json({
+    id: row.id, employeeId: row.employee_id, employeeName: emp.name,
+    amount: Number(row.amount), date: row.date, note: row.note,
+    isDeducted: row.is_deducted, deductedPayrollId: row.deducted_payroll_id,
+    paymentVoucherId: row.payment_voucher_id,
+    createdAt: row.created_at,
+  });
 });
+
+// The cash "Advance Recovery" workflow is RETIRED (owner decision, Aug 2026):
+// an advance now lives as a debit on the employee's Salary Payable ledger and
+// payroll settles it — one settlement path. Historical recoveries stay fully
+// readable through GET /hr/advances (module-retirement pattern: total hide of
+// the write path, reads keep serving history).
 
 // Edit a pending advance (amount / date / note). Only an advance no payroll
 // run has touched may change — once it is settled or reserved, the recovery
@@ -2595,6 +2554,15 @@ router.patch("/hr/advances/:id", requireModuleAction("page:/hr/advances", "edit"
       res.status(400).json({ error: "This advance is reserved by a payroll run. Remove it from that run first." });
       return;
     }
+    if (!adv.payment_voucher_id) {
+      // Legacy row (old ADV-EMP flow): its outstanding balance was moved to
+      // Salary Payable by the one-time migration, which the linked journal
+      // voucher knows nothing about — editing that voucher would desync the
+      // migrated figure. Locked; adjust with a manual journal voucher instead.
+      await client.query("ROLLBACK");
+      res.status(400).json({ error: "This advance was recorded under the old Employee Advance system and its balance now lives on Salary Payable — it can no longer be edited. Post a journal voucher if the figures need adjusting." });
+      return;
+    }
 
     const oldDate: string = adv.date_text;
     const effDate = newDate ?? oldDate;
@@ -2616,15 +2584,15 @@ router.patch("/hr/advances/:id", requireModuleAction("page:/hr/advances", "edit"
       [id, effAmount, effDate, noteProvided ? (String(b.note ?? "").trim() || null) : adv.note],
     );
 
-    // Keep the disbursement voucher in lockstep (date, amount, both legs).
-    if (adv.journal_voucher_id) {
-      const { rows: [jv] } = await client.query(
-        `SELECT * FROM journal_vouchers WHERE id = $1 FOR UPDATE`, [adv.journal_voucher_id],
+    // Keep the disbursement payment voucher in lockstep (date, amount).
+    {
+      const { rows: [pv] } = await client.query(
+        `SELECT * FROM payments WHERE id = $1 FOR UPDATE`, [adv.payment_voucher_id],
       );
-      if (jv) {
+      if (pv) {
         // Voucher numbers are FY-scoped: a date moved into another financial
         // year needs a number from that year's sequence; same-FY edits keep it.
-        let vn = String(jv.voucher_number);
+        let vn = String(pv.voucher_number);
         const curFy = vn.split("/")[1] ?? "";
         let fyStart = 4;
         try {
@@ -2632,14 +2600,12 @@ router.patch("/hr/advances/:id", requireModuleAction("page:/hr/advances", "edit"
           fyStart = Number(rows[0]?.fy_start_month ?? 4) || 4;
         } catch { /* defaults */ }
         if (financialYearLabel(effDate, fyStart) !== curFy) {
-          vn = await nextVoucherNumber(client, "journal", effDate);
+          vn = await nextVoucherNumber(client, "payment", effDate);
         }
         await client.query(
-          `UPDATE journal_vouchers SET voucher_number = $2, voucher_date = $3, total_amount = $4 WHERE id = $1`,
-          [jv.id, vn, effDate, effAmount],
+          `UPDATE payments SET voucher_number = $2, payment_date = $3, amount = $4 WHERE id = $1`,
+          [pv.id, vn, effDate, effAmount],
         );
-        await client.query(`UPDATE journal_voucher_lines SET debit = $2 WHERE voucher_id = $1 AND debit > 0`, [jv.id, effAmount]);
-        await client.query(`UPDATE journal_voucher_lines SET credit = $2 WHERE voucher_id = $1 AND credit > 0`, [jv.id, effAmount]);
       }
     }
     await client.query("COMMIT");
@@ -2691,6 +2657,17 @@ router.delete("/hr/advances/:id", requireModuleAction("page:/hr/advances", "dele
       });
       return;
     }
+    if (!adv.is_deducted && !adv.payment_voucher_id) {
+      // Pending LEGACY row (old ADV-EMP flow): the one-time migration moved its
+      // outstanding balance onto Salary Payable, and deleting the original
+      // disbursement voucher alone would strand that transfer. Locked; adjust
+      // with a manual journal voucher instead. (Cash-recovered legacy rows are
+      // still deletable — their two vouchers net to zero, so removing both
+      // unwinds cleanly.)
+      await client.query("ROLLBACK");
+      res.status(400).json({ error: "This advance was recorded under the old Employee Advance system and its balance was moved to Salary Payable — deleting it would break the books. Post a journal voucher if it needs reversing." });
+      return;
+    }
 
     const voucherIds = [adv.journal_voucher_id, adv.recovery_voucher_id]
       .filter((v): v is number => v !== null && v !== undefined);
@@ -2702,6 +2679,15 @@ router.delete("/hr/advances/:id", requireModuleAction("page:/hr/advances", "dele
         [voucherIds],
       );
       for (const jv of jvs) { lockDates.push(jv.d); voucherNumbers.push(jv.voucher_number); }
+    }
+    // New-flow advances disbursed a payment voucher — it goes with the row.
+    let pvRow: { id: number } | null = null;
+    if (adv.payment_voucher_id) {
+      const { rows: [pv] } = await client.query(
+        `SELECT id, voucher_number, payment_date::text AS d FROM payments WHERE id = $1 FOR UPDATE`,
+        [adv.payment_voucher_id],
+      );
+      if (pv) { pvRow = pv; lockDates.push(pv.d); voucherNumbers.push(pv.voucher_number); }
     }
     // Month lock: the advance date AND every voucher it posted (a cash
     // recovery is dated the day the money came back) must be in open months.
@@ -2717,6 +2703,9 @@ router.delete("/hr/advances/:id", requireModuleAction("page:/hr/advances", "dele
     if (voucherIds.length) {
       await client.query(`DELETE FROM journal_voucher_lines WHERE voucher_id = ANY($1)`, [voucherIds]);
       await client.query(`DELETE FROM journal_vouchers WHERE id = ANY($1)`, [voucherIds]);
+    }
+    if (pvRow) {
+      await client.query(`DELETE FROM payments WHERE id = $1`, [pvRow.id]);
     }
     await client.query(`DELETE FROM employee_advances WHERE id = $1`, [id]);
     await client.query("COMMIT");

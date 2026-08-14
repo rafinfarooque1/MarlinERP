@@ -18,7 +18,9 @@ description: Three-state payroll workflow (draft→approved→paid), accounting 
 |-------|-------|--------|
 | Approve | `SAL-EMP-{id}` under SYS-INDEXP | `SAL-PAY-{id}` under SYS-CURL |
 | Pay | `SAL-PAY-{id}` | STD-CASH or STD-BANK |
-| Advance | `ADV-EMP-{id}` under SYS-CURA | STD-CASH |
+| Advance | `SAL-PAY-{id}` (payment voucher, source='employee_advance') | STD-CASH or chosen till |
+
+(ADV-EMP-* Current-Asset ledgers retired Aug 2026 — balances migrated onto SAL-PAY, subtree deactivated; see advance-recovery.md.)
 
 Ledgers are per-employee, auto-provisioned by `findOrProvisionLedger()` in hr.ts.
 
@@ -34,6 +36,7 @@ Ledgers are per-employee, auto-provisioned by `findOrProvisionLedger()` in hr.ts
 ## Advance deduction
 - Pending advances fetched at generate time, summed → `advance_deduction` stored on payroll row
 - `net_pay = max(0, computed_net - advance_deduction)`; advances NOT marked deducted at generate time
+- Approval posts NO advance leg: SAL-PAY credit = `round2(netPay + advanceRec − accrued)` — the advance's own Dr on SAL-PAY offsets it to net pay owed
 - Advances can only be added by headoffice users; non-HO employees see only their own
 
 **Why:** Marking advances as deducted only at generate avoids issues if payroll is regenerated multiple times.

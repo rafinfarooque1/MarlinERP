@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useListAdvances, useAddAdvance, useRecoverAdvance, useUpdateAdvance, useDeleteAdvance, useListEmployees, useGetCompanySettings, useCashBankLedgersFlat } from '@workspace/api-client-react';
+import { useListAdvances, useAddAdvance, useUpdateAdvance, useDeleteAdvance, useListEmployees, useGetCompanySettings, useCashBankLedgersFlat } from '@workspace/api-client-react';
 import { usePermission } from '@/lib/usePermission';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
@@ -10,7 +10,7 @@ import { TransactionDialog, TransactionDialogContent } from '@/components/ui/tra
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
-import { ShieldOff, Plus, Search, Wallet, Clock, CheckCircle2, Loader2, IndianRupee, FileDown, HandCoins, Pencil, Trash2, AlertTriangle } from 'lucide-react';
+import { ShieldOff, Plus, Search, Wallet, Clock, CheckCircle2, Loader2, IndianRupee, FileDown, Pencil, Trash2, AlertTriangle } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { downloadAdvancePDF } from '@/lib/pdfUtils';
@@ -128,7 +128,7 @@ function NewAdvanceDialog({ onClose }: { onClose: () => void }) {
           </div>
 
           <p className="text-xs text-muted-foreground bg-muted/40 rounded-lg px-3 py-2">
-            A journal entry (Dr Advance-to-Employee / Cr Cash) will be posted automatically.
+            Posted as a payment voucher against the employee's Salary Payable ledger.
             The amount will be deducted from the next payroll run.
           </p>
         </div>
@@ -144,79 +144,9 @@ function NewAdvanceDialog({ onClose }: { onClose: () => void }) {
   );
 }
 
-// ── Recover Advance Dialog ────────────────────────────────────────────────────
-/**
- * Records the employee paying an advance back in cash, outside payroll. The
- * whole remaining amount is recovered in one go — the same all-or-nothing rule
- * payroll deduction uses — and the server refuses advances a payroll run has
- * already reserved.
- */
-function RecoverAdvanceDialog({ advance, onClose }: { advance: any; onClose: () => void }) {
-  const qc = useQueryClient();
-  const mutation = useRecoverAdvance();
-  const { data: cashBank = [] } = useCashBankLedgersFlat();
-  const [receiveIn, setReceiveIn] = useState('auto');
-
-  const submit = () => {
-    mutation.mutate(
-      { id: advance.id, receiveLedgerId: receiveIn !== 'auto' ? Number(receiveIn) : undefined },
-      {
-        onSuccess: () => {
-          toast.success(`Advance of ${fmt(advance.amount)} recovered from ${advance.employeeName}`);
-          qc.invalidateQueries({ queryKey: ['/api/hr/advances'] });
-          onClose();
-        },
-        onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed to recover the advance'),
-      },
-    );
-  };
-
-  return (
-    <TransactionDialog open dirty={receiveIn !== 'auto'} onOpenChange={onClose}>
-      <TransactionDialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <HandCoins className="w-5 h-5 text-primary" /> Recover Advance in Cash
-          </DialogTitle>
-        </DialogHeader>
-
-        <div className="space-y-4 py-2">
-          <div className="rounded-lg border bg-muted/30 px-4 py-3 text-sm space-y-1">
-            <div className="flex justify-between"><span className="text-muted-foreground">Employee</span><span className="font-medium">{advance.employeeName}</span></div>
-            <div className="flex justify-between"><span className="text-muted-foreground">Advance date</span><span>{fmtDate(advance.date)}</span></div>
-            <div className="flex justify-between"><span className="text-muted-foreground">Amount to recover</span><span className="font-bold font-mono">{fmt(advance.amount)}</span></div>
-          </div>
-
-          <div className="space-y-1.5">
-            <Label>Received Into</Label>
-            <Select value={receiveIn} onValueChange={setReceiveIn}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="auto">Default — your branch till</SelectItem>
-                {(cashBank as any[]).map((a: any) => (
-                  <SelectItem key={a.id} value={String(a.id)}>{a.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <p className="text-xs text-muted-foreground">Pick the cash box or bank account the money went into.</p>
-          </div>
-
-          <p className="text-xs text-muted-foreground bg-muted/40 rounded-lg px-3 py-2">
-            The full amount is settled at once and a journal entry is posted automatically.
-            The advance will no longer be deducted from payroll.
-          </p>
-        </div>
-
-        <DialogFooter>
-          <DialogClose asChild><Button variant="outline" disabled={mutation.isPending}>Cancel</Button></DialogClose>
-          <Button onClick={submit} disabled={mutation.isPending}>
-            {mutation.isPending ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Recording…</> : 'Record Recovery'}
-          </Button>
-        </DialogFooter>
-      </TransactionDialogContent>
-    </TransactionDialog>
-  );
-}
+// The cash "Recover Advance" flow is retired (Aug 2026): an advance now lives
+// as a debit on the employee's Salary Payable ledger and payroll settles it —
+// one settlement path. Historical cash recoveries keep their badge below.
 
 // ── Edit Advance Dialog ───────────────────────────────────────────────────────
 /**
@@ -279,7 +209,7 @@ function EditAdvanceDialog({ advance, onClose }: { advance: any; onClose: () => 
           </div>
 
           <p className="text-xs text-muted-foreground bg-muted/40 rounded-lg px-3 py-2">
-            The journal entry posted for this advance is updated automatically to match.
+            The payment voucher posted for this advance is updated automatically to match.
           </p>
         </div>
 
@@ -338,7 +268,7 @@ function DeleteAdvanceDialog({ advance, onClose }: { advance: any; onClose: () =
           <p className="text-sm text-muted-foreground">
             {advance.isDeducted
               ? 'This advance was recovered in cash. Deleting it removes BOTH journal entries — the original payment out and the cash recovery — as if the advance never happened.'
-              : 'Deleting removes the advance and the journal entry posted when it was paid out, as if it never happened.'}
+              : 'Deleting removes the advance and the payment voucher posted when it was paid out, as if it never happened.'}
             {' '}This cannot be undone.
           </p>
         </div>
@@ -364,7 +294,6 @@ export default function Advances() {
   const [search,    setSearch]    = useState('');
   const [statusFilter, setStatus] = useState<'all' | 'pending' | 'deducted'>('all');
   const [showNew,   setShowNew]   = useState(false);
-  const [recoverTarget, setRecoverTarget] = useState<any>(null);
   const [editTarget,    setEditTarget]    = useState<any>(null);
   const [deleteTarget,  setDeleteTarget]  = useState<any>(null);
 
@@ -415,7 +344,7 @@ export default function Advances() {
 
         <PageHeader
           title="Employee Advances"
-          description="Cash advances disbursed to employees — recovered automatically during payroll, or in cash any time."
+          description="Cash advances disbursed to employees against Salary Payable — deducted automatically from the next payroll."
           icon={Wallet}
           actions={perm.canAdd && (
             <Button onClick={() => setShowNew(true)}>
@@ -519,17 +448,10 @@ export default function Advances() {
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-1 justify-end">
-                      {perm.canEdit && !a.isDeducted && !a.deductedPayrollId && (
-                        <Button
-                          variant="ghost" size="sm"
-                          className="h-7 px-2 text-xs text-muted-foreground hover:text-primary"
-                          title="Employee paid this back in cash"
-                          onClick={() => setRecoverTarget(a)}
-                        >
-                          <HandCoins className="h-3.5 w-3.5 mr-1" /> Recover
-                        </Button>
-                      )}
-                      {perm.canEdit && !a.isDeducted && !a.deductedPayrollId && (
+                      {/* Legacy rows (no payment voucher — old advance-ledger flow) are
+                          read-only: their balance was moved to Salary Payable by the
+                          one-time migration, so the server locks edit/delete too. */}
+                      {perm.canEdit && !a.isDeducted && !a.deductedPayrollId && a.paymentVoucherId != null && (
                         <Button
                           variant="ghost" size="icon"
                           className="h-7 w-7 text-muted-foreground hover:text-primary"
@@ -556,9 +478,10 @@ export default function Advances() {
                         <FileDown className="h-3.5 w-3.5" />
                       </Button>
                       )}
-                      {/* Delete: pending or cash-recovered rows only — an advance a
-                          payroll run touched keeps its history (server enforces too). */}
-                      {perm.canDelete && !a.deductedPayrollId && (
+                      {/* Delete: new-flow pending or cash-recovered rows only — an advance
+                          a payroll run touched keeps its history, and pending legacy rows
+                          are locked post-migration (server enforces both). */}
+                      {perm.canDelete && !a.deductedPayrollId && (a.isDeducted || a.paymentVoucherId != null) && (
                         <Button
                           variant="ghost" size="icon"
                           className="h-7 w-7 text-muted-foreground hover:text-destructive"
@@ -581,7 +504,6 @@ export default function Advances() {
       </div>
 
       {showNew && <NewAdvanceDialog onClose={() => setShowNew(false)} />}
-      {recoverTarget && <RecoverAdvanceDialog advance={recoverTarget} onClose={() => setRecoverTarget(null)} />}
       {editTarget && <EditAdvanceDialog advance={editTarget} onClose={() => setEditTarget(null)} />}
       {deleteTarget && <DeleteAdvanceDialog advance={deleteTarget} onClose={() => setDeleteTarget(null)} />}
     </AppLayout>

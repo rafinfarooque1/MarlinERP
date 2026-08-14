@@ -26,6 +26,7 @@ import { startBackupScheduler } from "./lib/backup/scheduler";
 import { PasswordService } from "./lib/password";
 import { PRODUCT_KINDS, PRODUCT_TABLE, nextProductIdentity } from "./lib/productIdentity";
 import { nextVoucherNumber, financialYearLabel, salesInvoiceNumber, SALES_SERIES, type SalesSeries } from "./lib/voucherNumber";
+import { provisionSalaryLedgers } from "./lib/payrollLedgers";
 import { PAGE_PERM_KEYS, LEGACY_MODULE_TO_PAGES } from "./lib/pagePermissions";
 import { ensureChartStructure } from "./lib/chartGroups";
 import { DATE_COLUMNS } from "./lib/dateColumns";
@@ -3765,6 +3766,13 @@ await pool.query(`
   ALTER TABLE employee_advances ADD COLUMN IF NOT EXISTS journal_voucher_id INTEGER;
   ALTER TABLE employee_advances ADD COLUMN IF NOT EXISTS recovery_voucher_id INTEGER;
 
+  -- Aug 2026 model: an advance is disbursed as a PAYMENT VOUCHER against the
+  -- employee's Salary Payable ledger. NULL = legacy row from the old ADV-EMP
+  -- journal-voucher flow (locked for edit/delete once the one-time migration
+  -- below has moved its balance). Raw column — read and write via raw SQL.
+  ALTER TABLE employee_advances ADD COLUMN IF NOT EXISTS payment_voucher_id INTEGER;
+  ALTER TABLE employee_advances ADD COLUMN IF NOT EXISTS migrated_voucher_id INTEGER;
+
   ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS general_settings JSONB;
 `);
 
@@ -3820,6 +3828,295 @@ try {
   `);
 } catch (e) {
   console.error("[migrate] employee_advances voucher-link backfill failed:", e);
+}
+
+// ── Employee advances move to Salary Payable (Aug 2026, one-time) ────────────
+// Owner decision (final): Employee Advance stops being a separate Current
+// Asset flow. Each outstanding ADV-EMP balance is transferred to that
+// employee's Salary Payable ledger by an audited journal voucher (originals
+// preserved — nothing is deleted), then the ADV-EMP ledgers and their
+// "Employee Advances" container group are DEACTIVATED so no new-entry picker
+// offers them while history stays fully readable. Guarded by migration_log,
+// never by data shape. If any non-JV document (payment/receipt/expense/
+// opening balance) references an ADV-EMP ledger the marker is NOT written,
+// the leftovers are logged loudly, and the move retries next boot.
+{
+  const { rows: [moved] } = await pool.query(
+    `SELECT 1 FROM migration_log WHERE name = 'employee_advances_to_salary_payable_v1'`,
+  );
+  if (!moved) {
+    const advClient = await pool.connect();
+    try {
+      await advClient.query("BEGIN");
+
+      // Balances below derive from journal_voucher_lines only, so any other
+      // kind of posting against an ADV-EMP ledger would be silently missed —
+      // refuse and retry instead of assuming there are none.
+      const { rows: advForeign } = await advClient.query(`
+        SELECT al.code FROM account_ledgers al
+         WHERE al.code ~ '^ADV-EMP-[0-9]+$' AND (
+               EXISTS (SELECT 1 FROM payments p  WHERE p.paid_from_ledger_id = al.id OR p.paid_to_ledger_id = al.id)
+            OR EXISTS (SELECT 1 FROM receipts r  WHERE r.received_from_ledger_id = al.id OR r.received_in_ledger_id = al.id)
+            OR EXISTS (SELECT 1 FROM expenses e  WHERE e.ledger_account_id = al.id)
+            OR EXISTS (SELECT 1 FROM cash_deposits cd WHERE cd.source_cash_ledger_id = al.id OR cd.destination_bank_ledger_id = al.id)
+            OR EXISTS (SELECT 1 FROM opening_balances ob WHERE ob.ledger_id = al.id))`);
+      if (advForeign.length) {
+        await advClient.query("ROLLBACK");
+        console.error(
+          `[migration] employee_advances_to_salary_payable_v1: SKIPPED — non-journal postings still reference ` +
+          `${advForeign.map((f: any) => f.code).join(", ")}; move them manually, the migration retries next boot`,
+        );
+      } else {
+        const bookTotals = async () => {
+          const { rows: [t] } = await advClient.query(
+            `SELECT COALESCE(SUM(debit),0)::numeric AS d, COALESCE(SUM(credit),0)::numeric AS c
+               FROM journal_voucher_lines`,
+          );
+          return { d: Number(t.d), c: Number(t.c) };
+        };
+        const tbBefore = await bookTotals();
+
+        const { rows: advBals } = await advClient.query(`
+          SELECT al.id, al.code, SUBSTRING(al.code FROM 9)::int AS emp_id,
+                 COALESCE(SUM(l.debit), 0) - COALESCE(SUM(l.credit), 0) AS bal
+            FROM account_ledgers al
+            LEFT JOIN journal_voucher_lines l ON l.ledger_id = al.id
+           WHERE al.code ~ '^ADV-EMP-[0-9]+$' AND al.is_group = FALSE
+           GROUP BY al.id, al.code`);
+
+        // Per-row reconciliation BEFORE anything moves: each employee's ledger
+        // balance must equal the sum of that employee's still-pending legacy
+        // advance rows. The old create path inserted the row before its JV and
+        // swallowed voucher failures, so a pending row with NO ledger debit is
+        // possible — transferring the (zero) balance and marking the migration
+        // done would let payroll later credit Salary Payable against a debit
+        // that never existed. Any mismatch refuses the whole migration: no
+        // marker, loud log + boot_status, retry next boot after manual repair.
+        const { rows: pendingLegacy } = await advClient.query(`
+          SELECT id, employee_id, amount::numeric AS amount
+            FROM employee_advances
+           WHERE is_deducted = FALSE AND payment_voucher_id IS NULL`);
+        const pendingByEmp = new Map<number, { ids: number[]; sum: number }>();
+        for (const r of pendingLegacy) {
+          const g = pendingByEmp.get(Number(r.employee_id)) ?? { ids: [], sum: 0 };
+          g.ids.push(Number(r.id));
+          g.sum += Number(r.amount);
+          pendingByEmp.set(Number(r.employee_id), g);
+        }
+        const balByEmp = new Map<number, number>();
+        for (const b of advBals) balByEmp.set(Number(b.emp_id), Number(b.bal));
+        const empUnion = new Set<number>([...pendingByEmp.keys(), ...balByEmp.keys()]);
+        const discrepancies: string[] = [];
+        for (const empId of empUnion) {
+          const bal = balByEmp.get(empId) ?? 0;
+          const pend = pendingByEmp.get(empId)?.sum ?? 0;
+          if (Math.abs(bal - pend) > 0.005) {
+            discrepancies.push(
+              `employee #${empId}: ADV-EMP ledger balance ${bal.toFixed(2)} vs pending advance rows ${pend.toFixed(2)}`,
+            );
+          }
+        }
+        if (discrepancies.length) {
+          // Approval fails closed for these rows (no migrated_voucher_id), so
+          // skipping here cannot corrupt a payroll run in the meantime.
+          await advClient.query("ROLLBACK");
+          const msg =
+            `employee_advances_to_salary_payable_v1: SKIPPED — ledger/row mismatch, resolve manually then reboot: ` +
+            discrepancies.join("; ");
+          console.error(`[migration] ${msg}`);
+          await pool.query(
+            `INSERT INTO boot_status (node_env, migrations_ok, notes) VALUES ($1, FALSE, $2)`,
+            [process.env.NODE_ENV ?? "development", msg],
+          ).catch(() => {});
+        } else {
+        const migDate = new Date().toISOString().slice(0, 10);
+        let movedCount = 0;
+        let movedTotal = 0;
+        const evidence: string[] = [];
+        for (const b of advBals) {
+          const bal = Number(b.bal);
+          if (Math.abs(bal) <= 0.004) continue; // already nets to zero — nothing to move
+          const empId = Number(b.emp_id);
+          const { rows: [emp] } = await advClient.query(`SELECT id, name FROM employees WHERE id = $1`, [empId]);
+          const empLabel = emp?.name ?? `Employee #${empId}`;
+          const { payableLedgerId } = await provisionSalaryLedgers(advClient as any, empId, empLabel);
+          if (!payableLedgerId) throw new Error(`could not provision SAL-PAY-${empId} for the advance transfer`);
+
+          const amt = Math.abs(bal).toFixed(2);
+          const vn = await nextVoucherNumber(advClient as any, "journal", migDate);
+          const { rows: [jv] } = await advClient.query(
+            `INSERT INTO journal_vouchers (voucher_type, voucher_number, voucher_date, narration, total_amount,
+                                           created_by, origin, source_module)
+             VALUES ('journal', $1, $2, $3, $4, 'system', 'system', 'payroll') RETURNING id`,
+            [vn, migDate,
+             `Employee advance balance moved to Salary Payable — ${empLabel} (one-time migration, original entries preserved)`,
+             amt],
+          );
+          // Outstanding advance (debit balance): Dr Salary Payable / Cr the
+          // old advance ledger — the payable goes negative until payroll
+          // accrues against it. A credit balance (over-recovered; never seen
+          // in this book) flips the legs.
+          const drLedger = bal > 0 ? payableLedgerId : Number(b.id);
+          const crLedger = bal > 0 ? Number(b.id) : payableLedgerId;
+          await advClient.query(
+            `INSERT INTO journal_voucher_lines (voucher_id, ledger_id, debit, credit)
+             VALUES ($1, $2, $3, 0), ($1, $4, 0, $3)`,
+            [jv.id, drLedger, amt, crLedger],
+          );
+          movedCount++;
+          movedTotal += Math.abs(bal);
+          evidence.push(`${b.code} ${bal > 0 ? "Dr" : "Cr"} ${amt} -> SAL-PAY-${empId} via ${vn}`);
+
+          // Stamp every pending legacy row this transfer covers. The stamp is
+          // the per-row proof payroll approval demands before it will settle a
+          // legacy advance against Salary Payable — reconciliation above
+          // guarantees the rows sum to exactly the amount just moved.
+          const pend = pendingByEmp.get(empId);
+          if (pend?.ids.length) {
+            await advClient.query(
+              `UPDATE employee_advances SET migrated_voucher_id = $1 WHERE id = ANY($2::int[])`,
+              [jv.id, pend.ids],
+            );
+          }
+        }
+
+        // Reconcile before the marker: every ADV-EMP ledger must now net to
+        // zero and the whole book must still balance (the transfer vouchers
+        // are two-sided, so the totals move together or not at all).
+        const { rows: advLeft } = await advClient.query(`
+          SELECT al.code
+            FROM account_ledgers al
+            LEFT JOIN journal_voucher_lines l ON l.ledger_id = al.id
+           WHERE al.code ~ '^ADV-EMP-[0-9]+$' AND al.is_group = FALSE
+           GROUP BY al.code
+          HAVING ABS(COALESCE(SUM(l.debit), 0) - COALESCE(SUM(l.credit), 0)) > 0.004`);
+        if (advLeft.length) {
+          throw new Error(`advance transfer left nonzero balances on ${advLeft.map((r: any) => r.code).join(", ")}`);
+        }
+        const tbAfter = await bookTotals();
+        const drift = Math.abs((tbAfter.d - tbAfter.c) - (tbBefore.d - tbBefore.c));
+        if (drift > 0.005) {
+          throw new Error(`advance transfer changed the book's Dr−Cr gap by ${drift.toFixed(2)} — refusing to commit`);
+        }
+
+        // Archive: deactivate the per-employee ledgers and their container so
+        // pickers stop offering them; statements and history read on.
+        await advClient.query(
+          `UPDATE account_ledgers SET is_active = FALSE
+            WHERE code ~ '^ADV-EMP-[0-9]+$' OR code = 'STD-GRP-EMP-ADV'`,
+        );
+        await advClient.query(
+          `INSERT INTO migration_log (name) VALUES ('employee_advances_to_salary_payable_v1') ON CONFLICT (name) DO NOTHING`,
+        );
+        await advClient.query("COMMIT");
+        const summary =
+          `moved ${movedCount} balance(s) totalling ${movedTotal.toFixed(2)} to Salary Payable` +
+          (evidence.length ? ` [${evidence.join("; ")}]` : "") +
+          `; book Dr/Cr ${tbBefore.d.toFixed(2)}/${tbBefore.c.toFixed(2)} -> ${tbAfter.d.toFixed(2)}/${tbAfter.c.toFixed(2)}` +
+          `; ADV-EMP subtree deactivated`;
+        console.log(`[migration] employee_advances_to_salary_payable_v1: ${summary}`);
+        // Prod discards stdout until the port opens — leave the evidence
+        // somewhere readable after a deploy as well.
+        await pool.query(
+          `INSERT INTO boot_status (node_env, migrations_ok, notes)
+           VALUES ($1, TRUE, $2)`,
+          [process.env.NODE_ENV ?? "development", `employee_advances_to_salary_payable_v1: ${summary}`],
+        ).catch(() => {});
+        }
+      }
+    } catch (e) {
+      await advClient.query("ROLLBACK").catch(() => {});
+      throw e; // a failed accounting migration must fail the boot loudly, never half-apply
+    } finally {
+      advClient.release();
+    }
+  }
+}
+
+// ── Advance row links (databases where the balance move already ran) ─────────
+// The balance transfer above stamps `migrated_voucher_id` on every pending
+// legacy advance row it covers. Databases that ran the earlier revision of the
+// transfer moved the money but left the rows unstamped, and payroll approval
+// refuses to settle an unstamped legacy row — so reconcile those rows to the
+// transfer vouchers that are already in the books and stamp them once here.
+// Ambiguity or a sum mismatch refuses the backfill (no marker, loud log,
+// retries next boot): never pair money to rows by guesswork.
+{
+  const { rows: [linked] } = await pool.query(
+    `SELECT 1 FROM migration_log WHERE name = 'employee_advances_row_links_v1'`,
+  );
+  const { rows: [movedV1] } = await pool.query(
+    `SELECT 1 FROM migration_log WHERE name = 'employee_advances_to_salary_payable_v1'`,
+  );
+  if (!linked && movedV1) {
+    const linkClient = await pool.connect();
+    try {
+      await linkClient.query("BEGIN");
+      const { rows: unstamped } = await linkClient.query(`
+        SELECT id, employee_id, amount::numeric AS amount
+          FROM employee_advances
+         WHERE is_deducted = FALSE AND payment_voucher_id IS NULL AND migrated_voucher_id IS NULL`);
+      const byEmp = new Map<number, { ids: number[]; sum: number }>();
+      for (const r of unstamped) {
+        const g = byEmp.get(Number(r.employee_id)) ?? { ids: [], sum: 0 };
+        g.ids.push(Number(r.id));
+        g.sum += Number(r.amount);
+        byEmp.set(Number(r.employee_id), g);
+      }
+      const problems: string[] = [];
+      let stamped = 0;
+      for (const [empId, g] of byEmp) {
+        const { rows: jvs } = await linkClient.query(
+          `SELECT DISTINCT v.id, v.total_amount::numeric AS amt
+             FROM journal_vouchers v
+             JOIN journal_voucher_lines l ON l.voucher_id = v.id
+             JOIN account_ledgers al ON al.id = l.ledger_id
+            WHERE al.code = $1
+              AND v.narration LIKE '%one-time migration, original entries preserved%'`,
+          [`ADV-EMP-${empId}`],
+        );
+        if (jvs.length !== 1 || Math.abs(Number(jvs[0].amt) - g.sum) > 0.005) {
+          problems.push(
+            `employee #${empId}: pending rows ${g.sum.toFixed(2)} vs ${jvs.length} transfer voucher(s)` +
+            (jvs.length === 1 ? ` of ${Number(jvs[0].amt).toFixed(2)}` : ""),
+          );
+          continue;
+        }
+        await linkClient.query(
+          `UPDATE employee_advances SET migrated_voucher_id = $1 WHERE id = ANY($2::int[])`,
+          [Number(jvs[0].id), g.ids],
+        );
+        stamped += g.ids.length;
+      }
+      if (problems.length) {
+        await linkClient.query("ROLLBACK");
+        const msg =
+          `employee_advances_row_links_v1: SKIPPED — could not reconcile pending legacy rows to transfer vouchers: ` +
+          problems.join("; ") + `; resolve manually, retries next boot`;
+        console.error(`[migration] ${msg}`);
+        await pool.query(
+          `INSERT INTO boot_status (node_env, migrations_ok, notes) VALUES ($1, FALSE, $2)`,
+          [process.env.NODE_ENV ?? "development", msg],
+        ).catch(() => {});
+      } else {
+        await linkClient.query(
+          `INSERT INTO migration_log (name) VALUES ('employee_advances_row_links_v1') ON CONFLICT (name) DO NOTHING`,
+        );
+        await linkClient.query("COMMIT");
+        const msg = `employee_advances_row_links_v1: stamped ${stamped} pending legacy advance row(s) with their transfer voucher`;
+        console.log(`[migration] ${msg}`);
+        await pool.query(
+          `INSERT INTO boot_status (node_env, migrations_ok, notes) VALUES ($1, TRUE, $2)`,
+          [process.env.NODE_ENV ?? "development", msg],
+        ).catch(() => {});
+      }
+    } catch (e) {
+      await linkClient.query("ROLLBACK").catch(() => {});
+      throw e;
+    } finally {
+      linkClient.release();
+    }
+  }
 }
 
 // ── Multi-punch attendance ────────────────────────────────────────────────────

@@ -86,7 +86,7 @@ Key relationships & constraints:
 |---|---|
 | Items / Materials / Raw materials | Purchases, Production/BOM, Sales, Transfers, Stock, Valuation, GST (HSN/rate), Item Prices. Code prefixes follow display labels; EAN-13 barcodes in the `2` in-store range; inactive blocks CREATE only; creation is HO-only |
 | Customers / Vendors | Sales/Receipts · Purchases/Payments; auto-provision `CUST-`/`VEND-` ledgers under Sundry Debtors/Creditors; app-level delete removes the ledger; a boot sweep heals hand-deleted masters (orphan ledgers) |
-| Employees | Auth (username), HR, attendance, payroll, salary accrual; auto `SAL-EMP-`/`SAL-PAY-`/`ADV-EMP-` ledgers |
+| Employees | Auth (username), HR, attendance, payroll, salary accrual; auto `SAL-EMP-`/`SAL-PAY-` ledgers (`ADV-EMP-` retired Aug 2026: advances now post Dr SAL-PAY via payment voucher, source='employee_advance'; old balances migrated by `employee_advances_to_salary_payable_v1`, subtree deactivated; cash-recovery endpoint removed) |
 | Chart of Accounts | Everything financial; `SYS-*` roots → `STD-*` containers → auto party/branch/rent/salary ledgers; `code` never client-writable |
 | Warehouses / Outlets | LBAC scope, stock location, GSTIN for transfer classification, seller identity on invoices (seller = location, never company), rent agreements; a place can exist as BOTH warehouse and outlet sharing one cash ledger (mirror locations) |
 | GST config | Slab rates on items; company + per-location GSTINs; `lineTaxHeads()` is the single tax-math authority |

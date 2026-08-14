@@ -79,6 +79,13 @@ export interface EmployeeAdvance {
   note?: string | null;
   isDeducted: boolean;
   deductedPayrollId?: number | null;
+  /**
+   * Payment voucher that disbursed this advance (Dr Salary Payable / Cr till).
+   * NULL = legacy row from the retired Employee-Advance-ledger flow; pending
+   * legacy rows are locked for edit/delete (their balance was moved to Salary
+   * Payable by a one-time migration), so hide those buttons when this is null.
+   */
+  paymentVoucherId?: number | null;
   createdAt: string;
 }
 
@@ -248,25 +255,15 @@ export const useAddAdvance = () =>
       }),
   });
 
-/**
- * Recover an outstanding advance in cash (whole amount) instead of a payroll
- * deduction. `receiveLedgerId` picks the till/bank the money comes back into;
- * omitted = the caller's own till (branch) or company cash (Head Office).
- */
-export const useRecoverAdvance = () =>
-  useMutation<EmployeeAdvance, Error, { id: number; receiveLedgerId?: number }>({
-    mutationFn: ({ id, receiveLedgerId }) =>
-      customFetch<EmployeeAdvance>(`/api/hr/advances/${id}/recover`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(receiveLedgerId ? { receiveLedgerId } : {}),
-      }),
-  });
+// The cash "Recover Advance" flow is retired (Aug 2026): an advance now lives
+// as a debit on the employee's Salary Payable ledger and payroll settles it —
+// one settlement path. Historical cash recoveries stay visible in the list.
 
 /**
  * Edit a pending advance (amount / date / note). The server refuses advances
- * a payroll run has reserved or already settled, and keeps the linked journal
- * entry in sync automatically.
+ * a payroll run has reserved or already settled — and legacy rows from the
+ * retired Employee-Advance-ledger flow — and keeps the linked payment voucher
+ * in sync automatically.
  */
 export const useUpdateAdvance = () =>
   useMutation<EmployeeAdvance, Error, { id: number; amount?: number | string; date?: string; note?: string | null }>({
