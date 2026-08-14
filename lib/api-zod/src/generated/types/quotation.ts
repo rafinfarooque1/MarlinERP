@@ -44,8 +44,16 @@ export interface Quotation {
   paymentTerms?: string | null;
   /** @nullable */
   placeOfSupply?: string | null;
-  /** @nullable */
+  /**
+     * Display name. For quotations saved with salespersonEmployeeId this is the employee's name snapshotted at save time; older quotations carry the free text that was typed (grandfathered).
+     * @nullable
+     */
   salesperson?: string | null;
+  /**
+     * Reference to the employee chosen from the salesperson master. Null on quotations saved before the master existed (their free-text salesperson still renders).
+     * @nullable
+     */
+  salespersonEmployeeId?: number | null;
   /** @nullable */
   notes?: string | null;
   /** @nullable */

@@ -26,7 +26,13 @@ export interface QuotationInput {
   shippingAddress?: string;
   paymentTerms?: string;
   placeOfSupply?: string;
+  /** Free-text fallback for legacy quotations only. Ignored when salespersonEmployeeId is provided (the server snapshots the employee's name instead). */
   salesperson?: string;
+  /**
+     * Employee chosen from the salesperson dropdown. Must be an active employee at the quotation's location or Head Office. Null/absent keeps the free-text salesperson value.
+     * @nullable
+     */
+  salespersonEmployeeId?: number | null;
   notes?: string;
   termsConditions?: string;
 }

@@ -17,9 +17,11 @@ import {
   usePaginatedQuotations, useCreateQuotation, useUpdateQuotation, useDeleteQuotation,
   useSetQuotationStatus, useListItems, useListStock,
   useGetCompanySettings, useListCoupons, customFetch, useGetMe,
+  useListQuotationSalespeople, useListQuotationPaymentTerms,
   ensureQuotationShareLink, absoluteShareUrl, checkQuotationStock, requestQuotationPdfUrl,
   type QuotationListRow, type QuotationStockShortfall,
 } from '@workspace/api-client-react';
+import { EntityCombobox, type EntityOption } from '@/components/ui/entity-combobox';
 import { usePermission } from '@/lib/usePermission';
 import { isActiveProduct } from '@/lib/productStatus';
 import { useOutletsEnabled, useFeatureFlags } from '@/lib/useFeatureFlags';
@@ -137,6 +139,9 @@ const schema = z.object({
   billingAddress: z.string().optional(),
   shippingAddress: z.string().optional(),
   placeOfSupply: z.string().optional(),
+  // Employee reference from the salesperson master; `salesperson` keeps the
+  // legacy free text so pre-master quotations round-trip edits unchanged.
+  salespersonEmployeeId: z.coerce.number().optional(),
   salesperson: z.string().optional(),
   notes: z.string().optional(),
   termsConditions: z.string().optional(),
@@ -164,6 +169,7 @@ const defaultFormValues: FormValues = {
   billingAddress: '',
   shippingAddress: '',
   placeOfSupply: '',
+  salespersonEmployeeId: undefined,
   salesperson: '',
   notes: '',
   termsConditions: '',
@@ -340,6 +346,50 @@ export default function Quotations() {
   const watchLocationId = form.watch('locationId');
   const watchCustomerId = form.watch('customerId');
 
+  // ── Salesperson master ──
+  // Active employees at the quotation's location, plus Head Office staff (a
+  // HO manager quotes for any branch). The server re-checks the same rule on
+  // save; a stored salesperson stays selectable on edit even if since moved
+  // or deactivated (grandfathered, exactly like MRP floors).
+  const { data: salespeople = [] } = useListQuotationSalespeople();
+  const watchSalespersonId = form.watch('salespersonEmployeeId');
+  const salespersonOptions = useMemo<EntityOption[]>(() => {
+    const locId = Number(watchLocationId) || 0;
+    const opts: EntityOption[] = (salespeople as any[])
+      .filter(e => e.branchType === 'headoffice' ||
+        (e.branchType === watchLocationType && Number(e.branchId) === locId))
+      .map(e => ({ id: e.id, label: e.name, sublabel: e.branchType === 'headoffice' ? 'Head Office' : null }));
+    const storedId = editItem?.salespersonEmployeeId ?? 0;
+    if (storedId > 0 && !opts.some(o => o.id === storedId)) {
+      opts.push({ id: storedId, label: editItem?.salesperson || `Employee #${storedId}`, sublabel: null });
+    }
+    return opts;
+  }, [salespeople, watchLocationType, watchLocationId, editItem]);
+  // Changing the location invalidates a NEW selection that doesn't work
+  // there — clear it rather than let the server bounce the save later. The
+  // quote's stored salesperson survives (the server grandfathers it).
+  useEffect(() => {
+    const cur = Number(form.getValues('salespersonEmployeeId') ?? 0);
+    if (!cur || cur === (editItem?.salespersonEmployeeId ?? 0)) return;
+    if (!salespersonOptions.some(o => o.id === cur)) {
+      form.setValue('salespersonEmployeeId', undefined);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [watchLocationType, watchLocationId, salespersonOptions]);
+
+  // ── Payment terms master ──
+  // The select is fed by the managed list; a stored value outside the list
+  // (legacy free text, or a term since deleted) opens in custom mode so it
+  // keeps displaying and round-trips unchanged.
+  const { data: paymentTermsList = [] } = useListQuotationPaymentTerms();
+  const [customTermsMode, setCustomTermsMode] = useState(false);
+  useEffect(() => {
+    if (!isOpen) { setCustomTermsMode(false); return; }
+    const v = (form.getValues('paymentTerms') ?? '').trim();
+    setCustomTermsMode(!!v && !(paymentTermsList as any[]).some(t => t.label === v));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, editItem, paymentTermsList.length]);
+
   const openEdit = (q: QuotationListRow) => {
     if (q.convertedSaleId) {
       toast.error(`${q.quotationNumber} was converted to ${q.convertedInvoiceNumber ?? 'a sale'} and can no longer be edited.`);
@@ -359,6 +409,9 @@ export default function Quotations() {
       billingAddress: q.billingAddress ?? '',
       shippingAddress: q.shippingAddress ?? '',
       placeOfSupply: q.placeOfSupply ?? '',
+      salespersonEmployeeId: q.salespersonEmployeeId ?? undefined,
+      // Legacy quotes carry free text; employee-backed quotes carry the name
+      // snapshot (kept so an untouched edit round-trips it unchanged).
       salesperson: q.salesperson ?? '',
       notes: q.notes ?? '',
       termsConditions: q.termsConditions ?? '',
@@ -574,7 +627,10 @@ export default function Quotations() {
       shippingAddress: data.shippingAddress || undefined,
       paymentTerms: data.paymentTerms || undefined,
       placeOfSupply: data.placeOfSupply || undefined,
-      salesperson: data.salesperson || undefined,
+      // Employee reference wins; the free text rides along only for legacy
+      // quotations whose typed value was never replaced (server keeps it).
+      salespersonEmployeeId: data.salespersonEmployeeId ? Number(data.salespersonEmployeeId) : null,
+      salesperson: data.salespersonEmployeeId ? undefined : (data.salesperson || undefined),
       notes: data.notes || undefined,
       termsConditions: data.termsConditions || undefined,
     };
@@ -1072,12 +1128,78 @@ export default function Quotations() {
                 <FormField control={form.control} name="validTill" render={({ field }) => (
                   <FormItem><FormLabel>Valid Till</FormLabel><FormControl><Input type="date" {...field} value={field.value ?? ''} /></FormControl><FormMessage /></FormItem>
                 )} />
-                <FormField control={form.control} name="paymentTerms" render={({ field }) => (
-                  <FormItem><FormLabel>Payment Terms</FormLabel><FormControl><Input placeholder="e.g. 50% advance, balance on delivery" {...field} value={field.value ?? ''} /></FormControl></FormItem>
-                )} />
-                <FormField control={form.control} name="salesperson" render={({ field }) => (
-                  <FormItem><FormLabel>Salesperson</FormLabel><FormControl><Input placeholder="Who is quoting" {...field} value={field.value ?? ''} /></FormControl></FormItem>
-                )} />
+                <FormField control={form.control} name="paymentTerms" render={({ field }) => {
+                  const value = (field.value ?? '').trim();
+                  const inList = (paymentTermsList as any[]).some(t => t.label === value);
+                  return (
+                    <FormItem>
+                      <FormLabel>Payment Terms</FormLabel>
+                      {customTermsMode ? (
+                        <div className="flex gap-1.5">
+                          <FormControl><Input
+                            placeholder="e.g. 50% advance, balance on delivery"
+                            data-testid="input-payment-terms-custom"
+                            {...field} value={field.value ?? ''}
+                          /></FormControl>
+                          <Button
+                            type="button" variant="outline" size="sm" className="h-10 px-2.5 text-xs shrink-0"
+                            data-testid="button-payment-terms-list"
+                            onClick={() => { setCustomTermsMode(false); if (!inList) field.onChange(''); }}
+                          >List</Button>
+                        </div>
+                      ) : (
+                        <Select
+                          value={value || '__none__'}
+                          onValueChange={v => {
+                            if (v === '__custom__') { setCustomTermsMode(true); field.onChange(''); return; }
+                            field.onChange(v === '__none__' ? '' : v);
+                          }}
+                        >
+                          <FormControl><SelectTrigger data-testid="select-payment-terms"><SelectValue placeholder="Select terms" /></SelectTrigger></FormControl>
+                          <SelectContent>
+                            <SelectItem value="__none__">None</SelectItem>
+                            {(paymentTermsList as any[]).map(t => (
+                              <SelectItem key={t.id} value={t.label}>{t.label}</SelectItem>
+                            ))}
+                            {/* Stored wording outside the managed list (legacy free
+                                text, or a term deleted since) stays displayable. */}
+                            {value && !inList && <SelectItem value={value}>{value}</SelectItem>}
+                            <SelectItem value="__custom__">Custom…</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      )}
+                    </FormItem>
+                  );
+                }} />
+                <FormField control={form.control} name="salespersonEmployeeId" render={({ field }) => {
+                  const legacyText = (form.watch('salesperson') ?? '').trim();
+                  return (
+                    <FormItem>
+                      <FormLabel>Salesperson</FormLabel>
+                      <FormControl>
+                        <EntityCombobox
+                          options={salespersonOptions}
+                          value={field.value ? Number(field.value) : null}
+                          onChange={id => {
+                            field.onChange(id ?? undefined);
+                            // Touching the picker replaces (or clears) the old
+                            // free text — it must not linger and resurrect.
+                            form.setValue('salesperson', '');
+                          }}
+                          placeholder={legacyText || 'Select employee'}
+                          searchPlaceholder="Search employees…"
+                          clearable
+                          data-testid="select-salesperson"
+                        />
+                      </FormControl>
+                      {legacyText && !field.value && (
+                        <p className="text-[11px] text-muted-foreground mt-1">
+                          “{legacyText}” was typed before the salesperson list existed — leave as is, or pick an employee to replace it.
+                        </p>
+                      )}
+                    </FormItem>
+                  );
+                }} />
                 <FormField control={form.control} name="placeOfSupply" render={({ field }) => (
                   <FormItem><FormLabel>Place of Supply</FormLabel>
                     <FormControl><StateCombobox value={field.value || ''} onChange={field.onChange} data-testid="select-place-of-supply" /></FormControl>

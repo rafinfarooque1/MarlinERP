@@ -420,6 +420,173 @@ function InvoicePdfSection({ canEdit }: { canEdit: boolean }) {
 // each payroll row keeps a snapshot of the rates it was computed with — so
 // changing a rate here affects future runs only and never rewrites history.
 
+/**
+ * Quotation Payment Terms — the managed list feeding the quotation form's
+ * Payment Terms dropdown. Quotations store the label TEXT, so renaming or
+ * deleting a term here never rewrites documents already carrying the old
+ * wording (they keep displaying it, grandfathered like legacy free text).
+ */
+function QuotationTermsSection({ canEdit }: { canEdit: boolean }) {
+  const [terms, setTerms] = useState<Array<{ id: number; label: string; sortOrder: number }>>([]);
+  const [loading, setLoading] = useState(true);
+  const [newLabel, setNewLabel] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [edits, setEdits] = useState<Record<number, string>>({});
+  const [deleteTarget, setDeleteTarget] = useState<{ id: number; label: string } | null>(null);
+  const queryClient = useQueryClient();
+
+  const load = async () => {
+    try { setTerms(await customFetch<any[]>('/api/quotation-payment-terms')); }
+    catch { /* section stays empty; the quotation form falls back to custom text */ }
+  };
+  useEffect(() => { load().finally(() => setLoading(false)); }, []);
+
+  // The quotation form reads this list through the generated hook — refresh it.
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: ['/api/quotation-payment-terms'] });
+
+  const run = async (fn: () => Promise<void>) => {
+    setBusy(true);
+    try { await fn(); await load(); invalidate(); }
+    catch (e: any) { toast.error(e?.data?.error || e.message || 'Request failed'); }
+    finally { setBusy(false); }
+  };
+
+  const add = () => {
+    const label = newLabel.trim();
+    if (!label) return;
+    run(async () => {
+      await customFetch('/api/quotation-payment-terms', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ label }),
+      });
+      setNewLabel('');
+      toast.success(`Added "${label}"`);
+    });
+  };
+
+  const rename = (id: number) => {
+    const label = (edits[id] ?? '').trim();
+    const current = terms.find(t => t.id === id);
+    if (!label || !current || label === current.label) {
+      setEdits(prev => { const { [id]: _drop, ...rest } = prev; return rest; });
+      return;
+    }
+    run(async () => {
+      await customFetch(`/api/quotation-payment-terms/${id}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ label }),
+      });
+      setEdits(prev => { const { [id]: _drop, ...rest } = prev; return rest; });
+      toast.success('Renamed');
+    });
+  };
+
+  const remove = (id: number, label: string) => run(async () => {
+    await customFetch(`/api/quotation-payment-terms/${id}`, { method: 'DELETE' });
+    toast.success(`Removed "${label}"`);
+  });
+
+  return (
+    <div className="bg-card rounded-xl border border-border overflow-hidden">
+      <div className="p-5 border-b border-border flex items-center gap-3">
+        <div className="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
+          <FileText className="w-4.5 h-4.5 text-primary" />
+        </div>
+        <div>
+          <h2 className="font-semibold">Quotation Payment Terms</h2>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            Options offered in the quotation form's Payment Terms dropdown. Existing quotations keep the wording they were saved with.
+          </p>
+        </div>
+      </div>
+      <div className="p-5 space-y-3">
+        {loading ? (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="w-4 h-4 animate-spin" /> Loading…</div>
+        ) : (
+          <>
+            <div className="space-y-2">
+              {terms.length === 0 && (
+                <p className="text-sm text-muted-foreground">No payment terms yet — add the options your quotations should offer.</p>
+              )}
+              {terms.map(t => {
+                const editing = edits[t.id] !== undefined;
+                return (
+                  <div key={t.id} className="flex items-center gap-2" data-testid={`row-payment-term-${t.id}`}>
+                    {editing ? (
+                      <>
+                        <Input
+                          className="h-9 max-w-sm"
+                          value={edits[t.id]}
+                          autoFocus
+                          onChange={e => setEdits(prev => ({ ...prev, [t.id]: e.target.value }))}
+                          onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); rename(t.id); } if (e.key === 'Escape') setEdits(prev => { const { [t.id]: _d, ...rest } = prev; return rest; }); }}
+                          data-testid={`input-payment-term-${t.id}`}
+                        />
+                        <Button size="sm" variant="outline" className="h-9" disabled={busy} onClick={() => rename(t.id)}>
+                          <Save className="w-3.5 h-3.5 mr-1.5" /> Save
+                        </Button>
+                      </>
+                    ) : (
+                      <>
+                        <span className="text-sm flex-1 max-w-sm px-3 py-2 rounded-md bg-muted/40 border border-border break-words">{t.label}</span>
+                        {canEdit && (
+                          <>
+                            <Button size="sm" variant="ghost" className="h-9 text-xs" disabled={busy}
+                              onClick={() => setEdits(prev => ({ ...prev, [t.id]: t.label }))}
+                              data-testid={`button-edit-term-${t.id}`}>Rename</Button>
+                            <Button size="sm" variant="ghost" className="h-9 text-destructive hover:text-destructive" disabled={busy}
+                              onClick={() => setDeleteTarget({ id: t.id, label: t.label })}
+                              data-testid={`button-delete-term-${t.id}`}>
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </Button>
+                          </>
+                        )}
+                      </>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            {canEdit && (
+              <div className="flex items-center gap-2 pt-1">
+                <Input
+                  className="h-9 max-w-sm"
+                  placeholder="New term, e.g. 45 Days"
+                  value={newLabel}
+                  onChange={e => setNewLabel(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); add(); } }}
+                  data-testid="input-new-payment-term"
+                />
+                <Button size="sm" className="h-9" disabled={busy || !newLabel.trim()} onClick={add} data-testid="button-add-payment-term">
+                  <Plus className="w-3.5 h-3.5 mr-1.5" /> Add
+                </Button>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
+      <AlertDialog open={!!deleteTarget} onOpenChange={o => { if (!o) setDeleteTarget(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove "{deleteTarget?.label}"?</AlertDialogTitle>
+            <AlertDialogDescription>
+              It will no longer be offered on new quotations. Quotations already saved with this wording keep showing it.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => { if (deleteTarget) { remove(deleteTarget.id, deleteTarget.label); setDeleteTarget(null); } }}
+            >Remove</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  );
+}
+
 function StatutoryPayrollSection({ canEdit }: { canEdit: boolean }) {
   const [s, setS] = useState({
     pfEnabled: true, pfEmployeePercent: '12', pfEmployerPercent: '12',
@@ -1088,6 +1255,9 @@ export default function Settings() {
 
         {/* ── Invoice PDF: payment terms & footer (server-persisted) ───────── */}
         <InvoicePdfSection canEdit={perm.canEdit} />
+
+        {/* ── Quotation payment terms master (server-persisted) ────────────── */}
+        <QuotationTermsSection canEdit={perm.canEdit} />
 
         {/* ── Production costing: default overhead % (server-persisted) ────── */}
         <StatutoryPayrollSection canEdit={perm.canEdit} />

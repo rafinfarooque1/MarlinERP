@@ -42,7 +42,13 @@ export interface QuotationListRow {
   shippingAddress: string | null;
   paymentTerms: string | null;
   placeOfSupply: string | null;
+  /**
+   * Display name: the employee's name snapshotted at save time when
+   * salespersonEmployeeId is set, or the legacy free text on older quotations.
+   */
   salesperson: string | null;
+  /** Employee reference from the salesperson master; null on legacy quotations. */
+  salespersonEmployeeId: number | null;
   notes: string | null;
   termsConditions: string | null;
   convertedSaleId: number | null;

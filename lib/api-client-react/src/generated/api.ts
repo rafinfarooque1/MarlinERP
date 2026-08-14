@@ -42,6 +42,7 @@ import type {
   DashboardSummary,
   DeleteCashBankAccount200,
   DeleteQuotation200,
+  DeleteQuotationPaymentTerm200,
   Employee,
   EmployeeInput,
   EmployeeUpdate,
@@ -86,6 +87,9 @@ import type {
   PurchaseInput,
   Quotation,
   QuotationInput,
+  QuotationPaymentTerm,
+  QuotationPaymentTermInput,
+  QuotationSalesperson,
   QuotationStatusInput,
   RawMaterial,
   RawMaterialInput,
@@ -4100,6 +4104,364 @@ export const useSetQuotationStatus = <TError = ErrorType<unknown>,
         TContext
       > => {
       return useMutation(getSetQuotationStatusMutationOptions(options));
+    }
+
+export const getListQuotationSalespeopleUrl = () => {
+
+
+
+
+  return `/api/quotations/salespeople`
+}
+
+/**
+ * @summary Minimal active-employee directory for the quotation Salesperson picker — id, name and branch only (no salary/contact; the HR page permission guards those). Master list stays unscoped; the quotation's location choice does the narrowing, same convention as voucher-employees.
+
+ */
+export const listQuotationSalespeople = async ( options?: RequestInit): Promise<QuotationSalesperson[]> => {
+
+  return customFetch<QuotationSalesperson[]>(getListQuotationSalespeopleUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getListQuotationSalespeopleQueryKey = () => {
+    return [
+    `/api/quotations/salespeople`
+    ] as const;
+    }
+
+
+export const getListQuotationSalespeopleQueryOptions = <TData = Awaited<ReturnType<typeof listQuotationSalespeople>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listQuotationSalespeople>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getListQuotationSalespeopleQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listQuotationSalespeople>>> = ({ signal }) => listQuotationSalespeople({ signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listQuotationSalespeople>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type ListQuotationSalespeopleQueryResult = NonNullable<Awaited<ReturnType<typeof listQuotationSalespeople>>>
+export type ListQuotationSalespeopleQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary Minimal active-employee directory for the quotation Salesperson picker — id, name and branch only (no salary/contact; the HR page permission guards those). Master list stays unscoped; the quotation's location choice does the narrowing, same convention as voucher-employees.
+
+ */
+
+export function useListQuotationSalespeople<TData = Awaited<ReturnType<typeof listQuotationSalespeople>>, TError = ErrorType<unknown>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listQuotationSalespeople>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getListQuotationSalespeopleQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getListQuotationPaymentTermsUrl = () => {
+
+
+
+
+  return `/api/quotation-payment-terms`
+}
+
+/**
+ * @summary List the managed payment-terms options for quotations
+ */
+export const listQuotationPaymentTerms = async ( options?: RequestInit): Promise<QuotationPaymentTerm[]> => {
+
+  return customFetch<QuotationPaymentTerm[]>(getListQuotationPaymentTermsUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getListQuotationPaymentTermsQueryKey = () => {
+    return [
+    `/api/quotation-payment-terms`
+    ] as const;
+    }
+
+
+export const getListQuotationPaymentTermsQueryOptions = <TData = Awaited<ReturnType<typeof listQuotationPaymentTerms>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listQuotationPaymentTerms>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getListQuotationPaymentTermsQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listQuotationPaymentTerms>>> = ({ signal }) => listQuotationPaymentTerms({ signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listQuotationPaymentTerms>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type ListQuotationPaymentTermsQueryResult = NonNullable<Awaited<ReturnType<typeof listQuotationPaymentTerms>>>
+export type ListQuotationPaymentTermsQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary List the managed payment-terms options for quotations
+ */
+
+export function useListQuotationPaymentTerms<TData = Awaited<ReturnType<typeof listQuotationPaymentTerms>>, TError = ErrorType<unknown>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listQuotationPaymentTerms>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getListQuotationPaymentTermsQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getCreateQuotationPaymentTermUrl = () => {
+
+
+
+
+  return `/api/quotation-payment-terms`
+}
+
+/**
+ * @summary Add a payment-terms option (Settings, admin)
+ */
+export const createQuotationPaymentTerm = async (quotationPaymentTermInput: QuotationPaymentTermInput, options?: RequestInit): Promise<QuotationPaymentTerm> => {
+
+  return customFetch<QuotationPaymentTerm>(getCreateQuotationPaymentTermUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(quotationPaymentTermInput)
+  }
+);}
+
+
+
+
+
+export const getCreateQuotationPaymentTermMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createQuotationPaymentTerm>>, TError,{data: BodyType<QuotationPaymentTermInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof createQuotationPaymentTerm>>, TError,{data: BodyType<QuotationPaymentTermInput>}, TContext> => {
+
+const mutationKey = ['createQuotationPaymentTerm'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof createQuotationPaymentTerm>>, {data: BodyType<QuotationPaymentTermInput>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  createQuotationPaymentTerm(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type CreateQuotationPaymentTermMutationResult = NonNullable<Awaited<ReturnType<typeof createQuotationPaymentTerm>>>
+    export type CreateQuotationPaymentTermMutationBody = BodyType<QuotationPaymentTermInput>
+    export type CreateQuotationPaymentTermMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Add a payment-terms option (Settings, admin)
+ */
+export const useCreateQuotationPaymentTerm = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createQuotationPaymentTerm>>, TError,{data: BodyType<QuotationPaymentTermInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof createQuotationPaymentTerm>>,
+        TError,
+        {data: BodyType<QuotationPaymentTermInput>},
+        TContext
+      > => {
+      return useMutation(getCreateQuotationPaymentTermMutationOptions(options));
+    }
+
+export const getUpdateQuotationPaymentTermUrl = (id: number,) => {
+
+
+
+
+  return `/api/quotation-payment-terms/${id}`
+}
+
+export const updateQuotationPaymentTerm = async (id: number,
+    quotationPaymentTermInput: QuotationPaymentTermInput, options?: RequestInit): Promise<QuotationPaymentTerm> => {
+
+  return customFetch<QuotationPaymentTerm>(getUpdateQuotationPaymentTermUrl(id),
+  {
+    ...options,
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(quotationPaymentTermInput)
+  }
+);}
+
+
+
+
+
+export const getUpdateQuotationPaymentTermMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateQuotationPaymentTerm>>, TError,{id: number;data: BodyType<QuotationPaymentTermInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof updateQuotationPaymentTerm>>, TError,{id: number;data: BodyType<QuotationPaymentTermInput>}, TContext> => {
+
+const mutationKey = ['updateQuotationPaymentTerm'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof updateQuotationPaymentTerm>>, {id: number;data: BodyType<QuotationPaymentTermInput>}> = (props) => {
+          const {id,data} = props ?? {};
+
+          return  updateQuotationPaymentTerm(id,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type UpdateQuotationPaymentTermMutationResult = NonNullable<Awaited<ReturnType<typeof updateQuotationPaymentTerm>>>
+    export type UpdateQuotationPaymentTermMutationBody = BodyType<QuotationPaymentTermInput>
+    export type UpdateQuotationPaymentTermMutationError = ErrorType<unknown>
+
+    export const useUpdateQuotationPaymentTerm = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateQuotationPaymentTerm>>, TError,{id: number;data: BodyType<QuotationPaymentTermInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof updateQuotationPaymentTerm>>,
+        TError,
+        {id: number;data: BodyType<QuotationPaymentTermInput>},
+        TContext
+      > => {
+      return useMutation(getUpdateQuotationPaymentTermMutationOptions(options));
+    }
+
+export const getDeleteQuotationPaymentTermUrl = (id: number,) => {
+
+
+
+
+  return `/api/quotation-payment-terms/${id}`
+}
+
+export const deleteQuotationPaymentTerm = async (id: number, options?: RequestInit): Promise<DeleteQuotationPaymentTerm200> => {
+
+  return customFetch<DeleteQuotationPaymentTerm200>(getDeleteQuotationPaymentTermUrl(id),
+  {
+    ...options,
+    method: 'DELETE'
+
+
+  }
+);}
+
+
+
+
+
+export const getDeleteQuotationPaymentTermMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteQuotationPaymentTerm>>, TError,{id: number}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof deleteQuotationPaymentTerm>>, TError,{id: number}, TContext> => {
+
+const mutationKey = ['deleteQuotationPaymentTerm'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof deleteQuotationPaymentTerm>>, {id: number}> = (props) => {
+          const {id} = props ?? {};
+
+          return  deleteQuotationPaymentTerm(id,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type DeleteQuotationPaymentTermMutationResult = NonNullable<Awaited<ReturnType<typeof deleteQuotationPaymentTerm>>>
+
+    export type DeleteQuotationPaymentTermMutationError = ErrorType<unknown>
+
+    export const useDeleteQuotationPaymentTerm = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteQuotationPaymentTerm>>, TError,{id: number}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof deleteQuotationPaymentTerm>>,
+        TError,
+        {id: number},
+        TContext
+      > => {
+      return useMutation(getDeleteQuotationPaymentTermMutationOptions(options));
     }
 
 export const getListHierarchiesUrl = () => {

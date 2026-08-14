@@ -737,8 +737,16 @@ export interface Quotation {
   paymentTerms?: string | null;
   /** @nullable */
   placeOfSupply?: string | null;
-  /** @nullable */
+  /**
+     * Display name. For quotations saved with salespersonEmployeeId this is the employee's name snapshotted at save time; older quotations carry the free text that was typed (grandfathered).
+     * @nullable
+     */
   salesperson?: string | null;
+  /**
+     * Reference to the employee chosen from the salesperson master. Null on quotations saved before the master existed (their free-text salesperson still renders).
+     * @nullable
+     */
+  salespersonEmployeeId?: number | null;
   /** @nullable */
   notes?: string | null;
   /** @nullable */
@@ -778,7 +786,13 @@ export interface QuotationInput {
   shippingAddress?: string;
   paymentTerms?: string;
   placeOfSupply?: string;
+  /** Free-text fallback for legacy quotations only. Ignored when salespersonEmployeeId is provided (the server snapshots the employee's name instead). */
   salesperson?: string;
+  /**
+     * Employee chosen from the salesperson dropdown. Must be an active employee at the quotation's location or Head Office. Null/absent keeps the free-text salesperson value.
+     * @nullable
+     */
+  salespersonEmployeeId?: number | null;
   notes?: string;
   termsConditions?: string;
 }
@@ -796,6 +810,25 @@ export const QuotationStatusInputStatus = {
 
 export interface QuotationStatusInput {
   status: QuotationStatusInputStatus;
+}
+
+export interface QuotationSalesperson {
+  id: number;
+  name: string;
+  /** headoffice | warehouse | outlet */
+  branchType: string;
+  /** @nullable */
+  branchId?: number | null;
+}
+
+export interface QuotationPaymentTerm {
+  id: number;
+  label: string;
+  sortOrder?: number;
+}
+
+export interface QuotationPaymentTermInput {
+  label: string;
 }
 
 export interface Hierarchy {
@@ -1447,6 +1480,10 @@ salesperson?: string;
 };
 
 export type DeleteQuotation200 = {
+  success?: boolean;
+};
+
+export type DeleteQuotationPaymentTerm200 = {
   success?: boolean;
 };
 

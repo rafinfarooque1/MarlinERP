@@ -123,6 +123,55 @@ export async function addQuotations(pool: Pool): Promise<void> {
        ON quotation_share_links (quotation_id)`,
   );
 
+  // ── Salesperson master reference ───────────────────────────────────────────
+  // The employee chosen from the salesperson dropdown. The `salesperson` TEXT
+  // column stays: it now holds the employee's name snapshotted at save time
+  // (so PDFs, lists and CSV keep working unchanged), and quotations saved
+  // before this column existed keep rendering their free-typed text forever.
+  await pool.query(
+    `ALTER TABLE quotations ADD COLUMN IF NOT EXISTS salesperson_employee_id INTEGER`,
+  );
+
+  // ── Payment terms master ─────────────────────────────────────────────────
+  // A small managed list (Settings → admin CRUD) feeding the quotation form's
+  // Payment Terms select. Quotations keep storing the LABEL TEXT in
+  // payment_terms — deleting or renaming a term here never rewrites documents
+  // that already carry the old wording (grandfathered, like legacy free text).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS quotation_payment_terms (
+      id         SERIAL PRIMARY KEY,
+      label      TEXT        NOT NULL,
+      sort_order INTEGER     NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  // Outside the CREATE for the same live-DB reason as above; case-insensitive
+  // so "30 days" cannot silently duplicate "30 Days".
+  await pool.query(
+    `CREATE UNIQUE INDEX IF NOT EXISTS quotation_payment_terms_label_uq
+       ON quotation_payment_terms (LOWER(label))`,
+  );
+  // Seed the standard options ONCE (migration_log guard, not a data-shape
+  // probe: an admin deleting every seeded row must not resurrect them).
+  const { rows: termsSeeded } = await pool.query(
+    `SELECT 1 FROM migration_log WHERE name = 'quotation_payment_terms_seed_v1'`,
+  );
+  if (termsSeeded.length === 0) {
+    const defaults = ["Advance", "7 Days", "15 Days", "30 Days", "Against Delivery"];
+    for (let i = 0; i < defaults.length; i++) {
+      await pool.query(
+        `INSERT INTO quotation_payment_terms (label, sort_order)
+         VALUES ($1, $2)
+         ON CONFLICT DO NOTHING`,
+        [defaults[i], (i + 1) * 10],
+      );
+    }
+    await pool.query(
+      `INSERT INTO migration_log (name) VALUES ('quotation_payment_terms_seed_v1') ON CONFLICT (name) DO NOTHING`,
+    );
+    console.log("[migration] quotation_payment_terms_seed_v1 — seeded standard payment terms");
+  }
+
   // ── Permission seeding (ONE TIME) ──────────────────────────────────────────
   // page:/sales/quotations is a NEW key under default-deny: without seeding,
   // every pre-existing role above level 1 would silently lose the module.

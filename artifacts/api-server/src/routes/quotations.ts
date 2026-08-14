@@ -153,6 +153,7 @@ function mapQuotation(r: any, names?: { w: Map<number, string>; o: Map<number, s
     paymentTerms: r.payment_terms,
     placeOfSupply: r.place_of_supply,
     salesperson: r.salesperson,
+    salespersonEmployeeId: r.salesperson_employee_id != null ? Number(r.salesperson_employee_id) : null,
     notes: r.notes,
     termsConditions: r.terms_conditions,
     convertedSaleId: r.converted_sale_id,
@@ -289,6 +290,63 @@ const s = (v: unknown): string | null => {
   return t.length > 0 ? t : null;
 };
 
+// ── Salesperson master ────────────────────────────────────────────────────────
+
+type ResolvedSalesperson =
+  | { ok: true; employeeId: number | null; name: string | null }
+  | { ok: false; error: string };
+
+/**
+ * Resolve the salesperson pair (employee reference + display name) for a
+ * create or edit.
+ *
+ * - salespersonEmployeeId set → must be an ACTIVE employee at the quotation's
+ *   location or Head Office; the stored `salesperson` text becomes the
+ *   employee's name snapshotted NOW (documents keep the historical name if
+ *   the employee is later renamed — same convention as every other document).
+ * - Unchanged on edit (same id as stored) → keep the stored snapshot and skip
+ *   re-validation: an employee who has since resigned or moved branch must not
+ *   lock an old quotation out of harmless edits (grandfather, like MRP floors).
+ * - No id → legacy free-text passthrough: quotations saved before the master
+ *   keep their typed value forever, and edits that leave it alone preserve it.
+ */
+async function resolveSalesperson(
+  body: { salespersonEmployeeId?: number | null; salesperson?: string | null;
+          locationType?: string; locationId?: number },
+  existing?: { salesperson_employee_id?: number | null; salesperson?: string | null },
+): Promise<ResolvedSalesperson> {
+  const rawId = body.salespersonEmployeeId;
+  if (rawId == null) {
+    // Explicit null or absent: no employee reference — keep/store the text.
+    return { ok: true, employeeId: null, name: s(body.salesperson) };
+  }
+  const empId = Number(rawId);
+  if (!Number.isInteger(empId) || empId <= 0) {
+    return { ok: false, error: "salespersonEmployeeId must be a positive employee id" };
+  }
+  if (existing && Number(existing.salesperson_employee_id) === empId) {
+    // Unchanged reference on an edit — keep the saved snapshot untouched.
+    return { ok: true, employeeId: empId, name: s(existing.salesperson) };
+  }
+  const { rows: [emp] } = await pool.query<{
+    id: number; name: string; branch_type: string | null; branch_id: number | null; is_active: boolean;
+  }>(
+    `SELECT id, name, branch_type, branch_id, is_active FROM employees WHERE id = $1`,
+    [empId],
+  );
+  if (!emp) return { ok: false, error: "Salesperson not found — pick an employee from the list" };
+  if (!emp.is_active) {
+    return { ok: false, error: `${emp.name} is no longer an active employee and cannot be set as salesperson` };
+  }
+  const branchType = emp.branch_type ?? "headoffice";
+  const atLocation = branchType === "headoffice" ||
+    (branchType === body.locationType && Number(emp.branch_id) === Number(body.locationId));
+  if (!atLocation) {
+    return { ok: false, error: `${emp.name} does not work at this quotation's location` };
+  }
+  return { ok: true, employeeId: empId, name: emp.name };
+}
+
 /**
  * Audit rows for quotation-level MRP raises: lines priced ABOVE the master
  * MRP that was in force when the quote was saved. Recorded in the activity
@@ -354,6 +412,128 @@ router.get(
       totalAmount: Number(r.total_amount),
       validTill: r.valid_till_s,
     })));
+  },
+);
+
+// ── Salesperson directory ─────────────────────────────────────────────────────
+// Minimal active-employee list for the Salesperson dropdown: id, name and
+// branch only — no salary, no contact details (the HR page permission guards
+// those). Master list stays unscoped, the same convention voucher-employees
+// follows: the quotation's location choice does the narrowing client-side,
+// and resolveSalesperson re-checks it server-side on save.
+// Registered BEFORE /quotations/:id so the literal path is not swallowed.
+
+router.get(
+  "/quotations/salespeople",
+  requireModuleView(QUOTE_PAGES),
+  async (_req, res): Promise<void> => {
+    const { rows } = await pool.query(
+      `SELECT id, name, branch_type AS "branchType", branch_id AS "branchId"
+         FROM employees
+        WHERE is_active = true
+        ORDER BY name`,
+    );
+    res.json(rows.map((r: any) => ({
+      id: Number(r.id),
+      name: r.name,
+      branchType: r.branchType ?? "headoffice",
+      branchId: r.branchId != null ? Number(r.branchId) : null,
+    })));
+  },
+);
+
+// ── Payment terms master ──────────────────────────────────────────────────────
+// A small managed list feeding the quotation form's Payment Terms select.
+// Reads are open to anyone who can see quotations OR the Settings page (the
+// two surfaces that render it); writes are Settings-only. Quotations store the
+// LABEL TEXT, so renaming or deleting a term never rewrites existing documents.
+
+const TERMS_READ_PAGES = [...QUOTE_PAGES, "page:/company/settings"];
+const MAX_TERM_LABEL = 120;
+
+router.get(
+  "/quotation-payment-terms",
+  requireModuleView(TERMS_READ_PAGES),
+  async (_req, res): Promise<void> => {
+    const { rows } = await pool.query(
+      `SELECT id, label, sort_order AS "sortOrder"
+         FROM quotation_payment_terms
+        ORDER BY sort_order, LOWER(label)`,
+    );
+    res.json(rows.map((r: any) => ({
+      id: Number(r.id), label: r.label, sortOrder: Number(r.sortOrder),
+    })));
+  },
+);
+
+router.post(
+  "/quotation-payment-terms",
+  requireModuleAction("page:/company/settings", "edit"),
+  async (req, res): Promise<void> => {
+    const label = s((req.body ?? {}).label);
+    if (!label) { res.status(400).json({ error: "label is required" }); return; }
+    if (label.length > MAX_TERM_LABEL) {
+      res.status(400).json({ error: `label must be at most ${MAX_TERM_LABEL} characters` }); return;
+    }
+    try {
+      const { rows: [row] } = await pool.query(
+        `INSERT INTO quotation_payment_terms (label, sort_order)
+         VALUES ($1, COALESCE((SELECT MAX(sort_order) FROM quotation_payment_terms), 0) + 10)
+         RETURNING id, label, sort_order AS "sortOrder"`,
+        [label],
+      );
+      res.status(201).json({ id: Number(row.id), label: row.label, sortOrder: Number(row.sortOrder) });
+    } catch (e: any) {
+      if (e?.code === "23505") {
+        res.status(409).json({ error: `"${label}" is already in the payment terms list` }); return;
+      }
+      throw e;
+    }
+  },
+);
+
+router.patch(
+  "/quotation-payment-terms/:id",
+  requireModuleAction("page:/company/settings", "edit"),
+  async (req, res): Promise<void> => {
+    const id = parseId(req.params.id);
+    if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid id" }); return; }
+    const label = s((req.body ?? {}).label);
+    if (!label) { res.status(400).json({ error: "label is required" }); return; }
+    if (label.length > MAX_TERM_LABEL) {
+      res.status(400).json({ error: `label must be at most ${MAX_TERM_LABEL} characters` }); return;
+    }
+    try {
+      const { rows: [row] } = await pool.query(
+        `UPDATE quotation_payment_terms SET label = $1
+          WHERE id = $2
+          RETURNING id, label, sort_order AS "sortOrder"`,
+        [label, id],
+      );
+      if (!row) { res.status(404).json({ error: "Not found" }); return; }
+      res.json({ id: Number(row.id), label: row.label, sortOrder: Number(row.sortOrder) });
+    } catch (e: any) {
+      if (e?.code === "23505") {
+        res.status(409).json({ error: `"${label}" is already in the payment terms list` }); return;
+      }
+      throw e;
+    }
+  },
+);
+
+router.delete(
+  "/quotation-payment-terms/:id",
+  requireModuleAction("page:/company/settings", "edit"),
+  async (req, res): Promise<void> => {
+    const id = parseId(req.params.id);
+    if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid id" }); return; }
+    const { rows: [gone] } = await pool.query(
+      `DELETE FROM quotation_payment_terms WHERE id = $1 RETURNING id`, [id],
+    );
+    if (!gone) { res.status(404).json({ error: "Not found" }); return; }
+    // Quotations that already carry this wording keep it — payment_terms
+    // stores the text, not the id, by design.
+    res.json({ success: true });
   },
 );
 
@@ -478,6 +658,9 @@ router.post("/quotations", requireModuleAction(QUOTE_PAGES, "add"), async (req, 
     return;
   }
 
+  const sp = await resolveSalesperson(body);
+  if (!sp.ok) { res.status(400).json({ error: sp.error }); return; }
+
   const employee = (req as any).employee;
   const client = await pool.connect();
   let row: any;
@@ -504,15 +687,15 @@ router.post("/quotations", requireModuleAction(QUOTE_PAGES, "add"), async (req, 
          (quotation_number, location_type, location_id, customer_id, quote_date, valid_till,
           status, line_items, subtotal, tax_total, discount_total, bill_discount, total_amount,
           coupon_code, billing_address, shipping_address, payment_terms, place_of_supply,
-          salesperson, notes, terms_conditions, created_by)
-       VALUES ($1,$2,$3,$4,$5::date,$6::date,$7,$8::jsonb,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
+          salesperson, salesperson_employee_id, notes, terms_conditions, created_by)
+       VALUES ($1,$2,$3,$4,$5::date,$6::date,$7,$8::jsonb,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
        RETURNING id`,
       [
         quotationNumber, body.locationType, body.locationId, body.customerId ?? null,
         body.quoteDate, s(body.validTill), initialStatus, JSON.stringify(figures.lineItems),
         figures.subtotal, figures.taxTotal, figures.discountTotal, figures.billDiscount,
         figures.totalAmount, s(body.couponCode), s(body.billingAddress), s(body.shippingAddress),
-        s(body.paymentTerms), s(body.placeOfSupply), s(body.salesperson), s(body.notes),
+        s(body.paymentTerms), s(body.placeOfSupply), sp.name, sp.employeeId, s(body.notes),
         s(body.termsConditions), employee?.id ?? null,
       ],
     ));
@@ -611,6 +794,9 @@ router.put("/quotations/:id", requireModuleAction(QUOTE_PAGES, "edit"), async (r
     return;
   }
 
+  const sp = await resolveSalesperson(body, existing);
+  if (!sp.ok) { res.status(400).json({ error: sp.error }); return; }
+
   // The row was free of a conversion when checked above; the WHERE clause
   // re-checks under the UPDATE's own row lock so a conversion that lands in
   // between cannot be overwritten.
@@ -621,9 +807,10 @@ router.put("/quotations/:id", requireModuleAction(QUOTE_PAGES, "edit"), async (r
         line_items = $7::jsonb, subtotal = $8, tax_total = $9, discount_total = $10,
         bill_discount = $11, total_amount = $12, coupon_code = $13,
         billing_address = $14, shipping_address = $15, payment_terms = $16,
-        place_of_supply = $17, salesperson = $18, notes = $19, terms_conditions = $20,
+        place_of_supply = $17, salesperson = $18, salesperson_employee_id = $19,
+        notes = $20, terms_conditions = $21,
         updated_at = now()
-      WHERE id = $21 AND converted_sale_id IS NULL
+      WHERE id = $22 AND converted_sale_id IS NULL
       RETURNING id`,
     [
       body.locationType, body.locationId, body.customerId ?? null,
@@ -631,7 +818,7 @@ router.put("/quotations/:id", requireModuleAction(QUOTE_PAGES, "edit"), async (r
       JSON.stringify(figures.lineItems), figures.subtotal, figures.taxTotal, figures.discountTotal,
       figures.billDiscount, figures.totalAmount, s(body.couponCode),
       s(body.billingAddress), s(body.shippingAddress), s(body.paymentTerms),
-      s(body.placeOfSupply), s(body.salesperson), s(body.notes), s(body.termsConditions),
+      s(body.placeOfSupply), sp.name, sp.employeeId, s(body.notes), s(body.termsConditions),
       id,
     ],
   );

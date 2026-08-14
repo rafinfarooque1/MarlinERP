@@ -1232,7 +1232,8 @@ export const ListQuotationsResponseItem = zod.object({
   "shippingAddress": zod.string().nullish(),
   "paymentTerms": zod.string().nullish(),
   "placeOfSupply": zod.string().nullish(),
-  "salesperson": zod.string().nullish(),
+  "salesperson": zod.string().nullish().describe('Display name. For quotations saved with salespersonEmployeeId this is the employee\'s name snapshotted at save time; older quotations carry the free text that was typed (grandfathered).\n'),
+  "salespersonEmployeeId": zod.number().nullish().describe('Reference to the employee chosen from the salesperson master. Null on quotations saved before the master existed (their free-text salesperson still renders).\n'),
   "notes": zod.string().nullish(),
   "termsConditions": zod.string().nullish(),
   "convertedSaleId": zod.number().nullish(),
@@ -1268,7 +1269,8 @@ export const CreateQuotationBody = zod.object({
   "shippingAddress": zod.string().optional(),
   "paymentTerms": zod.string().optional(),
   "placeOfSupply": zod.string().optional(),
-  "salesperson": zod.string().optional(),
+  "salesperson": zod.string().optional().describe('Free-text fallback for legacy quotations only. Ignored when salespersonEmployeeId is provided (the server snapshots the employee\'s name instead).\n'),
+  "salespersonEmployeeId": zod.number().nullish().describe('Employee chosen from the salesperson dropdown. Must be an active employee at the quotation\'s location or Head Office. Null\/absent keeps the free-text salesperson value.\n'),
   "notes": zod.string().optional(),
   "termsConditions": zod.string().optional()
 })
@@ -1307,7 +1309,8 @@ export const CreateQuotationResponse = zod.object({
   "shippingAddress": zod.string().nullish(),
   "paymentTerms": zod.string().nullish(),
   "placeOfSupply": zod.string().nullish(),
-  "salesperson": zod.string().nullish(),
+  "salesperson": zod.string().nullish().describe('Display name. For quotations saved with salespersonEmployeeId this is the employee\'s name snapshotted at save time; older quotations carry the free text that was typed (grandfathered).\n'),
+  "salespersonEmployeeId": zod.number().nullish().describe('Reference to the employee chosen from the salesperson master. Null on quotations saved before the master existed (their free-text salesperson still renders).\n'),
   "notes": zod.string().nullish(),
   "termsConditions": zod.string().nullish(),
   "convertedSaleId": zod.number().nullish(),
@@ -1355,7 +1358,8 @@ export const GetQuotationResponse = zod.object({
   "shippingAddress": zod.string().nullish(),
   "paymentTerms": zod.string().nullish(),
   "placeOfSupply": zod.string().nullish(),
-  "salesperson": zod.string().nullish(),
+  "salesperson": zod.string().nullish().describe('Display name. For quotations saved with salespersonEmployeeId this is the employee\'s name snapshotted at save time; older quotations carry the free text that was typed (grandfathered).\n'),
+  "salespersonEmployeeId": zod.number().nullish().describe('Reference to the employee chosen from the salesperson master. Null on quotations saved before the master existed (their free-text salesperson still renders).\n'),
   "notes": zod.string().nullish(),
   "termsConditions": zod.string().nullish(),
   "convertedSaleId": zod.number().nullish(),
@@ -1394,7 +1398,8 @@ export const UpdateQuotationBody = zod.object({
   "shippingAddress": zod.string().optional(),
   "paymentTerms": zod.string().optional(),
   "placeOfSupply": zod.string().optional(),
-  "salesperson": zod.string().optional(),
+  "salesperson": zod.string().optional().describe('Free-text fallback for legacy quotations only. Ignored when salespersonEmployeeId is provided (the server snapshots the employee\'s name instead).\n'),
+  "salespersonEmployeeId": zod.number().nullish().describe('Employee chosen from the salesperson dropdown. Must be an active employee at the quotation\'s location or Head Office. Null\/absent keeps the free-text salesperson value.\n'),
   "notes": zod.string().optional(),
   "termsConditions": zod.string().optional()
 })
@@ -1433,7 +1438,8 @@ export const UpdateQuotationResponse = zod.object({
   "shippingAddress": zod.string().nullish(),
   "paymentTerms": zod.string().nullish(),
   "placeOfSupply": zod.string().nullish(),
-  "salesperson": zod.string().nullish(),
+  "salesperson": zod.string().nullish().describe('Display name. For quotations saved with salespersonEmployeeId this is the employee\'s name snapshotted at save time; older quotations carry the free text that was typed (grandfathered).\n'),
+  "salespersonEmployeeId": zod.number().nullish().describe('Reference to the employee chosen from the salesperson master. Null on quotations saved before the master existed (their free-text salesperson still renders).\n'),
   "notes": zod.string().nullish(),
   "termsConditions": zod.string().nullish(),
   "convertedSaleId": zod.number().nullish(),
@@ -1497,13 +1503,76 @@ export const SetQuotationStatusResponse = zod.object({
   "shippingAddress": zod.string().nullish(),
   "paymentTerms": zod.string().nullish(),
   "placeOfSupply": zod.string().nullish(),
-  "salesperson": zod.string().nullish(),
+  "salesperson": zod.string().nullish().describe('Display name. For quotations saved with salespersonEmployeeId this is the employee\'s name snapshotted at save time; older quotations carry the free text that was typed (grandfathered).\n'),
+  "salespersonEmployeeId": zod.number().nullish().describe('Reference to the employee chosen from the salesperson master. Null on quotations saved before the master existed (their free-text salesperson still renders).\n'),
   "notes": zod.string().nullish(),
   "termsConditions": zod.string().nullish(),
   "convertedSaleId": zod.number().nullish(),
   "convertedInvoiceNumber": zod.string().nullish(),
   "createdAt": zod.string().optional(),
   "updatedAt": zod.string().nullish()
+})
+
+
+/**
+ * @summary Minimal active-employee directory for the quotation Salesperson picker — id, name and branch only (no salary/contact; the HR page permission guards those). Master list stays unscoped; the quotation's location choice does the narrowing, same convention as voucher-employees.
+
+ */
+export const ListQuotationSalespeopleResponseItem = zod.object({
+  "id": zod.number(),
+  "name": zod.string(),
+  "branchType": zod.string().describe('headoffice | warehouse | outlet'),
+  "branchId": zod.number().nullish()
+})
+export const ListQuotationSalespeopleResponse = zod.array(ListQuotationSalespeopleResponseItem)
+
+
+/**
+ * @summary List the managed payment-terms options for quotations
+ */
+export const ListQuotationPaymentTermsResponseItem = zod.object({
+  "id": zod.number(),
+  "label": zod.string(),
+  "sortOrder": zod.number().optional()
+})
+export const ListQuotationPaymentTermsResponse = zod.array(ListQuotationPaymentTermsResponseItem)
+
+
+/**
+ * @summary Add a payment-terms option (Settings, admin)
+ */
+export const CreateQuotationPaymentTermBody = zod.object({
+  "label": zod.string()
+})
+
+export const CreateQuotationPaymentTermResponse = zod.object({
+  "id": zod.number(),
+  "label": zod.string(),
+  "sortOrder": zod.number().optional()
+})
+
+
+export const UpdateQuotationPaymentTermParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const UpdateQuotationPaymentTermBody = zod.object({
+  "label": zod.string()
+})
+
+export const UpdateQuotationPaymentTermResponse = zod.object({
+  "id": zod.number(),
+  "label": zod.string(),
+  "sortOrder": zod.number().optional()
+})
+
+
+export const DeleteQuotationPaymentTermParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const DeleteQuotationPaymentTermResponse = zod.object({
+  "success": zod.boolean().optional()
 })
 
 
