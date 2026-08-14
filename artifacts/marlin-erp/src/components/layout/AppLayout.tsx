@@ -51,6 +51,7 @@ import {
   MODULE_REGISTRY,
   getNavGroups,
   pagePermKey,
+  RETIRED_PAGE_HREFS,
   type SidebarNavItem,
 } from '@/lib/moduleRegistry';
 import { canViewModule as checkCanView } from '@/lib/usePermission';
@@ -63,16 +64,15 @@ const LOGO_KEY = 'marlin_company_logo';
 const OUTLETS_HREF = '/headoffice/outlets';
 
 /**
- * Duplicate sidebar links to hide, matched by href so moduleRegistry's
+ * Retired sidebar links to hide, matched by href so moduleRegistry's
  * navEntries stay untouched (same total-hide pattern as OUTLETS_HREF).
  *
- * "Accounts › Expenses" (/accounts/expenses) is a second door onto the same
- * expenses — Expenses belongs under Operations (/sales/expenses). Only the
- * navigation exposure is removed: the /accounts/expenses page route, its
- * permission row and every expense read/accounting API stay in place, so
- * expense accounting keeps working exactly as before.
+ * The set lives in moduleRegistry (RETIRED_PAGE_HREFS) so the sidebar, the
+ * route table and the Permissions matrix retire the same pages. Only the
+ * navigation/UI exposure is removed: permission keys and every expense and
+ * stock-ledger read API stay in place, so history keeps its names.
  */
-const RETIRED_NAV_HREFS = new Set<string>(['/accounts/expenses']);
+const RETIRED_NAV_HREFS = RETIRED_PAGE_HREFS;
 
 // ─── Navigation — derived from module registry ────────────────────────────────
 // To add, rename, or reorder modules edit src/lib/moduleRegistry.ts only.

@@ -1,29 +1,15 @@
 import { Fragment, useState } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
-import {
-  useReceivablesAging, usePayablesAging, useCollections, useCreateSalePayment,
-  getReceivablesAgingQueryKey, getPayablesAgingQueryKey, getCollectionsQueryKey,
-} from '@workspace/api-client-react';
+import { useReceivablesAging, usePayablesAging } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { usePermission } from '@/lib/usePermission';
-import { ReceiveIntoSelect } from '@/components/receive-into-select';
-import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
-import {
-  DialogClose, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
-} from '@/components/ui/dialog';
-import { TransactionDialog, TransactionDialogContent } from '@/components/ui/transaction-dialog';
 import { HandCoins, ChevronDown, ChevronRight, Search, Wallet, Phone, ShieldOff } from 'lucide-react';
-import { toast } from 'sonner';
 import { PageHeader } from '@/components/app/page-header';
 import { EmptyState } from '@/components/app/empty-state';
 import { inr } from '@/lib/currency';
 
-const fmt = (n: unknown) => Number(n ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 });
-const fmt0 = (n: unknown) => Number(n ?? 0).toLocaleString('en-IN', { maximumFractionDigits: 0 });
 const dfmt = (d?: string | null) => (d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—');
-const today = () => new Date().toISOString().split('T')[0];
 
 const BUCKETS: Array<{ key: 'b0_30' | 'b31_60' | 'b61_90' | 'b90p'; label: string; cls: string }> = [
   { key: 'b0_30', label: '0–30 d', cls: 'text-emerald-600' },
@@ -42,118 +28,29 @@ function bucketBadge(bucket: string) {
   return map[bucket] ?? 'text-muted-foreground';
 }
 
-// ─── Record payment dialog (collections) ─────────────────────────────────────
-
-function CollectPaymentDialog({ item, onOpenChange }: { item: any | null; onOpenChange: (v: boolean) => void }) {
-  const qc = useQueryClient();
-  const createPayment = useCreateSalePayment();
-  const [amount, setAmount] = useState('');
-  const [ledgerId, setLedgerId] = useState(0);
-  const [reference, setReference] = useState('');
-  const [paymentDate, setPaymentDate] = useState(today());
-
-  // Sync form when a new invoice is picked
-  const [lastId, setLastId] = useState<number | null>(null);
-  if (item && item.saleId !== lastId) {
-    setLastId(item.saleId);
-    setAmount(String(item.balanceDue ?? ''));
-    setLedgerId(0);
-    setReference('');
-    setPaymentDate(today());
-  }
-
-  const submit = () => {
-    if (!item) return;
-    const amt = Number(amount);
-    if (!Number.isFinite(amt) || amt <= 0) { toast.error('Enter a valid amount'); return; }
-    if (amt > Number(item.balanceDue) + 0.01) { toast.error(`Amount exceeds balance due (${inr(item.balanceDue)})`); return; }
-    if (!ledgerId) { toast.error('Pick the Cash / Bank account the money went into'); return; }
-    createPayment.mutate(
-      { saleId: item.saleId, data: { receivedInLedgerId: ledgerId, amount: amt, referenceNumber: reference.trim() || undefined, paymentDate } },
-      {
-        onSuccess: () => {
-          toast.success(`${inr(amt)} recorded against ${item.invoiceNumber || `Sale #${item.saleId}`}`);
-          qc.invalidateQueries({ queryKey: getCollectionsQueryKey() });
-          qc.invalidateQueries({ queryKey: getReceivablesAgingQueryKey() });
-          qc.invalidateQueries({ queryKey: getPayablesAgingQueryKey() });
-          onOpenChange(false);
-        },
-        onError: (e: any) => toast.error(e?.data?.error || e.message || 'Could not record the payment'),
-      },
-    );
-  };
-
-  return (
-    <TransactionDialog open={!!item} dirty={amount !== String(item?.balanceDue ?? '') || ledgerId !== 0 || reference !== '' || paymentDate !== today()} onOpenChange={onOpenChange}>
-      <TransactionDialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>Collect Payment</DialogTitle>
-          <DialogDescription>
-            {item && <>Against <span className="font-mono">{item.invoiceNumber || `Sale #${item.saleId}`}</span> · {item.customerName || 'Walk-in'} · balance {inr(item.balanceDue)}</>}
-          </DialogDescription>
-        </DialogHeader>
-        <div className="space-y-4 pt-1">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium">Amount (₹)</label>
-              <Input type="number" min={0} step="0.01" className="font-mono" value={amount} onChange={e => setAmount(e.target.value)} />
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium">Date</label>
-              <Input type="date" value={paymentDate} onChange={e => setPaymentDate(e.target.value)} />
-            </div>
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium">Receive Into <span className="text-muted-foreground font-normal">(Cash / Bank)</span></label>
-              <ReceiveIntoSelect
-                locationType={item?.locationType}
-                locationId={item?.locationId}
-                value={ledgerId}
-                onChange={setLedgerId}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium">Reference <span className="text-muted-foreground font-normal">(optional)</span></label>
-              <Input value={reference} onChange={e => setReference(e.target.value)} placeholder="UTR / cheque no." />
-            </div>
-          </div>
-        </div>
-        <DialogFooter className="pt-2">
-          <DialogClose asChild><Button variant="outline">Cancel</Button></DialogClose>
-          <Button onClick={submit} disabled={createPayment.isPending}>
-            {createPayment.isPending ? 'Recording…' : 'Record Payment'}
-          </Button>
-        </DialogFooter>
-      </TransactionDialogContent>
-    </TransactionDialog>
-  );
-}
-
 // ─── Page ─────────────────────────────────────────────────────────────────────
+//
+// Receivables and Payables only. The Collect action and Collections worklist
+// were retired (owner decision, Aug 2026): Receipt/Payment vouchers are the
+// only payment flows, so this page is a read-only aging view. The receivable
+// and payable figures are computed exactly as before.
 
 export default function Outstanding() {
   const perm = usePermission('page:/outstanding');
-  const [tab, setTab] = useState<'receivables' | 'payables' | 'collections'>('receivables');
+  const [tab, setTab] = useState<'receivables' | 'payables'>('receivables');
   const [search, setSearch] = useState('');
   const [expanded, setExpanded] = useState<number | null>(null);
-  const [collectItem, setCollectItem] = useState<any | null>(null);
   // Historical position: empty = today (the original, current view). Aging is
   // a position, so a single as-of date is the whole date dimension here.
-  // Collections is a worklist of what to chase NOW and stays at today.
   const [asOf, setAsOf] = useState('');
 
   const { data: recv, isLoading: recvLoading } = useReceivablesAging(asOf || undefined);
   const { data: pay, isLoading: payLoading } = usePayablesAging(asOf || undefined);
-  const { data: coll, isLoading: collLoading } = useCollections();
 
   const q = search.trim().toLowerCase();
 
   const customers = ((recv as any)?.customers ?? []).filter((c: any) => !q || c.name?.toLowerCase().includes(q) || c.phone?.includes(q));
   const vendors = ((pay as any)?.vendors ?? []).filter((v: any) => !q || v.name?.toLowerCase().includes(q) || v.phone?.includes(q));
-  const collItems = ((coll as any)?.items ?? []).filter((it: any) =>
-    !q || [it.invoiceNumber, it.customerName, it.customerPhone].some((v: any) => v && String(v).toLowerCase().includes(q)),
-  );
 
   const totals: any = tab === 'receivables' ? (recv as any)?.totals : (pay as any)?.totals;
 
@@ -181,13 +78,13 @@ export default function Outstanding() {
       <div className="space-y-6">
         <PageHeader
           title="Outstanding"
-          description="Who owes you, whom you owe, and which invoices to chase today."
+          description="Who owes you and whom you owe, aged by how long it has been due."
           icon={Wallet}
         />
 
         <div className="flex flex-wrap items-center gap-3">
           <div className="inline-flex rounded-lg border border-border p-0.5 bg-muted/30">
-            {([['receivables', 'Receivables'], ['payables', 'Payables'], ['collections', 'Collections']] as const).map(([k, label]) => (
+            {([['receivables', 'Receivables'], ['payables', 'Payables']] as const).map(([k, label]) => (
               <button
                 key={k}
                 onClick={() => { setTab(k); setExpanded(null); }}
@@ -199,54 +96,50 @@ export default function Outstanding() {
           </div>
           <div className="relative flex-1 min-w-[220px] max-w-xs">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-            <Input className="pl-9" placeholder={tab === 'collections' ? 'Search invoice or customer…' : 'Search party…'} value={search} onChange={e => setSearch(e.target.value)} />
+            <Input className="pl-9" placeholder="Search party…" value={search} onChange={e => setSearch(e.target.value)} />
           </div>
-          {tab !== 'collections' && (
-            <div className="flex items-center gap-1.5">
-              <span className="text-xs text-muted-foreground whitespace-nowrap">As of</span>
-              <Input type="date" className="w-36 h-9" value={asOf} onChange={e => setAsOf(e.target.value)} />
-              {asOf && (
-                <button onClick={() => setAsOf('')} className="text-xs text-muted-foreground hover:text-foreground underline">
-                  Today
-                </button>
-              )}
-            </div>
-          )}
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs text-muted-foreground whitespace-nowrap">As of</span>
+            <Input type="date" className="w-36 h-9" value={asOf} onChange={e => setAsOf(e.target.value)} />
+            {asOf && (
+              <button onClick={() => setAsOf('')} className="text-xs text-muted-foreground hover:text-foreground underline">
+                Today
+              </button>
+            )}
+          </div>
         </div>
-        {tab !== 'collections' && asOf && (
+        {asOf && (
           <p className="text-xs text-muted-foreground -mt-3">
             Showing the position as it stood on {asOf} — bills, payments and notes after that date are ignored.
           </p>
         )}
 
         {/* ── Aging summary cards (receivables / payables) ── */}
-        {tab !== 'collections' && (
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-            <div className="bg-card border border-border rounded-xl p-3">
-              <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Aged Bills</p>
-              <p className="text-lg font-bold font-mono mt-1">{inr(totals?.totalDue)}</p>
-            </div>
-            {BUCKETS.map(b => (
-              <div key={b.key} className="bg-card border border-border rounded-xl p-3">
-                <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{b.label}</p>
-                <p className={`text-lg font-bold font-mono mt-1 ${b.cls}`}>{inr(totals?.[b.key])}</p>
-              </div>
-            ))}
-            {/* The control figure. It comes from the party ledgers, so it equals
-                Sundry Debtors / Sundry Creditors on the Balance Sheet. The
-                buckets to the left show only the part that maps to dated bills. */}
-            <div className="bg-card border border-border rounded-xl p-3">
-              <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Balance (ledger)</p>
-              <p className="text-lg font-bold font-mono mt-1 text-primary">{inr(totals?.netDue)}</p>
-            </div>
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+          <div className="bg-card border border-border rounded-xl p-3">
+            <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Aged Bills</p>
+            <p className="text-lg font-bold font-mono mt-1">{inr(totals?.totalDue)}</p>
           </div>
-        )}
+          {BUCKETS.map(b => (
+            <div key={b.key} className="bg-card border border-border rounded-xl p-3">
+              <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{b.label}</p>
+              <p className={`text-lg font-bold font-mono mt-1 ${b.cls}`}>{inr(totals?.[b.key])}</p>
+            </div>
+          ))}
+          {/* The control figure. It comes from the party ledgers, so it equals
+              Sundry Debtors / Sundry Creditors on the Balance Sheet. The
+              buckets to the left show only the part that maps to dated bills. */}
+          <div className="bg-card border border-border rounded-xl p-3">
+            <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Balance (ledger)</p>
+            <p className="text-lg font-bold font-mono mt-1 text-primary">{inr(totals?.netDue)}</p>
+          </div>
+        </div>
 
         {/* Anything the ledger says is owed that no dated document explains —
             an opening balance, or a journal raising the liability directly.
             Surfaced rather than dropped so the buckets and the control figure
             can be reconciled by eye. */}
-        {tab !== 'collections' && Number((totals as any)?.[tab === 'receivables' ? 'uninvoiced' : 'unbilled']) > 0.004 && (
+        {Number((totals as any)?.[tab === 'receivables' ? 'uninvoiced' : 'unbilled']) > 0.004 && (
           <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-sm">
             <span className="font-medium text-amber-600">
               {inr((totals as any)[tab === 'receivables' ? 'uninvoiced' : 'unbilled'])}
@@ -431,64 +324,8 @@ export default function Outstanding() {
               </table>
             </div>
           ))}
-
-          {/* ── COLLECTIONS ── */}
-          {tab === 'collections' && (collLoading ? (
-            <div className="p-10 text-center text-muted-foreground text-sm">Loading worklist…</div>
-          ) : collItems.length === 0 ? (
-            <EmptyState icon={HandCoins} title="Nothing to chase" hint="No unpaid or partly-paid credit invoices right now." />
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-muted/30 text-xs uppercase tracking-wide text-muted-foreground">
-                  <tr>
-                    <th className="text-left px-4 py-2.5">Invoice</th>
-                    <th className="text-left px-3 py-2.5">Customer</th>
-                    <th className="text-left px-3 py-2.5">Due date</th>
-                    <th className="text-right px-3 py-2.5">Overdue</th>
-                    <th className="text-right px-3 py-2.5">Total</th>
-                    <th className="text-right px-3 py-2.5">Paid</th>
-                    <th className="text-right px-3 py-2.5">Balance</th>
-                    {perm.canAdd && <th className="text-right px-4 py-2.5 w-28"></th>}
-                  </tr>
-                </thead>
-                <tbody>
-                  {collItems.map((it: any) => (
-                    <tr key={it.saleId} className="border-t border-border hover:bg-muted/10">
-                      <td className="px-4 py-2.5">
-                        <p className="font-mono font-semibold">{it.invoiceNumber || `Sale #${it.saleId}`}</p>
-                        <p className="text-xs text-muted-foreground">{dfmt(it.saleDate)}</p>
-                      </td>
-                      <td className="px-3 py-2.5">
-                        <p className="font-medium">{it.customerName || 'Walk-in'}</p>
-                        {it.customerPhone && <p className="text-xs text-muted-foreground flex items-center gap-1"><Phone className="w-3 h-3" />{it.customerPhone}</p>}
-                      </td>
-                      <td className="px-3 py-2.5 whitespace-nowrap">{dfmt(it.dueDate)}</td>
-                      <td className="px-3 py-2.5 text-right">
-                        <Badge variant="outline" className={`font-mono text-[10px] ${it.daysOverdue > 60 ? 'text-red-600 border-red-500/40' : it.daysOverdue > 30 ? 'text-orange-600 border-orange-500/40' : it.daysOverdue > 0 ? 'text-amber-600 border-amber-500/40' : 'text-emerald-600 border-emerald-500/40'}`}>
-                          {it.daysOverdue > 0 ? `${it.daysOverdue} d` : 'current'}
-                        </Badge>
-                      </td>
-                      <td className="px-3 py-2.5 text-right font-mono">{inr(it.totalAmount)}</td>
-                      <td className="px-3 py-2.5 text-right font-mono">{inr(it.amountPaid)}</td>
-                      <td className="px-3 py-2.5 text-right font-mono font-bold">{inr(it.balanceDue)}</td>
-                      {perm.canAdd && (
-                        <td className="px-4 py-2.5 text-right">
-                          <Button size="sm" variant="outline" className="h-7" onClick={() => setCollectItem(it)}>
-                            <HandCoins className="w-3.5 h-3.5 mr-1.5" /> Collect
-                          </Button>
-                        </td>
-                      )}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ))}
         </div>
       </div>
-
-      <CollectPaymentDialog item={collectItem} onOpenChange={v => { if (!v) setCollectItem(null); }} />
     </AppLayout>
   );
 }

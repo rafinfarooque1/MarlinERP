@@ -104,6 +104,34 @@ is off, or a visible figure drops with no explanation. Hide the retired *labels*
 and chrome instead. State this boundary explicitly when reporting the work — an
 owner may want the totals hidden too, and that is their call, not a detail to bury.
 
+## Page-level retirement: one shared set, keys stay registered
+
+For retiring whole pages (as opposed to flag-gating a module), there is now ONE
+shared constant — `RETIRED_PAGE_HREFS` in the frontend module registry — that
+three consumers read: the sidebar filter (AppLayout), the route table (App.tsx
+comments mark where routes were removed; the trailing catch-all renders the
+standard 404), and the Permissions matrix (rows filtered out, save loop writes
+only active keys).
+
+**Why:** the earlier ad-hoc approach (a local set inside AppLayout) retired only
+the nav; typed URLs still reached the page, and the permission matrix kept dead
+rows. One set makes the three surfaces impossible to desynchronise.
+
+**How to apply:**
+- Do NOT touch the registry's `navEntries` or delete `page:` keys — backend
+  `requireModuleView` any-of guards and the permissions checker
+  (`scripts/src/check-permissions.ts`) reference the keys; deleting them breaks
+  guard validation, seeding determinism, and existing DB permission rows.
+- Remove the wouter `<Route>` blocks instead of adding guard screens: the
+  catch-all already renders the standard 404, which satisfies "no blank screen
+  from stale bookmarks".
+- Matrix save must write only the non-retired keys, so retired DB rows are left
+  untouched (nothing deleted, nothing re-seeded).
+- Keep the retired page component files in-tree; they are unreferenced but
+  their permission keys stay valid, so typecheck and the checker stay green.
+- Grep for `navigate('/<retired-href>')` deep-links (dashboards' panel-header
+  onNavigate props are the usual offenders) and the mobile app.
+
 ## The stale-selection trap
 
 Removing an option from a filter does not remove it from that filter's *state*.

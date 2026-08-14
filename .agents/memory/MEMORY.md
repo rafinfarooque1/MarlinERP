@@ -29,7 +29,7 @@
 - [Money voucher ownership](money-voucher-ownership.md) — the till anchors the stamp via ONE resolver (reconcile/deposit/import paths get forgotten); ownership = stamp OR ledger-leg; own-location scope.
 - [Payment modes & invoice share](payment-modes-invoice-share.md) — modes are Cash/Bank/UPI/Credit with legacy card/bank_transfer read as Bank, never rewritten; share = composed message + channel seam.
 - [Polymorphic stock_entries](polymorphic-stock-entries.md) — OVERLAPPING ids, scope material_type everywhere; master existence enforced by KEY SHARE trigger (no FK possible); orphan ledger keys poison backdated statements.
-- [Module retirement pattern](module-retirement-pattern.md) — retirement is a TOTAL hide (no badge/placeholder, owner rejected the badged variant); GETs still return data or history loses its names; stale filter state understates totals.
+- [Module retirement pattern](module-retirement-pattern.md) — TOTAL hide (no badge/placeholder); GETs keep returning data; page retirement = shared RETIRED_PAGE_HREFS set (nav+routes+perm matrix), keys stay registered.
 - [Guard the effective value](effective-value-guards.md) — body-only write guards are routinely bypassed: session stamping and partial PATCHes both route around them. Compute the resulting state, then guard that, then write.
 - [Product identity](product-identity.md) — code prefixes follow the DISPLAY label (materials="Raw Material"→RM); EAN-13 in the `2` in-store range; inactive blocks CREATE only; HO-only is a location rule.
 - [ERP write-path concurrency](erp-write-path-concurrency.md) — lock order = labour day+location, then item, then rows; reversals must read their lines from a row locked inside the txn.

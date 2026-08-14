@@ -537,8 +537,10 @@ export default function SalesDashboard() {
         {/* Expenses detail */}
         {open === 'expenses' && (
           <div className="rounded-xl border border-border overflow-hidden shadow-sm animate-in fade-in slide-in-from-top-2 duration-200">
-            <PanelHeader icon={Receipt} label={`Expenses on ${fmtDate(selectedDate)}`}
-              onNavigate={!isAll ? () => navigate('/sales/expenses') : undefined} />
+            {/* No onNavigate: the Expenses entry page is retired (expenses are
+                recorded via Receipt/Payment vouchers); this panel stays as the
+                read-only view of historical expense records. */}
+            <PanelHeader icon={Receipt} label={`Expenses on ${fmtDate(selectedDate)}`} />
             {expensesLoading ? (
               <div className="py-12 text-center text-muted-foreground text-sm">Loading…</div>
             ) : dayExpenses.length === 0 ? (

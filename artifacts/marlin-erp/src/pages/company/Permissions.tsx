@@ -12,7 +12,7 @@ import { toast } from 'sonner';
 import { useGetMe, useListHierarchies, useListPermissions, setPermission } from '@workspace/api-client-react';
 import { usePermission } from '@/lib/usePermission';
 import { PageHeader } from '@/components/app/page-header';
-import { getPagePermRows, PAGE_PERM_KEYS } from '@/lib/moduleRegistry';
+import { getPagePermRows, RETIRED_PAGE_HREFS } from '@/lib/moduleRegistry';
 import type { Hierarchy, Permission } from '@workspace/api-client-react';
 
 // ── One row per sidebar link ──────────────────────────────────────────────────
@@ -23,7 +23,13 @@ import type { Hierarchy, Permission } from '@workspace/api-client-react';
 //
 // Derived from moduleRegistry.ts, the same source the sidebar renders from, so
 // the two can never drift.
-const PAGE_ROWS = getPagePermRows();
+//
+// Retired pages (RETIRED_PAGE_HREFS) are excluded: their sidebar links and
+// routes are gone, so a matrix row would be a switch controlling nothing.
+// Their keys stay registered — existing DB rows keep resolving and backend
+// read guards that name them stay valid — the rows are only hidden here.
+const PAGE_ROWS = getPagePermRows().filter(r => !RETIRED_PAGE_HREFS.has(r.href));
+const ACTIVE_PERM_KEYS = PAGE_ROWS.map(r => r.key);
 
 type ActionKey = 'view' | 'add' | 'edit' | 'del' | 'download';
 type PagePerm = Record<ActionKey, boolean>;
@@ -58,7 +64,7 @@ function buildPermMap(hierarchies: Hierarchy[], dbPerms: Permission[]): PermMap 
   const map: PermMap = {};
   for (const h of hierarchies) {
     map[h.id] = {};
-    for (const key of PAGE_PERM_KEYS) {
+    for (const key of ACTIVE_PERM_KEYS) {
       const row = dbPerms.find(p => p.hierarchyId === h.id && p.module === key);
       map[h.id][key] = row
         ? {
@@ -105,7 +111,7 @@ export default function Permissions() {
   const isTopLevel = (selectedHierarchy?.level ?? 99) === 1;
   const rolePerms: Record<string, PagePerm> = effectiveId ? (perms[effectiveId] ?? {}) : {};
 
-  const visibleCount = PAGE_PERM_KEYS.filter(k => rolePerms[k]?.view).length;
+  const visibleCount = ACTIVE_PERM_KEYS.filter(k => rolePerms[k]?.view).length;
 
   const q = filter.trim().toLowerCase();
   const shownRows = q
@@ -134,7 +140,7 @@ export default function Permissions() {
   };
 
   const setAll = (value: boolean) =>
-    patch(Object.fromEntries(PAGE_PERM_KEYS.map(k => [k, allActions(value)])));
+    patch(Object.fromEntries(ACTIVE_PERM_KEYS.map(k => [k, allActions(value)])));
 
   /**
    * Grant or revoke every action on ONE page. The patch is keyed by that page
@@ -171,8 +177,10 @@ export default function Permissions() {
     if (!effectiveId) return;
     setSaving(true);
     try {
+      // Save writes only the active (non-retired) rows: a retired page's DB row
+      // is left exactly as it was, so nothing is deleted and nothing re-seeds.
       await Promise.all(
-        PAGE_PERM_KEYS.map(key => {
+        ACTIVE_PERM_KEYS.map(key => {
           const p = rolePerms[key] ?? NONE;
           return setPermission({
             hierarchyId: effectiveId,
@@ -266,7 +274,7 @@ export default function Permissions() {
                 <span className="font-medium text-foreground">{selectedHierarchy?.name}</span>
                 {' '}can open{' '}
                 <span className="font-bold text-foreground">{visibleCount}</span>
-                {' '}of {PAGE_PERM_KEYS.length} pages
+                {' '}of {ACTIVE_PERM_KEYS.length} pages
                 {isTopLevel && (
                   <span className="ml-2 text-primary text-xs font-medium">(Top level — always full access)</span>
                 )}

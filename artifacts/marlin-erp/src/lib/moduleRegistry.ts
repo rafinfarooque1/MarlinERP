@@ -208,6 +208,36 @@ export function permOwner(path: string): string {
   return pagePermKey(SATELLITE_PAGE_OWNER[path] ?? path);
 }
 
+/**
+ * Retired pages — owner decision (Aug 2026): total hide, no badges and no
+ * placeholders. Authoritative flows already cover each surface:
+ *
+ *   /sales/expenses           Expense entry → Receipt/Payment vouchers
+ *   /accounts/expenses        Second door onto the same expenses (nav-retired
+ *                             earlier; the route goes with the module now)
+ *   /headoffice/stock-ledger  Live Stock, Item Tracking & Storage Locations
+ *                             cover inventory history
+ *
+ * What "retired" means here:
+ *   • AppLayout drops the sidebar links for every role (no gap, no badge).
+ *   • App.tsx has no route — a typed/bookmarked URL falls through to the
+ *     standard 404, never a blank screen.
+ *   • The Permissions page hides these rows so the matrix shows no dead pages.
+ *
+ * What stays — deliberately:
+ *   • The registry entries above, so the `page:` keys remain registered.
+ *     Backend read guards still name them (expense/stock-ledger history GETs),
+ *     existing DB permission rows keep resolving, and the generated backend
+ *     mirror + sidebar snapshot stay byte-identical.
+ *   • Every read endpoint and all historical data — reports, ledgers and
+ *     dashboards keep rendering expense and stock-ledger history with names.
+ */
+export const RETIRED_PAGE_HREFS: ReadonlySet<string> = new Set([
+  '/sales/expenses',
+  '/accounts/expenses',
+  '/headoffice/stock-ledger',
+]);
+
 /** One row in the permissions table — maps to a nav link the user can see */
 export interface PermNavRow {
   moduleKey: string;

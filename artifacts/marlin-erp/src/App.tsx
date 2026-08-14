@@ -24,7 +24,6 @@ import StockVerification from './pages/headoffice/StockVerification';
 import ItemPrices from './pages/headoffice/ItemPrices';
 import Sales from './pages/headoffice/Sales';
 import Quotations from './pages/headoffice/Quotations';
-import StockLedger from './pages/headoffice/StockLedger';
 
 import Hierarchy from './pages/hr/Hierarchy';
 import Employees from './pages/hr/Employees';
@@ -43,7 +42,6 @@ import Outstanding from './pages/outstanding/Outstanding';
 import ChartOfAccounts from './pages/accounts/ChartOfAccounts';
 import Ledger from './pages/accounts/Ledger';
 import CashBank from './pages/accounts/CashBank';
-import Expenses from './pages/accounts/Expenses';
 import GstSummary from './pages/accounts/GstSummary';
 import GstReturns from './pages/accounts/GstReturns';
 import AccountingPeriods from './pages/accounts/AccountingPeriods';
@@ -83,7 +81,6 @@ import ProfileMe from './pages/profile/ProfileMe';
 import SalesStock from './pages/sales/SalesStock';
 
 import SalesPOS from './pages/sales/SalesPOS';
-import SalesExpenses from './pages/sales/SalesExpenses';
 import SalesCashBalance from './pages/sales/SalesCashBalance';
 import SalesDashboard from './pages/sales/SalesDashboard';
 import { LocationProvider } from './lib/locationContext';
@@ -252,9 +249,9 @@ function Router() {
       <Route path="/headoffice/stock-verification">
         <PermGuard href="/headoffice/stock-verification" pageName="Stock Verification"><StockVerification /></PermGuard>
       </Route>
-      <Route path="/headoffice/stock-ledger">
-        <PermGuard href="/headoffice/stock-ledger" pageName="Stock Ledger"><StockLedger /></PermGuard>
-      </Route>
+      {/* /headoffice/stock-ledger — retired (RETIRED_PAGE_HREFS): no route, so
+          a typed or bookmarked URL falls through to the standard 404. Live
+          Stock, Item Tracking and Storage Locations cover inventory history. */}
       <Route path="/headoffice/item-price">
         <PermGuard href="/headoffice/item-price" pageName="Item Prices"><ItemPrices /></PermGuard>
       </Route>
@@ -311,9 +308,9 @@ function Router() {
       <Route path="/accounts/cash-bank">
         <PermGuard href="/accounts/cash-bank" pageName="Cash & Bank"><CashBank /></PermGuard>
       </Route>
-      <Route path="/accounts/expenses">
-        <PermGuard href="/accounts/expenses" pageName="Expenses"><Expenses /></PermGuard>
-      </Route>
+      {/* /accounts/expenses — retired with the Expense module (RETIRED_PAGE_HREFS):
+          expenses are recorded through Receipt/Payment vouchers now. Historical
+          expense data stays readable in reports, ledgers and dashboards. */}
       <Route path="/accounts/vouchers">
         <PermGuard href="/accounts/vouchers" pageName="Vouchers"><Vouchers /></PermGuard>
       </Route>
@@ -449,9 +446,8 @@ function Router() {
         <PermGuard href="/operations/payment-voucher" pageName="Payment Voucher"><PaymentVoucher /></PermGuard>
       </Route>
 
-      <Route path="/sales/expenses">
-        <PermGuard href="/sales/expenses" pageName="Expenses"><SalesExpenses /></PermGuard>
-      </Route>
+      {/* /sales/expenses — retired with the Expense module (RETIRED_PAGE_HREFS):
+          see /accounts/expenses above. Falls through to the standard 404. */}
       <Route path="/sales/cash-balance">
         {/* Satellite: /sales/cash-balance → /accounts/cash-in-outlet permission */}
         <PermGuard href="/sales/cash-balance" pageName="Cash Balance"><SalesCashBalance /></PermGuard>
