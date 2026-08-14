@@ -38,6 +38,10 @@
           "href": "/operations/payment-voucher"
         },
         {
+          "name": "Dispatch",
+          "href": "/operations/dispatch"
+        },
+        {
           "name": "Stock",
           "href": "/headoffice/stock"
         },

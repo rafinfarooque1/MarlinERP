@@ -41,6 +41,7 @@ const STATUS_MAP: Record<string, { tone: Tone; label: string }> = {
   rejected:    { tone: 'red',   label: 'Rejected' },
   cancelled:   { tone: 'red',   label: 'Cancelled' },
   completed:   { tone: 'green', label: 'Completed' },
+  ready:       { tone: 'green', label: 'Ready' },
   converted:   { tone: 'blue',  label: 'Converted' },
   open:        { tone: 'amber', label: 'Open' },
   closed:      { tone: 'gray',  label: 'Closed' },

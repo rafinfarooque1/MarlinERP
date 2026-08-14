@@ -30,6 +30,7 @@ export * from "./assets";
 export * from "./rent";
 export * from "./backup";
 export * from "./invoice-share-links";
+export * from "./dispatch";
 export * from "./quotations";
 export * from "./warehouse-lifecycle";
 export * from "./attendance-correction";

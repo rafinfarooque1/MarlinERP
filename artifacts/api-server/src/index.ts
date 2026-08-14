@@ -3561,6 +3561,52 @@ await pool.query(`
   }
 }
 
+// ── Warehouse dispatch board (fulfillment status layer) ─────────────────────
+// Additive status table keyed to sales — one row per sale, created on the
+// first READY transition. Absence of a row = PENDING. Never touches sale
+// amounts, stock or postings, so its existence has zero books impact by
+// construction. ON DELETE CASCADE: an admin-deleted sale takes its dispatch
+// row with it instead of leaving an orphan.
+await pool.query(`
+  CREATE TABLE IF NOT EXISTS sale_dispatch_status (
+    sale_id       INTEGER PRIMARY KEY REFERENCES sales(id) ON DELETE CASCADE,
+    status        TEXT NOT NULL DEFAULT 'PENDING'
+                  CHECK (status IN ('PENDING','READY','DISPATCHED')),
+    ready_at      TIMESTAMPTZ,
+    ready_by      TEXT,
+    dispatched_at TIMESTAMPTZ,
+    dispatched_by TEXT,
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )
+`);
+await pool.query(`CREATE INDEX IF NOT EXISTS idx_sale_dispatch_status ON sale_dispatch_status (status)`);
+
+// ── Dispatch page permission seed (ONE TIME) ─────────────────────────────────
+// New Operations sidebar page. Default-deny would silently hide it from every
+// pre-existing role, so GRANT to roles that already existed (same direction
+// as operations_voucher_pages_perms_v1 above) and let an admin take rights
+// away on the Permissions page. New hierarchies stay default-deny.
+{
+  const { rows: seeded } = await pool.query(
+    `SELECT 1 FROM migration_log WHERE name = 'dispatch_page_perms_v1'`,
+  );
+  if (seeded.length === 0) {
+    const { rows: hRows } = await pool.query(
+      `SELECT id FROM hierarchies WHERE level != 1`,
+    );
+    for (const h of hRows) {
+      await pool.query(
+        `INSERT INTO permissions (hierarchy_id, module, can_view, can_add, can_edit, can_delete, can_download, can_print, can_approve, can_share)
+         VALUES ($1, 'page:/operations/dispatch', true, true, true, true, true, true, true, true)
+         ON CONFLICT (hierarchy_id, module) DO NOTHING`,
+        [h.id],
+      );
+    }
+    await pool.query(`INSERT INTO migration_log (name) VALUES ('dispatch_page_perms_v1') ON CONFLICT (name) DO NOTHING`);
+    console.log(`[migration] dispatch_page_perms_v1 — granted Dispatch page to ${hRows.length} pre-existing roles`);
+  }
+}
+
 // ── Legacy ERP Import module REMOVED (ONE TIME cleanup) ─────────────────────
 // The DBF-backup Legacy ERP Import module was deleted (Aug 2026; the Excel
 // Import Data module and Migration Wizard replaced it). Its permission rows

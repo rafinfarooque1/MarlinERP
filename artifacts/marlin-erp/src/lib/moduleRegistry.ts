@@ -39,6 +39,7 @@ import {
   Store,
   Landmark,
   FileText,
+  Truck,
 } from 'lucide-react';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -363,6 +364,15 @@ export const MODULE_REGISTRY: ModuleDef[] = [
     navGroup: 'Operations',
     navEntries: [{ name: 'Payment Voucher', href: '/operations/payment-voucher' }],
     icon: ArrowUpRight,
+  },
+  {
+    // Warehouse dispatch board — billed sales awaiting physical dispatch
+    // (PENDING → READY → DISPATCHED). Pure fulfillment status over sales;
+    // zero books/stock impact by construction.
+    key: 'Dispatch', permGroup: 'Operations',
+    navGroup: 'Operations',
+    navEntries: [{ name: 'Dispatch', href: '/operations/dispatch' }],
+    icon: Truck,
   },
 
   // ── Production ─────────────────────────────────────────────────────────────

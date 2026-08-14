@@ -50,6 +50,7 @@ import Payment from './pages/accounts/Payment';
 import ReceiptPage from './pages/accounts/Receipt';
 import ReceiptVoucher from './pages/operations/ReceiptVoucher';
 import PaymentVoucher from './pages/operations/PaymentVoucher';
+import Dispatch from './pages/operations/Dispatch';
 import Journal from './pages/accounts/Journal';
 import Contra from './pages/accounts/Contra';
 import Notes from './pages/accounts/Notes';
@@ -452,6 +453,10 @@ function Router() {
 
       <Route path="/operations/payment-voucher">
         <PermGuard href="/operations/payment-voucher" pageName="Payment Voucher"><PaymentVoucher /></PermGuard>
+      </Route>
+
+      <Route path="/operations/dispatch">
+        <PermGuard href="/operations/dispatch" pageName="Dispatch"><Dispatch /></PermGuard>
       </Route>
 
       {/* /sales/expenses — retired with the Expense module (RETIRED_PAGE_HREFS):

@@ -39,6 +39,7 @@ import backupRouter from "./backup";
 import assetsRouter from "./assets";
 import importsRouter from "./imports";
 import adminRenumberRouter from "./adminRenumber";
+import dispatchRouter from "./dispatch";
 const router: IRouter = Router();
 
 router.use(healthRouter);
@@ -83,5 +84,6 @@ router.use(rentRouter);
 router.use(backupRouter);
 router.use(importsRouter);
 router.use(adminRenumberRouter);
+router.use(dispatchRouter);
 
 export default router;

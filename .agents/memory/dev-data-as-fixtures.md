@@ -45,3 +45,9 @@ turned POS coupons off — every suite that asserted the old QA identities broke
   read, and the fallback is 'admin', which collects lockout strikes in
   `login_lockouts` (that's the lockout table; `login_attempts` is just the
   audit log).
+- Never use arbitrary live rows as MUTABLE fixtures, and never "reset" a
+  workflow/status table to prepare a fixture — those rows are real operational
+  history. Select a document that provably starts in the default state (e.g.
+  `NOT EXISTS` its status row) so cleanup = delete-your-own-stamped-writes and
+  survives a mid-run crash; for rows a test only *attempts* to mutate, snapshot
+  before and assert bitwise-identical after.
