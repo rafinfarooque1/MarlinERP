@@ -68,6 +68,18 @@ export async function addPurchaseBillFields(pool: Pool): Promise<void> {
     console.error("[migration] purchase_price_mode_v1: could not add price_mode check:", e);
   }
 
+  // ── 1c. Vendor Invoice Date ────────────────────────────────────────────────
+  // The date printed on the VENDOR's invoice, distinct from purchase_date (the
+  // business date the goods were booked in OUR books — month locks, stock
+  // dating and postings all follow purchase_date, never this). Required on new
+  // manual bills; historical rows stay NULL — absent means "not recorded",
+  // never a fake backfill. NOTE: some databases already carry this column from
+  // an earlier hotfix that shipped without a migration; IF NOT EXISTS makes
+  // this the canonical, idempotent home for the DDL.
+  await pool.query(
+    `ALTER TABLE purchases ADD COLUMN IF NOT EXISTS vendor_invoice_date date`,
+  );
+
   // ── 2. Batch-number allocator ──────────────────────────────────────────────
   await pool.query(`CREATE SEQUENCE IF NOT EXISTS ${PURCHASE_BATCH_SEQUENCE} AS bigint START 1`);
 

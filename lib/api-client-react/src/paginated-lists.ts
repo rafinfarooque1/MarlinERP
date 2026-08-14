@@ -43,6 +43,9 @@ export interface PaginatedPurchaseRow {
   vendorId: number;
   purchaseDate: string;
   invoiceNumber: string | null;
+  /** Date on the vendor's own invoice — null on bills recorded before the
+   *  field existed (never backfilled). */
+  vendorInvoiceDate: string | null;
   notes: string | null;
   createdAt: string;
   vendorName: string;

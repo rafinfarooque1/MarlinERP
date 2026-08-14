@@ -211,6 +211,7 @@ if (!vendor?.id) {
   const purchaseRes = await post('/purchases', {
     vendorId:       vendor.id,
     purchaseDate:   new Date().toISOString().slice(0, 10),
+    vendorInvoiceDate: new Date().toISOString().slice(0, 10),
     invoiceNumber:  `ACCTEST-${Date.now()}`,
     // Batch dates are required on every purchase line: frozen stock cannot be
     // expiry-checked without them. The batch number itself is left blank so the

@@ -154,7 +154,7 @@ preEntryIds = (await sql(`SELECT id FROM stock_entries WHERE item_id = $1 AND ma
 // Stock for the sales, from the stock vendor (kept out of the settlement tests).
 {
   const res = await post('/purchases', {
-    vendorId: fx.vendStockId, purchaseDate: '2026-07-01', locationType: 'warehouse', locationId: WH,
+    vendorId: fx.vendStockId, purchaseDate: '2026-07-01', vendorInvoiceDate: '2026-06-30', locationType: 'warehouse', locationId: WH,
     lineItems: [{ materialType: 'item', materialId: fx.itemId, quantity: 100, unitCost: 40, mfgDate: '2026-06-01', expiryDate: '2027-06-01' }],
   });
   if (res.status === 201) made.purchases.push(res.data.id);
@@ -175,6 +175,7 @@ const mkSale = async (qty, extra = {}) => {
 const mkBill = async (qty, unitCost, extra = {}) => {
   const res = await post('/purchases', {
     vendorId: fx.vendPayId, purchaseDate: extra.purchaseDate ?? '2026-08-01',
+    vendorInvoiceDate: extra.purchaseDate ?? '2026-08-01',
     locationType: 'warehouse', locationId: WH,
     lineItems: [{ materialType: 'item', materialId: fx.itemId, quantity: qty, unitCost, mfgDate: '2026-06-01', expiryDate: '2027-06-01' }],
     ...extra,

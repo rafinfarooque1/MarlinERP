@@ -19,17 +19,28 @@ const SYSTEM_CODE_RE = /^(SYS-|SAL-EMP-|SAL-PAY-|ADV-EMP-|GST-|STD-BRANCH-)/;
  * Validation is on the EFFECTIVE ledger, server-side, because the dropdown
  * filter on the client is a convenience, not a guard:
  *  · must exist, be active and be postable (not a group);
- *  · must be an expense ledger — anything else would silently reclassify the
- *    P&L (a charge parked on an asset ledger never hits profit);
+ *  · a NEW pick must sit under DIRECT EXPENSE (SYS-DIREXP) — bill-borne
+ *    freight/loading/transport is a direct cost of getting goods in, and
+ *    letting it land on an arbitrary indirect-expense ledger scatters what
+ *    should be one P&L section (anything non-expense would not hit profit
+ *    at all);
  *  · must NOT sit inside the Purchase (SYS-PUR) subtree — routing "freight"
  *    into a purchase ledger would inflate cost of goods in the books while
  *    stock stays valued without it, and the two would never reconcile;
  *  · must not be an internal system ledger.
+ *
+ * GRANDFATHERING: historical bills were allowed any expense ledger outside
+ * SYS-PUR. Their stored meaning is preserved forever — an EDIT passes the
+ * bill's already-stored charge ledger ids via `grandfatheredLedgerIds`, and
+ * those ledgers keep passing under the OLD rule. Only genuinely new picks are
+ * held to Direct Expense.
  */
 export async function validateOtherCharges(
   q: Queryable,
   raw: unknown,
+  opts?: { grandfatheredLedgerIds?: ReadonlySet<number> },
 ): Promise<{ error: string } | { charges: OtherCharge[]; total: number }> {
+  const grandfathered = opts?.grandfatheredLedgerIds ?? new Set<number>();
   if (raw === undefined || raw === null) return { charges: [], total: 0 };
   if (!Array.isArray(raw)) return { error: "Other charges must be a list of { ledgerId, amount }" };
   if (raw.length === 0) return { charges: [], total: 0 };
@@ -62,7 +73,8 @@ export async function validateOtherCharges(
          FROM account_ledgers p JOIN up ON p.id = up.parent_id
      )
      SELECT l.id, l.name, l.type, l.is_group, l.is_system_group, l.is_active, l.code,
-            EXISTS (SELECT 1 FROM up WHERE up.start_id = l.id AND up.code = 'SYS-PUR') AS under_purchase
+            EXISTS (SELECT 1 FROM up WHERE up.start_id = l.id AND up.code = 'SYS-PUR') AS under_purchase,
+            EXISTS (SELECT 1 FROM up WHERE up.start_id = l.id AND up.code = 'SYS-DIREXP' AND up.id <> up.start_id) AS under_direct_expense
        FROM account_ledgers l WHERE l.id = ANY($1::int[])`,
     [ids],
   );
@@ -73,9 +85,17 @@ export async function validateOtherCharges(
     const label = `"${l.name}"`;
     if (l.is_group || l.is_system_group) return { error: `${label} is a group — pick a postable expense ledger under it` };
     if (l.is_active === false) return { error: `${label} is inactive — reactivate it in the Chart of Accounts or pick another expense ledger` };
-    if (String(l.type) !== "expense") return { error: `${label} is not an expense ledger — other charges must post to a P&L expense account` };
-    if (l.under_purchase) return { error: `${label} sits under Purchase in the Chart of Accounts — record the charge on a freight/expense ledger, not a purchase account` };
-    if (l.code && SYSTEM_CODE_RE.test(String(l.code))) return { error: `${label} is an internal system ledger — pick a normal expense ledger` };
+    if (grandfathered.has(id)) {
+      // Stored historical meaning: the OLD any-expense rule, verbatim.
+      if (String(l.type) !== "expense") return { error: `${label} is not an expense ledger — other charges must post to a P&L expense account` };
+      if (l.under_purchase) return { error: `${label} sits under Purchase in the Chart of Accounts — record the charge on a freight/expense ledger, not a purchase account` };
+      if (l.code && SYSTEM_CODE_RE.test(String(l.code))) return { error: `${label} is an internal system ledger — pick a normal expense ledger` };
+      continue;
+    }
+    if (String(l.type) !== "expense" || !l.under_direct_expense) {
+      return { error: `${label} is not a Direct Expense ledger — purchase charges (freight, loading, transport…) must post under Direct Expense in the Chart of Accounts` };
+    }
+    if (l.code && SYSTEM_CODE_RE.test(String(l.code))) return { error: `${label} is an internal system ledger — pick a normal Direct Expense ledger` };
   }
 
   return { charges, total: r2(charges.reduce((s, c) => s + c.amount, 0)) };

@@ -114,7 +114,7 @@ const custRes = await post('/customers', { name: `${TAG} Buyer`, phone: '9000000
 fixtures.custId = custRes.data?.id;
 assert('Fixture customer created', !!fixtures.custId);
 const purch = await post('/purchases', {
-  vendorId, purchaseDate: '2026-07-30', locationType: 'warehouse', locationId: WH,
+  vendorId, purchaseDate: '2026-07-30', vendorInvoiceDate: '2026-07-29', locationType: 'warehouse', locationId: WH,
   lineItems: [{ materialType: 'item', materialId: fixtures.itemA, quantity: 200, unitCost: 200, mfgDate: '2026-07-01', expiryDate: '2027-07-01' }],
 });
 fixtures.purchaseId = purch.data?.id;

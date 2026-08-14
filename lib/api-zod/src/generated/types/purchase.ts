@@ -16,6 +16,11 @@ export interface Purchase {
   purchaseDate: string;
   /** @nullable */
   invoiceNumber?: string | null;
+  /**
+     * The date printed on the vendor's own invoice (YYYY-MM-DD). Null on historical bills recorded before the field existed — absent means "not recorded", never a backfilled value.
+     * @nullable
+     */
+  vendorInvoiceDate?: string | null;
   lineItems: PurchaseLineItem[];
   otherCharges?: PurchaseOtherCharge[];
   otherChargesTotal?: number;

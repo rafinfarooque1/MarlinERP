@@ -40,3 +40,8 @@ The frontend dropdown filter (parentId walk) is convenience, never the guard.
   negative synthetic ids (`/reports/fin/expenses` pattern) so ids never collide with vouchers.
 - Any PATCH path that returns the row must re-read `other_charges` via raw SQL before
   responding, or the response silently drops the charges it just stored.
+
+## Direct-Expense-only new picks (Aug 2026)
+- NEW charge picks (create, or genuinely new ledger on edit) must be postable expense ledgers strictly UNDER SYS-DIREXP (self excluded); stored legacy charges are grandfathered per-bill — the edit path passes the bill's stored charge ledger ids so they keep passing the OLD any-expense-outside-SYS-PUR rule verbatim. Mirrors sale charges (Direct-Income-only).
+- validateOtherCharges takes `opts.grandfatheredLedgerIds`; import path enforces the new rule with no grandfather set.
+- Test fixture trap: a "legacy" fixture ledger must sit outside BOTH SYS-DIREXP and SYS-PUR subtrees, or even the grandfather rule refuses it.

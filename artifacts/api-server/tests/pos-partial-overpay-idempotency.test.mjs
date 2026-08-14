@@ -251,7 +251,7 @@ try {
     const vend = await q(`SELECT id FROM vendors LIMIT 1`);
     if (vend[0]?.id) {
       const pb = await post("/purchases", {
-        vendorId: vend[0].id, purchaseDate: today, warehouseId: warehouse.id,
+        vendorId: vend[0].id, purchaseDate: today, vendorInvoiceDate: today, warehouseId: warehouse.id,
         lineItems: [{ kind: "item", itemId: taxableItem.id, quantity: 1, unitCost: 10 }],
         otherCharges: [{ ledgerId: incomeLedgerId, amount: 5 }],
       });

@@ -372,6 +372,7 @@ export const ListPurchasesResponseItem = zod.object({
   "vendorName": zod.string().optional(),
   "purchaseDate": zod.string(),
   "invoiceNumber": zod.string().nullish(),
+  "vendorInvoiceDate": zod.string().nullish().describe('The date printed on the vendor\'s own invoice (YYYY-MM-DD). Null on historical bills recorded before the field existed — absent means \"not recorded\", never a backfilled value.'),
   "lineItems": zod.array(zod.object({
   "materialType": zod.enum(['material', 'raw_material', 'item']),
   "materialId": zod.number(),
@@ -414,6 +415,7 @@ export const CreatePurchaseBody = zod.object({
   "vendorId": zod.number(),
   "purchaseDate": zod.string(),
   "invoiceNumber": zod.string().optional(),
+  "vendorInvoiceDate": zod.string().describe('The date printed on the vendor\'s own invoice (YYYY-MM-DD), distinct from purchaseDate (the booking date month locks follow). Required when creating a bill; on edit, omitted keeps the stored value.'),
   "priceMode": zod.enum(['exclusive', 'inclusive']).optional().describe('Whether the line rates were keyed inclusive or exclusive of GST. Stored with the bill; defaults to exclusive.'),
   "locationType": zod.enum(['headoffice', 'warehouse', 'outlet']).optional().describe('Requested receiving location. Only honoured if the caller\'s own location scope allows it; otherwise the session\'s location is used.'),
   "locationId": zod.number().optional(),
@@ -445,6 +447,7 @@ export const CreatePurchaseResponse = zod.object({
   "vendorName": zod.string().optional(),
   "purchaseDate": zod.string(),
   "invoiceNumber": zod.string().nullish(),
+  "vendorInvoiceDate": zod.string().nullish().describe('The date printed on the vendor\'s own invoice (YYYY-MM-DD). Null on historical bills recorded before the field existed — absent means \"not recorded\", never a backfilled value.'),
   "lineItems": zod.array(zod.object({
   "materialType": zod.enum(['material', 'raw_material', 'item']),
   "materialId": zod.number(),
@@ -489,6 +492,7 @@ export const GetPurchaseResponse = zod.object({
   "vendorName": zod.string().optional(),
   "purchaseDate": zod.string(),
   "invoiceNumber": zod.string().nullish(),
+  "vendorInvoiceDate": zod.string().nullish().describe('The date printed on the vendor\'s own invoice (YYYY-MM-DD). Null on historical bills recorded before the field existed — absent means \"not recorded\", never a backfilled value.'),
   "lineItems": zod.array(zod.object({
   "materialType": zod.enum(['material', 'raw_material', 'item']),
   "materialId": zod.number(),

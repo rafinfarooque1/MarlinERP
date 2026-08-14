@@ -120,7 +120,7 @@ console.log('\n[2] Fixture: unpaid bill, credit sale, partial cash payment');
 // Purchase stocks the item at WH1 and leaves an unpaid bill on a fresh vendor.
 const invoiceNo = `${TAG}-INV-${Date.now()}`;
 const purchaseRes = await post('/purchases', {
-  vendorId, purchaseDate: '2026-08-01', invoiceNumber: invoiceNo,
+  vendorId, purchaseDate: '2026-08-01', vendorInvoiceDate: '2026-07-31', invoiceNumber: invoiceNo,
   locationType: 'warehouse', locationId: WH1,
   lineItems: [{ materialType: 'item', materialId: itemId, quantity: 10, unitCost: 50, mfgDate: '2026-07-01', expiryDate: '2027-07-01' }],
 });

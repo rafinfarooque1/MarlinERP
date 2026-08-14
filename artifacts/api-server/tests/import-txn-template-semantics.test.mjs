@@ -172,7 +172,7 @@ fixtures.custId = (await sql(
 
 { // stock for the sales import + a known avg cost
   const res = await post('/purchases', {
-    vendorId: fixtures.vendorId, purchaseDate: '2026-07-30',
+    vendorId: fixtures.vendorId, purchaseDate: '2026-07-30', vendorInvoiceDate: '2026-07-29',
     locationType: 'warehouse', locationId: WH,
     lineItems: [{ materialType: 'item', materialId: fixtures.itemId, quantity: 50, unitCost: 40, mfgDate: '2026-07-01', expiryDate: '2027-07-01' }],
   });

@@ -255,7 +255,7 @@ assert('Fixture customers created', !!fixtures.custKA && !!fixtures.custKL);
 
 for (const wh of [WH_FULL, WH_BARE]) {
   const res = await post('/purchases', {
-    vendorId: fixtures.vendorId, purchaseDate: '2026-07-30',
+    vendorId: fixtures.vendorId, purchaseDate: '2026-07-30', vendorInvoiceDate: '2026-07-29',
     locationType: 'warehouse', locationId: wh,
     lineItems: [{ materialType: 'item', materialId: fixtures.itemA, quantity: 100, unitCost: 200, mfgDate: '2026-07-01', expiryDate: '2027-07-01' }],
   });

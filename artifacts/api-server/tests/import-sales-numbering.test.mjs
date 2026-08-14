@@ -129,7 +129,7 @@ fixtures.custB2C = (await sql(
 
 {
   const res = await post('/purchases', {
-    vendorId: fixtures.vendorId, purchaseDate: '2026-07-30',
+    vendorId: fixtures.vendorId, purchaseDate: '2026-07-30', vendorInvoiceDate: '2026-07-29',
     locationType: 'warehouse', locationId: WH,
     lineItems: [{ materialType: 'item', materialId: fixtures.itemId, quantity: 20, unitCost: 50, mfgDate: '2026-07-01', expiryDate: '2027-07-01' }],
   });

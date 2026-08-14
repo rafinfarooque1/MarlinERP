@@ -197,7 +197,7 @@ fixtures.ledgerLegacyExp = (await sql(
 // Stock: 200 units into the warehouse.
 {
   const res = await post('/purchases', {
-    vendorId: fixtures.vendorId, purchaseDate: '2026-08-01',
+    vendorId: fixtures.vendorId, purchaseDate: '2026-08-01', vendorInvoiceDate: '2026-07-31',
     locationType: 'warehouse', locationId: WH,
     lineItems: [{ materialType: 'item', materialId: fixtures.itemA, quantity: 200, unitCost: 50, mfgDate: '2026-07-01', expiryDate: '2027-07-01' }],
   });

@@ -206,7 +206,7 @@ try {
   console.log('\n── A. Vendor: purchase ──');
   const AMT = 633194;
   const pres = await post('/purchases', {
-    vendorId: fx.vendorId, purchaseDate: TODAY, locationType: 'warehouse', locationId: fx.warehouseId,
+    vendorId: fx.vendorId, purchaseDate: TODAY, vendorInvoiceDate: TODAY, locationType: 'warehouse', locationId: fx.warehouseId,
     lineItems: [{ materialType: 'material', materialId: fx.materialId, quantity: 1, unitCost: AMT, mfgDate: '2026-01-01', expiryDate: '2027-01-01' }],
   });
   assert('Purchase bill created', pres.status === 201, `status ${pres.status} ${JSON.stringify(pres.data).slice(0, 200)}`);

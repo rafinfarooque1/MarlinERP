@@ -142,7 +142,7 @@ fixtures.customerId = custRes.data?.id ?? 0;
 assert('Fixture customer created', custRes.status === 201 || custRes.status === 200, JSON.stringify(custRes.data).slice(0, 120));
 
 const purRes = await post('/purchases', {
-  vendorId: fixtures.vendorId, purchaseDate: new Date().toISOString().slice(0, 10),
+  vendorId: fixtures.vendorId, purchaseDate: new Date().toISOString().slice(0, 10), vendorInvoiceDate: new Date().toISOString().slice(0, 10),
   locationType: 'warehouse', locationId: fixtures.W,
   lineItems: [{ materialType: 'item', materialId: fixtures.itemId, quantity: 20, unitCost: 40, mfgDate: '2026-07-01', expiryDate: '2027-07-01' }],
 });
@@ -214,7 +214,7 @@ assert423('Editing an open sale INTO the locked month', await put(`/sales/${crea
 }));
 assert423('Cancelling a locked-month sale', await post(`/sales/${createdSales[0]}/cancel`, {}));
 assert423('New purchase dated in the locked month', await post('/purchases', {
-  vendorId: fixtures.vendorId, purchaseDate: IN_MONTH2, locationType: 'warehouse', locationId: fixtures.W,
+  vendorId: fixtures.vendorId, purchaseDate: IN_MONTH2, vendorInvoiceDate: IN_MONTH2, locationType: 'warehouse', locationId: fixtures.W,
   lineItems: [{ materialType: 'item', materialId: fixtures.itemId, quantity: 1, unitCost: 40, mfgDate: '2023-04-01', expiryDate: '2027-01-01' }],
 }));
 assert423('New journal voucher dated in the locked month', await post('/accounts/journal-vouchers', {

@@ -155,7 +155,7 @@ const D1 = '2026-07-10', D2 = '2026-07-15', D3 = '2026-07-18';
 let billId = 0;
 {
   const mk = await post('/purchases', {
-    vendorId: fixtures.vendorId, purchaseDate: D1, invoiceNumber: `${TAG}-INV-1`,
+    vendorId: fixtures.vendorId, purchaseDate: D1, vendorInvoiceDate: D1, invoiceNumber: `${TAG}-INV-1`,
     locationType: 'warehouse', locationId: WH_A, lineItems: [lineA()],
   });
   assert('Backdated bill created', mk.status === 200 || mk.status === 201, JSON.stringify(mk.data).slice(0, 200));

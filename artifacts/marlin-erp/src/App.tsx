@@ -11,6 +11,7 @@ import Units from './pages/production/Units';
 
 import Items from './pages/production/Items';
 import Purchases from './pages/production/Purchases';
+import PurchaseEntry from './pages/production/PurchaseEntry';
 import ProductionList from './pages/production/Production';
 import ProductionReports from './pages/production/ProductionReports';
 import Transfers from './pages/Transfers';
@@ -204,6 +205,13 @@ function Router() {
       </Route>
       <Route path="/production/purchase">
         <PermGuard href="/production/purchase" pageName="Purchases"><Purchases /></PermGuard>
+      </Route>
+      {/* Full-page bill entry — same permission surface as the register. */}
+      <Route path="/production/purchase/new">
+        <PermGuard href="/production/purchase" pageName="Purchases"><PurchaseEntry /></PermGuard>
+      </Route>
+      <Route path="/production/purchase/:id/edit">
+        <PermGuard href="/production/purchase" pageName="Purchases"><PurchaseEntry /></PermGuard>
       </Route>
       <Route path="/production/production">
         <PermGuard href="/production/production" pageName="Production Batches"><ProductionList /></PermGuard>

@@ -1924,6 +1924,12 @@ components:
           type: string
         invoiceNumber:
           type: ["string", "null"]
+        vendorInvoiceDate:
+          type: ["string", "null"]
+          description: >-
+            The date printed on the vendor's own invoice (YYYY-MM-DD).
+            Null on historical bills recorded before the field existed —
+            absent means "not recorded", never a backfilled value.
         lineItems:
           type: array
           items:
@@ -1962,7 +1968,7 @@ components:
 
     PurchaseInput:
       type: object
-      required: [vendorId, purchaseDate, lineItems]
+      required: [vendorId, purchaseDate, vendorInvoiceDate, lineItems]
       properties:
         vendorId:
           type: integer
@@ -1970,6 +1976,12 @@ components:
           type: string
         invoiceNumber:
           type: string
+        vendorInvoiceDate:
+          type: string
+          description: >-
+            The date printed on the vendor's own invoice (YYYY-MM-DD), distinct
+            from purchaseDate (the booking date month locks follow). Required
+            when creating a bill; on edit, omitted keeps the stored value.
         priceMode:
           type: string
           enum: [exclusive, inclusive]

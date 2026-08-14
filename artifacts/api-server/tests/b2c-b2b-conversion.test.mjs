@@ -148,7 +148,7 @@ fx.customerId = custRes.data?.id ?? 0;
 assert('Customer created WITHOUT a GSTIN', !!fx.customerId, JSON.stringify(custRes.data).slice(0, 120));
 
 const purRes = await post('/purchases', {
-  vendorId: fx.vendorId, purchaseDate: new Date().toISOString().slice(0, 10),
+  vendorId: fx.vendorId, purchaseDate: new Date().toISOString().slice(0, 10), vendorInvoiceDate: new Date().toISOString().slice(0, 10),
   locationType: 'warehouse', locationId: fx.W,
   lineItems: [{ materialType: 'item', materialId: fx.itemId, quantity: 30, unitCost: 40, mfgDate: '2026-07-01', expiryDate: '2027-07-01' }],
 });

@@ -515,7 +515,8 @@ router.get("/purchases", requireModuleView(["page:/production/purchase", "page:/
   const total = Number(t?.total ?? 0);
 
   const { rows } = await pool.query(`
-    SELECT p.*, p.purchase_date::text AS purchase_date_str, v.name AS vendor_name
+    SELECT p.*, p.purchase_date::text AS purchase_date_str,
+           p.vendor_invoice_date::text AS vendor_invoice_date_str, v.name AS vendor_name
     ${baseFrom} ${where}
     ORDER BY p.id DESC${limit ? ` LIMIT ${limit} OFFSET ${(page - 1) * limit}` : ''}
   `, params);
@@ -528,6 +529,8 @@ router.get("/purchases", requireModuleView(["page:/production/purchase", "page:/
     vendorId: r.vendor_id,
     purchaseDate: r.purchase_date_str,
     invoiceNumber: r.invoice_number,
+    // Absent on historical bills — null, never a fake backfill.
+    vendorInvoiceDate: r.vendor_invoice_date_str ?? null,
     notes: r.notes,
     createdAt: r.created_at,
     vendorName: r.vendor_name ?? "",
@@ -552,6 +555,22 @@ router.get("/purchases", requireModuleView(["page:/production/purchase", "page:/
 });
 
 router.post("/purchases", requireModuleAction("page:/production/purchase", "add"), async (req, res): Promise<void> => {
+  // Vendor Invoice Date — the date printed on the VENDOR's invoice, distinct
+  // from purchase_date (our booking date, which month locks and stock dating
+  // follow). Mandatory on every new manual bill; also a real DATE column
+  // (raw-migration — read/written via raw SQL throughout). Checked on the raw
+  // body BEFORE the zod parse: the spec now marks the field required, so a
+  // schema failure would otherwise bury this plain-language message inside a
+  // generic zod error.
+  const vendorInvoiceDateRaw = (req.body as any)?.vendorInvoiceDate;
+  if (vendorInvoiceDateRaw === undefined || vendorInvoiceDateRaw === null || String(vendorInvoiceDateRaw).trim() === "") {
+    res.status(400).json({ error: "Vendor Invoice Date is required — enter the date printed on the vendor's invoice" }); return;
+  }
+  const vendorInvoiceDate = String(vendorInvoiceDateRaw).trim();
+  if (!isIsoDate(vendorInvoiceDate)) {
+    res.status(400).json({ error: "Vendor Invoice Date must be a real calendar date (YYYY-MM-DD)" }); return;
+  }
+
   const parsed = CreatePurchaseBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
 
@@ -703,13 +722,13 @@ router.post("/purchases", requireModuleAction("page:/production/purchase", "add"
     const { rows: [ins] } = await client.query(
       `INSERT INTO purchases (vendor_id, purchase_date, invoice_number, line_items, total_amount,
                               notes, tax_total, discount_total, round_off, location_type, location_id,
-                              price_mode, other_charges)
-       VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb)
+                              price_mode, other_charges, vendor_invoice_date)
+       VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14::date)
        RETURNING id`,
       [parsed.data.vendorId, parsed.data.purchaseDate, parsed.data.invoiceNumber ?? null,
        JSON.stringify(enriched), String(totalAmount), parsed.data.notes ?? null,
        taxTotal, discountTotal, roundOff, loc.type, loc.id, priceMode,
-       JSON.stringify(otherCharges)],
+       JSON.stringify(otherCharges), vendorInvoiceDate],
     );
     newId = Number(ins.id);
 
@@ -875,6 +894,10 @@ router.post("/purchases", requireModuleAction("page:/production/purchase", "add"
 
   res.status(201).json({
     ...row, vendorName: vendor?.name ?? "", totalAmount,
+    // vendor_invoice_date is a raw-migration column drizzle cannot see — the
+    // re-read `row` above does not carry it, so the value just stored is
+    // echoed explicitly.
+    vendorInvoiceDate,
     subtotal, taxableTotal, taxTotal, discountTotal, roundOff, priceMode,
     otherCharges: enrichCharges(otherCharges, await chargeLedgerNames([otherCharges])),
     otherChargesTotal: otherChargesTot,
@@ -890,7 +913,9 @@ router.get("/purchases/:id", requireModuleView("page:/production/purchase"), asy
   const [row] = await db.select().from(purchasesTable).where(eq(purchasesTable.id, id)).limit(1);
   if (!row) { res.status(404).json({ error: "Not found" }); return; }
   const { rows: [locRow] } = await pool.query(
-    `SELECT location_type, location_id, price_mode, other_charges FROM purchases WHERE id = $1`, [id]);
+    `SELECT location_type, location_id, price_mode, other_charges,
+            vendor_invoice_date::text AS vendor_invoice_date
+       FROM purchases WHERE id = $1`, [id]);
   const loc: ProdLocation = { type: locRow?.location_type ?? 'headoffice', id: Number(locRow?.location_id ?? 1) };
   const gotCharges = parseStoredOtherCharges(locRow?.other_charges);
 
@@ -905,6 +930,8 @@ router.get("/purchases/:id", requireModuleView("page:/production/purchase"), asy
   const [vendor] = await db.select().from(vendorsTable).where(eq(vendorsTable.id, row.vendorId)).limit(1);
   res.json({
     ...row, vendorName: vendor?.name ?? "", totalAmount: Number(row.totalAmount),
+    // Raw-migration column: absent on historical bills — null, never backfilled.
+    vendorInvoiceDate: locRow?.vendor_invoice_date ?? null,
     taxTotal: Number((row as any).taxTotal ?? 0),
     discountTotal: Number((row as any).discountTotal ?? 0),
     roundOff: Number((row as any).roundOff ?? 0),
@@ -922,10 +949,25 @@ router.patch("/purchases/:id", requireModuleAction("page:/production/purchase", 
   const [current] = await db.select().from(purchasesTable).where(eq(purchasesTable.id, id)).limit(1);
   if (!current) { res.status(404).json({ error: "Not found" }); return; }
 
-  const { purchaseDate, invoiceNumber, notes, vendorId, lineItems, otherCharges: otherChargesBody } = req.body as {
+  const { purchaseDate, invoiceNumber, notes, vendorId, lineItems, otherCharges: otherChargesBody,
+          vendorInvoiceDate: vendorInvoiceDateBody } = req.body as {
     purchaseDate?: string; invoiceNumber?: string; notes?: string;
     vendorId?: number; lineItems?: any[]; otherCharges?: any[];
+    vendorInvoiceDate?: string | null;
   };
+
+  // Vendor Invoice Date: omitted = keep as stored; explicit null clears (a
+  // correction path — historical bills legitimately have none, absent ≠ zero);
+  // a string must be a real calendar date. Raw-migration DATE column — written
+  // via raw SQL on both edit paths below.
+  if (vendorInvoiceDateBody !== undefined && vendorInvoiceDateBody !== null
+      && !isIsoDate(String(vendorInvoiceDateBody).trim())) {
+    res.status(400).json({ error: "Vendor Invoice Date must be a real calendar date (YYYY-MM-DD)" }); return;
+  }
+  const vendorInvoiceDateNew: string | null | undefined = vendorInvoiceDateBody === undefined
+    ? undefined
+    : (vendorInvoiceDateBody === null || String(vendorInvoiceDateBody).trim() === ""
+        ? null : String(vendorInvoiceDateBody).trim());
 
   // Bill-wise settlement guards. Money already recorded against this bill no
   // longer freezes it: the payable is derived from the row, so an edited total
@@ -1056,10 +1098,13 @@ router.patch("/purchases/:id", requireModuleAction("page:/production/purchase", 
     }
 
     // Other Purchase Charges: replaced when sent, kept when omitted — an edit
-    // that never mentions them must not silently clear them.
+    // that never mentions them must not silently clear them. Ledgers this bill
+    // ALREADY charges are grandfathered under the old any-expense rule; only
+    // genuinely new picks are held to Direct Expense.
     let newOtherCharges: OtherCharge[];
     if (otherChargesBody !== undefined) {
-      const ocEdit = await validateOtherCharges(pool, otherChargesBody);
+      const storedIds = new Set(parseStoredOtherCharges(modeRow?.other_charges).map(c => c.ledgerId));
+      const ocEdit = await validateOtherCharges(pool, otherChargesBody, { grandfatheredLedgerIds: storedIds });
       if ("error" in ocEdit) { res.status(400).json({ error: ocEdit.error }); return; }
       newOtherCharges = ocEdit.charges;
     } else {
@@ -1108,6 +1153,7 @@ router.patch("/purchases/:id", requireModuleAction("page:/production/purchase", 
       // delete) each reverse the same lines from the same stale snapshot.
       const { rows: [locked] } = await client.query(
         `SELECT line_items, vendor_id, to_char(purchase_date, 'YYYY-MM-DD') AS purchase_date,
+                to_char(vendor_invoice_date, 'YYYY-MM-DD') AS vendor_invoice_date,
                 invoice_number, notes, total_amount, location_type, location_id
          FROM purchases WHERE id = $1 FOR UPDATE`, [id]);
       if (!locked) {
@@ -1617,13 +1663,14 @@ router.patch("/purchases/:id", requireModuleAction("page:/production/purchase", 
                               line_items = $6::jsonb, total_amount = $7,
                               tax_total = $8, discount_total = $9, round_off = $10,
                               price_mode = $11, location_type = $12, location_id = $13,
-                              other_charges = $14::jsonb
+                              other_charges = $14::jsonb, vendor_invoice_date = $15::date
          WHERE id = $1`,
         [id, vendorId ?? locked.vendor_id, purchaseDate ?? locked.purchase_date,
          invoiceNumber !== undefined ? invoiceNumber : locked.invoice_number,
          notes !== undefined ? notes : locked.notes,
          JSON.stringify(enriched), String(totalAmount), taxTotal, discountTotal, roundOff,
-         priceMode, newLoc.type, newLoc.id, JSON.stringify(newOtherCharges)],
+         priceMode, newLoc.type, newLoc.id, JSON.stringify(newOtherCharges),
+         vendorInvoiceDateNew !== undefined ? vendorInvoiceDateNew : (locked.vendor_invoice_date ?? null)],
       );
 
       await client.query("COMMIT");
@@ -1651,8 +1698,12 @@ router.patch("/purchases/:id", requireModuleAction("page:/production/purchase", 
     }).catch(() => {});
 
     const [vendor] = await db.select().from(vendorsTable).where(eq(vendorsTable.id, row.vendorId)).limit(1);
+    // Raw-migration column: re-read what the UPDATE just stored.
+    const { rows: [vidRow] } = await pool.query(
+      `SELECT vendor_invoice_date::text AS vendor_invoice_date FROM purchases WHERE id = $1`, [id]);
     res.json({
       ...row, vendorName: vendor?.name ?? "",
+      vendorInvoiceDate: vidRow?.vendor_invoice_date ?? null,
       totalAmount, subtotal, taxableTotal, taxTotal, discountTotal, roundOff, priceMode,
       otherCharges: enrichCharges(newOtherCharges, await chargeLedgerNames([newOtherCharges])),
       otherChargesTotal: newOtherTot,
@@ -1672,9 +1723,13 @@ router.patch("/purchases/:id", requireModuleAction("page:/production/purchase", 
   // Other charges may change without touching the lines. They change what the
   // vendor is owed, so the settled floor is re-judged on the resulting grand
   // total here — the bill may not shrink below what was already paid/adjusted.
+  // Ledgers the bill ALREADY charges are grandfathered (old any-expense rule);
+  // only genuinely new picks are held to Direct Expense.
   let chargesOnly: { charges: OtherCharge[]; total: number } | null = null;
   if (otherChargesBody !== undefined) {
-    const ocp = await validateOtherCharges(pool, otherChargesBody);
+    const { rows: [ocCur] } = await pool.query(`SELECT other_charges FROM purchases WHERE id = $1`, [id]);
+    const storedIds = new Set(parseStoredOtherCharges(ocCur?.other_charges).map(c => c.ledgerId));
+    const ocp = await validateOtherCharges(pool, otherChargesBody, { grandfatheredLedgerIds: storedIds });
     if ("error" in ocp) { res.status(400).json({ error: ocp.error }); return; }
     const advApplied = Number((req as any)._advApplied ?? 0);
     const settledTotal = Math.round((advApplied + Number((req as any)._allocTotal ?? 0)) * 100) / 100;
@@ -1689,7 +1744,18 @@ router.patch("/purchases/:id", requireModuleAction("page:/production/purchase", 
     chargesOnly = ocp;
   }
 
-  if (Object.keys(updateData).length === 0 && !chargesOnly) { res.status(400).json({ error: "No fields to update" }); return; }
+  if (Object.keys(updateData).length === 0 && !chargesOnly && vendorInvoiceDateNew === undefined) {
+    res.status(400).json({ error: "No fields to update" }); return;
+  }
+
+  // vendor_invoice_date is a raw-migration column — a drizzle .set() cannot
+  // carry it, so it is written with explicit SQL like other_charges below.
+  if (vendorInvoiceDateNew !== undefined) {
+    await pool.query(
+      `UPDATE purchases SET vendor_invoice_date = $2::date WHERE id = $1`,
+      [id, vendorInvoiceDateNew],
+    );
+  }
   if (chargesOnly) {
     // Raw column — a drizzle .set() cannot carry it (see raw-migration columns).
     // Written under the same row lock the payment-allocation path takes, and
@@ -1744,12 +1810,16 @@ router.patch("/purchases/:id", requireModuleAction("page:/production/purchase", 
     );
   }
   const [vendor] = await db.select().from(vendorsTable).where(eq(vendorsTable.id, row.vendorId)).limit(1);
-  // other_charges is a raw-migration column drizzle cannot see — read it back
-  // explicitly so the response carries what was just stored.
-  const { rows: [ocRow] } = await pool.query(`SELECT other_charges FROM purchases WHERE id = $1`, [id]);
+  // other_charges / vendor_invoice_date are raw-migration columns drizzle
+  // cannot see — read them back explicitly so the response carries what was
+  // just stored.
+  const { rows: [ocRow] } = await pool.query(
+    `SELECT other_charges, vendor_invoice_date::text AS vendor_invoice_date
+       FROM purchases WHERE id = $1`, [id]);
   const storedCharges = parseStoredOtherCharges(ocRow?.other_charges);
   res.json({
     ...row, vendorName: vendor?.name ?? "", totalAmount: Number(row.totalAmount), lineItems: row.lineItems ?? [],
+    vendorInvoiceDate: ocRow?.vendor_invoice_date ?? null,
     otherCharges: enrichCharges(storedCharges, await chargeLedgerNames([storedCharges])),
     otherChargesTotal: otherChargesTotal(storedCharges),
   });

@@ -222,6 +222,11 @@ export interface Purchase {
   purchaseDate: string;
   /** @nullable */
   invoiceNumber?: string | null;
+  /**
+     * The date printed on the vendor's own invoice (YYYY-MM-DD). Null on historical bills recorded before the field existed — absent means "not recorded", never a backfilled value.
+     * @nullable
+     */
+  vendorInvoiceDate?: string | null;
   lineItems: PurchaseLineItem[];
   otherCharges?: PurchaseOtherCharge[];
   otherChargesTotal?: number;
@@ -266,6 +271,8 @@ export interface PurchaseInput {
   vendorId: number;
   purchaseDate: string;
   invoiceNumber?: string;
+  /** The date printed on the vendor's own invoice (YYYY-MM-DD), distinct from purchaseDate (the booking date month locks follow). Required when creating a bill; on edit, omitted keeps the stored value. */
+  vendorInvoiceDate: string;
   /** Whether the line rates were keyed inclusive or exclusive of GST. Stored with the bill; defaults to exclusive. */
   priceMode?: PurchaseInputPriceMode;
   /** Requested receiving location. Only honoured if the caller's own location scope allows it; otherwise the session's location is used. */

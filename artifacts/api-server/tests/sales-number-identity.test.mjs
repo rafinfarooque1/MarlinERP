@@ -118,7 +118,7 @@ fixtures.itemId = (await sql(
 
 for (const loc of LOCS) {
   const res = await post('/purchases', {
-    vendorId: fixtures.vendorId, purchaseDate: '2026-08-01',
+    vendorId: fixtures.vendorId, purchaseDate: '2026-08-01', vendorInvoiceDate: '2026-07-31',
     locationType: loc.type, locationId: loc.id,
     lineItems: [{ materialType: 'item', materialId: fixtures.itemId, quantity: 10, unitCost: 40, mfgDate: '2026-07-01', expiryDate: '2027-07-01' }],
   });

@@ -210,6 +210,8 @@ export async function buildPurchaseInvoicePDF(
     ['PURCHASE BILL NO.', docNo],
     ['BILL DATE', dateIN(purchase?.purchaseDate)],
     ['VENDOR INVOICE REF.', val(purchase?.invoiceNumber)],
+    // Absent on historical bills — shown as a dash, never a fabricated date.
+    ['VENDOR INVOICE DATE', purchase?.vendorInvoiceDate ? dateIN(purchase.vendorInvoiceDate) : '—'],
     ['RATE BASIS', inclusive ? 'GST Inclusive' : 'GST Exclusive'],
   ];
   const cellW = CW / cells.length;

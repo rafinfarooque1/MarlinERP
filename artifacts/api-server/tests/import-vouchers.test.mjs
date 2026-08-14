@@ -152,7 +152,7 @@ await cleanup();
 
   // Stock the item, then two credit sales (S1 ₹1000 oldest, S2 ₹500).
   const pr = await post('/purchases', {
-    vendorId: fx.vendStockId, purchaseDate: '2026-06-20', locationType: 'warehouse', locationId: WH,
+    vendorId: fx.vendStockId, purchaseDate: '2026-06-20', vendorInvoiceDate: '2026-06-19', locationType: 'warehouse', locationId: WH,
     lineItems: [{ materialType: 'item', materialId: fx.itemId, quantity: 60, unitCost: 50, mfgDate: '2026-06-01', expiryDate: '2027-06-01' }],
   });
   if (pr.data?.id) createdPurchases.push(pr.data.id);
@@ -175,7 +175,7 @@ await cleanup();
   // Two unpaid purchase bills for the pay vendor (P1 ₹300 oldest, P2 ₹200).
   const mkBill = async (date, qty, inv) => {
     const r = await post('/purchases', {
-      vendorId: fx.vendPayId, purchaseDate: date, invoiceNumber: inv,
+      vendorId: fx.vendPayId, purchaseDate: date, vendorInvoiceDate: date, invoiceNumber: inv,
       locationType: 'warehouse', locationId: WH,
       lineItems: [{ materialType: 'item', materialId: fx.itemId, quantity: qty, unitCost: 50, mfgDate: '2026-07-01', expiryDate: '2027-07-01' }],
     });

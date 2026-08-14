@@ -164,7 +164,7 @@ const line = (over = {}) => ({
   quantity: 1, unitCost: 100, mfgDate: '2026-01-01', expiryDate: '2027-01-01', ...over,
 });
 const bill = (over = {}) => ({
-  vendorId: fixtures.vendorKa, purchaseDate: '2026-07-30',
+  vendorId: fixtures.vendorKa, purchaseDate: '2026-07-30', vendorInvoiceDate: '2026-07-29',
   locationType: 'warehouse', locationId: WH_OK, lineItems: [line()], ...over,
 });
 async function createBill(body, token) {
