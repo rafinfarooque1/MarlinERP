@@ -163,13 +163,19 @@ export const useEditPayroll = () =>
       }),
   });
 
+/**
+ * Approve a payroll row. If the month still has unclassified absent days the
+ * server refuses with 409 code UNCLASSIFIED_ABSENCES and the dates; re-approve
+ * with `confirmLop: true` once the manager explicitly accepts the loss of pay
+ * (or classify each day via the attendance correction route instead).
+ */
 export const useApprovePayroll = () =>
-  useMutation<EnrichedPayrollRecord, Error, { id: number }>({
-    mutationFn: ({ id }) =>
+  useMutation<EnrichedPayrollRecord, Error, { id: number; confirmLop?: boolean }>({
+    mutationFn: ({ id, confirmLop }) =>
       customFetch<EnrichedPayrollRecord>(`/api/hr/payroll/${id}/approve`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
+        body: JSON.stringify(confirmLop ? { confirmLop: true } : {}),
       }),
   });
 
@@ -181,6 +187,38 @@ export const usePayPayroll = () =>
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ amount, paymentMode, payLedgerId }),
       }),
+  });
+
+// ── Unclassified absences ───────────────────────────────────────────────────
+//
+// Days absent only by omission — no attendance row, no holiday, no weekly off —
+// which price as loss of pay without a manager ever deciding so. Approval
+// refuses a month that still has them, so the payroll page surfaces them for
+// classification (casual/sick leave, paid off, or explicit absent) through the
+// attendance correction route.
+
+export interface UnclassifiedAbsences {
+  employeeId: number;
+  employeeName: string;
+  /** YYYY-MM-DD, ascending; only days up to the business today. */
+  dates: string[];
+}
+
+export const getUnclassifiedAbsencesQueryKey = (params: { year: number; month: number }) => [
+  "/api/hr/payroll/unclassified-absences",
+  params,
+];
+
+export const useUnclassifiedAbsences = (
+  params: { year: number; month: number },
+  options?: { query?: Partial<UseQueryOptions<UnclassifiedAbsences[], Error>> }
+) =>
+  useQuery<UnclassifiedAbsences[], Error>({
+    queryKey: getUnclassifiedAbsencesQueryKey(params),
+    queryFn: async () =>
+      customFetch<UnclassifiedAbsences[]>(
+        `/api/hr/payroll/unclassified-absences?year=${params.year}&month=${params.month}`),
+    ...options?.query,
   });
 
 // ── Salary Accrual Register ────────────────────────────────────────────────

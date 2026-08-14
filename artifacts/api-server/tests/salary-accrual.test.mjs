@@ -41,6 +41,10 @@ const q = async (text, params = []) => (await sql.query(text, params)).rows;
 // accepted but stay unpriced until their day arrives.
 const NOW = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
 const Y = NOW.getFullYear(), M = NOW.getMonth() + 1, DOM = NOW.getDate();
+// Working-days basis = the payroll month's actual calendar length (Aug 2026
+// change — the payrollWorkingDays setting is retired).
+const DIM = new Date(Y, M, 0).getDate();
+const RATE = 30000 / DIM; // fixture A–H: ₹30,000/month over DIM calendar days
 const D = (d) => `${Y}-${String(M).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
 if (DOM < 7) {
   // Scenarios A–F walk days 1..7 of the month and need them all priced.
@@ -74,15 +78,16 @@ async function main() {
     password: process.env.TEST_ADMIN_PASSWORD || process.env.TEST_PASSWORD || "marlin1458",
   })).token;
 
-  // The pay basis is COMPANY policy since the Aug 2026 LOP change. Pin the
-  // values every expectation below assumes, restore at the end.
-  await pinPolicy({ payrollWorkingDays: 30, paidCasualLeavesPerMonth: 4, lopEnabled: true });
+  // The leave policy is COMPANY policy since the Aug 2026 LOP change. Pin the
+  // values every expectation below assumes, restore at the end. (The
+  // working-days basis is no longer a setting — it is the calendar month.)
+  await pinPolicy({ paidCasualLeavesPerMonth: 4, lopEnabled: true });
 
   const hiers = await api("GET", "/hr/hierarchies");
   const hierarchyId = hiers[0]?.id;
   const stamp = Date.now();
 
-  // Salary 30000 over the 30-working-day company basis = a clean ₹1000/day.
+  // Salary 30000 over the month's DIM calendar days = ₹RATE/day.
   const emp = await api("POST", "/hr/employees", {
     name: `AccrualTest_${stamp}`, username: `acctest_${stamp}`,
     email: `acc${stamp}@test.local`, phone: "9000000000",
@@ -98,18 +103,18 @@ async function main() {
   await setAtt(1, "present");
   let t = await accrualTotal(EID);
   check("A", "Full day earns exactly one day's salary",
-    near(t.total, 1000) && t.earning === 1,
-    `accrued ₹${t.total} over ${t.earning} earning day(s); expected ₹1000 / 1`);
+    near(t.total, round2(RATE)) && t.earning === 1,
+    `accrued ₹${t.total} over ${t.earning} earning day(s); expected ₹${round2(RATE)} / 1`);
 
   // ── B. Half day ─────────────────────────────────────────────────────────
   // Under the leave policy a half day is half worked + half a casual leave;
   // while the monthly allowance (4) lasts, the leave half is PAID, so the day
-  // still earns a full ₹1000. (Unpaid halves are the LOP suite's job.)
+  // still earns a full day's rate. (Unpaid halves are the LOP suite's job.)
   await setAtt(2, "half_day");
   t = await accrualTotal(EID);
   check("B", "Half day tops up from the paid-leave allowance to a full day",
-    near(t.total, 2000),
-    `accrued ₹${t.total}; expected ₹2000 (1000 + 1000: half worked + half paid leave)`);
+    near(t.total, round2(2 * RATE)),
+    `accrued ₹${t.total}; expected ₹${round2(2 * RATE)} (2 full days: half worked + half paid leave)`);
 
   // ── C. Absent / LOP ─────────────────────────────────────────────────────
   await setAtt(3, "absent");
@@ -118,7 +123,7 @@ async function main() {
     `SELECT amount, attendance_basis FROM salary_accruals WHERE employee_id=$1 AND accrual_date=$2`,
     [EID, D(3)]);
   check("C", "Absent day accrues nothing",
-    near(t.total, 2000) && near(absRow?.amount ?? -1, 0),
+    near(t.total, round2(2 * RATE)) && near(absRow?.amount ?? -1, 0),
     `month total ₹${t.total} (unchanged); day row = ₹${absRow?.amount} basis '${absRow?.attendance_basis}'`);
 
   // ── D. Full day → absent correction ─────────────────────────────────────
@@ -130,16 +135,16 @@ async function main() {
     `SELECT COUNT(*) AS n, SUM(amount) AS amt FROM salary_accruals WHERE employee_id=$1 AND accrual_date=$2`,
     [EID, D(1)]);
   check("D", "Full→absent correction adjusts in place, never duplicates",
-    near(t.total, 1000) && Number(afterD[0].n) === 1 && Number(beforeD[0].n) === 1,
-    `month total ₹${t.total} (expected ₹1000); rows for ${D(1)}: ${beforeD[0].n} → ${afterD[0].n} (must stay 1), value ₹${afterD[0].amt}`);
+    near(t.total, round2(RATE)) && Number(afterD[0].n) === 1 && Number(beforeD[0].n) === 1,
+    `month total ₹${t.total} (expected ₹${round2(RATE)}); rows for ${D(1)}: ${beforeD[0].n} → ${afterD[0].n} (must stay 1), value ₹${afterD[0].amt}`);
   await setAtt(1, "present"); // put the day back
 
   // ── E. Absent → present correction ──────────────────────────────────────
   await setAtt(3, "present");
   t = await accrualTotal(EID);
   check("E", "Absent→present correction recognises the extra earned salary",
-    near(t.total, 3000),
-    `month total ₹${t.total}; expected ₹3000 (1000 + 1000 + 1000)`);
+    near(t.total, round2(3 * RATE)),
+    `month total ₹${t.total}; expected ₹${round2(3 * RATE)} (3 full days)`);
 
   // ── F. Multiple days: accrual == payroll ────────────────────────────────
   await setAtt(6, "present");
@@ -147,7 +152,7 @@ async function main() {
   t = await accrualTotal(EID);
   const gen = await api("POST", "/hr/payroll/generate", { year: Y, month: M });
   const payrollList = await api("GET", `/hr/payroll?year=${Y}&month=${M}`);
-  const row = (Array.isArray(payrollList) ? payrollList : payrollList.data ?? [])
+  let row = (Array.isArray(payrollList) ? payrollList : payrollList.data ?? [])
     .find((p) => Number(p.employeeId) === EID);
   const earnedBasic = Math.round((Number(row?.baseSalary ?? 0) - Number(row?.lopDeduction ?? 0)) * 100) / 100;
   check("F", "Accrued Salary Expense equals payroll's earned basic",
@@ -164,9 +169,21 @@ async function main() {
     `gross ₹${grossPay} − deductions ₹${deductions} − advances ₹${advDed} + bonus ₹${row?.bonus ?? 0} = ₹${netPay}`);
 
   // ── H. Month-end approval must not duplicate the accrual ────────────────
+  // The fixture deliberately leaves uncovered past days, which the approval
+  // gate now surfaces as unclassified absences; this suite tests the accrual
+  // true-up, not classification (payroll-autocalc covers that), so confirm
+  // them as loss of pay explicitly.
+  //
+  // Approval also refuses any pay period with days that have not occurred yet
+  // (MONTH_INCOMPLETE — they would freeze in as loss of pay). End the
+  // fixture's employment today so its payable period is complete; the figures
+  // are untouched — all attendance sits on days 1..7, well inside the cap.
+  await api("PATCH", `/hr/employees/${EID}`, { employmentStatus: "resigned", lastWorkingDate: D(DOM) });
+  const rowsH = await api("GET", `/hr/payroll?year=${Y}&month=${M}`);
+  row = (Array.isArray(rowsH) ? rowsH : rowsH.data ?? []).find((p) => Number(p.employeeId) === EID);
   const payableBefore = await payableFor(EID);
   const expenseBefore = await expenseFor(EID);
-  await api("POST", `/hr/payroll/${row.id}/approve`, {});
+  await api("POST", `/hr/payroll/${row.id}/approve`, { confirmLop: true });
   const payableAfter = await payableFor(EID);
   const expenseAfter = await expenseFor(EID);
   check("H", "Approval trues up to net pay instead of re-recognising the accrual",
@@ -263,10 +280,10 @@ async function main() {
 }
 
 /**
- * Q and R need a salary that does NOT divide evenly by the working-days basis.
- * ₹30,000/30 is a clean ₹1,000 a day and hides every rounding question, so this
- * fixture uses ₹20,000/30 = ₹666.666…, where rounding the rate before
- * multiplying and rounding after differ by paise.
+ * Q and R need a salary that does NOT divide evenly by the working-days basis
+ * (the month's calendar length). ₹20,000 over a 28/30/31-day month never
+ * divides cleanly, so rounding the rate before multiplying and rounding after
+ * differ by paise — exactly the property under test.
  */
 async function roundingAndStalenessTests(hierarchyId) {
   const stamp = Date.now();
@@ -277,9 +294,9 @@ async function roundingAndStalenessTests(hierarchyId) {
     salary: 20000, joinDate: D(1),
   });
   const EID = emp.id;
-  console.log(`\nfixture employee #${EID} — ₹20,000/month over 30 days = ₹666.666…/day\n`);
+  console.log(`\nfixture employee #${EID} — ₹20,000/month over ${DIM} days = ₹${20000 / DIM}/day\n`);
 
-  // 25 attended days out of a 26-day basis: exactly one day of loss of pay.
+  // 25 attended days out of the calendar-month basis; the rest is LOP.
   for (let d = 1; d <= 25; d++) {
     await api("PUT", "/hr/attendance", { employeeId: EID, date: D(d), status: "present" });
   }
@@ -296,10 +313,10 @@ async function roundingAndStalenessTests(hierarchyId) {
   // rounded days (which drifts). At month-end (k=25) that equals the payroll
   // earned basic exactly.
   const k = Math.min(DOM, 25);
-  const expectedQ = k >= 25 ? earnedBasic : round2(k * (20000 / 30));
+  const expectedQ = k >= 25 ? earnedBasic : round2(k * (20000 / DIM));
   check("Q", "Accrual matches the cumulative daily rate to the paisa when it doesn't divide evenly",
     near(t.total, expectedQ, 0.005),
-    `accrued ₹${t.total} vs expected ₹${expectedQ} (${k} priced day(s) × ₹20000/30, cumulative)` +
+    `accrued ₹${t.total} vs expected ₹${expectedQ} (${k} priced day(s) × ₹20000/${DIM}, cumulative)` +
     `${near(t.total, expectedQ, 0.005) ? "" : "  ← rounding drift"}`);
 
   // Attendance moves after the payroll row was frozen. Approving now would true
@@ -313,6 +330,11 @@ async function roundingAndStalenessTests(hierarchyId) {
       : stale.error.slice(0, 170));
 
   // Regenerating clears the staleness and approval then goes through.
+  // Approval refuses pay periods with days that have not occurred yet
+  // (MONTH_INCOMPLETE) — end this fixture's employment on its last attended
+  // day so its payable period is complete. Every attended day is ≤ D(26), so
+  // the figures the staleness check compares are untouched.
+  await api("PATCH", `/hr/employees/${EID}`, { employmentStatus: "resigned", lastWorkingDate: D(26) });
   await api("POST", "/hr/payroll/generate", { year: Y, month: M, employeeId: EID, forceRegenerate: true });
   const after = await tryApi("POST", `/hr/payroll/${row.id}/approve`, {});
   check("S", "Regenerating clears the block and approval proceeds",
@@ -349,9 +371,14 @@ async function raceTest(hierarchyId) {
       hierarchyId, branchType: "headoffice", branchId: 1,
       salary: 26000, joinDate: D(1),
     });
-    for (let d = 1; d <= 25; d++) {
+    // Attend every day up to yesterday, leave TODAY rowless as the racing
+    // correction's target, and end employment today so the payable period is
+    // complete — approval refuses incomplete periods (MONTH_INCOMPLETE)
+    // outright, which would starve the approval side of the race.
+    for (let d = 1; d < DOM; d++) {
       await api("PUT", "/hr/attendance", { employeeId: emp.id, date: D(d), status: "present" });
     }
+    await api("PATCH", `/hr/employees/${emp.id}`, { employmentStatus: "resigned", lastWorkingDate: D(DOM) });
     await api("POST", "/hr/payroll/generate", { year: Y, month: M, employeeId: emp.id });
     const rows = await api("GET", `/hr/payroll?year=${Y}&month=${M}`);
     const row = rows.find((r) => Number(r.employeeId) === emp.id);
@@ -365,8 +392,11 @@ async function raceTest(hierarchyId) {
     // payroll row, the employee and the ledgers before it reaches the lock, so a
     // correction fired at the same instant always gets there first. Odd rounds
     // give approval a head start so the correction lands while it holds the lock.
-    const doCorrect = () => tryApi("PUT", "/hr/attendance", { employeeId: emp.id, date: D(26), status: "present" });
-    const doApprove = () => tryApi("POST", `/hr/payroll/${row.id}/approve`, {});
+    // TODAY is the fixture's one rowless (unclassified) day, so approval must
+    // carry confirmLop — otherwise winning the lock would still 409 and the
+    // "approval won, correction refused" branch would never be exercised.
+    const doCorrect = () => tryApi("PUT", "/hr/attendance", { employeeId: emp.id, date: D(DOM), status: "present" });
+    const doApprove = () => tryApi("POST", `/hr/payroll/${row.id}/approve`, { confirmLop: true });
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     const [correct, approve] = i % 2 === 0
       ? await Promise.all([doCorrect(), doApprove()])

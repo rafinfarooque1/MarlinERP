@@ -26,7 +26,8 @@ import {
 } from "../lib/salaryAccrual";
 import {
   loadAttendanceThresholds, loadPayrollSettings, monthLeaveSummary,
-  loadHolidaySet, calendarDayInfo, PUNCHED_HOURS_JOIN,
+  loadHolidaySet, calendarDayInfo, PUNCHED_HOURS_JOIN, monthWorkingDays,
+  weeklyOffRuleFor, type PayrollLeavePolicy,
 } from "../lib/attendanceFactor";
 import { ownLocationScope, scopeCashLedgerIds } from "../lib/moneyScope";
 import {
@@ -644,70 +645,127 @@ async function requireLedgerId(code: string): Promise<number> {
  * difference between the figure payroll finally computed and what has already
  * been accrued, plus the statutory legs only a payroll run knows.
  */
+/**
+ * Days in an employee-month that are ABSENT ONLY BY OMISSION — no attendance
+ * row, no holiday, no weekly off — i.e. days pricing treats as loss of pay
+ * without a manager ever having said so.
+ *
+ * These are what the absence-classification step (Aug 2026) surfaces: a
+ * manager must turn each one into casual/sick leave, a paid day off, or an
+ * explicit stored `absent` row (deliberate LOP) before approval — or confirm
+ * the LOP outright. Deliberately narrow:
+ *
+ *  - An untracked month (zero attendance rows, post-cutover) is excluded: it
+ *    pays nothing BY DESIGN and classifying its days one by one is busywork.
+ *  - Pre-cutover months are excluded: they price full-pay regardless of rows,
+ *    so there is no absence to classify.
+ *  - Only days up to the business today count — the rest of the month has not
+ *    happened yet — and only days inside the employment window (join → LWD).
+ */
+function unclassifiedAbsenceDates(opts: {
+  year: number;
+  month: number;
+  /** Every stored attendance row date in the month (any status). */
+  attDates: ReadonlySet<string>;
+  holidays: ReadonlySet<string>;
+  policy: PayrollLeavePolicy;
+  joinDate: string | null;
+  lwd: string | null;
+  /** Post-cutover month (untracked = absent)? Pre-cutover months classify nothing. */
+  untrackedIsAbsent: boolean;
+  /** Business today (YYYY-MM-DD); future days are never unclassified. */
+  until: string;
+}): string[] {
+  const { year, month } = opts;
+  if (!opts.untrackedIsAbsent) return [];
+  if (opts.attDates.size === 0) return [];
+  const mm = String(month).padStart(2, "0");
+  const out: string[] = [];
+  for (let d = 1, n = monthWorkingDays(year, month); d <= n; d++) {
+    const date = `${year}-${mm}-${String(d).padStart(2, "0")}`;
+    if (date > opts.until) break;
+    if (opts.joinDate && date < opts.joinDate) continue;
+    if (opts.lwd && date > opts.lwd) continue;
+    if (opts.attDates.has(date)) continue;
+    if (opts.holidays.has(date)) continue;
+    if (weeklyOffRuleFor(date, opts.policy)) continue;
+    out.push(date);
+  }
+  return out;
+}
+
 async function postSalaryApproval(opts: {
   payroll: any;
   empLabel: string;
   voucherDate: string;
   periodLabel: string;
   createdBy: string;
+  /** Manager explicitly confirmed unclassified absent days as loss of pay. */
+  confirmLop?: boolean;
 }): Promise<{ updated: any; netPay: number; salaryCost: number; voucherNumber: string | null; accrued: number }> {
-  const { payroll: pr, empLabel, voucherDate, periodLabel, createdBy } = opts;
-  const employeeId = Number(pr.employee_id);
-
-  const extraAmt    = round2(Number(pr.extra_amount ?? 0));
-  const grossPay    = round2(Number(pr.gross_pay ?? 0));
-  const pfEmployee  = round2(Number(pr.pf_employee ?? 0));
-  const pfEmployer  = round2(Number(pr.pf_employer ?? 0));
-  const esiEmployee = round2(Number(pr.esi_employee ?? 0));
-  const esiEmployer = round2(Number(pr.esi_employer ?? 0));
-  const advanceRec  = round2(Number(pr.advance_deduction ?? 0));
-  const netPay      = round2(Number(pr.net_pay ?? 0) + extraAmt);
-
-  // Withholdings other than PF/ESI, derived so the voucher always balances even
-  // for rows generated before the statutory columns existed.
-  const totalDeductions = round2(Number(pr.deductions ?? 0));
-  const otherDeductions = round2(Math.max(0, totalDeductions - pfEmployee - esiEmployee));
-
-  // Salary expense carries gross pay plus anything added by hand (arrears,
-  // bonus). Employer contributions are separate expenses.
-  const salaryCost = round2(grossPay + extraAmt);
+  const { payroll: prStale, empLabel, voucherDate, periodLabel, createdBy } = opts;
+  const employeeId = Number(prStale.employee_id);
 
   const { expenseLedgerId: salExpId, payableLedgerId: salPayId } =
     await provisionSalaryLedgers(pool, employeeId, empLabel);
   if (!salExpId || !salPayId) throw new Error("Could not provision the employee's salary ledgers");
 
-  // Statutory legs are recognised for the first time here: only a payroll run
-  // knows PF, ESI, other withholdings and the advance it recovered, so daily
-  // accrual never touches them and they are posted in full.
-  const fixedDebits: Array<[number, number]> = [];
-  const fixedCredits: Array<[number, number]> = [];
-  if (pfEmployer  > 0.004) fixedDebits.push([await requireLedgerId('STD-PF-EMPR'),  pfEmployer]);
-  if (esiEmployer > 0.004) fixedDebits.push([await requireLedgerId('STD-ESI-EMPR'), esiEmployer]);
-
-  const pfPayable  = round2(pfEmployee + pfEmployer);
-  const esiPayable = round2(esiEmployee + esiEmployer);
-  if (pfPayable       > 0.004) fixedCredits.push([await requireLedgerId('STD-PF-PAY'),  pfPayable]);
-  if (esiPayable      > 0.004) fixedCredits.push([await requireLedgerId('STD-ESI-PAY'), esiPayable]);
-  if (otherDeductions > 0.004) fixedCredits.push([await requireLedgerId('STD-EMP-DED'), otherDeductions]);
-  // NO advance leg (owner decision, Aug 2026): the advance already sits as a
-  // DEBIT on this employee's Salary Payable ledger (it was disbursed as
-  // Dr Salary Payable / Cr till, or moved there by the one-time migration).
-  // Approval credits Salary Payable with the FULL net (before the advance
-  // offset) and the existing debit nets it down to the cash actually owed.
-
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
 
-    // Re-read under a row lock so two concurrent approvals cannot both post.
-    const { rows: [locked] } = await client.query(
-      `SELECT status FROM payroll WHERE id = $1 FOR UPDATE`, [pr.id],
+    // Re-read the WHOLE row under its lock — not just the status. The live
+    // refresh rewrites a draft's figures and advance claims, and it can
+    // commit between the route's unlocked read and this lock; every amount,
+    // snapshot and advance id below must come from the row as it is NOW, or
+    // approval would post the old net pay onto the refreshed row and leave
+    // its newly claimed advances unsettled. The caller's copy only finds the
+    // row; nothing else about it is trusted.
+    const { rows: [pr] } = await client.query(
+      `SELECT * FROM payroll WHERE id = $1 FOR UPDATE`, [prStale.id],
     );
-    if (!locked) throw new Error("Payroll record disappeared");
-    if (locked.status === 'approved' || locked.status === 'paid') {
+    if (!pr) throw new Error("Payroll record disappeared");
+    if (pr.status === 'approved' || pr.status === 'paid') {
       throw Object.assign(
         new Error("This payroll was already approved by someone else"), { conflict: true });
     }
+
+    const extraAmt    = round2(Number(pr.extra_amount ?? 0));
+    const grossPay    = round2(Number(pr.gross_pay ?? 0));
+    const pfEmployee  = round2(Number(pr.pf_employee ?? 0));
+    const pfEmployer  = round2(Number(pr.pf_employer ?? 0));
+    const esiEmployee = round2(Number(pr.esi_employee ?? 0));
+    const esiEmployer = round2(Number(pr.esi_employer ?? 0));
+    const advanceRec  = round2(Number(pr.advance_deduction ?? 0));
+    const netPay      = round2(Number(pr.net_pay ?? 0) + extraAmt);
+
+    // Withholdings other than PF/ESI, derived so the voucher always balances even
+    // for rows generated before the statutory columns existed.
+    const totalDeductions = round2(Number(pr.deductions ?? 0));
+    const otherDeductions = round2(Math.max(0, totalDeductions - pfEmployee - esiEmployee));
+
+    // Salary expense carries gross pay plus anything added by hand (arrears,
+    // bonus). Employer contributions are separate expenses.
+    const salaryCost = round2(grossPay + extraAmt);
+
+    // Statutory legs are recognised for the first time here: only a payroll run
+    // knows PF, ESI, other withholdings and the advance it recovered, so daily
+    // accrual never touches them and they are posted in full.
+    const fixedDebits: Array<[number, number]> = [];
+    const fixedCredits: Array<[number, number]> = [];
+    if (pfEmployer  > 0.004) fixedDebits.push([await requireLedgerId('STD-PF-EMPR'),  pfEmployer]);
+    if (esiEmployer > 0.004) fixedDebits.push([await requireLedgerId('STD-ESI-EMPR'), esiEmployer]);
+
+    const pfPayable  = round2(pfEmployee + pfEmployer);
+    const esiPayable = round2(esiEmployee + esiEmployer);
+    if (pfPayable       > 0.004) fixedCredits.push([await requireLedgerId('STD-PF-PAY'),  pfPayable]);
+    if (esiPayable      > 0.004) fixedCredits.push([await requireLedgerId('STD-ESI-PAY'), esiPayable]);
+    if (otherDeductions > 0.004) fixedCredits.push([await requireLedgerId('STD-EMP-DED'), otherDeductions]);
+    // NO advance leg (owner decision, Aug 2026): the advance already sits as a
+    // DEBIT on this employee's Salary Payable ledger (it was disbursed as
+    // Dr Salary Payable / Cr till, or moved there by the one-time migration).
+    // Approval credits Salary Payable with the FULL net (before the advance
+    // offset) and the existing debit nets it down to the cash actually owed.
 
     // Month lock: approval posts the true-up voucher into the payroll month, so
     // it may not run once that accounting period is locked. Re-checked inside
@@ -738,9 +796,11 @@ async function postSalaryApproval(opts: {
     // inside the lock, because the check is only worth anything if no sweep can
     // run between the check and the voucher.
     const { thresholds: liveThresholds, policy: livePolicy } = await loadPayrollSettings(pool);
-    const wd = livePolicy.workingDays;
     const mStr = String(pr.month).padStart(2, "0");
     const lastDay = new Date(Number(pr.year), Number(pr.month), 0).getDate();
+    // Calendar-days basis (Aug 2026): identical to generation's, or every
+    // approval would 409 forever against the draft generation itself wrote.
+    const wd = monthWorkingDays(Number(pr.year), Number(pr.month));
     const { rows: attRows } = await client.query(
       `SELECT a.date, a.check_in AS "checkIn", a.check_out AS "checkOut", a.status,
               a.leave_type AS "leaveType",
@@ -756,10 +816,13 @@ async function postSalaryApproval(opts: {
     const monthFirst = `${pr.year}-${mStr}-01`;
     const monthLast = `${pr.year}-${mStr}-${String(lastDay).padStart(2, "0")}`;
     const { rows: [empEmployment] } = await client.query(
-      `SELECT to_char(last_working_date, 'YYYY-MM-DD') AS lwd FROM employees WHERE id = $1`,
+      `SELECT to_char(last_working_date, 'YYYY-MM-DD') AS lwd,
+              to_char(join_date, 'YYYY-MM-DD') AS join_date
+         FROM employees WHERE id = $1`,
       [employeeId],
     );
     const liveLwd: string | null = empEmployment?.lwd ?? null;
+    const liveJoinDate: string | null = empEmployment?.join_date ?? null;
     const liveAtt = liveLwd
       ? attRows.filter((a: any) => attDateStr(a.date) <= liveLwd)
       : attRows;
@@ -797,6 +860,54 @@ async function postSalaryApproval(opts: {
           : `The company payroll policy (working days / paid leave / LOP) changed after this payroll was generated. `) +
         `Regenerate the payroll so it matches, then approve it.`,
       ), { conflict: true });
+    }
+
+    // Absence classification (Aug 2026): days absent only by OMISSION — no
+    // attendance row, no calendar cover — price as loss of pay without a
+    // manager ever deciding so. The scan covers the employee's WHOLE payable
+    // period (month end, or the last working date for leavers), then splits:
+    //
+    //  - Days that have not happened yet cannot be classified OR confirmed —
+    //    generation priced them as loss of pay only as a projection, and
+    //    approving would freeze that projection into the books. Approval is
+    //    refused outright until the period is complete (or every remaining day
+    //    carries a stored attendance/holiday/weekly-off decision, e.g. a
+    //    rostered plan entered ahead of time). No override: `confirmLop` is a
+    //    statement about days that occurred, not about days that might.
+    //  - Past days stay the classification gate: classify each (casual/sick/
+    //    paid off/explicit absent) or approve again confirming the LOP.
+    //
+    // Checked inside the same lock as the drift check: a day classified after
+    // this read would move attendance, and the sweep cannot run between here
+    // and the voucher.
+    {
+      const unpriced = unclassifiedAbsenceDates({
+        year: Number(pr.year), month: Number(pr.month),
+        attDates: new Set(attRows.map((a: any) => attDateStr(a.date))),
+        holidays: liveCalendar.holidays,
+        policy: livePolicy,
+        joinDate: liveJoinDate,
+        lwd: liveLwd,
+        untrackedIsAbsent: liveCalendar.untrackedIsAbsent,
+        until: monthLast,
+      });
+      const businessToday = await businessTodayStr();
+      const futureUnpriced = unpriced.filter((d) => d > businessToday);
+      const unclassified = unpriced.filter((d) => d <= businessToday);
+      if (futureUnpriced.length) {
+        throw Object.assign(new Error(
+          `${mStr}/${pr.year} cannot be approved yet: ${futureUnpriced.length} day(s) of the pay ` +
+          `period have not occurred (${futureUnpriced.join(", ")}). Approving now would lock them ` +
+          `in as loss of pay. Approve after the period ends.`,
+        ), { conflict: true, monthIncomplete: futureUnpriced });
+      }
+      if (unclassified.length && !opts.confirmLop) {
+        throw Object.assign(new Error(
+          `${unclassified.length} day(s) in ${mStr}/${pr.year} are absent without classification ` +
+          `(${unclassified.join(", ")}). Classify each as leave, paid off or absent — or approve ` +
+          `again confirming they are loss of pay.`,
+        ), { conflict: true, unclassifiedAbsences: unclassified });
+      }
     }
 
     const accrued = await accruedForMonth(
@@ -1236,7 +1347,8 @@ router.get("/hr/employees", requireModuleView("page:/hr/employees"), async (req,
               e.is_active AS "isActive", e.must_change_password AS "mustChangePassword",
               e.is_production_staff AS "isProductionStaff",
               e.employment_status AS "employmentStatus",
-              to_char(e.last_working_date, 'YYYY-MM-DD') AS "lastWorkingDate"
+              to_char(e.last_working_date, 'YYYY-MM-DD') AS "lastWorkingDate",
+              e.leaving_reason AS "leavingReason"
        FROM employees e WHERE ${scopeCond} ORDER BY e.id`,
       scopeParams,
     ),
@@ -1256,6 +1368,7 @@ router.get("/hr/employees", requireModuleView("page:/hr/employees"), async (req,
     isProductionStaff: e.isProductionStaff ?? false,
     employmentStatus: e.employmentStatus ?? "active",
     lastWorkingDate: e.lastWorkingDate ?? null,
+    leavingReason: e.leavingReason ?? null,
   })));
   res.json(enriched);
 });
@@ -1282,16 +1395,21 @@ async function readProductionStaffFlag(id: number): Promise<boolean> {
  *  'resigned' and 'terminated' record WHY someone left. */
 const EMPLOYMENT_STATUSES = ["active", "resigned", "terminated", "inactive"];
 
-/** Employment status + last working date are raw-migration columns (invisible
- *  to drizzle), read and written with explicit SQL like the production-staff
- *  flag. The date comes back as text so no timezone can shift it. */
-async function readEmploymentFields(id: number): Promise<{ status: string; lastWorkingDate: string | null }> {
+/** Employment status, last working date and leaving reason are raw-migration
+ *  columns (invisible to drizzle), read and written with explicit SQL like the
+ *  production-staff flag. The date comes back as text so no timezone can shift it. */
+async function readEmploymentFields(id: number): Promise<{ status: string; lastWorkingDate: string | null; leavingReason: string | null }> {
   const { rows } = await pool.query(
-    `SELECT employment_status AS s, to_char(last_working_date, 'YYYY-MM-DD') AS lwd
+    `SELECT employment_status AS s, to_char(last_working_date, 'YYYY-MM-DD') AS lwd,
+            leaving_reason AS reason
        FROM employees WHERE id = $1`,
     [id],
   );
-  return { status: rows[0]?.s ?? "active", lastWorkingDate: rows[0]?.lwd ?? null };
+  return {
+    status: rows[0]?.s ?? "active",
+    lastWorkingDate: rows[0]?.lwd ?? null,
+    leavingReason: rows[0]?.reason ?? null,
+  };
 }
 
 /** Same conversion `dayStr` in the attendance-factor module uses, so a pg DATE
@@ -1411,6 +1529,7 @@ router.get("/hr/employees/:id", requireModuleView("page:/hr/employees"), async (
     isProductionStaff: await readProductionStaffFlag(id),
     ...(await readEmploymentFields(id).then((f) => ({
       employmentStatus: f.status, lastWorkingDate: f.lastWorkingDate,
+      leavingReason: f.leavingReason,
     }))),
   });
 });
@@ -1452,6 +1571,11 @@ router.patch("/hr/employees/:id", requireModuleAction("page:/hr/employees", "edi
     res.status(400).json({ error: "lastWorkingDate must be a YYYY-MM-DD date" });
     return;
   }
+  const rawReason = (req.body as any)?.leavingReason;
+  if (rawReason !== undefined && rawReason !== null && typeof rawReason !== "string") {
+    res.status(400).json({ error: "leavingReason must be text" });
+    return;
+  }
   let nextStatus: string | undefined = rawStatus !== undefined ? String(rawStatus) : undefined;
   if (nextStatus === undefined && (parsed.data as any).isActive !== undefined) {
     // Legacy toggle: reactivation restores 'active'; deactivation records
@@ -1468,6 +1592,13 @@ router.patch("/hr/employees/:id", requireModuleAction("page:/hr/employees", "edi
     ? null
     : ((rawLwd !== undefined ? (rawLwd as string | null) : prevEmployment.lastWorkingDate)
         ?? new Date().toISOString().slice(0, 10));
+  // The reason follows the same effective-value rule: an active employee has
+  // none (reactivation clears it); a leaver keeps the stored one unless the
+  // PATCH says otherwise. Blank means NULL — never store an empty string.
+  const effReasonRaw = effStatus === "active"
+    ? null
+    : (rawReason !== undefined ? (rawReason as string | null) : prevEmployment.leavingReason);
+  const effReason = effReasonRaw && String(effReasonRaw).trim() !== "" ? String(effReasonRaw).trim() : null;
   if (nextStatus !== undefined) (parsed.data as any).isActive = nextStatus === "active";
   const updateData: Record<string, unknown> = { ...parsed.data };
   if (parsed.data.salary !== undefined) updateData.salary = String(parsed.data.salary);
@@ -1483,11 +1614,12 @@ router.patch("/hr/employees/:id", requireModuleAction("page:/hr/employees", "edi
   const isProductionStaff = (await saveProductionStaffFlag(id, req.body)) ?? beforeFlag;
 
   const employmentChanged = effStatus !== prevEmployment.status
-    || (effLwd ?? null) !== (prevEmployment.lastWorkingDate ?? null);
+    || (effLwd ?? null) !== (prevEmployment.lastWorkingDate ?? null)
+    || (effReason ?? null) !== (prevEmployment.leavingReason ?? null);
   if (employmentChanged) {
     await pool.query(
-      `UPDATE employees SET employment_status = $1, last_working_date = $2 WHERE id = $3`,
-      [effStatus, effLwd, id],
+      `UPDATE employees SET employment_status = $1, last_working_date = $2, leaving_reason = $3 WHERE id = $4`,
+      [effStatus, effLwd, effReason, id],
     );
     logActivity({
       action: "UPDATE", module: "hr", entityType: "employee", entityId: id,
@@ -1499,6 +1631,7 @@ router.patch("/hr/employees/:id", requireModuleAction("page:/hr/employees", "edi
         employeeId: id, employeeName: row.name,
         previousStatus: prevEmployment.status, newStatus: effStatus,
         previousLastWorkingDate: prevEmployment.lastWorkingDate, newLastWorkingDate: effLwd,
+        previousLeavingReason: prevEmployment.leavingReason, newLeavingReason: effReason,
       },
     }).catch(() => {});
   }
@@ -1543,10 +1676,10 @@ router.patch("/hr/employees/:id", requireModuleAction("page:/hr/employees", "edi
       const now = new Date();
       const basis = recalc.monthsRecalculated[0]
         ?? { year: now.getFullYear(), month: now.getMonth() + 1 };
-      // The daily rate is per working-days basis now, not per calendar month, so
-      // the audit entry has to quote the same basis the engine priced with —
-      // the company-wide policy since the Aug 2026 LOP change.
-      const revWorkingDays = (await loadPayrollSettings(pool)).policy.workingDays;
+      // The daily rate divides by the month's actual calendar days (the basis
+      // since the Aug 2026 calendar-days change), so the audit entry quotes
+      // the basis of the first month the engine actually re-priced.
+      const revWorkingDays = monthWorkingDays(basis.year, basis.month);
       const asLabel = (m: { year: number; month: number }) => `${String(m.month).padStart(2, "0")}/${m.year}`;
       const months = recalc.monthsRecalculated.map(asLabel);
 
@@ -1604,7 +1737,7 @@ router.patch("/hr/employees/:id", requireModuleAction("page:/hr/employees", "edi
     branchName: await getBranchName(row.branchType, row.branchId),
     salary: Number(row.salary), joinDate: row.joinDate, photoUrl: row.photoUrl ?? null, isActive: row.isActive, mustChangePassword: row.mustChangePassword ?? false,
     isProductionStaff,
-    employmentStatus: effStatus, lastWorkingDate: effLwd,
+    employmentStatus: effStatus, lastWorkingDate: effLwd, leavingReason: effReason,
   });
 });
 
@@ -1700,6 +1833,31 @@ router.get("/hr/payroll", requireModuleView("page:/hr/payroll"), async (req, res
     empIdFilter = empRow[0]?.id ?? null;
   }
 
+  // Live payroll (Aug 2026): a month view always reflects current attendance.
+  // Refresh the month's drafts before listing — idempotent, serialised by the
+  // advance-claim locks — so there is no Generate button and no stale figure.
+  //
+  // Least privilege: the refresh WRITES — it creates/updates/tears down draft
+  // rows and releases/claims employee advances — so it runs ONLY for
+  // head-office callers holding the same `add` right POST
+  // /hr/payroll/generate requires (the payroll operators who run the month).
+  // Everyone else's read is genuinely read-only: a view-only caller AND a
+  // self-scoped branch employee (even one who happens to hold `add`) must
+  // never mutate pay or shift which month claims an advance by merely
+  // viewing a period. They read the stored rows, refreshed the next time an
+  // operator looks at the month (or by the daily accrual sweep).
+  //
+  // A locked accounting period is skipped (nothing may be written into it);
+  // approved/paid rows are skipped inside the refresh itself.
+  const isOperator = !(scopeEmp && scopeEmp.branchType !== 'headoffice')
+    && await hasModuleAction((req as any).employee?.hierarchyId, "page:/hr/payroll", "add");
+  if (isOperator && qp.success && qp.data.year && qp.data.month) {
+    const ry = Number(qp.data.year), rm = Number(qp.data.month);
+    if (!(await isMonthLocked(pool, ry, rm))) {
+      await refreshPayrollDrafts({ year: ry, month: rm });
+    }
+  }
+
   // Use raw SQL so the new startup-migration columns are included
   let whereParts = ['1=1'];
   const params: unknown[] = [];
@@ -1738,16 +1896,40 @@ router.get("/hr/payroll", requireModuleView("page:/hr/payroll"), async (req, res
   res.json(enriched);
 });
 
-// Generate payroll for a month — creates or updates records for all employees (or one)
-router.post("/hr/payroll/generate", requireModuleAction("page:/hr/payroll", "add"), async (req, res): Promise<void> => {
-  const { month, year, employeeId, forceRegenerate = false } = req.body;
-  if (!month || !year) { res.status(400).json({ error: "month and year are required" }); return; }
-
-  // Month lock: payroll is a dated financial record for (year, month). A locked
-  // accounting period may not have a run generated into it.
-  if (await isMonthLocked(pool, Number(year), Number(month))) {
-    res.status(423).json(monthLockedBody(Number(year), Number(month))); return;
+// Recompute every draft payroll row for a month from current attendance/leave.
+//
+// This is the old POST /hr/payroll/generate body, extracted so the payroll
+// list can refresh drafts on every view (the "live payroll" model, Aug 2026):
+// there are no Generate/Regenerate buttons any more — drafts always mirror
+// attendance until approval freezes them. It is idempotent: recomputing an
+// unchanged month rewrites each draft to the same values, and the one-txn
+// advance release/claim (FOR UPDATE) serialises concurrent refreshes.
+//
+// Callers must check the accounting-period lock first: a locked month may not
+// be written into (generate 423s; the list view just skips the refresh).
+//
+// Concurrency: refreshes of the SAME month serialise on a session advisory
+// lock held for the whole run. The per-employee existence check ("is there a
+// row for this employee-month?") happens before that employee's write
+// transaction, so without the lock two operators loading a previously
+// unmaterialised month could both see "no row" and both insert — the
+// uq_payroll_employee_period unique index would make the loser fail loudly,
+// but the lock makes the second refresh wait and then update idempotently
+// instead. Different months never contend.
+async function refreshPayrollDrafts(opts: { year: number; month: number; employeeId?: number }): Promise<any[]> {
+  const monthKey = Number(opts.year) * 100 + Number(opts.month);
+  const lockClient = await pool.connect();
+  await lockClient.query(`SELECT pg_advisory_lock(hashtext('payroll-refresh'), $1)`, [monthKey]);
+  try {
+    return await refreshPayrollDraftsLocked(opts);
+  } finally {
+    await lockClient.query(`SELECT pg_advisory_unlock(hashtext('payroll-refresh'), $1)`, [monthKey]).catch(() => {});
+    lockClient.release();
   }
+}
+
+async function refreshPayrollDraftsLocked(opts: { year: number; month: number; employeeId?: number }): Promise<any[]> {
+  const { year, month, employeeId } = opts;
 
   // The same thresholds and company-wide leave policy the daily accrual engine
   // prices a day at, loaded from one place. Payroll and the books must not be
@@ -1836,11 +2018,10 @@ router.post("/hr/payroll/generate", requireModuleAction("page:/hr/payroll", "add
     // back-filled by migration), so an absent row means an empty structure —
     // basic pay only, plus the statutory contributions.
     const [pc] = await db.select().from(payComponentsTable).where(eq(payComponentsTable.employeeId, emp.id)).limit(1);
-    // Working days are COMPANY-WIDE policy (Company → Settings → Payroll), not
-    // per employee — the owner's rule since the Aug 2026 LOP change. The old
-    // per-employee `pay_components.working_days_per_month` is deliberately no
-    // longer read.
-    const workingDays = policy.workingDays;
+    // Working days = the month's ACTUAL calendar days (Aug 2026, replacing the
+    // old company-wide "Working Days Per Month" setting). The old per-employee
+    // `pay_components.working_days_per_month` is deliberately not read either.
+    const workingDays = monthWorkingDays(Number(year), Number(month));
     const allowances: AllowanceComp[] = (pc?.allowances as AllowanceComp[]) ?? [];
     const deductions = stripStatutoryDuplicates((pc?.deductions as DeductionComp[]) ?? [], rates);
 
@@ -1887,13 +2068,30 @@ router.post("/hr/payroll/generate", requireModuleAction("page:/hr/payroll", "add
     let row: any;
     let claimedIds: number[] = [];
     let advanceDeduction = 0;
+    let finalizedMeanwhile = false;
     try {
       await advClient.query("BEGIN");
-      if (existing) {
+      // Approval locks this same row, posts the salary voucher, and commits.
+      // The unlocked pre-read above raced that: a refresh queued behind an
+      // in-flight approval would otherwise resume after its commit and reset
+      // a POSTED document back to draft. Re-read under the row's own lock —
+      // only a still-draft (or absent) row may be written; a row finalised
+      // in the meantime passes through untouched.
+      const { rows: [lockedRow] } = await advClient.query(
+        `SELECT * FROM payroll WHERE employee_id = $1 AND month = $2 AND year = $3 FOR UPDATE`,
+        [emp.id, month, year],
+      );
+      if (lockedRow && (lockedRow.is_paid || lockedRow.status === 'approved' || lockedRow.status === 'paid')) {
+        await advClient.query("ROLLBACK");
+        row = lockedRow;
+        finalizedMeanwhile = true;
+      } else {
+      const current = lockedRow ?? null;
+      if (current) {
         await advClient.query(
           `UPDATE employee_advances SET deducted_payroll_id = NULL
             WHERE deducted_payroll_id = $1 AND is_deducted = FALSE`,
-          [existing.id],
+          [current.id],
         );
       }
       const { rows: advances } = await advClient.query(
@@ -1952,7 +2150,7 @@ router.post("/hr/payroll/generate", requireModuleAction("page:/hr/payroll", "add
       leaveSummary.paidSickLeaveUsed, policy.paidSickLeavesPerMonth,
     ];
 
-    if (existing) {
+    if (current) {
       const { rows: [updated] } = await advClient.query(
         `UPDATE payroll SET
            employee_id=$1, month=$2, year=$3, base_salary=$4, working_days=$5, present_days=$6,
@@ -1963,9 +2161,12 @@ router.post("/hr/payroll/generate", requireModuleAction("page:/hr/payroll", "add
            statutory_snapshot=$20, advance_ids=$21, pay_period_label=$22,
            paid_leave_used=$23, paid_leave_allowed=$24,
            sick_leave_used=$25, sick_leave_allowed=$26
-         WHERE id=$27 RETURNING *`,
-        [...writeCols, existing.id],
+         WHERE id=$27 AND COALESCE(status, 'draft') = 'draft' RETURNING *`,
+        [...writeCols, current.id],
       );
+      // Impossible while we hold the row lock (the status was checked under
+      // it); refuse loudly rather than let a finalised row be rewritten.
+      if (!updated) throw new Error(`Payroll row ${current.id} is no longer a draft — refusing to overwrite it.`);
       row = updated;
     } else {
       const { rows: [inserted] } = await advClient.query(
@@ -1996,7 +2197,8 @@ router.post("/hr/payroll/generate", requireModuleAction("page:/hr/payroll", "add
         throw new Error(`Advance claim conflict for ${emp.name} — an advance changed while payroll was being generated. Run generate again.`);
       }
     }
-      await advClient.query("COMMIT");
+      } // end still-draft-or-absent branch (finalised rows pass through untouched)
+      if (!finalizedMeanwhile) await advClient.query("COMMIT");
     } catch (e) {
       await advClient.query("ROLLBACK").catch(() => {});
       throw e;
@@ -2032,7 +2234,93 @@ router.post("/hr/payroll/generate", requireModuleAction("page:/hr/payroll", "add
     }
   }
 
+  return results;
+}
+
+// Recompute a month's drafts on demand. Kept for API compatibility (scripts,
+// tests) even though the UI no longer has a Generate button — the list view
+// refreshes drafts itself on every read.
+router.post("/hr/payroll/generate", requireModuleAction("page:/hr/payroll", "add"), async (req, res): Promise<void> => {
+  const { month, year, employeeId } = req.body;
+  if (!month || !year) { res.status(400).json({ error: "month and year are required" }); return; }
+
+  // Month lock: payroll is a dated financial record for (year, month). A locked
+  // accounting period may not have a run generated into it.
+  if (await isMonthLocked(pool, Number(year), Number(month))) {
+    res.status(423).json(monthLockedBody(Number(year), Number(month))); return;
+  }
+
+  const results = await refreshPayrollDrafts({
+    year: Number(year), month: Number(month),
+    employeeId: employeeId ? Number(employeeId) : undefined,
+  });
   res.json(results);
+});
+
+// Unclassified absences for a month — the days approval will refuse until a
+// manager classifies them (casual/sick leave, paid off, explicit absent) via
+// the attendance correction route, or confirms them as loss of pay.
+router.get("/hr/payroll/unclassified-absences", requireModuleView("page:/hr/payroll"), async (req, res): Promise<void> => {
+  const year = Number((req.query as any)?.year);
+  const month = Number((req.query as any)?.month);
+  if (!Number.isInteger(year) || year < 1900 || !Number.isInteger(month) || month < 1 || month > 12) {
+    res.status(400).json({ error: "Invalid year/month" }); return;
+  }
+  let employeeId = Number((req.query as any)?.employeeId);
+  if (!Number.isInteger(employeeId) || employeeId <= 0) employeeId = 0;
+  // Non-headoffice callers only ever see their own days, whatever they ask for.
+  const scopeEmp = (req as any).employee as { id: number; branchType: string } | undefined;
+  if (scopeEmp && scopeEmp.branchType !== 'headoffice') employeeId = scopeEmp.id;
+
+  const mm = String(month).padStart(2, "0");
+  const monthFirst = `${year}-${mm}-01`;
+  const monthLast = `${year}-${mm}-${String(monthWorkingDays(year, month)).padStart(2, "0")}`;
+
+  const { policy } = await loadPayrollSettings(pool);
+  const holidays = await loadHolidaySet(pool, monthFirst, monthLast);
+  const untrackedIsAbsent = monthFirst >= await loadAccrualCutover(pool);
+  const until = await businessTodayStr();
+
+  // Same population payroll itself covers: active employees, plus leavers
+  // whose last working day falls inside or after the month.
+  const params: unknown[] = [monthFirst];
+  let only = "";
+  if (employeeId) { params.push(employeeId); only = ` AND e.id = $${params.length}`; }
+  const { rows: emps } = await pool.query(
+    `SELECT e.id, e.name,
+            to_char(e.join_date, 'YYYY-MM-DD') AS join_date,
+            to_char(e.last_working_date, 'YYYY-MM-DD') AS lwd
+       FROM employees e
+      WHERE (e.is_active = TRUE
+             OR (e.last_working_date IS NOT NULL AND to_char(e.last_working_date, 'YYYY-MM-DD') >= $1))${only}
+      ORDER BY e.name`,
+    params,
+  );
+  const { rows: attRows } = await pool.query(
+    `SELECT employee_id AS "employeeId", to_char(date, 'YYYY-MM-DD') AS date
+       FROM attendance WHERE date >= $1 AND date <= $2`,
+    [monthFirst, monthLast],
+  );
+  const attByEmp = new Map<number, Set<string>>();
+  for (const r of attRows) {
+    const set = attByEmp.get(Number(r.employeeId)) ?? new Set<string>();
+    set.add(String(r.date));
+    attByEmp.set(Number(r.employeeId), set);
+  }
+
+  const out = [];
+  for (const e of emps) {
+    const dates = unclassifiedAbsenceDates({
+      year, month,
+      attDates: attByEmp.get(Number(e.id)) ?? new Set<string>(),
+      holidays, policy,
+      joinDate: e.join_date ?? null,
+      lwd: e.lwd ?? null,
+      untrackedIsAbsent, until,
+    });
+    if (dates.length) out.push({ employeeId: Number(e.id), employeeName: e.name, dates });
+  }
+  res.json(out);
 });
 
 // Edit extra amount / note (for authorised managers before approval)
@@ -2202,6 +2490,7 @@ router.post("/hr/payroll/:id/approve", requireModuleAction("page:/hr/payroll", "
       voucherDate: today,
       periodLabel: existing.pay_period_label || `${monthStr}/${existing.year}`,
       createdBy: req.employee?.username ?? "system",
+      confirmLop: req.body?.confirmLop === true,
     });
 
     logActivity({ action: "UPDATE", module: "payroll", entityType: "payroll", entityId: id,
@@ -2226,6 +2515,27 @@ router.post("/hr/payroll/:id/approve", requireModuleAction("page:/hr/payroll", "
     // failure is a 500, so the UI can tell "you need to do something" apart
     // from "the server broke".
     if (e?.monthLocked) { res.status(423).json(e.monthLocked); return; }
+    if (e?.monthIncomplete) {
+      // The pay period has days that have not occurred yet. There is no
+      // override — approving would freeze the projection of those days as
+      // loss of pay into the books.
+      res.status(409).json({
+        error: e.message,
+        code: "MONTH_INCOMPLETE",
+        monthIncomplete: e.monthIncomplete,
+      });
+      return;
+    }
+    if (e?.unclassifiedAbsences) {
+      // Structured refusal: the client shows the dates and can re-approve with
+      // confirmLop once the manager explicitly accepts the loss of pay.
+      res.status(409).json({
+        error: e.message,
+        code: "UNCLASSIFIED_ABSENCES",
+        unclassifiedAbsences: e.unclassifiedAbsences,
+      });
+      return;
+    }
     if (e?.conflict) { res.status(409).json({ error: e.message }); return; }
     console.error("[payroll/approve] posting failed:", e);
     res.status(500).json({ error: `Could not post the salary entry, so the payroll was not approved: ${e?.message ?? "unknown error"}` });

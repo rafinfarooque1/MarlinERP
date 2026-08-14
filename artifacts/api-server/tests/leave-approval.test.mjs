@@ -52,6 +52,9 @@ if (DOM < 6) {
   process.exit(0);
 }
 const D = (d) => `${Y}-${String(M).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+// Working-days basis = the month's actual calendar length (Aug 2026 change).
+const DIM = new Date(Y, M, 0).getDate();
+const LEAVE3 = Math.round((3 * (30000 / DIM)) * 100) / 100; // 3 paid days
 
 async function attRows(empId, from, to) {
   return await q(
@@ -97,9 +100,10 @@ async function main() {
   })).token;
 
   // Pay basis is COMPANY policy since the Aug 2026 LOP change. Pin what the
-  // ₹1,000/day expectations assume: 30-day basis, allowance covering the 3
-  // approved leave days, LOP on. Restored after cleanup.
-  await pinPolicy({ payrollWorkingDays: 30, paidCasualLeavesPerMonth: 4, lopEnabled: true });
+  // per-day expectations assume: allowance covering the 3 approved leave days,
+  // LOP on. Restored after cleanup. (The working-days basis is the calendar
+  // month now — not a setting.)
+  await pinPolicy({ paidCasualLeavesPerMonth: 4, lopEnabled: true });
   const me = await api("GET", "/auth/me");
   const adminId = me.id;
 
@@ -158,8 +162,8 @@ async function main() {
   const att2 = await attRows(empA.id, D(3), D(5));
   const acc2 = await accrualJuly(empA.id);
   check("C2", "Approval stamps exactly the leave days and accrues exactly their pay",
-    att2.length === 3 && att2.every((r) => r.status === "leave") && near(acc2, 3000),
-    `attendance rows=${att2.length}/3 all-leave=${att2.every((r) => r.status === "leave")}, July accrual ₹${acc2} (expected ₹3000 = 3 × ₹1000)`);
+    att2.length === 3 && att2.every((r) => r.status === "leave") && near(acc2, LEAVE3),
+    `attendance rows=${att2.length}/3 all-leave=${att2.every((r) => r.status === "leave")}, July accrual ₹${acc2} (expected ₹${LEAVE3} = 3 paid days)`);
 
   const again = await raw("POST", `/hr/leaves/${lv1.id}/approve`, { status: "approved" });
   check("C3", "Deciding an already-decided request is refused (409)",
@@ -170,8 +174,8 @@ async function main() {
   const pr = (await api("GET", `/hr/payroll?year=${Y}&month=${M}`)).find((p) => Number(p.employeeId) === empA.id);
   const earned = Math.round((Number(pr?.baseSalary ?? 0) - Number(pr?.lopDeduction ?? 0)) * 100) / 100;
   check("C4", "Payroll pays exactly the approved leave days",
-    pr && near(earned, 3000),
-    `earned basic ₹${earned} (base ${pr?.baseSalary} − LOP ${pr?.lopDeduction}); expected ₹3000`);
+    pr && near(earned, LEAVE3),
+    `earned basic ₹${earned} (base ${pr?.baseSalary} − LOP ${pr?.lopDeduction}); expected ₹${LEAVE3}`);
 
   // ── 4. Cancellation: own pending only, zero payroll effect ────────────────
   const lv2 = await api("POST", "/hr/leaves", {
@@ -185,8 +189,8 @@ async function main() {
   const att3 = await attRows(empA.id, D(13), D(14));
   const acc3 = await accrualJuly(empA.id);
   check("D2", "Owner cancels own pending request; payroll untouched",
-    cancelled.status === "cancelled" && !!cancelled.cancelledAt && att3.length === 0 && near(acc3, 3000),
-    `status=${cancelled.status} cancelledAt=${cancelled.cancelledAt}, attendance rows=${att3.length}, accrual ₹${acc3} (still ₹3000)`);
+    cancelled.status === "cancelled" && !!cancelled.cancelledAt && att3.length === 0 && near(acc3, LEAVE3),
+    `status=${cancelled.status} cancelledAt=${cancelled.cancelledAt}, attendance rows=${att3.length}, accrual ₹${acc3} (still ₹${LEAVE3})`);
 
   const cancelAgain = await raw("POST", `/hr/leaves/${lv2.id}/cancel`, undefined, tokA);
   check("D3", "Cancelling a non-pending request is refused (409)",
@@ -201,7 +205,7 @@ async function main() {
   const acc4 = await accrualJuly(empA.id);
   check("E1", "Rejection records the reason and approver; payroll untouched",
     rejected.status === "rejected" && rejected.approvalNote === "peak season" && !!rejected.approverName
-      && att4.length === 0 && near(acc4, 3000),
+      && att4.length === 0 && near(acc4, LEAVE3),
     `status=${rejected.status} note=${rejected.approvalNote} by=${rejected.approverName}; attendance rows=${att4.length}, accrual ₹${acc4}`);
 
   // ── 6. Legacy apply-time stamps come off at rejection ─────────────────────

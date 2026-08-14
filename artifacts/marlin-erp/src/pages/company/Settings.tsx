@@ -50,20 +50,24 @@ const SETTING_GROUPS: SettingGroup[] = [
   },
   {
     icon: DollarSign,
-    title: 'Payroll',
-    description: 'Salary cycle and working-hours settings',
+    title: 'Payroll & Leave Policy',
+    description: 'Working hours and paid-leave allowances. One day of salary = monthly salary ÷ the actual days in that month.',
     settings: [
       // PF and ESI deliberately live in their own section below, not here.
       // This group is a preferences blob; payroll computes contributions from
       // dedicated fields, so a toggle here would look authoritative and change
       // nothing.
-      { key: 'salaryDay', label: 'Salary Credit Day', type: 'number', defaultValue: 28 },
+      //
+      // Retired knobs (Aug 2026 payroll auto-calculation):
+      //  - 'payrollWorkingDays' — the working-days basis is now the payroll
+      //    month's actual calendar length; the server never reads the key.
+      //  - 'salaryDay' — was display-only; the actual pay date is the payment
+      //    voucher's date recorded when salary is paid.
       { key: 'fullDayHours', label: 'Full-Day Work Hours', type: 'number', defaultValue: 9 },
       { key: 'halfDayHours', label: 'Half-Day Work Hours', type: 'number', defaultValue: 4.5 },
-      // Company-wide leave policy (Aug 2026): one day of salary = monthly
-      // salary ÷ working days; casual leave is paid up to the monthly
-      // allowance, beyond it each leave day is deducted as Loss of Pay.
-      { key: 'payrollWorkingDays', label: 'Working Days Per Month', type: 'number', defaultValue: 30 },
+      // Company-wide leave policy (Aug 2026): casual/sick leave is paid up to
+      // the monthly allowance, beyond it each leave day is deducted as Loss of
+      // Pay at monthly salary ÷ calendar days of the month.
       { key: 'paidCasualLeavesPerMonth', label: 'Paid Casual Leaves Per Month', type: 'number', defaultValue: 4 },
       { key: 'paidSickLeavesPerMonth', label: 'Paid Sick Leaves Per Month', type: 'number', defaultValue: 0 },
       { key: 'lopEnabled', label: 'Enable Loss of Pay (LOP)', type: 'toggle', defaultValue: true },

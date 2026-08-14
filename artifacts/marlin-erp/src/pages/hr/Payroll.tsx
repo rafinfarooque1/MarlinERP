@@ -1,12 +1,15 @@
 import { useState, useMemo } from 'react';
 import {
-  useListEnrichedPayroll, useGeneratePayroll, getEnrichedPayrollQueryKey,
+  useListEnrichedPayroll, getEnrichedPayrollQueryKey,
   useEditPayroll, useApprovePayroll, usePayPayroll,
   useListAdvances, useAddAdvance,
   useListEmployees, useListWarehouses, useListOutlets,
   useListSalaryAccruals, getSalaryAccrualsQueryKey,
+  useUnclassifiedAbsences, getUnclassifiedAbsencesQueryKey,
+  useCorrectAttendance,
   useCashBankLedgersFlat,
   EnrichedPayrollRecord,
+  UnclassifiedAbsences,
 } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
@@ -21,7 +24,7 @@ import { TransactionDialog, TransactionDialogContent } from '@/components/ui/tra
 import { Separator } from '@/components/ui/separator';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import {
-  DollarSign, Download, Eye, CheckCircle, Zap, RefreshCw, FileDown,
+  DollarSign, Download, Eye, CheckCircle, RefreshCw, FileDown, AlertTriangle,
   ShieldOff, Pencil, PlusCircle, ChevronDown, ChevronUp, Wallet, Search, Users,
 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -477,6 +480,94 @@ function NewAdvanceDialog({ employees, onClose }: { employees: any[]; onClose: (
   );
 }
 
+// ── Absence classification dialog ─────────────────────────────────────────
+//
+// Days with no attendance row, no holiday and no weekly off price as loss of
+// pay by omission. A manager decides each one here — casual/sick leave, paid
+// off, or confirmed unpaid — through the same attendance-correction route the
+// Fix Attendance flow uses, so the accruals and payroll refresh themselves.
+const CLASSIFY_CHOICES = [
+  { value: 'casual', label: 'Casual Leave' },
+  { value: 'sick', label: 'Sick Leave' },
+  { value: 'paid_off', label: 'Paid Off' },
+  { value: 'absent', label: 'Absent (LOP)' },
+] as const;
+
+function classificationBody(choice: string): { status: 'leave' | 'weekly_off' | 'absent'; leaveType?: 'casual' | 'sick' } {
+  if (choice === 'casual') return { status: 'leave', leaveType: 'casual' };
+  if (choice === 'sick') return { status: 'leave', leaveType: 'sick' };
+  if (choice === 'paid_off') return { status: 'weekly_off' };
+  return { status: 'absent' };
+}
+
+function ClassifyAbsencesDialog({ emp, year, month, onClose }: {
+  emp: UnclassifiedAbsences; year: number; month: number; onClose: () => void;
+}) {
+  const [choices, setChoices] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState(false);
+  const correct = useCorrectAttendance();
+  const qc = useQueryClient();
+  const chosen = Object.entries(choices).filter(([, v]) => !!v);
+
+  const apply = async () => {
+    if (chosen.length === 0) { onClose(); return; }
+    setSaving(true);
+    let done = 0;
+    try {
+      // Sequential on purpose: each correction re-prices the month under the
+      // attendance lock, and the casual-leave allowance check depends on the
+      // days already saved.
+      for (const [date, choice] of chosen) {
+        await correct.mutateAsync({ employeeId: emp.employeeId, date, ...classificationBody(choice) });
+        done += 1;
+      }
+      toast.success(`Classified ${done} day(s) for ${emp.employeeName}`);
+      onClose();
+    } catch (e: any) {
+      const msg = e?.data?.error || e?.message || 'Failed';
+      toast.error(done > 0 ? `Saved ${done} day(s), then failed: ${msg}` : msg);
+    } finally {
+      setSaving(false);
+      qc.invalidateQueries({ queryKey: getUnclassifiedAbsencesQueryKey({ year, month }) });
+    }
+  };
+
+  return (
+    <TransactionDialog open dirty={chosen.length > 0} onOpenChange={onClose}>
+      <TransactionDialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Classify Absences — {emp.employeeName}</DialogTitle>
+        </DialogHeader>
+        <p className="text-sm text-muted-foreground">
+          These days have no attendance record, so they count as unpaid unless
+          classified. Days left as “—” stay unclassified.
+        </p>
+        <div className="max-h-72 overflow-y-auto rounded-lg border divide-y text-sm">
+          {emp.dates.map(date => (
+            <div key={date} className="flex items-center justify-between gap-3 px-3 py-2">
+              <span className="font-medium">
+                {new Date(date + 'T00:00:00').toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' })}
+              </span>
+              <Select value={choices[date] ?? ''} onValueChange={v => setChoices(c => ({ ...c, [date]: v }))}>
+                <SelectTrigger className="w-40"><SelectValue placeholder="—" /></SelectTrigger>
+                <SelectContent>
+                  {CLASSIFY_CHOICES.map(c => <SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+          ))}
+        </div>
+        <DialogFooter>
+          <DialogClose asChild><Button variant="outline">Cancel</Button></DialogClose>
+          <Button onClick={apply} disabled={saving || chosen.length === 0}>
+            {saving ? 'Saving…' : `Save ${chosen.length || ''} day(s)`}
+          </Button>
+        </DialogFooter>
+      </TransactionDialogContent>
+    </TransactionDialog>
+  );
+}
+
 // ── Advances section ───────────────────────────────────────────────────────
 function AdvancesSection({ isAdmin, employees }: { isAdmin: boolean; employees: any[] }) {
   const { data: advances = [] } = useListAdvances();
@@ -498,7 +589,7 @@ function AdvancesSection({ isAdmin, employees }: { isAdmin: boolean; employees: 
       <div className="flex items-center justify-between mb-3">
         <div>
           <h2 className="font-semibold text-sm">Employee Advances</h2>
-          <p className="text-xs text-muted-foreground">Cash advances disbursed; auto-deducted during payroll generation</p>
+          <p className="text-xs text-muted-foreground">Cash advances disbursed; settled automatically against the month's payroll</p>
         </div>
         {isAdmin && (
           <Button size="sm" variant="outline" onClick={() => setAdvOpen(true)}>
@@ -566,7 +657,10 @@ export default function Payroll() {
   const [search, setSearch]   = useState('');
   const [viewItem, setViewItem] = useState<EnrichedPayrollRecord | null>(null);
   const [payItem, setPayItem]   = useState<EnrichedPayrollRecord | null>(null);
-  const [generating, setGenerating] = useState(false);
+  const [classifyEmp, setClassifyEmp] = useState<UnclassifiedAbsences | null>(null);
+  // Approval refused because the month still has unclassified absent days —
+  // holds the row and the dates so the manager can classify or confirm LOP.
+  const [lopConfirm, setLopConfirm] = useState<{ item: EnrichedPayrollRecord; dates: string[] } | null>(null);
   const [branchTypeFilter, setBranchTypeFilter] = useState<string>('all');
   useClearOutletSelection(branchTypeFilter.startsWith('outlet-'), () => setBranchTypeFilter('all'));
 
@@ -583,24 +677,21 @@ export default function Payroll() {
   const { data: outlets = [] } = useListOutlets();
   const { outletsEnabled } = useOutletsEnabled();
   const qc = useQueryClient();
-  const generateMutation = useGeneratePayroll();
   const approveMutation  = useApprovePayroll();
+  // Which employees still have absent-by-omission days this month. Feeds the
+  // per-row badge; approval independently re-checks on the server.
+  const { data: unclassified = [] } = useUnclassifiedAbsences(
+    { year: Number(year), month: Number(month) },
+    { query: { enabled: isAdmin } },
+  );
+  const unclassifiedByEmployee = useMemo(
+    () => new Map(unclassified.map(u => [u.employeeId, u])),
+    [unclassified],
+  );
 
-  const handleGenerate = (forceRegenerate = false) => {
-    setGenerating(true);
-    generateMutation.mutate({ month: Number(month), year: Number(year), forceRegenerate }, {
-      onSuccess: (data) => {
-        toast.success(`Generated payroll for ${data.length} employee(s)`);
-        qc.invalidateQueries({ queryKey: getEnrichedPayrollQueryKey({ year: Number(year), month: Number(month) }) });
-        setGenerating(false);
-      },
-      onError: (e: any) => { toast.error(e?.message || 'Failed to generate payroll'); setGenerating(false); },
-    });
-  };
-
-  const handleApprove = (item: EnrichedPayrollRecord) => {
+  const handleApprove = (item: EnrichedPayrollRecord, confirmLop = false) => {
     const already = accruedByEmployee.get(item.employeeId)?.accrued ?? 0;
-    approveMutation.mutate({ id: item.id }, {
+    approveMutation.mutate({ id: item.id, confirmLop }, {
       onSuccess: () => {
         // Approval is a true-up, not the moment salary hits the books — say so,
         // otherwise the ledger looks like it double-counted the month.
@@ -612,8 +703,24 @@ export default function Payroll() {
         qc.invalidateQueries({ queryKey: getEnrichedPayrollQueryKey({ year: Number(year), month: Number(month) }) });
         qc.invalidateQueries({ queryKey: getSalaryAccrualsQueryKey({ year: Number(year), month: Number(month) }) });
         setViewItem(null);
+        setLopConfirm(null);
       },
-      onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
+      onError: (e: any) => {
+        // The server refuses months with unclassified absent days: they would
+        // silently price as loss of pay. Offer the choice explicitly.
+        if (e?.data?.code === 'UNCLASSIFIED_ABSENCES') {
+          setViewItem(null);
+          setLopConfirm({ item, dates: e.data.unclassifiedAbsences ?? [] });
+          return;
+        }
+        if (e?.data?.code === 'MONTH_INCOMPLETE') {
+          // Days of the pay period haven't occurred yet — approving would lock
+          // them in as loss of pay, so the server refuses with no override.
+          toast.error(e.data.error, { duration: 8000 });
+          return;
+        }
+        toast.error(e?.data?.error || e.message || 'Failed');
+      },
     });
   };
 
@@ -650,9 +757,9 @@ export default function Payroll() {
     employee: (p: any) => p.employeeName,
     branch: (p: any) => p.branchName,
     days: (p: any) => Number(p.presentDays ?? 0),
-    accrued: (p: any) => p._accrued,
     gross: (p: any) => Number(p.grossPay ?? 0) + Number(p.extraAmount ?? 0),
-    deductions: (p: any) => Number(p.deductions ?? 0) + Number(p.advanceDeduction ?? 0),
+    deductions: (p: any) => Number(p.deductions ?? 0),
+    advance: (p: any) => Number(p.advanceDeduction ?? 0),
     net: (p: any) => Number(p.netPay ?? 0) + Number(p.extraAmount ?? 0),
     status: (p: any) => p.status,
   });
@@ -696,26 +803,14 @@ export default function Payroll() {
       <div className="space-y-6 mb-6">
         <PageHeader
           title="Payroll"
-          description="Monthly salary runs — generate, approve and pay"
+          description="Computed automatically from attendance — review, approve and pay"
           icon={DollarSign}
           actions={
-            <>
-              {isAdmin && perm.canAdd && (
-                <>
-                  <Button variant="outline" size="sm" onClick={() => handleGenerate(false)} disabled={generating}>
-                    <Zap className="h-4 w-4 mr-1" />{generating ? 'Generating…' : 'Generate'}
-                  </Button>
-                  <Button variant="outline" size="sm" onClick={() => handleGenerate(true)} disabled={generating}>
-                    <RefreshCw className="h-4 w-4 mr-1" />Regenerate
-                  </Button>
-                </>
-              )}
-              {perm.canDownload && (
-                <Button variant="outline" size="sm" onClick={handleExport}>
-                  <Download className="h-4 w-4 mr-1" />Export
-                </Button>
-              )}
-            </>
+            perm.canDownload ? (
+              <Button variant="outline" size="sm" onClick={handleExport}>
+                <Download className="h-4 w-4 mr-1" />Export
+              </Button>
+            ) : undefined
           }
         />
 
@@ -776,9 +871,9 @@ export default function Payroll() {
               <SortableHead k="employee" sort={sort}>Employee</SortableHead>
               {isAdmin && <SortableHead k="branch" sort={sort}>Branch</SortableHead>}
               <SortableHead k="days" sort={sort} className="text-center">Days</SortableHead>
-              <SortableHead k="accrued" sort={sort} className="text-right">Accrued Daily</SortableHead>
               <SortableHead k="gross" sort={sort} className="text-right">Gross Pay</SortableHead>
               <SortableHead k="deductions" sort={sort} className="text-right">Deductions</SortableHead>
+              <SortableHead k="advance" sort={sort} className="text-right">Advance Adj.</SortableHead>
               {isAdmin && <SortableHead k="net" sort={sort} className="text-right">Net Pay</SortableHead>}
               <SortableHead k="status" sort={sort}>Status</SortableHead>
               <TableHead className="text-right">Actions</TableHead>
@@ -793,45 +888,38 @@ export default function Payroll() {
                   <EmptyState
                     icon={DollarSign}
                     title="No payroll records"
-                    hint={`No payroll for ${MONTHS[Number(month) - 1]} ${year}.`}
-                    action={isAdmin ? <Button size="sm" onClick={() => handleGenerate()}><Zap className="h-4 w-4 mr-1" />Generate now</Button> : undefined}
+                    hint={`No payroll for ${MONTHS[Number(month) - 1]} ${year}. Rows appear automatically once employees have salary or attendance in the month.`}
                     compact
                   />
                 </TableCell>
               </TableRow>
             ) : sorted.map((p) => {
               const totalNet = (p.netPay ?? 0) + (p.extraAmount ?? 0);
-              const totalDed = (p.deductions ?? 0) + (p.advanceDeduction ?? 0);
-              const accrual = accruedByEmployee.get(p.employeeId);
+              const unclass = p.status === 'draft' ? unclassifiedByEmployee.get(p.employeeId) : undefined;
               return (
                 <TableRow key={p.id} className="cursor-pointer hover:bg-muted/30" onClick={() => setViewItem(p)}>
-                  <TableCell className="font-medium">{p.employeeName}</TableCell>
+                  <TableCell className="font-medium">
+                    {p.employeeName}
+                    {isAdmin && unclass && (
+                      <button
+                        type="button"
+                        className="ml-2 inline-flex items-center gap-1 rounded-full bg-amber-100 text-amber-800 px-2 py-0.5 text-[11px] font-medium hover:bg-amber-200"
+                        title="Days with no attendance record — classify before approval or they count as loss of pay"
+                        onClick={e => { e.stopPropagation(); setClassifyEmp(unclass); }}
+                      >
+                        <AlertTriangle className="h-3 w-3" />{unclass.dates.length} unclassified
+                      </button>
+                    )}
+                  </TableCell>
                   {isAdmin && <TableCell className="text-muted-foreground text-xs">{p.branchName || '—'}</TableCell>}
                   <TableCell className="text-center text-sm">
                     <span className="text-emerald-600">{Number(p.presentDays ?? 0).toFixed(1)}</span>
                     <span className="text-muted-foreground">/{p.workingDays}</span>
                     {(p.lopDays ?? 0) > 0 && <span className="text-red-500 ml-1">({Number(p.lopDays).toFixed(1)} LOP)</span>}
                   </TableCell>
-                  <TableCell className="text-right text-muted-foreground">
-                    {/* Paid days, not calendar days. Absent days are recorded as
-                        zero-value accrual rows, so the row count stopped meaning
-                        "days charged" — quoting it here read as a full month
-                        accrued when most of it had been earned by nobody. */}
-                    {accrual ? (
-                      <span title={
-                        `${Number((accrual as any).paidDays ?? 0).toFixed(1)} paid day(s) of a ` +
-                        `${(accrual as any).workingDays}-day basis at ${fmt(accrual.dailyAccrual)}/day, ` +
-                        `already in the P&L`
-                      }>
-                        {fmt(accrual.accrued)}
-                        <span className="block text-[11px]">
-                          {Number((accrual as any).paidDays ?? 0).toFixed(1)}/{(accrual as any).workingDays} paid
-                        </span>
-                      </span>
-                    ) : '—'}
-                  </TableCell>
                   <TableCell className="text-right">{fmt((p.grossPay ?? 0) + (p.extraAmount ?? 0))}</TableCell>
-                  <TableCell className="text-right text-red-600">{totalDed > 0 ? fmt(totalDed) : '—'}</TableCell>
+                  <TableCell className="text-right text-red-600">{(p.deductions ?? 0) > 0 ? fmt(p.deductions ?? 0) : '—'}</TableCell>
+                  <TableCell className="text-right text-amber-700">{(p.advanceDeduction ?? 0) > 0 ? fmt(p.advanceDeduction ?? 0) : '—'}</TableCell>
                   {isAdmin && <TableCell className="text-right font-semibold">{fmt(totalNet)}</TableCell>}
                   <TableCell onClick={e => e.stopPropagation()}>
                     {statusBadge(p.status, p.paidAmount ?? 0, totalNet)}
@@ -885,6 +973,61 @@ export default function Payroll() {
 
       {/* Dialogs */}
       {payItem && <PayDialog item={payItem} onClose={() => setPayItem(null)} />}
+      {classifyEmp && (
+        <ClassifyAbsencesDialog
+          emp={classifyEmp}
+          year={Number(year)}
+          month={Number(month)}
+          onClose={() => setClassifyEmp(null)}
+        />
+      )}
+
+      {/* Approval refused: unclassified absent days. Classify them, or confirm
+          they are loss of pay and approve anyway. */}
+      {lopConfirm && (
+        <TransactionDialog open dirty={false} onOpenChange={() => setLopConfirm(null)}>
+          <TransactionDialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2 text-amber-600">
+                <AlertTriangle className="h-5 w-5" />Unclassified Absences — {lopConfirm.item.employeeName}
+              </DialogTitle>
+            </DialogHeader>
+            <div className="space-y-3 text-sm">
+              <p className="text-muted-foreground">
+                These days have no attendance record. Approving now treats every
+                one of them as <span className="font-medium text-foreground">unpaid (Loss of Pay)</span>.
+              </p>
+              <div className="rounded-lg border bg-muted/30 px-3 py-2 max-h-40 overflow-y-auto">
+                {lopConfirm.dates.map(d => (
+                  <div key={d} className="py-0.5">
+                    {new Date(d + 'T00:00:00').toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' })}
+                  </div>
+                ))}
+              </div>
+            </div>
+            <DialogFooter className="gap-2">
+              <DialogClose asChild><Button variant="outline">Cancel</Button></DialogClose>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  const u = unclassifiedByEmployee.get(lopConfirm.item.employeeId);
+                  setClassifyEmp(u ?? { employeeId: lopConfirm.item.employeeId, employeeName: lopConfirm.item.employeeName, dates: lopConfirm.dates });
+                  setLopConfirm(null);
+                }}
+              >
+                Classify Days
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={() => handleApprove(lopConfirm.item, true)}
+                disabled={approveMutation.isPending}
+              >
+                Approve as LOP
+              </Button>
+            </DialogFooter>
+          </TransactionDialogContent>
+        </TransactionDialog>
+      )}
     </AppLayout>
   );
 }

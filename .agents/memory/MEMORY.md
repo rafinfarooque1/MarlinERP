@@ -23,8 +23,8 @@
 - [Unified sidebar architecture](unified-sidebar.md) — ONE nav for all users; Sales/Accounts switcher removed; getNavGroups() replaces getAccountsNavGroups()+getSalesNavItems(); getPermissionGroups() replaces getPermissionSegments().
 - [Phase 1 stabilization changes](phase1-stabilization.md) — default-deny perms + seeding migration, 8-hr token expiry, payroll COA posting, negative-stock DB constraint, opening-balances table, CORS/body limits.
 - [Phase 1 QA findings](phase1-qa-findings.md) — 3 bugs found+fixed in QA: health bypass path, incomplete seeding list, frontend default-allow. All Phase 1 items verified with test evidence.
-- [Payroll workflow](payroll-workflow.md) — draft→approved→paid; per-employee ledgers (SAL-EMP/SAL-PAY/ADV-EMP); hours-based attendance; advances auto-deducted at generate time.
-- [LOP leave policy](lop-leave-policy.md) — company-wide wd/paid-leave/LOP in general_settings; ONE formula (dayContribution/monthLeaveSummary); NULL leave snapshot = omit, never 0; test suites must pin policy.
+- [Payroll workflow](payroll-workflow.md) — drafts LIVE-refresh on GET (no Generate buttons); approval gates on unclassified absences (409/confirmLop); per-employee ledgers; advances auto-deducted at generate.
+- [LOP leave policy](lop-leave-policy.md) — wd = calendar days of the month (payrollWorkingDays retired/ignored); ONE formula (dayContribution/monthLeaveSummary); NULL leave snapshot = omit, never 0; suites pin policy + derive DIM.
 - [LBAC implementation](lbac-implementation.md) — full location-scoping across all routes; decisions on HO-only endpoints; vendor/customer location stamping; dataScope helpers.
 - [Money voucher ownership](money-voucher-ownership.md) — the till anchors the stamp via ONE resolver (reconcile/deposit/import paths get forgotten); ownership = stamp OR ledger-leg; own-location scope.
 - [Payment modes & invoice share](payment-modes-invoice-share.md) — modes are Cash/Bank/UPI/Credit with legacy card/bank_transfer read as Bank, never rewritten; share = composed message + channel seam.

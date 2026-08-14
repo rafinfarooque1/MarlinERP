@@ -144,6 +144,7 @@ async function runMigrations() {
     ALTER TABLE employees ADD COLUMN IF NOT EXISTS work_experience jsonb DEFAULT '[]'::jsonb;
     ALTER TABLE employees ADD COLUMN IF NOT EXISTS employment_status text NOT NULL DEFAULT 'active';
     ALTER TABLE employees ADD COLUMN IF NOT EXISTS last_working_date date;
+    ALTER TABLE employees ADD COLUMN IF NOT EXISTS leaving_reason text;
   `);
 
   // Employment status is richer than the is_active flag: resigned, terminated
@@ -3237,7 +3238,9 @@ await pool.query(`
 await pool.query(`CREATE INDEX IF NOT EXISTS idx_sales_customer       ON sales (customer_id)       WHERE customer_id IS NOT NULL`);
 await pool.query(`CREATE INDEX IF NOT EXISTS idx_sales_invoice        ON sales (invoice_number)    WHERE invoice_number IS NOT NULL`);
 await pool.query(`CREATE INDEX IF NOT EXISTS idx_jv_party_ledger      ON journal_vouchers (party_ledger_id) WHERE party_ledger_id IS NOT NULL`);
-await pool.query(`CREATE INDEX IF NOT EXISTS idx_payroll_emp_month    ON payroll (employee_id, year, month)`);
+// (The unique payroll employee-month index is created further down, after
+// the employee_advances table exists — its duplicate reconciliation repoints
+// advance claims, so it must run once both tables are in place.)
 await pool.query(`CREATE INDEX IF NOT EXISTS idx_permissions_hier     ON permissions (hierarchy_id)`);
 await pool.query(`CREATE INDEX IF NOT EXISTS idx_stock_batches_expiry_loc ON stock_batches (expiry_date, branch_type, branch_id)`);
 await pool.query(`CREATE INDEX IF NOT EXISTS idx_receipts_date        ON receipts (receipt_date)`);
@@ -3775,6 +3778,44 @@ await pool.query(`
 
   ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS general_settings JSONB;
 `);
+
+// One payroll row per employee-month, enforced by the database (Aug 2026).
+// The live-refresh-on-read model makes concurrent draft materialisation a
+// normal event, so uniqueness cannot rest on application-level checks alone.
+// Any pre-existing duplicates are reconciled first: keep the paid row, else
+// the approved row, else the newest, repointing advance claims onto the
+// survivor before deleting the losers. Idempotent: once the unique index
+// exists no duplicate can form, so the reconciliation CTE matches nothing.
+// Runs HERE, after the employee_advances block above, because the repoint
+// touches that table — on a fresh database it does not exist any earlier.
+// Base tables (payroll, employees) are bootstrapped by Drizzle, not by these
+// upgrade migrations, so on a truly fresh database they may not exist yet at
+// all: guard on both tables and let the next boot (once the base schema is
+// in place) create the index rather than aborting the remaining setup steps.
+const { rows: [uniqPrereq] } = await pool.query(
+  `SELECT (to_regclass('payroll') IS NOT NULL AND to_regclass('employee_advances') IS NOT NULL) AS ok`,
+);
+if (uniqPrereq?.ok) {
+await pool.query(`
+  WITH ranked AS (
+    SELECT id,
+           ROW_NUMBER() OVER (PARTITION BY employee_id, year, month
+             ORDER BY (status = 'paid' OR is_paid) DESC, (status = 'approved') DESC, id DESC) AS rn,
+           FIRST_VALUE(id) OVER (PARTITION BY employee_id, year, month
+             ORDER BY (status = 'paid' OR is_paid) DESC, (status = 'approved') DESC, id DESC) AS keep_id
+      FROM payroll
+  ),
+  losers AS (SELECT id, keep_id FROM ranked WHERE rn > 1),
+  repoint AS (
+    UPDATE employee_advances ea SET deducted_payroll_id = l.keep_id
+      FROM losers l WHERE ea.deducted_payroll_id = l.id
+      RETURNING ea.id
+  )
+  DELETE FROM payroll WHERE id IN (SELECT id FROM losers)
+`);
+await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS uq_payroll_employee_period ON payroll (employee_id, year, month)`);
+await pool.query(`DROP INDEX IF EXISTS idx_payroll_emp_month`);
+}
 
 // Backfill advance→voucher links for rows created before the columns existed.
 // Idempotent (only fills NULLs) and STRICTLY unambiguous: a link is written

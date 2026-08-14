@@ -22,8 +22,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import { Plus, Search, Users, Download, Eye, Settings2, Trash2, UserX, UserCheck, Edit2, AlertTriangle, KeyRound, Copy } from 'lucide-react';
 import { toast } from 'sonner';
-import { useQueryClient, useQuery } from '@tanstack/react-query';
-import { customFetch } from '@workspace/api-client-react';
+import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
@@ -86,15 +85,11 @@ function PayStructureEditor({ employee }: { employee: any }) {
   const [allowances, setAllowances] = useState<PayComponent[] | null>(null);
   const [deductions, setDeductions] = useState<PayComponent[] | null>(null);
 
-  // Working days are COMPANY policy (Company → Settings → Payroll) since the
-  // Aug 2026 LOP change — every employee is priced on the same basis, so the
-  // per-employee field is gone and the preview reads the company setting.
-  const { data: companySettings } = useQuery<any>({
-    queryKey: ['company-settings-payroll-preview'],
-    queryFn: () => customFetch('/api/company/settings'),
-    staleTime: 60_000,
-  });
-  const effectiveWD = Number(companySettings?.generalSettings?.payrollWorkingDays ?? 30) || 30;
+  // Working days = the month's actual calendar length (Aug 2026 payroll
+  // auto-calculation) — no company setting, no per-employee field. The preview
+  // shows the CURRENT month's basis; other months divide by their own length.
+  const previewNow = new Date();
+  const effectiveWD = new Date(previewNow.getFullYear(), previewNow.getMonth() + 1, 0).getDate();
 
   const effectiveAllowances = allowances ?? pc?.allowances ?? [];
   const effectiveDeductions = deductions ?? pc?.deductions ?? [];
@@ -178,8 +173,8 @@ function PayStructureEditor({ employee }: { employee: any }) {
   return (
     <div className="space-y-5 mt-2">
       <div className="p-2.5 rounded-lg bg-muted/30 border border-border text-xs text-muted-foreground">
-        Salary is calculated on <span className="font-medium text-foreground">{effectiveWD} working days/month</span> — the
-        company-wide policy set under <span className="font-medium text-foreground">Company → Settings → Payroll</span>.
+        Salary is calculated on the month's <span className="font-medium text-foreground">actual calendar days</span> —
+        this month that is <span className="font-medium text-foreground">{effectiveWD} days</span>, so the per-day figures below are for this month.
       </div>
       <Tabs defaultValue="allowances">
         <TabsList className="w-full">
@@ -251,6 +246,7 @@ export default function Employees() {
   // working day — salary stops accruing after that day.
   const [leaveStatus, setLeaveStatus] = useState<string>('resigned');
   const [leaveDate, setLeaveDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [leaveReason, setLeaveReason] = useState<string>('');
   const [deleteTarget, setDeleteTarget] = useState<any>(null);
   const [resetTarget, setResetTarget] = useState<any>(null);
   // Set only after a successful reset, so one dialog covers confirm → result.
@@ -341,6 +337,7 @@ export default function Employees() {
   const openMarkAsLeft = (emp: any) => {
     setLeaveStatus('resigned');
     setLeaveDate(new Date().toISOString().split('T')[0]);
+    setLeaveReason(emp?.leavingReason ?? '');
     setConfirmResign(emp);
   };
 
@@ -351,13 +348,13 @@ export default function Employees() {
     const emp = confirmResign;
     if (!emp || !leaveDate) return;
     updateMutation.mutate(
-      { id: emp.id, data: { employmentStatus: leaveStatus, lastWorkingDate: leaveDate } as any },
+      { id: emp.id, data: { employmentStatus: leaveStatus, lastWorkingDate: leaveDate, leavingReason: leaveReason.trim() || null } as any },
       {
         onSuccess: () => {
           toast.success(`${emp.name} marked as ${leaveStatus} — pay stops after ${new Date(leaveDate).toLocaleDateString('en-IN')}`);
           queryClient.invalidateQueries({ queryKey: getListEmployeesQueryKey() });
           setConfirmResign(null);
-          if (viewItem?.id === emp.id) setViewItem((prev: any) => ({ ...prev, isActive: false, employmentStatus: leaveStatus, lastWorkingDate: leaveDate }));
+          if (viewItem?.id === emp.id) setViewItem((prev: any) => ({ ...prev, isActive: false, employmentStatus: leaveStatus, lastWorkingDate: leaveDate, leavingReason: leaveReason.trim() || null }));
         },
         onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
       },
@@ -609,6 +606,10 @@ export default function Employees() {
                 <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Last Working Day</label>
                 <Input type="date" value={leaveDate} onChange={e => setLeaveDate(e.target.value)} />
               </div>
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Details (optional)</label>
+              <Input placeholder="e.g. moved back to hometown, joined another company…" value={leaveReason} onChange={e => setLeaveReason(e.target.value)} />
             </div>
             <p className="text-xs text-muted-foreground">
               They will no longer be able to sign in. This can be reversed with the Reactivate button.
@@ -911,6 +912,9 @@ export default function Employees() {
                 ['Join Date', viewItem.joinDate ? new Date(viewItem.joinDate).toLocaleDateString('en-IN') : '—'],
                 ...((viewItem as any).lastWorkingDate
                   ? [['Last Working Day', new Date((viewItem as any).lastWorkingDate).toLocaleDateString('en-IN')]]
+                  : []),
+                ...((viewItem as any).leavingReason
+                  ? [['Leaving Details', (viewItem as any).leavingReason]]
                   : []),
               ].map(([k, v]) => (
                 <div key={k} className="flex flex-col gap-1 border-b border-border pb-3">

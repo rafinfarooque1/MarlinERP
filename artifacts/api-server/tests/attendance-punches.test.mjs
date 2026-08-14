@@ -21,6 +21,7 @@ function check(id, desc, pass, detail) {
   console.log(`${pass ? "PASS" : "FAIL"}  ${id}  ${desc}${detail ? `\n        ${detail}` : ""}`);
 }
 const near = (a, b, tol = 0.05) => Math.abs(Number(a) - Number(b)) <= tol;
+const r2 = (n) => Math.round(Number(n) * 100) / 100;
 
 async function api(method, path, body) {
   const r = await fetch(BASE + path, {
@@ -56,6 +57,9 @@ if (TODAY_DOM < 7) {
 }
 const D = (d) => `${Y}-${String(M).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
 const IST = (day, hhmm) => `${D(day)}T${hhmm}:00+05:30`;
+// Working-days basis = the month's actual calendar length (Aug 2026 change).
+const DIM = new Date(Y, M, 0).getDate();
+const DAY_RATE = 30000 / DIM;
 
 // ── Company leave-policy pin/restore ────────────────────────────────────────
 let savedGS = null;
@@ -113,7 +117,8 @@ async function main() {
   // This suite is about HOURS-based pricing, so pin the company policy with a
   // ZERO paid-leave allowance — otherwise the leave policy tops half days up
   // to full pay and every hours expectation below goes invisible.
-  await pinPolicy({ payrollWorkingDays: 30, paidCasualLeavesPerMonth: 0, lopEnabled: true });
+  // (The working-days basis is the calendar month now — not a setting.)
+  await pinPolicy({ paidCasualLeavesPerMonth: 0, lopEnabled: true });
 
   const cfg = await api("GET", "/hr/attendance/config");
   const FULL = Number(cfg.fullDayHours), HALF = Number(cfg.halfDayHours);
@@ -124,7 +129,8 @@ async function main() {
   const hierarchyId = hiers[0]?.id;
   const stamp = Date.now();
 
-  // ₹30,000 over the 30-working-day company basis = a clean ₹1,000/day.
+  // ₹30,000 over the month's calendar days (the working-days basis since the
+  // Aug 2026 change).
   const emp = await api("POST", "/hr/employees", {
     name: `PunchTest_${stamp}`, username: `punch_${stamp}`,
     email: `punch${stamp}@test.local`, phone: "9000000003",
@@ -148,8 +154,8 @@ async function main() {
     punches.length === 1 && punches[0].punch_out != null,
     `punch rows: ${punches.length}; accrual ₹${await accrualFor(EID, 1)}`);
   check("A2", "Single-session day is priced exactly as the span always was",
-    near(await accrualFor(EID, 1), 1000 * factor(spanFull)),
-    `₹${await accrualFor(EID, 1)} vs expected ₹${1000 * factor(spanFull)} for ${spanFull}h`);
+    near(await accrualFor(EID, 1), DAY_RATE * factor(spanFull)),
+    `₹${await accrualFor(EID, 1)} vs expected ₹${DAY_RATE * factor(spanFull)} for ${spanFull}h`);
 
   // ── B. Legacy day (times, NO punch rows) keeps span pricing ──────────────
   await q(
@@ -159,7 +165,7 @@ async function main() {
   await reprice(EID, 2);
   const punchesB = await punchRows(EID, D(2));
   check("B", "Pre-punch day (no punch rows) still prices on the span — legacy identical",
-    near(await accrualFor(EID, 2), 1000 * factor(spanFull)) && punchesB.length === 0,
+    near(await accrualFor(EID, 2), DAY_RATE * factor(spanFull)) && punchesB.length === 0,
     `₹${await accrualFor(EID, 2)} for ${spanFull}h span, ${punchesB.length} punch rows`);
 
   // ── C. Multi-punch: total hours outvote the span ──────────────────────────
@@ -169,8 +175,8 @@ async function main() {
   const s2End = hm(9 * 60 + spanFull * 60);
   await seedDay(EID, 3, [["09:00", s1End], [s2Start, s2End]]);
   await reprice(EID, 3);
-  const expectedC = 1000 * factor(punchedTotal);
-  const spanWouldPay = 1000 * factor(spanFull);
+  const expectedC = DAY_RATE * factor(punchedTotal);
+  const spanWouldPay = DAY_RATE * factor(spanFull);
   check("C", "Multi-punch day is paid on total punched hours, not first-in → last-out",
     near(await accrualFor(EID, 3), expectedC) && !near(expectedC, spanWouldPay),
     `₹${await accrualFor(EID, 3)} for ${punchedTotal}h punched (span ${spanFull}h would have paid ₹${spanWouldPay})`);
@@ -191,7 +197,7 @@ async function main() {
     { employeeId: EID, date: D(3), status: "present", checkIn: IST(3, "09:00"), checkOut: IST(3, hm(9 * 60 + spanFull * 60)) });
   punches = await punchRows(EID, D(3));
   check("E", "Correcting times replaces the day's punches with one matching pair",
-    punches.length === 1 && near(await accrualFor(EID, 3), 1000 * factor(spanFull)),
+    punches.length === 1 && near(await accrualFor(EID, 3), DAY_RATE * factor(spanFull)),
     `punch rows: ${punches.length}; accrual ₹${await accrualFor(EID, 3)} (stale sessions would have paid ₹${expectedC})`);
 
   // ── F. Clearing times drops the day to its status, punches deleted ────────
@@ -199,8 +205,8 @@ async function main() {
     { employeeId: EID, date: D(3), status: "half_day", checkIn: null, checkOut: null });
   punches = await punchRows(EID, D(3));
   check("F", "Clearing times deletes punches and prices the day on status alone",
-    punches.length === 0 && near(await accrualFor(EID, 3), 500),
-    `punch rows: ${punches.length}; accrual ₹${await accrualFor(EID, 3)} (expected ₹500)`);
+    punches.length === 0 && near(await accrualFor(EID, 3), DAY_RATE * 0.5),
+    `punch rows: ${punches.length}; accrual ₹${await accrualFor(EID, 3)} (expected ₹${r2(DAY_RATE * 0.5)})`);
 
   // ── G. Payroll generate agrees with the accrual over a multi-punch month ──
   await seedDay(EID, 6, [["09:00", s1End], [s2Start, s2End]]); // another split day
@@ -261,8 +267,19 @@ async function main() {
   // every portal test above must already be done. The portal tests changed
   // today's attendance AFTER the payroll was generated, and approval rightly
   // refuses a stale figure — regenerate first so it matches.
+  // Approval refuses pay periods with days that have not occurred yet
+  // (MONTH_INCOMPLETE) — end the fixture's employment today so the period is
+  // complete. Punch pricing is untouched: every punched day is on or before
+  // today.
+  await api("PATCH", `/hr/employees/${EID}`, { employmentStatus: "resigned", lastWorkingDate: D(TODAY_DOM) });
   await api("POST", "/hr/payroll/generate", { year: Y, month: M, employeeId: EID });
-  await api("POST", `/hr/payroll/${prow.id}/approve`, {});
+  // The fixture only punches a handful of days, so the approval gate surfaces
+  // the uncovered past days as unclassified absences. This suite tests punch
+  // pricing and month locking, not classification (payroll-autocalc covers
+  // that) — confirm them as loss of pay explicitly.
+  const prowsH = await api("GET", `/hr/payroll?year=${Y}&month=${M}`);
+  const prowH = (Array.isArray(prowsH) ? prowsH : prowsH.data ?? []).find((p) => Number(p.employeeId) === EID);
+  await api("POST", `/hr/payroll/${prowH.id}/approve`, { confirmLop: true });
   // A PAST day of the now-approved month — a future date could be refused for
   // being in the future, which would pass the regex for the wrong reason.
   const refused = await tryApi("PUT", "/hr/attendance", { employeeId: EID, date: D(5), status: "present" });

@@ -65,8 +65,6 @@ export interface WeeklyOffRule {
  * in `loadPayrollSettings`, not a different formula.
  */
 export interface PayrollLeavePolicy {
-  /** Working-days-per-month basis: per-day pay = monthly salary / this. 1–31. */
-  workingDays: number;
   /** Casual-leave days paid per month before loss of pay starts. */
   paidCasualLeavesPerMonth: number;
   /** Sick-leave days paid per month before loss of pay starts. */
@@ -86,7 +84,6 @@ export interface PayrollLeavePolicy {
 }
 
 export const PAYROLL_POLICY_DEFAULTS: PayrollLeavePolicy = {
-  workingDays: 30,
   paidCasualLeavesPerMonth: 4,
   paidSickLeavesPerMonth: 0,
   lopEnabled: true,
@@ -161,24 +158,24 @@ function sanitizeWeeklyOff(raw: any): WeeklyOffRule | null {
  * Thresholds + leave policy in one read, from `company_settings.general_settings`.
  *
  * Values are sanitised here, once, so no caller prices a month on a malformed
- * setting: working days clamps to 1–31 (integer), each allowance to
- * 0–workingDays, weekly-off rules to well-formed entries only.
+ * setting: each allowance clamps to 0–31 (a month can never hold more days),
+ * weekly-off rules to well-formed entries only.
+ *
+ * The working-days basis is NO LONGER a setting (Aug 2026, task: payroll
+ * auto-calculation): per-day pay = monthly salary / actual calendar days of
+ * the payroll month — see `monthWorkingDays`. The legacy `payrollWorkingDays`
+ * key may survive in stored blobs; it is deliberately never read.
  */
 export async function loadPayrollSettings(pool: Pool): Promise<PayrollSettings> {
   const { rows: [row] } = await pool.query(
     `SELECT general_settings FROM company_settings LIMIT 1`,
   );
   const gs = (row?.general_settings as Record<string, any>) ?? {};
-  const wdRaw = Number(gs.payrollWorkingDays ?? PAYROLL_POLICY_DEFAULTS.workingDays);
-  const workingDays = Number.isFinite(wdRaw)
-    ? Math.min(31, Math.max(1, Math.round(wdRaw)))
-    : PAYROLL_POLICY_DEFAULTS.workingDays;
-  // Both branches clamp to workingDays — the DEFAULT allowance (4) can exceed
-  // a small working-days setting (e.g. 1), and the 0..workingDays invariant
-  // must hold whatever garbage the blob carries.
+  // Both branches clamp — the DEFAULT allowance (4) must also survive garbage,
+  // and no month can hold more than 31 days of allowance.
   const clampAllowance = (raw: unknown, dflt: number) => {
     const n = Number(raw ?? dflt);
-    return Math.min(workingDays, Math.max(0, Number.isFinite(n) ? n : dflt));
+    return Math.min(31, Math.max(0, Number.isFinite(n) ? n : dflt));
   };
   const weeklyOffs = Array.isArray(gs.weeklyOffs)
     ? (gs.weeklyOffs.map(sanitizeWeeklyOff).filter(Boolean) as WeeklyOffRule[])
@@ -189,7 +186,6 @@ export async function loadPayrollSettings(pool: Pool): Promise<PayrollSettings> 
       halfDayHours: Number(gs.halfDayHours ?? ATTENDANCE_THRESHOLD_DEFAULTS.halfDayHours),
     },
     policy: {
-      workingDays,
       paidCasualLeavesPerMonth: clampAllowance(
         gs.paidCasualLeavesPerMonth, PAYROLL_POLICY_DEFAULTS.paidCasualLeavesPerMonth),
       paidSickLeavesPerMonth: clampAllowance(
@@ -203,6 +199,20 @@ export async function loadPayrollSettings(pool: Pool): Promise<PayrollSettings> 
 }
 
 // ── Company calendar (holidays + weekly offs) ────────────────────────────────
+
+/**
+ * The month's working-days basis: the ACTUAL calendar days of that month.
+ *
+ * This replaced the old company-wide "Working Days Per Month" setting (fixed
+ * 30) in Aug 2026: per-day pay = monthly salary / days the month really has,
+ * so July prices at /31 and February at /28 (or /29). Payroll generation, the
+ * approval drift-check and the daily accrual engine must all compute the basis
+ * through THIS function — any of them using a different figure makes approvals
+ * 409 forever against the drafts generation itself wrote.
+ */
+export function monthWorkingDays(year: number, month: number): number {
+  return new Date(year, month, 0).getDate();
+}
 
 /** Which weekly-off rule (if any) covers this date. First matching rule wins. */
 export function weeklyOffRuleFor(dateStr: string, policy: PayrollLeavePolicy): WeeklyOffRule | null {
@@ -424,9 +434,12 @@ export function monthLeaveSummary(
   rowsInMonth: readonly AttendanceDay[],
   policy: PayrollLeavePolicy,
   t: AttendanceThresholds,
-  calendar?: MonthCalendarContext,
+  calendar: MonthCalendarContext,
 ): MonthLeaveSummary {
-  const wd = policy.workingDays;
+  // The basis is the month's own calendar length — which is why the calendar
+  // context stopped being optional: without a (year, month) there is no month
+  // to price.
+  const wd = monthWorkingDays(calendar.year, calendar.month);
   if (!monthHasAttendance(rowsInMonth)) {
     // No attendance at all. In the attendance-tracking era (untrackedIsAbsent)
     // that means nothing was earned — never assume presence. Before the

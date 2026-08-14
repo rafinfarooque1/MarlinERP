@@ -30,10 +30,11 @@ export interface Querier {
  *
  *  - the day's worked/leave split comes from `dayContribution` and the
  *    allowance from the company `PayrollLeavePolicy` in ./attendanceFactor,
- *    the single rule `POST /hr/payroll/generate` also uses;
- *  - the per-day rate divides by the company-wide `workingDays` basis, which
- *    is exactly the `baseSalary / workingDays` that `computePayroll` prices
- *    loss of pay at.
+ *    the single rule payroll generation also uses;
+ *  - the per-day rate divides by the month's ACTUAL calendar days (the
+ *    working-days basis since Aug 2026 — see `monthWorkingDays` in
+ *    ./attendanceFactor), which is exactly the `baseSalary / workingDays`
+ *    that `computePayroll` prices loss of pay at.
  *
  * That is what makes the two agree. A fully-attended month accrues to precisely
  * the `effectiveBasic` payroll computes, so month-end approval has only
@@ -354,7 +355,6 @@ async function accrueEmployee(
   opts: { asOf: string; settings: PayrollSettings; attendanceFrom: string },
 ): Promise<AccrueOutcome> {
   const { policy, thresholds } = opts.settings;
-  const workingDays = policy.workingDays;
   const locked = await lockedMonths(q, e.id);
 
   // Employment bounds the span. Pay stops with the last working date: the walk
@@ -435,12 +435,6 @@ async function accrueEmployee(
     });
   }
 
-  // UNROUNDED, deliberately. Payroll divides the monthly salary by the working
-  // days and only rounds the finished loss-of-pay figure, so rounding the rate
-  // here first would price every partial month a paisa or two away from the
-  // payroll number the same month is eventually approved against.
-  const perDayRate = workingDays > 0 ? e.monthlySalary / workingDays : 0;
-
   let days = 0;
   let total = 0;
   let changed = 0;
@@ -461,6 +455,15 @@ async function accrueEmployee(
   let cumPaidOff = 0;
   let prevPayable = 0;
   let prevExpected = 0;
+  // The working-days basis is per MONTH now — the month's actual calendar
+  // length — so it and the per-day rate reset at every month boundary along
+  // with the cumulative counters. The rate stays UNROUNDED, deliberately:
+  // payroll divides the monthly salary by the basis and only rounds the
+  // finished loss-of-pay figure, so rounding the rate here first would price
+  // every partial month a paisa or two away from the payroll number the same
+  // month is eventually approved against.
+  let workingDays = 0;
+  let perDayRate = 0;
 
   const monthPayable = () => Math.min(
     workingDays,
@@ -472,7 +475,12 @@ async function accrueEmployee(
   for (let day = e.startDate; day <= asOf; day = addDays(day, 1)) {
     const { y, m } = parse(day);
     const mk = monthKey(y, m);
-    if (mk !== curMonth) { curMonth = mk; cumWork = 0; cumCasual = 0; cumSick = 0; cumPaidOff = 0; prevPayable = 0; prevExpected = 0; }
+    if (mk !== curMonth) {
+      curMonth = mk;
+      workingDays = daysInMonth(y, m);
+      perDayRate = workingDays > 0 ? e.monthlySalary / workingDays : 0;
+      cumWork = 0; cumCasual = 0; cumSick = 0; cumPaidOff = 0; prevPayable = 0; prevExpected = 0;
+    }
     if (locked.has(mk)) continue;
 
     // Before the cutover the old flat-calendar rows stand untouched. Their value

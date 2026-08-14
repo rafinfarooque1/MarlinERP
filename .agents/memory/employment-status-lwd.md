@@ -16,6 +16,10 @@ body (zod strips unknown keys).
 - Non-active always has an LWD (defaults to today when omitted). Reactivation
   clears the LWD; resumption is the existing `salary_accrual_resume_from` stamp
   (never backfills the gap).
+- `leaving_reason` (raw column, Aug 2026) follows the same effective-value rule:
+  active status ⇒ NULL (reactivation clears it), non-active keeps the stored one
+  unless the PATCH says otherwise; blank/whitespace ⇒ NULL (trimmed), never an
+  empty string. The unclassified-absence scan also stops at the LWD.
 - Legacy deactivations WITHOUT an LWD keep old behavior: excluded from payroll,
   accrual stops, nothing deleted — there is no boundary to rebuild against.
 

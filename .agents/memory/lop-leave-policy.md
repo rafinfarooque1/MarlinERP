@@ -5,12 +5,15 @@ description: Company-wide payroll leave policy (working days, paid casual leave,
 
 # Company-wide LOP leave policy (Aug 2026)
 
-Policy lives in `company_settings.general_settings` JSONB: `payrollWorkingDays`
-(default 30), `paidCasualLeavesPerMonth` (default 4), `lopEnabled` (default true).
-Sanitized ONLY in `loadPayrollSettings()` (attendanceFactor.ts) — wd clamps 1–31
-integer, allowance clamps 0..wd. PATCH /company/settings validates the incoming
-blob (it replaces the stored one wholesale, so the incoming object IS the
-effective value).
+Policy lives in `company_settings.general_settings` JSONB: `paidCasualLeavesPerMonth`
+(default 4), sick-leave allowance, `lopEnabled` (default true). Since Aug 2026 the
+working-days basis is NOT a setting: wd = the payroll month's actual calendar days
+via `monthWorkingDays(year, month)` (attendanceFactor.ts). A stored
+`payrollWorkingDays` key is accepted and IGNORED (never rejected — old blobs
+round-trip); leave allowances clamp 0..31. PATCH /company/settings validates the
+incoming blob (it replaces the stored one wholesale, so the incoming object IS the
+effective value). Changing the basis re-priced open unapproved months at the next
+sweep — accepted trade-off, approved history untouched.
 
 ## The one formula
 - `dayContribution(day) → {work, leave}`: leave={0,1}; hrs≥full={1,0};
@@ -55,4 +58,7 @@ the lock and refuses with "regenerate". Approved/paid months never move.
 salary-accrual / attendance-punches / leave-approval / lop-payroll suites
 pin+restore `generalSettings` via PATCH. attendance-punches pins allowance=0 —
 with any allowance, the policy tops half days up to full pay and hours-based
-pricing assertions go invisible. Fixtures use salary 30000 (₹1,000/day at wd 30).
+pricing assertions go invisible. Fixtures use salary 30000; day rate is now
+30000/DIM (DIM = calendar days of the fixture month), so suites derive a `DIM`
+const instead of hardcoding ₹1,000/day — a literal that survives (e.g. ₹500 for
+a half day) breaks the moment the month length differs.

@@ -19,6 +19,10 @@ The month's earned basic must be computed with payroll's own expression, using t
     lopDays  = max(0, workingDays − paidDaysSoFar)
     earned   = round2(monthlySalary − round2(lopDays × perDay))
 
+(Since Aug 2026, `workingDays` = the month's ACTUAL calendar days —
+`monthWorkingDays(year, month)` — everywhere: accrual, generation, approval.
+The `payrollWorkingDays` setting is retired/ignored.)
+
 Charge each day the *increase* in `earned` so no per-day rounding accumulates.
 
 **Why:** the algebraically "equivalent" `round2(paidDays × perDay)` is not equivalent

@@ -182,12 +182,11 @@ router.patch("/company/settings", requireModuleAction("page:/company/settings", 
     // validate it here, not just in the UI.
     const gsu: Record<string, any> = v ?? {};
     generalSettingsUpdate = gsu;
-    if (gsu.payrollWorkingDays !== undefined && gsu.payrollWorkingDays !== null) {
-      const wd = Number(gsu.payrollWorkingDays);
-      if (!Number.isInteger(wd) || wd < 1 || wd > 31) {
-        res.status(400).json({ error: 'Working Days Per Month must be a whole number between 1 and 31' }); return;
-      }
-    }
+    // `payrollWorkingDays` is retired (Aug 2026): the working-days basis is the
+    // payroll month's actual calendar length now (see monthWorkingDays), so the
+    // key is neither validated nor read. Stale copies in stored blobs are
+    // harmless. `salaryDay` was likewise retired — it was display-only; the
+    // actual pay date is the payment voucher's date.
     // POS opening payment mode: only the two modes a new sale can be created
     // with. Anything else stored here would silently fall back client-side, so
     // reject it up front.
@@ -197,12 +196,11 @@ router.patch("/company/settings", requireModuleAction("page:/company/settings", 
     }
     if (gsu.paidCasualLeavesPerMonth !== undefined && gsu.paidCasualLeavesPerMonth !== null) {
       const pl = Number(gsu.paidCasualLeavesPerMonth);
-      const wdEff = Number(gsu.payrollWorkingDays ?? 30);
       if (!Number.isFinite(pl) || pl < 0) {
         res.status(400).json({ error: 'Paid Casual Leaves Per Month must be zero or more' }); return;
       }
-      if (pl > wdEff) {
-        res.status(400).json({ error: 'Paid Casual Leaves Per Month cannot exceed Working Days Per Month' }); return;
+      if (pl > 31) {
+        res.status(400).json({ error: 'Paid Casual Leaves Per Month cannot exceed 31 — no month has more days' }); return;
       }
     }
     if (gsu.lopEnabled !== undefined && gsu.lopEnabled !== null && typeof gsu.lopEnabled !== 'boolean') {
@@ -210,12 +208,11 @@ router.patch("/company/settings", requireModuleAction("page:/company/settings", 
     }
     if (gsu.paidSickLeavesPerMonth !== undefined && gsu.paidSickLeavesPerMonth !== null) {
       const sl = Number(gsu.paidSickLeavesPerMonth);
-      const wdEff = Number(gsu.payrollWorkingDays ?? 30);
       if (!Number.isFinite(sl) || sl < 0) {
         res.status(400).json({ error: 'Paid Sick Leaves Per Month must be zero or more' }); return;
       }
-      if (sl > wdEff) {
-        res.status(400).json({ error: 'Paid Sick Leaves Per Month cannot exceed Working Days Per Month' }); return;
+      if (sl > 31) {
+        res.status(400).json({ error: 'Paid Sick Leaves Per Month cannot exceed 31 — no month has more days' }); return;
       }
     }
     // Weekly-off rules: each entry is a weekday (0=Sunday…6=Saturday), which
@@ -409,7 +406,7 @@ router.patch("/company/settings", requireModuleAction("page:/company/settings", 
     // salary books must follow now, not at the next hourly sweep. Locked
     // (approved/paid) months are skipped by the sweep itself.
     const PAY_POLICY_KEYS = [
-      "payrollWorkingDays", "paidCasualLeavesPerMonth", "paidSickLeavesPerMonth",
+      "paidCasualLeavesPerMonth", "paidSickLeavesPerMonth",
       "lopEnabled", "weeklyOffs", "weeklyOffExhaustedAction",
     ];
     const policyChanged = PAY_POLICY_KEYS.some((k) =>

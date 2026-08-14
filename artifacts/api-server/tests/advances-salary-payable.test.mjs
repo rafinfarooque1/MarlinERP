@@ -42,7 +42,8 @@ const q = async (text, params = []) => (await sql.query(text, params)).rows;
 
 const Y = 2026, M = 7; // fixture month: July 2026 (fully in the past, unlocked)
 const D = (d) => `${Y}-${String(M).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-const SALARY = 30000, WD = 30, ALLOW = 4;
+const SALARY = 30000, ALLOW = 4;
+const DIM = new Date(Y, M, 0).getDate(); // basis = calendar days (Aug 2026 change)
 const TODAY = new Date().toISOString().split("T")[0];
 
 async function bookGap() {
@@ -80,7 +81,7 @@ async function main() {
   })).token;
 
   savedGS = (await api("GET", "/company/settings")).generalSettings ?? {};
-  await putGS({ payrollWorkingDays: WD, paidCasualLeavesPerMonth: ALLOW, lopEnabled: true });
+  await putGS({ paidCasualLeavesPerMonth: ALLOW, lopEnabled: true });
 
   // ── 1. One-time migration: guarded, reconciled, archived ────────────────
   const marker = await q(`SELECT COUNT(*)::int AS n FROM migration_log WHERE name='employee_advances_to_salary_payable_v1'`);
@@ -138,7 +139,9 @@ async function main() {
   });
   const EID = emp.id;
   console.log(`\nfixture employee #${EID} — ₹${SALARY}/month, joined ${D(1)}\n`);
-  for (let d = 1; d <= 30; d++) await api("PUT", "/hr/attendance", { employeeId: EID, date: D(d), status: "present" });
+  // Cover EVERY calendar day: a gap day would now be an unclassified absence
+  // (blocking approval) and an LOP day (shrinking gross below ₹30,000).
+  for (let d = 1; d <= DIM; d++) await api("PUT", "/hr/attendance", { employeeId: EID, date: D(d), status: "present" });
 
   const [salPay] = await q(`SELECT id FROM account_ledgers WHERE code=$1`, [`SAL-PAY-${EID}`]);
 
