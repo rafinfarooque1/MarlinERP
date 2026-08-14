@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useLocation } from 'wouter';
 import {
   usePaginatedPurchases, useListVendors, useListMaterials, useListRawMaterials, useListItems,
-  getListPurchasesQueryKey, useDeletePurchase, useGetCompanySettings,
+  getListPurchasesQueryKey, useDeletePurchase, useGetCompanySettings, useGetPurchase,
 } from '@workspace/api-client-react';
 import { downloadPurchaseInvoicePDF } from '@/lib/purchasePdf';
 import { AppLayout } from '@/components/layout/AppLayout';
@@ -72,6 +72,27 @@ export default function Purchases() {
   const locations = useActingLocations();
   const [viewItem, setViewItem] = useState<any>(null);
   const [deleteTarget, setDeleteTarget] = useState<any>(null);
+
+  // Books drill-down: /production/purchase?view=<id> opens that bill's view
+  // sheet directly (ledger statement / day book rows navigate here). Fetched
+  // by id — the bill may be outside the current list page.
+  const [drillBillId, setDrillBillId] = useState<number | null>(() => {
+    const n = Number(new URLSearchParams(window.location.search).get('view'));
+    return Number.isFinite(n) && n > 0 ? n : null;
+  });
+  const { data: drillBill, error: drillError } = useGetPurchase(drillBillId ?? 0, { query: { enabled: !!drillBillId } } as any);
+  useEffect(() => {
+    if (!drillBillId) return;
+    if (drillBill) {
+      setViewItem(drillBill);
+      setDrillBillId(null);
+      window.history.replaceState({}, '', window.location.pathname);
+    } else if (drillError) {
+      toast.error('Purchase bill not found — it may have been deleted or belong to another location');
+      setDrillBillId(null);
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+  }, [drillBillId, drillBill, drillError]);
   const queryClient = useQueryClient();
 
   // Purchases change stock levels and dashboard KPIs — refresh them too.

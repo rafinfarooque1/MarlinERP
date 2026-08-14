@@ -98,7 +98,22 @@ function validateReportBody(req: any, res: any, format: "PDF" | "Excel"): Report
 // Download covers every output channel — saving the PDF and sending it to a
 // printer alike — so the guard no longer cares which button was pressed.
 // Clients may still send an `intent` field; it is ignored.
-router.post("/pdf/report", requireModuleAction("page:/reports/sales", "download"), async (req, res) => {
+//
+// Any-of guard: the renderer is a shared surface — the Reports Center AND the
+// books pages (Ledger, Day Book, Cash/Bank Book, Trial Balance) export through
+// it, so holding Download on any ONE of those pages is enough. The payload is
+// preformatted rows the caller could already see on screen; the page's own
+// view gate decided what data reached the client in the first place.
+const REPORT_EXPORT_PAGES = [
+  "page:/reports/sales",
+  "page:/accounts/ledger",
+  "page:/accounts/day-book",
+  "page:/accounts/cash-book",
+  "page:/accounts/bank-book",
+  "page:/accounts/trial-balance",
+];
+
+router.post("/pdf/report", requireModuleAction(REPORT_EXPORT_PAGES, "download"), async (req, res) => {
   try {
     const body = validateReportBody(req, res, "PDF");
     if (!body) return;
@@ -141,7 +156,7 @@ router.post("/pdf/report", requireModuleAction("page:/reports/sales", "download"
 // ── Generic tabular report — Excel ───────────────────────────────────────────
 // Same payload as /pdf/report. Always `download`: there is no such thing as
 // printing a spreadsheet straight out of the browser.
-router.post("/xlsx/report", requireModuleAction("page:/reports/sales", "download"), async (req, res) => {
+router.post("/xlsx/report", requireModuleAction(REPORT_EXPORT_PAGES, "download"), async (req, res) => {
   try {
     const body = validateReportBody(req, res, "Excel");
     if (!body) return;

@@ -151,4 +151,5 @@
 - [Transaction dialog guard](transaction-dialog-guard.md) — every close path (Cancel AND Close buttons) must be DialogClose-wrapped or the dirty guard is bypassed; sm:max-w-* only; exceptions recorded in UI_CONVENTIONS.md.
 - [UI modernization sweep](ui-modernization-sweep.md) — docs/UI_CONVENTIONS.md is the binding page-style contract; page kit in components/app/*; satellite pages gate via permOwner; supersedes "sidebar frozen".
 - [Dispatch board](dispatch-board.md) — per-document status layer pattern: additive table, absence-of-row = initial status, forward-only transitions re-checked under the row lock; books-unchanged provable by hash.
+- [Books drill-down & exports](books-drilldown.md) — statement/day-book rows carry provenance keys mapped in ONE drilldown.ts; targets open via ?view= params; new export pages must join REPORT_EXPORT_PAGES.
 - [Workspace reset & rollback semantics](workspace-reset-recovery.md) — merge/cancel events revert TRACKED files to HEAD (untracked survive); re-verify wiring by marker greps; surviving tests + pg_dump -s are the recovery contract.

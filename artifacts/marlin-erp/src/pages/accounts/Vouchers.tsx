@@ -904,6 +904,32 @@ export default function Vouchers() {
     return rows.sort((a, b) => (b.date ?? '').localeCompare(a.date ?? '') || b.id - a.id);
   }, [payments, receipts, journals, contras, creditNotes, debitNotes]);
 
+  // Books drill-down: /accounts/vouchers?kind=<type>&view=<id> focuses that
+  // voucher — the type filter narrows to its family, the search box pins its
+  // number (the row IS the detail view here), and a JV expands its legs.
+  const [drill, setDrill] = useState<{ kind: VoucherType; id: number } | null>(() => {
+    const sp = new URLSearchParams(window.location.search);
+    const kind = sp.get('kind') as VoucherType | null;
+    const id = Number(sp.get('view'));
+    const valid: VoucherType[] = ['payment', 'receipt', 'journal', 'contra', 'credit_note', 'debit_note'];
+    return kind && valid.includes(kind) && Number.isFinite(id) && id > 0 ? { kind, id } : null;
+  });
+  useEffect(() => {
+    if (!drill || isLoading) return;
+    const row = all.find(r => r.type === drill.kind && r.id === drill.id);
+    setDrill(null);
+    window.history.replaceState({}, '', window.location.pathname);
+    if (!row) {
+      toast.error('Voucher not found — it may have been deleted');
+      return;
+    }
+    setTypeFilter(drill.kind);
+    setSearch(row.voucherNumber);
+    if (!['payment', 'receipt'].includes(row.type) && (row.raw?.lines?.length ?? 0) > 0) {
+      setExpanded(row.key);
+    }
+  }, [drill, isLoading, all]);
+
   const filtered = useMemo(() => {
     let list = typeFilter === 'all' ? all : all.filter(r => r.type === typeFilter);
     // Row dates are YYYY-MM-DD, so plain string comparison is date comparison.

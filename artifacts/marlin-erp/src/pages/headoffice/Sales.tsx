@@ -7,7 +7,7 @@ import {
   useListItems, useListItemPrices, useListStock, useGetCompanySettings,
   useListCoupons,
   customFetch,
-  useGetSalePayments, useCreateSalePayment, useUpdateSale,
+  useGetSale, useGetSalePayments, useCreateSalePayment, useUpdateSale,
   ensureInvoiceShareLink, absoluteShareUrl,
   usePartyAdvance, getPartyAdvanceQueryKey,
 } from '@workspace/api-client-react';
@@ -359,6 +359,27 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   const [statusFilter, setStatusFilter] = useState<'all' | 'unpaid' | 'partially_paid' | 'paid'>('all');
   const [isOpen, setIsOpen] = useState(false);
   const [viewItem, setViewItem] = useState<any>(null);
+
+  // Books drill-down: /headoffice/sales?view=<id> opens that invoice's view
+  // sheet directly (ledger statement / day book rows navigate here). The
+  // record is fetched by id — it may be outside the loaded list pages.
+  const [drillSaleId, setDrillSaleId] = useState<number | null>(() => {
+    const n = Number(new URLSearchParams(window.location.search).get('view'));
+    return Number.isFinite(n) && n > 0 ? n : null;
+  });
+  const { data: drillSale, error: drillError } = useGetSale(drillSaleId ?? 0, { query: { enabled: !!drillSaleId } } as any);
+  useEffect(() => {
+    if (!drillSaleId) return;
+    if (drillSale) {
+      setViewItem(drillSale);
+      setDrillSaleId(null);
+      window.history.replaceState({}, '', window.location.pathname);
+    } else if (drillError) {
+      toast.error('Sale not found — it may have been deleted or belong to another location');
+      setDrillSaleId(null);
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+  }, [drillSaleId, drillSale, drillError]);
   const [viewQrUrl, setViewQrUrl] = useState<string | null>(null);
   // Credit-limit override: holds the rejected payload + 409 details while the
   // manager decides whether to proceed anyway.

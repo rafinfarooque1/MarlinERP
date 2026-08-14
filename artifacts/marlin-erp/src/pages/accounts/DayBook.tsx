@@ -1,12 +1,16 @@
 import { useState } from 'react';
+import { useLocation } from 'wouter';
+import { toast } from 'sonner';
 import { useDayBook } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
-import { BookOpenCheck, Download, AlertTriangle, ChevronLeft, ChevronRight, ListChecks, IndianRupee } from 'lucide-react';
+import { BookOpenCheck, AlertTriangle, ChevronLeft, ChevronRight, ListChecks, IndianRupee, ExternalLink, Info } from 'lucide-react';
 import { downloadCSV } from '@/lib/download';
+import { ExportButtons, pdfMoney, type ReportDoc } from '@/pages/reports/shared';
+import { resolveDrill } from '@/lib/drilldown';
 import { usePermission } from '@/lib/usePermission';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { useLocationContext, locationFilterParams } from '@/lib/locationContext';
@@ -38,6 +42,7 @@ function shiftDate(date: string, days: number): string {
 
 export default function DayBook() {
   const perm = usePermission('page:/accounts/day-book');
+  const [, navigate] = useLocation();
   const [date, setDate] = useState(today());
   const { locationState } = useLocationContext();
   const loc = locationFilterParams(locationState);
@@ -53,6 +58,45 @@ export default function DayBook() {
     particulars: e => e.particulars,
     narration: e => e.narration,
     amount: e => Number(e.amount),
+  });
+
+  // Row drill-down — a day-book entry's id IS its provenance key ("sale:12").
+  const openRow = (e: any) => {
+    const t = resolveDrill(e.id, e.source);
+    if (!t) return;
+    if (t.kind === 'link') navigate(t.href);
+    else toast.info(t.reason);
+  };
+
+  // Server-rendered Excel/PDF over the FULL day (the page never paginates).
+  const dayLabel = new Date(`${date}T00:00:00`).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' });
+  const doc = (): ReportDoc => ({
+    title: 'Day Book',
+    subtitle: `${dayLabel}${(data as any)?.location && locationState.locationName ? ` · ${locationState.locationName}` : ''}`,
+    filename: `day-book-${date}`,
+    metaRows: [
+      ['Date', dayLabel],
+      ['Transactions', String(data?.totals.count ?? 0)],
+      ['Total Amount', pdfMoney(data?.totals.amount ?? 0)],
+    ],
+    orientation: 'landscape',
+    sections: [{
+      columns: [
+        { label: 'Type' },
+        { label: 'Voucher / Invoice #' },
+        { label: 'Particulars', width: 3 },
+        { label: 'Narration', width: 2 },
+        { label: 'Amount', align: 'right', width: 1.4 },
+      ],
+      rows: entries.map(e => [
+        SOURCE_META[e.source]?.label ?? e.source,
+        e.voucherNumber || '',
+        e.particulars,
+        e.narration || '',
+        pdfMoney(Number(e.amount)),
+      ] as (string | number)[]),
+      totalsRow: ['Total', '', `${data?.totals.count ?? 0} transactions`, '', pdfMoney(data?.totals.amount ?? 0)],
+    }],
   });
 
   if (!perm.isLoading && !perm.canView) {
@@ -85,14 +129,15 @@ export default function DayBook() {
               {date !== today() && (
                 <Button variant="outline" size="sm" onClick={() => setDate(today())}>Today</Button>
               )}
-              {perm.canDownload && entries.length > 0 && (
-                <Button variant="outline" size="sm" onClick={() => downloadCSV(`day-book-${date}.csv`, entries.map(e => ({
+              <ExportButtons
+                canDownload={perm.canDownload}
+                disabled={entries.length === 0}
+                doc={doc}
+                onCSV={() => downloadCSV(`day-book-${date}.csv`, entries.map(e => ({
                   Type: SOURCE_META[e.source]?.label ?? e.source, Voucher: e.voucherNumber || '', Particulars: e.particulars,
                   Narration: e.narration || '', Amount: e.amount,
-                })))}>
-                  <Download className="w-4 h-4 mr-2" /> Export
-                </Button>
-              )}
+                })))}
+              />
             </div>
           }
         />
@@ -146,19 +191,33 @@ export default function DayBook() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {sorted.map(e => (
-                <TableRow key={e.id} className="hover:bg-muted/10">
+              {sorted.map(e => {
+                const drill = resolveDrill(e.id, e.source);
+                return (
+                <TableRow
+                  key={e.id}
+                  className={`hover:bg-muted/10 ${drill ? 'cursor-pointer' : ''}`}
+                  title={drill ? (drill.kind === 'link' ? drill.label : 'No document — click for details') : undefined}
+                  onClick={() => openRow(e)}
+                >
                   <TableCell>
                     <Badge className={`${SOURCE_META[e.source]?.cls ?? 'bg-muted text-muted-foreground'} border-0 hover:${SOURCE_META[e.source]?.cls ?? ''}`}>
                       {SOURCE_META[e.source]?.label ?? e.source}
                     </Badge>
                   </TableCell>
-                  <TableCell className="font-mono text-primary font-semibold text-sm">{e.voucherNumber || '—'}</TableCell>
+                  <TableCell className="font-mono text-primary font-semibold text-sm">
+                    <span className="inline-flex items-center gap-1.5">
+                      {e.voucherNumber || '—'}
+                      {drill?.kind === 'link' && <ExternalLink className="w-3 h-3 text-muted-foreground/60 shrink-0" />}
+                      {drill?.kind === 'info' && <Info className="w-3 h-3 text-muted-foreground/60 shrink-0" />}
+                    </span>
+                  </TableCell>
                   <TableCell className="text-sm max-w-[320px] truncate">{e.particulars}</TableCell>
                   <TableCell className="text-muted-foreground text-sm max-w-[220px] truncate">{e.narration || '—'}</TableCell>
                   <TableCell className="text-right font-mono font-bold">{inr(e.amount)}</TableCell>
                 </TableRow>
-              ))}
+                );
+              })}
             </TableBody>
           </Table>
           )}

@@ -44,8 +44,13 @@ export function AccountCombobox({
   const pickedRef = useRef(false);
 
   const selected = options.find(o => o.id === value);
+  // Name is the display; the internal code stays searchable (admins paste
+  // "STD-SALES" or "CUST-12" to disambiguate same-named ledgers) and shows as
+  // a subtle secondary line — never folded into the visible name.
   const filtered = query.trim()
-    ? options.filter(o => o.name.toLowerCase().includes(query.toLowerCase()))
+    ? options.filter(o =>
+        o.name.toLowerCase().includes(query.toLowerCase())
+        || (o.code ?? '').toLowerCase().includes(query.toLowerCase()))
     : options;
 
   return (
@@ -102,7 +107,12 @@ export function AccountCombobox({
                   onSelect={() => { onChange(opt.id); pickedRef.current = true; setOpen(false); setQuery(''); }}
                 >
                   <Check className={cn('mr-2 h-4 w-4 shrink-0', value === opt.id ? 'opacity-100' : 'opacity-0')} />
-                  {opt.name}
+                  <span className="flex min-w-0 flex-col">
+                    <span className="truncate">{opt.name}</span>
+                    {opt.code && (
+                      <span className="truncate font-mono text-[10px] text-muted-foreground">{opt.code}</span>
+                    )}
+                  </span>
                 </CommandItem>
               ))}
             </CommandGroup>

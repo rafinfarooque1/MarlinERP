@@ -1,11 +1,12 @@
 import { useState } from 'react';
+import { useLocation } from 'wouter';
+import { toast } from 'sonner';
 import { useGetLedgerStatement, useListAccountsFlat } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
-import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { AccountCombobox } from '@/components/ui/account-combobox';
-import { FileText, Download, Calendar, ShieldOff, ArrowDownCircle, ArrowUpCircle, ListChecks } from 'lucide-react';
+import { FileText, Calendar, ShieldOff, ArrowDownCircle, ArrowUpCircle, ListChecks, ExternalLink, Info } from 'lucide-react';
 import { downloadCSV } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
@@ -15,9 +16,12 @@ import { PageHeader } from '@/components/app/page-header';
 import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
 import { EmptyState } from '@/components/app/empty-state';
 import { TableSkeleton } from '@/components/app/loading-skeletons';
+import { ExportButtons, pdfMoney, periodLabel, type ReportDoc } from '@/pages/reports/shared';
+import { resolveDrill } from '@/lib/drilldown';
 
 export default function Ledger() {
   const perm = usePermission('page:/accounts/ledger');
+  const [, navigate] = useLocation();
   const { data: accounts = [] } = useListAccountsFlat();
   const [accountId, setAccountId] = useState<string>('');
   const now = new Date();
@@ -40,6 +44,52 @@ export default function Ledger() {
   );
 
   const entries = (statement as any)?.entries || (statement as any)?.transactions || [];
+  const account = (accounts as any[]).find((a: any) => a.id === Number(accountId));
+
+  // Row drill-down: a statement line opens the document that produced it —
+  // derived rows (accruals, advance adjustments) explain themselves instead.
+  const openRow = (e: any) => {
+    const t = resolveDrill(e.entryId, e.entryType);
+    if (!t) return;
+    if (t.kind === 'link') navigate(t.href);
+    else toast.info(t.reason);
+  };
+
+  // Server-rendered Excel/PDF — the FULL filtered statement, never the
+  // current sort page (entries already hold the whole range).
+  const doc = (): ReportDoc => ({
+    title: 'Ledger Statement',
+    subtitle: `${account?.name ?? ''} · ${periodLabel(fromDate, toDate)}${locationState.locationName ? ` · ${locationState.locationName}` : ''}`,
+    filename: `ledger-${(account?.name ?? 'statement').toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
+    metaRows: [
+      ['Account', `${account?.name ?? ''}${account?.code ? ` (${account.code})` : ''}`],
+      ['Period', periodLabel(fromDate, toDate)],
+      ['Opening Balance', pdfMoney(Number((statement as any)?.openingBalance ?? 0))],
+      ['Total Debit', pdfMoney(Number((statement as any)?.totalDebit ?? 0))],
+      ['Total Credit', pdfMoney(Number((statement as any)?.totalCredit ?? 0))],
+      ['Closing Balance', pdfMoney(Number((statement as any)?.closingBalance ?? 0))],
+    ],
+    orientation: 'landscape',
+    sections: [{
+      columns: [
+        { label: 'Date' },
+        { label: 'Description', width: 3 },
+        { label: 'Type' },
+        { label: 'Debit', align: 'right', width: 1.4 },
+        { label: 'Credit', align: 'right', width: 1.4 },
+        { label: 'Balance', align: 'right', width: 1.4 },
+      ],
+      rows: (entries as any[]).map((e: any) => [
+        new Date(e.date).toLocaleDateString('en-IN'),
+        e.description,
+        e.entryType,
+        e.debit ? pdfMoney(Number(e.debit)) : '',
+        e.credit ? pdfMoney(Number(e.credit)) : '',
+        pdfMoney(Number(e.balance ?? 0)),
+      ] as (string | number)[]),
+      totalsRow: ['', 'Total', '', pdfMoney(Number((statement as any)?.totalDebit ?? 0)), pdfMoney(Number((statement as any)?.totalCredit ?? 0)), pdfMoney(Number((statement as any)?.closingBalance ?? 0))],
+    }],
+  });
 
   const { sorted, sort } = useTableSort(entries as any[], {
     date: (e: any) => e.date,
@@ -75,11 +125,14 @@ export default function Ledger() {
           title="Ledger Statement"
           description="Account-wise debit / credit statement"
           icon={FileText}
-          actions={perm.canDownload && (
-            <Button variant="outline" size="sm" disabled={!entries.length} onClick={() => downloadCSV('ledger.csv', entries.map((e: any) => ({ Date: e.date, Description: e.description, Debit: e.debit || 0, Credit: e.credit || 0, Balance: e.balance || 0 })))}>
-              <Download className="w-4 h-4 mr-2" /> Export
-            </Button>
-          )}
+          actions={
+            <ExportButtons
+              canDownload={perm.canDownload}
+              disabled={!entries.length}
+              doc={doc}
+              onCSV={() => downloadCSV('ledger.csv', entries.map((e: any) => ({ Date: e.date, Description: e.description, Type: e.entryType, Debit: e.debit || 0, Credit: e.credit || 0, Balance: e.balance || 0 })))}
+            />
+          }
         />
 
         {/* Filters */}
@@ -89,9 +142,9 @@ export default function Ledger() {
             placeholder="Select account"
             options={(accounts as any[])
               .filter((a: any) => !a.isGroup)
-              // Fold the code into the display name so the search box matches
-              // on either — "[STD-SALES] Sales" is findable by code or name.
-              .map((a: any) => ({ id: a.id, name: `${a.code ? `[${a.code}] ` : ''}${a.name}` }))}
+              // Clean display names — the internal code renders as a subtle
+              // secondary line inside the combobox and stays searchable there.
+              .map((a: any) => ({ id: a.id, name: a.name, code: a.code ?? null }))}
             value={Number(accountId) || 0}
             onChange={id => setAccountId(String(id))}
           />
@@ -131,16 +184,30 @@ export default function Ledger() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {sorted.map((e: any, i: number) => (
-                <TableRow key={i} className="hover:bg-muted/10">
+              {sorted.map((e: any, i: number) => {
+                const drill = resolveDrill(e.entryId, e.entryType);
+                return (
+                <TableRow
+                  key={i}
+                  className={`hover:bg-muted/10 ${drill ? 'cursor-pointer' : ''}`}
+                  title={drill ? (drill.kind === 'link' ? drill.label : 'No document — click for details') : undefined}
+                  onClick={() => openRow(e)}
+                >
                   <TableCell className="text-sm">{new Date(e.date).toLocaleDateString('en-IN')}</TableCell>
-                  <TableCell className="text-sm">{e.description}</TableCell>
+                  <TableCell className="text-sm">
+                    <span className="inline-flex items-center gap-1.5">
+                      {e.description}
+                      {drill?.kind === 'link' && <ExternalLink className="w-3 h-3 text-muted-foreground/60 shrink-0" />}
+                      {drill?.kind === 'info' && <Info className="w-3 h-3 text-muted-foreground/60 shrink-0" />}
+                    </span>
+                  </TableCell>
                   <TableCell><Badge variant="outline" className="text-xs capitalize">{e.entryType}</Badge></TableCell>
                   <TableCell className="text-right font-mono text-red-500">{e.debit ? `₹${Number(e.debit).toLocaleString('en-IN')}` : '—'}</TableCell>
                   <TableCell className="text-right font-mono text-emerald-500">{e.credit ? `₹${Number(e.credit).toLocaleString('en-IN')}` : '—'}</TableCell>
                   <TableCell className="text-right font-mono font-bold">₹{Number(e.balance || 0).toLocaleString('en-IN')}</TableCell>
                 </TableRow>
-              ))}
+                );
+              })}
             </TableBody>
           </Table>
           )}

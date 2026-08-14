@@ -1,13 +1,13 @@
 import { useState, useEffect } from 'react';
 import { useCashBankBook, useCashBankBookLedgers } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
-import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { EntityCombobox } from '@/components/ui/entity-combobox';
-import { Wallet, Landmark, Download, AlertTriangle } from 'lucide-react';
+import { Wallet, Landmark, AlertTriangle } from 'lucide-react';
 import { downloadCSV } from '@/lib/download';
+import { ExportButtons, pdfMoney, periodLabel, type ReportDoc } from '@/pages/reports/shared';
 import { usePermission } from '@/lib/usePermission';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { useLocationContext, locationFilterParams } from '@/lib/locationContext';
@@ -61,6 +61,49 @@ export default function CashBankBook({ kind }: { kind: 'cash' | 'bank' }) {
 
   const { pageRows, pagerProps } = useClientPage(sorted);
 
+  // Server-rendered Excel/PDF — always the FULL filtered range, never the
+  // visible client page.
+  const bookTitle = isCash ? 'Cash Book' : 'Bank Book';
+  const ledgerName = ledgers.find(l => l.id === ledgerId)?.name ?? '';
+  const doc = (): ReportDoc => ({
+    title: bookTitle,
+    subtitle: `${ledgerName} · ${periodLabel(fromDate, toDate)}${(data as any)?.location && locationState.locationName ? ` · ${locationState.locationName}` : ''}`,
+    filename: `${kind}-book-${fromDate}-to-${toDate}`,
+    metaRows: [
+      ['Ledger', ledgerName],
+      ['Period', periodLabel(fromDate, toDate)],
+      ['Opening Balance', pdfMoney(data?.openingBalance ?? 0)],
+      ['Total In (Dr)', pdfMoney(data?.totalDebit ?? 0)],
+      ['Total Out (Cr)', pdfMoney(data?.totalCredit ?? 0)],
+      ['Closing Balance', pdfMoney(data?.closingBalance ?? 0)],
+    ],
+    orientation: 'landscape',
+    sections: [{
+      columns: [
+        { label: 'Date' },
+        { label: 'Type' },
+        { label: 'Voucher #' },
+        { label: 'Description', width: 3 },
+        { label: 'In (Dr)', align: 'right', width: 1.4 },
+        { label: 'Out (Cr)', align: 'right', width: 1.4 },
+        { label: 'Balance', align: 'right', width: 1.4 },
+      ],
+      rows: [
+        ['', '', 'Opening Balance', '', '', '', pdfMoney(data?.openingBalance ?? 0)] as (string | number)[],
+        ...entries.map(e => [
+          new Date(`${e.date}T00:00:00`).toLocaleDateString('en-IN'),
+          SOURCE_LABEL[e.source] ?? e.source,
+          e.voucherNumber || '',
+          e.description,
+          e.debit > 0 ? pdfMoney(e.debit) : '',
+          e.credit > 0 ? pdfMoney(e.credit) : '',
+          pdfMoney(e.balance),
+        ] as (string | number)[]),
+      ],
+      totalsRow: ['', '', 'Total', '', pdfMoney(data?.totalDebit ?? 0), pdfMoney(data?.totalCredit ?? 0), pdfMoney(data?.closingBalance ?? 0)],
+    }],
+  });
+
   if (!perm.isLoading && !perm.canView) {
     return (
       <AppLayout>
@@ -83,17 +126,18 @@ export default function CashBankBook({ kind }: { kind: 'cash' | 'bank' }) {
           description={isCash ? 'Cash movements with running balance' : 'Bank movements with running balance'}
           icon={Icon}
           actions={
-            perm.canDownload && entries.length > 0 ? (
-              <Button variant="outline" size="sm" onClick={() => downloadCSV(`${kind}-book-${fromDate}-to-${toDate}.csv`, [
+            <ExportButtons
+              canDownload={perm.canDownload}
+              disabled={entries.length === 0}
+              doc={doc}
+              onCSV={() => downloadCSV(`${kind}-book-${fromDate}-to-${toDate}.csv`, [
                 { Date: '', Type: '', Voucher: 'Opening Balance', Description: '', Debit: '', Credit: '', Balance: data?.openingBalance ?? 0 },
                 ...entries.map(e => ({
                   Date: e.date, Type: SOURCE_LABEL[e.source] ?? e.source, Voucher: e.voucherNumber || '',
                   Description: e.description, Debit: e.debit || '', Credit: e.credit || '', Balance: e.balance,
                 })),
-              ])}>
-                <Download className="w-4 h-4 mr-2" /> Export
-              </Button>
-            ) : undefined
+              ])}
+            />
           }
         />
 

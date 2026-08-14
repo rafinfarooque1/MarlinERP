@@ -2114,7 +2114,7 @@ async function postingLedgerStatement(opts: {
   locFilter: PostingLocationFilter | null;
 }): Promise<{
   opening: number; closing: number; totalDebit: number; totalCredit: number;
-  entries: Array<{ date: string; reference: string | null; description: string; entryType: string; debit: number; credit: number; balance: number }>;
+  entries: Array<{ date: string; reference: string | null; description: string; entryType: string; debit: number; credit: number; balance: number; entryId: string | null }>;
 }> {
   const rnd = (n: number) => Math.round(n * 100) / 100;
   const dateOpts = opts.toDate && isIsoDate(opts.toDate) ? { toDate: opts.toDate } : {};
@@ -2131,7 +2131,7 @@ async function postingLedgerStatement(opts: {
   let running = 0;
   let totalDebit = 0;
   let totalCredit = 0;
-  const entries: Array<{ date: string; reference: string | null; description: string; entryType: string; debit: number; credit: number; balance: number }> = [];
+  const entries: Array<{ date: string; reference: string | null; description: string; entryType: string; debit: number; credit: number; balance: number; entryId: string | null }> = [];
   for (const p of mine) {
     const debit = Number(p.debit) || 0;
     const credit = Number(p.credit) || 0;
@@ -2149,6 +2149,10 @@ async function postingLedgerStatement(opts: {
       debit: rnd(debit),
       credit: rnd(credit),
       balance: running,
+      // Provenance for row drill-down: the posting's entry key ("sale:12",
+      // "jv:7", "opening-balance-3"…). The client maps it to the owning
+      // document's page; rows without a reachable document explain why.
+      entryId: p.entryId == null ? null : String(p.entryId),
     });
   }
   return { opening: rnd(opening), closing: running, totalDebit, totalCredit, entries };

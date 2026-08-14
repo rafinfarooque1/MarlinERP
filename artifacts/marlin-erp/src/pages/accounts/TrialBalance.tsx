@@ -5,8 +5,10 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
-import { Scale, Download, AlertTriangle, CheckCircle2, XCircle, Wallet, TrendingUp } from 'lucide-react';
+import { Link } from 'wouter';
+import { Scale, AlertTriangle, CheckCircle2, XCircle, Wallet, TrendingUp, ArrowRight } from 'lucide-react';
 import { downloadCSV } from '@/lib/download';
+import { ExportButtons, pdfMoney, periodLabel, type ReportDoc } from '@/pages/reports/shared';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { usePermission } from '@/lib/usePermission';
 import { useLocationContext, locationFilterParams } from '@/lib/locationContext';
@@ -39,6 +41,40 @@ export default function TrialBalance() {
     credit: r => Number(r.credit) || null,
   });
 
+  // Server-rendered Excel/PDF over every ledger row (the page never paginates).
+  const period = fromDate || toDate ? periodLabel(fromDate || undefined, toDate || undefined) : 'All time';
+  const doc = (): ReportDoc => ({
+    title: 'Trial Balance',
+    subtitle: `${period}${data?.location && locationState.locationName ? ` · ${locationState.locationName}` : ''}`,
+    filename: 'trial-balance',
+    metaRows: [
+      ['Period', period],
+      ['Total Debit', pdfMoney(data?.totalDebit ?? 0)],
+      ['Total Credit', pdfMoney(data?.totalCredit ?? 0)],
+      ['Status', data?.balanced ? 'Balanced' : `OUT OF BALANCE by ${pdfMoney(Math.abs(data?.difference ?? 0))}`],
+    ],
+    sections: [{
+      columns: [
+        { label: 'Ledger', width: 2.2 },
+        { label: 'Group', width: 1.6 },
+        { label: 'Type' },
+        { label: 'Debit', align: 'right', width: 1.4 },
+        { label: 'Credit', align: 'right', width: 1.4 },
+      ],
+      rows: rows.map(r => [
+        r.name,
+        r.groupName || '',
+        TYPE_LABEL[r.type ?? ''] ?? r.type ?? '',
+        r.debit > 0 ? pdfMoney(r.debit) : '',
+        r.credit > 0 ? pdfMoney(r.credit) : '',
+      ] as (string | number)[]),
+      totalsRow: ['Total', '', '', pdfMoney(data?.totalDebit ?? 0), pdfMoney(data?.totalCredit ?? 0)],
+    }],
+    footerNote: data?.balanced
+      ? 'Total debits equal total credits — the books are balanced.'
+      : `WARNING: the books are OUT OF BALANCE by ${pdfMoney(Math.abs(data?.difference ?? 0))}. Investigate via Accounts → Reconciliation.`,
+  });
+
   if (!perm.isLoading && !perm.canView) {
     return (
       <AppLayout>
@@ -65,17 +101,18 @@ export default function TrialBalance() {
               {(fromDate || toDate) && (
                 <Button variant="outline" size="sm" onClick={() => { setFromDate(''); setToDate(''); }}>All time</Button>
               )}
-              {perm.canDownload && rows.length > 0 && (
-                <Button variant="outline" size="sm" onClick={() => downloadCSV('trial-balance.csv', [
+              <ExportButtons
+                canDownload={perm.canDownload}
+                disabled={rows.length === 0}
+                doc={doc}
+                onCSV={() => downloadCSV('trial-balance.csv', [
                   ...rows.map(r => ({
                     Ledger: r.name, Group: r.groupName || '', Type: TYPE_LABEL[r.type ?? ''] ?? r.type ?? '',
                     Debit: r.debit || '', Credit: r.credit || '',
                   })),
                   { Ledger: 'TOTAL', Group: '', Type: '', Debit: data?.totalDebit ?? 0, Credit: data?.totalCredit ?? 0 },
-                ])}>
-                  <Download className="w-4 h-4 mr-2" /> Export
-                </Button>
-              )}
+                ])}
+              />
             </div>
           }
         />
@@ -106,11 +143,26 @@ export default function TrialBalance() {
               <p className="text-sm font-medium">Books are balanced — total debits equal total credits ({inr(data.totalDebit)})</p>
             </div>
           ) : (
-            <div className="bg-destructive/10 border border-destructive/30 text-destructive rounded-xl p-4 flex items-center gap-3">
-              <XCircle className="w-5 h-5 shrink-0" />
-              <p className="text-sm font-medium">
-                Out of balance by {inr(Math.abs(data?.difference ?? 0))} — usually a ledger-mapping gap (e.g. a location without a sales or cash ledger)
-              </p>
+            <div className="bg-destructive/10 border-2 border-destructive/50 rounded-xl p-5 space-y-3">
+              <div className="flex items-start gap-3">
+                <XCircle className="w-6 h-6 shrink-0 text-destructive" />
+                <div className="space-y-1">
+                  <p className="text-base font-bold text-destructive">
+                    Books are OUT OF BALANCE by {inr(Math.abs(data?.difference ?? 0))}
+                  </p>
+                  <p className="text-sm text-destructive/90">
+                    Total debits {inr(data?.totalDebit ?? 0)} ≠ total credits {inr(data?.totalCredit ?? 0)}.
+                    This should never happen — it usually means a ledger-mapping gap (e.g. a location
+                    without a sales or cash ledger) or a posting that lost one of its legs.
+                  </p>
+                </div>
+              </div>
+              <Link
+                href="/accounts/reconciliation"
+                className="inline-flex items-center gap-1.5 text-sm font-semibold text-destructive underline underline-offset-4 hover:no-underline ml-9"
+              >
+                Investigate in Reconciliation <ArrowRight className="w-4 h-4" />
+              </Link>
             </div>
           )
         )}
