@@ -100,6 +100,7 @@
 - [Payroll pay ledger & JV location stamps](payroll-pay-ledger.md) — salary/advances pay from any scoped till; mode derived from ledger tree; journal_vouchers has raw location columns; branch default must never fall back to HO cash.
 - [Quotations module](quotations-module.md) — parallel doc store, zero books impact by construction; one-sale-per-quote via 2 partial uniques + FOR UPDATE; explicit JSX generics break the vite build; pdftotext for PDF checks.
 - [Money voucher provenance](money-voucher-provenance.md) — payments/receipts store `source`; every producer must stamp it; edit rights derive from it and NULL fails closed; never re-sweep NULL→manual.
+- [Voucher admin delete & employee legs](voucher-admin-delete-employee-legs.md) — voucher DELETEs are level-1-only via the shared adminGate; employee party legs = SAL-PAY/SAL-EMP only (ADV-EMP refused, unchanged legs grandfathered), own-location on effective values.
 - [Admin system receipt delete](system-receipt-delete.md) — level-1-only unwind for source='sale' receipts; trail slice = paid−Σlegs, never raw amount; amount_paid writers must SUM under the sale row lock.
 - [Advance settlement](advance-recovery.md) — the debit must sit on the ledger settlement credits (Salary Payable); ONE settlement path; settling a row needs per-row proof, never a global migration marker.
 - [Advance voucher links](advance-voucher-links.md) — row + voucher created in ONE txn with the link stamped; consumers fail closed on NULL links; backfills reconcile amounts, never pair by row order.

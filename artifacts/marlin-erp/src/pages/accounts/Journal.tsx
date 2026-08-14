@@ -21,6 +21,7 @@ import { usePermission } from '@/lib/usePermission';
 import { AccountCombobox } from '@/components/ui/account-combobox';
 import { entryScopeKeyDown, autoFocusFirst, focusField, focusAndOpen, useEntryShortcuts } from '@/lib/keyboard-entry';
 import { useVoucherLocationChoice, parseLocKey, LocationSelectField } from '@/lib/voucherLocation';
+import { useIsAdmin } from '@/lib/useIsAdmin';
 import { PageHeader } from '@/components/app/page-header';
 import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
 import { EmptyState } from '@/components/app/empty-state';
@@ -35,6 +36,8 @@ const EMPTY_LINE: LineDraft = { ledgerId: 0, debit: '', credit: '' };
 
 export default function Journal() {
   const perm = usePermission('page:/accounts/vouchers');
+  // Voucher deletion is Administrator-only (the API 403s everyone else).
+  const isAdmin = useIsAdmin();
   const { data: vouchers = [], isLoading } = useListJournalVouchers({ type: 'journal' });
   const { data: allAccounts = [] } = useListAccountsFlat();
   const createMutation = useCreateJournalVoucher();
@@ -241,14 +244,24 @@ export default function Journal() {
                     <TableCell className="pr-0">
                       {expanded === v.id ? <ChevronDown className="w-4 h-4 text-muted-foreground" /> : <ChevronRight className="w-4 h-4 text-muted-foreground" />}
                     </TableCell>
-                    <TableCell className="font-mono text-primary font-bold text-sm">{v.voucherNumber}</TableCell>
+                    <TableCell className="font-mono text-primary font-bold text-sm whitespace-nowrap">
+                      {v.voucherNumber}
+                      {(v as any).origin === 'system' && (
+                        <Badge variant="secondary" className="ml-2 align-middle font-sans font-medium text-[10px] uppercase tracking-wide text-muted-foreground"
+                          title="System generated — created by another module (transfers, payroll, GST). Manage it there.">
+                          System generated
+                        </Badge>
+                      )}
+                    </TableCell>
                     <TableCell className="text-sm text-muted-foreground">
                       <div className="flex items-center gap-1"><Calendar className="w-3 h-3" />{new Date(v.voucherDate).toLocaleDateString('en-IN')}</div>
                     </TableCell>
                     <TableCell className="text-muted-foreground text-sm max-w-[280px] truncate">{v.narration || '—'}</TableCell>
                     <TableCell className="text-right font-mono font-bold">{inr(v.totalAmount)}</TableCell>
                     <TableCell className="text-right" onClick={e => e.stopPropagation()}>
-                      {perm.canDelete && (
+                      {/* Delete: Administrator-only (API 403s others) and never
+                          for system-generated vouchers (API 409s those). */}
+                      {perm.canDelete && isAdmin && (v as any).origin !== 'system' && (
                         <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-destructive" onClick={() => setDeleteTarget(v)}>
                           <Trash2 className="w-4 h-4" />
                         </Button>
@@ -314,13 +327,17 @@ export default function Journal() {
 
             <div className="space-y-2">
               <label className="text-sm font-medium">Entries <span className="text-destructive">*</span></label>
-              <div className="border border-border rounded-lg overflow-x-auto">
-                <table className="w-full text-sm min-w-[480px]">
+              {/* Responsive: no fixed min-width — the ledger column flexes and
+                  its combobox label truncates, while the Dr/Cr columns shrink
+                  on small screens so totals stay on-screen without a
+                  horizontal scroll. */}
+              <div className="border border-border rounded-lg">
+                <table className="w-full text-sm table-fixed sm:table-auto">
                   <thead className="bg-muted/20 text-muted-foreground">
                     <tr>
                       <th className="text-left px-2 py-1.5 font-medium">Ledger</th>
-                      <th className="text-right px-2 py-1.5 font-medium w-28">Debit ₹</th>
-                      <th className="text-right px-2 py-1.5 font-medium w-28">Credit ₹</th>
+                      <th className="text-right px-2 py-1.5 font-medium w-20 sm:w-28">Debit ₹</th>
+                      <th className="text-right px-2 py-1.5 font-medium w-20 sm:w-28">Credit ₹</th>
                       <th className="w-8" />
                     </tr>
                   </thead>

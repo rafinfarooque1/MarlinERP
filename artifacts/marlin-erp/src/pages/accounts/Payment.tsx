@@ -22,6 +22,7 @@ import { AccountCombobox } from '@/components/ui/account-combobox';
 import { isSystemLedger } from '@/lib/systemLedgers';
 import { BillSettlementPanel, type SettlementSelection } from '@/components/settlement/BillSettlementPanel';
 import { useVoucherLocationChoice, parseLocKey, LocationSelectField, voucherLocationName } from '@/lib/voucherLocation';
+import { useIsAdmin } from '@/lib/useIsAdmin';
 import { PageHeader } from '@/components/app/page-header';
 import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
 import { EmptyState } from '@/components/app/empty-state';
@@ -42,6 +43,8 @@ type FormValues = z.infer<typeof schema>;
 
 export default function Payment() {
   const perm = usePermission('page:/accounts/vouchers');
+  // Voucher deletion is Administrator-only (the API 403s everyone else).
+  const isAdmin = useIsAdmin();
   const { data: payments = [], isLoading } = useListPayments();
   const { data: allAccounts = [] } = useListAccountsFlat();
   const { data: cashBankAccounts = [] } = useCashBankLedgersFlat();
@@ -204,7 +207,15 @@ export default function Payment() {
                 </TableCell></TableRow>
               ) : pageRows.map((p: any) => (
                 <TableRow key={p.id} className="hover:bg-muted/10">
-                  <TableCell className="font-mono text-primary font-bold text-sm">{p.voucherNumber}</TableCell>
+                  <TableCell className="font-mono text-primary font-bold text-sm whitespace-nowrap">
+                    {p.voucherNumber}
+                    {p.origin === 'system' && (
+                      <Badge variant="secondary" className="ml-2 align-middle font-sans font-medium text-[10px] uppercase tracking-wide text-muted-foreground"
+                        title="System generated — created by another module (sales, expenses, payroll). Manage it there.">
+                        System generated
+                      </Badge>
+                    )}
+                  </TableCell>
                   <TableCell className="text-sm text-muted-foreground">
                     <div className="flex items-center gap-1"><Calendar className="w-3 h-3" />{new Date(p.paymentDate).toLocaleDateString('en-IN')}</div>
                   </TableCell>
@@ -225,7 +236,7 @@ export default function Payment() {
                       <span title="System voucher — manage from its own module" className="inline-flex justify-center w-8">
                         <Lock className="w-3.5 h-3.5 text-muted-foreground/60" />
                       </span>
-                    ) : perm.canDelete && (
+                    ) : perm.canDelete && isAdmin && (
                       <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-destructive" onClick={() => setDeleteTarget(p)}>
                         <Trash2 className="w-4 h-4" />
                       </Button>

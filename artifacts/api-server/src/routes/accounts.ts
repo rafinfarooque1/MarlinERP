@@ -35,6 +35,7 @@ import { purchaseSettlementIndex } from "../lib/vendorBillSettlement";
 import { parsePostingLocationFilter, companyLevelSummary, filterPostingsByLocation, type PostingLocationFilter } from "../lib/postingLocation";
 import { resolveGstScope, salesScopeCond, purchaseScopeCond } from "../lib/gstinScope";
 import { openingBalancePostings } from "../lib/openingBalances";
+import { isLevelOneAdmin, ADMIN_DELETE_ERROR } from "../lib/adminGate";
 
 /**
  * Location condition on a SOURCE DOCUMENT row, mirroring how the derived
@@ -633,6 +634,75 @@ router.get("/accounts/payments", requireModuleView(["page:/accounts/vouchers", "
 // stay in the DB for legacy rows but are never read or written any more.
 // (Sales settlement modes are a different, credit-controlled list.)
 
+// ── Employee party legs on money vouchers ───────────────────────────────────
+// The Employee party type offers exactly two ledgers per employee: Salary
+// Payable (SAL-PAY-<id>) and Salary Expense (SAL-EMP-<id>). Advance ledgers
+// (ADV-EMP-<id>) are payroll-owned legacy and never a valid manual leg.
+const EMPLOYEE_LEDGER_RE = /^(SAL-EMP|SAL-PAY|ADV-EMP)-(\d+)$/;
+
+/**
+ * Validate an employee-coded ledger leg on a manual receipt/payment against
+ * the voucher's EFFECTIVE values (body ?? stored row — a partial PATCH must
+ * not route around this). Non-employee ledgers pass untouched.
+ *
+ * Rules (checked only when the leg is NEW or CHANGED — legacy rows keep their
+ * stored legs editable for dates/amounts/narration):
+ *  · ADV-EMP-* is refused outright: advances are managed by Payroll.
+ *  · The employee master must exist and be active.
+ *  · A branch-stamped employee may only appear on a voucher stamped to that
+ *    same branch. Head-office-stamped employees are company-wide, and a
+ *    Head Office voucher may name any location's employee (HO acts for all —
+ *    the same convention every other location rule follows).
+ */
+async function checkEmployeeVoucherLeg(
+  ledgerId: number,
+  loc: { locationType: string; locationId: number },
+  stored?: {
+    ledgerId: number | null;
+    locationType?: string | null;
+    locationId?: number | null;
+  } | null,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const { rows: [led] } = await pool.query(
+    `SELECT code, name FROM account_ledgers WHERE id = $1`, [Number(ledgerId)],
+  );
+  const m = EMPLOYEE_LEDGER_RE.exec(String(led?.code ?? ""));
+  if (!m) return { ok: true };
+
+  const legUnchanged = stored?.ledgerId != null && Number(stored.ledgerId) === Number(ledgerId);
+  const locUnchanged = stored != null
+    && (stored.locationType ?? "headoffice") === loc.locationType
+    && Number(stored.locationId ?? 0) === Number(loc.locationId);
+
+  if (m[1] === "ADV-EMP") {
+    // Grandfather: an untouched legacy leg stays editable (amount, date…),
+    // but nothing may newly point at an advance ledger.
+    if (legUnchanged) return { ok: true };
+    return { ok: false, error: "Employee advance ledgers are managed by Payroll. Use the employee's Salary Payable or Salary Expense account instead." };
+  }
+
+  const employeeId = Number(m[2]);
+  const { rows: [emp] } = await pool.query(
+    `SELECT id, name, is_active, branch_type, branch_id FROM employees WHERE id = $1`, [employeeId],
+  );
+  if (!emp) {
+    return { ok: false, error: `${led?.name ?? led?.code} has no matching employee record.` };
+  }
+  if (!legUnchanged && !emp.is_active) {
+    return { ok: false, error: `${emp.name} is inactive — vouchers can only be recorded for active employees.` };
+  }
+  // Location: enforced whenever the leg or the voucher's location changed.
+  if (!(legUnchanged && locUnchanged)) {
+    const empType = emp.branch_type ?? "headoffice";
+    if ((empType === "warehouse" || empType === "outlet")
+      && (loc.locationType === "warehouse" || loc.locationType === "outlet")
+      && (empType !== loc.locationType || Number(emp.branch_id) !== Number(loc.locationId))) {
+      return { ok: false, error: `${emp.name} belongs to another location — record this voucher under their own location.` };
+    }
+  }
+  return { ok: true };
+}
+
 /** Shared create/edit field validation for manual money vouchers. */
 function validateVoucherFields(body: any): { amount?: number; error?: string } {
   if (body.amount !== undefined) {
@@ -761,18 +831,8 @@ async function loadManualReceipt(client: { query: Function }, id: number, scopeW
   return { row };
 }
 
-/**
- * Administrator = level-1 hierarchy. System-voucher deletion is gated on this,
- * ON TOP of the page delete right: reversing a system-generated receipt
- * rewrites an invoice's payment story, which is a bigger authority than
- * deleting a voucher a user typed themselves.
- */
-async function isLevelOneAdmin(employee: any): Promise<boolean> {
-  const hid = Number(employee?.hierarchyId);
-  if (!Number.isFinite(hid)) return false;
-  const { rows } = await pool.query(`SELECT level FROM hierarchies WHERE id = $1`, [hid]);
-  return Number(rows[0]?.level ?? 99) === 1;
-}
+// isLevelOneAdmin moved to ../lib/adminGate so journal.ts shares the exact
+// same rule for its own voucher deletes.
 
 type SaleReceiptImpactSale = {
   saleId: number; invoiceNumber: string; customerName: string;
@@ -881,6 +941,26 @@ async function computeSaleReceiptImpact(
   return { kind: "invoice", sales: [await buildSale(saleRow, reversal)], legs: [], blockers };
 }
 
+// ── Voucher employee lookup ─────────────────────────────────────────────────
+// Minimal employee directory for the Employee party type on voucher forms:
+// enough to filter the picker to the selected location's active employees and
+// pair each one with their salary ledgers — and nothing more (no salary, no
+// contact details; the HR page permission guards those). Master lists stay
+// unscoped, the same convention every other picker follows: the voucher's
+// location choice does the narrowing.
+router.get("/accounts/voucher-employees", requireModuleView(["page:/accounts/vouchers", "page:/operations/receipt-voucher", "page:/operations/payment-voucher"]), async (_req, res): Promise<void> => {
+  const { rows } = await pool.query(
+    `SELECT id, name, branch_type AS "branchType", branch_id AS "branchId", is_active AS "isActive"
+       FROM employees ORDER BY name`,
+  );
+  res.json(rows.map(r => ({
+    id: Number(r.id), name: r.name,
+    branchType: r.branchType ?? 'headoffice',
+    branchId: r.branchId != null ? Number(r.branchId) : null,
+    isActive: Boolean(r.isActive),
+  })));
+});
+
 router.post("/accounts/payments", requireModuleAction(["page:/accounts/vouchers", "page:/operations/payment-voucher"], "add"), async (req, res): Promise<void> => {
   // paymentMode/attachmentUrl are deliberately NOT read: the chosen account is
   // the instrument, and old clients still sending them are silently ignored.
@@ -919,6 +999,14 @@ router.post("/accounts/payments", requireModuleAction(["page:/accounts/vouchers"
   {
     const disabledMsg = await disabledWarehouseError(pool, [{ type: locationType, id: locationId }]);
     if (disabledMsg) { res.status(409).json({ error: disabledMsg, code: WAREHOUSE_DISABLED_CODE }); return; }
+  }
+  // Employee legs: only the employee's salary ledgers, active employees, and
+  // the voucher must be stamped to the employee's own location. Both legs are
+  // checked — the till pickers keep employee ledgers out client-side, but the
+  // server guards the effective value.
+  for (const legId of [Number(paidToLedgerId), Number(paidFromLedgerId)]) {
+    const empCheck = await checkEmployeeVoucherLeg(legId, { locationType, locationId });
+    if (!empCheck.ok) { res.status(400).json({ error: empCheck.error }); return; }
   }
 
   // ── Bill-wise settlement path (vendor bills) ──────────────────────────────
@@ -1162,6 +1250,17 @@ router.patch("/accounts/payments/:id", requireModuleAction(["page:/accounts/vouc
       { locationType: (row.location_type ?? 'headoffice') as any, locationId: Number(row.location_id ?? 0) });
     if (!locRes.ok) { await client.query("ROLLBACK"); res.status(locRes.status).json({ error: locRes.error }); return; }
 
+    // Employee legs on the EFFECTIVE values — unchanged legacy legs stay
+    // editable, but a changed leg or location must obey the salary-ledger
+    // rules exactly as on create.
+    for (const [legId, storedId] of [[newTo, row.paid_to_ledger_id], [newFrom, row.paid_from_ledger_id]] as const) {
+      const empCheck = await checkEmployeeVoucherLeg(Number(legId), locRes.loc, {
+        ledgerId: storedId != null ? Number(storedId) : null,
+        locationType: row.location_type, locationId: row.location_id,
+      });
+      if (!empCheck.ok) { await client.query("ROLLBACK"); res.status(400).json({ error: empCheck.error }); return; }
+    }
+
     const upd = await client.query(
       `UPDATE payments SET
          payment_date = $2, paid_from_ledger_id = $3, paid_to_ledger_id = $4, amount = $5,
@@ -1207,6 +1306,11 @@ router.patch("/accounts/payments/:id", requireModuleAction(["page:/accounts/vouc
 router.delete("/accounts/payments/:id", requireModuleAction(["page:/accounts/vouchers", "page:/operations/payment-voucher"], "delete"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid payment id" }); return; }
+  // Deleting a voucher rewrites the books — Administrator (level 1) only,
+  // on top of the page delete right.
+  if (!(await isLevelOneAdmin((req as any).employee))) {
+    res.status(403).json({ error: ADMIN_DELETE_ERROR }); return;
+  }
   // Scope the DELETE itself: a branch user must not be able to remove another
   // location's (or Head Office's) voucher by guessing its id.
   const scope = ownLocationScope((req as any).employee);
@@ -1401,6 +1505,12 @@ router.post("/accounts/receipts", requireModuleAction(["page:/accounts/vouchers"
   {
     const disabledMsg = await disabledWarehouseError(pool, [{ type: locationType, id: locationId }]);
     if (disabledMsg) { res.status(409).json({ error: disabledMsg, code: WAREHOUSE_DISABLED_CODE }); return; }
+  }
+  // Employee legs: same salary-ledger / active / own-location rules as
+  // payments, checked on both legs (guard the effective value).
+  for (const legId of [Number(receivedFromLedgerId), Number(receivedInLedgerId)]) {
+    const empCheck = await checkEmployeeVoucherLeg(legId, { locationType, locationId });
+    if (!empCheck.ok) { res.status(400).json({ error: empCheck.error }); return; }
   }
 
   // ── Bill-wise settlement path ─────────────────────────────────────────────
@@ -1645,6 +1755,15 @@ router.patch("/accounts/receipts/:id", requireModuleAction(["page:/accounts/vouc
       { locationType: (row.location_type ?? 'headoffice') as any, locationId: Number(row.location_id ?? 0) });
     if (!locRes.ok) { await client.query("ROLLBACK"); res.status(locRes.status).json({ error: locRes.error }); return; }
 
+    // Employee legs on the EFFECTIVE values, unchanged legacy legs grandfathered.
+    for (const [legId, storedId] of [[newFrom, row.received_from_ledger_id], [newIn, row.received_in_ledger_id]] as const) {
+      const empCheck = await checkEmployeeVoucherLeg(Number(legId), locRes.loc, {
+        ledgerId: storedId != null ? Number(storedId) : null,
+        locationType: row.location_type, locationId: row.location_id,
+      });
+      if (!empCheck.ok) { await client.query("ROLLBACK"); res.status(400).json({ error: empCheck.error }); return; }
+    }
+
     const upd = await client.query(
       `UPDATE receipts SET
          receipt_date = $2, received_from_ledger_id = $3, received_in_ledger_id = $4, amount = $5,
@@ -1690,6 +1809,10 @@ router.patch("/accounts/receipts/:id", requireModuleAction(["page:/accounts/vouc
 router.delete("/accounts/receipts/:id", requireModuleAction(["page:/accounts/vouchers", "page:/operations/receipt-voucher"], "delete"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid receipt id" }); return; }
+  // Administrator (level 1) only — same rule as payments and journals.
+  if (!(await isLevelOneAdmin((req as any).employee))) {
+    res.status(403).json({ error: ADMIN_DELETE_ERROR }); return;
+  }
   const scope = ownLocationScope((req as any).employee);
   const ledgerIds = await scopeLedgerIds(scope);
   const params: unknown[] = [id];

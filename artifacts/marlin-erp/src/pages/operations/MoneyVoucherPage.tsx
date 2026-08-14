@@ -15,7 +15,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   useListPayments, useCreatePayment, useUpdatePayment, useDeletePayment,
   useListReceipts, useCreateReceipt, useUpdateReceipt, useDeleteReceipt,
-  useListAccountsFlat, useCashBankLedgersFlat, useGetMe,
+  useListAccountsFlat, useCashBankLedgersFlat, useGetMe, useVoucherEmployees,
 } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
@@ -44,6 +44,7 @@ import { PageHeader } from '@/components/app/page-header';
 import { BillSettlementPanel, type SettlementSelection } from '@/components/settlement/BillSettlementPanel';
 import { entryScopeKeyDown, focusField, useEntryShortcuts } from '@/lib/keyboard-entry';
 import { useVoucherLocationChoice, parseLocKey, LocationSelectField, voucherLocationName } from '@/lib/voucherLocation';
+import { useIsAdmin } from '@/lib/useIsAdmin';
 
 // ── Per-kind wiring ───────────────────────────────────────────────────────────
 
@@ -89,7 +90,10 @@ const CONFIG = {
 const PARTY_TYPES = [
   { value: 'customer', label: 'Customer', match: (c: string) => c.startsWith('CUST-') },
   { value: 'vendor', label: 'Vendor', match: (c: string) => c.startsWith('VEND-') },
-  { value: 'employee', label: 'Employee', match: (c: string) => c.startsWith('SAL-EMP-') || c.startsWith('ADV-EMP-') },
+  // Exactly two ledgers per employee: Salary Payable (SAL-PAY-) and Salary
+  // Expense (SAL-EMP-). Advance ledgers (ADV-EMP-) are payroll-owned legacy
+  // and never offered — the server refuses them too.
+  { value: 'employee', label: 'Employee', match: (c: string) => c.startsWith('SAL-EMP-') || c.startsWith('SAL-PAY-') },
   { value: 'ledger', label: 'Other Ledger', match: (_c: string) => true },
 ] as const;
 
@@ -155,6 +159,9 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
   const { data: allAccounts = [] } = useListAccountsFlat();
   const { data: cashBankAccounts = [] } = useCashBankLedgersFlat();
   const { data: me } = useGetMe();
+  // Voucher deletion is Administrator-only (the API returns 403 for everyone
+  // else); other actions keep the page's role permissions.
+  const isAdmin = useIsAdmin();
 
   const rows = (listQ.data ?? []) as any[];
   const isLoading = listQ.isLoading;
@@ -179,11 +186,37 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
 
   const codeOf = (id: number) => (allAccounts as any[]).find(a => a.id === id)?.code ?? '';
   const partyTypeDef = PARTY_TYPES.find(t => t.value === partyType) ?? PARTY_TYPES[3];
+
+  // Employee party type: the salary ledgers are system-provisioned, so the
+  // generic system-ledger exclusion is bypassed for exactly the two allowed
+  // prefixes — and the options narrow to the selected location's ACTIVE
+  // employees (Head-Office-stamped employees are company-wide; a Head Office
+  // voucher may name any employee, matching the server's rule).
+  const { data: voucherEmployees = [] } = useVoucherEmployees();
+  const eligibleEmployeeIds = useMemo(() => {
+    const loc = parseLocKey(locKey);
+    const ids = new Set<number>();
+    for (const e of voucherEmployees as any[]) {
+      if (!e.isActive) continue;
+      const empType = e.branchType ?? 'headoffice';
+      if (loc && loc.locationType !== 'headoffice' && (empType === 'warehouse' || empType === 'outlet')) {
+        if (empType !== loc.locationType || Number(e.branchId) !== Number(loc.locationId)) continue;
+      }
+      ids.add(Number(e.id));
+    }
+    return ids;
+  }, [voucherEmployees, locKey]);
+
   const partyOptions = useMemo(
-    () => (allAccounts as any[]).filter(a =>
-      !a.isSystemGroup && !a.isGroup && !isSystemLedger(a.code)
-      && partyTypeDef.match(a.code ?? '') && !foreignLedgerIds.has(a.id)),
-    [allAccounts, partyTypeDef, foreignLedgerIds],
+    () => (allAccounts as any[]).filter(a => {
+      if (a.isSystemGroup || a.isGroup || !partyTypeDef.match(a.code ?? '') || foreignLedgerIds.has(a.id)) return false;
+      if (partyTypeDef.value === 'employee') {
+        const m = /^(?:SAL-EMP|SAL-PAY)-(\d+)$/.exec(a.code ?? '');
+        return !!m && eligibleEmployeeIds.has(Number(m[1]));
+      }
+      return !isSystemLedger(a.code);
+    }),
+    [allAccounts, partyTypeDef, foreignLedgerIds, eligibleEmployeeIds],
   );
 
   // Till picker — only the selected location's own cash/bank accounts.
@@ -212,8 +245,14 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
     if (cashId && !tillOptions.some((a: any) => Number(a.id) === cashId)) form.setValue('cashBankLedgerId', 0);
     const partyId = Number(form.getValues('partyLedgerId'));
     if (partyId && foreignLedgerIds.has(partyId)) form.setValue('partyLedgerId', 0);
+    // An employee that just became ineligible (location switch) must not ride
+    // along hidden in the form — same rule as foreign ledgers.
+    if (partyId && partyTypeDef.value === 'employee' && !editing
+      && !partyOptions.some((a: any) => Number(a.id) === partyId)) {
+      form.setValue('partyLedgerId', 0);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [locKey, tillOptions, foreignLedgerIds]);
+  }, [locKey, tillOptions, foreignLedgerIds, partyOptions]);
 
   const resetForm = () => {
     form.reset({ ...EMPTY, voucherDate: today(), cashBankLedgerId: defaultCashId });
@@ -613,6 +652,12 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
                 <TableRow key={r.id} className="hover:bg-muted/10">
                   <TableCell className="font-mono text-primary font-bold text-sm whitespace-nowrap">
                     {r.voucherNumber}
+                    {r.origin === 'system' && (
+                      <Badge variant="secondary" className="ml-2 align-middle font-sans font-medium text-[10px] uppercase tracking-wide text-muted-foreground"
+                        title="System generated — created by another module (sales, expenses, payroll). Manage it there.">
+                        System generated
+                      </Badge>
+                    )}
                   </TableCell>
                   <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
                     <div className="flex items-center gap-1"><Calendar className="w-3 h-3" />{new Date(r[C.dateField]).toLocaleDateString('en-IN')}</div>
@@ -661,7 +706,7 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
                             <Pencil className="w-4 h-4" />
                           </Button>
                         )}
-                        {perm.canDelete && (
+                        {perm.canDelete && isAdmin && (
                           <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-destructive" title="Delete" onClick={() => setDeleteTarget(r)}>
                             <Trash2 className="w-4 h-4" />
                           </Button>

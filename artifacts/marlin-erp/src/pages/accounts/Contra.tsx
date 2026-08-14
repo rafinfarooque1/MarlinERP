@@ -23,6 +23,7 @@ import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { AccountCombobox } from '@/components/ui/account-combobox';
 import { entryScopeKeyDown, autoFocusFirst, focusField, useEntryShortcuts } from '@/lib/keyboard-entry';
 import { useVoucherLocationChoice, parseLocKey, LocationSelectField } from '@/lib/voucherLocation';
+import { useIsAdmin } from '@/lib/useIsAdmin';
 import { PageHeader } from '@/components/app/page-header';
 import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
 import { EmptyState } from '@/components/app/empty-state';
@@ -43,6 +44,8 @@ const today = () => new Date().toISOString().split('T')[0];
 
 export default function Contra() {
   const perm = usePermission('page:/accounts/vouchers');
+  // Voucher deletion is Administrator-only (the API 403s everyone else).
+  const isAdmin = useIsAdmin();
   const { data: vouchers = [], isLoading } = useListJournalVouchers({ type: 'contra' });
   const { data: cashBankAccounts = [] } = useCashBankLedgersFlat();
   const createMutation = useCreateJournalVoucher();
@@ -204,7 +207,7 @@ export default function Contra() {
                   <TableCell className="text-muted-foreground text-sm max-w-[200px] truncate">{v.narration || '—'}</TableCell>
                   <TableCell className="text-right font-mono font-bold text-violet-500">{inr(v.totalAmount)}</TableCell>
                   <TableCell className="text-right">
-                    {perm.canDelete && (
+                    {perm.canDelete && isAdmin && (
                       <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-destructive" onClick={() => setDeleteTarget(v)}>
                         <Trash2 className="w-4 h-4" />
                       </Button>

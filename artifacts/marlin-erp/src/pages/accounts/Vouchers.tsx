@@ -35,6 +35,7 @@ import { useGetCompanySettings } from '@workspace/api-client-react';
 import { downloadVoucherPDF } from '@/lib/pdfUtils';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { useVoucherLocationChoice, parseLocKey, LocationSelectField } from '@/lib/voucherLocation';
+import { useIsAdmin } from '@/lib/useIsAdmin';
 import { SystemReceiptDeleteDialog } from '@/components/accounts/SystemReceiptDeleteDialog';
 import { PageHeader } from '@/components/app/page-header';
 import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
@@ -934,6 +935,9 @@ export default function Vouchers() {
 
   const canView = perm.canView || permPay.canView;
   const canAdd  = perm.canAdd  || permPay.canAdd;
+  // Voucher deletion is Administrator-only (the API 403s everyone else);
+  // view/edit/download/print keep the page's role permissions.
+  const isAdmin = useIsAdmin();
   const canDel  = perm.canDelete || permPay.canDelete;
   const canEdit = perm.canEdit || permPay.canEdit;
   const canDownload = perm.canDownload || permPay.canDownload;
@@ -1098,7 +1102,15 @@ export default function Vouchers() {
                       </TableCell>
 
                       <TableCell>{typeBadge(row.type)}</TableCell>
-                      <TableCell className="font-mono text-xs font-semibold">{row.voucherNumber}</TableCell>
+                      <TableCell className="font-mono text-xs font-semibold whitespace-nowrap">
+                        {row.voucherNumber}
+                        {row.raw?.origin === 'system' && (
+                          <Badge variant="secondary" className="ml-2 align-middle font-sans font-medium text-[10px] uppercase tracking-wide text-muted-foreground"
+                            title="System generated — created by another module (sales, expenses, payroll). Manage it there.">
+                            System generated
+                          </Badge>
+                        )}
+                      </TableCell>
                       <TableCell className="text-muted-foreground text-sm">{row.date}</TableCell>
                       <TableCell className="max-w-[200px] truncate text-sm" title={row.description}>{row.description}</TableCell>
                       <TableCell className="max-w-[160px] truncate text-xs text-muted-foreground" title={row.narration}>{row.narration || '—'}</TableCell>
@@ -1157,9 +1169,9 @@ export default function Vouchers() {
                           )}
                           {/* Delete is hidden for vouchers another module owns —
                               the API refuses them, so offering the button would
-                              only produce an error. Payments/receipts and older
-                              rows without recorded provenance are unaffected. */}
-                          {canDel && row.raw?.origin !== 'system' && (
+                              only produce an error. It is also Administrator-only:
+                              the API 403s every other hierarchy level. */}
+                          {canDel && isAdmin && row.raw?.origin !== 'system' && (
                             <Button
                               variant="ghost" size="icon"
                               className="h-7 w-7 text-muted-foreground hover:text-destructive"

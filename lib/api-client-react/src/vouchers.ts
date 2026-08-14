@@ -275,3 +275,23 @@ export function usePartyAdvance(
     enabled: !!partyId && partyId > 0,
   });
 }
+
+// ── Voucher employee lookup (Employee party type) ────────────────────────────
+export const getVoucherEmployeesQueryKey = () => ['/api/accounts/voucher-employees'] as const;
+
+/** Minimal employee directory for the Employee party pickers — no salary data. */
+export interface VoucherEmployee {
+  id: number;
+  name: string;
+  branchType: 'headoffice' | 'warehouse' | 'outlet';
+  branchId: number | null;
+  isActive: boolean;
+}
+
+export function useVoucherEmployees() {
+  return useQuery({
+    queryKey: getVoucherEmployeesQueryKey(),
+    queryFn: ({ signal }) =>
+      customFetch<VoucherEmployee[]>('/api/accounts/voucher-employees', { signal }),
+  });
+}

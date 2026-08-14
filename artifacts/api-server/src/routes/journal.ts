@@ -11,6 +11,7 @@ import { isIsoDate } from "../lib/dateInput";
 import { callerLocation, ownLocationScope, foreignPartyLedgerIds, locationOwnedLedgerMap } from "../lib/moneyScope";
 import { outletWritesBlocked } from "../lib/featureFlags";
 import { respondIfMonthLocked, isMonthLocked, ymOfDate, monthLockedBody } from "../lib/periodLock";
+import { isLevelOneAdmin, ADMIN_DELETE_ERROR } from "../lib/adminGate";
 
 const router = Router();
 
@@ -811,6 +812,11 @@ router.patch("/accounts/journal-vouchers/:id", requireModuleAction("page:/accoun
 router.delete("/accounts/journal-vouchers/:id", requireModuleAction("page:/accounts/vouchers", "delete"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   if (!Number.isInteger(id) || id <= 0) { res.status(400).json({ error: "Invalid voucher id" }); return; }
+  // Deleting a voucher rewrites the books — Administrator (level 1) only,
+  // on top of the page delete right (same gate as receipts/payments).
+  if (!(await isLevelOneAdmin((req as any).employee))) {
+    res.status(403).json({ error: ADMIN_DELETE_ERROR }); return;
+  }
 
   const client = await pool.connect();
   try {
