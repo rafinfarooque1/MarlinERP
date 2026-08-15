@@ -467,14 +467,7 @@ export default function Dashboard() {
       tone: bi?.bank?.balance == null ? 'default' : bi.bank.balance >= 0 ? 'pos' : 'neg',
       onClick: drillTo('/reports/financial', 'bank'),
     },
-    // ── Row 6: COGS · GP — both read the P&L's own summary, never a re-sum ──
-    {
-      label: 'COGS',
-      value: pf?.cogs == null ? '—' : fmt(pf.cogs),
-      tone: 'default',
-      hint: 'Cost of Goods Sold · tap for P&L',
-      onClick: drill('pl-cogs'),
-    },
+    // ── Row 6: GP · NP — both read the P&L's own summary, never a re-sum ──
     {
       label: 'GP',
       value: pf?.gross == null ? '—' : fmt(pf.gross),
@@ -496,8 +489,7 @@ export default function Dashboard() {
   // The shared KPI report picks its figures OUT OF summaryCards, so the image
   // can never disagree with the screen (same data, same formatting — never
   // refetched or recomputed). Owner spec fixes the card list to these twelve;
-  // COGS stays dashboard-only, and Inventory drops out when the valuation
-  // permission hides it on screen too. Reconciling breakdown hints ride along
+  // Inventory drops out when the valuation permission hides it on screen too. Reconciling breakdown hints ride along
   // only where they are pure figures ("tap for P&L" hints make no sense in a
   // static image).
   const SHARE_PICKS: { src: string; out: string; withHint?: boolean }[] = [
@@ -612,13 +604,6 @@ export default function Dashboard() {
       value: bi?.bank?.balance == null ? '—' : fmt(bi.bank.balance),
       tone: bi?.bank?.balance == null ? 'default' : bi.bank.balance >= 0 ? 'pos' : 'neg',
       onClick: drillTo('/reports/financial', 'bank'),
-    },
-    {
-      label: 'COGS',
-      icon: Boxes,
-      value: pf?.cogs == null ? '—' : fmt(pf.cogs),
-      desc: 'Cost of Goods Sold',
-      onClick: drill('pl-cogs'),
     },
     {
       label: 'GP',
