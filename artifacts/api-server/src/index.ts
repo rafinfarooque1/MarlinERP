@@ -3471,10 +3471,13 @@ await pool.query(`
 {
   // Guard MUST check the same name this block records ('permission_seed_existing_v1').
   // It previously checked 'assets_page_perms_v1' (copy-paste from the block below),
-  // which made this one-time seed re-run — and crash on the duplicate log insert —
-  // on any database where the assets entry was absent.
+  // which made this one-time seed re-run — and grant all-true rows to roles
+  // created AFTER the cutover (breaking default-deny) — on any database where
+  // the assets entry was absent (e.g. a backup restored from before the assets
+  // module shipped). Both live databases carry both migration_log entries, so
+  // checking the correct name changes nothing for them and closes the hole.
   const { rows: seeded } = await pool.query(
-    `SELECT 1 FROM migration_log WHERE name = 'assets_page_perms_v1'`,
+    `SELECT 1 FROM migration_log WHERE name = 'permission_seed_existing_v1'`,
   );
   if (seeded.length === 0) {
     const { rows: hRows } = await pool.query(

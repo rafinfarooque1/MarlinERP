@@ -32,6 +32,7 @@ import {
   getPagePermRows,
   getNavGroups,
   MODULE_REGISTRY,
+  permKeyForRoute,
 } from '../../artifacts/marlin-erp/src/lib/moduleRegistry';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -204,6 +205,76 @@ const covered = new Set(Object.values(LEGACY_MODULE_TO_PAGES).flat());
 for (const key of PAGE_PERM_KEYS) {
   if (!covered.has(key)) {
     errors.push(`No legacy module maps to "${key}" — existing roles would lose access to it on migration.`);
+  }
+}
+
+// ── 6. Every route must be guarded by ITS OWN page's permission ───────────────
+// The wrong-page failure mode: `<Route path="/accounts/chart"><PermGuard
+// href="/accounts/vouchers">` would gate the chart page behind the Vouchers
+// permission — access granted/denied by the wrong switch, invisible in any
+// key-registration check because both keys exist. Rules enforced on App.tsx:
+//
+//   a. When the route's own path resolves to a registered permission key
+//      (directly or as a satellite), the PermGuard href MUST equal the path.
+//   b. Alias paths (path itself resolves to no key — /dashboard,
+//      /production/purchase/new, /reports/:cat) must pass an href that DOES
+//      resolve, otherwise RoutePermissionGuard silently falls through open.
+//   c. Routes with no PermGuard at all must be on the explicit no-permission
+//      list below (login, redirects, the location picker, self-profile).
+
+const APP_TSX = join(ROOT, 'artifacts/marlin-erp/src/App.tsx');
+{
+  // Routes that intentionally render without a permission row. Additions here
+  // are a security decision — every one is reachable by ANY authenticated user.
+  const NO_PERM_ROUTES = new Set([
+    '/login',      // public credential entry
+    '/sales',      // location picker — no data of its own
+    '/profile/me', // self-service profile
+  ]);
+
+  const src = readFileSync(APP_TSX, 'utf8');
+  for (const m of src.matchAll(/<Route path="([^"]+)"([^>]*)>/g)) {
+    const path = m[1];
+    if (m[2].includes('/>')) {
+      // Self-closing (e.g. the login route rendering a bare component).
+      if (!NO_PERM_ROUTES.has(path)) {
+        errors.push(`App.tsx:${lineOf(src, m.index!)} route "${path}" renders without a PermGuard and is not on the no-permission list.`);
+      }
+      continue;
+    }
+    const end = src.indexOf('</Route>', m.index!);
+    const block = src.slice(m.index!, end === -1 ? undefined : end);
+    if (block.includes('<Redirect')) continue;
+
+    const guard = block.match(/<(?:Perm|RoutePermission)Guard\s[^>]*href="([^"]+)"([^>]*)>/s);
+    if (!guard) {
+      if (!NO_PERM_ROUTES.has(path)) {
+        errors.push(`App.tsx:${lineOf(src, m.index!)} route "${path}" renders without a PermGuard and is not on the no-permission list.`);
+      }
+      continue;
+    }
+    const href = guard[1];
+    const unrestricted = /\bunrestricted\b/.test(guard[2]);
+    if (unrestricted) continue; // explicit opt-out (change-password)
+
+    const ownKey = permKeyForRoute(path);
+    const guardKey = permKeyForRoute(href);
+    if (PAGE_PERM_KEY_SET.has(ownKey)) {
+      // The route's own path resolves to a permission key (directly or as a
+      // satellite): the guard must resolve to that SAME key. Comparing resolved
+      // keys (not raw hrefs) allows satellite tabs to name their owner page.
+      if (guardKey !== ownKey) {
+        errors.push(
+          `App.tsx:${lineOf(src, m.index!)} route "${path}" is guarded with href="${href}" (→ "${guardKey}") — the wrong page's ` +
+          `permission. The route's own path resolves to "${ownKey}".`,
+        );
+      }
+    } else if (!PAGE_PERM_KEY_SET.has(guardKey)) {
+      errors.push(
+        `App.tsx:${lineOf(src, m.index!)} route "${path}" guard href="${href}" resolves to "${guardKey}", which is not a registered ` +
+        `permission key — RoutePermissionGuard falls through UNRESTRICTED. Point href at a registered page or add the satellite mapping.`,
+      );
+    }
   }
 }
 
