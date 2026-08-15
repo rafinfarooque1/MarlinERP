@@ -302,3 +302,37 @@ Report-only audit (no fixes applied). Method: 33 regression suites re-run, produ
 - **Accounting Periods module** (`/accounts/periods`, `routes/periods.ts`, `lib/periodLock.ts`): admin-only monthly locking. `accounting_period_locks` holds only locked months (absence = open); `period_lock_events` records every lock/unlock with actor and unlock reason. Lock requires confirmation and shows a pre-lock verification summary; unlock requires a reason. All writes with a business date in a locked month are refused with HTTP 423 `MONTH_LOCKED` via one shared helper — sales, purchases, returns, productions, transfers, vouchers, expenses, payroll, attendance, leaves, rent, assets (incl. asset transfers), imports, accrual sweeps. Deliberately open: new open-month payments against locked-month credit sales, quotations, masters.
 - **B2C→B2B reclassification** (`lib/invoiceReclass.ts`): a customer gaining a GSTIN converts their open-month SB2C invoices to the SB2B series atomically (GST save inside the same transaction), compacts only the serial gaps the conversion opened (historical gaps preserved), pair-renames receipts/quotations with unconditional location guards, and writes an audit row per invoice. GSTR-1 classifies by the stamped `invoice_series`; locked months are never touched.
 - Regression suites: `tests/period-lock.test.mjs` (38 checks), `tests/b2c-b2b-conversion.test.mjs` (24 checks) — both suites are self-cleaning and location-guarded against the live data.
+
+## 21. Addendum — Post-Modernization Acceptance Gate (Aug 15, 2026, task #300)
+
+Final regression, reconciliation and export/UI audit closing the modernization program. Unlike §19 (report-only), genuine breaks found here were **fixed**.
+
+### Test battery: 55/55 suites green
+Every backend suite passes (~2,900 assertions; `org-restructure-migration` runs via the workspace tsx harness). The §19 "stale suite" debt is fully paid — the 7 formerly-failing suites were rewritten/repaired in earlier tasks and now pass. Monorepo typecheck clean across api-server, marlin-erp, employee-app, mockup-sandbox and all `lib/*` packages.
+
+Two suite-adjacent defects found and fixed on the way to green:
+- **Ghost sale receipts (data + product fix).** `buildDerivedPostings` excludes sale-linked receipts only while the sale exists; deleting a sale turned its receipts into live one-sided postings. 10 ghost receipts in dev (leaked by test fixtures) were exactly the −₹3,000 BS gap. Receipts removed; `period-lock.test.mjs` cleanup now unwinds creation-time clearing receipts too, and re-running the suite verifiably leaks nothing.
+- **Nameless reversal audit rows (product fix, root cause of §19 M-3).** Purchase delete/edit-reversal wrote `stock_ledger` rows with blank item names — the stored line JSON never carries name/unit (they resolve at read time), so the writers must resolve from the product masters, which they now do inside the transaction. 293 orphan rows healed (verified against masters/documents/batches first). Locked in by `tests/purchase-reversal-ledger-names.test.mjs` (15 checks: edit and delete reversals both stamp real name/unit, zero blank rows escape).
+
+### Reconciliation battery: 17/17 pass (evidence recorded)
+On live-shaped dev data: TB Dr = Cr = ₹2,511,294.30 on both TB endpoints; Balance Sheet balanced, zero difference, no integrity issues; every dashboard tile equals its report (receivables ₹273,686.37, payables ₹695,682, inventory ₹618,685.54, sales ₹431,632.41, purchases ₹936,135); payroll/Salary-Payable sub-ledgers consistent; orphan-posting and ghost-receipt scans clean; `stock_ledger` Σqty = `stock_entries` per item+location (0 mismatches); batches ≤ stock; placements ≤ site stock; no negative stock. GST fixture month (July 2026): Summary = GSTR-1 = GSTR-3B (taxable ₹103,881.02, output ₹5,194.19, ITC ₹3,661.71, net ₹1,532.48) and `/gst/reconciliation` fully attributes all 6 heads. §19's **M-1 is fixed** (cash/bank book folds opening balances — verified in code and by the recon pass).
+
+### Export audit: every export reproduces its screen
+All 87 CSV call sites audited against their page's pagination. Client-paged pages and full-fetch reports export the complete filtered dataset by construction; books/statement exports covered by the `books-drilldown-export` suite. **Four broken exports found and fixed** — Purchases, Sales, Quotations and the Quotation report exported only the loaded server page; they now one-shot fetch the full filtered dataset (new `fetchAllPurchases`/`fetchAllSales`/`fetchAllQuotations` client helpers using the unpaginated server path, same filters as the screen). Verified server-side (unpaginated = paginated totals: 433/26/13) and end-to-end in the browser (pager total 26 = CSV rows 26).
+
+### UI regression: pass
+Playwright sweep as a level-1 user: sale entry (keyboard-entry POS dialog) with dirty-guard verified (Escape on a dirty form prompts, never silently closes) and cash creation-time collection working; journal voucher create + admin delete with dirty-guard; purchases list sorting/pager/₹ formatting; payroll month live-draft render; dispatch board render; mobile (390×844) dashboard + purchases with no horizontal overflow, card lists, drawer nav. One design note (not a regression): sale cancellation has **no UI surface** — `POST /sales/:id/cancel` has never had a frontend caller; cancelling requires the API (and receipts must be unwound first). Tracked as a follow-up.
+
+### Scores (Aug 15)
+Accounting 95 (M-1 closed, ghost-receipt class closed) · Inventory 92 (M-3 closed, ledger reconciles exactly) · Reports/Exports 95 (export parity now enforced end-to-end) · Cash & Bank 92 (was 80) · GST 85 (still held by #54) · Tests/CI 95 (all suites green, zero stale debt) · everything else at §19 levels or better. **Overall: 93/100** (up from 90).
+
+### Owner summary (plain language)
+Your ERP passed its full end-of-program health check. The books balance to the paisa, every dashboard number matches the report behind it, stock counts agree across all three tracking layers, and the GST returns agree with the ledgers. Every "Export" button now downloads *everything* the screen is filtered to — four of them previously exported only the first page. All automated tests pass. The two things to keep on your radar: credit/debit notes still don't reduce GST returns (task #54 — fix before relying on filed returns), and cancelling a sale currently requires technical help since there's no button for it yet.
+
+### Deferred / open items (intentional, with status)
+- **Stock Transfer module spec** — deferred by design; existing two-step transfers remain the flow.
+- **#54** GST credit/debit notes vs returns — open, highest-priority correctness item.
+- **#53** portal JSON exports — deferred.
+- **#37** sales summary warehouse gap, **#14** GST slab locking, **#188** deleted-customer balances (mitigated: orphan sales derive onto SYS-DEBTORS; scans clean), **#134** concurrent-edit reload prompt — open in backlog.
+- **Sale cancel UI** — endpoint exists, no frontend surface (follow-up proposed).
+- **§19 M-2** (8 early prod cash sales missing `sale_payments` legs) — production-side backfill still pending publish-time verification.

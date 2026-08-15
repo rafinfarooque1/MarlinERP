@@ -8,7 +8,7 @@
  */
 import { useMemo, useState } from 'react';
 import {
-  usePaginatedQuotations, useListCustomers, useListWarehouses,
+  usePaginatedQuotations, fetchAllQuotations, useListCustomers, useListWarehouses,
   type QuotationListRow,
 } from '@workspace/api-client-react';
 import { useEnabledOutlets } from '@/lib/locationStructure';
@@ -96,7 +96,8 @@ export function QuotationsSection() {
     { key: 'totalAmount', label: 'Quoted Total', align: 'right', sortValue: r => Number(r.totalAmount), render: r => <span className="font-mono font-semibold">{fmt(Number(r.totalAmount))}</span> },
   ];
 
-  const csvRows = () => rows.map(r => ({
+  // Export must cover the FULL filtered dataset, not the visible page.
+  const csvRows = async () => (await fetchAllQuotations(filters)).map(r => ({
     Quotation: r.quotationNumber, Date: r.quoteDate, Customer: r.customerName || 'Walk-in',
     Location: r.locationName, Type: r.locationType, Status: titleCase(r.status),
     'Valid Till': r.validTill ?? '', Salesperson: r.salesperson ?? '',
@@ -156,7 +157,7 @@ export function QuotationsSection() {
             onChange={e => { setSalesperson(e.target.value); setPage(1); }}
           />
           <ExportButtons
-            onCSV={() => downloadCSV('quotation-report.csv', csvRows())}
+            onCSV={async () => downloadCSV('quotation-report.csv', await csvRows())}
             doc={doc}
             disabled={rows.length === 0}
             canDownload={perm.canDownload}

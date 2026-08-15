@@ -1396,15 +1396,25 @@ router.patch("/purchases/:id", requireModuleAction("page:/production/purchase", 
     // Dated on the bill's OLD business date: the reversal takes the old lines
     // out of history exactly where they entered it, so date-based stock
     // reports stay continuous (closing of D = opening of D+1).
-    await writeStockLedger(client, (toReverse as any[]).map(li => ({
-      txnType: 'purchase_reversal', materialType: li.materialType ?? 'item',
-      refId: li.materialId, itemName: '', unit: '',
-      branchType: loc.type, branchId: ledgerBranchId(loc, li.materialType ?? 'item'), branchName: locName,
-      qtyChange: -Number(li.quantity), unitCost: 0,
-      docType: 'purchase', docId: id,
-      txnDate: String(locked.purchase_date ?? '') || null,
-      notes: 'Purchase edit — old lines reversed',
-    })));
+    // Names/units are resolved from the masters here (via the txn client), NOT
+    // read off the stored line JSON — priceBill deliberately persists lines
+    // without materialName/unit, so the stored fields are always absent.
+    const reversalMaps = await buildNameMaps(client);
+    await writeStockLedger(client, (toReverse as any[]).map(li => {
+      const kind = (li.materialType ?? 'item') as keyof NameMaps;
+      const master = reversalMaps[kind]?.get(Number(li.materialId));
+      return {
+        txnType: 'purchase_reversal', materialType: kind,
+        refId: li.materialId,
+        itemName: master?.name ?? li.materialName ?? '',
+        unit: master?.unit ?? li.unit ?? '',
+        branchType: loc.type, branchId: ledgerBranchId(loc, kind), branchName: locName,
+        qtyChange: -Number(li.quantity), unitCost: 0,
+        docType: 'purchase', docId: id,
+        txnDate: String(locked.purchase_date ?? '') || null,
+        notes: 'Purchase edit — old lines reversed',
+      };
+    }));
 
     // ── Quantity-only changes: adjust by the difference ─────────────────────
     // An increase is a normal inbound of the extra units at the line's own
@@ -1895,7 +1905,7 @@ router.delete("/purchases/:id", requireModuleAction("page:/production/purchase",
       }
     }
 
-    const lineItems = (locked.line_items ?? []) as Array<{ materialType: string; materialId: number; quantity: number; batchNumber?: string | null }>;
+    const lineItems = (locked.line_items ?? []) as Array<{ materialType: string; materialId: number; quantity: number; batchNumber?: string | null; materialName?: string | null; unit?: string | null }>;
   for (const li of lineItems) {
     if (li.materialType === "material") {
       await client.query(
@@ -1944,15 +1954,24 @@ router.delete("/purchases/:id", requireModuleAction("page:/production/purchase",
           AND quantity::numeric <= 0.0005`,
       [id, loc.type, loc.id],
     );
-    await writeStockLedger(client, lineItems.map(li => ({
-      txnType: 'purchase_reversal', materialType: li.materialType ?? 'item',
-      refId: li.materialId, itemName: '', unit: '',
-      branchType: loc.type, branchId: ledgerBranchId(loc, li.materialType ?? 'item'), branchName: locName,
-      qtyChange: -Number(li.quantity), unitCost: 0,
-      docType: 'purchase', docId: id,
-      txnDate: String(locked.purchase_date ?? '') || null,
-      notes: 'Purchase deleted — stock reversed',
-    })));
+    // Names/units resolved from the masters via the txn client — the stored
+    // line JSON never carries materialName/unit (priceBill strips them).
+    const deleteMaps = await buildNameMaps(client);
+    await writeStockLedger(client, lineItems.map(li => {
+      const kind = (li.materialType ?? 'item') as keyof NameMaps;
+      const master = deleteMaps[kind]?.get(Number(li.materialId));
+      return {
+        txnType: 'purchase_reversal', materialType: kind,
+        refId: li.materialId,
+        itemName: master?.name ?? li.materialName ?? '',
+        unit: master?.unit ?? li.unit ?? '',
+        branchType: loc.type, branchId: ledgerBranchId(loc, kind), branchName: locName,
+        qtyChange: -Number(li.quantity), unitCost: 0,
+        docType: 'purchase', docId: id,
+        txnDate: String(locked.purchase_date ?? '') || null,
+        notes: 'Purchase deleted — stock reversed',
+      };
+    }));
     const del = await client.query(`DELETE FROM purchases WHERE id = $1 RETURNING id`, [id]);
     if (del.rowCount === 0) {
       // Belt and braces: the FOR UPDATE above should make this impossible, so if

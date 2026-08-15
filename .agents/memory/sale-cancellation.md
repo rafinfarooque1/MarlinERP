@@ -34,3 +34,7 @@ and immediately after the lock, so it cannot race a concurrent cancel.
 - Test both directions. A guard that blocks the cancelled case but also blocks
   the *live* case is a worse bug than the one being fixed, and only a positive
   control catches it.
+- **No UI surface:** cancel has never had a frontend caller — it is API-only,
+  and a sale with collected money refuses to cancel until the collection is
+  unwound first (admin receipt system-delete). A follow-up task exists to add
+  the button — verify whether it landed before assuming this is still true.

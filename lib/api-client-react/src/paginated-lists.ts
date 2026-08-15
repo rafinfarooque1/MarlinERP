@@ -203,6 +203,27 @@ export function useInfiniteSales(params?: Omit<PaginatedSalesParams, 'page'>) {
   });
 }
 
+/** Full filtered sales list (no page/limit → the server returns everything
+ * matching the filters). For CSV export parity: the screen pages, the file
+ * must not. Plain caller — runs from a click handler, not a render. Rows come
+ * back oldest-first on the unpaginated path, so sort to match the screen. */
+export function fetchAllSales(params?: Omit<PaginatedSalesParams, 'page' | 'limit'>): Promise<PaginatedSaleRow[]> {
+  const qs = salesFilterQuery(params);
+  qs.delete('limit'); // presence of `limit` alone flips the server into paged mode
+  const key = qs.toString();
+  return customFetch<PaginatedSaleRow[]>(`/api/sales${key ? `?${key}` : ''}`)
+    .then(rows => [...rows].sort((a: any, b: any) => Number(b.id) - Number(a.id)));
+}
+
+/** Full filtered purchases list (no page/limit) — CSV export parity. */
+export function fetchAllPurchases(params?: Omit<PaginatedPurchasesParams, 'page' | 'limit'>): Promise<PaginatedPurchaseRow[]> {
+  const qs = new URLSearchParams();
+  if (params?.q) qs.set('q', params.q);
+  appendDateLocationParams(qs, params);
+  const key = qs.toString();
+  return customFetch<PaginatedPurchaseRow[]>(`/api/purchases${key ? `?${key}` : ''}`);
+}
+
 /** Server-paginated purchases list. */
 export function usePaginatedPurchases(params?: PaginatedPurchasesParams) {
   const qs = new URLSearchParams();

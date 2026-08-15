@@ -110,6 +110,25 @@ export function usePaginatedQuotations(
 /** All quotation queries (list + paginated + detail) share this root key. */
 export const quotationsQueryRoot = ["/api/quotations"] as const;
 
+/** Full filtered quotations list (no page/limit → the server returns every
+ * matching row). For CSV export parity: the screen pages, the file must not.
+ * Plain caller — runs from a click handler, not a render. */
+export const fetchAllQuotations = (filters: QuotationListFilters = {}): Promise<QuotationListRow[]> => {
+  const p = new URLSearchParams();
+  if (filters.q) p.set("q", filters.q);
+  if (filters.from) p.set("from", filters.from);
+  if (filters.to) p.set("to", filters.to);
+  if (filters.status) p.set("status", filters.status);
+  if (filters.locationType && filters.locationId) {
+    p.set("locationType", filters.locationType);
+    p.set("locationId", String(filters.locationId));
+  }
+  if (filters.customerId) p.set("customerId", String(filters.customerId));
+  if (filters.salesperson) p.set("salesperson", filters.salesperson);
+  const qs = p.toString();
+  return customFetch<QuotationListRow[]>(`/api/quotations${qs ? `?${qs}` : ""}`);
+};
+
 // ── Stock check before Convert to Sale ────────────────────────────────────────
 
 export interface QuotationStockShortfall {

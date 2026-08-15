@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useLocation } from 'wouter';
 import {
-  usePaginatedPurchases, useListVendors, useListMaterials, useListRawMaterials, useListItems,
+  usePaginatedPurchases, fetchAllPurchases, useListVendors, useListMaterials, useListRawMaterials, useListItems,
   getListPurchasesQueryKey, useDeletePurchase, useGetCompanySettings, useGetPurchase,
 } from '@workspace/api-client-react';
 import { downloadPurchaseInvoicePDF } from '@/lib/purchasePdf';
@@ -178,7 +178,10 @@ export default function Purchases() {
           icon={ShoppingCart}
           actions={<>
             {perm.canDownload && (
-              <Button variant="outline" size="sm" onClick={() => downloadCSV('purchases.csv', filtered.map(p => ({
+              <Button variant="outline" size="sm" onClick={async () => downloadCSV('purchases.csv', (await fetchAllPurchases({
+                q: debouncedSearch || undefined,
+                from: range.from || undefined, to: range.to || undefined, ...locParams,
+              })).map(p => ({
                 'Bill #': p.id, Date: p.purchaseDate, Vendor: p.vendorName, Invoice: p.invoiceNumber || '',
                 // Absent on historical bills — exported blank, never a fake date.
                 'Vendor Inv Date': (p as any).vendorInvoiceDate || '',

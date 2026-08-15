@@ -38,3 +38,5 @@ Sales/purchase tax splits to Output/Input CGST-SGST-IGST ledgers inside `buildDe
 **Why:** COUNT(*)-based numbering duplicates under concurrency and reuses numbers after deletes. All COUNT-based spots were replaced (accounts, customers, reconciliation, cash-in-outlet, payments routes).
 
 **How to apply:** never number a voucher with COUNT(*). Pass the transaction client so the sequence update joins the tx. Grep for `COUNT(*)` near INSERTs when touching money routes — one hid in the sale-payment collection path long after the first sweep.
+
+**Ghost sale receipts:** the "sale-linked receipts stay excluded" rule holds only WHILE the sale row exists — deleting a sale turns its receipts into live one-sided postings (a BS gap equal to their sum). Any path that deletes sales must remove the invoice-trail receipts AND the creation-time clearing receipts first.

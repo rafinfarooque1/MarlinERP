@@ -14,7 +14,7 @@ import { SearchableItemSelect, type ItemOption } from '@/components/ui/searchabl
 import { entryScopeKeyDown, autoFocusFirst, focusAndOpen, useEntryShortcuts } from '@/lib/keyboard-entry';
 import { Checkbox } from '@/components/ui/checkbox';
 import {
-  usePaginatedQuotations, useCreateQuotation, useUpdateQuotation, useDeleteQuotation,
+  usePaginatedQuotations, fetchAllQuotations, useCreateQuotation, useUpdateQuotation, useDeleteQuotation,
   useSetQuotationStatus, useListItems, useListStock,
   useGetCompanySettings, useListCoupons, customFetch, useGetMe,
   useListQuotationSalespeople, useListQuotationPaymentTerms,
@@ -825,7 +825,15 @@ export default function Quotations() {
           actions={
             <>
               {perm.canDownload && (
-                <Button variant="outline" size="sm" onClick={() => downloadCSV('quotations.csv', quotes.map(q => ({
+                <Button variant="outline" size="sm" onClick={async () => downloadCSV('quotations.csv', (await fetchAllQuotations({
+                  q: debouncedSearch || undefined,
+                  from: range.from || undefined,
+                  to: range.to || undefined,
+                  status: statusFilter === 'all' ? undefined : statusFilter,
+                  ...(locFilterType && locFilterId
+                    ? { locationType: locFilterType, locationId: locFilterId }
+                    : {}),
+                })).map(q => ({
                   Quotation: q.quotationNumber, Date: q.quoteDate, Location: q.locationName,
                   Customer: q.customerName || 'Walk-in', Status: STATUS_LABEL[q.status as QStatus] ?? q.status,
                   'Valid Till': q.validTill ?? '', Salesperson: q.salesperson ?? '',

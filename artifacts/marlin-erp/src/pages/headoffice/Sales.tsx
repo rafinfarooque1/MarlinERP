@@ -3,7 +3,7 @@ import { SearchableItemSelect, type ItemOption } from '@/components/ui/searchabl
 import { entryScopeKeyDown, autoFocusFirst, focusAndOpen, focusField, useEntryShortcuts } from '@/lib/keyboard-entry';
 import { Checkbox } from '@/components/ui/checkbox';
 import {
-  useInfiniteSales, useCreateSale, useListCustomers, useGetMe, useListAccountsFlat,
+  useInfiniteSales, fetchAllSales, useCreateSale, useListCustomers, useGetMe, useListAccountsFlat,
   useListItems, useListItemPrices, useListStock, useGetCompanySettings,
   useListCoupons,
   customFetch,
@@ -305,11 +305,9 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   // warehouse passes warehouseScope so the server returns the warehouse plus
   // its child outlets (replaces the old client-side forceChildOutletIds
   // filtering).
-  const {
-    data: salesPages, isLoading, isFetching,
-    fetchNextPage, hasNextPage, isFetchingNextPage,
-  } = useInfiniteSales({
-    limit: PAGE_SIZE,
+  // Shared by the on-screen infinite list AND the CSV export's one-shot full
+  // fetch, so the two can never disagree on what "the filtered dataset" means.
+  const salesListFilters = {
     q: debouncedSearch || undefined,
     from: range.from || undefined,
     to: range.to || undefined,
@@ -326,7 +324,11 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
           : locFilterType === 'outlet' && locFilterId
             ? { locationType: 'outlet' as const, locationId: locFilterId }
             : {}),
-  });
+  };
+  const {
+    data: salesPages, isLoading, isFetching,
+    fetchNextPage, hasNextPage, isFetchingNextPage,
+  } = useInfiniteSales({ limit: PAGE_SIZE, ...salesListFilters });
   const sales = useMemo(
     () => (salesPages?.pages ?? []).flatMap(p => p.rows),
     [salesPages],
@@ -1485,7 +1487,9 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
           actions={
             <>
               {perm.canDownload && (
-                <Button variant="outline" size="sm" onClick={() => downloadCSV('sales.csv', filtered.map(s => ({
+                <Button variant="outline" size="sm" onClick={async () => downloadCSV('sales.csv', (await fetchAllSales(salesListFilters))
+                  .filter(s => statusFilter === 'all' || ((s as any).paymentStatus ?? 'paid') === statusFilter)
+                  .map(s => ({
                   Invoice: s.invoiceNumber, Date: s.saleDate, Outlet: s.outletName,
                   Customer: s.customerName || 'Walk-in', Payment: paymentModeLabel(s.paymentMode),
                   Subtotal: s.subtotal, Tax: s.taxTotal,

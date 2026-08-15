@@ -89,6 +89,14 @@ async function cleanup() {
                             AND s2.location_type = $2 AND s2.location_id = $3) = 0`,
         [row.invoice_number, row.location_type, row.location_id, id]);
     }
+    // Creation-time collections post through the receipt engine (REC/-numbered
+    // clearing receipts linked via sale_payments.clearing_receipt_id) — delete
+    // them BEFORE the legs, or they turn into ghost postings once the sale row
+    // is gone (the posting-stream exclusion keys on the live sale).
+    await sql(`DELETE FROM receipts
+                WHERE id IN (SELECT clearing_receipt_id FROM sale_payments
+                              WHERE sale_id = $1 AND clearing_receipt_id IS NOT NULL)
+                  AND source = 'sale'`, [id]);
     await sql(`DELETE FROM sale_payments WHERE sale_id = $1`, [id]);
     await sql(`DELETE FROM sales WHERE id = $1`, [id]);
   }
