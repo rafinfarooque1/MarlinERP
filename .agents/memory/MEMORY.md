@@ -143,4 +143,5 @@
 - [Client-side image capture](dashboard-share-capture.md) — html2canvas chokes on Tailwind v4 oklab; use html-to-image + crossorigin font links; prebundle lazy deps; never disable the button on isLoading.
 - [Transaction window layout](transaction-workspace-layout.md) — Purchase page is the MASTER design; POS/Quotation dialogs reuse it via transaction-window.tsx primitives; outside-click NEVER closes TransactionDialogs; no h-scroll.
 - [Mobile ERP foundation](mobile-erp-foundation.md) — session boundaries must clear query cache + location snapshot synchronously (global keys, headers outside keys); deny-first tab gating; payroll/leave-balance still 403 non-HR hierarchies.
+- [Mobile billing-flow lessons](mobile-sales-flow.md) — fallback-bearing empty states gate on RESOLVED queries; web confirmDialog is sync so defer retries past the submit lock; business dates = local calendar, never toISOString.
 - [Route-guard audit CI](route-guard-audit.md) — audit-route-guards.ts fails CI on unguarded writes (exemptions stay exact) + check-permissions #6 pins App.tsx guard keys; a comment claiming a fix ≠ the fix.
