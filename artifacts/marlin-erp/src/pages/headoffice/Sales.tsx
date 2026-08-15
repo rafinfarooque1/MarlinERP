@@ -863,6 +863,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
     id: it.id,
     name: it.name,
     code: it.itemCode || null,
+    barcode: it.barcode || null,
     hsn: it.hsnCode || null,
     uom: it.unit || null,
     available: stockMap.get(it.id) ?? 0,
@@ -1735,7 +1736,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
         dirty={form.formState.isDirty || (!!convertFrom && !editItem)}
         onOpenChange={v => { setIsOpen(v); if (!v) { setEditItem(null); setConvertFrom(null); form.reset(effectiveDefaultValues); } }}
       >
-        <TransactionDialogContent className="sm:max-w-3xl" onOpenAutoFocus={autoFocusFirst}>
+        <TransactionDialogContent className="sm:max-w-6xl" onOpenAutoFocus={autoFocusFirst}>
           <DialogHeader><DialogTitle>{editItem
             ? `Edit Sale — ${editItem.invoiceNumber}`
             : convertFrom
@@ -1755,6 +1756,12 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
               onSubmit={form.handleSubmit(onSubmit)}
               className="space-y-5"
             >
+              {/* Desktop workspace: entry flow on the left, live invoice summary
+                  + actions pinned on the right so the total and Complete Sale
+                  stay visible however long the cart grows. Below lg everything
+                  stacks exactly as before (mobile keeps its sticky footer). */}
+              <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(21rem,24rem)] lg:gap-6 lg:items-start">
+              <div className="space-y-5 min-w-0">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <FormField control={form.control} name="locationId" render={({ field }) => (
                   <FormItem><FormLabel>Selling Location <span className="text-destructive">*</span></FormLabel>
@@ -2033,7 +2040,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                     <div className="flex justify-between items-center mb-3">
                       <p className="font-semibold">Cart Items <span className="text-xs text-muted-foreground font-normal ml-1">({availableItems.length} in stock)</span></p>
                     </div>
-                    <div className="overflow-x-auto"><div className="min-w-[720px] space-y-2">
+                    <div className="space-y-2">
                       {fields.map((field, index) => {
                         const itemId   = form.watch(`lineItems.${index}.itemId`);
                         const qty      = form.watch(`lineItems.${index}.quantity`);
@@ -2085,13 +2092,27 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                                     /></FormControl>
                                   </div>
                                   <PriceHistoryButton customerId={watchCustomerId} itemId={Number(f.value) || 0} />
+                                  {/* Below sm the trailing delete column is hidden, so the
+                                      remove control lives beside the picker instead. */}
+                                  <Button type="button" variant="ghost" size="icon" tabIndex={-1} className="sm:hidden h-8 w-8 shrink-0 text-destructive" onClick={() => remove(index)} disabled={fields.length === 1}><Trash2 className="w-3.5 h-3.5" /></Button>
                                 </div>
+                                {itemId > 0 && (() => {
+                                  const it: any = getItem(itemId);
+                                  return it ? (
+                                    <p className="text-[10px] text-muted-foreground">
+                                      {it.itemCode ? <>SKU <span className="font-mono">{it.itemCode}</span> · </> : null}
+                                      MRP {inr(Number(it.mrp ?? 0))}
+                                      {it.unit ? <> · per {it.unit}</> : null} · GST {Number(it.taxRate ?? 0)}%
+                                    </p>
+                                  ) : null;
+                                })()}
                               </FormItem>
                             )} />
 
-                            {/* Row 2: Qty + MRP display (read-only) + Discount + Line total */}
-                            <div className="grid grid-cols-12 gap-2 items-end">
-                              <div className="col-span-2">
+                            {/* Row 2: Qty + Rate + Discount + Line total. Two
+                                labelled columns below sm — never sideways scroll. */}
+                            <div className="grid grid-cols-2 sm:grid-cols-12 gap-2 items-end">
+                              <div className="col-span-1 sm:col-span-2">
                                 <FormField control={form.control} name={`lineItems.${index}.quantity`} render={({ field: f }) => (
                                   <FormItem>
                                     <FormLabel className="text-xs">Qty {itemId > 0 && <span className="text-muted-foreground">(max {maxQty})</span>}</FormLabel>
@@ -2105,13 +2126,13 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                                   price if the master rose since). Anything below
                                   is rejected and snapped back; reductions go
                                   through Discount. */}
-                              <div className="col-span-3">
+                              <div className="col-span-1 sm:col-span-3">
                                 <FormField control={form.control} name={`lineItems.${index}.unitPrice`} render={({ field: f }) => {
                                   const floor = getMrpFloor(itemId);
                                   return (
                                     <FormItem>
                                       <FormLabel className="text-xs">
-                                        MRP (₹) {floor > 0 && <span className="text-[10px] text-muted-foreground font-normal">min {inr(floor)}</span>}
+                                        Rate (₹) {floor > 0 && <span className="text-[10px] text-muted-foreground font-normal">MRP min {inr(floor)}</span>}
                                       </FormLabel>
                                       <FormControl>
                                         <Input
@@ -2168,7 +2189,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                                   existing amount on an edited historical sale
                                   stays visible read-only and is resubmitted
                                   unchanged. */}
-                              <div className="col-span-3">
+                              <div className="col-span-1 sm:col-span-3">
                                 {!discountsEnabled ? (
                                   unitDisc > 0 ? (
                                     <div className="pt-5">
@@ -2204,7 +2225,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                                 )}
                               </div>
 
-                              <div className="col-span-3 text-right pb-0.5 space-y-0.5">
+                              <div className="col-span-1 sm:col-span-3 text-right pb-0.5 space-y-0.5">
                                 {itemId > 0 ? (
                                   unitPrice > 0 ? (
                                     <>
@@ -2227,14 +2248,14 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                                   <p className="text-muted-foreground text-xs">—</p>
                                 )}
                               </div>
-                              <div className="col-span-1 pb-0.5 flex justify-end">
+                              <div className="hidden sm:flex col-span-1 pb-0.5 justify-end">
                                 <Button type="button" variant="ghost" size="icon" tabIndex={-1} className="h-7 w-7 text-destructive" onClick={() => remove(index)} disabled={fields.length === 1}><Trash2 className="w-3 h-3" /></Button>
                               </div>
                             </div>
                           </div>
                         );
                       })}
-                    </div></div>
+                    </div>
                     <Button type="button" variant="outline" size="sm" className="mt-3 w-full border-dashed" onClick={() => append({ itemId: 0, quantity: 1, unitPrice: 0, unitDiscount: 0, taxable: customerHasGstin, taxableTouched: false })}>
                       <Plus className="w-3 h-3 mr-1" /> Add Item
                     </Button>
@@ -2287,8 +2308,12 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                 </Button>
               </div>
 
-              {/* ── Tax Summary + Footer ── */}
-              <DialogFooter className="flex-col gap-0 sm:flex-col w-full pt-2 border-t border-border max-md:sticky max-md:bottom-0 max-md:z-20 max-md:-mx-4 max-md:-mb-4 max-md:px-4 max-md:pb-4 max-md:bg-background/95 max-md:backdrop-blur">
+              </div>{/* /left column */}
+
+              {/* ── Tax Summary + Footer — right column on desktop, sticky so
+                  the running total and Complete Sale never scroll away ── */}
+              <div className="min-w-0 lg:sticky lg:top-0">
+              <DialogFooter className="flex-col gap-0 sm:flex-col w-full pt-2 border-t border-border lg:pt-0 lg:border-t-0 max-md:sticky max-md:bottom-0 max-md:z-20 max-md:-mx-4 max-md:-mb-4 max-md:px-4 max-md:pb-4 max-md:bg-background/95 max-md:backdrop-blur">
                 {hasItems && (
                   <div className="w-full mb-3 rounded-lg border border-border overflow-hidden text-sm">
                     {/* Header */}
@@ -2426,6 +2451,8 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                   </Button>
                 </div>
               </DialogFooter>
+              </div>{/* /right column */}
+              </div>{/* /workspace grid */}
             </form>
           </Form>
         </TransactionDialogContent>

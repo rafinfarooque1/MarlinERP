@@ -1,0 +1,466 @@
+============================================================
+74. TRANSACTION WINDOW / FORM UI — POS + QUOTATION + PURCHASE
+============================================================
+
+IMPORTANT:
+Use the existing Purchase transaction UI direction as the design reference for the POS and Quotation transaction screens.
+
+The goal is NOT to make all three modules visually identical.
+
+The goal is to create ONE common professional transaction-form system that is adapted to:
+
+1. Point of Sale
+2. Quotation
+3. Purchase
+
+All three must feel like they belong to the same ERP.
+
+------------------------------------------------------------
+A. REMOVE THE CRAMPED FORM EXPERIENCE
+------------------------------------------------------------
+
+Do not use the current small, restrictive transaction popup as the primary experience.
+
+The transaction form should use a large responsive workspace.
+
+On desktop:
+- use most of the available content width
+- provide comfortable spacing
+- keep important fields visible
+- avoid unnecessary scrolling
+
+On laptop:
+- automatically adapt to available viewport width
+
+On tablet:
+- stack sections intelligently
+
+On mobile:
+- use a near-full-screen transaction experience
+- no horizontal scrolling
+- fields must stack vertically
+- long item names must wrap
+
+Do NOT create a fixed-width form.
+
+------------------------------------------------------------
+B. COMMON TRANSACTION STRUCTURE
+------------------------------------------------------------
+
+Use a consistent structure:
+
+HEADER
+→ Transaction title
+→ document/status information
+→ location
+→ date
+
+PARTY / CUSTOMER / VENDOR SECTION
+→ Customer or Vendor
+→ relevant reference information
+
+TRANSACTION DETAILS
+→ item search
+→ item selection
+→ quantity
+→ rate
+→ discount
+→ tax
+→ amount
+
+ADDITIONAL INFORMATION
+→ charges
+→ notes
+→ payment terms / payment mode where applicable
+
+SUMMARY
+→ subtotal
+→ discount
+→ tax
+→ other charges
+→ grand total
+
+ACTION BAR
+→ Cancel
+→ Save / Complete / Submit
+
+The exact fields must differ according to the module.
+
+Do not force irrelevant fields into every transaction.
+
+------------------------------------------------------------
+C. POINT OF SALE
+------------------------------------------------------------
+
+Redesign New Sale using the same professional transaction workspace.
+
+POS must be optimized for fast billing.
+
+Top section:
+
+Selling Location
+Date
+Customer
+Payment Mode
+
+Then immediately provide:
+
+SEARCH / SCAN ITEM
+
+The item-entry area must be the main focus.
+
+Use a clean table/card layout:
+
+Item
+SKU
+Qty
+MRP
+Selling Rate
+Discount
+Tax
+Amount
+Actions
+
+Item search must be fast and searchable.
+
+Barcode/scanner workflow must remain supported.
+
+Long item names must wrap.
+
+Do not force horizontal scrolling.
+
+------------------------------------------------------------
+D. POS PAYMENT AREA
+------------------------------------------------------------
+
+Make payment information visually prominent.
+
+Show:
+
+Subtotal
+Discount
+Other Charges
+Tax
+Grand Total
+
+Then:
+
+Payment Mode
+
+Available payment accounts must come dynamically from the Cash & Bank accounts assigned to the selected location.
+
+Support:
+
+Cash
+Bank
+UPI
+Card
+other configured payment accounts
+Credit / Pay Later
+
+For partial payment:
+
+Invoice ₹1,000
+Paid ₹500
+Balance ₹500
+
+Clearly show:
+
+PAID
+PARTIALLY PAID
+UNPAID
+
+For overpayment:
+
+Show confirmation before accepting excess payment.
+
+Excess amount must become customer credit according to the existing accounting model.
+
+------------------------------------------------------------
+E. POS CUSTOMER PRICE HISTORY
+------------------------------------------------------------
+
+When an item is selected for a customer, show a small warning/history icon near MRP or selling rate.
+
+Clicking it should show recent selling prices for that customer and item.
+
+Example:
+
+Last Sale
+₹165 — 10 Aug
+
+Previous Sale
+₹170 — 05 Aug
+
+Previous Sale
+₹160 — 01 Aug
+
+This must be informational only.
+
+Do not automatically change the current price.
+
+------------------------------------------------------------
+F. POS OTHER CHARGES
+------------------------------------------------------------
+
+Sales Other Charges must show ONLY:
+
+DIRECT INCOME ledgers.
+
+Do not show unrelated income or expense ledgers.
+
+Use searchable ledger selection.
+
+------------------------------------------------------------
+G. QUOTATION
+------------------------------------------------------------
+
+Quotation must use the same transaction-form design language.
+
+Header:
+
+Quotation Number
+Date
+Location
+Customer
+Payment Terms
+Sales Person
+
+Sales Person must NOT be free text.
+
+Use searchable employee selection.
+
+Only employees belonging to the selected location should appear.
+
+Then:
+
+Item Search
+Item Table
+Quantity
+Rate
+Discount
+Tax
+Other Charges
+Totals
+
+Quotation must be easy to convert into a Sale without re-entering data.
+
+Quotation itself must NOT affect stock or accounting.
+
+------------------------------------------------------------
+H. PURCHASE
+------------------------------------------------------------
+
+Purchase should be the reference model for the overall transaction workspace.
+
+Use a spacious professional purchase form.
+
+Header:
+
+Purchase Number
+Purchase Date
+Location
+Vendor
+Vendor Invoice Number
+Vendor Invoice Date
+
+Then:
+
+Item Search
+Item
+SKU
+Batch
+Manufacture Date
+Expiry Date
+Quantity
+Unit
+Purchase Rate
+MRP
+Discount
+GST
+Total
+
+The item-entry area should be large enough to work comfortably with many items.
+
+------------------------------------------------------------
+I. PURCHASE OTHER CHARGES
+------------------------------------------------------------
+
+Purchase Other Charges must show ONLY:
+
+DIRECT EXPENSE
+
+ledgers.
+
+Do NOT show:
+
+Indirect Expense
+Direct Income
+Indirect Income
+
+Use searchable ledger selection.
+
+------------------------------------------------------------
+J. TRANSACTION FORM UX
+------------------------------------------------------------
+
+Make the transaction experience visually attractive but practical.
+
+Use:
+
+- clear section headings
+- subtle cards
+- consistent borders
+- sufficient whitespace
+- clear field labels
+- strong primary action
+- secondary Cancel action
+- sticky summary/action area where useful
+
+Do not over-design.
+
+This is an ERP transaction screen, not a marketing landing page.
+
+The user should be able to understand the entire transaction within seconds.
+
+------------------------------------------------------------
+K. UNSAVED DATA PROTECTION
+------------------------------------------------------------
+
+Clicking outside the transaction form must NOT close it.
+
+If the user attempts to navigate away while data has been entered:
+
+Show:
+
+"Discard unsaved changes?"
+
+Options:
+
+Continue Editing
+Discard
+
+Never silently lose a transaction.
+
+------------------------------------------------------------
+L. RESPONSIVE BEHAVIOR
+------------------------------------------------------------
+
+The transaction UI must automatically adapt to:
+
+Mobile
+Tablet
+Laptop
+Desktop
+
+Never rely on horizontal scrolling for normal transaction entry.
+
+If a table genuinely cannot fit:
+
+Use responsive row/card transformation rather than forcing the user to scroll sideways.
+
+Long names must wrap.
+
+Buttons must remain accessible.
+
+Totals must always remain visible.
+
+------------------------------------------------------------
+M. COMMON COMPONENT ARCHITECTURE
+------------------------------------------------------------
+
+Create reusable transaction components rather than separately implementing three unrelated UIs.
+
+For example:
+
+TransactionPageShell
+TransactionHeader
+PartySelector
+LocationSelector
+ItemSearch
+TransactionItemTable
+DiscountEditor
+TaxSummary
+OtherCharges
+PaymentSection
+TransactionSummary
+TransactionActionBar
+
+Reuse these across:
+
+POS
+Quotation
+Purchase
+
+But allow each module to provide its own fields and business rules.
+
+Do NOT duplicate business/accounting logic merely to create the new UI.
+
+------------------------------------------------------------
+N. VISUAL QUALITY STANDARD
+------------------------------------------------------------
+
+The final transaction screens should feel comparable to a modern professional ERP.
+
+Prioritize:
+
+Clarity
+Speed
+Readability
+Low cognitive load
+Responsive behavior
+Consistent interaction
+Fast item selection
+Easy review before submission
+
+Do not sacrifice usability for visual effects.
+
+------------------------------------------------------------
+O. ACCEPTANCE TEST
+------------------------------------------------------------
+
+Before completion test:
+
+1. POS with one item
+2. POS with many items
+3. POS with long item name
+4. POS on mobile viewport
+5. POS partial payment
+6. POS credit sale
+7. POS cash sale
+8. POS bank payment
+9. POS customer price history
+10. POS other charges
+
+11. Quotation with one item
+12. Quotation with many items
+13. Quotation with long item name
+14. Quotation employee selection
+15. Quotation location restriction
+16. Quotation conversion to sale
+
+17. Purchase with one item
+18. Purchase with many items
+19. Purchase with long item name
+20. Purchase batch
+21. Purchase manufacture date
+22. Purchase expiry date
+23. Purchase vendor invoice number
+24. Purchase vendor invoice date
+25. Purchase direct-expense charges
+
+26. Test desktop
+27. Test laptop
+28. Test tablet
+29. Test mobile
+
+Verify:
+
+No accidental popup closing
+No horizontal overflow
+No clipped fields
+No hidden Save/Complete button
+No broken dropdown
+No accounting changes caused by UI refactoring
+No inventory duplication
+No regression in existing workflows

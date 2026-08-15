@@ -758,6 +758,7 @@ export default function PurchaseEntry() {
                               id: m.id,
                               name: m.name,
                               code: m.itemCode || null,
+                              barcode: m.barcode || null,
                               hsn: m.hsnCode || null,
                               gstRate: m.taxRate == null ? null : Number(m.taxRate),
                             }))}
@@ -774,6 +775,19 @@ export default function PurchaseEntry() {
                             <X className="w-3.5 h-3.5" />
                           </Button>
                         </div>
+                        {/* Unit + MRP straight from the master — display only,
+                            nothing here feeds the costing arithmetic. */}
+                        {Number(li.materialId) > 0 && (() => {
+                          const kind = form.watch(`lineItems.${index}.materialType`);
+                          const arr: any[] = kind === 'raw_material' ? rawMaterials : kind === 'item' ? finishedItems : materials;
+                          const m: any = arr.find((x: any) => Number(x.id) === Number(li.materialId));
+                          return m ? (
+                            <p className="text-[10px] text-muted-foreground">
+                              Unit <span className="font-mono">{m.unit || '—'}</span>
+                              {Number(m.mrp ?? 0) > 0 && <> · MRP {inr(Number(m.mrp))}</>}
+                            </p>
+                          ) : null;
+                        })()}
                       </div>
                       {/* HSN fills itself from the Item Master; it is out of
                           the tab order (still mouse-editable) so Tab goes

@@ -22,8 +22,7 @@
 - [GST recon attribution](gst-recon-attribution.md) — head diffs decompose EXACTLY into doc diffs + JV entries; legacy aggregates filter cancelled at aggregation-time; GSTR-3B invariant is conservation, not out−itc.
 - [GST transfer classification](gst-transfer-classification.md) — auto-detects internal/intrastate/interstate from GSTIN; JVs created inside transactions at dispatch+approve; STD-BRANCH-DEBTOR/CREDITOR auto-provisioned.
 - [Unified sidebar architecture](unified-sidebar.md) — ONE nav for all users; Sales/Accounts switcher removed; getNavGroups() replaces getAccountsNavGroups()+getSalesNavItems(); getPermissionGroups() replaces getPermissionSegments().
-- [Phase 1 stabilization changes](phase1-stabilization.md) — default-deny perms + seeding migration, 8-hr token expiry, payroll COA posting, negative-stock DB constraint, opening-balances table, CORS/body limits.
-- [Phase 1 QA findings](phase1-qa-findings.md) — 3 bugs found+fixed in QA: health bypass path, incomplete seeding list, frontend default-allow. All Phase 1 items verified with test evidence.
+- [Phase 1 stabilization changes](phase1-stabilization.md) — default-deny perms + seeding migration, 8-hr token expiry, payroll COA posting, negative-stock constraint, CORS/body limits; QA findings in phase1-qa-findings.md.
 - [Payroll workflow](payroll-workflow.md) — drafts LIVE-refresh on GET (no Generate buttons); approval gates on unclassified absences (409/confirmLop); per-employee ledgers; advances auto-deducted at generate.
 - [LOP leave policy](lop-leave-policy.md) — wd = calendar days of the month (payrollWorkingDays retired/ignored); ONE formula (dayContribution/monthLeaveSummary); NULL leave snapshot = omit, never 0; suites pin policy + derive DIM.
 - [LBAC implementation](lbac-implementation.md) — full location-scoping across all routes; decisions on HO-only endpoints; vendor/customer location stamping; dataScope helpers.
@@ -62,7 +61,7 @@
 - [Publish schema diff](publish-schema-diff.md) — publish diffs the two live DBs (not schema.ts); CASE-expression indexes break the differ; text→date can NEVER apply, date→text applies silently; converge types.
 - [One outstanding figure](single-outstanding-figure.md) — the owning module must export BOTH the in-process calc and SQL builders; reports and UIs hand-roll `total−paid` and silently drop credit notes.
 - [Orphaned ledger postings](orphaned-ledger-postings.md) — a balanced trial balance proves nothing: deleted ledgers leave postings that classify into neither statement, and the BS gap equals their net exactly.
-- [Dashboard KPI sources](dashboard-kpi-sources.md) — never re-sum expense subtrees for a tile (the capitalisation overlay makes it disagree with the P&L); located tiles read the located posting slice.
+- [Dashboard KPI sources & money flows](dashboard-kpi-sources.md) — never re-sum expense subtrees for a tile (capitalisation overlay disagrees with P&L); located tiles read the located posting slice; UI reads /dashboard/bi (NOT /summary, which stays today-anchored).
 - [Global location context](global-location-context.md) — sidebar selector → headers on reads only; view ANDed on LBAC, never authority; query key beats header; ledger-anchored reports flip basis when located.
 - [Audit stamp fallbacks](audit-stamp-fallbacks.md) — `?? "system"` over a never-assigned request property records every row as system-generated and never fails; grep the middleware before writing created_by.
 - [Purchase edit line diff](purchase-edit-line-diff.md) — edits pair lines by kind:id:batch and touch only changed stock; aggregate debits per lot/product; settled floor (not a block) re-checked under the row lock.
@@ -105,7 +104,6 @@
 - [Admin system receipt delete](system-receipt-delete.md) — level-1-only unwind for source='sale' receipts; trail slice = paid−Σlegs, never raw amount; amount_paid writers must SUM under the sale row lock.
 - [Advance settlement](advance-recovery.md) — the debit must sit on the ledger settlement credits (Salary Payable); ONE settlement path; settling a row needs per-row proof, never a global migration marker.
 - [Advance voucher links](advance-voucher-links.md) — row + voucher created in ONE txn with the link stamped; consumers fail closed on NULL links; backfills reconcile amounts, never pair by row order.
-- [Dashboard money flows](dashboard-kpi-sources.md) — Dashboard UI reads /dashboard/bi (NOT /summary); moneyFlows follows the selected range+location (todayMoney = legacy mirror); /summary stays today-anchored.
 - [P&L returns split & GP/NP tiles](pnl-returns-split.md) — GP/NP tiles read the P&L's own summary (never recomputed); returns recovered from note-sourced postings on the sales/purchases subtrees; statement splits must be remainder-based.
 - [Shared surface guards](shared-surface-guards.md) — a second page over existing endpoints: widen the lookup GETs too, bind any-of guards to the request kind, seed new page keys + regenerate pagePermissions.
 - [shadcn Form context](shadcn-form-context.md) — FormItem/FormLabel outside a FormField render prop crash the whole route at runtime; plain label for non-RHF controls.
@@ -119,7 +117,7 @@
 - [Party location assignment](party-location-assignment.md) — ONE validated resolver for create+edit stamps; /:id routes need their own scope gate; located ledger filters totals too; import blank rows = batch stamp.
 - [Bill-level control over per-line fields](bill-level-over-per-line.md) — one control fronting a per-row stored field must surface mixed legacy rows (warn + apply-on-pick), never let row 0 silently speak for the bill.
 - [Radix programmatic focus](radix-programmatic-focus.md) — Select opens on pointerdown, Popover on click; chain closes via onCloseAutoFocus+preventDefault, defer one tick for Escape; scope+verify auto-advance flags.
-- [Responsive design conventions](responsive-design.md) — desktop pixel-identical: touch bumps live in ui/ primitives (max-md:), md:hidden card lists beside hidden md:block tables, entry grids scroll (never restructure).
+- [Responsive design conventions](responsive-design.md) — desktop pixel-identical: touch bumps live in ui/ primitives (max-md:), md:hidden card lists beside hidden md:block tables; "entry grids scroll" superseded for POS/Quotation rows by transaction-workspace-layout.md.
 - [Org role restructure](org-role-restructure.md) — root = Administrator, Management is view-only level 2; hierarchy migrations must fail closed (no marker) on name clashes/multi-root; reset rebuilds the tree via shared helper.
 - [Keyboard Entry Mode](keyboard-entry-mode.md) — all entry forms share keyboard-entry.tsx conventions; cmdk needs CommandList for arrow-nav; isPending is not a double-submit guard — sync submitLockRef.
 - [Table sorting](table-sorting.md) — every table sorts via lib/tableSort.tsx / RTable; accessors return RAW values, footers pinned, tri-state to default; see file for the non-sortable list.
@@ -156,4 +154,5 @@
 - [Workspace reset & rollback semantics](workspace-reset-recovery.md) — merge/cancel events revert TRACKED files to HEAD (untracked survive); re-verify wiring by marker greps; surviving tests + pg_dump -s are the recovery contract.
 - [Dashboard drill-downs & parity](dashboard-drilldowns.md) — tile → report via ?view/range params (stripped on mount, location rides headers); parity suite pins every tile == its report's total.
 - [Client-side image capture](dashboard-share-capture.md) — html2canvas chokes on Tailwind v4 oklab; use html-to-image + crossorigin font links; prebundle lazy deps; never disable the button on isLoading.
+- [Transaction workspace layout](transaction-workspace-layout.md) — POS/Quotation dialogs = wide 2-col workspace (left entry in original DOM order, right sticky summary+footer); 12-span responsive rows, no h-scroll; reuse for new txn dialogs.
 - [Route-guard audit CI](route-guard-audit.md) — audit-route-guards.ts fails CI on unguarded writes (exemptions stay exact) + check-permissions #6 pins App.tsx guard keys; a comment claiming a fix ≠ the fix.
