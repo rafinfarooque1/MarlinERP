@@ -33,6 +33,7 @@ import {
   useDateRange, RangeBar, SummaryCards, LocationBadge, TONE_CLS,
   type CardTone, type SummaryCard,
 } from '@/pages/reports/shared';
+import { DashboardShareReport, type ShareKpi } from './DashboardShareReport';
 
 // ── Small helpers ───────────────────────────────────────────────────────────
 
@@ -42,6 +43,12 @@ const OUTLET_COLOR = 'hsl(var(--chart-2))';
 const PAY_LABEL: Record<string, string> = {
   cash: 'Cash', card: 'Card', upi: 'UPI',
   bank_transfer: 'Bank', credit: 'Credit', unknown: 'Other',
+};
+
+/** Period chip on the shared KPI report — mirrors the RangeBar presets. */
+const PRESET_LABEL: Record<string, string> = {
+  today: 'Today', yesterday: 'Yesterday', week: 'Last 7 days', month: 'This month',
+  quarter: 'Quarter', fy: 'This FY', all: 'All time', custom: 'Custom range',
 };
 
 // ── Mobile KPI cards (phones only — desktop keeps SummaryCards untouched) ───
@@ -290,35 +297,54 @@ export default function Dashboard() {
     navigate(`${path}?${drillQs(view)}${anchor ? `#${anchor}` : ''}`);
   const drill = (anchor: string) => drillTo('/reports/financial', 'pnl', anchor);
 
-  // ── Export / Share: capture the dashboard as one PNG (client-side) ────────
-  // Rendered off the live DOM with html2canvas (lazy-loaded — it's only paid
-  // for on tap). Mobile browsers get the native share sheet (WhatsApp etc.);
-  // everywhere else the image downloads.
-  const captureRef = useRef<HTMLDivElement>(null);
+  // ── Export / Share: capture ONLY the dedicated KPI report (owner spec) ────
+  // The DashboardShareReport component renders off-screen at a fixed design
+  // width, so the image is identical on phone/tablet/desktop and can never
+  // include the trend/BI sections, navigation or floating buttons. Never a
+  // cropped page screenshot.
+  const shareRef = useRef<HTMLDivElement>(null);
   const [sharing, setSharing] = useState(false);
   const shareDashboard = async () => {
-    const el = captureRef.current;
+    if (sharing) return;
+    if (isLoading || !bi) {
+      // The report shows exactly the on-screen figures — there are none yet.
+      toast.info('Dashboard figures are still loading — try again in a moment');
+      return;
+    }
+    const el = shareRef.current;
     if (!el) {
-      // Should be unreachable — the button lives inside the captured div.
-      console.error('[dashboard] share: capture root not mounted');
+      // Should be unreachable — the report mounts whenever bi is loaded.
+      console.error('[dashboard] share: report node not mounted');
       toast.error('Could not capture the dashboard image');
       return;
     }
-    if (sharing) return;
-    console.debug('[dashboard] share: capturing…');
+    console.debug('[dashboard] share: capturing KPI report…');
     setSharing(true);
     try {
+      // Wait for webfonts first — a mid-swap capture measures fallback font
+      // metrics, shifting line wraps and the report height between captures.
+      await document.fonts.ready;
       // html-to-image renders via SVG <foreignObject>, so the BROWSER paints
       // the clone — modern color functions (Tailwind v4 emits oklab/oklch,
       // which html2canvas could not parse) work for free.
       const { toBlob } = await import('html-to-image');
       const blob = await toBlob(el, {
-        backgroundColor: getComputedStyle(document.body).backgroundColor || '#ffffff',
-        pixelRatio: Math.min(2, Math.max(1, window.devicePixelRatio || 1)),
+        backgroundColor: '#ffffff',
+        // Fixed design width → fixed output size on every device.
+        pixelRatio: 2,
         cacheBust: true,
       });
       if (!blob) throw new Error('empty canvas');
-      const file = new File([blob], `dashboard-${new Date().toISOString().slice(0, 10)}.png`, { type: 'image/png' });
+      const slugify = (s: string) =>
+        s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'all-locations';
+      const dateSlug = range.from && range.to
+        ? (range.from === range.to ? range.from : `${range.from}_to_${range.to}`)
+        : 'all-time';
+      const file = new File(
+        [blob],
+        `business-dashboard-${dateSlug}-${slugify(bi.scope.label)}.png`,
+        { type: 'image/png' },
+      );
       if (typeof navigator.canShare === 'function' && navigator.canShare({ files: [file] })) {
         await navigator.share({ files: [file], title: 'Business Dashboard' });
       } else {
@@ -328,7 +354,7 @@ export default function Dashboard() {
         a.download = file.name;
         a.click();
         URL.revokeObjectURL(url);
-        toast.success('Dashboard image downloaded');
+        toast.success('Dashboard report image downloaded');
       }
     } catch (e: any) {
       // The user closing the share sheet is not an error.
@@ -467,6 +493,38 @@ export default function Dashboard() {
     },
   ];
 
+  // The shared KPI report picks its figures OUT OF summaryCards, so the image
+  // can never disagree with the screen (same data, same formatting — never
+  // refetched or recomputed). Owner spec fixes the card list to these twelve;
+  // COGS stays dashboard-only, and Inventory drops out when the valuation
+  // permission hides it on screen too. Reconciling breakdown hints ride along
+  // only where they are pure figures ("tap for P&L" hints make no sense in a
+  // static image).
+  const SHARE_PICKS: { src: string; out: string; withHint?: boolean }[] = [
+    { src: 'Sales', out: 'Sales' },
+    { src: 'Purchases', out: 'Purchases' },
+    { src: 'Inventory Value', out: 'Inventory' },
+    { src: 'Expenses', out: 'Expenses', withHint: true },
+    { src: 'Payables', out: 'Payables', withHint: true },
+    { src: 'Receivables', out: 'Receivables' },
+    { src: 'Payments', out: 'Payments', withHint: true },
+    { src: 'Receipts', out: 'Receipts', withHint: true },
+    { src: 'Cash Balance', out: 'Cash' },
+    { src: 'Bank Balance', out: 'Bank' },
+    { src: 'GP', out: 'GP · Gross Profit' },
+    { src: 'NP', out: 'NP · Net Profit' },
+  ];
+  const shareCards: ShareKpi[] = SHARE_PICKS.flatMap(({ src, out, withHint }) => {
+    const c = summaryCards.find((x) => x.label === src);
+    if (!c) return []; // permission-hidden (Inventory) — omitted, like on screen
+    return [{
+      label: out,
+      value: typeof c.value === 'string' ? c.value : '—',
+      tone: c.tone,
+      hint: withHint && typeof c.hint === 'string' ? c.hint : undefined,
+    }];
+  });
+
   // Mobile-only card set: same figures, order and tones as summaryCards, but
   // with shorter labels, subtle icons, structured breakdown lines and one-line
   // descriptions, per the owner's mobile-dashboard spec. Pairs land as
@@ -583,7 +641,7 @@ export default function Dashboard() {
 
   return (
     <AppLayout>
-      <div className="space-y-6" ref={captureRef}>
+      <div className="space-y-6">
 
         {/* ── Header ─────────────────────────────────────────────────────── */}
         <PageHeader
@@ -867,6 +925,23 @@ export default function Dashboard() {
           />
         </div>
       </div>
+      {/* Off-screen KPI share report — exists only to be photographed by the
+          Share button. Fixed left offset keeps it out of view and out of the
+          layout without display:none (which html-to-image cannot capture). */}
+      {!isLoading && bi && (
+        <div aria-hidden className="fixed top-0 -left-[10000px] pointer-events-none" style={{ zIndex: -1 }}>
+          <DashboardShareReport
+            ref={shareRef}
+            locationLabel={bi.scope.label}
+            periodLabel={pLabel}
+            presetLabel={PRESET_LABEL[range.preset] ?? 'Custom range'}
+            generatedAt={new Date().toLocaleString('en-IN', {
+              day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit',
+            })}
+            cards={shareCards}
+          />
+        </div>
+      )}
     </AppLayout>
   );
 }
