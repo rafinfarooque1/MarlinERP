@@ -8,7 +8,7 @@
  * shows up in GST or the dashboard. "Convert to Sale" opens the Sales Entry
  * form prefilled — only completing THAT sale deducts stock and posts books.
  */
-import { useState, useMemo, useEffect, useRef } from 'react';
+import { Fragment, useState, useMemo, useEffect, useRef } from 'react';
 import { useLocation } from 'wouter';
 import { SearchableItemSelect, type ItemOption } from '@/components/ui/searchable-item-select';
 import { entryScopeKeyDown, autoFocusFirst, focusAndOpen, useEntryShortcuts } from '@/lib/keyboard-entry';
@@ -30,8 +30,20 @@ import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { DialogClose, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { DialogClose, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { TransactionDialog, TransactionDialogContent } from '@/components/ui/transaction-dialog';
+// The shared transaction-window vocabulary — extracted from the Purchase
+// master page so this dialog renders as the same design system.
+import {
+  TXN_CARD, TXN_HEADER_GRID, TXN_LINES_BOX, txnLinesHead, txnLineRow, TXN_SUBROW,
+  TXN_BOTTOM_GRID, TXN_SUMMARY_CARD, TXN_ACTION_BAR_DIALOG, TXN_ACTION_BAR_INNER_DIALOG,
+  TxnCellLabel as CellLabel,
+} from '@/components/app/transaction-window';
+
+/** One shared column template for the quoted-items header strip and every ≥lg
+ *  row — the Purchase master's table pattern. Below lg the cells wrap into
+ *  labelled 2/4-column grids instead; no horizontal scrolling at any width. */
+const QUOTE_GRID_LG = 'lg:grid-cols-[minmax(200px,1fr)_88px_72px_112px_88px_60px_104px_32px]';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -1024,14 +1036,12 @@ export default function Quotations() {
               data-kbd-scope
               onKeyDown={entryScopeKeyDown({ onSave: kbdSave, onComplete: kbdSave, onAddLine: kbdAddLine, onDeleteLine: kbdDeleteLine })}
               onSubmit={form.handleSubmit(onSubmit)}
-              className="space-y-5"
+              className="space-y-6"
             >
-              {/* Desktop workspace: entry flow on the left, live quotation
-                  summary + actions pinned on the right. Below lg everything
-                  stacks exactly as before (mobile keeps its sticky footer). */}
-              <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(21rem,24rem)] lg:gap-6 lg:items-start">
-              <div className="space-y-5 min-w-0">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* ── Quotation header — the same section card + 3-column field
+                  grid as the Purchase master. ── */}
+              <div className={`${TXN_CARD} space-y-4`}>
+              <div className={TXN_HEADER_GRID}>
                 <FormField control={form.control} name="locationId" render={({ field }) => (
                   <FormItem><FormLabel>Selling Location <span className="text-destructive">*</span></FormLabel>
                     {/* Branch staff never choose — their login decides the
@@ -1284,16 +1294,29 @@ export default function Quotations() {
               </div>
               )}
 
-              {/* Line items — stock shown for information; quoting never blocks on it */}
-              <div>
+              </div>{/* /header card */}
+
+              {/* ── Quoted Items — the master's line-item table; stock shown
+                  for information only, quoting never blocks on it. ── */}
+              <div className={TXN_CARD}>
                 {!watchLocationId || watchLocationId === 0 ? (
                   <div className="p-6 border border-dashed border-border rounded-lg text-center text-muted-foreground">Select a selling location above to start quoting</div>
                 ) : (
                   <>
                     <div className="flex justify-between items-center mb-3">
-                      <p className="font-semibold">Quoted Items <span className="text-xs text-muted-foreground font-normal ml-1">(stock shown for reference — nothing is reserved)</span></p>
+                      <p className="text-sm font-medium">Quoted Items <span className="text-xs text-muted-foreground font-normal ml-1">(stock shown for reference — nothing is reserved)</span></p>
                     </div>
-                    <div className="space-y-2">
+                    <div className={TXN_LINES_BOX}>
+                    <div className={txnLinesHead(QUOTE_GRID_LG)}>
+                      <span>Item</span>
+                      <span>SKU</span>
+                      <span className="text-right">Qty</span>
+                      <span className="text-right">Rate ₹</span>
+                      <span className="text-right">Disc/Unit ₹</span>
+                      <span className="text-center">GST %</span>
+                      <span className="text-right">Amount ₹</span>
+                      <span />
+                    </div>
                       {fields.map((field, index) => {
                         const itemId   = form.watch(`lineItems.${index}.itemId`);
                         const qty      = form.watch(`lineItems.${index}.quantity`);
@@ -1310,14 +1333,17 @@ export default function Quotations() {
                         const belowFloor = mrpFloor > 0 && unitPrice < mrpFloor;
 
                         return (
-                          <div key={field.id} data-kbd-row={index} className="p-3 bg-muted/20 rounded-lg border border-border space-y-2">
+                          <Fragment key={field.id}>
+                          <div data-kbd-row={index} className={txnLineRow(QUOTE_GRID_LG)}>
+                            {/* Item selector — full row below lg so long names
+                                wrap instead of scrolling. */}
                             <FormField control={form.control} name={`lineItems.${index}.itemId`} render={({ field: f }) => (
-                              <FormItem>
-                                <FormLabel className="text-xs">Item</FormLabel>
-                                <div className="flex items-center gap-1">
+                              <FormItem className="col-span-2 sm:col-span-4 lg:col-span-1 space-y-1 min-w-0">
+                                <CellLabel>Item</CellLabel>
+                                <div className="flex items-center gap-1 min-w-0">
                                   <div className="flex-1 min-w-0">
                                     <FormControl><SearchableItemSelect
-                                      className="h-8 text-xs"
+                                      className="h-9 text-xs"
                                       columns={['available', 'mrp', 'gst']}
                                       advanceOnSelect
                                       data-testid={`input-line-item-${index}`}
@@ -1329,49 +1355,47 @@ export default function Quotations() {
                                       }}
                                     /></FormControl>
                                   </div>
-                                  {/* Below sm the trailing delete column is hidden, so the
+                                  {/* Below lg the trailing delete column is hidden, so the
                                       remove control lives beside the picker instead. */}
-                                  <Button type="button" variant="ghost" size="icon" tabIndex={-1} className="sm:hidden h-8 w-8 shrink-0 text-destructive" onClick={() => remove(index)} disabled={fields.length === 1}><Trash2 className="w-3.5 h-3.5" /></Button>
+                                  <Button type="button" variant="ghost" size="icon" tabIndex={-1} className="lg:hidden h-9 w-8 shrink-0 text-destructive" onClick={() => remove(index)} disabled={fields.length === 1}><Trash2 className="w-3.5 h-3.5" /></Button>
                                 </div>
                                 {itemId > 0 && (() => {
                                   const it: any = getItem(itemId);
-                                  return it ? (
-                                    <p className="text-[10px] text-muted-foreground">
-                                      {it.itemCode ? <>SKU <span className="font-mono">{it.itemCode}</span> · </> : null}
-                                      MRP {inr(Number(it.mrp ?? 0))}
-                                      {it.unit ? <> · per {it.unit}</> : null} · GST {Number(it.taxRate ?? 0)}%
-                                    </p>
+                                  return it?.unit ? (
+                                    <p className="text-[10px] text-muted-foreground">per {it.unit}</p>
                                   ) : null;
                                 })()}
                               </FormItem>
                             )} />
 
-                            <div className="grid grid-cols-2 sm:grid-cols-12 gap-2 items-end">
-                              <div className="col-span-1 sm:col-span-2">
-                                <FormField control={form.control} name={`lineItems.${index}.quantity`} render={({ field: f }) => (
-                                  <FormItem>
-                                    <FormLabel className="text-xs">Qty</FormLabel>
-                                    <FormControl><Input type="number" min={1} className="h-8 text-xs" {...f} /></FormControl>
-                                  </FormItem>
-                                )} />
-                                {itemId > 0 && qty > available && (
-                                  <p className="text-[10px] text-amber-500 mt-0.5">Only {available} in stock</p>
-                                )}
+                            {/* SKU — display-only, straight from the Item Master. */}
+                            <div className="space-y-1 min-w-0">
+                              <CellLabel>SKU</CellLabel>
+                              <div className="h-9 flex items-center text-xs font-mono truncate">
+                                {itemId > 0 ? ((getItem(itemId) as any)?.itemCode || '—') : '—'}
                               </div>
+                            </div>
+                            <div className="space-y-1 min-w-0">
+                              <FormField control={form.control} name={`lineItems.${index}.quantity`} render={({ field: f }) => (
+                                <FormItem className="space-y-1">
+                                  <CellLabel>Qty</CellLabel>
+                                  <FormControl><Input type="number" min={1} className="h-9 text-xs text-right" {...f} /></FormControl>
+                                </FormItem>
+                              )} />
+                              {itemId > 0 && qty > available && (
+                                <p className="text-[10px] text-amber-500 mt-0.5 text-right">Only {available} in stock</p>
+                              )}
+                            </div>
 
-                              <div className="col-span-1 sm:col-span-3">
+                              <div className="space-y-1 min-w-0">
                                 <FormField control={form.control} name={`lineItems.${index}.unitPrice`} render={({ field: f }) => (
-                                  <FormItem>
-                                    <FormLabel className="text-xs">
-                                      Rate (₹){masterMrp > 0 && (
-                                        <span className="text-[10px] text-muted-foreground font-normal ml-1">MRP {inr(masterMrp)}</span>
-                                      )}
-                                    </FormLabel>
+                                  <FormItem className="space-y-1">
+                                    <CellLabel>Rate ₹</CellLabel>
                                     <FormControl><Input
                                       type="number"
                                       min={0}
                                       step="0.01"
-                                      className={`h-8 text-xs font-mono ${belowFloor ? 'border-destructive focus-visible:ring-destructive' : ''}`}
+                                      className={`h-9 text-xs text-right font-mono ${belowFloor ? 'border-destructive focus-visible:ring-destructive' : ''}`}
                                       data-testid={`input-line-mrp-${index}`}
                                       data-last-field={!discountsEnabled && index === fields.length - 1 ? '1' : undefined}
                                       {...f}
@@ -1379,6 +1403,9 @@ export default function Quotations() {
                                     /></FormControl>
                                   </FormItem>
                                 )} />
+                                {masterMrp > 0 && (
+                                  <p className="text-[10px] text-muted-foreground mt-0.5 lg:text-right">MRP {inr(masterMrp)}</p>
+                                )}
                                 {belowFloor && (
                                   <p className="text-[10px] text-destructive mt-0.5" data-testid={`error-line-mrp-${index}`}>
                                     {mrpFloorMessage(mrpFloor)}
@@ -1387,48 +1414,29 @@ export default function Quotations() {
                                 {itemId > 0 && masterMrp <= 0 && unitPrice <= 0 && (
                                   <p className="text-[10px] text-amber-500 mt-0.5">No MRP in Item Master — enter the quote price</p>
                                 )}
-                                <FormField control={form.control} name={`lineItems.${index}.taxable`} render={({ field: f }) => (
-                                  <label
-                                    className="mt-1 flex items-center gap-1.5 cursor-pointer select-none w-fit"
-                                    title={f.value
-                                      ? 'Price is the taxable base — GST will be added on top'
-                                      : 'Price includes GST — tax is extracted from it'}
-                                  >
-                                    <Checkbox
-                                      className="h-3.5 w-3.5"
-                                      checked={!!f.value}
-                                      onCheckedChange={(v) => {
-                                        f.onChange(v === true);
-                                        form.setValue(`lineItems.${index}.taxableTouched`, true);
-                                      }}
-                                    />
-                                    <span className="text-[10px] text-muted-foreground">
-                                      Taxable{taxRate > 0 ? (f.value ? ' (+GST on top)' : ' (GST incl.)') : ''}
-                                    </span>
-                                  </label>
-                                )} />
                               </div>
 
-                              <div className="col-span-1 sm:col-span-3">
+                              <div className="space-y-1 min-w-0">
                                 {!discountsEnabled ? (
                                   unitDisc > 0 ? (
-                                    <div className="pt-5">
-                                      <p className="text-[10px] text-muted-foreground font-medium">
-                                        Disc {inr(unitDisc)}/unit (existing)
+                                    <>
+                                      <CellLabel>Disc/Unit ₹</CellLabel>
+                                      <p className="text-[10px] text-muted-foreground font-medium lg:h-9 lg:flex lg:items-center lg:justify-end">
+                                        {inr(unitDisc)}/unit (existing)
                                       </p>
-                                    </div>
+                                    </>
                                   ) : null
                                 ) : (
                                 <FormField control={form.control} name={`lineItems.${index}.unitDiscount`} render={({ field: f }) => (
-                                  <FormItem>
-                                    <FormLabel className="text-xs">Disc / Unit (₹)</FormLabel>
+                                  <FormItem className="space-y-1">
+                                    <CellLabel>Disc/Unit ₹</CellLabel>
                                     <FormControl>
                                       <Input
                                         type="number" min={0} step="0.01"
                                         max={itemId > 0 ? unitPrice : undefined}
                                         disabled={!itemId || unitPrice <= 0}
                                         placeholder="0"
-                                        className="h-8 text-xs"
+                                        className="h-9 text-xs text-right"
                                         data-last-field={index === fields.length - 1 ? '1' : undefined}
                                         {...f}
                                         value={(f.value as any) ?? ''}
@@ -1445,57 +1453,75 @@ export default function Quotations() {
                                 )}
                               </div>
 
-                              <div className="col-span-1 sm:col-span-3 text-right pb-0.5 space-y-0.5">
-                                {itemId > 0 ? (
-                                  unitPrice > 0 ? (
-                                    <>
-                                      <p className="text-xs text-muted-foreground">Subtotal {inr(gst.lineSubtotal)}</p>
-                                      {taxRate > 0 && (
-                                        <p className="text-xs text-amber-500 font-medium">
-                                          {isInterState ? 'IGST' : 'CGST+SGST'} ({taxRate}%) = {inr(gst.taxAmount)}
-                                        </p>
-                                      )}
-                                      {taxRate === 0 && <p className="text-xs text-muted-foreground/50">No GST</p>}
-                                      {disc > 0 && (
-                                        <p className="text-xs text-emerald-600 font-medium">Disc −{inr(Math.min(disc, qty * unitPrice))}</p>
-                                      )}
-                                      <p className="font-mono font-bold text-primary text-sm">{inr(lineTotal)}</p>
-                                    </>
-                                  ) : (
-                                    <p className="text-xs text-amber-400 italic">No MRP</p>
-                                  )
-                                ) : (
-                                  <p className="text-muted-foreground text-xs">—</p>
-                                )}
+                              <div className="space-y-1 min-w-0">
+                                <CellLabel>GST %</CellLabel>
+                                <div className="h-9 flex items-center lg:justify-center text-xs">{itemId > 0 ? `${taxRate}%` : '—'}</div>
                               </div>
-                              <div className="hidden sm:flex col-span-1 pb-0.5 justify-end">
-                                <Button type="button" variant="ghost" size="icon" tabIndex={-1} className="h-7 w-7 text-destructive" onClick={() => remove(index)} disabled={fields.length === 1}><Trash2 className="w-3 h-3" /></Button>
+                              <div className="space-y-1 min-w-0 sm:col-span-2 lg:col-span-1">
+                                <CellLabel>Amount ₹</CellLabel>
+                                <div className="h-9 flex items-center justify-end text-sm font-mono font-medium tabular-nums whitespace-nowrap">
+                                  {itemId > 0
+                                    ? (unitPrice > 0 ? inr(lineTotal) : <span className="text-xs text-amber-400 italic font-sans">No MRP</span>)
+                                    : '—'}
+                                </div>
                               </div>
+                              <Button type="button" variant="ghost" size="icon" tabIndex={-1} className="hidden lg:inline-flex h-8 w-8 text-destructive justify-self-end" onClick={() => remove(index)} disabled={fields.length === 1}><Trash2 className="w-3.5 h-3.5" /></Button>
                             </div>
-                          </div>
+                            {/* Per-line GST breakdown + taxable toggle — the
+                                tinted sub-strip, like the master's batch strip. */}
+                            <div data-kbd-row={index} className={TXN_SUBROW}>
+                              {/* Taxable: checked → price is the taxable base, GST added on top;
+                                  unchecked → price is final, GST extracted from it. */}
+                              <FormField control={form.control} name={`lineItems.${index}.taxable`} render={({ field: f }) => (
+                                <label
+                                  className="flex items-center gap-1.5 cursor-pointer select-none w-fit"
+                                  title={f.value
+                                    ? 'Price is the taxable base — GST will be added on top'
+                                    : 'Price includes GST — tax is extracted from it'}
+                                >
+                                  <Checkbox
+                                    className="h-3.5 w-3.5"
+                                    checked={!!f.value}
+                                    onCheckedChange={(v) => {
+                                      f.onChange(v === true);
+                                      form.setValue(`lineItems.${index}.taxableTouched`, true);
+                                    }}
+                                  />
+                                  <span className="text-[10px] text-muted-foreground">
+                                    Taxable{taxRate > 0 ? (f.value ? ' (+GST on top)' : ' (GST incl.)') : ''}
+                                  </span>
+                                </label>
+                              )} />
+                              {itemId > 0 && unitPrice > 0 && (
+                                <>
+                                  <span className="text-[10px] text-muted-foreground">Subtotal <span className="font-mono">{inr(gst.lineSubtotal)}</span></span>
+                                  {taxRate > 0
+                                    ? <span className="text-[10px] text-amber-500 font-medium">{isInterState ? 'IGST' : 'CGST+SGST'} ({taxRate}%) = {inr(gst.taxAmount)}</span>
+                                    : <span className="text-[10px] text-muted-foreground/50">No GST</span>}
+                                  {disc > 0 && (
+                                    <span className="text-[10px] text-emerald-600 font-medium">Disc −{inr(Math.min(disc, qty * unitPrice))} → {inr(Math.max(0, unitPrice - unitDisc))}/unit</span>
+                                  )}
+                                </>
+                              )}
+                            </div>
+                          </Fragment>
                         );
                       })}
                     </div>
-                    <Button type="button" variant="outline" size="sm" className="mt-3 w-full border-dashed" onClick={() => append({ itemId: 0, quantity: 1, unitPrice: 0, unitDiscount: 0, taxable: customerHasGstin, taxableTouched: false })}>
+                    <Button type="button" variant="outline" size="sm" className="mt-2" onClick={() => append({ itemId: 0, quantity: 1, unitPrice: 0, unitDiscount: 0, taxable: customerHasGstin, taxableTouched: false })}>
                       <Plus className="w-3 h-3 mr-1" /> Add Item
                     </Button>
                   </>
                 )}
               </div>
 
-              </div>{/* /left column */}
-
-              {/* ── Tax Summary + Footer (identical arithmetic to Sales) —
-                  right column on desktop, sticky so the quoted total and Save
-                  never scroll away ── */}
-              <div className="min-w-0 lg:sticky lg:top-0">
-              <DialogFooter className="flex-col gap-0 sm:flex-col w-full pt-2 border-t border-border lg:pt-0 lg:border-t-0">
-                {hasItems && (
-                  <div className="w-full mb-3 rounded-lg border border-border overflow-hidden text-sm">
-                    <div className="px-3 py-1.5 bg-muted/30 text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-                      Quotation Summary
-                    </div>
-                    <div className="px-3 py-2 space-y-1.5">
+              {/* ── Quotation Summary (identical arithmetic to Sales) —
+                  bottom-right card, the exact position and styling of the
+                  master's bill summary. ── */}
+              {hasItems && (
+                <div className={TXN_BOTTOM_GRID}>
+                  <div className={`${TXN_SUMMARY_CARD} md:col-start-2`} data-testid="section-quotation-summary">
+                    <h3 className="text-sm font-semibold">Quotation Summary</h3>
                       {(totals.itemDiscountTotal > 0 || totals.billDiscount > 0) && (
                         <div className="flex justify-between text-muted-foreground">
                           <span>Gross Item Value</span>
@@ -1584,28 +1610,28 @@ export default function Quotations() {
                         <span>Quoted Total</span>
                         <span className="font-mono text-primary">{inr(totals.finalAmount)}</span>
                       </div>
-                    </div>
                   </div>
-                )}
-                <div className="flex gap-2 justify-end w-full max-md:flex-wrap max-md:items-center max-md:sticky max-md:bottom-0 max-md:z-20 max-md:-mx-4 max-md:-mb-4 max-md:px-4 max-md:py-2 max-md:bg-background/95 max-md:backdrop-blur max-md:border-t max-md:border-border">
-                  {/* Quoted total pinned beside the action on mobile so a long
-                      item list never scrolls the figure out of view. */}
-                  {hasItems && (
-                    <div className="flex md:hidden items-center justify-between w-full text-sm font-bold">
-                      <span>Quoted Total</span>
-                      <span className="font-mono text-primary">{inr(totals.finalAmount)}</span>
-                    </div>
-                  )}
-                  <DialogClose asChild><Button variant="outline" type="button">Cancel</Button></DialogClose>
-                  <Button type="submit" disabled={(editItem ? updateMutation.isPending : createMutation.isPending) || !watchLocationId || totals.finalAmount === 0}>
-                    {editItem
-                      ? (updateMutation.isPending ? 'Saving…' : 'Save Changes')
-                      : (createMutation.isPending ? 'Saving…' : 'Save Quotation')}
-                  </Button>
                 </div>
-              </DialogFooter>
-              </div>{/* /right column */}
-              </div>{/* /workspace grid */}
+              )}
+
+              {/* ── Sticky action bar — the dialog flavour of the master's
+                  bottom bar: quoted total left, actions right. ── */}
+              <div className={TXN_ACTION_BAR_DIALOG}>
+                <div className={TXN_ACTION_BAR_INNER_DIALOG}>
+                  <div className="text-sm font-bold flex items-baseline gap-2 min-w-0">
+                    <span className="text-muted-foreground font-medium text-xs uppercase tracking-wide shrink-0">Quoted Total</span>
+                    <span className="font-mono text-primary text-base truncate">{inr(totals.finalAmount)}</span>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <DialogClose asChild><Button variant="outline" type="button">Cancel</Button></DialogClose>
+                    <Button type="submit" disabled={(editItem ? updateMutation.isPending : createMutation.isPending) || !watchLocationId || totals.finalAmount === 0}>
+                      {editItem
+                        ? (updateMutation.isPending ? 'Saving…' : 'Save Changes')
+                        : (createMutation.isPending ? 'Saving…' : 'Save Quotation')}
+                    </Button>
+                  </div>
+                </div>
+              </div>
             </form>
           </Form>
         </TransactionDialogContent>

@@ -154,5 +154,5 @@
 - [Workspace reset & rollback semantics](workspace-reset-recovery.md) — merge/cancel events revert TRACKED files to HEAD (untracked survive); re-verify wiring by marker greps; surviving tests + pg_dump -s are the recovery contract.
 - [Dashboard drill-downs & parity](dashboard-drilldowns.md) — tile → report via ?view/range params (stripped on mount, location rides headers); parity suite pins every tile == its report's total.
 - [Client-side image capture](dashboard-share-capture.md) — html2canvas chokes on Tailwind v4 oklab; use html-to-image + crossorigin font links; prebundle lazy deps; never disable the button on isLoading.
-- [Transaction workspace layout](transaction-workspace-layout.md) — POS/Quotation dialogs = wide 2-col workspace (left entry in original DOM order, right sticky summary+footer); 12-span responsive rows, no h-scroll; reuse for new txn dialogs.
+- [Transaction window layout](transaction-workspace-layout.md) — Purchase page is the MASTER design; POS/Quotation dialogs reuse it via transaction-window.tsx primitives; outside-click NEVER closes TransactionDialogs; no h-scroll.
 - [Route-guard audit CI](route-guard-audit.md) — audit-route-guards.ts fails CI on unguarded writes (exemptions stay exact) + check-permissions #6 pins App.tsx guard keys; a comment claiming a fix ≠ the fix.

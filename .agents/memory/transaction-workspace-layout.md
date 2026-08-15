@@ -1,19 +1,19 @@
 ---
-name: Transaction workspace dialog layout
-description: The two-column wide-dialog convention for POS/Quotation entry forms; apply to future transaction dialogs.
+name: Transaction window layout (Purchase-master)
+description: The shared stacked layout for all transaction entry surfaces (Purchase page, POS Record Sale, New Quotation); supersedes the two-column workspace convention.
 ---
 
-# Transaction workspace dialog layout
+# Transaction window layout — Purchase page is the MASTER design
 
-The POS "Record Sale" and Quotation dialogs are wide two-column workspaces, settled Aug 2026:
+Settled Aug 2026 (user correction spec, replacing the earlier two-column "workspace" convention): the Purchase → New Purchase Bill page defines the ONE transaction-entry design. POS "Record Sale" and "New Quotation" dialogs reuse it exactly; Purchase's appearance must never drift.
 
-- Dialog width `sm:max-w-6xl`; inside the `<form>`: `lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(21rem,24rem)]`.
-- LEFT column = the entry flow in its ORIGINAL DOM order (header/receive/coupon/items/charges). Never reorder sections — tab order and keyboard-entry rows depend on it.
-- RIGHT column = summary card + `DialogFooter` (still inside the form so submit works), `lg:sticky lg:top-0`; footer gets `lg:pt-0 lg:border-t-0`.
-- Line-item rows: NO horizontal scroll wrappers. Rows are `grid grid-cols-2 sm:grid-cols-12` with per-cell `col-span-1 sm:col-span-N` (spans must total 12); trailing delete cell `hidden sm:flex`, plus a `sm:hidden` delete button beside the item picker for mobile.
-- Editable price label is "Rate (₹)" with an "MRP min ₹X" hint; a per-line info line under the item picker shows SKU · MRP · per-unit · GST%.
-- SearchableItemSelect trigger wraps long names globally (`h-auto min-h-8 whitespace-normal` appended AFTER caller className — twMerge lets the later class win) and its search filter matches `barcode` (scanner wedge = digits + Enter → first match).
+- Shared primitives live in `components/app/transaction-window.tsx`: TXN_CARD, TXN_HEADER_GRID, TXN_LINES_BOX, `txnLinesHead(gridLg)` / `txnLineRow(gridLg)` builders, TXN_SUBROW (per-row breakdown strip), TxnCellLabel, TXN_BOTTOM_GRID + TXN_SUMMARY_CARD, and action-bar variants (page vs dialog — the dialog one is sticky with negative margins matching dialog padding). Restyle in ONE place; never fork these strings back into pages.
+- Structure per surface (stacked, single column — no side summary): header card → lines card (column header strip + grid rows + per-row TXN_SUBROW) → Other Charges card → TXN_BOTTOM_GRID with summary card right-aligned → sticky action bar (total left, Cancel + submit right).
+- Each surface passes its own `lg:grid-cols-[...]` column template to the builders (sale has an MRP column; quotation shows MRP only as a hint under Rate).
+- No horizontal scrolling at any width; names wrap; below `lg` rows stack into labeled cells with a delete button beside the item picker (`lg:hidden`) and the trailing delete `hidden lg:inline-flex`.
+- Kept from the retired workspace layout: barcode search in the item picker, MRP floor snap-back, wrapping picker trigger.
+- **Outside-click NEVER closes a TransactionDialog** (dirty or clean) — `transaction-dialog.tsx` preventDefaults onInteractOutside unconditionally; Escape/✕/Cancel still route through the dirty-discard confirm. This is global to every TransactionDialog.
 
-**Why:** spec §74 mandated no sideways scrolling at any width and a visible running summary; two-column-without-moving-DOM was chosen to keep RHF registration, dirty guard, and keyboard-entry untouched.
+**Why:** the user rejected the two-column workspace and mandated the Purchase page as the single visual system for all three surfaces, with zero business-logic changes (RHF wiring, testids, keyboard-entry attrs untouched).
 
-**How to apply:** any new transaction entry dialog (or a rework of Purchase into a dialog) should reuse this exact pattern rather than inventing a new layout; verified by e2e at 1440x900 and 390x844.
+**How to apply:** any new transaction entry surface must consume `transaction-window.tsx` primitives with its own column template — never invent a new layout and never restyle Purchase independently. Verify e2e at 1440/768/390.
