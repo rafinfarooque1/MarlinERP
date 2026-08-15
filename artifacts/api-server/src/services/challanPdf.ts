@@ -1,37 +1,34 @@
 /**
- * Delivery Challan PDF generator — jsPDF, A4 portrait.
+ * Delivery Challan PDF — jsPDF, A4 portrait.
  *
- * Matches Marlin brand design:
- *   • Same header as invoice (navy M logo + company info left, badge right)
- *   • Teal FROM / TO boxes
- *   • Navy items table header
- *   • Receiver signature + authorised signatory footer
- *   • Navy "Thank You" footer bar
+ * The goods-movement document for a stock transfer: FROM/TO endpoints, the
+ * dispatched lines with HSN and quantity, status, and the receiver's
+ * signature block. Assembled by the route from the stored transfer row —
+ * never from client-composed figures.
+ *
+ * Wears the shared letterhead: the DISPATCHING LOCATION is the masthead
+ * (company profile as fallback), so a challan carries the same identity as
+ * the invoices that location issues. Accent is the house teal, telling
+ * goods-movement paper apart from money documents at a glance.
  */
 import { jsPDF } from "jspdf";
+import {
+  FONT, registerFonts, drawLetterhead, drawSignatureRow, drawGeneratedNote,
+} from "@workspace/pdf-kit";
+import type { InvoiceIssuer } from "../lib/billingProfile";
+
+type RGB = [number, number, number];
 
 export interface ChallanItem {
   name: string;
-  hsnCode?: string;
+  hsnCode?: string | null;
   quantity: number;
-  unit?: string;
+  unit?: string | null;
 }
 
 export interface ChallanPdfInput {
-  cs?: {
-    companyName?: string;
-    address?: string;
-    city?: string;
-    state?: string;
-    pincode?: string;
-    gstin?: string;
-    gstNumber?: string;
-    phone?: string;
-    email?: string;
-    bankName?: string;
-    bankAccount?: string;
-    ifscCode?: string;
-  };
+  issuer: InvoiceIssuer;
+  logoDataUrl?: string | null;
   challanNo: string;
   date: string;
   fromName: string;
@@ -40,230 +37,169 @@ export interface ChallanPdfInput {
   toType: string;
   lineItems: ChallanItem[];
   isInterstate?: boolean;
-  status?: string;
-  notes?: string;
-  approvedBy?: string;
+  status?: string | null;
+  notes?: string | null;
+  approvedBy?: string | null;
 }
 
-type RGB = [number, number, number];
+function fmtDate(v: string | null | undefined): string {
+  if (!v) return "—";
+  try {
+    const d = new Date(v);
+    if (Number.isNaN(d.getTime())) return String(v);
+    return d.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+  } catch { return String(v); }
+}
 
-// ── Colour palette (matches invoicePdf.ts) ────────────────────────────────────
-const NAVY:   RGB = [13,  42,  83];
-const TEAL:   RGB = [14,  85, 105];
-const WHITE:  RGB = [255, 255, 255];
-const LGRAY:  RGB = [245, 247, 250];
-const MGRAY:  RGB = [160, 170, 185];
-const BORDER: RGB = [200, 210, 220];
-const BK:     RGB = [20,  20,  20];
+const typeLabel = (t: string) =>
+  t === "warehouse" ? "Warehouse" : t === "outlet" ? "Outlet" : t === "headoffice" ? "Head Office" : t || "";
 
-export function generateChallanPdf(data: ChallanPdfInput): Buffer {
-  const doc = new jsPDF({ unit: "mm", format: "a4", compress: true });
+export async function generateChallanPdf(data: ChallanPdfInput): Promise<Buffer> {
+  const doc = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait", compress: true });
+  await registerFonts(doc);
 
-  const PW = 210;
-  const PH = 297;
-  const M  = 10;
-  const CW = PW - M * 2;   // 190
-  const HW = CW / 2;       // 95
-  const L2 = M + HW;
+  const PW = 210, PH = 297, M = 12, CW = PW - M * 2;
+  const ACCENT: RGB = [14, 85, 105];     // goods-movement teal
+  const SOFT: RGB = [238, 247, 249];
+  const INK: RGB = [32, 44, 74];
+  const MUT: RGB = [104, 116, 140];
+  const BORDER: RGB = [201, 213, 229];
+  const WHITE: RGB = [255, 255, 255];
 
-  // ── Drawing helpers ─────────────────────────────────────────────────────────
-  const fill = (x: number, y: number, w: number, h: number, rgb: RGB) => {
+  const txt = (
+    s: string, x: number, y: number,
+    o: { size?: number; bold?: boolean; align?: "left" | "center" | "right"; color?: RGB } = {},
+  ) => {
+    doc.setFont(FONT, o.bold ? "bold" : "normal");
+    doc.setFontSize(o.size ?? 9);
+    const c = o.color ?? INK;
+    doc.setTextColor(c[0], c[1], c[2]);
+    doc.text(s, x, y, o.align ? { align: o.align } : {});
+  };
+  const cell = (s: string, x: number, y: number, w: number, o: {
+    size?: number; bold?: boolean; align?: "left" | "center" | "right"; color?: RGB;
+  } = {}) => {
+    let size = o.size ?? 8;
+    doc.setFont(FONT, o.bold ? "bold" : "normal");
+    doc.setFontSize(size);
+    let t = s;
+    while (size > 5 && doc.getTextWidth(t) > w) { size -= 0.25; doc.setFontSize(size); }
+    while (t.length > 1 && doc.getTextWidth(`${t}\u2026`) > w && doc.getTextWidth(t) > w) t = t.slice(0, -1);
+    if (t !== s) t = `${t}\u2026`;
+    txt(t, x, y, { ...o, size });
+  };
+  const fillRect = (x: number, y: number, w: number, h: number, rgb: RGB) => {
     doc.setFillColor(rgb[0], rgb[1], rgb[2]); doc.rect(x, y, w, h, "F");
   };
-  const bx = (x: number, y: number, w: number, h: number, rgb: RGB = BORDER) => {
-    doc.setDrawColor(rgb[0], rgb[1], rgb[2]); doc.setLineWidth(0.25); doc.rect(x, y, w, h);
+  const box = (x: number, y: number, w: number, h: number) => {
+    doc.setDrawColor(BORDER[0], BORDER[1], BORDER[2]); doc.setLineWidth(0.2); doc.rect(x, y, w, h);
   };
-  const ln = (x1: number, y1: number, x2: number, y2: number, rgb: RGB = BORDER, lw = 0.2) => {
-    doc.setDrawColor(rgb[0], rgb[1], rgb[2]); doc.setLineWidth(lw); doc.line(x1, y1, x2, y2);
-  };
-  const txt = (s: string, x: number, y: number, opts?: {
-    align?: "left" | "right" | "center"; bold?: boolean; size?: number; color?: RGB; maxWidth?: number;
-  }) => {
-    doc.setFont("helvetica", opts?.bold ? "bold" : "normal");
-    doc.setFontSize(opts?.size ?? 7.5);
-    const c = opts?.color ?? BK;
-    doc.setTextColor(c[0], c[1], c[2]);
-    const tOpts: { align?: "left" | "right" | "center"; maxWidth?: number } = {};
-    if (opts?.align)    tOpts.align    = opts.align;
-    if (opts?.maxWidth) tOpts.maxWidth = opts.maxWidth;
-    doc.text(s, x, y, tOpts);
+  const wrap = (s: string, w: number, size: number): string[] => {
+    doc.setFont(FONT, "normal");
+    doc.setFontSize(size);
+    return doc.splitTextToSize(s || "", w) as string[];
   };
 
-  const cs = data.cs ?? {};
-  const companyName  = cs.companyName  || "Marlin Frozen Fruits";
-  const companyAddr  = [cs.address, cs.city, cs.state, cs.pincode].filter(Boolean).join(", ");
-  const companyGstin = cs.gstNumber || cs.gstin || "";
-  const companyPhone = cs.phone || "";
-  const companyEmail = cs.email || "";
-
-  let y = M;
-
-  // ══════════════════════════════════════════════════════════════════════════
-  // 1. HEADER — same layout as invoice
-  // ══════════════════════════════════════════════════════════════════════════
-  // Navy "M" logo mark
-  fill(M, y, 11, 11, NAVY);
-  txt("M", M + 5.5, y + 7.8, { bold: true, size: 9, color: WHITE, align: "center" });
-
-  // Company name
-  txt(companyName.toUpperCase(), M + 14, y + 7, { bold: true, size: 14, color: NAVY });
-  if (companyAddr) txt(companyAddr, M + 14, y + 12, { size: 7, color: MGRAY });
-  const contactLine = [companyPhone ? `+${companyPhone}` : "", companyEmail].filter(Boolean).join("   |   ");
-  if (contactLine) txt(contactLine, M + 14, y + 17, { size: 6.5, color: MGRAY });
-
-  // GSTIN bar
-  fill(M, y + 20, CW, 7, LGRAY);
-  bx(M, y + 20, CW, 7, BORDER);
-  txt(`GSTIN: ${companyGstin || "-"}`, M + 3, y + 25, { bold: true, size: 7.5, color: NAVY });
-
-  // Right: DELIVERY CHALLAN badge
-  const badgeX = M + CW - 68;
-  fill(badgeX, y, 68, 8, NAVY);
-  txt("DELIVERY CHALLAN", badgeX + 34, y + 5.8, { bold: true, size: 9, color: WHITE, align: "center" });
-
-  // Status chip colour
-  const stRaw   = data.status || "in_transit";
-  const stLabel = stRaw === "completed" ? "COMPLETED" : stRaw === "rejected" ? "REJECTED" : "IN TRANSIT";
-  const stBg: RGB = stRaw === "completed" ? [22, 120, 74] : stRaw === "rejected" ? [180, 30, 30] : [160, 100, 0];
-
-  // Meta box below badge
-  const metaRows: [string, string][] = [
-    ["Challan No.",  data.challanNo || "-"],
-    ["Date",         data.date      || "-"],
-    ["Status",       stLabel],
-    ["Type",         data.isInterstate ? "Interstate Transfer" : "Internal Transfer"],
+  // ── Header ────────────────────────────────────────────────────────────────
+  const stRaw = data.status || "in_transit";
+  const stLabel = stRaw === "completed" ? "Completed" : stRaw === "rejected" ? "Rejected" : "In Transit";
+  const metaRows: Array<[string, string]> = [
+    ["Challan No.", data.challanNo || "—"],
+    ["Date", fmtDate(data.date)],
+    ["Status", stLabel],
+    ["Type", data.isInterstate ? "Interstate Transfer" : "Internal Transfer"],
   ];
-  const mRH  = 4.8;
-  const metaW = 68;
-  fill(badgeX, y + 8, metaW, metaRows.length * mRH + 0.5, [250, 252, 255]);
-  bx(badgeX, y + 8, metaW, metaRows.length * mRH + 0.5, BORDER);
-  metaRows.forEach(([k, v], i) => {
-    const ry = y + 8 + i * mRH + 3.5;
-    txt(k, badgeX + 2, ry, { size: 6.5, color: MGRAY });
-    if (k === "Status") {
-      fill(badgeX + 29, ry - 3.2, metaW - 31, 4, stBg);
-      txt(v, badgeX + 30, ry - 0.5, { size: 6, bold: true, color: WHITE });
-    } else {
-      txt(`: ${v}`, badgeX + 29, ry, { size: 6.5, bold: true, color: NAVY });
-    }
+
+  let y = drawLetterhead(doc, {
+    issuer: data.issuer,
+    logoDataUrl: data.logoDataUrl,
+    badgeTitle: "DELIVERY CHALLAN",
+    accent: ACCENT,
+    metaRows,
+    margin: M,
   });
 
-  y += 30;
-
-  // ══════════════════════════════════════════════════════════════════════════
-  // 2. FROM / TO boxes
-  // ══════════════════════════════════════════════════════════════════════════
-  const FT_HDR = 7;
-  const FT_H   = 28;
-
-  // FROM
-  fill(M, y, HW, FT_HDR, TEAL);
-  bx(M, y, HW, FT_H, BORDER);
-  txt("  FROM", M + 3, y + FT_HDR - 1.8, { bold: true, size: 7.5, color: WHITE });
-  txt(data.fromName || "-", M + 3, y + FT_HDR + 6,  { bold: true, size: 10, color: NAVY });
-  txt(data.fromType || "",  M + 3, y + FT_HDR + 12, { size: 7.5, color: MGRAY });
-
-  // TO
-  fill(L2, y, HW, FT_HDR, TEAL);
-  bx(L2, y, HW, FT_H, BORDER);
-  txt("  TO", L2 + 3, y + FT_HDR - 1.8, { bold: true, size: 7.5, color: WHITE });
-  txt(data.toName || "-", L2 + 3, y + FT_HDR + 6,  { bold: true, size: 10, color: NAVY });
-  txt(data.toType || "",  L2 + 3, y + FT_HDR + 12, { size: 7.5, color: MGRAY });
-  if (data.isInterstate) {
-    fill(L2 + HW - 28, y + FT_H - 8, 26, 6, [160, 100, 0]);
-    txt("INTERSTATE", L2 + HW - 15, y + FT_H - 3.5, { size: 5.5, bold: true, color: WHITE, align: "center" });
+  // ── FROM / TO boxes ───────────────────────────────────────────────────────
+  const HW = (CW - 4) / 2;
+  const L2 = M + HW + 4;
+  const FT_H = 22;
+  for (const [x, label, name, type] of [
+    [M, "FROM", data.fromName, data.fromType],
+    [L2, "TO", data.toName, data.toType],
+  ] as Array<[number, string, string, string]>) {
+    fillRect(x, y, HW, 6.5, ACCENT);
+    box(x, y, HW, FT_H);
+    txt(label, x + 3, y + 4.6, { size: 7.5, bold: true, color: WHITE });
+    cell(name || "—", x + 3, y + 12.5, HW - 6, { size: 9.5, bold: true, color: INK });
+    txt(typeLabel(type), x + 3, y + 17.8, { size: 7.4, color: MUT });
   }
-
+  if (data.isInterstate) {
+    fillRect(L2 + HW - 27, y + FT_H - 7, 25, 5, [160, 100, 0]);
+    txt("INTERSTATE", L2 + HW - 14.5, y + FT_H - 3.5, { size: 5.8, bold: true, color: WHITE, align: "center" });
+  }
   y += FT_H + 3;
 
-  // Notes / Approved by strip
-  if (data.approvedBy || data.notes) {
-    fill(M, y, CW, 7, LGRAY);
-    bx(M, y, CW, 7, BORDER);
-    const bits: string[] = [];
-    if (data.approvedBy) bits.push(`Approved by: ${data.approvedBy}`);
-    if (data.notes)      bits.push(`Notes: ${data.notes}`);
-    txt(bits.join("   |   "), M + 3, y + 4.8, { size: 7, color: MGRAY, maxWidth: CW - 6 });
-    y += 9;
+  // Notes / approved-by strip.
+  const bits: string[] = [];
+  if (data.approvedBy) bits.push(`Approved by: ${data.approvedBy}`);
+  if (data.notes) bits.push(`Notes: ${data.notes}`);
+  if (bits.length) {
+    const sLines = wrap(bits.join("   |   "), CW - 6, 7.2).slice(0, 3);
+    const sh = Math.max(7, sLines.length * 3.6 + 3.6);
+    fillRect(M, y, CW, sh, SOFT);
+    box(M, y, CW, sh);
+    sLines.forEach((l, i) => txt(l, M + 3, y + 4.8 + i * 3.6, { size: 7.2, color: MUT }));
+    y += sh + 3;
   }
 
-  // ══════════════════════════════════════════════════════════════════════════
-  // 3. ITEMS TABLE
-  // ══════════════════════════════════════════════════════════════════════════
-  // Col widths: Sl | Description | HSN Code | Qty | Unit
-  const CLS = [10, 96, 35, 28, 21];
-  const CX: number[] = [];
-  { let cx = M; for (const w of CLS) { CX.push(cx); cx += w; } }
+  // ── Items — SL | Description | HSN | Qty | Unit ──────────────────────────
+  const C_SL = 10, C_HSN = 32, C_QTY = 26, C_UNIT = 20;
+  const C_DESC = CW - C_SL - C_HSN - C_QTY - C_UNIT;
+  const xSl = M, xDesc = xSl + C_SL, xHsn = xDesc + C_DESC, xQty = xHsn + C_HSN, xUnit = xQty + C_QTY;
 
-  const HDR_H = 8;
-  const ROW_H = 8;
+  const drawTableHead = () => {
+    fillRect(M, y, CW, 8, ACCENT);
+    txt("SL", xSl + 2, y + 5.4, { size: 8, bold: true, color: WHITE });
+    txt("DESCRIPTION OF GOODS", xDesc + 2, y + 5.4, { size: 8, bold: true, color: WHITE });
+    txt("HSN CODE", xHsn + 2, y + 5.4, { size: 8, bold: true, color: WHITE });
+    txt("QTY", xQty + C_QTY - 2, y + 5.4, { size: 8, bold: true, align: "right", color: WHITE });
+    txt("UNIT", xUnit + 2, y + 5.4, { size: 8, bold: true, color: WHITE });
+    y += 8;
+  };
+  drawTableHead();
 
-  // Header row — navy
-  fill(M, y, CW, HDR_H, NAVY);
-  bx(M, y, CW, HDR_H, NAVY);
-  const HEADERS = ["SL", "DESCRIPTION OF GOODS", "HSN CODE", "QTY", "UNIT"];
-  HEADERS.forEach((h, i) => {
-    if (i > 0) ln(CX[i], y, CX[i], y + HDR_H, WHITE, 0.2);
-    txt(h, CX[i] + 2, y + HDR_H - 2.5, { bold: true, size: 7, color: WHITE });
-  });
-  y += HDR_H;
-
+  const genNote = "This is a computer-generated delivery challan.";
   let totalQty = 0;
-  (data.lineItems || []).forEach((item, idx) => {
+  (data.lineItems || []).forEach((item, i) => {
     totalQty += Number(item.quantity) || 0;
-    if (y + ROW_H > PH - 60) { doc.addPage(); y = M; }
-
-    if (idx % 2 === 1) fill(M, y, CW, ROW_H, LGRAY);
-    bx(M, y, CW, ROW_H, BORDER);
-    for (let i = 1; i < CX.length; i++) ln(CX[i], y, CX[i], y + ROW_H, BORDER, 0.15);
-
-    const ry = y + ROW_H - 2.5;
-    txt(String(idx + 1), CX[0] + CLS[0]/2, ry, { size: 7, align: "center" });
-    const name = (doc.splitTextToSize(item.name || "", CLS[1] - 4) as string[])[0] || item.name;
-    txt(name, CX[1] + 2, ry, { size: 7 });
-    txt(item.hsnCode || "-", CX[2] + 2, ry, { size: 7, color: MGRAY });
-    txt(String(item.quantity ?? ""), CX[3] + CLS[3]-2, ry, { size: 7, bold: true, align: "right" });
-    txt(item.unit || "-", CX[4] + 2, ry, { size: 7, color: MGRAY });
-    y += ROW_H;
+    if (y > PH - 75) {
+      drawGeneratedNote(doc, genNote, M);
+      doc.addPage();
+      y = M + 4;
+      drawTableHead();
+    }
+    if (i % 2 === 1) fillRect(M, y, CW, 8, SOFT);
+    box(M, y, CW, 8);
+    txt(String(i + 1), xSl + 2, y + 5.3, { size: 8, color: MUT });
+    cell(item.name || "—", xDesc + 2, y + 5.3, C_DESC - 4, { size: 8.4, bold: true, color: INK });
+    txt(item.hsnCode || "—", xHsn + 2, y + 5.3, { size: 7.8, color: MUT });
+    txt(String(item.quantity ?? ""), xQty + C_QTY - 2, y + 5.3, { size: 8.4, bold: true, align: "right", color: INK });
+    cell(item.unit || "—", xUnit + 2, y + 5.3, C_UNIT - 4, { size: 7.8, color: MUT });
+    y += 8;
   });
 
-  // Total row — navy
-  fill(M, y, CW, ROW_H, NAVY);
-  bx(M, y, CW, ROW_H, NAVY);
-  for (let i = 1; i < CX.length; i++) ln(CX[i], y, CX[i], y + ROW_H, WHITE, 0.2);
-  txt("TOTAL", CX[1] + 2, y + ROW_H - 2.5, { bold: true, size: 7.5, color: WHITE });
-  txt(String(totalQty), CX[3] + CLS[3]-2, y + ROW_H - 2.5, { bold: true, size: 7.5, color: WHITE, align: "right" });
-  y += ROW_H + 4;
+  // Total row.
+  fillRect(M, y, CW, 9, ACCENT);
+  txt("TOTAL", xDesc + 2, y + 6.1, { size: 8.5, bold: true, color: WHITE });
+  const tq = Math.round(totalQty * 1000) / 1000;
+  txt(String(tq), xQty + C_QTY - 2, y + 6.1, { size: 8.5, bold: true, align: "right", color: WHITE });
+  y += 12;
 
-  // ══════════════════════════════════════════════════════════════════════════
-  // 4. SIGNATURE SECTION
-  // ══════════════════════════════════════════════════════════════════════════
-  const SIG_H = 28;
-  if (y + SIG_H + 14 > PH - 4) { doc.addPage(); y = M; }
+  // ── Signatures ────────────────────────────────────────────────────────────
+  y = Math.min(Math.max(y, 235), PH - 30);
+  drawSignatureRow(doc, ["Dispatched By", "Receiver's Signature & Stamp", "Authorized Signatory"], y, M, CW);
 
-  // Receiver box
-  bx(M, y, HW - 2, SIG_H, BORDER);
-  fill(M, y, HW - 2, 7, LGRAY);
-  txt("RECEIVER'S SIGNATURE & STAMP", M + 3, y + 5, { bold: true, size: 6.5, color: NAVY });
-  txt("Name  : ___________________________", M + 3, y + 14, { size: 6.5, color: MGRAY });
-  txt("Date   : _________________________", M + 3, y + 21, { size: 6.5, color: MGRAY });
-
-  // Authorised signatory box
-  bx(L2 + 2, y, HW - 2, SIG_H, BORDER);
-  fill(L2 + 2, y, HW - 2, 7, LGRAY);
-  txt(`For ${companyName.toUpperCase()}`, L2 + HW - 2, y + 5, { bold: true, size: 6.5, color: NAVY, align: "right" });
-  txt("Authorised Signatory", L2 + HW - 2, y + SIG_H - 4, { size: 6.5, color: MGRAY, align: "right" });
-
-  y += SIG_H + 4;
-
-  // ══════════════════════════════════════════════════════════════════════════
-  // 5. FOOTER — navy bar
-  // ══════════════════════════════════════════════════════════════════════════
-  if (y + 14 > PH - 4) { doc.addPage(); y = M; }
-  fill(M, y, CW, 9, NAVY);
-  txt("THANK YOU FOR YOUR BUSINESS!", PW / 2, y + 6, { bold: true, size: 9, color: WHITE, align: "center" });
-  y += 11;
-  txt("This is a computer-generated document.", PW / 2, y + 3, { size: 6.5, color: MGRAY, align: "center" });
+  drawGeneratedNote(doc, genNote, M);
 
   return Buffer.from(doc.output("arraybuffer"));
 }

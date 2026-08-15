@@ -476,6 +476,63 @@ async function chargeLedgerNames(charges: OtherCharge[][]): Promise<Map<number, 
 const enrichCharges = (charges: OtherCharge[], names: Map<number, string>) =>
   charges.map((c) => ({ ...c, ledgerName: names.get(c.ledgerId) ?? `Ledger #${c.ledgerId}` }));
 
+/**
+ * One stored bill, in the same enriched shape the list serves, plus the
+ * vendor's full identity — for the server-rendered purchase invoice PDF.
+ * LBAC is applied HERE (the caller passes the employee's data scope) so the
+ * PDF route cannot print a bill its caller may not list. Returns null when
+ * the bill does not exist or is outside scope — the route answers 404 for
+ * both, refusing to confirm existence.
+ */
+export async function loadPurchaseBillDoc(
+  id: number,
+  scope: import("../lib/dataScope").DataScope,
+): Promise<any | null> {
+  const params: unknown[] = [id];
+  const scopeWhere = scopeLocationTypeWhere(scope, params, "p");
+  if (scopeWhere === "FALSE") return null;
+  const { rows: [r] } = await pool.query(`
+    SELECT p.*, p.purchase_date::text AS purchase_date_str,
+           p.vendor_invoice_date::text AS vendor_invoice_date_str,
+           v.name AS vendor_name, v.gst_number AS vendor_gst, v.address AS vendor_address,
+           v.state AS vendor_state, v.phone AS vendor_phone, v.email AS vendor_email
+      FROM purchases p LEFT JOIN vendors v ON v.id = p.vendor_id
+     WHERE p.id = $1 AND p.branch_transfer_id IS NULL
+       ${scopeWhere !== "TRUE" ? `AND ${scopeWhere}` : ""}`, params);
+  if (!r) return null;
+  const nameMaps = await buildNameMaps();
+  const locNames = await locationNameMap();
+  const charges = parseStoredOtherCharges(r.other_charges);
+  const chargeNames = await chargeLedgerNames([charges]);
+  return {
+    id: r.id,
+    purchaseDate: r.purchase_date_str,
+    invoiceNumber: r.invoice_number,
+    vendorInvoiceDate: r.vendor_invoice_date_str ?? null,
+    notes: r.notes,
+    vendorName: r.vendor_name ?? "",
+    totalAmount: Number(r.total_amount),
+    taxTotal: Number(r.tax_total ?? 0),
+    discountTotal: Number(r.discount_total ?? 0),
+    roundOff: Number(r.round_off ?? 0),
+    priceMode: asPriceMode(r.price_mode),
+    locationType: r.location_type ?? "headoffice",
+    locationId: Number(r.location_id ?? 1),
+    locationName: locNames.get(`${r.location_type ?? "headoffice"}:${Number(r.location_id ?? 1)}`) ?? "Head Office",
+    otherCharges: enrichCharges(charges, chargeNames),
+    otherChargesTotal: otherChargesTotal(charges),
+    lineItems: enrichLines(r.line_items, nameMaps),
+    vendor: {
+      name: r.vendor_name ?? null,
+      gstNumber: r.vendor_gst ?? null,
+      address: r.vendor_address ?? null,
+      state: r.vendor_state ?? null,
+      phone: r.vendor_phone ?? null,
+      email: r.vendor_email ?? null,
+    },
+  };
+}
+
 // Serves Purchases and Returns pages.
 router.get("/purchases", requireModuleView(["page:/production/purchase", "page:/returns"]), async (req, res): Promise<void> => {
   // LBAC: a location sees its own bills; Head Office sees every location's.

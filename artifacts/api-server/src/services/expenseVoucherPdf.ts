@@ -5,17 +5,23 @@
  * spend, what it was for, which ledger it hit, what it was paid from, and the
  * signatures. The route assembles this from the stored row so a voucher can
  * never be printed with figures the books do not hold.
+ *
+ * Wears the shared letterhead: the ISSUING LOCATION is the masthead (the
+ * company profile only as fallback), matching invoices and money vouchers.
+ * Money-out documents use the house navy, same as payment vouchers.
  */
 import { jsPDF } from "jspdf";
+import {
+  FONT, registerFonts, drawLetterhead, drawSignatureRow, drawGeneratedNote,
+  amountInWords,
+} from "@workspace/pdf-kit";
+import type { InvoiceIssuer } from "../lib/billingProfile";
 
 type RGB = [number, number, number];
 
 export interface ExpenseVoucherPdfInput {
-  cs?: {
-    companyName?: string;
-    address?: string; city?: string; state?: string; pincode?: string;
-    gstNumber?: string; phone?: string; email?: string;
-  };
+  issuer: InvoiceIssuer;
+  logoDataUrl?: string | null;
   voucherNumber: string;
   expenseDate: string;
   amount: number;
@@ -30,34 +36,6 @@ export interface ExpenseVoucherPdfInput {
   attachmentUrl: string | null;
 }
 
-/** Amount in words — a voucher without it is not a complete instrument. */
-function amountInWords(value: number): string {
-  const n = Math.floor(Math.abs(value));
-  if (n === 0) return "Zero Rupees Only";
-  const ones = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine",
-    "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen",
-    "Seventeen", "Eighteen", "Nineteen"];
-  const tens = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"];
-  const two = (x: number): string =>
-    x < 20 ? ones[x] : `${tens[Math.floor(x / 10)]}${x % 10 ? " " + ones[x % 10] : ""}`;
-  const three = (x: number): string =>
-    x >= 100 ? `${ones[Math.floor(x / 100)]} Hundred${x % 100 ? " " + two(x % 100) : ""}` : two(x);
-
-  const parts: string[] = [];
-  const crore = Math.floor(n / 10000000);
-  const lakh = Math.floor((n % 10000000) / 100000);
-  const thousand = Math.floor((n % 100000) / 1000);
-  const rest = n % 1000;
-  if (crore) parts.push(`${three(crore)} Crore`);
-  if (lakh) parts.push(`${three(lakh)} Lakh`);
-  if (thousand) parts.push(`${three(thousand)} Thousand`);
-  if (rest) parts.push(three(rest));
-
-  const paise = Math.round((Math.abs(value) - n) * 100);
-  const rupees = `${parts.join(" ")} Rupees`;
-  return paise > 0 ? `${rupees} and ${two(paise)} Paise Only` : `${rupees} Only`;
-}
-
 function fmtDate(v: string | null | undefined): string {
   if (!v) return "—";
   try {
@@ -67,109 +45,126 @@ function fmtDate(v: string | null | undefined): string {
   } catch { return String(v); }
 }
 
-export function generateExpenseVoucherPdf(data: ExpenseVoucherPdfInput): Buffer {
-  const doc = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
-  const PW = 210, M = 14, CW = PW - M * 2;
+export async function generateExpenseVoucherPdf(data: ExpenseVoucherPdfInput): Promise<Buffer> {
+  const doc = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait", compress: true });
+  await registerFonts(doc);
+
+  const PW = 210, PH = 297, M = 12, CW = PW - M * 2;
+  const ACCENT: RGB = [23, 42, 92];      // money-out navy, same as payment vouchers
+  const SOFT: RGB = [242, 245, 252];
+  const INK: RGB = [32, 44, 74];
+  const MUT: RGB = [104, 116, 140];
+  const BORDER: RGB = [201, 213, 229];
+  const WHITE: RGB = [255, 255, 255];
 
   const txt = (
     s: string, x: number, y: number,
     o: { size?: number; bold?: boolean; align?: "left" | "center" | "right"; color?: RGB } = {},
   ) => {
+    doc.setFont(FONT, o.bold ? "bold" : "normal");
     doc.setFontSize(o.size ?? 9);
-    doc.setFont("helvetica", o.bold ? "bold" : "normal");
-    const c = o.color ?? [0, 0, 0];
+    const c = o.color ?? INK;
     doc.setTextColor(c[0], c[1], c[2]);
-    doc.text(s, x, y, { align: o.align ?? "left" });
+    doc.text(s, x, y, o.align ? { align: o.align } : {});
+  };
+  const cell = (s: string, x: number, y: number, w: number, o: {
+    size?: number; bold?: boolean; color?: RGB;
+  } = {}) => {
+    let size = o.size ?? 8;
+    doc.setFont(FONT, o.bold ? "bold" : "normal");
+    doc.setFontSize(size);
+    let t = s;
+    while (size > 5 && doc.getTextWidth(t) > w) { size -= 0.25; doc.setFontSize(size); }
+    while (t.length > 1 && doc.getTextWidth(`${t}\u2026`) > w && doc.getTextWidth(t) > w) t = t.slice(0, -1);
+    if (t !== s) t = `${t}\u2026`;
+    txt(t, x, y, { ...o, size });
   };
   const fillRect = (x: number, y: number, w: number, h: number, rgb: RGB) => {
     doc.setFillColor(rgb[0], rgb[1], rgb[2]); doc.rect(x, y, w, h, "F");
   };
-  const outlineRect = (x: number, y: number, w: number, h: number, lw = 0.3) => {
-    doc.setDrawColor(0); doc.setLineWidth(lw); doc.rect(x, y, w, h);
+  const box = (x: number, y: number, w: number, h: number) => {
+    doc.setDrawColor(BORDER[0], BORDER[1], BORDER[2]); doc.setLineWidth(0.2); doc.rect(x, y, w, h);
   };
-  const vline = (x: number, y1: number, y2: number) => {
-    doc.setDrawColor(200); doc.setLineWidth(0.2); doc.line(x, y1, x, y2);
+  const wrap = (s: string, w: number, size: number): string[] => {
+    doc.setFont(FONT, "normal");
+    doc.setFontSize(size);
+    return doc.splitTextToSize(s || "", w) as string[];
   };
   const money = (n: number) =>
-    `Rs. ${Math.abs(n).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-
-  let y = M;
+    `\u20B9${Math.abs(n).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
   // ── Header ────────────────────────────────────────────────────────────────
-  fillRect(M, y, CW, 16, [25, 72, 140]);
-  txt(data.cs?.companyName || "Company", PW / 2, y + 7, { size: 13, bold: true, align: "center", color: [255, 255, 255] });
-  const addr = [data.cs?.address, data.cs?.city, data.cs?.state, data.cs?.pincode].filter(Boolean).join(", ");
-  if (addr) txt(addr, PW / 2, y + 11.5, { size: 6.5, align: "center", color: [200, 220, 255] });
-  const contact = [
-    data.cs?.gstNumber ? `GSTIN: ${data.cs.gstNumber}` : "",
-    data.cs?.phone ? `Ph: ${data.cs.phone}` : "",
-    data.cs?.email || "",
-  ].filter(Boolean).join("   ");
-  if (contact) txt(contact, PW / 2, y + 15, { size: 6.5, align: "center", color: [200, 220, 255] });
-  y += 19;
+  const metaRows: Array<[string, string]> = [
+    ["Voucher No.", data.voucherNumber || "—"],
+    ["Voucher Date", fmtDate(data.expenseDate)],
+  ];
+  if (data.category) metaRows.push(["Category", data.category]);
+  if (data.locationName && data.locationName !== data.issuer.tradeName) {
+    metaRows.push(["Location", data.locationName]);
+  }
 
-  txt("PAYMENT VOUCHER", PW / 2, y, { size: 11, bold: true, align: "center", color: [25, 72, 140] });
-  y += 5;
+  let y = drawLetterhead(doc, {
+    issuer: data.issuer,
+    logoDataUrl: data.logoDataUrl,
+    badgeTitle: "PAYMENT VOUCHER",
+    accent: ACCENT,
+    metaRows,
+    margin: M,
+  });
 
-  // ── Voucher meta ──────────────────────────────────────────────────────────
-  outlineRect(M, y, CW, 18);
-  vline(M + CW / 2, y, y + 18);
-  txt("Voucher No.", M + 3, y + 5, { size: 6.5, color: [100, 100, 100] });
-  txt(data.voucherNumber || "—", M + 3, y + 11, { size: 10, bold: true });
-  txt(`Location: ${data.locationName || "—"}`, M + 3, y + 16, { size: 7, color: [80, 80, 80] });
-
-  txt("Date", M + CW / 2 + 3, y + 5, { size: 6.5, color: [100, 100, 100] });
-  txt(fmtDate(data.expenseDate), M + CW / 2 + 3, y + 11, { size: 10, bold: true });
-  if (data.category) txt(`Category: ${data.category}`, M + CW / 2 + 3, y + 16, { size: 7, color: [80, 80, 80] });
-  y += 21;
-
-  // ── Detail table ──────────────────────────────────────────────────────────
-  fillRect(M, y, CW, 7, [240, 244, 255]);
-  outlineRect(M, y, CW, 7, 0.2);
-  txt("PARTICULARS", M + 3, y + 5, { size: 7.5, bold: true, color: [30, 80, 160] });
-  txt("AMOUNT", M + CW - 3, y + 5, { size: 7.5, bold: true, align: "right", color: [30, 80, 160] });
-  y += 7;
+  // ── Particulars table ─────────────────────────────────────────────────────
+  fillRect(M, y, CW, 8, ACCENT);
+  txt("PARTICULARS", M + 3, y + 5.4, { size: 8, bold: true, color: WHITE });
+  txt("AMOUNT", M + CW - 3, y + 5.4, { size: 8, bold: true, align: "right", color: WHITE });
+  y += 8;
 
   const rows: Array<[string, string]> = [
     ["Expense Account (Debit)", data.expenseLedgerName || "—"],
     [`${data.paidFromLabel} (Credit)`, data.paidFromName || "—"],
   ];
   rows.forEach(([label, value], i) => {
-    if (i % 2 === 1) fillRect(M, y, CW, 8, [248, 250, 254]);
-    doc.setDrawColor(220); doc.setLineWidth(0.2); doc.rect(M, y, CW, 8);
-    txt(label, M + 3, y + 5.5, { size: 7.5, color: [90, 90, 90] });
-    txt(value, M + 62, y + 5.5, { size: 8, bold: true });
-    if (i === 0) txt(money(data.amount), M + CW - 3, y + 5.5, { size: 8, bold: true, align: "right" });
-    y += 8;
+    if (i % 2 === 1) fillRect(M, y, CW, 9, SOFT);
+    box(M, y, CW, 9);
+    txt(label, M + 3, y + 5.9, { size: 7.8, color: MUT });
+    cell(value, M + 64, y + 5.9, CW - 64 - 34, { size: 8.6, bold: true, color: INK });
+    if (i === 0) txt(money(data.amount), M + CW - 3, y + 5.9, { size: 8.6, bold: true, align: "right" });
+    y += 9;
   });
 
   // Narration — wrapped, so a long note is fully readable rather than clipped.
   const narration = (data.description || "—").trim();
-  doc.setFontSize(7.5); doc.setFont("helvetica", "normal");
-  const lines = doc.splitTextToSize(narration, CW - 66) as string[];
-  const nh = Math.max(8, lines.length * 3.6 + 4);
-  doc.setDrawColor(220); doc.setLineWidth(0.2); doc.rect(M, y, CW, nh);
-  txt("Narration", M + 3, y + 5.5, { size: 7.5, color: [90, 90, 90] });
-  lines.forEach((ln, i) => txt(ln, M + 62, y + 5.5 + i * 3.6, { size: 7.5 }));
+  const nLines = wrap(narration, CW - 70, 7.8);
+  const nh = Math.max(9, nLines.length * 3.8 + 4.8);
+  box(M, y, CW, nh);
+  txt("Narration", M + 3, y + 5.9, { size: 7.8, color: MUT });
+  nLines.forEach((ln, i) => txt(ln, M + 64, y + 5.9 + i * 3.8, { size: 7.8, color: INK }));
   y += nh;
 
-  // ── Total ─────────────────────────────────────────────────────────────────
-  fillRect(M, y, CW, 12, [25, 72, 140]);
-  outlineRect(M, y, CW, 12, 0.5);
-  txt("TOTAL", M + 4, y + 8, { size: 10, bold: true, color: [255, 255, 255] });
-  txt(money(data.amount), M + CW - 4, y + 8, { size: 12, bold: true, align: "right", color: [160, 230, 160] });
-  y += 15;
+  // ── Total band ────────────────────────────────────────────────────────────
+  fillRect(M, y, CW, 11, ACCENT);
+  txt("TOTAL", M + 4, y + 7.4, { size: 10, bold: true, color: WHITE });
+  txt(money(data.amount), M + CW - 4, y + 7.4, { size: 11, bold: true, align: "right", color: WHITE });
+  y += 14;
 
-  txt(`Amount in words: ${amountInWords(data.amount)}`, M, y, { size: 7.5, bold: true, color: [60, 60, 60] });
-  y += 8;
+  // Amount in words — a voucher without it is not a complete instrument.
+  const wLines = wrap(amountInWords(data.amount), CW - 40, 7.8).slice(0, 3);
+  const wh = Math.max(9, wLines.length * 3.9 + 4.5);
+  fillRect(M, y, CW, wh, SOFT);
+  box(M, y, CW, wh);
+  txt("Amount in Words", M + 3, y + 5.8, { size: 7.2, color: MUT });
+  wLines.forEach((l, i) => {
+    doc.setFont(FONT, "bold");
+    txt(l, M + 36, y + 5.8 + i * 3.9, { size: 7.8, bold: true, color: INK });
+  });
+  y += wh + 3;
 
   // ── Supporting document ───────────────────────────────────────────────────
-  outlineRect(M, y, CW, 10, 0.2);
-  txt("Supporting bill / receipt", M + 3, y + 4, { size: 6.5, color: [100, 100, 100] });
+  box(M, y, CW, 10);
+  txt("Supporting bill / receipt", M + 3, y + 4.2, { size: 6.8, color: MUT });
   txt(
     data.attachmentUrl ? "Attached in the system against this voucher" : "Not attached",
-    M + 3, y + 8,
-    { size: 7.5, bold: true, color: data.attachmentUrl ? [22, 130, 74] : [180, 100, 0] },
+    M + 3, y + 8.2,
+    { size: 7.8, bold: true, color: data.attachmentUrl ? [22, 130, 74] : [180, 100, 0] },
   );
   y += 13;
 
@@ -178,17 +173,13 @@ export function generateExpenseVoucherPdf(data: ExpenseVoucherPdfInput): Buffer 
     data.recordedBy ? `Recorded by: ${data.recordedBy}` : "",
     data.recordedAt ? `Recorded on: ${fmtDate(data.recordedAt)}` : "",
   ].filter(Boolean).join("      ");
-  if (trail) { txt(trail, M, y, { size: 7, color: [110, 110, 110] }); y += 8; }
+  if (trail) { txt(trail, M, y + 3, { size: 7, color: MUT }); y += 9; }
 
   // ── Signatures ────────────────────────────────────────────────────────────
-  y = Math.max(y, 235);
-  const sigW = CW / 3;
-  ["Prepared By", "Approved By", "Received By"].forEach((label, i) => {
-    const x = M + sigW * i;
-    doc.setDrawColor(120); doc.setLineWidth(0.2);
-    doc.line(x + 4, y + 12, x + sigW - 4, y + 12);
-    txt(label, x + sigW / 2, y + 16, { size: 7, align: "center", color: [90, 90, 90] });
-  });
+  y = Math.min(Math.max(y, 235), PH - 30);
+  drawSignatureRow(doc, ["Prepared By", "Approved By", "Received By"], y, M, CW);
+
+  drawGeneratedNote(doc, "This is a computer-generated payment voucher.", M);
 
   return Buffer.from(doc.output("arraybuffer"));
 }

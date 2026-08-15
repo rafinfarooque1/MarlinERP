@@ -2323,6 +2323,12 @@ components:
           description: Footer/terms text printed at the foot of this location's invoices.
         authorizedSignatory:
           type: ["string", "null"]
+        logoUrl:
+          type: ["string", "null"]
+          description: >-
+            Letterhead logo as an inline PNG/JPEG data URI. Null means this
+            location prints the company logo (or a lettermark when neither
+            has one).
         billingIncomplete:
           type: array
           items:
@@ -2384,6 +2390,9 @@ components:
           type: ["string", "null"]
         authorizedSignatory:
           type: ["string", "null"]
+        logoUrl:
+          type: ["string", "null"]
+          description: Letterhead logo as a PNG/JPEG data URI. Empty or null stores none.
 
     WarehouseUpdate:
       type: object
@@ -2431,6 +2440,9 @@ components:
           type: ["string", "null"]
         authorizedSignatory:
           type: ["string", "null"]
+        logoUrl:
+          type: ["string", "null"]
+          description: Letterhead logo as a PNG/JPEG data URI. Empty or null clears it.
 
     # OUTLET
     Outlet:

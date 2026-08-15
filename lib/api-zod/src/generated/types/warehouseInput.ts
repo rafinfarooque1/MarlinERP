@@ -46,4 +46,6 @@ export interface WarehouseInput {
   invoiceFooter?: string | null;
   /** @nullable */
   authorizedSignatory?: string | null;
+  /** Letterhead logo as a PNG/JPEG data URI; null falls back to the company logo. */
+  logoUrl?: string | null;
 }

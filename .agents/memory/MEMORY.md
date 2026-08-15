@@ -68,6 +68,7 @@
 - [Purchase bill costing](purchase-bill-costing.md) — stock is valued at the TAXABLE value (net of GST+discount); floor-at-zero reversals invent stock, so refuse an edit once the goods moved; unwind avg cost with the qty.
 - [Hiding a money figure](hiding-a-money-figure.md) — the figure always has siblings behind weaker guards; omit (never zero) the key; stripping a GET a client echoes back on approve zeroes cost.
 - [PDF Unicode fonts](pdf-unicode-fonts.md) — jsPDF's built-ins are WinAnsi so ₹ prints as `¹`; only an embedded TrueType fixes it, and jsPDF subsets it for you.
+- [Document letterhead standard](document-letterhead.md) — EVERY business PDF renders server-side from the stored row under the shared location letterhead; clients send {id} only; linked-doc prints fail closed on NULL links.
 - [Document renderers must not compute](document-renderers.md) — `stored ?? qty*rate` fires only on the oldest records; absent ≠ zero; single-page docs need a measured fit strategy.
 - [Ledger-authoritative balances](ledger-authoritative-balances.md) — documents never produce a competing "current balance"; never clamp, absent ≠ zero, build the index once, re-read subtrees.
 - [Query cache invalidation keys](query-cache-invalidation-keys.md) — a hand-written key matches no query and fails silently; the stale screen looks exactly like a backend bug.

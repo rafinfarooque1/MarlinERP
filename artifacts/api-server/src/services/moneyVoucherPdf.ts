@@ -14,7 +14,7 @@
  * stack of printouts without reading a word.
  */
 import { jsPDF } from "jspdf";
-import { FONT, registerFonts } from "@workspace/pdf-kit";
+import { FONT, registerFonts, drawLetterhead } from "@workspace/pdf-kit";
 import type { InvoiceIssuer } from "../lib/billingProfile";
 
 type RGB = [number, number, number];
@@ -138,70 +138,10 @@ export async function generateMoneyVoucherPdf(data: MoneyVoucherPdfInput): Promi
   let y = M + 2;
 
   // ══════════════════════════════════════════════════════════════════════════
-  // 1. HEADER — logo + issuing-location identity left | badge + meta right
+  // 1. HEADER — the shared letterhead (logo + issuing-location identity left,
+  //    badge + meta right), so every document prints the same masthead.
   // ══════════════════════════════════════════════════════════════════════════
-  const BADGE_W = 64;
-  const badgeX  = M + CW - BADGE_W;
-  const nameX   = M + 23;
-  const nameW   = badgeX - nameX - 9;
-
-  const LOGO_S = 19;
-  const drawLettermark = () => {
-    rfill(M, y, LOGO_S, LOGO_S, ACCENT, 2);
-    txt((issuer.tradeName[0] || "M").toUpperCase(), M + LOGO_S / 2, y + LOGO_S / 2 + 4,
-        { bold: true, size: 16, color: WHITE, align: "center" });
-  };
-  if (data.logoDataUrl) {
-    try {
-      const props = doc.getImageProperties(data.logoDataUrl);
-      const s = Math.min(LOGO_S / (props.width || 1), LOGO_S / (props.height || 1));
-      const lw = (props.width || 1) * s;
-      const lh = (props.height || 1) * s;
-      doc.addImage(data.logoDataUrl, M + (LOGO_S - lw) / 2, y + (LOGO_S - lh) / 2, lw, lh, undefined, "FAST");
-    } catch { drawLettermark(); }
-  } else {
-    drawLettermark();
-  }
-
-  // Issuing location's name — large, wrapping instead of colliding with meta.
-  const nameLines = wrap((issuer.tradeName || "—").toUpperCase(), nameW, 15.5, true).slice(0, 2);
-  let ly = y + 7;
-  for (const nl of nameLines) {
-    txt(nl, nameX, ly, { bold: true, size: 15.5, color: ACCENT });
-    ly += 6.4;
-  }
-  ly -= 0.8;
-
-  for (const l of issuer.addressLines.slice(0, 4)) {
-    cell(l, nameX, ly, nameW, { size: 7.4, color: INK });
-    ly += 3.9;
-  }
-  const contactBits = [
-    issuer.phone ? `Ph: +91 ${issuer.phone}`.replace(/\+91 \+/, "+") : "",
-    issuer.email || "",
-  ].filter(Boolean).join("    ");
-  if (contactBits) {
-    ly += 1;
-    cell(contactBits, nameX, ly, nameW, { size: 7.4, color: INK });
-    ly += 4.2;
-  }
-  if (issuer.gstin) {
-    ly += 0.6;
-    txt(`GSTIN: ${issuer.gstin}`, nameX, ly + 1.4, { bold: true, size: 8.6, color: ACCENT });
-    ly += 5.4;
-  }
-  if (issuer.fssai) {
-    txt(`FSSAI Lic. No.: ${issuer.fssai}`, nameX, ly + 0.6, { bold: true, size: 7.6, color: ACCENT });
-    ly += 4.6;
-  }
-
-  // Right: document badge + meta rows.
-  rfill(badgeX, y, BADGE_W, 9.5, ACCENT, 1);
-  txt(isReceipt ? "RECEIPT VOUCHER" : "PAYMENT VOUCHER", badgeX + BADGE_W / 2, y + 6.3,
-      { bold: true, size: 10.5, color: WHITE, align: "center" });
-
-  type MetaRow = [label: string, value: string];
-  const metaRows: MetaRow[] = [
+  const metaRows: Array<[string, string]> = [
     ["Voucher No.", data.voucherNumber || "—"],
     ["Voucher Date", fmtDate(data.voucherDate)],
   ];
@@ -212,18 +152,14 @@ export async function generateMoneyVoucherPdf(data: MoneyVoucherPdfInput): Promi
   }
   if (data.referenceNumber) metaRows.push(["Reference", data.referenceNumber]);
 
-  let my = y + 14.6;
-  for (const [label, value] of metaRows) {
-    txt(label, badgeX + 0.5, my, { size: 7.4, color: MUT });
-    cell(`:  ${value}`, badgeX + 22.5, my, BADGE_W - 23, { size: 7.4, bold: true, color: INK });
-    my += 5.6;
-  }
-  my -= 2;
-
-  const headerBottom = Math.max(ly + 1, my, y + LOGO_S + 1);
-  line(badgeX - 4.5, y + 1, badgeX - 4.5, headerBottom - 1, BORDER, 0.35);
-  line(M, headerBottom + 2, M + CW, headerBottom + 2, BORDER, 0.4);
-  y = headerBottom + 7;
+  y = drawLetterhead(doc, {
+    issuer,
+    logoDataUrl: data.logoDataUrl,
+    badgeTitle: isReceipt ? "RECEIPT VOUCHER" : "PAYMENT VOUCHER",
+    accent: ACCENT,
+    metaRows,
+    margin: M,
+  });
 
   // ══════════════════════════════════════════════════════════════════════════
   // 2. PARTICULARS — Dr first, Cr second: the double-entry order an auditor

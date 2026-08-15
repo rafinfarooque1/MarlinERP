@@ -44,6 +44,8 @@ type Mapping = {
 type Preview = {
   locationName: string;
   scope: string;
+  mode?: 'restart' | 'preserve';
+  planChecksum: string;
   total: number;
   perSeries: Record<string, { count: number; firstNew: string; lastNew: string; lastSerial: number }>;
   oddShaped: number;
@@ -77,10 +79,23 @@ export default function InvoiceRenumberingSection() {
   });
 
   const [locationKey, setLocationKey] = useState<string>('');
+  /**
+   * 'preserve' (default) — change only the printed shape, every bill keeps its
+   * serial: SB2C/2026-27/000528 → SB2C/26-27/528.
+   * 'restart' — rebuild the sequence from chosen starting numbers (continuing
+   * an old physical bill book).
+   */
+  const [mode, setMode] = useState<'preserve' | 'restart'>('preserve');
   const [b2cStart, setB2cStart] = useState<string>('7490');
   const [b2bStart, setB2bStart] = useState<string>('130');
   const [previewing, setPreviewing] = useState(false);
   const [preview, setPreview] = useState<Preview | null>(null);
+  /**
+   * The EXACT request body the shown preview was computed for. Apply always
+   * sends this captured target (plus the preview's checksum) — never the live
+   * select state, which the user may have changed while the preview loaded.
+   */
+  const [previewTarget, setPreviewTarget] = useState<Record<string, unknown> | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [applying, setApplying] = useState(false);
   const [result, setResult] = useState<ApplyResult | null>(null);
@@ -108,12 +123,13 @@ export default function InvoiceRenumberingSection() {
   const target = selected && {
     locationType: selected.locationType,
     locationId: selected.locationId,
-    b2cStart: Number(b2cStart),
-    b2bStart: Number(b2bStart),
+    mode,
+    ...(mode === 'restart' ? { b2cStart: Number(b2cStart), b2bStart: Number(b2bStart) } : {}),
   };
 
   const runPreview = async () => {
     if (!target) return;
+    const requested = { ...target };
     setPreviewing(true);
     setResult(null);
     setLocked(null);
@@ -121,8 +137,9 @@ export default function InvoiceRenumberingSection() {
       const p = await customFetch<Preview>('/api/admin/sales-renumber/preview', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(target),
+        body: JSON.stringify(requested),
       });
+      setPreviewTarget(requested);
       setPreview(p);
     } catch (e: any) {
       // Already-migrated is not a toast-and-forget error: surface it inline
@@ -157,16 +174,17 @@ export default function InvoiceRenumberingSection() {
   };
 
   const runApply = async () => {
-    if (!target || !preview) return;
+    if (!previewTarget || !preview) return;
     setApplying(true);
     try {
       const r = await customFetch<ApplyResult>('/api/admin/sales-renumber/apply', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...target, expectedTotal: preview.total }),
+        body: JSON.stringify({ ...previewTarget, expectedTotal: preview.total, planChecksum: preview.planChecksum }),
       });
       setResult(r);
       setPreview(null);
+      setPreviewTarget(null);
       setConfirmOpen(false);
       toast.success(`Renumbered ${r.renumbered} invoices at ${r.locationName}`);
       // Every list that shows invoice numbers is now stale.
@@ -187,7 +205,7 @@ export default function InvoiceRenumberingSection() {
         <div>
           <h3 className="font-semibold">Invoice Number Migration</h3>
           <p className="text-xs text-muted-foreground">
-            Renumber one location's sales bills onto its old bill-book series (e.g. SB2C/26-27/7490) and continue that series for future bills. Super administrators only — can be done once per location.
+            Convert one location's sales bills to the short number format (SB2C/26-27/528) — or renumber them onto an old bill-book series. Future bills continue in the short format automatically. Super administrators only — can be done once per location.
           </p>
         </div>
       </div>
@@ -204,21 +222,35 @@ export default function InvoiceRenumberingSection() {
             </Select>
           </div>
           <div>
-            <label className="text-xs font-medium text-muted-foreground">First B2C (retail) number</label>
-            <Input className="mt-1 font-mono" inputMode="numeric" value={b2cStart}
-              onChange={(e) => setB2cStart(e.target.value.replace(/\D/g, ''))} />
+            <label className="text-xs font-medium text-muted-foreground">Numbering</label>
+            <Select value={mode} onValueChange={(v) => setMode(v as 'preserve' | 'restart')}>
+              <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="preserve">Keep bill numbers — change format only</SelectItem>
+                <SelectItem value="restart">Restart from a bill-book number…</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
-          <div>
-            <label className="text-xs font-medium text-muted-foreground">First B2B (GST customer) number</label>
-            <Input className="mt-1 font-mono" inputMode="numeric" value={b2bStart}
-              onChange={(e) => setB2bStart(e.target.value.replace(/\D/g, ''))} />
-          </div>
+          {mode === 'restart' && (
+            <>
+              <div>
+                <label className="text-xs font-medium text-muted-foreground">First B2C (retail) number</label>
+                <Input className="mt-1 font-mono" inputMode="numeric" value={b2cStart}
+                  onChange={(e) => setB2cStart(e.target.value.replace(/\D/g, ''))} />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-muted-foreground">First B2B (GST customer) number</label>
+                <Input className="mt-1 font-mono" inputMode="numeric" value={b2bStart}
+                  onChange={(e) => setB2bStart(e.target.value.replace(/\D/g, ''))} />
+              </div>
+            </>
+          )}
         </div>
 
         <div className="flex items-center gap-3">
           <Button
             onClick={runPreview}
-            disabled={!selected || previewing || !Number(b2cStart) || !Number(b2bStart)}
+            disabled={!selected || previewing || (mode === 'restart' && (!Number(b2cStart) || !Number(b2bStart)))}
           >
             {previewing ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Checking…</> : 'Preview changes'}
           </Button>
@@ -261,9 +293,15 @@ export default function InvoiceRenumberingSection() {
       <Dialog open={!!preview} onOpenChange={(o) => { if (!o) setPreview(null); }}>
         <DialogContent className="max-w-3xl">
           <DialogHeader>
-            <DialogTitle>Renumber {preview?.total} invoices at {preview?.locationName}?</DialogTitle>
+            <DialogTitle>
+              {(preview?.mode ?? mode) === 'preserve'
+                ? `Convert ${preview?.total} invoices at ${preview?.locationName} to the new format?`
+                : `Renumber ${preview?.total} invoices at ${preview?.locationName}?`}
+            </DialogTitle>
             <DialogDescription>
-              Every bill below gets its new number, oldest first. Receipts and quotation references are renamed with them. Amounts, dates, GST and stock are not touched.
+              {(preview?.mode ?? mode) === 'preserve'
+                ? 'Every bill keeps its own number — only the printed format changes (SB2C/2026-27/000528 → SB2C/26-27/528). Receipts and quotation references are renamed with them. Amounts, dates, GST and stock are not touched.'
+                : 'Every bill below gets its new number, oldest first. Receipts and quotation references are renamed with them. Amounts, dates, GST and stock are not touched.'}
             </DialogDescription>
           </DialogHeader>
           {preview && (
@@ -303,8 +341,11 @@ export default function InvoiceRenumberingSection() {
           )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setPreview(null)}>Cancel</Button>
-            <Button variant="destructive" onClick={() => setConfirmOpen(true)} disabled={!preview?.total}>
-              Renumber {preview?.total} invoices…
+            {/* preserve mode may apply with 0 bills — it still locks the location
+                onto the short format so its FUTURE bills print short. */}
+            <Button variant="destructive" onClick={() => setConfirmOpen(true)}
+              disabled={!preview || (preview.mode === 'restart' && !preview.total)}>
+              {(preview?.mode ?? mode) === 'preserve' ? `Convert ${preview?.total} invoices…` : `Renumber ${preview?.total} invoices…`}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -318,7 +359,9 @@ export default function InvoiceRenumberingSection() {
               <TriangleAlert className="w-5 h-5 text-destructive" /> This can be done only once
             </AlertDialogTitle>
             <AlertDialogDescription>
-              {preview?.total} invoices at {preview?.locationName} will be permanently renumbered onto the bill-book series, and all future bills at this location will continue it. The old numbers stay searchable, but this cannot be run again for this location unless a super administrator clears the migration lock.
+              {(preview?.mode ?? mode) === 'preserve'
+                ? `${preview?.total} invoices at ${preview?.locationName} will be converted to the short number format (each bill keeps its own number), and all future bills at this location will use it. The old numbers stay searchable, but this cannot be run again for this location unless a super administrator clears the migration lock.`
+                : `${preview?.total} invoices at ${preview?.locationName} will be permanently renumbered onto the bill-book series, and all future bills at this location will continue it. The old numbers stay searchable, but this cannot be run again for this location unless a super administrator clears the migration lock.`}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

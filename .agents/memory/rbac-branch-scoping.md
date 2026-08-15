@@ -107,3 +107,8 @@ evaluated for the users who do the testing.
 **How to apply:** whenever a query interpolates a scope fragment, alias the
 table to what the helper expects. When triaging a 500 that only one role sees,
 check the alias before anything else.
+
+## Silent-empty HO gates look like permission bugs
+Several accounting views once hard-gated on `branchType !== 'headoffice'` and returned an EMPTY payload (not 403) — so granting the page's View right appeared to do nothing. Day Book now pins branch callers to their own location slice instead (the `statementLocationFilter` pattern: employee branch outvotes selector headers/query params; companyLevel bucket suppressed for branch callers since those are HO figures). Cash/Bank book ledgers, ledger statement, and trial balance keep their HO-only empty gates BY SCOPE DECISION — if a branch is ever granted those, use the same pin pattern, never the empty return.
+**Why:** an empty 200 hides the authz decision from both the user and the UI; the owner reported it as "permission granted but page won't open".
+**How to apply:** when a branch user with a granted View right sees an empty accounting view, grep the route for a branchType early-return before suspecting the permission tables.

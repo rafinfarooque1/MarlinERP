@@ -103,7 +103,7 @@ async function cleanup() {
   // deletable), then bills through the API so lots and postings unwind
   // exactly as a real delete would, then the raw fixture rows.
   if (saleId) await post(`/sales/${saleId}/cancel`, {}).catch(() => {});
-  await sql(`DELETE FROM receipts WHERE voucher_number IN (SELECT invoice_number FROM sales WHERE location_type='warehouse' AND location_id=$1 AND line_items::text LIKE '%"itemId":'||$2||'%')`, [WH, fixtures.itemA || -1]).catch(() => {});
+  await sql(`DELETE FROM receipts WHERE voucher_number IN (SELECT invoice_number FROM sales WHERE location_type='warehouse' AND location_id=$1 AND line_items @> jsonb_build_array(jsonb_build_object('itemId', $2::int)))`, [WH, fixtures.itemA || -1]).catch(() => {});
   if (saleId) {
     const row = await saleRow(saleId).catch(() => null);
     if (row) await sql(`DELETE FROM receipts WHERE voucher_number = $1`, [row.invoice_number]);

@@ -751,6 +751,7 @@ export const ListWarehousesResponseItem = zod.object({
   "ifscCode": zod.string().nullish(),
   "invoiceFooter": zod.string().nullish().describe('Footer\/terms text printed at the foot of this location\'s invoices.'),
   "authorizedSignatory": zod.string().nullish(),
+  "logoUrl": zod.string().nullish(),
   "billingIncomplete": zod.array(zod.string()).optional().describe('Billing fields still missing from the seller identity this warehouse will print on an invoice, e.g. [\"GSTIN\", \"Bank details\"]. Resolved server-side after the company-level bank\/UPI fallback, so an empty array means invoices from here come out complete. Read-only.'),
   "outletCount": zod.number().optional(),
   "createdAt": zod.string()
@@ -782,7 +783,8 @@ export const CreateWarehouseBody = zod.object({
   "bankAccountNumber": zod.string().nullish(),
   "ifscCode": zod.string().nullish(),
   "invoiceFooter": zod.string().nullish(),
-  "authorizedSignatory": zod.string().nullish()
+  "authorizedSignatory": zod.string().nullish(),
+  "logoUrl": zod.string().nullish()
 })
 
 export const CreateWarehouseResponse = zod.object({
@@ -808,6 +810,7 @@ export const CreateWarehouseResponse = zod.object({
   "ifscCode": zod.string().nullish(),
   "invoiceFooter": zod.string().nullish().describe('Footer\/terms text printed at the foot of this location\'s invoices.'),
   "authorizedSignatory": zod.string().nullish(),
+  "logoUrl": zod.string().nullish(),
   "billingIncomplete": zod.array(zod.string()).optional().describe('Billing fields still missing from the seller identity this warehouse will print on an invoice, e.g. [\"GSTIN\", \"Bank details\"]. Resolved server-side after the company-level bank\/UPI fallback, so an empty array means invoices from here come out complete. Read-only.'),
   "outletCount": zod.number().optional(),
   "createdAt": zod.string()
@@ -841,6 +844,7 @@ export const GetWarehouseResponse = zod.object({
   "ifscCode": zod.string().nullish(),
   "invoiceFooter": zod.string().nullish().describe('Footer\/terms text printed at the foot of this location\'s invoices.'),
   "authorizedSignatory": zod.string().nullish(),
+  "logoUrl": zod.string().nullish(),
   "billingIncomplete": zod.array(zod.string()).optional().describe('Billing fields still missing from the seller identity this warehouse will print on an invoice, e.g. [\"GSTIN\", \"Bank details\"]. Resolved server-side after the company-level bank\/UPI fallback, so an empty array means invoices from here come out complete. Read-only.'),
   "outletCount": zod.number().optional(),
   "createdAt": zod.string()
@@ -872,7 +876,8 @@ export const UpdateWarehouseBody = zod.object({
   "bankAccountNumber": zod.string().nullish(),
   "ifscCode": zod.string().nullish(),
   "invoiceFooter": zod.string().nullish(),
-  "authorizedSignatory": zod.string().nullish()
+  "authorizedSignatory": zod.string().nullish(),
+  "logoUrl": zod.string().nullish()
 })
 
 export const UpdateWarehouseResponse = zod.object({
@@ -898,6 +903,7 @@ export const UpdateWarehouseResponse = zod.object({
   "ifscCode": zod.string().nullish(),
   "invoiceFooter": zod.string().nullish().describe('Footer\/terms text printed at the foot of this location\'s invoices.'),
   "authorizedSignatory": zod.string().nullish(),
+  "logoUrl": zod.string().nullish(),
   "billingIncomplete": zod.array(zod.string()).optional().describe('Billing fields still missing from the seller identity this warehouse will print on an invoice, e.g. [\"GSTIN\", \"Bank details\"]. Resolved server-side after the company-level bank\/UPI fallback, so an empty array means invoices from here come out complete. Read-only.'),
   "outletCount": zod.number().optional(),
   "createdAt": zod.string()

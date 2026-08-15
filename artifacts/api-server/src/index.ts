@@ -92,6 +92,7 @@ async function runMigrations() {
     ALTER TABLE warehouses ADD COLUMN IF NOT EXISTS ifsc_code text;
     ALTER TABLE warehouses ADD COLUMN IF NOT EXISTS invoice_footer text;
     ALTER TABLE warehouses ADD COLUMN IF NOT EXISTS authorized_signatory text;
+    ALTER TABLE warehouses ADD COLUMN IF NOT EXISTS logo_url text;
     ALTER TABLE outlets    ADD COLUMN IF NOT EXISTS cash_ledger_id integer;
     ALTER TABLE outlets    ADD COLUMN IF NOT EXISTS sales_ledger_id integer;
 
@@ -2571,6 +2572,103 @@ async function runMigrations() {
     );
   } catch (e) {
     console.error('[migration] sales_number_formats FAILED:', (e as Error).message);
+  }
+
+  // ── GST document series onto the short number format (Aug 2026) ───────────
+  // One-time conversion of EXISTING sales returns, purchase returns, credit
+  // notes and debit notes from PREFIX/2026-27/0004 to PREFIX/26-27/4 — the
+  // same format the sales invoices standardised on. New documents already
+  // print short via SHORT_FORMAT_VOUCHER_TYPES in nextVoucherNumber(); this
+  // block brings history in line so lists never mix two shapes.
+  //   • shape-only: prefix, serial and every amount/date/posting untouched;
+  //   • old number kept searchable (legacy_return_number /
+  //     legacy_voucher_number, first value wins);
+  //   • narration/notes texts that quote the old number are rewritten in the
+  //     SAME transaction, so a credit-note JV never references a number that
+  //     no longer exists;
+  //   • runs as an idempotent sweep on EVERY boot, not one-shot: during a
+  //     rolling deploy an old instance can still write a long-format document
+  //     after the new instance's first conversion committed — the next boot
+  //     heals it. The sweep is format-only and fails closed on duplicates, so
+  //     re-running is safe (this is deliberately different from the
+  //     destructive-boot rule, which is about DELETEs guarded by data shape);
+  //   • serialized across concurrently booting instances by an advisory lock;
+  //   • migration_log marker records first completion (observability only);
+  //   • the voucher_sequences rows stay keyed on the LONG FY label, so the
+  //     running serial of each series is not reset or forked by this.
+  try {
+    await pool.query(`ALTER TABLE sales_returns ADD COLUMN IF NOT EXISTS legacy_return_number TEXT`);
+    await pool.query(`ALTER TABLE purchase_returns ADD COLUMN IF NOT EXISTS legacy_return_number TEXT`);
+    {
+      const c = await pool.connect();
+      try {
+        await c.query('BEGIN');
+        // One converter at a time — two instances booting together must not
+        // interleave their UPDATE + duplicate-check phases.
+        await c.query(`SELECT pg_advisory_xact_lock(hashtext('gst_doc_short_numbers'))`);
+        const LONG_SHAPE = String.raw`^[A-Z0-9-]+/[0-9]{4}-[0-9]{2}/0*[0-9]+$`;
+        const TO_SHORT = String.raw`^([A-Z0-9-]+)/[0-9]{2}([0-9]{2})-([0-9]{2})/0*([0-9]+)$`;
+        const renamed: Array<{ old: string; next: string }> = [];
+        for (const t of [
+          { table: 'sales_returns', col: 'return_number', legacy: 'legacy_return_number', where: '' },
+          { table: 'purchase_returns', col: 'return_number', legacy: 'legacy_return_number', where: '' },
+          { table: 'journal_vouchers', col: 'voucher_number', legacy: 'legacy_voucher_number',
+            where: `AND voucher_type IN ('credit_note','debit_note')` },
+        ]) {
+          const { rows } = await c.query(
+            `UPDATE ${t.table}
+                SET ${t.legacy} = COALESCE(${t.legacy}, ${t.col}),
+                    ${t.col} = regexp_replace(${t.col}, $2, '\\1/\\2-\\3/\\4')
+              WHERE ${t.col} ~ $1 ${t.where}
+              RETURNING ${t.legacy} AS old, ${t.col} AS next`,
+            [LONG_SHAPE, TO_SHORT]
+          );
+          for (const r of rows) renamed.push({ old: String(r.old), next: String(r.next) });
+          // Two long numbers may only collapse onto one short number if they
+          // were already duplicates (identical up to zero padding) — refuse
+          // to commit rather than merge two documents' identities.
+          const { rows: [dup] } = await c.query(
+            `SELECT count(*)::int AS n FROM (
+               SELECT ${t.col} FROM ${t.table} GROUP BY ${t.col} HAVING count(*) > 1
+             ) d`
+          );
+          if (Number(dup?.n ?? 0) > 0) {
+            throw new Error(`${t.table} would hold ${dup.n} duplicate number(s) after conversion`);
+          }
+        }
+        // Rewrite every stored text that quotes an old number — narrations on
+        // the linked note JVs, refund payment narrations, receipt/settlement
+        // notes — so no book line references a number that no longer exists.
+        for (const { old, next } of renamed) {
+          for (const [table, col] of [
+            ['journal_vouchers', 'narration'],
+            ['payments', 'narration'],
+            ['payments', 'notes'],
+            ['receipts', 'narration'],
+            ['sale_payments', 'notes'],
+          ] as const) {
+            await c.query(
+              `UPDATE ${table} SET ${col} = replace(${col}, $1, $2) WHERE ${col} LIKE '%' || $1 || '%'`,
+              [old, next]
+            );
+          }
+        }
+        await c.query(
+          `INSERT INTO migration_log (name) VALUES ('gst_doc_short_numbers_v1') ON CONFLICT (name) DO NOTHING`
+        );
+        await c.query('COMMIT');
+        if (renamed.length > 0) {
+          console.log(`[migration] gst_doc_short_numbers_v1: converted ${renamed.length} document number(s) to the short format`);
+        }
+      } catch (e) {
+        await c.query('ROLLBACK').catch(() => {});
+        throw e;
+      } finally {
+        c.release();
+      }
+    }
+  } catch (e) {
+    console.error('[migration] gst_doc_short_numbers_v1 FAILED:', (e as Error).message);
   }
 
   // Forward-only reconcile for the per-location SB2B/SB2C counters, every

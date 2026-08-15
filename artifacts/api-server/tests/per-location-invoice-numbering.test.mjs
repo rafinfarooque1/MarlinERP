@@ -66,17 +66,27 @@ async function snapshotTB() {
 
 // Financial-year label for today, Indian FY (April start) — same rule as the
 // server. Computed dynamically so the suite survives clock rollover.
+// Aug 2026: every location prints the SHORT financial-year label (26-27)
+// with an unpadded serial — the global GST-document format.
 function fyLabelToday() {
   const d = new Date();
   const startYear = d.getMonth() + 1 >= 4 ? d.getFullYear() : d.getFullYear() - 1;
-  return `${startYear}-${String((startYear + 1) % 100).padStart(2, '0')}`;
+  return `${String(startYear % 100).padStart(2, '0')}-${String((startYear + 1) % 100).padStart(2, '0')}`;
 }
 const FY = fyLabelToday();
 const today = new Date().toISOString().slice(0, 10);
 
-// Highest suffix already in use for a series at a location — the suite's
-// expectations are anchored on the data, not on hardcoded numbers.
+// Next-number anchor for a series at a location. The allocator continues
+// from the COUNTER row, not from the highest stored bill: serials burned by
+// since-deleted bills are never reissued (by design), so the counter can sit
+// ahead of the stored maximum. Expectations must anchor on the same source
+// the allocator reads — GREATEST(counter, stored max).
 async function maxSuffix(prefix, locType, locId) {
+  const scope = locType === 'headoffice' ? 'headoffice' : `${locType}:${locId}`;
+  const counterName = prefix === 'SB2B' ? 'sales_invoice_counter_b2b' : 'sales_invoice_counter_b2c';
+  const { rows: [c] } = await sql(
+    `SELECT COALESCE(MAX(last_number), 0) AS m FROM voucher_sequences WHERE voucher_type = $1`,
+    [`${counterName}@${scope}`]);
   const { rows: [r] } = await sql(
     `SELECT COALESCE(MAX((split_part(invoice_number, '/', 3))::int), 0) AS m
        FROM sales
@@ -84,9 +94,9 @@ async function maxSuffix(prefix, locType, locId) {
         AND split_part(invoice_number, '/', 3) ~ '^[0-9]+$'
         AND location_type = $3 AND ($3 = 'headoffice' OR location_id = $4)`,
     [prefix, FY, locType, locId]);
-  return Number(r.m);
+  return Math.max(Number(c.m), Number(r.m));
 }
-const num = (prefix, n) => `${prefix}/${FY}/${String(n).padStart(6, '0')}`;
+const num = (prefix, n) => `${prefix}/${FY}/${String(n)}`;
 
 const fixtures = { itemId: 0, custB2C: 0, custB2B: 0 };
 const createdSales = []; // { id, invoiceNumber, locType, locId }
@@ -95,10 +105,14 @@ async function cleanup() {
   // Cancel through the API first so stock is restored and the sale's own
   // receipts are withdrawn by the same guarded delete production uses.
   for (const s of createdSales) await post(`/sales/${s.id}/cancel`, {}).catch(() => {});
+  // Match fixture sales by the tagged item NAME inside line_items — never by
+  // a text-LIKE on the itemId: jsonb::text renders `"itemId": 206` with a
+  // space, so the old pattern matched nothing and leaked every fixture sale.
+  // The name match also sweeps up leftovers from earlier runs.
   const { rows: mine } = await sql(
     `SELECT id, invoice_number, location_type, location_id FROM sales
-      WHERE line_items::text LIKE '%"itemId":' || $1 || ',%' OR line_items::text LIKE '%"itemId":' || $1 || '}%'`,
-    [fixtures.itemId || -1]);
+      WHERE line_items::text LIKE '%' || $1 || '%'`,
+    [TAG]);
   for (const s of mine) {
     // Same per-location guard as the app: never touch a twin's receipt.
     await sql(
@@ -157,10 +171,13 @@ for (const [bt, bid] of [['warehouse', WH1], ['warehouse', WH2], ['headoffice', 
 async function nextAnchor(series, locType, locId) {
   const counter = series === 'SB2B' ? 'sales_invoice_counter_b2b' : 'sales_invoice_counter_b2c';
   const scope = locType === 'headoffice' ? 'headoffice' : `${locType}:${locId}`;
+  // A scope on the continuous (short) format keys its counter row on 'ALL';
+  // stale per-FY rows can linger below it, so take the maximum of both.
   const { rows: [r] } = await sql(
-    `SELECT last_number FROM voucher_sequences WHERE voucher_type = $1 AND fy_label = $2`,
+    `SELECT MAX(last_number) AS m FROM voucher_sequences
+      WHERE voucher_type = $1 AND fy_label IN ('ALL', $2)`,
     [`${counter}@${scope}`, FY]);
-  if (r) return Number(r.last_number);
+  if (r && r.m != null) return Number(r.m);
   return maxSuffix(series, locType, locId);
 }
 
@@ -209,7 +226,7 @@ assert(`HO continues its own serial (${num('SB2C', before.ho + 1)})`,
   lastSale()?.invoiceNumber === num('SB2C', before.ho + 1), `got ${lastSale()?.invoiceNumber}`);
 
 assert('Numbers carry no location code (clean SB2C/FY/NNNNNN format)',
-  createdSales.every(s => new RegExp(`^SB2[BC]/${FY}/\\d{6}$`).test(s.invoiceNumber)));
+  createdSales.every(s => new RegExp(`^SB2[BC]/${FY}/[1-9]\\d*$`).test(s.invoiceNumber)));
 
 // ───────────────────────────────────────────────────────────────────────────
 console.log('\n[2] First use of a series at a location starts at 000001');

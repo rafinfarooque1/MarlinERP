@@ -24,32 +24,7 @@ const LOGO_KEY = 'marlin_company_logo';
  */
 const LOGO_SYNCED_KEY = 'marlin_logo_synced_v1';
 
-/**
- * Normalise any uploaded image to a small PNG data URI (≤512px on the long
- * edge). The invoice PDF is rendered on the server and embeds these bytes
- * directly — jsPDF cannot fetch a URL or draw an SVG — so everything is
- * converted to a format it can draw, at a size the API accepts.
- */
-async function normaliseLogo(dataUrl: string): Promise<string> {
-  const img = await new Promise<HTMLImageElement>((resolve, reject) => {
-    const i = new Image();
-    i.onload = () => resolve(i);
-    i.onerror = () => reject(new Error('Not a readable image'));
-    i.src = dataUrl;
-  });
-  const iw = img.naturalWidth || 512;
-  const ih = img.naturalHeight || 512;
-  const scale = Math.min(1, 512 / Math.max(iw, ih));
-  const w = Math.max(1, Math.round(iw * scale));
-  const h = Math.max(1, Math.round(ih * scale));
-  const canvas = document.createElement('canvas');
-  canvas.width = w;
-  canvas.height = h;
-  const ctx = canvas.getContext('2d');
-  if (!ctx) throw new Error('Canvas unavailable');
-  ctx.drawImage(img, 0, 0, w, h);
-  return canvas.toDataURL('image/png');
-}
+import { normaliseLogo } from '@/lib/logoUpload';
 
 const schema = z.object({
   name: z.string().min(1, 'Company name required'),

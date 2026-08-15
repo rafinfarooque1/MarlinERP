@@ -45,6 +45,14 @@ turned POS coupons off — every suite that asserted the old QA identities broke
   read, and the fallback is 'admin', which collects lockout strikes in
   `login_lockouts` (that's the lockout table; `login_attempts` is just the
   audit log).
+- Cleanup matchers on `line_items::text` (jsonb) must account for jsonb's
+  canonical rendering: `"itemId": 206` has a space after the colon, so
+  `LIKE '%"itemId":206%'` matches NOTHING and the suite silently leaks its
+  cancelled fixture sales into the live DB forever (assertions still pass —
+  they check the items table, not sales). Match by the fixture item-NAME tag
+  or jsonb containment (`@>`), and make cleanup sweep by TAG so it also heals
+  prior runs' leaks. After ANY suite run against this DB, verify zero
+  tag-matching sales remain.
 - Never use arbitrary live rows as MUTABLE fixtures, and never "reset" a
   workflow/status table to prepare a fixture — those rows are real operational
   history. Select a document that provably starts in the default state (e.g.

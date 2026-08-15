@@ -411,3 +411,4 @@ export function stampFooters(doc: jsPDF, note: string): void {
     p.txt(`Page ${i} of ${total}`, PW - M, PH - 7, { size: 6.2, color: MGRAY, align: "right" });
   }
 }
+export * from "./letterhead";

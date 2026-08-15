@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import {
+  useGetMe,
   useListWarehouses,
   useStorageLocations,
   useStorageStock,
@@ -44,11 +45,30 @@ interface Perm {
 }
 
 export default function StorageLocationsTab({ perm }: { perm: Perm }) {
+  const { data: me } = useGetMe();
   const { data: warehouses = [] } = useListWarehouses();
+  // Location lockdown: a branch user's warehouse is a fact of their login,
+  // never a choice — they see their own name as a label, not a dropdown that
+  // would name every other warehouse. (The server already scopes reads/writes;
+  // this closes the display leak.)
+  const isHO = ((me as any)?.branchType ?? 'headoffice') === 'headoffice';
+  const visibleWarehouses = useMemo(() => {
+    if (isHO) return warehouses as any[];
+    if ((me as any)?.branchType !== 'warehouse') return [] as any[];
+    const myId = Number((me as any)?.branchId);
+    return (warehouses as any[]).filter((w) => Number(w.id) === myId);
+  }, [warehouses, me, isHO]);
   const [warehouseId, setWarehouseId] = useState<number | null>(null);
   useEffect(() => {
-    if (warehouseId == null && warehouses.length > 0) setWarehouseId(Number((warehouses[0] as any).id));
-  }, [warehouses, warehouseId]);
+    // Pin + cold-load guard: /api/me resolves async, so a selection made
+    // before it lands may point outside the caller's scope — snap it back.
+    const ids = visibleWarehouses.map((w: any) => Number(w.id));
+    if (warehouseId != null && ids.length > 0 && !ids.includes(warehouseId)) {
+      setWarehouseId(ids[0]);
+    } else if (warehouseId == null && ids.length > 0) {
+      setWarehouseId(ids[0]);
+    }
+  }, [visibleWarehouses, warehouseId]);
 
   const [search, setSearch] = useState('');
   const [debounced, setDebounced] = useState('');
@@ -337,14 +357,20 @@ export default function StorageLocationsTab({ perm }: { perm: Perm }) {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <WarehouseIcon className="w-4 h-4 text-muted-foreground" />
-          <Select value={warehouseId != null ? String(warehouseId) : ''} onValueChange={v => setWarehouseId(Number(v))}>
-            <SelectTrigger className="w-56"><SelectValue placeholder="Pick a warehouse" /></SelectTrigger>
-            <SelectContent>
-              {warehouses.map((w: any) => (
-                <SelectItem key={w.id} value={String(w.id)}>{w.name}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          {isHO ? (
+            <Select value={warehouseId != null ? String(warehouseId) : ''} onValueChange={v => setWarehouseId(Number(v))}>
+              <SelectTrigger className="w-56"><SelectValue placeholder="Pick a warehouse" /></SelectTrigger>
+              <SelectContent>
+                {visibleWarehouses.map((w: any) => (
+                  <SelectItem key={w.id} value={String(w.id)}>{w.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          ) : (
+            <span className="inline-flex h-9 items-center rounded-md border border-input bg-muted/40 px-3 text-sm font-medium">
+              {visibleWarehouses.find((w: any) => Number(w.id) === warehouseId)?.name ?? '—'}
+            </span>
+          )}
         </div>
         {perm.canAdd && (
           <Button size="sm" onClick={() => openAdd(null)} disabled={warehouseId == null}>

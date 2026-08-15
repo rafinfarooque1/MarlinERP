@@ -17,7 +17,8 @@ import {
 import { TransactionDialog, TransactionDialogContent } from '@/components/ui/transaction-dialog';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { BillCombobox } from '@/components/ui/bill-combobox';
-import { Undo2, Plus, Search, Eye, Pencil, PackageX, ShieldOff, Wallet, Receipt } from 'lucide-react';
+import { Undo2, Plus, Search, Eye, Pencil, PackageX, ShieldOff, Wallet, Receipt, FileDown } from 'lucide-react';
+import { downloadPDFFromEndpoint } from '@/lib/download';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { invalidateDashboard } from '@/lib/invalidateDashboard';
@@ -664,6 +665,11 @@ export default function Returns() {
                           </td>
                           <td className="px-4 py-2.5 text-right whitespace-nowrap">
                             <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setView({ kind: 'sales', doc: r })} data-testid={`button-view-sr-${r.id}`}><Eye className="w-4 h-4" /></Button>
+                            {perm.canDownload && (
+                              <Button variant="ghost" size="icon" className="h-7 w-7" title="Download PDF"
+                                onClick={() => downloadPDFFromEndpoint('/api/pdf/sales-return', { id: r.id }, `${r.returnNumber}.pdf`).catch((e: any) => toast.error(e?.message ?? 'PDF failed'))}
+                                data-testid={`button-pdf-sr-${r.id}`}><FileDown className="w-4 h-4" /></Button>
+                            )}
                             {perm.canEdit && (
                               <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setEditSR(r)} data-testid={`button-edit-sr-${r.id}`}><Pencil className="w-4 h-4" /></Button>
                             )}
@@ -680,6 +686,11 @@ export default function Returns() {
                           <td className="px-3 py-2.5"><StatusBadge status="converted" label={r.debitNoteNumber || 'Debit Note'} className="font-mono" /></td>
                           <td className="px-4 py-2.5 text-right whitespace-nowrap">
                             <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setView({ kind: 'purchase', doc: r })} data-testid={`button-view-pr-${r.id}`}><Eye className="w-4 h-4" /></Button>
+                            {perm.canDownload && (
+                              <Button variant="ghost" size="icon" className="h-7 w-7" title="Download PDF"
+                                onClick={() => downloadPDFFromEndpoint('/api/pdf/purchase-return', { id: r.id }, `${r.returnNumber}.pdf`).catch((e: any) => toast.error(e?.message ?? 'PDF failed'))}
+                                data-testid={`button-pdf-pr-${r.id}`}><FileDown className="w-4 h-4" /></Button>
+                            )}
                             {perm.canEdit && (
                               <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setEditPR(r)} data-testid={`button-edit-pr-${r.id}`}><Pencil className="w-4 h-4" /></Button>
                             )}

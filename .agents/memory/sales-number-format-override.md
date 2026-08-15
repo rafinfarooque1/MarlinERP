@@ -22,6 +22,14 @@ description: Per-location invoice number formats (short FY, no padding, continuo
 - Proof standard: financial statements bitwise identical before/after, receipt pairing count unchanged, orphan count not increased, dup check 0 — all in-txn, throwing rolls everything back. `invoice_renumber_log` keeps the permanent old→new record per bill.
 - Ragiguda (warehouse:1) migrated Aug 2026: B2C from 7490, B2B from 130, continuous.
 
+## Global short-format rollout (mid-Aug 2026) — short format is now THE standard
+- Company decision: ALL GST/customer documents print `PREFIX/YY-YY/N` (short FY, unpadded). Scope = SB2B/SB2C sales + SR/PR returns + CN/DN notes ONLY; REC/PAY/JV/CTR/QTN/EXP stay long padded — do not "clean up" that asymmetry.
+- Non-sales GST docs: `SHORT_FORMAT_VOUCHER_TYPES` in voucherNumber.ts flips PRINTING only; sequence rows stay keyed on the LONG fy_label so counters never reset. History converted by boot migration `gst_doc_short_numbers_v1` (migration_log-guarded, one txn, per-table dup check fails closed, old numbers kept in `legacy_return_number`/legacy cols, narrations/notes rewritten).
+- Sales history: admin renumber gained `mode:'preserve'` (UI default "Keep bill numbers — change format only") — keeps each stamped `invoice_serial`, no start inputs, may apply with 0 rows. `mode:'restart'` is the old flow; counter rewind (SET) happens ONLY on `isRerun && restart`, all other paths GREATEST. Preserve adds a per-FY counter high-water floor so serials burned under per-FY counters (bill printed then deleted) can never be reissued on the folded `'ALL'` row.
+- New locations auto-seed a short-format row at creation (`system:new-location`, ON CONFLICT DO NOTHING, seeded AFTER ledger provisioning so mirror outlets fold to the warehouse scope) — a new branch never starts in the long format.
+- Test suites anchor "next expected number" on the COUNTER (`'ALL'` + FY rows, GREATEST with stored max), never on MAX(invoice_number): deleted bills leave the counter ahead by design.
+- All three locations' sales history converted in dev via preserve mode; prod rollout = publish (boot migration converts SR/PR/CN/DN automatically) + owner runs preserve-mode renumber per location in Settings.
+
 ## Reset-lock & corrected re-runs (Aug 2026)
 - `POST /admin/sales-renumber/reset-lock` (level-1 + `confirm:true`) deletes exactly the one marker row under the exclusive scope lock and, IN THE SAME TXN, inserts a `series='RESET'` event row into `invoice_renumber_log` (sale_id 0). That row is BOTH the durable audit and the re-run authorisation.
 - Re-run eligibility = the RESET row exists, NOT "some batch exists": a marker deleted by hand in SQL leaves no RESET row, so the half-landed 409 still fails closed. Preview's marker 409 carries `code:"ALREADY_MIGRATED"`; the UI renders it as an inline panel with the clear-lock button.

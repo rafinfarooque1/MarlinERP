@@ -177,20 +177,19 @@ export async function assembleInvoiceData(saleId: number): Promise<InvoiceData |
     : null;
   const [cs] = await db.select().from(companySettingsTable).limit(1);
 
-  // Payment terms and the logo are company-wide and live in raw columns from a
-  // startup migration, which Drizzle's select() cannot see.
+  // Payment terms are company-wide and live in a raw column from a startup
+  // migration, which Drizzle's select() cannot see.
   let paymentTerms: string | null = null;
-  let logoDataUrl: string | null = null;
   if (cs) {
-    const { rows: [pdfCols] } = await pool.query<{ payment_terms: string | null; logo_url: string | null }>(
-      `SELECT payment_terms, logo_url FROM company_settings WHERE id = $1`, [cs.id],
+    const { rows: [pdfCols] } = await pool.query<{ payment_terms: string | null }>(
+      `SELECT payment_terms FROM company_settings WHERE id = $1`, [cs.id],
     );
     paymentTerms = pdfCols?.payment_terms ?? null;
-    // Only an inline data URI is usable: jsPDF cannot fetch a remote image, and
-    // a URL string would be drawn as a broken box.
-    const logo = pdfCols?.logo_url ?? null;
-    logoDataUrl = logo && /^data:image\//i.test(logo) ? logo : null;
   }
+  // Letterhead logo — the ISSUER's logo (its own, else the company's), so a
+  // branch with its own mark prints it. Only an inline data URI is usable:
+  // jsPDF cannot fetch a remote image, and a URL would draw as a broken box.
+  const logoDataUrl = issuer.logoUrl && /^data:image\//i.test(issuer.logoUrl) ? issuer.logoUrl : null;
 
   // ── What this invoice must ask the customer for ────────────────────────────
   // Read on every assembly, so a document downloaded a second after a payment
@@ -292,14 +291,8 @@ export async function assembleQuotationData(quotationId: number): Promise<Invoic
     : null;
   const [cs] = await db.select().from(companySettingsTable).limit(1);
 
-  let logoDataUrl: string | null = null;
-  if (cs) {
-    const { rows: [pdfCols] } = await pool.query<{ logo_url: string | null }>(
-      `SELECT logo_url FROM company_settings WHERE id = $1`, [cs.id],
-    );
-    const logo = pdfCols?.logo_url ?? null;
-    logoDataUrl = logo && /^data:image\//i.test(logo) ? logo : null;
-  }
+  // Letterhead logo — the quoting location's own logo, else the company's.
+  const logoDataUrl = issuer.logoUrl && /^data:image\//i.test(issuer.logoUrl) ? issuer.logoUrl : null;
 
   const lineItems: InvoiceLineItem[] = Array.isArray(q.line_items) ? (q.line_items as InvoiceLineItem[]) : [];
   const missingIds = [...new Set(

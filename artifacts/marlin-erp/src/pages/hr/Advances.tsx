@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useListAdvances, useAddAdvance, useUpdateAdvance, useDeleteAdvance, useListEmployees, useGetCompanySettings, useCashBankLedgersFlat } from '@workspace/api-client-react';
+import { useListAdvances, useAddAdvance, useUpdateAdvance, useDeleteAdvance, useListEmployees, useCashBankLedgersFlat } from '@workspace/api-client-react';
 import { usePermission } from '@/lib/usePermission';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
@@ -13,7 +13,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { ShieldOff, Plus, Search, Wallet, Clock, CheckCircle2, Loader2, IndianRupee, FileDown, Pencil, Trash2, AlertTriangle } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
-import { downloadAdvancePDF } from '@/lib/pdfUtils';
+import { downloadPDFFromEndpoint } from '@/lib/download';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { PageHeader } from '@/components/app/page-header';
 import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
@@ -288,7 +288,6 @@ function DeleteAdvanceDialog({ advance, onClose }: { advance: any; onClose: () =
 export default function Advances() {
   const perm = usePermission('page:/hr/advances');
   const { data: advances = [], isLoading } = useListAdvances();
-  const { data: cs } = useGetCompanySettings();
   const list = advances as any[];
 
   const [search,    setSearch]    = useState('');
@@ -466,14 +465,14 @@ export default function Advances() {
                         variant="ghost" size="icon"
                         className="h-7 w-7 text-muted-foreground hover:text-primary"
                         title="Download PDF"
-                        onClick={() => downloadAdvancePDF({
-                          id: a.id,
-                          employeeName: a.employeeName,
-                          amount: a.amount,
-                          date: a.date?.split('T')[0] ?? a.date,
-                          note: a.note,
-                          isDeducted: a.isDeducted,
-                        }, cs)}
+                        onClick={async () => {
+                          // Prints the advance's actual book entry (linked
+                          // voucher) under the paying location's letterhead.
+                          try {
+                            await downloadPDFFromEndpoint('/api/pdf/advance-voucher', { id: a.id },
+                              `Advance-${a.id}.pdf`);
+                          } catch (e: any) { toast.error(e?.message || 'Could not generate the PDF'); }
+                        }}
                       >
                         <FileDown className="h-3.5 w-3.5" />
                       </Button>
