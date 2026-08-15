@@ -1,0 +1,232 @@
+GLOBAL DOCUMENT SERIAL NUMBER FORMAT UPDATE
+
+Current live document/invoice serial format:
+
+SB2C/2026-27/000528
+
+I need the new format to be:
+
+SB2C/26-27/528
+
+Apply this consistently throughout the ERP.
+
+RULES:
+
+1. Financial year format:
+   2026-27 → 26-27
+
+2. Sequence format:
+   000001 → 1
+   000002 → 2
+   000099 → 99
+   000100 → 100
+   000528 → 528
+
+Do NOT use leading zeros.
+
+3. Preserve the existing document prefix.
+
+Example:
+
+SB2C/2026-27/000528
+→
+SB2C/26-27/528
+
+4. Apply the same formatting to:
+- Head Office
+- Every Warehouse
+- Every Outlet
+- All Locations
+
+5. Do NOT create different formatting rules for different locations.
+
+6. Preserve the existing document-series/business logic.
+
+The location may determine the series/prefix if that is already part of the ERP's existing architecture, but the FORMAT must always be:
+
+PREFIX/YY-YY/NUMBER
+
+Example:
+
+SB2C/26-27/528
+
+7. Apply this consistently to all applicable document types that currently use the same FY + padded sequence format, including the relevant:
+- Sales invoices
+- B2C invoices
+- B2B invoices where applicable
+- Credit notes
+- Debit notes
+- Returns
+- Other applicable GST document series
+
+Do NOT blindly change unrelated voucher numbering if it uses a different numbering system.
+
+8. IMPORTANT — EXISTING DATA
+
+Before changing anything, inspect how document numbers are stored.
+
+Determine whether the current value:
+
+SB2C/2026-27/000528
+
+is:
+A. the actual stored document number, or
+B. a generated display format based on prefix/FY/sequence.
+
+If it is generated:
+→ change the formatter only.
+
+If it is stored:
+→ DO NOT mass-rewrite historical document numbers without first checking accounting, GST, GSTR-1, PDF invoices, references, returns, audit logs and duplicate-number logic.
+
+Existing issued documents must not become inconsistent.
+
+9. NEW DOCUMENTS
+
+All newly generated documents must use:
+
+PREFIX/YY-YY/NUMBER
+
+For example:
+
+SB2C/26-27/1
+SB2C/26-27/2
+SB2C/26-27/3
+...
+SB2C/26-27/528
+SB2C/26-27/529
+
+10. FINANCIAL YEAR RESET
+
+At the beginning of a new financial year:
+
+2026-27
+→ 2027-28
+
+The displayed format should become:
+
+SB2C/27-28/1
+
+The sequence must follow the existing approved series-reset logic.
+
+11. SEQUENTIAL NUMBERING
+
+Do not create duplicate numbers.
+
+Do not accidentally reset the sequence because of the formatting change.
+
+Do not allow two locations/documents to collide if the existing ERP uses separate series.
+
+Preserve the existing uniqueness rules.
+
+12. GST / ACCOUNTING SAFETY
+
+Do not break:
+
+- GST reports
+- GSTR-1
+- GSTR reconciliation
+- Sales returns
+- Purchase returns
+- Credit notes
+- Debit notes
+- Ledger references
+- Receipt references
+- Payment references
+- Dashboard
+- PDF invoices
+- Excel exports
+- CSV exports
+- Search
+- Audit logs
+- Existing document links
+
+13. DISPLAY CONSISTENCY
+
+Wherever the document number is shown, use the new format consistently:
+
+Sales list
+POS
+Invoice
+Customer ledger
+Day Book
+GST Summary
+GSTR-1
+Receivables
+Dashboard drill-down
+Sales Return
+Reports
+PDF
+Exports
+Transaction details
+
+Do not show:
+
+SB2C/2026-27/000528
+
+in one place and:
+
+SB2C/26-27/528
+
+in another.
+
+The user-facing document number must be consistent everywhere.
+
+14. SEARCH / REFERENCES
+
+The system should still be able to locate historical documents correctly.
+
+If legacy numbers exist, consider backward-compatible searching so that searching either the old number or the new formatted number can locate the same document where technically appropriate.
+
+15. VALIDATION
+
+Test at least:
+
+SB2C/26-27/1
+SB2C/26-27/9
+SB2C/26-27/99
+SB2C/26-27/100
+SB2C/26-27/528
+SB2C/26-27/9999
+SB2C/27-28/1
+
+Test across:
+
+Head Office
+Warehouse
+Outlet
+
+Verify there are no duplicate numbers.
+
+16. DO NOT CHANGE BUSINESS LOGIC
+
+This task is primarily a document-number FORMAT update.
+
+Do not rewrite accounting, inventory, GST, POS, purchase, quotation, payroll or other business logic unnecessarily.
+
+First inspect the current numbering implementation and make the smallest safe change.
+
+17. FINAL VERIFICATION
+
+After implementation:
+
+- Create test sales
+- Create test B2B/B2C documents where applicable
+- Test returns
+- Test PDF
+- Test Excel
+- Test GST reports
+- Test GSTR-1
+- Test ledger references
+- Test search
+- Test Head Office
+- Test Warehouse
+- Test Outlet
+
+Confirm that all new documents display:
+
+PREFIX/26-27/NUMBER
+
+with no leading zeros and a two-digit financial-year format.
+
+Do not declare completion until the numbering is verified across the ERP.
