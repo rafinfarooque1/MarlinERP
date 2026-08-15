@@ -28,3 +28,9 @@ A Head Office user's selected location restores from `employee.uiLocationPref` a
 
 ## Expo e2e note
 A `ReferenceError` for a symbol that greps clean in source = stale Metro HMR bundle in a long-lived tester browser; a fresh page load clears it.
+
+## E2E testing the Expo app
+Testers must open `https://$REPLIT_EXPO_DEV_DOMAIN/` directly. A path like `/employee-app/` on the shared
+proxy hits the WEB app's Vite server, which answers with its own HTML — the tester then sees a blank screen
+and misreads it as a Metro bundle failure. Also: a workflow restart mid-test leaves Metro cold; the first
+bundle takes 1–2 min, so tell the tester to wait, not restart.

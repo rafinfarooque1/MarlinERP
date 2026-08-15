@@ -56,6 +56,7 @@ function RootLayoutNav() {
       <Stack.Screen name="receipt-vouchers" options={{ headerShown: false }} />
       <Stack.Screen name="payment-vouchers" options={{ headerShown: false }} />
       <Stack.Screen name="sale/[id]" options={{ headerShown: false }} />
+      <Stack.Screen name="stock-item/[key]" options={{ headerShown: false }} />
       <Stack.Screen name="new-sale" options={{ headerShown: false, gestureEnabled: false }} />
     </Stack>
   );

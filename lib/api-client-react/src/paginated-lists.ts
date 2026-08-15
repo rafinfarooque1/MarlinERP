@@ -240,8 +240,37 @@ export function usePaginatedPurchases(params?: PaginatedPurchasesParams) {
   });
 }
 
+/**
+ * Infinite (load-more) stock list: same rows/envelope as usePaginatedStock,
+ * fetched in server-side batches and accumulated across pages. The key starts
+ * with '/api/stock' so existing stock invalidations refetch it too.
+ * `canViewValuation` rides on every page; read it from any page (they agree).
+ */
+export function useInfiniteStock(
+  params?: Omit<PaginatedStockParams, 'page'>,
+  options?: { enabled?: boolean },
+) {
+  const qs = new URLSearchParams();
+  qs.set('limit', String(params?.limit ?? 50));
+  if (params?.q) qs.set('q', params.q);
+  if (params?.branchType) qs.set('branchType', params.branchType);
+  if (params?.branchId) qs.set('branchId', String(params.branchId));
+  if (params?.materialType) qs.set('materialType', params.materialType);
+  const key = qs.toString();
+  return useInfiniteQuery({
+    queryKey: ['/api/stock', 'infinite', key] as const,
+    queryFn: ({ pageParam, signal }) =>
+      customFetch<PaginatedStock>(`/api/stock?page=${pageParam}&${key}`, { signal }),
+    initialPageParam: 1,
+    getNextPageParam: (last) =>
+      last.page * last.limit < last.total ? last.page + 1 : undefined,
+    placeholderData: (prev) => prev,
+    enabled: options?.enabled ?? true,
+  });
+}
+
 /** Server-paginated stock list. */
-export function usePaginatedStock(params?: PaginatedStockParams) {
+export function usePaginatedStock(params?: PaginatedStockParams, options?: { enabled?: boolean }) {
   const qs = new URLSearchParams();
   qs.set('page', String(params?.page ?? 1));
   qs.set('limit', String(params?.limit ?? 25));
@@ -255,5 +284,6 @@ export function usePaginatedStock(params?: PaginatedStockParams) {
     queryFn: ({ signal }) =>
       customFetch<PaginatedStock>(`/api/stock?${key}`, { signal }),
     placeholderData: (prev) => prev,
+    enabled: options?.enabled ?? true,
   });
 }
