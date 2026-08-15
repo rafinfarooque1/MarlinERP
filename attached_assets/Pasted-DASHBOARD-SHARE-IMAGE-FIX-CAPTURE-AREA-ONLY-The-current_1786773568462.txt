@@ -1,0 +1,175 @@
+DASHBOARD SHARE IMAGE — FIX CAPTURE AREA ONLY
+
+The current Dashboard Share button is capturing the entire dashboard/page.
+
+This is NOT what we want.
+
+Use the second screenshot provided as the exact reference for the intended shared report.
+
+REQUIREMENT:
+
+When the user clicks the Dashboard "Share" button, generate/share/download ONLY the MAIN BUSINESS DASHBOARD KPI REPORT SECTION.
+
+The captured report must contain only:
+
+1. Business Dashboard header
+2. Current Location
+3. Selected Date / Date Range
+4. The selected period/filter
+5. KPI cards:
+   - Sales
+   - Purchases
+   - Inventory
+   - Expenses
+   - Payables
+   - Receivables
+   - Payments
+   - Receipts
+   - Cash
+   - Bank
+   - GP
+   - NP
+
+DO NOT capture or include anything below this KPI report section.
+
+DO NOT include:
+
+- Sales Trend
+- Payment Mix
+- Sales by Location
+- Top Items
+- Top Customers
+- Inventory widgets
+- Production widgets
+- Business Insights
+- Management Dashboard
+- Any lower dashboard sections
+- Sidebar/navigation
+- Browser chrome
+- Floating buttons
+- Scrollbars
+- Other page content
+
+IMPORTANT:
+
+Do NOT implement this by taking a screenshot of the entire page and cropping it approximately.
+
+Create a dedicated share/export container/component for the KPI report.
+
+For example:
+
+<DashboardShareReport>
+  Header
+  Location + Date
+  KPI Grid
+</DashboardShareReport>
+
+The Share button should render/capture ONLY this component.
+
+The normal dashboard UI can continue to contain all sections.
+
+The share/export component must be independent from the rest of the dashboard page.
+
+VISUAL REQUIREMENT:
+
+The generated image should look like a clean professional business report, similar to the KPI layout shown in the second screenshot.
+
+It should have:
+
+- clean white/light background
+- Business Dashboard title
+- location
+- date range
+- all KPI cards
+- consistent spacing
+- readable typography
+- proper ₹ currency formatting
+- no clipped content
+- no horizontal scrolling
+- no browser/UI elements
+
+RESPONSIVE:
+
+On mobile:
+Generate a properly sized vertical report image containing the KPI cards.
+
+On desktop:
+Generate a clean report image with the KPI cards arranged in the appropriate grid.
+
+Do NOT simply capture the mobile/desktop viewport.
+
+The generated image should have its own controlled dimensions.
+
+SHARE BEHAVIOUR:
+
+When Share is pressed:
+
+1. Generate the dedicated KPI report image.
+2. On supported mobile devices, open the native share sheet with this generated image.
+3. On desktop/laptop, provide image download.
+4. If native sharing is unavailable, automatically fall back to PNG download.
+
+The filename should be something like:
+
+business-dashboard-2026-08-15.png
+
+or dynamically use the selected date/location.
+
+IMPORTANT DATA RULE:
+
+The shared KPI report must use EXACTLY the same data currently displayed in the dashboard.
+
+Do not recalculate the figures separately for the image.
+
+For example:
+
+Dashboard Sales = ₹X
+Shared Sales = ₹X
+
+Dashboard GP = ₹X
+Shared GP = ₹X
+
+Dashboard NP = ₹X
+Shared NP = ₹X
+
+All location/date filters currently selected must be respected.
+
+If the user selects:
+
+Today + Head Office
+
+the shared report must show:
+
+Head Office + Today
+
+If:
+
+All Locations + Today
+
+then show:
+
+All Locations + Today
+
+TESTING:
+
+Test the Share button on:
+
+- mobile viewport
+- tablet viewport
+- desktop viewport
+
+Verify that the generated image contains ONLY the KPI report section.
+
+Specifically verify that the generated image does NOT contain:
+
+Sales Trend
+Payment Mix
+Top Items
+Sales by Location
+other lower dashboard sections.
+
+Do not change the existing dashboard calculations or accounting logic.
+
+This is a SHARE/EXPORT presentation fix only.
+
+After implementation, provide a screenshot of the generated shared image and confirm that it matches the second reference screenshot.
