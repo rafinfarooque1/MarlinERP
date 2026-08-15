@@ -14,7 +14,10 @@ import {
 import { Stack, router } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { setBaseUrl } from '@workspace/api-client-react';
+import { View } from 'react-native';
+import { OfflineBanner } from '@/components/ui/OfflineBanner';
 import { AuthProvider, useAuth } from '@/contexts/AuthContext';
+import { LocationProvider } from '@/contexts/LocationContext';
 
 // ── Module-level: set API base URL for Expo builds (outside the web proxy) ──
 if (process.env.EXPO_PUBLIC_DOMAIN) {
@@ -49,6 +52,9 @@ function RootLayoutNav() {
     <Stack>
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
       <Stack.Screen name="login" options={{ headerShown: false, animation: 'fade' }} />
+      <Stack.Screen name="profile" options={{ headerShown: false }} />
+      <Stack.Screen name="receipt-vouchers" options={{ headerShown: false }} />
+      <Stack.Screen name="payment-vouchers" options={{ headerShown: false }} />
     </Stack>
   );
 }
@@ -76,7 +82,12 @@ export default function RootLayout() {
           <GestureHandlerRootView style={{ flex: 1 }}>
             <KeyboardProvider>
               <AuthProvider>
-                <RootLayoutNav />
+                <LocationProvider>
+                  <View style={{ flex: 1 }}>
+                    <RootLayoutNav />
+                    <OfflineBanner />
+                  </View>
+                </LocationProvider>
               </AuthProvider>
             </KeyboardProvider>
           </GestureHandlerRootView>

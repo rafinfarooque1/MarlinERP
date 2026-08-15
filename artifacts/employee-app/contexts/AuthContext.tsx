@@ -1,11 +1,13 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   customFetch,
   setAuthTokenGetter,
   setAuthTokenSetter,
   setUnauthorizedHandler,
 } from '@workspace/api-client-react';
+import { clearLocationSnapshot } from '@/lib/locationSnapshot';
 
 export interface AuthEmployee {
   id: number;
@@ -13,14 +15,18 @@ export interface AuthEmployee {
   username: string;
   email: string | null;
   phone: string | null;
+  hierarchyId: number;
   hierarchyName: string;
   branchType: string;
+  branchId: number;
   branchName: string;
   salary: number;
   joinDate: string;
   photoUrl: string | null;
   isActive: boolean;
   mustChangePassword?: boolean;
+  /** Server-persisted UI location preference (JSON string) — display only. */
+  uiLocationPref?: string | null;
 }
 
 interface AuthContextType {
@@ -46,9 +52,22 @@ const TOKEN_KEY = '@marlin_auth_token';
 const EMPLOYEE_KEY = '@marlin_auth_employee';
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
+  const queryClient = useQueryClient();
   const [token, setToken] = useState<string | null>(null);
   const [employee, setEmployee] = useState<AuthEmployee | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+
+  // Every session boundary (login, logout, confirmed 401) must wipe BOTH the
+  // query cache and the location header snapshot SYNCHRONOUSLY. Query keys
+  // are global (not per-user) and location headers ride outside query keys —
+  // without this, the next account on the same device could render the
+  // previous user's cached payroll/permission data or fire its first
+  // requests with the previous user's warehouse headers.
+  const resetSessionState = () => {
+    clearLocationSnapshot();
+    queryClient.cancelQueries().catch(() => {});
+    queryClient.clear();
+  };
 
   useEffect(() => {
     // A confirmed 401 means the persisted token expired (8-hour server
@@ -59,10 +78,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       AsyncStorage.multiRemove([TOKEN_KEY, EMPLOYEE_KEY]).catch(() => {});
       setAuthTokenGetter(null);
       setAuthTokenSetter(null);
+      resetSessionState();
       setToken(null);
       setEmployee(null);
     });
     return () => setUnauthorizedHandler(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -72,18 +93,62 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           AsyncStorage.getItem(TOKEN_KEY),
           AsyncStorage.getItem(EMPLOYEE_KEY),
         ]);
-        if (savedToken) {
-          setToken(savedToken);
-          // Wire up the token getter so all API calls are authenticated
-          const t = savedToken;
-          setAuthTokenGetter(() => t);
-          setAuthTokenSetter((newToken: string) => {
-            setToken(newToken);
-            AsyncStorage.setItem(TOKEN_KEY, newToken).catch(() => {});
-          });
-        }
+        if (!savedToken) return;
+
+        // Wire up the token getter so all API calls are authenticated
+        const t = savedToken;
+        setAuthTokenGetter(() => t);
+        setAuthTokenSetter((newToken: string) => {
+          setToken(newToken);
+          AsyncStorage.setItem(TOKEN_KEY, newToken).catch(() => {});
+        });
+
+        let stored: AuthEmployee | null = null;
         if (savedEmployee) {
-          setEmployee(JSON.parse(savedEmployee));
+          try { stored = JSON.parse(savedEmployee); } catch { stored = null; }
+        }
+        // Records persisted by the pre-ERP app lack hierarchyId/branchId —
+        // permission resolution would deny everything and branch pinning
+        // would send an undefined location. Only the current shape may be
+        // used without a server refresh.
+        const storedUsable =
+          !!stored &&
+          typeof stored.hierarchyId === 'number' &&
+          typeof stored.branchId === 'number' &&
+          typeof stored.branchType === 'string';
+
+        // Refresh the employee from the server so stale/legacy persisted
+        // records never drive permissions or location pinning.
+        try {
+          const fresh = await customFetch<AuthEmployee>('/api/auth/me');
+          const emp: AuthEmployee = {
+            ...fresh,
+            mustChangePassword:
+              fresh.mustChangePassword ?? stored?.mustChangePassword ?? false,
+          };
+          AsyncStorage.setItem(EMPLOYEE_KEY, JSON.stringify(emp)).catch(() => {});
+          setToken(savedToken);
+          setEmployee(emp);
+        } catch (err) {
+          const isHttpError = err instanceof Error && err.name === 'ApiError';
+          if (isHttpError) {
+            // Rejected by the server (expired token → the 401 handler has
+            // already cleared storage; deactivated → 403). Fail closed.
+            await AsyncStorage.multiRemove([TOKEN_KEY, EMPLOYEE_KEY]).catch(() => {});
+            setAuthTokenGetter(null);
+            setAuthTokenSetter(null);
+            return;
+          }
+          // Network failure (offline start). A current-shape stored record
+          // is safe to keep — the server still re-checks everything. A
+          // legacy record is not: fail closed to the login screen.
+          if (storedUsable && stored) {
+            setToken(savedToken);
+            setEmployee(stored);
+          } else {
+            setAuthTokenGetter(null);
+            setAuthTokenSetter(null);
+          }
         }
       } catch {
         // Ignore storage errors — user will see login screen
@@ -92,6 +157,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     }
     loadPersistedAuth();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const login = async (username: string, password: string): Promise<void> => {
@@ -114,6 +180,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       AsyncStorage.setItem(EMPLOYEE_KEY, JSON.stringify(emp)),
     ]);
 
+    // New session: drop anything cached or scoped under the previous account
+    // BEFORE the new token/employee state lands and screens start querying.
+    resetSessionState();
+
     const t = resp.token;
     setAuthTokenGetter(() => t);
     setAuthTokenSetter((newToken: string) => {
@@ -131,6 +201,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     ]);
     setAuthTokenGetter(null);
     setAuthTokenSetter(null);
+    resetSessionState();
     setToken(null);
     setEmployee(null);
   };

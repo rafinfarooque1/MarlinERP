@@ -7,37 +7,100 @@ import { isLiquidGlassAvailable } from 'expo-glass-effect';
 import { Tabs } from 'expo-router';
 import { Icon, Label, NativeTabs } from 'expo-router/unstable-native-tabs';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { PAGE, useErpPermissions } from '@/hooks/useErpPermissions';
+
+/**
+ * Permission-driven tab shape:
+ *  • ERP users (any business-module view right): Home, Sales*, Dispatch*,
+ *    Stock*, More — starred tabs appear only with that module's view right.
+ *    Payslips/Attendance/Leaves stay routable and live in the More menu.
+ *  • Pure employees: the original Home, Payslips, Attendance, Leaves tabs.
+ * Until permissions load we show the employee shape — safe for everyone,
+ * no ERP flash. Gating here is display-only; the API re-checks every call.
+ */
+interface TabVisibility {
+  sales: boolean;
+  dispatch: boolean;
+  stock: boolean;
+  erp: boolean;
+}
+
+function useTabVisibility(): TabVisibility {
+  const { ready, canView } = useErpPermissions();
+  const sales = ready && canView(PAGE.sales);
+  const dispatch = ready && canView(PAGE.dispatch);
+  const stock = ready && canView(PAGE.stock);
+  const vouchers =
+    ready && (canView(PAGE.receiptVoucher) || canView(PAGE.paymentVoucher));
+  const dashboard = ready && canView(PAGE.dashboard);
+  return {
+    sales,
+    dispatch,
+    stock,
+    erp: sales || dispatch || stock || vouchers || dashboard,
+  };
+}
 
 // SF Symbols: use 'as any' since calendar.fill / leaf.fill are valid SF symbols
 // but may not appear in the narrow SFSymbols7_0 type exported by expo-symbols.
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-function NativeTabLayout() {
+function NativeTabLayout({ vis }: { vis: TabVisibility }) {
   return (
     <NativeTabs>
       <NativeTabs.Trigger name="index">
         <Icon sf={{ default: 'house' as any, selected: 'house.fill' as any }} />
         <Label>Home</Label>
       </NativeTabs.Trigger>
-      <NativeTabs.Trigger name="payslips">
-        <Icon sf={{ default: 'doc.text' as any, selected: 'doc.text.fill' as any }} />
-        <Label>Payslips</Label>
-      </NativeTabs.Trigger>
-      <NativeTabs.Trigger name="attendance">
-        <Icon sf={{ default: 'calendar' as any, selected: 'calendar.fill' as any }} />
-        <Label>Attendance</Label>
-      </NativeTabs.Trigger>
-      <NativeTabs.Trigger name="leaves">
-        <Icon sf={{ default: 'leaf' as any, selected: 'leaf.fill' as any }} />
-        <Label>Leaves</Label>
-      </NativeTabs.Trigger>
+      {vis.sales && (
+        <NativeTabs.Trigger name="sales">
+          <Icon sf={{ default: 'cart' as any, selected: 'cart.fill' as any }} />
+          <Label>Sales</Label>
+        </NativeTabs.Trigger>
+      )}
+      {vis.dispatch && (
+        <NativeTabs.Trigger name="dispatch">
+          <Icon sf={{ default: 'shippingbox' as any, selected: 'shippingbox.fill' as any }} />
+          <Label>Dispatch</Label>
+        </NativeTabs.Trigger>
+      )}
+      {vis.stock && (
+        <NativeTabs.Trigger name="stock">
+          <Icon sf={{ default: 'archivebox' as any, selected: 'archivebox.fill' as any }} />
+          <Label>Stock</Label>
+        </NativeTabs.Trigger>
+      )}
+      {vis.erp && (
+        <NativeTabs.Trigger name="more">
+          <Icon sf={{ default: 'ellipsis.circle' as any, selected: 'ellipsis.circle.fill' as any }} />
+          <Label>More</Label>
+        </NativeTabs.Trigger>
+      )}
+      {!vis.erp && (
+        <NativeTabs.Trigger name="payslips">
+          <Icon sf={{ default: 'doc.text' as any, selected: 'doc.text.fill' as any }} />
+          <Label>Payslips</Label>
+        </NativeTabs.Trigger>
+      )}
+      {!vis.erp && (
+        <NativeTabs.Trigger name="attendance">
+          <Icon sf={{ default: 'calendar' as any, selected: 'calendar.fill' as any }} />
+          <Label>Attendance</Label>
+        </NativeTabs.Trigger>
+      )}
+      {!vis.erp && (
+        <NativeTabs.Trigger name="leaves">
+          <Icon sf={{ default: 'leaf' as any, selected: 'leaf.fill' as any }} />
+          <Label>Leaves</Label>
+        </NativeTabs.Trigger>
+      )}
     </NativeTabs>
   );
 }
 
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
-function ClassicTabLayout() {
+function ClassicTabLayout({ vis }: { vis: TabVisibility }) {
   const colors = useColors();
   const colorScheme = useColorScheme();
   const isDark = colorScheme === 'dark';
@@ -95,10 +158,43 @@ function ClassicTabLayout() {
         }}
       />
       <Tabs.Screen
+        name="sales"
+        options={{
+          title: 'Sales',
+          tabBarIcon: featherIcon('shopping-cart'),
+          href: vis.sales ? undefined : null,
+        }}
+      />
+      <Tabs.Screen
+        name="dispatch"
+        options={{
+          title: 'Dispatch',
+          tabBarIcon: featherIcon('truck'),
+          href: vis.dispatch ? undefined : null,
+        }}
+      />
+      <Tabs.Screen
+        name="stock"
+        options={{
+          title: 'Stock',
+          tabBarIcon: featherIcon('package'),
+          href: vis.stock ? undefined : null,
+        }}
+      />
+      <Tabs.Screen
+        name="more"
+        options={{
+          title: 'More',
+          tabBarIcon: featherIcon('menu'),
+          href: vis.erp ? undefined : null,
+        }}
+      />
+      <Tabs.Screen
         name="payslips"
         options={{
           title: 'Payslips',
           tabBarIcon: featherIcon('file-text'),
+          href: vis.erp ? null : undefined,
         }}
       />
       <Tabs.Screen
@@ -106,6 +202,7 @@ function ClassicTabLayout() {
         options={{
           title: 'Attendance',
           tabBarIcon: featherIcon('calendar'),
+          href: vis.erp ? null : undefined,
         }}
       />
       <Tabs.Screen
@@ -113,6 +210,7 @@ function ClassicTabLayout() {
         options={{
           title: 'Leaves',
           tabBarIcon: featherIcon('clock'),
+          href: vis.erp ? null : undefined,
         }}
       />
     </Tabs>
@@ -120,8 +218,9 @@ function ClassicTabLayout() {
 }
 
 export default function TabLayout() {
+  const vis = useTabVisibility();
   if (isLiquidGlassAvailable()) {
-    return <NativeTabLayout />;
+    return <NativeTabLayout vis={vis} />;
   }
-  return <ClassicTabLayout />;
+  return <ClassicTabLayout vis={vis} />;
 }

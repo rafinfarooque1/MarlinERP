@@ -15,7 +15,9 @@ import { router } from 'expo-router';
 import { useQuery } from '@tanstack/react-query';
 import { useColors } from '@/hooks/useColors';
 import { useAuth } from '@/contexts/AuthContext';
+import { useHasErpAccess } from '@/hooks/useErpPermissions';
 import { ChangePasswordModal } from '@/components/ChangePasswordModal';
+import { LocationSelector } from '@/components/LocationSelector';
 import { customFetch, useListEnrichedPayroll, useListAdvances } from '@workspace/api-client-react';
 
 const MONTHS = [
@@ -50,6 +52,7 @@ export default function HomeScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const { employee, logout, markPasswordChanged } = useAuth();
+  const hasErpAccess = useHasErpAccess();
   const [showPasswordModal, setShowPasswordModal] = useState(false);
 
   const now = new Date();
@@ -132,6 +135,13 @@ export default function HomeScreen() {
           <Feather name="log-out" size={20} color={colors.mutedForeground} />
         </Pressable>
       </View>
+
+      {/* Current-location context — only meaningful for ERP users */}
+      {hasErpAccess ? (
+        <View style={{ marginBottom: 16 }}>
+          <LocationSelector />
+        </View>
+      ) : null}
 
       {/* Password change warning — tappable, opens the in-app change flow */}
       {employee?.mustChangePassword ? (
