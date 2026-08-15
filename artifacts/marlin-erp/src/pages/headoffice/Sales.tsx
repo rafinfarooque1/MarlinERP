@@ -818,6 +818,13 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   // Default ON whenever a customer with an advance is picked.
   useEffect(() => { setApplyAdvance(true); }, [watchCustomerId]);
 
+  // Bill discount entry unit — ₹ (absolute) or % of the pre-discount basis.
+  // Pure entry convenience: a % converts to the ₹ amount before compute and
+  // submit, so the server (which only knows ₹) is untouched. Resets to ₹ on
+  // every open — stored sales always hold the ₹ amount.
+  const [billDiscountMode, setBillDiscountMode] = useState<'amount' | 'percent'>('amount');
+  useEffect(() => { if (isOpen) setBillDiscountMode('amount'); }, [isOpen]);
+
   // A new sale may only be Cash or Credit — Bank/UPI are collected later, never
   // set at sale time (the API rejects them on create). Editing an existing
   // bank/upi sale must not blank its mode, so that stored value stays selectable
@@ -1051,7 +1058,15 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
     // proportion to their bases (largest remainder), mirroring the server's
     // allocation so the preview and the stored invoice agree to the paisa.
     const basisSum = Math.round(prepared.reduce((s, p) => s + p.basis, 0) * 100) / 100;
-    const billDiscount = Math.min(Math.max(0, Math.round(Number(form.watch('billDiscount') ?? 0) * 100) / 100), basisSum);
+    // The typed value is either ₹ or a % of the basis (toggle beside the
+    // input). A % converts to paise HERE, so the allocation below and the
+    // submit payload always carry the ₹ amount the server expects.
+    const typedBillDisc = Math.max(0, Number(form.watch('billDiscount') ?? 0));
+    const billDiscount = Math.min(
+      billDiscountMode === 'percent'
+        ? Math.round(basisSum * Math.min(typedBillDisc, 100)) / 100
+        : Math.round(typedBillDisc * 100) / 100,
+      basisSum);
     const basePaise = prepared.map(p => Math.max(0, Math.round(p.basis * 100)));
     const weightSum = basePaise.reduce((s, b) => s + b, 0);
     const totalPaise = Math.round(billDiscount * 100);
@@ -1096,7 +1111,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
     // them), mirroring the server: total = goods + GST − coupon + charges.
     const otherTotal = Math.round(((form.watch('otherCharges') ?? []) as any[])
       .reduce((t, c) => t + (Number(c?.amount) || 0), 0) * 100) / 100;
-    return { grossItemValue, grossTotal, subtotal, cgstTotal, sgstTotal, igstTotal, taxTotal, itemDiscountTotal, billDiscount, grandTotal, discountAmount, otherTotal, finalAmount: Math.round((grandTotal - discountAmount + otherTotal) * 100) / 100 };
+    return { grossItemValue, grossTotal, subtotal, cgstTotal, sgstTotal, igstTotal, taxTotal, itemDiscountTotal, basisSum, billDiscount, grandTotal, discountAmount, otherTotal, finalAmount: Math.round((grandTotal - discountAmount + otherTotal) * 100) / 100 };
   };
 
   const totals = computeCartTotals();
@@ -1165,6 +1180,10 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
       lineItems: enrichedItems,
       customerId: data.customerId || undefined,
       discountTotal: discountAmount,
+      // The ₹ bill discount actually applied — overrides the raw typed form
+      // value spread from `data`, which is a percentage while the % toggle
+      // is on and must never reach the server as-is.
+      billDiscount,
       // Always sent: on edit the list REPLACES the stored charges, so removing
       // the last row genuinely clears them (absent would preserve).
       otherCharges: (data.otherCharges ?? [])
@@ -2370,19 +2389,52 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                       {discountsEnabled ? (
                       <div className="flex justify-between items-center gap-2">
                         <span className="text-emerald-600 font-medium">Bill Discount (pre-tax)</span>
-                        <FormField control={form.control} name="billDiscount" render={({ field: f }) => (
-                          <FormItem className="space-y-0">
-                            <FormControl>
-                              <Input
-                                type="number" min={0} step="0.01"
-                                placeholder="0"
-                                className="h-7 w-28 text-xs text-right font-mono"
-                                {...f}
-                                value={(f.value as any) ?? ''}
-                              />
-                            </FormControl>
-                          </FormItem>
-                        )} />
+                        <div className="flex items-center gap-1.5">
+                          {/* % mode: show the resulting ₹ so the cashier sees
+                              exactly what comes off the bill. */}
+                          {billDiscountMode === 'percent' && totals.billDiscount > 0 && (
+                            <span className="font-mono text-xs text-emerald-600" data-testid="text-bill-discount-computed">−{inr(totals.billDiscount)}</span>
+                          )}
+                          <FormField control={form.control} name="billDiscount" render={({ field: f }) => (
+                            <FormItem className="space-y-0">
+                              <FormControl>
+                                <Input
+                                  type="number" min={0} step="0.01"
+                                  max={billDiscountMode === 'percent' ? 100 : undefined}
+                                  placeholder="0"
+                                  className="h-7 w-20 text-xs text-right font-mono"
+                                  data-testid="input-bill-discount"
+                                  {...f}
+                                  value={(f.value as any) ?? ''}
+                                />
+                              </FormControl>
+                            </FormItem>
+                          )} />
+                          {/* ₹/% toggle — switching CONVERTS the typed value so
+                              the effective discount stays identical (₹ → its %
+                              of the basis, % → the ₹ it produced). */}
+                          <div className="flex rounded-md border overflow-hidden shrink-0">
+                            {(['amount', 'percent'] as const).map((m) => (
+                              <button
+                                key={m}
+                                type="button"
+                                data-testid={m === 'amount' ? 'button-bill-discount-rupee' : 'button-bill-discount-percent'}
+                                aria-pressed={billDiscountMode === m}
+                                className={`h-7 px-2 text-xs font-medium transition-colors ${billDiscountMode === m ? 'bg-primary text-primary-foreground' : 'bg-background text-muted-foreground hover:bg-muted'}`}
+                                onClick={() => {
+                                  if (m === billDiscountMode) return;
+                                  const { billDiscount: effective, basisSum } = computeCartTotals();
+                                  setBillDiscountMode(m);
+                                  form.setValue('billDiscount', m === 'percent'
+                                    ? (basisSum > 0 ? Math.round((effective / basisSum) * 10000) / 100 : 0)
+                                    : effective);
+                                }}
+                              >
+                                {m === 'amount' ? '₹' : '%'}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
                       </div>
                       ) : Number(form.watch('billDiscount') ?? 0) > 0 ? (
                         <div className="flex justify-between items-center gap-2">

@@ -16,6 +16,7 @@ THREE independent discount concepts on a sale — never mix them:
 **Why:** rewriting every consumer of `li.discount` would be enormous and regression-prone; deriving the legacy field keeps the blast radius to the two write paths.
 
 **How to apply:**
+- The POS ₹/% toggle on the bill discount is CLIENT-ONLY entry sugar: a % converts to ₹ before compute and the payload overrides the raw form value, so the server contract stays ₹-only. Any new discount-entry UI must keep that boundary — never send a percentage.
 - Any NEW reader that wants item-only discount must compute `discount − (billDiscountShare ?? 0)` (legacy lines have no share → no-op). Never label the combined `li.discount` as "item discount".
 - Legacy lines (no `unitDiscount`) keep line-TOTAL `discount` semantics FOREVER — including through edits. The edit form derives `ud = (discount − share)/qty` at FULL float precision so an untouched save round-trips exactly.
 - Client preview must mirror server rounding: round the adjusted amount to the paisa BEFORE the tax math (fractional kg quantities keep sub-paisa fractions otherwise) — call the tax fn with (1, adjustedAmount) rather than (qty, price, disc).
