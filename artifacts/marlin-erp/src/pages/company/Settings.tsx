@@ -9,7 +9,7 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { Settings2, Save, Loader2, Bell, Receipt, DollarSign, Globe, Store, ScanBarcode, Trash2, TriangleAlert, CalendarRange, CalendarOff, FileText, Plus, ShieldCheck, ShieldOff, Upload } from 'lucide-react';
+import { Settings2, Save, Loader2, Bell, Receipt, DollarSign, Globe, Store, ScanBarcode, Trash2, TriangleAlert, CalendarRange, CalendarOff, FileText, Plus, ShieldCheck, ShieldOff, Upload, Smartphone } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { customFetch, useGetMe, useListHierarchies } from '@workspace/api-client-react';
@@ -187,6 +187,37 @@ const SETTING_GROUPS: SettingGroup[] = [
         defaultValue: true,
         description:
           'When a row has a Line Total but no unit price, the price is worked out as Line Total ÷ Qty. When both are given they are cross-checked and mismatches flagged. Turn off to ignore Line Total columns.',
+      },
+    ],
+  },
+  {
+    icon: Smartphone,
+    title: 'Mobile App',
+    description: 'Store links behind the "Download Mobile App" menu and its QR code',
+    settings: [
+      {
+        key: 'mobileAppIosUrl',
+        label: 'App Store Link (iPhone)',
+        type: 'text',
+        defaultValue: '',
+        description:
+          'The full https:// link to your app on the Apple App Store. Leave empty until the app is published there — the download window shows "Coming soon" instead of a dead button.',
+      },
+      {
+        key: 'mobileAppAndroidUrl',
+        label: 'Google Play Link (Android)',
+        type: 'text',
+        defaultValue: '',
+        description:
+          'The full https:// link to your app on Google Play. Leave empty until the app is published there.',
+      },
+      {
+        key: 'mobileAppFallbackUrl',
+        label: 'Fallback Download Page (optional)',
+        type: 'text',
+        defaultValue: '',
+        description:
+          'Where the QR code sends people when neither store link is set — e.g. a direct APK or an instructions page. The QR scans on any phone: iPhones go to the App Store link, Android to Google Play, and anything else here.',
       },
     ],
   },
@@ -1146,6 +1177,10 @@ export default function Settings() {
       // and every location dropdown must re-read it now rather than up to a
       // minute later when the flags query goes stale on its own.
       await queryClient.invalidateQueries({ queryKey: ['company', 'feature-flags'] });
+      // The Download Mobile App modal (and anything else on useGetCompanySettings)
+      // reads this blob from the generated query — refresh it now so freshly
+      // saved store links show up without a page reload.
+      await queryClient.invalidateQueries({ queryKey: ['/api/company/settings'] });
       toast.success('Settings saved');
     } catch (e: any) {
       toast.error(e?.data?.error || e.message || 'Failed to save settings');

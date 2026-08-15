@@ -202,6 +202,27 @@ router.patch("/company/settings", requireModuleAction("page:/company/settings", 
         && gsu.weeklyOffExhaustedAction !== 'ask' && gsu.weeklyOffExhaustedAction !== 'absent') {
       res.status(400).json({ error: 'When casual leave is exhausted, the action must be Ask or Mark Unpaid' }); return;
     }
+    // Mobile app store links: these feed a PUBLIC redirect (GET /api/public/app,
+    // the URL the "Download Mobile App" QR encodes), so only plain http(s) URLs
+    // may ever be stored — anything else could turn the QR into an open
+    // redirect to a javascript:/data: payload. Empty/null means "not published
+    // yet" and the UI shows Coming Soon instead of a dead button.
+    for (const [key, label] of [
+      ['mobileAppIosUrl',      'App Store link'],
+      ['mobileAppAndroidUrl',  'Google Play link'],
+      ['mobileAppFallbackUrl', 'Fallback download page link'],
+    ] as const) {
+      const v = gsu[key];
+      if (v === undefined || v === null) continue;
+      if (typeof v !== 'string') { res.status(400).json({ error: `${label} must be a URL or empty` }); return; }
+      const t = v.trim();
+      if (t === '') { gsu[key] = ''; continue; }
+      if (t.length > 500) { res.status(400).json({ error: `${label} must be 500 characters or fewer` }); return; }
+      let ok = false;
+      try { const u = new URL(t); ok = u.protocol === 'https:' || u.protocol === 'http:'; } catch { ok = false; }
+      if (!ok) { res.status(400).json({ error: `${label} must be a full link starting with https://` }); return; }
+      gsu[key] = t;
+    }
   }
 
   // Default production overhead % (raw column, numeric 0–100)
@@ -375,6 +396,79 @@ router.patch("/company/settings", requireModuleAction("page:/company/settings", 
     }
   }
   res.json({ ...row, ...(await extraSettingsFields(row.id)) });
+});
+
+// ── Public mobile-app download redirect ────────────────────────────────────
+// The URL the "Download Mobile App" QR code encodes. PUBLIC (auth exemption in
+// app.ts) because it is scanned by phones that are not logged in. It only ever
+// discloses the configured store links — no business data.
+//
+// Behaviour, in order:
+//   iPhone/iPad + iOS link set        → 302 to the App Store
+//   Android + Play link set           → 302 to Google Play
+//   exactly one store link configured → 302 there (any device)
+//   none configured + fallback set    → 302 to the fallback page
+//   otherwise                         → a small self-contained HTML page:
+//     both store buttons when both exist, or an honest "not published yet"
+//     notice when nothing is configured. Never a dead button.
+const escapeHtml = (s: string) =>
+  s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+router.get("/public/app", async (req, res): Promise<void> => {
+  // Config changes must take effect on the next scan — never cache.
+  res.set("Cache-Control", "no-store");
+  const { rows: [r] } = await pool.query<any>(
+    `SELECT company_name, general_settings FROM company_settings ORDER BY id LIMIT 1`,
+  );
+  const gs = typeof r?.general_settings === "string"
+    ? JSON.parse(r.general_settings) : (r?.general_settings ?? {});
+  // Defence in depth: the PATCH already validates, but this endpoint redirects
+  // unauthenticated visitors, so re-check the scheme at read time too.
+  const clean = (v: unknown): string | null => {
+    if (typeof v !== "string") return null;
+    const t = v.trim();
+    if (!t || t.length > 500) return null;
+    try { const u = new URL(t); return (u.protocol === "https:" || u.protocol === "http:") ? t : null; }
+    catch { return null; }
+  };
+  const ios      = clean(gs?.mobileAppIosUrl);
+  const android  = clean(gs?.mobileAppAndroidUrl);
+  const fallback = clean(gs?.mobileAppFallbackUrl);
+
+  const ua = String(req.get("user-agent") ?? "");
+  const isIos     = /iPhone|iPad|iPod/i.test(ua);
+  const isAndroid = /Android/i.test(ua);
+  if (isIos && ios)         { res.redirect(302, ios); return; }
+  if (isAndroid && android) { res.redirect(302, android); return; }
+  const stores = [ios, android].filter((u): u is string => !!u);
+  if (stores.length === 1)  { res.redirect(302, stores[0]); return; }
+  if (stores.length === 0 && fallback) { res.redirect(302, fallback); return; }
+
+  const company = escapeHtml(String(r?.company_name || "Marlin Frozen Fruits"));
+  const btn = (href: string, label: string) =>
+    `<a class="btn" href="${escapeHtml(href)}">${label}</a>`;
+  const body = stores.length === 2
+    ? `<p class="sub">Manage your business from anywhere. Get the app for your phone:</p>
+       <div class="btns">${btn(ios!, "Download on the App Store")}${btn(android!, "Get it on Google Play")}</div>`
+    : `<p class="sub">The mobile app has not been published to the app stores yet.<br>Please check back soon.</p>`;
+  res.status(200).type("html").send(`<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>${company} — Mobile App</title>
+<style>
+  body{margin:0;font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;background:#f6f7f9;color:#111827;
+       display:flex;align-items:center;justify-content:center;min-height:100vh;padding:24px;box-sizing:border-box}
+  .card{background:#fff;border:1px solid #e5e7eb;border-radius:16px;padding:36px 28px;max-width:420px;width:100%;
+        text-align:center;box-shadow:0 8px 24px rgba(0,0,0,.06)}
+  h1{font-size:20px;margin:0 0 6px}
+  .sub{color:#6b7280;font-size:14px;line-height:1.6;margin:0 0 20px}
+  .btns{display:flex;flex-direction:column;gap:10px}
+  .btn{display:block;background:#111827;color:#fff;text-decoration:none;border-radius:10px;padding:13px 16px;
+       font-size:14px;font-weight:600}
+  .btn:hover{background:#1f2937}
+</style></head>
+<body><div class="card"><h1>${company} Mobile App</h1>${body}</div></body></html>`);
 });
 
 // ── Login history (Phase 7) ────────────────────────────────────────────────

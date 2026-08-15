@@ -87,6 +87,10 @@ app.use("/api", (req, res, next) => {
   // Customer-facing quotation links — same rules, own table (see
   // routes/quotationShareLinks.ts).
   if (req.method === "GET" && req.path.startsWith("/share/quotation/")) { next(); return; }
+  // Mobile-app download redirect — the URL the "Download Mobile App" QR
+  // encodes, scanned by phones that are not logged in. Exact match only; it
+  // discloses nothing but the configured store links (routes/company.ts).
+  if (req.method === "GET" && req.path === "/public/app") { next(); return; }
   requireAuth(req, res, next);
 });
 

@@ -23,6 +23,7 @@ import {
   Eye,
   EyeOff,
   ShoppingCart,
+  Smartphone,
   Warehouse,
   Store,
   Package,
@@ -57,6 +58,7 @@ import {
 import { canViewModule as checkCanView } from '@/lib/usePermission';
 import { useOutletsEnabled } from '@/lib/useFeatureFlags';
 import { GlobalLocationSelector } from '@/components/layout/GlobalLocationSelector';
+import { DownloadAppDialog } from '@/components/layout/DownloadAppDialog';
 
 const LOGO_KEY = 'marlin_company_logo';
 /** The retired Outlet module's sidebar link, matched by href so
@@ -447,6 +449,9 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   // ── Notification bell: quotations that expired recently, for users who can see them ──
   const { data: expiredQuotes = [] } = useExpiredQuotationNotifications({ enabled: searchCanViewQuotations });
 
+  // "Download Mobile App" modal (profile menu) — content is settings-driven
+  const [appDlOpen, setAppDlOpen] = useState(false);
+
   // Change-password dialog state
   const [pwOpen, setPwOpen] = useState(false);
   const [currentPassword, setCurrentPassword] = useState('');
@@ -719,6 +724,10 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
                       Settings
                     </Link>
                   </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => setAppDlOpen(true)} className="cursor-pointer">
+                    <Smartphone className="mr-2 h-4 w-4" />
+                    Download Mobile App
+                  </DropdownMenuItem>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem onClick={handleLogout} className="text-destructive cursor-pointer">
                     <LogOut className="mr-2 h-4 w-4" />
@@ -806,6 +815,9 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
           )}
         </CommandList>
       </CommandDialog>
+
+      {/* ── Download Mobile App Dialog ─────────────────────────── */}
+      <DownloadAppDialog open={appDlOpen} onOpenChange={setAppDlOpen} />
 
       {/* ── Change Password Dialog ─────────────────────────────── */}
       <Dialog open={pwOpen} onOpenChange={setPwOpen}>
