@@ -116,9 +116,12 @@ function biQS(params?: DashboardBiFilters): string {
   const qs = new URLSearchParams();
   if (params?.fromDate) qs.set('fromDate', params.fromDate);
   if (params?.toDate) qs.set('toDate', params.toDate);
-  if (params?.locationType && params?.locationId) {
+  // Head Office is matched on TYPE ALONE (its id is a per-table placeholder),
+  // so locationType must serialize even without a locationId — otherwise a
+  // Head Office selection silently reuses the All Locations URL and cache.
+  if (params?.locationType) {
     qs.set('locationType', params.locationType);
-    qs.set('locationId', String(params.locationId));
+    if (params.locationId) qs.set('locationId', String(params.locationId));
   }
   return qs.toString();
 }
