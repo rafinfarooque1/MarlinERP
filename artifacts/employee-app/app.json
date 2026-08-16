@@ -36,6 +36,12 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
-    }
+    },
+    "extra": {
+      "eas": {
+        "projectId": "fbed9982-3e0b-4deb-b4ad-dc28d5b9346b"
+      }
+    },
+    "owner": "frozenfruits"
   }
 }
