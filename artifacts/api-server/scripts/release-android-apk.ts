@@ -44,6 +44,36 @@ function readAppJson(): { version: string; projectId: string | null } {
   return { version: version.trim(), projectId: typeof projectId === "string" ? projectId : null };
 }
 
+/**
+ * The APK runs on phones OUTSIDE Replit's proxies, so the API address must be
+ * baked into the bundle at build time via eas.json → build.apk.env
+ * EXPO_PUBLIC_DOMAIN. EAS cloud builds do NOT inherit this workspace's shell
+ * environment: without the eas.json entry the app ships with no server
+ * address at all and every login fails (relative requests fall through to
+ * expo-router's placeholder origin — the v1.0.0 "Expected X-Requested-With
+ * header" incident). Fail the release up front instead.
+ */
+function assertBakedApiDomain(): string {
+  const raw = JSON.parse(readFileSync(path.join(APP_DIR, "eas.json"), "utf8"));
+  const domain = raw?.build?.apk?.env?.EXPO_PUBLIC_DOMAIN;
+  if (typeof domain !== "string" || !domain.trim()) {
+    fail(
+      "employee-app/eas.json must bake the production API address into the APK:\n" +
+      '  build.apk.env.EXPO_PUBLIC_DOMAIN = "<the published domain, e.g. erpmarlin.replit.app>"\n' +
+      "Without it the built app has no server address and every login fails.",
+    );
+  }
+  const d = domain.trim();
+  if (/\.replit\.dev$/i.test(d)) {
+    fail(
+      `employee-app/eas.json bakes EXPO_PUBLIC_DOMAIN=${d} — that is a temporary development ` +
+      "domain that phones outside Replit cannot use. Point it at the published domain " +
+      "(e.g. erpmarlin.replit.app).",
+    );
+  }
+  return d;
+}
+
 /** Run eas-cli inside the employee-app dir. Never prints the token. */
 function eas(args: string[], opts: { allowFail?: boolean } = {}) {
   const r = spawnSync("npx", ["--yes", "eas-cli", ...args], {
@@ -87,7 +117,9 @@ async function main() {
   }
 
   const { version, projectId } = readAppJson();
+  const apiDomain = assertBakedApiDomain();
   console.log(`▸ Building Marlin Employee App v${version} (Android APK) via EAS`);
+  console.log(`▸ App will talk to: https://${apiDomain}`);
 
   if (!projectId) {
     console.log("▸ No EAS project linked yet — running eas init (one-time)…");
