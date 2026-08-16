@@ -1689,6 +1689,19 @@ paths:
               schema:
                 $ref: "#/components/schemas/CompanySettings"
 
+  /public/app/info:
+    get:
+      operationId: getPublicAppInfo
+      tags: [company]
+      summary: Public mobile-app release availability (no auth required)
+      responses:
+        "200":
+          description: Which platforms have an installable release right now
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PublicAppInfo"
+
   # ── PERMISSIONS ───────────────────────────────────────────────────────────
   /company/permissions:
     get:
@@ -1724,6 +1737,34 @@ paths:
 
 components:
   schemas:
+    PublicAppInfo:
+      type: object
+      required: [companyName, android, ios]
+      properties:
+        companyName:
+          type: string
+        android:
+          type: object
+          required: [available]
+          properties:
+            available:
+              type: boolean
+            version:
+              type: string
+            size:
+              type: number
+            builtAt:
+              type: string
+        ios:
+          type: object
+          required: [available]
+          properties:
+            available:
+              type: boolean
+            url:
+              type: string
+            version:
+              type: string
     HealthStatus:
       type: object
       properties:

@@ -751,7 +751,7 @@ export const ListWarehousesResponseItem = zod.object({
   "ifscCode": zod.string().nullish(),
   "invoiceFooter": zod.string().nullish().describe('Footer\/terms text printed at the foot of this location\'s invoices.'),
   "authorizedSignatory": zod.string().nullish(),
-  "logoUrl": zod.string().nullish(),
+  "logoUrl": zod.string().nullish().describe('Letterhead logo as an inline PNG\/JPEG data URI. Null means this location prints the company logo (or a lettermark when neither has one).'),
   "billingIncomplete": zod.array(zod.string()).optional().describe('Billing fields still missing from the seller identity this warehouse will print on an invoice, e.g. [\"GSTIN\", \"Bank details\"]. Resolved server-side after the company-level bank\/UPI fallback, so an empty array means invoices from here come out complete. Read-only.'),
   "outletCount": zod.number().optional(),
   "createdAt": zod.string()
@@ -784,7 +784,7 @@ export const CreateWarehouseBody = zod.object({
   "ifscCode": zod.string().nullish(),
   "invoiceFooter": zod.string().nullish(),
   "authorizedSignatory": zod.string().nullish(),
-  "logoUrl": zod.string().nullish()
+  "logoUrl": zod.string().nullish().describe('Letterhead logo as a PNG\/JPEG data URI. Empty or null stores none.')
 })
 
 export const CreateWarehouseResponse = zod.object({
@@ -810,7 +810,7 @@ export const CreateWarehouseResponse = zod.object({
   "ifscCode": zod.string().nullish(),
   "invoiceFooter": zod.string().nullish().describe('Footer\/terms text printed at the foot of this location\'s invoices.'),
   "authorizedSignatory": zod.string().nullish(),
-  "logoUrl": zod.string().nullish(),
+  "logoUrl": zod.string().nullish().describe('Letterhead logo as an inline PNG\/JPEG data URI. Null means this location prints the company logo (or a lettermark when neither has one).'),
   "billingIncomplete": zod.array(zod.string()).optional().describe('Billing fields still missing from the seller identity this warehouse will print on an invoice, e.g. [\"GSTIN\", \"Bank details\"]. Resolved server-side after the company-level bank\/UPI fallback, so an empty array means invoices from here come out complete. Read-only.'),
   "outletCount": zod.number().optional(),
   "createdAt": zod.string()
@@ -844,7 +844,7 @@ export const GetWarehouseResponse = zod.object({
   "ifscCode": zod.string().nullish(),
   "invoiceFooter": zod.string().nullish().describe('Footer\/terms text printed at the foot of this location\'s invoices.'),
   "authorizedSignatory": zod.string().nullish(),
-  "logoUrl": zod.string().nullish(),
+  "logoUrl": zod.string().nullish().describe('Letterhead logo as an inline PNG\/JPEG data URI. Null means this location prints the company logo (or a lettermark when neither has one).'),
   "billingIncomplete": zod.array(zod.string()).optional().describe('Billing fields still missing from the seller identity this warehouse will print on an invoice, e.g. [\"GSTIN\", \"Bank details\"]. Resolved server-side after the company-level bank\/UPI fallback, so an empty array means invoices from here come out complete. Read-only.'),
   "outletCount": zod.number().optional(),
   "createdAt": zod.string()
@@ -877,7 +877,7 @@ export const UpdateWarehouseBody = zod.object({
   "ifscCode": zod.string().nullish(),
   "invoiceFooter": zod.string().nullish(),
   "authorizedSignatory": zod.string().nullish(),
-  "logoUrl": zod.string().nullish()
+  "logoUrl": zod.string().nullish().describe('Letterhead logo as a PNG\/JPEG data URI. Empty or null clears it.')
 })
 
 export const UpdateWarehouseResponse = zod.object({
@@ -903,7 +903,7 @@ export const UpdateWarehouseResponse = zod.object({
   "ifscCode": zod.string().nullish(),
   "invoiceFooter": zod.string().nullish().describe('Footer\/terms text printed at the foot of this location\'s invoices.'),
   "authorizedSignatory": zod.string().nullish(),
-  "logoUrl": zod.string().nullish(),
+  "logoUrl": zod.string().nullish().describe('Letterhead logo as an inline PNG\/JPEG data URI. Null means this location prints the company logo (or a lettermark when neither has one).'),
   "billingIncomplete": zod.array(zod.string()).optional().describe('Billing fields still missing from the seller identity this warehouse will print on an invoice, e.g. [\"GSTIN\", \"Bank details\"]. Resolved server-side after the company-level bank\/UPI fallback, so an empty array means invoices from here come out complete. Read-only.'),
   "outletCount": zod.number().optional(),
   "createdAt": zod.string()
@@ -2571,6 +2571,25 @@ export const UpdateCompanySettingsResponse = zod.object({
   "financialYear": zod.string().optional(),
   "paymentTerms": zod.string().nullish(),
   "invoiceFooter": zod.string().nullish()
+})
+
+
+/**
+ * @summary Public mobile-app release availability (no auth required)
+ */
+export const GetPublicAppInfoResponse = zod.object({
+  "companyName": zod.string(),
+  "android": zod.object({
+  "available": zod.boolean(),
+  "version": zod.string().optional(),
+  "size": zod.number().optional(),
+  "builtAt": zod.string().optional()
+}),
+  "ios": zod.object({
+  "available": zod.boolean(),
+  "url": zod.string().optional(),
+  "version": zod.string().optional()
+})
 })
 
 

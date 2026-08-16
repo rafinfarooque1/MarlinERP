@@ -12,18 +12,22 @@ import { validateLogoDataUrl } from "../lib/logoImage";
 import { createBackup } from "../lib/backup/create";
 import { runSalaryAccrual } from "../lib/salaryAccrual";
 import { objectStorageConfigured } from "../lib/backup/files";
-import { ObjectStorageService, ObjectNotFoundError } from "../lib/objectStorage";
+import { ObjectStorageService } from "../lib/objectStorage";
+import { readApkManifest } from "../lib/apkRelease";
 import { logActivity } from "../lib/audit";
 import { ensureStandardOrgTree } from "../migrations/orgHierarchyRestructure";
 
 const router = Router();
 
-// General-settings keys that only the dedicated mobile-APK upload/remove
-// endpoints may write. Every other writer of the blob (the PATCH below)
-// preserves the stored values and discards anything the client sent.
-const APK_MANAGED_KEYS = [
+// RETIRED mobile-APK settings keys. The Android release is owned entirely by
+// the automated build pipeline (EAS build → object-storage manifest, see
+// lib/apkRelease.ts) — nothing reads these keys any more. The PATCH below
+// strips them from both the client payload and the stored blob so stale
+// copies cannot linger or be forged back in.
+const RETIRED_MOBILE_KEYS: string[] = [
   "androidApkObjectPath", "androidApkFileName", "androidApkSize", "androidApkUploadedAt",
-] as const;
+  "androidApkUrl", "androidAppVersion",
+];
 
 // Allowed fields for company settings update
 const ALLOWED_COMPANY_FIELDS = new Set([
@@ -229,10 +233,7 @@ router.patch("/company/settings", requireModuleAction("page:/company/settings", 
     //    be a fake download — reject it outright.
     //  - legacy mobileApp*Url keys: kept readable so old stored blobs still
     //    save, plain http(s).
-    const devLocalhostOk = process.env.NODE_ENV !== 'production';
-    const isLocalhost = (u: URL) => u.hostname === 'localhost' || u.hostname === '127.0.0.1';
     for (const [key, label, schemes] of [
-      ['androidApkUrl',        'Android APK file link',   'https-or-local'],
       ['iosInstallUrl',        'iOS installation link',   'ios-install'],
       ['mobileAppIosUrl',      'App Store link',          'http'],
       ['mobileAppAndroidUrl',  'Google Play link',        'http'],
@@ -247,9 +248,7 @@ router.patch("/company/settings", requireModuleAction("page:/company/settings", 
       let ok = false;
       try {
         const u = new URL(t);
-        if (schemes === 'https-or-local') {
-          ok = u.protocol === 'https:' || (devLocalhostOk && u.protocol === 'http:' && isLocalhost(u));
-        } else if (schemes === 'ios-install') {
+        if (schemes === 'ios-install') {
           ok = u.protocol === 'https:' || u.protocol === 'itms-services:';
           if (ok && /\.ipa$/i.test(u.pathname)) {
             res.status(400).json({ error: `${label} must not point at an .ipa file — iPhones cannot install one from a browser. Use a TestFlight link or an itms-services:// install link instead.` });
@@ -262,10 +261,10 @@ router.patch("/company/settings", requireModuleAction("page:/company/settings", 
       if (!ok) { res.status(400).json({ error: `${label} must be a full https:// link${schemes === 'ios-install' ? ' (or an itms-services:// install link)' : ''}` }); return; }
       gsu[key] = t;
     }
-    // App version labels are display strings shown in the download window and
-    // used in the APK filename — keep them short and filename-safe.
+    // App version labels are display strings shown in the download window —
+    // keep them short and filename-safe. (The ANDROID version is no longer a
+    // setting: it is recorded by the build pipeline from the app source.)
     for (const [key, label] of [
-      ['androidAppVersion', 'Android app version'],
       ['iosAppVersion',     'iOS app version'],
     ] as const) {
       const v = gsu[key];
@@ -433,25 +432,18 @@ router.patch("/company/settings", requireModuleAction("page:/company/settings", 
       `SELECT general_settings FROM company_settings WHERE id = $1`, [row.id]);
     const prevGS = typeof prevRow?.general_settings === "string"
       ? JSON.parse(prevRow.general_settings) : (prevRow?.general_settings ?? {});
-    // The uploaded-APK pointer keys are SERVER-MANAGED: only the dedicated
-    // upload/remove endpoints below may change them. A normal Settings save
-    // does a GET→merge→PATCH of the whole blob, so without this, any Settings
-    // save could silently corrupt or forge the pointer. Client-sent values are
-    // discarded, and the stored ones are carried forward INSIDE the UPDATE
-    // itself (single statement, row-locked) — copying them forward from an
-    // earlier SELECT would race a concurrent APK publish/remove and restore a
-    // stale pointer or erase a fresh one.
-    for (const k of APK_MANAGED_KEYS) {
+    // The retired mobile-APK keys are dropped outright: the Android release
+    // lives in the object-storage manifest now (lib/apkRelease.ts), so any
+    // copy of these keys — sent by an old client OR already in the stored
+    // blob — is stripped inside the UPDATE itself.
+    for (const k of RETIRED_MOBILE_KEYS) {
       delete (generalSettingsUpdate as Record<string, unknown>)[k];
     }
     await pool.query(
       `UPDATE company_settings
-         SET general_settings = ($1::jsonb - ${APK_MANAGED_KEYS.map((_, i) => `$${i + 3}`).join(" - ")})
-             || (SELECT COALESCE(jsonb_object_agg(k, v), '{}'::jsonb)
-                   FROM jsonb_each(COALESCE(general_settings, '{}'::jsonb)) AS t(k, v)
-                  WHERE k = ANY($${APK_MANAGED_KEYS.length + 3}))
+         SET general_settings = $1::jsonb - $3::text[]
        WHERE id = $2`,
-      [JSON.stringify(generalSettingsUpdate), row.id, ...APK_MANAGED_KEYS, APK_MANAGED_KEYS],
+      [JSON.stringify(generalSettingsUpdate), row.id, RETIRED_MOBILE_KEYS],
     );
     // A changed pay policy immediately changes what open days are worth — the
     // salary books must follow now, not at the next hourly sweep. Locked
@@ -483,30 +475,21 @@ router.patch("/company/settings", requireModuleAction("page:/company/settings", 
 const escapeHtml = (s: string) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
-// One read path for the distribution config. Defence in depth: the PATCH
-// already validates, but these endpoints serve unauthenticated visitors, so
-// the EXACT same rules are re-applied at read time — a value smuggled into the
-// blob some other way (old backup restore, manual SQL) must not weaken them.
+// One read path for the distribution config. The Android side comes from
+// the build pipeline's manifest in object storage (shape-validated on read,
+// see lib/apkRelease.ts) — never from a setting or a URL. The iOS side stays
+// a validated setting: defence in depth — the PATCH already validates, but
+// these endpoints serve unauthenticated visitors, so the EXACT same rules
+// are re-applied at read time.
 async function readAppDistribution() {
-  const { rows: [r] } = await pool.query<any>(
-    `SELECT company_name, general_settings FROM company_settings ORDER BY id LIMIT 1`,
-  );
+  const [{ rows: [r] }, android] = await Promise.all([
+    pool.query<any>(
+      `SELECT company_name, general_settings FROM company_settings ORDER BY id LIMIT 1`,
+    ),
+    readApkManifest(),
+  ]);
   const gs = typeof r?.general_settings === "string"
     ? JSON.parse(r.general_settings) : (r?.general_settings ?? {});
-  const devLocalhostOk = process.env.NODE_ENV !== "production";
-  const isLocalhostUrl = (u: URL) => u.hostname === "localhost" || u.hostname === "127.0.0.1";
-  // Mirrors the PATCH 'https-or-local' rule.
-  const cleanApk = (v: unknown): string | null => {
-    if (typeof v !== "string") return null;
-    const t = v.trim();
-    if (!t || t.length > 500) return null;
-    try {
-      const u = new URL(t);
-      if (u.protocol === "https:") return t;
-      if (devLocalhostOk && u.protocol === "http:" && isLocalhostUrl(u)) return t;
-      return null;
-    } catch { return null; }
-  };
   // Mirrors the PATCH 'ios-install' rule, including the raw-.ipa refusal.
   const cleanIos = (v: unknown): string | null => {
     if (typeof v !== "string") return null;
@@ -524,18 +507,11 @@ async function readAppDistribution() {
     const t = v.trim();
     return t && t.length <= 50 && /^[\w. +()-]*$/.test(t) ? t : null;
   };
-  // The uploaded-APK pointer must be exactly the shape our upload endpoint
-  // writes — a UUID under the dedicated mobile-apk prefix. Anything else
-  // (edited by hand, restored from a foreign backup) is treated as absent so
-  // the public download can never be steered at another stored object.
-  const cleanApkObject = (v: unknown): string | null =>
-    typeof v === "string" && /^\/objects\/uploads\/mobile-apk\/[A-Za-z0-9-]{8,64}$/.test(v) ? v : null;
   return {
     companyName: String(r?.company_name || "Marlin Frozen Fruits"),
-    apkObjectPath: cleanApkObject(gs?.androidApkObjectPath),
-    apkUrl: cleanApk(gs?.androidApkUrl),
+    // null → no Android release published (honest unavailability, never stale)
+    android,
     iosUrl: cleanIos(gs?.iosInstallUrl),
-    androidVersion: cleanVersion(gs?.androidAppVersion),
     iosVersion: cleanVersion(gs?.iosAppVersion),
   };
 }
@@ -553,7 +529,7 @@ router.get("/public/app", async (req, res): Promise<void> => {
   // The APK link points at OUR download endpoint, not the raw hosted file, so
   // the browser gets a clean filename and the hosting can move without
   // invalidating anything already printed or shared.
-  const apkConfigured = Boolean(cfg.apkObjectPath || cfg.apkUrl);
+  const apkConfigured = Boolean(cfg.android);
   if (isAndroid && apkConfigured) { res.redirect(302, "/api/public/app/apk"); return; }
   if (isIos && cfg.iosUrl)        { res.redirect(302, cfg.iosUrl); return; }
 
@@ -563,7 +539,7 @@ router.get("/public/app", async (req, res): Promise<void> => {
   const sections: string[] = [];
   if (apkConfigured) {
     sections.push(
-      `<div class="plat"><h2>Android${cfg.androidVersion ? ` <span class="ver">Version ${escapeHtml(cfg.androidVersion)}</span>` : ""}</h2>
+      `<div class="plat"><h2>Android${cfg.android ? ` <span class="ver">Version ${escapeHtml(cfg.android.version)}</span>` : ""}</h2>
        ${btn("/api/public/app/apk", "Download APK")}
        <p class="note">Android may ask you to allow installation from this source.</p></div>`);
   } else {
@@ -600,314 +576,73 @@ router.get("/public/app", async (req, res): Promise<void> => {
 <p class="sub">Access your ERP from your phone.</p>${sections.join("")}</div></body></html>`);
 });
 
-// GET /public/app/apk — streams the configured APK to the browser as a real
-// file download. The server only ever fetches the ONE admin-configured URL —
-// no user input reaches the fetch, so it cannot be steered at other files.
-// Because the endpoint is PUBLIC, the fetch itself is hardened:
-//   - redirects followed MANUALLY (max 3 hops), every hop re-checked
-//   - each non-localhost hostname is DNS-resolved and refused if it points at
-//     a private/loopback/link-local/reserved address (SSRF guard; localhost
-//     is only reachable in development builds, matching the config rule)
-//   - a hard size cap and an overall timeout bound what one request can cost
-const APK_MAX_BYTES = 300 * 1024 * 1024; // generous — a real APK is well under this
-const APK_TIMEOUT_MS = 15 * 60 * 1000;   // covers a slow phone connection end-to-end
-
-function isForbiddenAddress(ip: string): boolean {
-  const lower = ip.toLowerCase();
-  if (lower.includes(":")) { // IPv6
-    const v4Mapped = lower.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
-    if (v4Mapped) return isForbiddenAddress(v4Mapped[1]);
-    return lower === "::" || lower === "::1" || lower.startsWith("fe80") ||
-      lower.startsWith("fc") || lower.startsWith("fd");
-  }
-  const parts = ip.split(".").map(Number);
-  if (parts.length !== 4 || parts.some(n => !Number.isInteger(n) || n < 0 || n > 255)) return true;
-  const [a, b] = parts;
-  return a === 0 || a === 10 || a === 127 || (a === 100 && b >= 64 && b <= 127) ||
-    (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) ||
-    (a === 192 && b === 168) || a >= 224;
-}
-
-async function fetchApkUpstream(startUrl: string, signal: AbortSignal): Promise<Response | null> {
-  const dns = await import("node:dns/promises");
-  const devLocalhostOk = process.env.NODE_ENV !== "production";
-  let url: URL;
-  try { url = new URL(startUrl); } catch { return null; }
-  for (let hop = 0; hop < 4; hop++) {
-    const isLocal = url.hostname === "localhost" || url.hostname === "127.0.0.1";
-    if (isLocal) {
-      if (!devLocalhostOk) return null; // dev convenience only, never in prod
-    } else {
-      if (url.protocol !== "https:") return null;
-      try {
-        const addrs = await dns.lookup(url.hostname, { all: true });
-        if (addrs.length === 0 || addrs.some(a => isForbiddenAddress(a.address))) return null;
-      } catch { return null; }
-    }
-    const r = await fetch(url, { redirect: "manual", signal });
-    if (r.status >= 300 && r.status < 400) {
-      const loc = r.headers.get("location");
-      r.body?.cancel().catch(() => {});
-      if (!loc) return null;
-      try { url = new URL(loc, url); } catch { return null; }
-      continue;
-    }
-    return r;
-  }
-  return null; // too many redirects
-}
-
+// GET /public/app/apk — streams the current APK release to the browser as a
+// real file download. The served object comes exclusively from the automated
+// build pipeline's manifest (lib/apkRelease.ts) — no user input, no external
+// URLs, no upload path. Honest 404 when no release is published; 502 if the
+// manifest points at an object that has gone missing (storage outage or
+// out-of-band deletion) — never a silent fallback.
 router.get("/public/app/apk", async (_req, res): Promise<void> => {
   res.set("Cache-Control", "no-store");
   const cfg = await readAppDistribution();
-  if (!cfg.apkObjectPath && !cfg.apkUrl) {
+  if (!cfg.android) {
     res.status(404).json({ error: "Android app download is not currently available." });
     return;
   }
   const fail = () => {
-    if (!res.headersSent) res.status(502).json({ error: "The APK file could not be fetched from its configured location." });
+    if (!res.headersSent) res.status(502).json({ error: "The APK file could not be read from storage." });
     else res.destroy();
   };
-
-  // Professional, stable filename regardless of where the file is hosted.
+  // Professional, stable filename: company name + the version the pipeline
+  // recorded at build time (from the app source, not a hand-typed setting).
   const safe = (s: string) => s.replace(/[^\w.-]+/g, "-").replace(/^-+|-+$/g, "");
   const base = safe(cfg.companyName) || "ERP";
-  const fileName = `${base}-Mobile${cfg.androidVersion ? `-v${safe(cfg.androidVersion)}` : ""}.apk`;
-
-  // Preferred source: the admin-uploaded APK in our own object storage.
-  // The external-URL proxy below is only a fallback for when no file has
-  // been uploaded.
-  if (cfg.apkObjectPath) {
-    try {
-      const svc = new ObjectStorageService();
-      const objectFile = await svc.getObjectEntityFile(cfg.apkObjectPath);
-      const [meta] = await objectFile.getMetadata();
-      res.setHeader("Content-Type", "application/vnd.android.package-archive");
-      res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
-      const size = Number(meta.size ?? 0);
-      if (Number.isFinite(size) && size > 0) res.setHeader("Content-Length", String(size));
-      const rs = objectFile.createReadStream();
-      rs.on("error", (err) => {
-        console.error("[public/app/apk] storage stream error:", err);
-        fail();
-      });
-      rs.pipe(res);
-    } catch (err) {
-      // Dangling pointer (object deleted out-of-band) or storage outage —
-      // an honest error beats silently falling back to a possibly stale URL.
-      console.error("[public/app/apk] stored APK unavailable:", err);
+  const fileName = `${base}-Mobile-v${safe(cfg.android.version)}.apk`;
+  try {
+    const svc = new ObjectStorageService();
+    const objectFile = await svc.getObjectEntityFile(cfg.android.publishedPath);
+    const [meta] = await objectFile.getMetadata();
+    // Integrity gate: the object must still be the exact release the pipeline
+    // recorded. A size mismatch means it was changed after publication
+    // (corruption or an out-of-band write) — refuse to distribute unverified
+    // bytes rather than serve them.
+    const size = Number(meta.size ?? 0);
+    if (!Number.isFinite(size) || size !== cfg.android.size) {
+      console.error(`[public/app/apk] object size ${size} != manifest size ${cfg.android.size} — refusing to serve`);
       fail();
-    }
-    return;
-  }
-
-  let upstream: Response | null;
-  try {
-    upstream = await fetchApkUpstream(cfg.apkUrl!, AbortSignal.timeout(APK_TIMEOUT_MS));
-  } catch { fail(); return; }
-  if (!upstream || !upstream.ok || !upstream.body) { upstream?.body?.cancel().catch(() => {}); fail(); return; }
-  const len = upstream.headers.get("content-length");
-  if (len && Number(len) > APK_MAX_BYTES) { upstream.body.cancel().catch(() => {}); fail(); return; }
-
-  res.setHeader("Content-Type", "application/vnd.android.package-archive");
-  res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
-  if (len) res.setHeader("Content-Length", len);
-
-  const { Readable, Transform } = await import("node:stream");
-  let sent = 0;
-  const capGuard = new Transform({
-    transform(chunk, _enc, cb) {
-      sent += chunk.length;
-      if (sent > APK_MAX_BYTES) cb(new Error("APK size cap exceeded"));
-      else cb(null, chunk);
-    },
-  });
-  const stream = Readable.fromWeb(upstream.body as any);
-  stream.on("error", () => { res.destroy(); });
-  capGuard.on("error", () => { stream.destroy(); res.destroy(); });
-  stream.pipe(capGuard).pipe(res);
-});
-
-// ── Admin: direct APK upload into object storage ───────────────────────────
-// Three-step flow, all behind the Settings edit permission:
-//   1. POST /company/mobile-app/apk/upload-url → presigned PUT URL
-//   2. browser PUTs the file straight to storage (never through this server)
-//   3. POST /company/mobile-app/apk commits: the server validates the stored
-//      bytes ARE an Android APK before the pointer flips. The previous
-//      version keeps serving until the new one passes.
-// The presigned PUT cannot bind size or content-type, so EVERYTHING is
-// re-checked at commit time against the actual stored object.
-
-/** Validate that a stored object is structurally an Android APK. */
-async function validateStoredApk(objectFile: import("@google-cloud/storage").File): Promise<
-  { ok: true; size: number } | { ok: false; error: string }
-> {
-  const bad = (error: string) => ({ ok: false as const, error });
-  const [meta] = await objectFile.getMetadata();
-  const size = Number(meta.size ?? 0);
-  if (!Number.isFinite(size) || size <= 0) return bad("The uploaded file is empty.");
-  if (size > APK_MAX_BYTES) return bad("The uploaded file is larger than the 300 MB limit.");
-  if (size < 1024) return bad("The uploaded file is too small to be a real APK.");
-
-  // 1) Every APK is a ZIP archive: the first entry's local header starts PK\x03\x04.
-  const [head] = await objectFile.download({ start: 0, end: 3 });
-  if (head.length < 4 || head[0] !== 0x50 || head[1] !== 0x4b || head[2] !== 0x03 || head[3] !== 0x04) {
-    return bad("The uploaded file is not a valid APK — it is not a ZIP-format archive.");
-  }
-
-  // 2) Find the End-Of-Central-Directory record in the trailing 64 KB.
-  const tailStart = Math.max(0, size - 66_000);
-  const [tail] = await objectFile.download({ start: tailStart, end: size - 1 });
-  let eocd = -1;
-  for (let i = tail.length - 22; i >= 0; i--) {
-    if (tail[i] === 0x50 && tail[i + 1] === 0x4b && tail[i + 2] === 0x05 && tail[i + 3] === 0x06) { eocd = i; break; }
-  }
-  if (eocd < 0) return bad("The uploaded file is not a valid APK — its archive index is missing or corrupted.");
-  const entryCount = tail.readUInt16LE(eocd + 10);
-  if (entryCount === 0) return bad("The uploaded file is an empty archive — not a valid APK.");
-
-  // 3) The central directory must contain an ENTRY named AndroidManifest.xml.
-  //    Records are parsed properly (signature, name length, name) — a file
-  //    whose CONTENT merely mentions the string, or a plain ZIP renamed to
-  //    .apk, both fail here. The manifest is conventionally the first entry;
-  //    the 8 MB slice cap covers central directories of ~100k entries.
-  const cdSize = tail.readUInt32LE(eocd + 12);
-  const cdOffset = tail.readUInt32LE(eocd + 16);
-  const badIndex = () => bad("The uploaded file is not a valid APK — its archive index is missing or corrupted.");
-  if (cdOffset === 0xffffffff || cdSize === 0xffffffff || cdOffset + cdSize > size) return badIndex();
-  const cdEnd = cdOffset + Math.min(cdSize, 8 * 1_048_576) - 1;
-  if (cdEnd < cdOffset) return badIndex();
-  const [cd] = await objectFile.download({ start: cdOffset, end: cdEnd });
-  const MANIFEST = "AndroidManifest.xml";
-  let pos = 0;
-  for (let entry = 0; entry < entryCount; entry++) {
-    if (pos + 46 > cd.length) break; // slice (or directory) ended early
-    // Central-directory file header signature: PK\x01\x02
-    if (cd[pos] !== 0x50 || cd[pos + 1] !== 0x4b || cd[pos + 2] !== 0x01 || cd[pos + 3] !== 0x02) return badIndex();
-    const nameLen = cd.readUInt16LE(pos + 28);
-    const extraLen = cd.readUInt16LE(pos + 30);
-    const commentLen = cd.readUInt16LE(pos + 32);
-    if (pos + 46 + nameLen > cd.length) break;
-    if (cd.toString("latin1", pos + 46, pos + 46 + nameLen) === MANIFEST) return { ok: true, size };
-    pos += 46 + nameLen + extraLen + commentLen;
-  }
-  return bad("The uploaded file does not look like an Android app — AndroidManifest.xml was not found inside it.");
-}
-
-router.post("/company/mobile-app/apk/upload-url", requireModuleAction("page:/company/settings", "edit"), async (req, res): Promise<void> => {
-  if (!objectStorageConfigured()) {
-    res.status(503).json({ error: "File storage is not configured on this server." });
-    return;
-  }
-  const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
-  const size = Number(req.body?.size);
-  if (!name || name.length > 200 || !/\.apk$/i.test(name)) {
-    res.status(400).json({ error: "Only .apk files can be uploaded here." });
-    return;
-  }
-  if (!Number.isFinite(size) || size <= 0) {
-    res.status(400).json({ error: "The selected file is empty." });
-    return;
-  }
-  if (size > APK_MAX_BYTES) {
-    res.status(400).json({ error: "The APK is larger than the 300 MB limit." });
-    return;
-  }
-  const svc = new ObjectStorageService();
-  const { uploadURL, objectPath } = await svc.getMobileApkUploadURL();
-  res.json({ uploadURL, objectPath });
-});
-
-router.post("/company/mobile-app/apk", requireModuleAction("page:/company/settings", "edit"), async (req, res): Promise<void> => {
-  const objectPath = typeof req.body?.objectPath === "string" ? req.body.objectPath.trim() : "";
-  const rawFileName = typeof req.body?.fileName === "string" ? req.body.fileName.trim() : "";
-  if (!/^\/objects\/uploads\/mobile-apk\/[A-Za-z0-9-]{8,64}$/.test(objectPath)) {
-    res.status(400).json({ error: "Invalid upload reference — please upload the file again." });
-    return;
-  }
-  if (!rawFileName || rawFileName.length > 200 || !/\.apk$/i.test(rawFileName)) {
-    res.status(400).json({ error: "Only .apk files can be published here." });
-    return;
-  }
-  // Display-only: strip anything that isn't a plain filename character.
-  const fileName = rawFileName.replace(/[^\w. ()+-]+/g, "-");
-
-  // The presigned upload URL stays valid for an hour, so the upload object
-  // remains WRITABLE after this commit. Publish a server-side copy no signed
-  // URL has ever existed for, and validate THE COPY — otherwise the bytes we
-  // validated here could be swapped out from under the public download.
-  const svc = new ObjectStorageService();
-  let verdict: Awaited<ReturnType<typeof validateStoredApk>>;
-  let publishedPath: string;
-  try {
-    const published = await svc.publishMobileApk(objectPath);
-    publishedPath = published.publishedPath;
-    verdict = await validateStoredApk(published.file);
-    if (!verdict.ok) {
-      // Best-effort: don't let rejected copies pile up in storage.
-      await published.file.delete().catch(() => {});
-    }
-  } catch (err) {
-    if (err instanceof ObjectNotFoundError) {
-      res.status(400).json({ error: "The uploaded file was not found — please upload it again." });
       return;
     }
-    throw err;
+    res.setHeader("Content-Type", "application/vnd.android.package-archive");
+    res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
+    res.setHeader("Content-Length", String(size));
+    const rs = objectFile.createReadStream();
+    rs.on("error", (err) => {
+      console.error("[public/app/apk] storage stream error:", err);
+      fail();
+    });
+    rs.pipe(res);
+  } catch (err) {
+    console.error("[public/app/apk] published APK unavailable:", err);
+    fail();
   }
-  if (!verdict.ok) {
-    res.status(400).json({ error: verdict.error });
-    return;
-  }
-
-  const rows = await db.select().from(companySettingsTable).limit(1);
-  if (rows.length === 0) {
-    res.status(400).json({ error: "Company settings have not been set up yet." });
-    return;
-  }
-  const uploadedAt = new Date().toISOString();
-  const patch = {
-    androidApkObjectPath: publishedPath,
-    androidApkFileName: fileName,
-    androidApkSize: verdict.size,
-    androidApkUploadedAt: uploadedAt,
-  };
-  // jsonb || merge: atomic against a concurrent Settings save — only these
-  // four keys change, whatever else the blob holds at that instant survives.
-  await pool.query(
-    `UPDATE company_settings SET general_settings = COALESCE(general_settings, '{}'::jsonb) || $1::jsonb WHERE id = $2`,
-    [JSON.stringify(patch), rows[0].id],
-  );
-  logActivity({
-    action: "UPDATE",
-    module: "company",
-    entityType: "mobile_apk",
-    description: `Published mobile app APK "${fileName}" (${(verdict.size / (1024 * 1024)).toFixed(1)} MB)`,
-    user: (req as any).employee?.username,
-    metadata: { objectPath, publishedPath, fileName, size: verdict.size },
-  }).catch(() => { /* audit is best-effort */ });
-  res.json({ ...patch });
 });
 
-router.delete("/company/mobile-app/apk", requireModuleAction("page:/company/settings", "edit"), async (req, res): Promise<void> => {
-  const rows = await db.select().from(companySettingsTable).limit(1);
-  if (rows.length === 0) { res.status(404).json({ error: "Company settings not found." }); return; }
-  // Clear only the pointer keys; the stored object is deliberately retained
-  // so a mistaken removal can be undone by re-publishing.
-  await pool.query(
-    `UPDATE company_settings
-       SET general_settings = COALESCE(general_settings, '{}'::jsonb)
-           - 'androidApkObjectPath' - 'androidApkFileName' - 'androidApkSize' - 'androidApkUploadedAt'
-     WHERE id = $1`,
-    [rows[0].id],
-  );
-  logActivity({
-    action: "DELETE",
-    module: "company",
-    entityType: "mobile_apk",
-    description: "Removed the published mobile app APK",
-    user: (req as any).employee?.username,
-  }).catch(() => { /* audit is best-effort */ });
-  res.json({ ok: true });
+// GET /public/app/info — machine-readable release availability for the web
+// client (Download Mobile App modal + the Settings page's read-only Android
+// release card). Public by design: it discloses exactly what the /public/app
+// landing page already shows an unauthenticated visitor — nothing more.
+router.get("/public/app/info", async (_req, res): Promise<void> => {
+  res.set("Cache-Control", "no-store");
+  const cfg = await readAppDistribution();
+  res.json({
+    companyName: cfg.companyName,
+    android: cfg.android
+      ? { available: true, version: cfg.android.version, size: cfg.android.size, builtAt: cfg.android.builtAt }
+      : { available: false },
+    ios: cfg.iosUrl
+      ? { available: true, url: cfg.iosUrl, ...(cfg.iosVersion ? { version: cfg.iosVersion } : {}) }
+      : { available: false },
+  });
 });
 
 // ── Login history (Phase 7) ────────────────────────────────────────────────

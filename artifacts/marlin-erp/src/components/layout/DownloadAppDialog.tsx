@@ -1,17 +1,19 @@
 import { useEffect, useState } from 'react';
 import { Apple, Download, Smartphone } from 'lucide-react';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { useGetCompanySettings } from '@workspace/api-client-react';
+import { useGetCompanySettings, useGetPublicAppInfo } from '@workspace/api-client-react';
 
 /**
  * "Download Mobile App" modal, opened from the top-right profile menu.
  *
  * The app is deliberately NOT on Google Play / the App Store, so the modal
- * never shows store badges. Distribution (all configured under Settings →
- * Mobile App, never hardcoded):
- *   Android — [Download APK] hits GET /api/public/app/apk, a server proxy of
- *     the configured APK URL that serves the file with a clean versioned
- *     filename. Unconfigured → an honest "not currently available" note.
+ * never shows store badges. Distribution:
+ *   Android — [Download APK] hits GET /api/public/app/apk, which serves the
+ *     release produced by the AUTOMATED BUILD PIPELINE (EAS cloud build →
+ *     object storage). Availability and version come from the server's
+ *     /public/app/info endpoint — the same manifest the download reads, so
+ *     the modal can never claim a version the button doesn't serve.
+ *     No release published → an honest "not currently available" note.
  *   iOS — [Install iOS App] opens the configured Apple-supported install link
  *     (TestFlight / OTA manifest / a real listing later). A plain .ipa
  *     download is never offered — iPhones cannot install one from a browser.
@@ -27,34 +29,18 @@ export function DownloadAppDialog({ open, onOpenChange }: {
   open: boolean;
   onOpenChange: (o: boolean) => void;
 }) {
+  // Company identity (name + logo) still comes from settings; release
+  // availability comes from the public info endpoint backed by the build
+  // pipeline's manifest.
   const { data: settings } = useGetCompanySettings();
-  const gs = (settings as any)?.generalSettings ?? {};
-  const cleanUrl = (v: unknown, ios = false): string | null => {
-    if (typeof v !== 'string') return null;
-    const t = v.trim();
-    if (!t) return null;
-    // iOS mirrors the server rule: Apple-supported install links only — never
-    // a raw .ipa file (iPhones cannot install one from a browser, so showing
-    // an Install button for it would be a fake).
-    if (ios && /\.ipa(\?|#|$)/i.test(t)) return null;
-    if (/^https?:\/\//i.test(t)) return t;
-    if (ios && /^itms-services:/i.test(t)) return t;
-    return null;
-  };
-  const cleanText = (v: unknown): string | null =>
-    typeof v === 'string' && v.trim() ? v.trim() : null;
+  const { data: appInfo } = useGetPublicAppInfo();
 
-  // Android is available when an APK file has been uploaded into the system
-  // (preferred), or — advanced fallback — an external APK link is set. Either
-  // way the button hits our own download endpoint, which picks the source.
-  const apkUploaded =
-    typeof gs.androidApkObjectPath === 'string' && gs.androidApkObjectPath.startsWith('/objects/');
-  const apkConfigured = apkUploaded || !!cleanUrl(gs.androidApkUrl);
-  const iosUrl = cleanUrl(gs.iosInstallUrl, true);
-  const androidVersion = cleanText(gs.androidAppVersion);
-  const iosVersion = cleanText(gs.iosAppVersion);
+  const apkConfigured = !!appInfo?.android?.available;
+  const androidVersion = appInfo?.android?.version || null;
+  const iosUrl = (appInfo?.ios?.available && appInfo.ios.url) || null;
+  const iosVersion = appInfo?.ios?.version || null;
   // The button downloads via the server so the filename is professional and
-  // the hosting location never leaks into bookmarks/QRs.
+  // the storage location never leaks into bookmarks/QRs.
   const apkDownloadUrl = `${window.location.origin}/api/public/app/apk`;
 
   const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
@@ -62,13 +48,13 @@ export function DownloadAppDialog({ open, onOpenChange }: {
   const isIosDevice = /iPhone|iPad|iPod/i.test(ua);
   const isDesktop = !isAndroidDevice && !isIosDevice;
 
-  // Desktop-only QR codes, one per configured platform.
+  // Desktop-only QR codes, one per available platform.
   const [qrAndroid, setQrAndroid] = useState<string | null>(null);
   const [qrIos, setQrIos] = useState<string | null>(null);
   useEffect(() => {
-    // Drop any previously generated QR immediately — if the config changed
-    // while the dialog is open (e.g. an admin just cleared a link), a stale
-    // QR must never keep pointing at the old destination.
+    // Drop any previously generated QR immediately — if the release state
+    // changed while the dialog is open (e.g. a build just landed or a release
+    // was removed), a stale QR must never keep pointing at the old state.
     setQrAndroid(null);
     setQrIos(null);
     if (!open || !isDesktop || (!apkConfigured && !iosUrl)) return;

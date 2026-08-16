@@ -83,6 +83,7 @@ import type {
   PermissionInput,
   Production,
   ProductionInput,
+  PublicAppInfo,
   Purchase,
   PurchaseInput,
   Quotation,
@@ -7589,6 +7590,83 @@ export const useUpdateCompanySettings = <TError = ErrorType<unknown>,
       > => {
       return useMutation(getUpdateCompanySettingsMutationOptions(options));
     }
+
+export const getGetPublicAppInfoUrl = () => {
+
+
+
+
+  return `/api/public/app/info`
+}
+
+/**
+ * @summary Public mobile-app release availability (no auth required)
+ */
+export const getPublicAppInfo = async ( options?: RequestInit): Promise<PublicAppInfo> => {
+
+  return customFetch<PublicAppInfo>(getGetPublicAppInfoUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetPublicAppInfoQueryKey = () => {
+    return [
+    `/api/public/app/info`
+    ] as const;
+    }
+
+
+export const getGetPublicAppInfoQueryOptions = <TData = Awaited<ReturnType<typeof getPublicAppInfo>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getPublicAppInfo>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetPublicAppInfoQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getPublicAppInfo>>> = ({ signal }) => getPublicAppInfo({ signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getPublicAppInfo>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetPublicAppInfoQueryResult = NonNullable<Awaited<ReturnType<typeof getPublicAppInfo>>>
+export type GetPublicAppInfoQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary Public mobile-app release availability (no auth required)
+ */
+
+export function useGetPublicAppInfo<TData = Awaited<ReturnType<typeof getPublicAppInfo>>, TError = ErrorType<unknown>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getPublicAppInfo>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetPublicAppInfoQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
 
 export const getListPermissionsUrl = () => {
 

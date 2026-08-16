@@ -91,7 +91,7 @@ app.use("/api", (req, res, next) => {
   // plus the APK download it links to, hit by phones that are not logged in.
   // Exact matches only; they disclose nothing but the configured install
   // destinations / the APK file itself (routes/company.ts).
-  if (req.method === "GET" && (req.path === "/public/app" || req.path === "/public/app/apk")) { next(); return; }
+  if (req.method === "GET" && (req.path === "/public/app" || req.path === "/public/app/apk" || req.path === "/public/app/info")) { next(); return; }
   requireAuth(req, res, next);
 });
 

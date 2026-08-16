@@ -137,44 +137,9 @@ export class ObjectStorageService {
     });
   }
 
-  /**
-   * Presigned PUT URL for the company's mobile-app APK. Deliberately a
-   * separate prefix from per-employee `uploads/<id>/…` attachments: the APK is
-   * company-level (no owner id in the path), and the attachment serving
-   * route's ownership rule can never accidentally match it. Longer TTL than
-   * attachments because an APK is tens of megabytes on an office connection.
-   */
-  async getMobileApkUploadURL(): Promise<{ uploadURL: string; objectPath: string }> {
-    const privateObjectDir = this.getPrivateObjectDir();
-    const objectId = randomUUID();
-    const fullPath = `${privateObjectDir}/uploads/mobile-apk/${objectId}`;
-    const { bucketName, objectName } = parseObjectPath(fullPath);
-    const uploadURL = await signObjectURL({
-      bucketName,
-      objectName,
-      method: 'PUT',
-      ttlSec: 3600,
-    });
-    return { uploadURL, objectPath: `/objects/uploads/mobile-apk/${objectId}` };
-  }
-
-  /**
-   * Copy a just-uploaded APK to a fresh "published-…" object no presigned PUT
-   * URL has ever been issued for. The upload object stays writable for as
-   * long as its signed URL lives, so validating and serving THAT object would
-   * be a time-of-check/time-of-use hole — the published copy is immutable in
-   * practice, and both validation and the public download read only the copy.
-   */
-  async publishMobileApk(uploadObjectPath: string): Promise<{ publishedPath: string; file: File }> {
-    const src = await this.getObjectEntityFile(uploadObjectPath);
-    const privateObjectDir = this.getPrivateObjectDir();
-    const publishedId = `published-${randomUUID()}`;
-    const fullPath = `${privateObjectDir}/uploads/mobile-apk/${publishedId}`;
-    const { bucketName, objectName } = parseObjectPath(fullPath);
-    const dest = objectStorageClient.bucket(bucketName).file(objectName);
-    await src.copy(dest);
-    return { publishedPath: `/objects/uploads/mobile-apk/${publishedId}`, file: dest };
-  }
+  // The mobile-APK upload/publish helpers that used to live here are gone on
+  // purpose: the Android APK is produced by the automated build pipeline and
+  // published through lib/apkRelease.ts — there is no manual upload path.
 
   async getObjectEntityFile(objectPath: string): Promise<File> {
     if (!objectPath.startsWith('/objects/')) {

@@ -5,6 +5,25 @@
  * Marlin Frozen Fruits ERP API
  * OpenAPI spec version: 0.1.0
  */
+export type PublicAppInfoAndroid = {
+  available: boolean;
+  version?: string;
+  size?: number;
+  builtAt?: string;
+};
+
+export type PublicAppInfoIos = {
+  available: boolean;
+  url?: string;
+  version?: string;
+};
+
+export interface PublicAppInfo {
+  companyName: string;
+  android: PublicAppInfoAndroid;
+  ios: PublicAppInfoIos;
+}
+
 export interface HealthStatus {
   status: string;
 }
@@ -476,6 +495,11 @@ export interface Warehouse {
   invoiceFooter?: string | null;
   /** @nullable */
   authorizedSignatory?: string | null;
+  /**
+     * Letterhead logo as an inline PNG/JPEG data URI. Null means this location prints the company logo (or a lettermark when neither has one).
+     * @nullable
+     */
+  logoUrl?: string | null;
   /** Billing fields still missing from the seller identity this warehouse will print on an invoice, e.g. ["GSTIN", "Bank details"]. Resolved server-side after the company-level bank/UPI fallback, so an empty array means invoices from here come out complete. Read-only. */
   billingIncomplete?: string[];
   outletCount?: number;
@@ -522,6 +546,11 @@ export interface WarehouseInput {
   invoiceFooter?: string | null;
   /** @nullable */
   authorizedSignatory?: string | null;
+  /**
+     * Letterhead logo as a PNG/JPEG data URI. Empty or null stores none.
+     * @nullable
+     */
+  logoUrl?: string | null;
 }
 
 export interface WarehouseUpdate {
@@ -564,6 +593,11 @@ export interface WarehouseUpdate {
   invoiceFooter?: string | null;
   /** @nullable */
   authorizedSignatory?: string | null;
+  /**
+     * Letterhead logo as a PNG/JPEG data URI. Empty or null clears it.
+     * @nullable
+     */
+  logoUrl?: string | null;
 }
 
 export interface Outlet {
