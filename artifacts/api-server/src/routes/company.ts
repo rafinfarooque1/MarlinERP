@@ -12,10 +12,18 @@ import { validateLogoDataUrl } from "../lib/logoImage";
 import { createBackup } from "../lib/backup/create";
 import { runSalaryAccrual } from "../lib/salaryAccrual";
 import { objectStorageConfigured } from "../lib/backup/files";
+import { ObjectStorageService, ObjectNotFoundError } from "../lib/objectStorage";
 import { logActivity } from "../lib/audit";
 import { ensureStandardOrgTree } from "../migrations/orgHierarchyRestructure";
 
 const router = Router();
+
+// General-settings keys that only the dedicated mobile-APK upload/remove
+// endpoints may write. Every other writer of the blob (the PATCH below)
+// preserves the stored values and discards anything the client sent.
+const APK_MANAGED_KEYS = [
+  "androidApkObjectPath", "androidApkFileName", "androidApkSize", "androidApkUploadedAt",
+] as const;
 
 // Allowed fields for company settings update
 const ALLOWED_COMPANY_FIELDS = new Set([
@@ -425,7 +433,26 @@ router.patch("/company/settings", requireModuleAction("page:/company/settings", 
       `SELECT general_settings FROM company_settings WHERE id = $1`, [row.id]);
     const prevGS = typeof prevRow?.general_settings === "string"
       ? JSON.parse(prevRow.general_settings) : (prevRow?.general_settings ?? {});
-    await pool.query(`UPDATE company_settings SET general_settings = $1 WHERE id = $2`, [JSON.stringify(generalSettingsUpdate), row.id]);
+    // The uploaded-APK pointer keys are SERVER-MANAGED: only the dedicated
+    // upload/remove endpoints below may change them. A normal Settings save
+    // does a GET→merge→PATCH of the whole blob, so without this, any Settings
+    // save could silently corrupt or forge the pointer. Client-sent values are
+    // discarded, and the stored ones are carried forward INSIDE the UPDATE
+    // itself (single statement, row-locked) — copying them forward from an
+    // earlier SELECT would race a concurrent APK publish/remove and restore a
+    // stale pointer or erase a fresh one.
+    for (const k of APK_MANAGED_KEYS) {
+      delete (generalSettingsUpdate as Record<string, unknown>)[k];
+    }
+    await pool.query(
+      `UPDATE company_settings
+         SET general_settings = ($1::jsonb - ${APK_MANAGED_KEYS.map((_, i) => `$${i + 3}`).join(" - ")})
+             || (SELECT COALESCE(jsonb_object_agg(k, v), '{}'::jsonb)
+                   FROM jsonb_each(COALESCE(general_settings, '{}'::jsonb)) AS t(k, v)
+                  WHERE k = ANY($${APK_MANAGED_KEYS.length + 3}))
+       WHERE id = $2`,
+      [JSON.stringify(generalSettingsUpdate), row.id, ...APK_MANAGED_KEYS, APK_MANAGED_KEYS],
+    );
     // A changed pay policy immediately changes what open days are worth — the
     // salary books must follow now, not at the next hourly sweep. Locked
     // (approved/paid) months are skipped by the sweep itself.
@@ -497,8 +524,15 @@ async function readAppDistribution() {
     const t = v.trim();
     return t && t.length <= 50 && /^[\w. +()-]*$/.test(t) ? t : null;
   };
+  // The uploaded-APK pointer must be exactly the shape our upload endpoint
+  // writes — a UUID under the dedicated mobile-apk prefix. Anything else
+  // (edited by hand, restored from a foreign backup) is treated as absent so
+  // the public download can never be steered at another stored object.
+  const cleanApkObject = (v: unknown): string | null =>
+    typeof v === "string" && /^\/objects\/uploads\/mobile-apk\/[A-Za-z0-9-]{8,64}$/.test(v) ? v : null;
   return {
     companyName: String(r?.company_name || "Marlin Frozen Fruits"),
+    apkObjectPath: cleanApkObject(gs?.androidApkObjectPath),
     apkUrl: cleanApk(gs?.androidApkUrl),
     iosUrl: cleanIos(gs?.iosInstallUrl),
     androidVersion: cleanVersion(gs?.androidAppVersion),
@@ -519,14 +553,15 @@ router.get("/public/app", async (req, res): Promise<void> => {
   // The APK link points at OUR download endpoint, not the raw hosted file, so
   // the browser gets a clean filename and the hosting can move without
   // invalidating anything already printed or shared.
-  if (isAndroid && cfg.apkUrl) { res.redirect(302, "/api/public/app/apk"); return; }
-  if (isIos && cfg.iosUrl)     { res.redirect(302, cfg.iosUrl); return; }
+  const apkConfigured = Boolean(cfg.apkObjectPath || cfg.apkUrl);
+  if (isAndroid && apkConfigured) { res.redirect(302, "/api/public/app/apk"); return; }
+  if (isIos && cfg.iosUrl)        { res.redirect(302, cfg.iosUrl); return; }
 
   const company = escapeHtml(cfg.companyName);
   const btn = (href: string, label: string) =>
     `<a class="btn" href="${escapeHtml(href)}">${label}</a>`;
   const sections: string[] = [];
-  if (cfg.apkUrl) {
+  if (apkConfigured) {
     sections.push(
       `<div class="plat"><h2>Android${cfg.androidVersion ? ` <span class="ver">Version ${escapeHtml(cfg.androidVersion)}</span>` : ""}</h2>
        ${btn("/api/public/app/apk", "Download APK")}
@@ -625,7 +660,7 @@ async function fetchApkUpstream(startUrl: string, signal: AbortSignal): Promise<
 router.get("/public/app/apk", async (_req, res): Promise<void> => {
   res.set("Cache-Control", "no-store");
   const cfg = await readAppDistribution();
-  if (!cfg.apkUrl) {
+  if (!cfg.apkObjectPath && !cfg.apkUrl) {
     res.status(404).json({ error: "Android app download is not currently available." });
     return;
   }
@@ -633,18 +668,47 @@ router.get("/public/app/apk", async (_req, res): Promise<void> => {
     if (!res.headersSent) res.status(502).json({ error: "The APK file could not be fetched from its configured location." });
     else res.destroy();
   };
-  let upstream: Response | null;
-  try {
-    upstream = await fetchApkUpstream(cfg.apkUrl, AbortSignal.timeout(APK_TIMEOUT_MS));
-  } catch { fail(); return; }
-  if (!upstream || !upstream.ok || !upstream.body) { upstream?.body?.cancel().catch(() => {}); fail(); return; }
-  const len = upstream.headers.get("content-length");
-  if (len && Number(len) > APK_MAX_BYTES) { upstream.body.cancel().catch(() => {}); fail(); return; }
 
   // Professional, stable filename regardless of where the file is hosted.
   const safe = (s: string) => s.replace(/[^\w.-]+/g, "-").replace(/^-+|-+$/g, "");
   const base = safe(cfg.companyName) || "ERP";
   const fileName = `${base}-Mobile${cfg.androidVersion ? `-v${safe(cfg.androidVersion)}` : ""}.apk`;
+
+  // Preferred source: the admin-uploaded APK in our own object storage.
+  // The external-URL proxy below is only a fallback for when no file has
+  // been uploaded.
+  if (cfg.apkObjectPath) {
+    try {
+      const svc = new ObjectStorageService();
+      const objectFile = await svc.getObjectEntityFile(cfg.apkObjectPath);
+      const [meta] = await objectFile.getMetadata();
+      res.setHeader("Content-Type", "application/vnd.android.package-archive");
+      res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
+      const size = Number(meta.size ?? 0);
+      if (Number.isFinite(size) && size > 0) res.setHeader("Content-Length", String(size));
+      const rs = objectFile.createReadStream();
+      rs.on("error", (err) => {
+        console.error("[public/app/apk] storage stream error:", err);
+        fail();
+      });
+      rs.pipe(res);
+    } catch (err) {
+      // Dangling pointer (object deleted out-of-band) or storage outage —
+      // an honest error beats silently falling back to a possibly stale URL.
+      console.error("[public/app/apk] stored APK unavailable:", err);
+      fail();
+    }
+    return;
+  }
+
+  let upstream: Response | null;
+  try {
+    upstream = await fetchApkUpstream(cfg.apkUrl!, AbortSignal.timeout(APK_TIMEOUT_MS));
+  } catch { fail(); return; }
+  if (!upstream || !upstream.ok || !upstream.body) { upstream?.body?.cancel().catch(() => {}); fail(); return; }
+  const len = upstream.headers.get("content-length");
+  if (len && Number(len) > APK_MAX_BYTES) { upstream.body.cancel().catch(() => {}); fail(); return; }
+
   res.setHeader("Content-Type", "application/vnd.android.package-archive");
   res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
   if (len) res.setHeader("Content-Length", len);
@@ -662,6 +726,188 @@ router.get("/public/app/apk", async (_req, res): Promise<void> => {
   stream.on("error", () => { res.destroy(); });
   capGuard.on("error", () => { stream.destroy(); res.destroy(); });
   stream.pipe(capGuard).pipe(res);
+});
+
+// ── Admin: direct APK upload into object storage ───────────────────────────
+// Three-step flow, all behind the Settings edit permission:
+//   1. POST /company/mobile-app/apk/upload-url → presigned PUT URL
+//   2. browser PUTs the file straight to storage (never through this server)
+//   3. POST /company/mobile-app/apk commits: the server validates the stored
+//      bytes ARE an Android APK before the pointer flips. The previous
+//      version keeps serving until the new one passes.
+// The presigned PUT cannot bind size or content-type, so EVERYTHING is
+// re-checked at commit time against the actual stored object.
+
+/** Validate that a stored object is structurally an Android APK. */
+async function validateStoredApk(objectFile: import("@google-cloud/storage").File): Promise<
+  { ok: true; size: number } | { ok: false; error: string }
+> {
+  const bad = (error: string) => ({ ok: false as const, error });
+  const [meta] = await objectFile.getMetadata();
+  const size = Number(meta.size ?? 0);
+  if (!Number.isFinite(size) || size <= 0) return bad("The uploaded file is empty.");
+  if (size > APK_MAX_BYTES) return bad("The uploaded file is larger than the 300 MB limit.");
+  if (size < 1024) return bad("The uploaded file is too small to be a real APK.");
+
+  // 1) Every APK is a ZIP archive: the first entry's local header starts PK\x03\x04.
+  const [head] = await objectFile.download({ start: 0, end: 3 });
+  if (head.length < 4 || head[0] !== 0x50 || head[1] !== 0x4b || head[2] !== 0x03 || head[3] !== 0x04) {
+    return bad("The uploaded file is not a valid APK — it is not a ZIP-format archive.");
+  }
+
+  // 2) Find the End-Of-Central-Directory record in the trailing 64 KB.
+  const tailStart = Math.max(0, size - 66_000);
+  const [tail] = await objectFile.download({ start: tailStart, end: size - 1 });
+  let eocd = -1;
+  for (let i = tail.length - 22; i >= 0; i--) {
+    if (tail[i] === 0x50 && tail[i + 1] === 0x4b && tail[i + 2] === 0x05 && tail[i + 3] === 0x06) { eocd = i; break; }
+  }
+  if (eocd < 0) return bad("The uploaded file is not a valid APK — its archive index is missing or corrupted.");
+  const entryCount = tail.readUInt16LE(eocd + 10);
+  if (entryCount === 0) return bad("The uploaded file is an empty archive — not a valid APK.");
+
+  // 3) The central directory must contain an ENTRY named AndroidManifest.xml.
+  //    Records are parsed properly (signature, name length, name) — a file
+  //    whose CONTENT merely mentions the string, or a plain ZIP renamed to
+  //    .apk, both fail here. The manifest is conventionally the first entry;
+  //    the 8 MB slice cap covers central directories of ~100k entries.
+  const cdSize = tail.readUInt32LE(eocd + 12);
+  const cdOffset = tail.readUInt32LE(eocd + 16);
+  const badIndex = () => bad("The uploaded file is not a valid APK — its archive index is missing or corrupted.");
+  if (cdOffset === 0xffffffff || cdSize === 0xffffffff || cdOffset + cdSize > size) return badIndex();
+  const cdEnd = cdOffset + Math.min(cdSize, 8 * 1_048_576) - 1;
+  if (cdEnd < cdOffset) return badIndex();
+  const [cd] = await objectFile.download({ start: cdOffset, end: cdEnd });
+  const MANIFEST = "AndroidManifest.xml";
+  let pos = 0;
+  for (let entry = 0; entry < entryCount; entry++) {
+    if (pos + 46 > cd.length) break; // slice (or directory) ended early
+    // Central-directory file header signature: PK\x01\x02
+    if (cd[pos] !== 0x50 || cd[pos + 1] !== 0x4b || cd[pos + 2] !== 0x01 || cd[pos + 3] !== 0x02) return badIndex();
+    const nameLen = cd.readUInt16LE(pos + 28);
+    const extraLen = cd.readUInt16LE(pos + 30);
+    const commentLen = cd.readUInt16LE(pos + 32);
+    if (pos + 46 + nameLen > cd.length) break;
+    if (cd.toString("latin1", pos + 46, pos + 46 + nameLen) === MANIFEST) return { ok: true, size };
+    pos += 46 + nameLen + extraLen + commentLen;
+  }
+  return bad("The uploaded file does not look like an Android app — AndroidManifest.xml was not found inside it.");
+}
+
+router.post("/company/mobile-app/apk/upload-url", requireModuleAction("page:/company/settings", "edit"), async (req, res): Promise<void> => {
+  if (!objectStorageConfigured()) {
+    res.status(503).json({ error: "File storage is not configured on this server." });
+    return;
+  }
+  const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
+  const size = Number(req.body?.size);
+  if (!name || name.length > 200 || !/\.apk$/i.test(name)) {
+    res.status(400).json({ error: "Only .apk files can be uploaded here." });
+    return;
+  }
+  if (!Number.isFinite(size) || size <= 0) {
+    res.status(400).json({ error: "The selected file is empty." });
+    return;
+  }
+  if (size > APK_MAX_BYTES) {
+    res.status(400).json({ error: "The APK is larger than the 300 MB limit." });
+    return;
+  }
+  const svc = new ObjectStorageService();
+  const { uploadURL, objectPath } = await svc.getMobileApkUploadURL();
+  res.json({ uploadURL, objectPath });
+});
+
+router.post("/company/mobile-app/apk", requireModuleAction("page:/company/settings", "edit"), async (req, res): Promise<void> => {
+  const objectPath = typeof req.body?.objectPath === "string" ? req.body.objectPath.trim() : "";
+  const rawFileName = typeof req.body?.fileName === "string" ? req.body.fileName.trim() : "";
+  if (!/^\/objects\/uploads\/mobile-apk\/[A-Za-z0-9-]{8,64}$/.test(objectPath)) {
+    res.status(400).json({ error: "Invalid upload reference — please upload the file again." });
+    return;
+  }
+  if (!rawFileName || rawFileName.length > 200 || !/\.apk$/i.test(rawFileName)) {
+    res.status(400).json({ error: "Only .apk files can be published here." });
+    return;
+  }
+  // Display-only: strip anything that isn't a plain filename character.
+  const fileName = rawFileName.replace(/[^\w. ()+-]+/g, "-");
+
+  // The presigned upload URL stays valid for an hour, so the upload object
+  // remains WRITABLE after this commit. Publish a server-side copy no signed
+  // URL has ever existed for, and validate THE COPY — otherwise the bytes we
+  // validated here could be swapped out from under the public download.
+  const svc = new ObjectStorageService();
+  let verdict: Awaited<ReturnType<typeof validateStoredApk>>;
+  let publishedPath: string;
+  try {
+    const published = await svc.publishMobileApk(objectPath);
+    publishedPath = published.publishedPath;
+    verdict = await validateStoredApk(published.file);
+    if (!verdict.ok) {
+      // Best-effort: don't let rejected copies pile up in storage.
+      await published.file.delete().catch(() => {});
+    }
+  } catch (err) {
+    if (err instanceof ObjectNotFoundError) {
+      res.status(400).json({ error: "The uploaded file was not found — please upload it again." });
+      return;
+    }
+    throw err;
+  }
+  if (!verdict.ok) {
+    res.status(400).json({ error: verdict.error });
+    return;
+  }
+
+  const rows = await db.select().from(companySettingsTable).limit(1);
+  if (rows.length === 0) {
+    res.status(400).json({ error: "Company settings have not been set up yet." });
+    return;
+  }
+  const uploadedAt = new Date().toISOString();
+  const patch = {
+    androidApkObjectPath: publishedPath,
+    androidApkFileName: fileName,
+    androidApkSize: verdict.size,
+    androidApkUploadedAt: uploadedAt,
+  };
+  // jsonb || merge: atomic against a concurrent Settings save — only these
+  // four keys change, whatever else the blob holds at that instant survives.
+  await pool.query(
+    `UPDATE company_settings SET general_settings = COALESCE(general_settings, '{}'::jsonb) || $1::jsonb WHERE id = $2`,
+    [JSON.stringify(patch), rows[0].id],
+  );
+  logActivity({
+    action: "UPDATE",
+    module: "company",
+    entityType: "mobile_apk",
+    description: `Published mobile app APK "${fileName}" (${(verdict.size / (1024 * 1024)).toFixed(1)} MB)`,
+    user: (req as any).employee?.username,
+    metadata: { objectPath, publishedPath, fileName, size: verdict.size },
+  }).catch(() => { /* audit is best-effort */ });
+  res.json({ ...patch });
+});
+
+router.delete("/company/mobile-app/apk", requireModuleAction("page:/company/settings", "edit"), async (req, res): Promise<void> => {
+  const rows = await db.select().from(companySettingsTable).limit(1);
+  if (rows.length === 0) { res.status(404).json({ error: "Company settings not found." }); return; }
+  // Clear only the pointer keys; the stored object is deliberately retained
+  // so a mistaken removal can be undone by re-publishing.
+  await pool.query(
+    `UPDATE company_settings
+       SET general_settings = COALESCE(general_settings, '{}'::jsonb)
+           - 'androidApkObjectPath' - 'androidApkFileName' - 'androidApkSize' - 'androidApkUploadedAt'
+     WHERE id = $1`,
+    [rows[0].id],
+  );
+  logActivity({
+    action: "DELETE",
+    module: "company",
+    entityType: "mobile_apk",
+    description: "Removed the published mobile app APK",
+    user: (req as any).employee?.username,
+  }).catch(() => { /* audit is best-effort */ });
+  res.json({ ok: true });
 });
 
 // ── Login history (Phase 7) ────────────────────────────────────────────────

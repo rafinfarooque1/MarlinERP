@@ -196,20 +196,20 @@ const SETTING_GROUPS: SettingGroup[] = [
     description: 'Direct-install links behind the "Download Mobile App" menu — the app is not on the public app stores',
     settings: [
       {
-        key: 'androidApkUrl',
-        label: 'Android APK File Link',
-        type: 'text',
-        defaultValue: '',
-        description:
-          'The full https:// link to the hosted APK file. The Download APK button and its QR code serve this file with a clean filename. Leave empty until an APK is built and hosted — the download window then says Android download is not available yet.',
-      },
-      {
         key: 'androidAppVersion',
         label: 'Android App Version',
         type: 'text',
         defaultValue: '',
         description:
-          'Shown next to the Download APK button (e.g. 1.0.0) and included in the downloaded filename. Update it whenever a new APK is hosted.',
+          'Shown next to the Download APK button (e.g. 1.0.0) and included in the downloaded filename. Update it whenever a new APK is uploaded.',
+      },
+      {
+        key: 'androidApkUrl',
+        label: 'Advanced: External APK Link',
+        type: 'text',
+        defaultValue: '',
+        description:
+          'Fallback only — a full https:// link to an APK hosted elsewhere. It is used ONLY when no APK file has been uploaded above. Most companies should upload the file instead and leave this empty.',
       },
       {
         key: 'iosInstallUrl',
@@ -239,6 +239,207 @@ const SETTING_GROUPS: SettingGroup[] = [
     ],
   },
 ];
+
+// ── Mobile APK upload (Settings → Mobile App) ────────────────────────────────
+// The APK is uploaded straight from the browser to object storage via a
+// presigned URL, then committed — the server validates the stored bytes are a
+// real Android APK before the download pointer flips. The four pointer keys
+// (androidApkObjectPath/FileName/Size/UploadedAt) are server-managed: the
+// normal Save Settings PATCH preserves the stored values, so keeping copies in
+// the page's `values` state is display-only and harmless.
+
+const APK_UPLOAD_MAX_BYTES = 300 * 1024 * 1024;
+
+function formatBytes(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return '';
+  if (n >= 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  if (n >= 1024) return `${(n / 1024).toFixed(0)} KB`;
+  return `${n} B`;
+}
+
+/** PUT the file to the presigned URL with upload progress. */
+function putApkWithProgress(url: string, file: File, onProgress: (pct: number) => void): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('PUT', url);
+    xhr.setRequestHeader('Content-Type', 'application/vnd.android.package-archive');
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
+    };
+    xhr.onload = () =>
+      xhr.status >= 200 && xhr.status < 300
+        ? resolve()
+        : reject(new Error(`Upload failed (HTTP ${xhr.status}). Please try again.`));
+    xhr.onerror = () => reject(new Error('Upload failed — check your connection and try again.'));
+    xhr.send(file);
+  });
+}
+
+function MobileApkManager({ canEdit, values, set }: {
+  canEdit: boolean;
+  values: Record<string, any>;
+  set: (key: string, val: any) => void;
+}) {
+  const queryClient = useQueryClient();
+  const [uploading, setUploading] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [removing, setRemoving] = useState(false);
+  const [confirmRemove, setConfirmRemove] = useState(false);
+  const fileInputRef = useState<{ el: HTMLInputElement | null }>({ el: null })[0];
+
+  const apkPath: string = typeof values.androidApkObjectPath === 'string' ? values.androidApkObjectPath : '';
+  const apkName: string = typeof values.androidApkFileName === 'string' ? values.androidApkFileName : '';
+  const apkSize: number = Number(values.androidApkSize) || 0;
+  const apkDate: string = typeof values.androidApkUploadedAt === 'string' ? values.androidApkUploadedAt : '';
+  const hasApk = !!apkPath;
+
+  const refreshSettingsQuery = () =>
+    queryClient.invalidateQueries({ queryKey: ['/api/company/settings'] });
+
+  const handleFile = async (file: File) => {
+    if (!/\.apk$/i.test(file.name)) { toast.error('Only .apk files can be uploaded.'); return; }
+    if (file.size <= 0) { toast.error('The selected file is empty.'); return; }
+    if (file.size > APK_UPLOAD_MAX_BYTES) { toast.error('The APK is larger than the 300 MB limit.'); return; }
+    setUploading(true);
+    setProgress(0);
+    try {
+      const { uploadURL, objectPath } = await customFetch<{ uploadURL: string; objectPath: string }>(
+        '/api/company/mobile-app/apk/upload-url',
+        { method: 'POST', body: JSON.stringify({ name: file.name, size: file.size }) },
+      );
+      await putApkWithProgress(uploadURL, file, setProgress);
+      const info = await customFetch<{
+        androidApkObjectPath: string; androidApkFileName: string;
+        androidApkSize: number; androidApkUploadedAt: string;
+      }>('/api/company/mobile-app/apk', {
+        method: 'POST',
+        body: JSON.stringify({ objectPath, fileName: file.name }),
+      });
+      set('androidApkObjectPath', info.androidApkObjectPath);
+      set('androidApkFileName', info.androidApkFileName);
+      set('androidApkSize', info.androidApkSize);
+      set('androidApkUploadedAt', info.androidApkUploadedAt);
+      await refreshSettingsQuery();
+      toast.success('APK published — the download button and QR code now serve this file.');
+    } catch (e: any) {
+      toast.error(e?.data?.error || e.message || 'APK upload failed.');
+    } finally {
+      setUploading(false);
+      setProgress(0);
+    }
+  };
+
+  const handleRemove = async () => {
+    setRemoving(true);
+    try {
+      await customFetch('/api/company/mobile-app/apk', { method: 'DELETE' });
+      set('androidApkObjectPath', undefined);
+      set('androidApkFileName', undefined);
+      set('androidApkSize', undefined);
+      set('androidApkUploadedAt', undefined);
+      await refreshSettingsQuery();
+      setConfirmRemove(false);
+      toast.success('APK removed — the download window now says Android is not available.');
+    } catch (e: any) {
+      toast.error(e?.data?.error || e.message || 'Failed to remove the APK.');
+    } finally {
+      setRemoving(false);
+    }
+  };
+
+  const pickFile = () => fileInputRef.el?.click();
+
+  return (
+    <div className="p-4">
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex-1">
+          <label className="text-sm font-medium">Android APK File</label>
+          <p className="text-xs text-muted-foreground mt-1 max-w-lg">
+            Upload the app's .apk file here. It is stored securely and served from this system's
+            own download link — the Download APK button and QR code update automatically.
+          </p>
+          {hasApk ? (
+            <div className="mt-3 flex items-center gap-2 text-sm">
+              <span className="inline-flex items-center gap-1.5 rounded-md bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 px-2 py-1 text-xs font-medium">
+                <ShieldCheck className="w-3.5 h-3.5" /> APK available
+              </span>
+              <span className="font-mono text-xs truncate max-w-[16rem]" title={apkName}>{apkName}</span>
+              <span className="text-xs text-muted-foreground whitespace-nowrap">
+                {formatBytes(apkSize)}{apkDate ? ` · uploaded ${new Date(apkDate).toLocaleDateString()}` : ''}
+              </span>
+            </div>
+          ) : (
+            <p className="mt-3 text-xs text-muted-foreground">
+              No APK uploaded yet — the download window tells Android users the app is not available.
+            </p>
+          )}
+          {uploading && (
+            <div className="mt-3 max-w-sm">
+              <div className="h-2 rounded-full bg-muted overflow-hidden">
+                <div className="h-full bg-primary transition-all" style={{ width: `${progress}%` }} />
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">Uploading… {progress}%</p>
+            </div>
+          )}
+        </div>
+        {canEdit && (
+          <div className="flex flex-col items-end gap-2 shrink-0">
+            <input
+              type="file"
+              accept=".apk"
+              className="hidden"
+              ref={(el) => { fileInputRef.el = el; }}
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                e.target.value = ''; // allow re-selecting the same file
+                if (f) handleFile(f);
+              }}
+            />
+            <Button size="sm" onClick={pickFile} disabled={uploading} className="gap-1.5">
+              {uploading
+                ? <><Loader2 className="w-4 h-4 animate-spin" /> Uploading…</>
+                : <><Upload className="w-4 h-4" /> {hasApk ? 'Replace APK' : 'Upload APK'}</>}
+            </Button>
+            {hasApk && !uploading && (
+              <div className="flex gap-2">
+                <Button size="sm" variant="outline" asChild>
+                  <a href="/api/public/app/apk">Test Download</a>
+                </Button>
+                <Button size="sm" variant="outline" className="text-destructive hover:text-destructive"
+                  onClick={() => setConfirmRemove(true)}>
+                  Remove
+                </Button>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      <AlertDialog open={confirmRemove} onOpenChange={setConfirmRemove}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove the published APK?</AlertDialogTitle>
+            <AlertDialogDescription>
+              The Download APK button and QR code will stop working immediately, and the
+              download window will tell Android users the app is not currently available.
+              You can upload a new APK at any time.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={removing}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={(e) => { e.preventDefault(); handleRemove(); }}
+              disabled={removing}
+            >
+              {removing ? <><Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> Removing…</> : 'Yes, remove it'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  );
+}
 
 function getDefaults() {
   const init: Record<string, any> = {};
@@ -1246,6 +1447,9 @@ export default function Settings() {
               <div className="p-6 flex items-center gap-2 text-muted-foreground text-sm"><Loader2 className="w-4 h-4 animate-spin" /> Loading…</div>
             ) : (
               <div className="divide-y divide-border">
+                {group.title === 'Mobile App' && (
+                  <MobileApkManager canEdit={!!perm.canEdit} values={values} set={set} />
+                )}
                 {group.settings.map(setting => (
                   <div key={setting.key} className="p-4 flex items-center justify-between gap-4">
                     <div className="flex-1">

@@ -1,0 +1,440 @@
+CHANGE MOBILE APP SETTINGS TO SUPPORT DIRECT APK FILE UPLOAD
+
+The current Mobile App settings show:
+
+Android APK File Link
+Android App Version
+iOS Installation Link
+iOS App Version
+
+The current Android field requires manually entering an APK URL.
+
+I do NOT want that as the primary workflow.
+
+I want the Admin to be able to UPLOAD the actual Android APK directly from ERP Settings.
+
+============================================================
+1. ANDROID APK SETTINGS
+============================================================
+
+Replace the current:
+
+Android APK File Link
+
+text input with:
+
+Android APK File
+
+[ Choose / Upload APK ]
+
+The Admin should be able to select an actual .apk file from the computer.
+
+Only allow:
+
+.apk
+
+Do not allow arbitrary file types.
+
+After upload, show:
+
+APK filename
+APK version
+Upload status
+Download/Test button
+Replace APK button
+
+Example:
+
+Android Mobile App
+
+ERP-Mobile.apk
+Version 1.0.0
+
+[ Replace APK ] [ Test Download ]
+
+============================================================
+2. APK STORAGE
+============================================================
+
+When the Admin uploads the APK:
+
+Store it in the application's proper production file/object storage.
+
+DO NOT store it only in a temporary browser/local path.
+
+DO NOT store it inside an inaccessible temporary build directory.
+
+The APK must remain downloadable after:
+
+- server restart
+- deployment
+- frontend rebuild
+- backend restart
+
+Use the application's existing persistent storage mechanism where available.
+
+============================================================
+3. DOWNLOAD URL
+============================================================
+
+After upload, the backend should automatically create/use a stable download URL.
+
+Example:
+
+/downloads/mobile/android
+
+or an equivalent secure production route.
+
+The frontend should NOT require the Admin to manually enter this URL.
+
+The Download Mobile App modal should automatically use the configured APK.
+
+============================================================
+4. DOWNLOAD MOBILE APP MODAL
+============================================================
+
+Current modal:
+
+Android
+"Android app download is not currently available."
+
+This should change automatically after an APK is uploaded.
+
+Show:
+
+Android
+
+Version 1.0.0
+
+[ Download APK ]
+
+and:
+
+[ QR CODE ]
+
+"Scan to download Android APK"
+
+The QR code must point to the actual production APK download URL.
+
+============================================================
+5. APK DOWNLOAD
+============================================================
+
+When the user clicks:
+
+Download APK
+
+the actual uploaded APK must download.
+
+Use a clean filename such as:
+
+CompanyERP-Mobile-v1.0.0.apk
+
+or another appropriate configurable filename.
+
+Do NOT return HTML instead of the APK.
+
+Do NOT return a JSON response.
+
+Verify the response has the correct APK content type and file contents.
+
+============================================================
+6. VERSION
+============================================================
+
+Keep:
+
+Android App Version
+
+as a separate Admin setting.
+
+Example:
+
+1.0.0
+
+When uploading a new APK:
+
+Admin can change:
+
+1.0.0
+→
+1.0.1
+
+The Download Mobile App modal automatically displays the configured version.
+
+============================================================
+7. REPLACE APK
+============================================================
+
+Admin must be able to replace the current APK.
+
+Workflow:
+
+Existing APK
+→ Replace APK
+→ Upload new .apk
+→ enter/update version
+→ Save
+
+The new APK becomes the active download.
+
+Do not break the previous version while the new upload is being processed.
+
+If practical, retain previous versions internally for rollback.
+
+Normal employees must NOT be able to replace/delete the APK.
+
+============================================================
+8. FILE VALIDATION
+============================================================
+
+When an APK is uploaded:
+
+Validate:
+
+- file extension
+- MIME type where available
+- file is not empty
+- file is a valid APK/archive structure
+- reasonable file size
+
+Reject:
+
+- .exe
+- .zip
+- .ipa
+- .pdf
+- arbitrary files
+- empty files
+
+Show a clear validation error.
+
+============================================================
+9. SECURITY
+============================================================
+
+Only authorized Admin users can:
+
+Upload APK
+Replace APK
+Remove APK
+Change APK version
+
+Normal employees/users:
+
+→ can only download the APK.
+
+Do not expose arbitrary filesystem paths.
+
+Do not allow a user to manipulate the download URL to access unrelated server files.
+
+============================================================
+10. IOS
+============================================================
+
+Keep iOS separate.
+
+Do NOT create an "Upload IPA" workflow.
+
+Do NOT pretend that an arbitrary IPA can be installed by normal iPhone users.
+
+Keep:
+
+iOS Installation Link
+
+as a configurable URL.
+
+Example:
+
+TestFlight invitation
+Apple-supported installation/distribution URL
+real App Store URL later
+
+If no iOS URL is configured:
+
+show:
+
+"iOS installation is not currently configured."
+
+Do not show a fake App Store badge.
+
+============================================================
+11. SETTINGS UI
+============================================================
+
+Change the current settings section to something like:
+
+--------------------------------------------
+
+Mobile App
+
+Direct-install links behind the
+"Download Mobile App" menu.
+
+ANDROID
+
+Android APK
+[ Upload APK ]
+
+Current file:
+ERP-Mobile-v1.0.0.apk
+
+Version:
+[ 1.0.0 ]
+
+[ Replace APK ]
+
+Status:
+✓ APK available
+
+--------------------------------------------
+
+IOS
+
+iOS Installation Link
+[ https://... ]
+
+iOS App Version
+[ 1.0.0 ]
+
+--------------------------------------------
+
+============================================================
+12. DOWNLOAD MODAL
+============================================================
+
+When Android APK exists:
+
+--------------------------------
+Download Mobile App
+
+Access your ERP from your phone.
+
+ANDROID
+
+Version 1.0.0
+
+[ Download APK ]
+
+Scan to download Android APK
+
+[ QR CODE ]
+
+--------------------------------
+
+IPHONE / IOS
+
+Version 1.0.0
+
+[ Install iOS App ]
+
+--------------------------------
+
+When Android APK does NOT exist:
+
+Android
+
+"Android app download is not currently available."
+
+This is correct behavior.
+
+============================================================
+13. QR CODE
+============================================================
+
+QR code must automatically update when the active APK changes.
+
+It must point to:
+
+the actual Android APK download route.
+
+Do not generate a QR code from:
+
+- localhost
+- development URL
+- temporary URL
+- internal filesystem path
+
+Use the production/public HTTPS URL.
+
+============================================================
+14. IMPORTANT — DO NOT BREAK EXISTING MOBILE APP
+============================================================
+
+Do NOT change:
+
+Mobile Dashboard
+Receipt Voucher
+Payment Voucher
+Mobile permissions
+Location restrictions
+Accounting
+GST
+Payroll
+Existing mobile API
+
+This task only changes:
+
+APK storage
+APK configuration
+APK download
+QR code
+Mobile App settings
+Download Mobile App modal
+
+============================================================
+15. TESTING
+============================================================
+
+After implementation:
+
+1. Login as Admin.
+2. Open Settings.
+3. Upload a real test APK.
+4. Set version to 1.0.0.
+5. Save.
+6. Open Download Mobile App.
+7. Verify Android now shows:
+   Download APK.
+8. Click Download APK.
+9. Verify the actual APK downloads.
+10. Verify filename.
+11. Verify file is not empty.
+12. Verify APK structure.
+13. Scan QR code.
+14. Verify QR opens the same APK download URL.
+15. Replace APK with version 1.0.1.
+16. Verify modal now shows 1.0.1.
+17. Verify the new APK downloads.
+18. Login as normal employee.
+19. Verify employee can download but cannot modify APK settings.
+20. Restart/redeploy backend.
+21. Verify APK is still downloadable.
+
+============================================================
+16. FINAL ACCEPTANCE CRITERIA
+============================================================
+
+The final workflow must be:
+
+ADMIN
+→ Settings
+→ Mobile App
+→ Upload APK
+→ Set Version
+→ Save
+
+Then:
+
+USER
+→ Profile
+→ Download Mobile App
+→ Download APK
+→ APK downloads
+→ Install on Android
+
+No Google Play Store publication is required.
+
+The system must not require the Admin to manually paste an APK URL unless an advanced fallback configuration is specifically needed.
+
+Do not mark the feature complete until an actual APK has been uploaded and a real download has been successfully tested.

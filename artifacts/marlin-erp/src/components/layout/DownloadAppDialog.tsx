@@ -44,7 +44,12 @@ export function DownloadAppDialog({ open, onOpenChange }: {
   const cleanText = (v: unknown): string | null =>
     typeof v === 'string' && v.trim() ? v.trim() : null;
 
-  const apkConfigured = !!cleanUrl(gs.androidApkUrl);
+  // Android is available when an APK file has been uploaded into the system
+  // (preferred), or — advanced fallback — an external APK link is set. Either
+  // way the button hits our own download endpoint, which picks the source.
+  const apkUploaded =
+    typeof gs.androidApkObjectPath === 'string' && gs.androidApkObjectPath.startsWith('/objects/');
+  const apkConfigured = apkUploaded || !!cleanUrl(gs.androidApkUrl);
   const iosUrl = cleanUrl(gs.iosInstallUrl, true);
   const androidVersion = cleanText(gs.androidAppVersion);
   const iosVersion = cleanText(gs.iosAppVersion);
