@@ -112,3 +112,11 @@ check the alias before anything else.
 Several accounting views once hard-gated on `branchType !== 'headoffice'` and returned an EMPTY payload (not 403) — so granting the page's View right appeared to do nothing. Day Book now pins branch callers to their own location slice instead (the `statementLocationFilter` pattern: employee branch outvotes selector headers/query params; companyLevel bucket suppressed for branch callers since those are HO figures). Cash/Bank book ledgers, ledger statement, and trial balance keep their HO-only empty gates BY SCOPE DECISION — if a branch is ever granted those, use the same pin pattern, never the empty return.
 **Why:** an empty 200 hides the authz decision from both the user and the UI; the owner reported it as "permission granted but page won't open".
 **How to apply:** when a branch user with a granted View right sees an empty accounting view, grep the route for a branchType early-return before suspecting the permission tables.
+
+## Deny-order: scope gate before state validation
+A write route that validates document STATE (cancelled? balance due? settled?) before the location-scope
+check leaks that state to out-of-scope callers — the payments route quoted a foreign bill's balance due
+in its overpayment 400. Run the scope gate immediately after the row lock, before any state-dependent
+response. BODY-shape validation before lookup is fine (same answer for everyone — no oracle); anything
+computed from the loaded row is not.
+**How to apply:** in any /:id write, order = auth gate → parse/shape-validate body → lock row → scope gate → state checks.

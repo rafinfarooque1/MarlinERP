@@ -1,21 +1,27 @@
 import { useEffect, useState } from 'react';
-import { Apple, Play, Smartphone, QrCode } from 'lucide-react';
+import { Apple, Download, Smartphone } from 'lucide-react';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { useGetCompanySettings } from '@workspace/api-client-react';
 
 /**
  * "Download Mobile App" modal, opened from the top-right profile menu.
  *
- * Store links come from company settings (Settings → Mobile App) — never
- * hardcoded. An unconfigured store shows an honest "Coming soon" chip instead
- * of a dead button, and when nothing at all is configured the modal says the
- * app is not published yet rather than pretending.
+ * The app is deliberately NOT on Google Play / the App Store, so the modal
+ * never shows store badges. Distribution (all configured under Settings →
+ * Mobile App, never hardcoded):
+ *   Android — [Download APK] hits GET /api/public/app/apk, a server proxy of
+ *     the configured APK URL that serves the file with a clean versioned
+ *     filename. Unconfigured → an honest "not currently available" note.
+ *   iOS — [Install iOS App] opens the configured Apple-supported install link
+ *     (TestFlight / OTA manifest / a real listing later). A plain .ipa
+ *     download is never offered — iPhones cannot install one from a browser.
  *
- * The QR encodes GET /api/public/app — a public server redirect that reads the
- * same settings and sends iPhones to the App Store, Androids to Google Play,
- * and anything else to the fallback page / a both-options page. Encoding the
- * redirect (not a store URL) means printed or screenshotted QRs keep working
- * when the links change later.
+ * Device-aware: on an Android phone the Android card leads and the iOS card
+ * follows (and vice versa); QR codes are desktop-only, since a phone viewing
+ * the modal can just tap its own button. Each QR encodes its platform's REAL
+ * destination — Android's the stable server download URL, iOS's the
+ * configured install link directly (Apple install schemes must be opened by
+ * the phone itself, not proxied).
  */
 export function DownloadAppDialog({ open, onOpenChange }: {
   open: boolean;
@@ -23,57 +29,107 @@ export function DownloadAppDialog({ open, onOpenChange }: {
 }) {
   const { data: settings } = useGetCompanySettings();
   const gs = (settings as any)?.generalSettings ?? {};
-  const cleanUrl = (v: unknown): string | null => {
+  const cleanUrl = (v: unknown, ios = false): string | null => {
     if (typeof v !== 'string') return null;
     const t = v.trim();
-    return /^https?:\/\//i.test(t) ? t : null;
+    if (!t) return null;
+    // iOS mirrors the server rule: Apple-supported install links only — never
+    // a raw .ipa file (iPhones cannot install one from a browser, so showing
+    // an Install button for it would be a fake).
+    if (ios && /\.ipa(\?|#|$)/i.test(t)) return null;
+    if (/^https?:\/\//i.test(t)) return t;
+    if (ios && /^itms-services:/i.test(t)) return t;
+    return null;
   };
-  const iosUrl = cleanUrl(gs.mobileAppIosUrl);
-  const androidUrl = cleanUrl(gs.mobileAppAndroidUrl);
-  const fallbackUrl = cleanUrl(gs.mobileAppFallbackUrl);
-  // The QR is only useful when scanning it leads somewhere real.
-  const hasDestination = !!(iosUrl || androidUrl || fallbackUrl);
+  const cleanText = (v: unknown): string | null =>
+    typeof v === 'string' && v.trim() ? v.trim() : null;
 
-  const [qrUrl, setQrUrl] = useState<string | null>(null);
+  const apkConfigured = !!cleanUrl(gs.androidApkUrl);
+  const iosUrl = cleanUrl(gs.iosInstallUrl, true);
+  const androidVersion = cleanText(gs.androidAppVersion);
+  const iosVersion = cleanText(gs.iosAppVersion);
+  // The button downloads via the server so the filename is professional and
+  // the hosting location never leaks into bookmarks/QRs.
+  const apkDownloadUrl = `${window.location.origin}/api/public/app/apk`;
+
+  const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
+  const isAndroidDevice = /Android/i.test(ua);
+  const isIosDevice = /iPhone|iPad|iPod/i.test(ua);
+  const isDesktop = !isAndroidDevice && !isIosDevice;
+
+  // Desktop-only QR codes, one per configured platform.
+  const [qrAndroid, setQrAndroid] = useState<string | null>(null);
+  const [qrIos, setQrIos] = useState<string | null>(null);
   useEffect(() => {
-    if (!open || !hasDestination) { setQrUrl(null); return; }
+    // Drop any previously generated QR immediately — if the config changed
+    // while the dialog is open (e.g. an admin just cleared a link), a stale
+    // QR must never keep pointing at the old destination.
+    setQrAndroid(null);
+    setQrIos(null);
+    if (!open || !isDesktop || (!apkConfigured && !iosUrl)) return;
     let cancelled = false;
-    const target = `${window.location.origin}/api/public/app`;
-    (import('qrcode') as Promise<any>)
-      .then(QR => QR.toDataURL(target, { width: 176, margin: 2 }))
-      .then((url: string) => { if (!cancelled) setQrUrl(url); })
-      .catch(() => { if (!cancelled) setQrUrl(null); });
+    (import('qrcode') as Promise<any>).then(QR => {
+      if (apkConfigured) {
+        QR.toDataURL(apkDownloadUrl, { width: 144, margin: 2 })
+          .then((u: string) => { if (!cancelled) setQrAndroid(u); })
+          .catch(() => { if (!cancelled) setQrAndroid(null); });
+      }
+      if (iosUrl) {
+        QR.toDataURL(iosUrl, { width: 144, margin: 2 })
+          .then((u: string) => { if (!cancelled) setQrIos(u); })
+          .catch(() => { if (!cancelled) setQrIos(null); });
+      }
+    }).catch(() => { /* QR is a convenience, never an error */ });
     return () => { cancelled = true; };
-  }, [open, hasDestination]);
+  }, [open, isDesktop, apkConfigured, iosUrl, apkDownloadUrl]);
 
   const companyName = (settings as any)?.companyName || 'Marlin Frozen Fruits';
   const logoUrl = (settings as any)?.logoUrl as string | null | undefined;
 
-  const StoreButton = ({ href, icon: Icon, topLine, storeName }: {
-    href: string | null;
-    icon: React.ElementType;
-    topLine: string;
-    storeName: string;
-  }) => href ? (
-    <a
-      href={href}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="flex items-center gap-3 rounded-xl bg-foreground text-background px-4 py-2.5 hover:opacity-90 transition-opacity"
-    >
-      <Icon className="w-6 h-6 shrink-0" />
-      <span className="flex flex-col items-start leading-tight">
-        <span className="text-[10px] opacity-80">{topLine}</span>
-        <span className="text-sm font-semibold">{storeName}</span>
-      </span>
-    </a>
-  ) : (
-    <div className="flex items-center gap-3 rounded-xl border border-dashed border-border px-4 py-2.5 text-muted-foreground select-none">
-      <Icon className="w-6 h-6 shrink-0 opacity-50" />
-      <span className="flex flex-col items-start leading-tight">
-        <span className="text-[10px]">{storeName}</span>
-        <span className="text-sm font-semibold">Coming soon</span>
-      </span>
+  const AndroidCard = (
+    <div className={`rounded-xl border p-4 flex flex-col gap-2 ${isAndroidDevice ? 'border-primary/50 bg-primary/5' : 'border-border'}`}>
+      <div className="flex items-center gap-2">
+        <Smartphone className="w-4 h-4 text-primary" />
+        <span className="text-sm font-semibold">Android</span>
+        {androidVersion && <span className="text-xs text-muted-foreground">Version {androidVersion}</span>}
+      </div>
+      {apkConfigured ? (
+        <>
+          <a
+            href={apkDownloadUrl}
+            className="inline-flex items-center justify-center gap-2 rounded-lg bg-foreground text-background px-4 py-2 text-sm font-semibold hover:opacity-90 transition-opacity"
+          >
+            <Download className="w-4 h-4" /> Download APK
+          </a>
+          <p className="text-[11px] text-muted-foreground leading-snug">
+            Download the Android app directly. Android may ask you to allow installation from this source.
+          </p>
+        </>
+      ) : (
+        <p className="text-xs text-muted-foreground">Android app download is not currently available.</p>
+      )}
+    </div>
+  );
+
+  const IosCard = (
+    <div className={`rounded-xl border p-4 flex flex-col gap-2 ${isIosDevice ? 'border-primary/50 bg-primary/5' : 'border-border'}`}>
+      <div className="flex items-center gap-2">
+        <Apple className="w-4 h-4 text-primary" />
+        <span className="text-sm font-semibold">iPhone / iOS</span>
+        {iosVersion && <span className="text-xs text-muted-foreground">Version {iosVersion}</span>}
+      </div>
+      {iosUrl ? (
+        <a
+          href={iosUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center justify-center gap-2 rounded-lg bg-foreground text-background px-4 py-2 text-sm font-semibold hover:opacity-90 transition-opacity"
+        >
+          <Apple className="w-4 h-4" /> Install iOS App
+        </a>
+      ) : (
+        <p className="text-xs text-muted-foreground">iOS installation is not currently configured.</p>
+      )}
     </div>
   );
 
@@ -90,37 +146,33 @@ export function DownloadAppDialog({ open, onOpenChange }: {
               </div>
             )}
             <div className="text-left">
-              <DialogTitle>{companyName} Mobile App</DialogTitle>
-              <DialogDescription>Manage your business from anywhere</DialogDescription>
+              <DialogTitle>Download Mobile App</DialogTitle>
+              <DialogDescription>Access your {companyName} ERP from your phone</DialogDescription>
             </div>
           </div>
         </DialogHeader>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-          <StoreButton href={iosUrl} icon={Apple} topLine="Download on the" storeName="App Store" />
-          <StoreButton href={androidUrl} icon={Play} topLine="Get it on" storeName="Google Play" />
+        {/* The visitor's own platform leads. */}
+        <div className="flex flex-col gap-2.5">
+          {isIosDevice ? <>{IosCard}{AndroidCard}</> : <>{AndroidCard}{IosCard}</>}
         </div>
 
-        {hasDestination ? (
-          <div className="flex flex-col items-center gap-2 rounded-xl border border-border bg-muted/30 p-4">
-            <p className="text-sm font-semibold flex items-center gap-1.5">
-              <QrCode className="w-4 h-4" /> Scan to Download
-            </p>
-            {qrUrl ? (
-              <img src={qrUrl} alt="QR code to download the mobile app" className="w-44 h-44 rounded-lg bg-white p-1" />
-            ) : (
-              <div className="w-44 h-44 rounded-lg bg-muted animate-pulse" />
-            )}
-            <p className="text-xs text-muted-foreground text-center">
-              {(iosUrl || androidUrl)
-                ? 'Point your phone camera at the code — it opens the right store for your device.'
-                : 'Point your phone camera at the code — it opens the download page.'}
-            </p>
-          </div>
-        ) : (
-          <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-700 dark:text-amber-400">
-            The mobile app hasn't been published to the app stores yet. Once it's live, add the
-            store links under Settings → Mobile App and they'll appear here automatically.
+        {isDesktop && (qrAndroid || qrIos) && (
+          <div className="rounded-xl border border-border bg-muted/30 p-4">
+            <div className="flex items-start justify-center gap-6">
+              {qrAndroid && (
+                <div className="flex flex-col items-center gap-1.5">
+                  <img src={qrAndroid} alt="QR code to download the Android APK" className="w-36 h-36 rounded-lg bg-white p-1" />
+                  <p className="text-[11px] text-muted-foreground text-center">Scan to download Android APK</p>
+                </div>
+              )}
+              {qrIos && (
+                <div className="flex flex-col items-center gap-1.5">
+                  <img src={qrIos} alt="QR code to install the iOS app" className="w-36 h-36 rounded-lg bg-white p-1" />
+                  <p className="text-[11px] text-muted-foreground text-center">Scan to install iOS app</p>
+                </div>
+              )}
+            </div>
           </div>
         )}
       </DialogContent>

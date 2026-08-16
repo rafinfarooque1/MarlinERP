@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { router } from 'expo-router';
@@ -6,6 +6,7 @@ import { useColors } from '@/hooks/useColors';
 import { useErpPermissions, PAGE } from '@/hooks/useErpPermissions';
 import { useLocationContext } from '@/contexts/LocationContext';
 import { localYmd, shiftYmd } from '@/lib/localDate';
+import { shareViewAsImage } from '@/lib/shareCapture';
 import { formatMoney } from '@/components/ui/MoneyText';
 import {
   useGetDashboardBi,
@@ -102,6 +103,25 @@ function DashboardInner() {
   }, [period, location.locationType, location.locationId]);
 
   const { data: bi, isLoading, isError } = useGetDashboardBi(filters);
+
+  // Share-as-image: captures the whole dashboard section (header, KPI cards,
+  // insights) and hands it to the share sheet. Gated only on the capture
+  // being in flight — never on the figures still loading.
+  const shotRef = useRef<View>(null);
+  const [sharing, setSharing] = useState(false);
+  const onShare = async () => {
+    if (sharing) return;
+    setSharing(true);
+    try {
+      await shareViewAsImage(shotRef.current, {
+        fileName: `marlin-dashboard-${localYmd()}.png`,
+        backgroundColor: colors.background,
+        dialogTitle: 'Share dashboard',
+      });
+    } finally {
+      setSharing(false);
+    }
+  };
 
   const styles = makeStyles(colors);
 
@@ -222,8 +242,8 @@ function DashboardInner() {
   const topItemMax = Math.max(1, ...topItems.map(i => i.revenue));
 
   return (
-    <View style={styles.section}>
-      {/* ── Header: title + scope + period chips ── */}
+    <View ref={shotRef} collapsable={false} style={styles.section}>
+      {/* ── Header: title + scope + period chips + share ── */}
       <Text style={styles.sectionTitle}>Business Dashboard</Text>
       <View style={styles.headerRow}>
         <View style={styles.scopeRow}>
@@ -245,6 +265,19 @@ function DashboardInner() {
             </Pressable>
           ))}
         </View>
+        <Pressable
+          onPress={onShare}
+          disabled={sharing}
+          hitSlop={8}
+          accessibilityLabel="Share dashboard"
+          style={({ pressed }) => [styles.shareBtn, pressed && { opacity: 0.7 }]}
+        >
+          {sharing ? (
+            <ActivityIndicator size={14} color={colors.primary} />
+          ) : (
+            <Feather name="share-2" size={14} color={colors.primary} />
+          )}
+        </Pressable>
       </View>
 
       {isError ? (
@@ -428,6 +461,16 @@ function makeStyles(colors: ReturnType<typeof useColors>) {
       gap: 2,
     },
     chip: { paddingHorizontal: 12, paddingVertical: 5, borderRadius: 8 },
+    shareBtn: {
+      width: 30,
+      height: 30,
+      borderRadius: 10,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: colors.primary + '12',
+      borderWidth: 1,
+      borderColor: colors.primary + '25',
+    },
     chipText: { fontSize: 12, color: colors.mutedForeground, fontFamily: 'Outfit_600SemiBold' },
     loadingCard: {
       backgroundColor: colors.card,

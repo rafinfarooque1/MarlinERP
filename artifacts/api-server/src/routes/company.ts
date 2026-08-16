@@ -202,15 +202,33 @@ router.patch("/company/settings", requireModuleAction("page:/company/settings", 
         && gsu.weeklyOffExhaustedAction !== 'ask' && gsu.weeklyOffExhaustedAction !== 'absent') {
       res.status(400).json({ error: 'When casual leave is exhausted, the action must be Ask or Mark Unpaid' }); return;
     }
-    // Mobile app store links: these feed a PUBLIC redirect (GET /api/public/app,
-    // the URL the "Download Mobile App" QR encodes), so only plain http(s) URLs
-    // may ever be stored — anything else could turn the QR into an open
-    // redirect to a javascript:/data: payload. Empty/null means "not published
-    // yet" and the UI shows Coming Soon instead of a dead button.
-    for (const [key, label] of [
-      ['mobileAppIosUrl',      'App Store link'],
-      ['mobileAppAndroidUrl',  'Google Play link'],
-      ['mobileAppFallbackUrl', 'Fallback download page link'],
+    // Mobile app distribution settings: these feed PUBLIC endpoints
+    // (GET /api/public/app + /api/public/app/apk), so only vetted URLs may
+    // ever be stored — anything else could turn the QR into an open redirect
+    // to a javascript:/data: payload. Empty/null means "not available yet"
+    // and the UI shows an honest notice instead of a dead button.
+    //
+    // Scheme rules per key:
+    //  - androidApkUrl: where the server FETCHES the APK from when someone
+    //    clicks Download APK. https only; http://localhost is tolerated in
+    //    development builds only — the file must never travel over plain http
+    //    in prod, and in prod a localhost URL would be an SSRF against our own
+    //    services (the download endpoint is public).
+    //  - iosInstallUrl: an Apple-supported install destination — a TestFlight
+    //    https link, a real App Store https link, or an itms-services://
+    //    OTA-manifest link (ad-hoc/enterprise distribution). NEVER a raw .ipa
+    //    file; iPhones cannot install one from a browser, so offering it would
+    //    be a fake download — reject it outright.
+    //  - legacy mobileApp*Url keys: kept readable so old stored blobs still
+    //    save, plain http(s).
+    const devLocalhostOk = process.env.NODE_ENV !== 'production';
+    const isLocalhost = (u: URL) => u.hostname === 'localhost' || u.hostname === '127.0.0.1';
+    for (const [key, label, schemes] of [
+      ['androidApkUrl',        'Android APK file link',   'https-or-local'],
+      ['iosInstallUrl',        'iOS installation link',   'ios-install'],
+      ['mobileAppIosUrl',      'App Store link',          'http'],
+      ['mobileAppAndroidUrl',  'Google Play link',        'http'],
+      ['mobileAppFallbackUrl', 'Fallback download page link', 'http'],
     ] as const) {
       const v = gsu[key];
       if (v === undefined || v === null) continue;
@@ -219,8 +237,35 @@ router.patch("/company/settings", requireModuleAction("page:/company/settings", 
       if (t === '') { gsu[key] = ''; continue; }
       if (t.length > 500) { res.status(400).json({ error: `${label} must be 500 characters or fewer` }); return; }
       let ok = false;
-      try { const u = new URL(t); ok = u.protocol === 'https:' || u.protocol === 'http:'; } catch { ok = false; }
-      if (!ok) { res.status(400).json({ error: `${label} must be a full link starting with https://` }); return; }
+      try {
+        const u = new URL(t);
+        if (schemes === 'https-or-local') {
+          ok = u.protocol === 'https:' || (devLocalhostOk && u.protocol === 'http:' && isLocalhost(u));
+        } else if (schemes === 'ios-install') {
+          ok = u.protocol === 'https:' || u.protocol === 'itms-services:';
+          if (ok && /\.ipa$/i.test(u.pathname)) {
+            res.status(400).json({ error: `${label} must not point at an .ipa file — iPhones cannot install one from a browser. Use a TestFlight link or an itms-services:// install link instead.` });
+            return;
+          }
+        } else {
+          ok = u.protocol === 'https:' || u.protocol === 'http:';
+        }
+      } catch { ok = false; }
+      if (!ok) { res.status(400).json({ error: `${label} must be a full https:// link${schemes === 'ios-install' ? ' (or an itms-services:// install link)' : ''}` }); return; }
+      gsu[key] = t;
+    }
+    // App version labels are display strings shown in the download window and
+    // used in the APK filename — keep them short and filename-safe.
+    for (const [key, label] of [
+      ['androidAppVersion', 'Android app version'],
+      ['iosAppVersion',     'iOS app version'],
+    ] as const) {
+      const v = gsu[key];
+      if (v === undefined || v === null) continue;
+      if (typeof v !== 'string') { res.status(400).json({ error: `${label} must be text like 1.0.0` }); return; }
+      const t = v.trim();
+      if (t.length > 50) { res.status(400).json({ error: `${label} must be 50 characters or fewer` }); return; }
+      if (t && !/^[\w. +()-]*$/.test(t)) { res.status(400).json({ error: `${label} may only contain letters, numbers, dots, dashes and spaces` }); return; }
       gsu[key] = t;
     }
   }
@@ -398,59 +443,104 @@ router.patch("/company/settings", requireModuleAction("page:/company/settings", 
   res.json({ ...row, ...(await extraSettingsFields(row.id)) });
 });
 
-// ── Public mobile-app download redirect ────────────────────────────────────
-// The URL the "Download Mobile App" QR code encodes. PUBLIC (auth exemption in
-// app.ts) because it is scanned by phones that are not logged in. It only ever
-// discloses the configured store links — no business data.
+// ── Public mobile-app distribution endpoints ───────────────────────────────
+// The app is deliberately NOT on Google Play / the App Store. Distribution is:
+//   Android → direct APK download (server-proxied so the filename is clean)
+//   iOS     → a configurable Apple-supported install link (TestFlight /
+//             OTA manifest / a real store listing later). Never an .ipa file —
+//             ordinary iPhones cannot install one from a browser.
 //
-// Behaviour, in order:
-//   iPhone/iPad + iOS link set        → 302 to the App Store
-//   Android + Play link set           → 302 to Google Play
-//   exactly one store link configured → 302 there (any device)
-//   none configured + fallback set    → 302 to the fallback page
-//   otherwise                         → a small self-contained HTML page:
-//     both store buttons when both exist, or an honest "not published yet"
-//     notice when nothing is configured. Never a dead button.
+// Both endpoints are PUBLIC (auth exemption in app.ts) because they are hit by
+// phones that are not logged in (QR scans). They disclose only the configured
+// install destinations — no business data.
 const escapeHtml = (s: string) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
-router.get("/public/app", async (req, res): Promise<void> => {
-  // Config changes must take effect on the next scan — never cache.
-  res.set("Cache-Control", "no-store");
+// One read path for the distribution config. Defence in depth: the PATCH
+// already validates, but these endpoints serve unauthenticated visitors, so
+// the EXACT same rules are re-applied at read time — a value smuggled into the
+// blob some other way (old backup restore, manual SQL) must not weaken them.
+async function readAppDistribution() {
   const { rows: [r] } = await pool.query<any>(
     `SELECT company_name, general_settings FROM company_settings ORDER BY id LIMIT 1`,
   );
   const gs = typeof r?.general_settings === "string"
     ? JSON.parse(r.general_settings) : (r?.general_settings ?? {});
-  // Defence in depth: the PATCH already validates, but this endpoint redirects
-  // unauthenticated visitors, so re-check the scheme at read time too.
-  const clean = (v: unknown): string | null => {
+  const devLocalhostOk = process.env.NODE_ENV !== "production";
+  const isLocalhostUrl = (u: URL) => u.hostname === "localhost" || u.hostname === "127.0.0.1";
+  // Mirrors the PATCH 'https-or-local' rule.
+  const cleanApk = (v: unknown): string | null => {
     if (typeof v !== "string") return null;
     const t = v.trim();
     if (!t || t.length > 500) return null;
-    try { const u = new URL(t); return (u.protocol === "https:" || u.protocol === "http:") ? t : null; }
-    catch { return null; }
+    try {
+      const u = new URL(t);
+      if (u.protocol === "https:") return t;
+      if (devLocalhostOk && u.protocol === "http:" && isLocalhostUrl(u)) return t;
+      return null;
+    } catch { return null; }
   };
-  const ios      = clean(gs?.mobileAppIosUrl);
-  const android  = clean(gs?.mobileAppAndroidUrl);
-  const fallback = clean(gs?.mobileAppFallbackUrl);
+  // Mirrors the PATCH 'ios-install' rule, including the raw-.ipa refusal.
+  const cleanIos = (v: unknown): string | null => {
+    if (typeof v !== "string") return null;
+    const t = v.trim();
+    if (!t || t.length > 500) return null;
+    try {
+      const u = new URL(t);
+      if (u.protocol !== "https:" && u.protocol !== "itms-services:") return null;
+      if (/\.ipa$/i.test(u.pathname)) return null;
+      return t;
+    } catch { return null; }
+  };
+  const cleanVersion = (v: unknown): string | null => {
+    if (typeof v !== "string") return null;
+    const t = v.trim();
+    return t && t.length <= 50 && /^[\w. +()-]*$/.test(t) ? t : null;
+  };
+  return {
+    companyName: String(r?.company_name || "Marlin Frozen Fruits"),
+    apkUrl: cleanApk(gs?.androidApkUrl),
+    iosUrl: cleanIos(gs?.iosInstallUrl),
+    androidVersion: cleanVersion(gs?.androidAppVersion),
+    iosVersion: cleanVersion(gs?.iosAppVersion),
+  };
+}
+
+// GET /public/app — the stable link printed QR codes carry. Sends each device
+// where it can actually install from; shows an honest page otherwise.
+router.get("/public/app", async (req, res): Promise<void> => {
+  // Config changes must take effect on the next scan — never cache.
+  res.set("Cache-Control", "no-store");
+  const cfg = await readAppDistribution();
 
   const ua = String(req.get("user-agent") ?? "");
   const isIos     = /iPhone|iPad|iPod/i.test(ua);
   const isAndroid = /Android/i.test(ua);
-  if (isIos && ios)         { res.redirect(302, ios); return; }
-  if (isAndroid && android) { res.redirect(302, android); return; }
-  const stores = [ios, android].filter((u): u is string => !!u);
-  if (stores.length === 1)  { res.redirect(302, stores[0]); return; }
-  if (stores.length === 0 && fallback) { res.redirect(302, fallback); return; }
+  // The APK link points at OUR download endpoint, not the raw hosted file, so
+  // the browser gets a clean filename and the hosting can move without
+  // invalidating anything already printed or shared.
+  if (isAndroid && cfg.apkUrl) { res.redirect(302, "/api/public/app/apk"); return; }
+  if (isIos && cfg.iosUrl)     { res.redirect(302, cfg.iosUrl); return; }
 
-  const company = escapeHtml(String(r?.company_name || "Marlin Frozen Fruits"));
+  const company = escapeHtml(cfg.companyName);
   const btn = (href: string, label: string) =>
     `<a class="btn" href="${escapeHtml(href)}">${label}</a>`;
-  const body = stores.length === 2
-    ? `<p class="sub">Manage your business from anywhere. Get the app for your phone:</p>
-       <div class="btns">${btn(ios!, "Download on the App Store")}${btn(android!, "Get it on Google Play")}</div>`
-    : `<p class="sub">The mobile app has not been published to the app stores yet.<br>Please check back soon.</p>`;
+  const sections: string[] = [];
+  if (cfg.apkUrl) {
+    sections.push(
+      `<div class="plat"><h2>Android${cfg.androidVersion ? ` <span class="ver">Version ${escapeHtml(cfg.androidVersion)}</span>` : ""}</h2>
+       ${btn("/api/public/app/apk", "Download APK")}
+       <p class="note">Android may ask you to allow installation from this source.</p></div>`);
+  } else {
+    sections.push(`<div class="plat"><h2>Android</h2><p class="note">Android app download is not currently available.</p></div>`);
+  }
+  if (cfg.iosUrl) {
+    sections.push(
+      `<div class="plat"><h2>iPhone / iOS${cfg.iosVersion ? ` <span class="ver">Version ${escapeHtml(cfg.iosVersion)}</span>` : ""}</h2>
+       ${btn(cfg.iosUrl, "Install iOS App")}</div>`);
+  } else {
+    sections.push(`<div class="plat"><h2>iPhone / iOS</h2><p class="note">iOS installation is not currently configured.</p></div>`);
+  }
   res.status(200).type("html").send(`<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -462,13 +552,116 @@ router.get("/public/app", async (req, res): Promise<void> => {
   .card{background:#fff;border:1px solid #e5e7eb;border-radius:16px;padding:36px 28px;max-width:420px;width:100%;
         text-align:center;box-shadow:0 8px 24px rgba(0,0,0,.06)}
   h1{font-size:20px;margin:0 0 6px}
+  h2{font-size:15px;margin:0 0 10px}
+  .ver{color:#6b7280;font-weight:500;font-size:12px}
   .sub{color:#6b7280;font-size:14px;line-height:1.6;margin:0 0 20px}
-  .btns{display:flex;flex-direction:column;gap:10px}
+  .plat{border:1px solid #e5e7eb;border-radius:12px;padding:16px;margin-top:12px}
+  .note{color:#6b7280;font-size:12px;line-height:1.5;margin:10px 0 0}
   .btn{display:block;background:#111827;color:#fff;text-decoration:none;border-radius:10px;padding:13px 16px;
        font-size:14px;font-weight:600}
   .btn:hover{background:#1f2937}
 </style></head>
-<body><div class="card"><h1>${company} Mobile App</h1>${body}</div></body></html>`);
+<body><div class="card"><h1>${company} Mobile App</h1>
+<p class="sub">Access your ERP from your phone.</p>${sections.join("")}</div></body></html>`);
+});
+
+// GET /public/app/apk — streams the configured APK to the browser as a real
+// file download. The server only ever fetches the ONE admin-configured URL —
+// no user input reaches the fetch, so it cannot be steered at other files.
+// Because the endpoint is PUBLIC, the fetch itself is hardened:
+//   - redirects followed MANUALLY (max 3 hops), every hop re-checked
+//   - each non-localhost hostname is DNS-resolved and refused if it points at
+//     a private/loopback/link-local/reserved address (SSRF guard; localhost
+//     is only reachable in development builds, matching the config rule)
+//   - a hard size cap and an overall timeout bound what one request can cost
+const APK_MAX_BYTES = 300 * 1024 * 1024; // generous — a real APK is well under this
+const APK_TIMEOUT_MS = 15 * 60 * 1000;   // covers a slow phone connection end-to-end
+
+function isForbiddenAddress(ip: string): boolean {
+  const lower = ip.toLowerCase();
+  if (lower.includes(":")) { // IPv6
+    const v4Mapped = lower.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+    if (v4Mapped) return isForbiddenAddress(v4Mapped[1]);
+    return lower === "::" || lower === "::1" || lower.startsWith("fe80") ||
+      lower.startsWith("fc") || lower.startsWith("fd");
+  }
+  const parts = ip.split(".").map(Number);
+  if (parts.length !== 4 || parts.some(n => !Number.isInteger(n) || n < 0 || n > 255)) return true;
+  const [a, b] = parts;
+  return a === 0 || a === 10 || a === 127 || (a === 100 && b >= 64 && b <= 127) ||
+    (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) || a >= 224;
+}
+
+async function fetchApkUpstream(startUrl: string, signal: AbortSignal): Promise<Response | null> {
+  const dns = await import("node:dns/promises");
+  const devLocalhostOk = process.env.NODE_ENV !== "production";
+  let url: URL;
+  try { url = new URL(startUrl); } catch { return null; }
+  for (let hop = 0; hop < 4; hop++) {
+    const isLocal = url.hostname === "localhost" || url.hostname === "127.0.0.1";
+    if (isLocal) {
+      if (!devLocalhostOk) return null; // dev convenience only, never in prod
+    } else {
+      if (url.protocol !== "https:") return null;
+      try {
+        const addrs = await dns.lookup(url.hostname, { all: true });
+        if (addrs.length === 0 || addrs.some(a => isForbiddenAddress(a.address))) return null;
+      } catch { return null; }
+    }
+    const r = await fetch(url, { redirect: "manual", signal });
+    if (r.status >= 300 && r.status < 400) {
+      const loc = r.headers.get("location");
+      r.body?.cancel().catch(() => {});
+      if (!loc) return null;
+      try { url = new URL(loc, url); } catch { return null; }
+      continue;
+    }
+    return r;
+  }
+  return null; // too many redirects
+}
+
+router.get("/public/app/apk", async (_req, res): Promise<void> => {
+  res.set("Cache-Control", "no-store");
+  const cfg = await readAppDistribution();
+  if (!cfg.apkUrl) {
+    res.status(404).json({ error: "Android app download is not currently available." });
+    return;
+  }
+  const fail = () => {
+    if (!res.headersSent) res.status(502).json({ error: "The APK file could not be fetched from its configured location." });
+    else res.destroy();
+  };
+  let upstream: Response | null;
+  try {
+    upstream = await fetchApkUpstream(cfg.apkUrl, AbortSignal.timeout(APK_TIMEOUT_MS));
+  } catch { fail(); return; }
+  if (!upstream || !upstream.ok || !upstream.body) { upstream?.body?.cancel().catch(() => {}); fail(); return; }
+  const len = upstream.headers.get("content-length");
+  if (len && Number(len) > APK_MAX_BYTES) { upstream.body.cancel().catch(() => {}); fail(); return; }
+
+  // Professional, stable filename regardless of where the file is hosted.
+  const safe = (s: string) => s.replace(/[^\w.-]+/g, "-").replace(/^-+|-+$/g, "");
+  const base = safe(cfg.companyName) || "ERP";
+  const fileName = `${base}-Mobile${cfg.androidVersion ? `-v${safe(cfg.androidVersion)}` : ""}.apk`;
+  res.setHeader("Content-Type", "application/vnd.android.package-archive");
+  res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
+  if (len) res.setHeader("Content-Length", len);
+
+  const { Readable, Transform } = await import("node:stream");
+  let sent = 0;
+  const capGuard = new Transform({
+    transform(chunk, _enc, cb) {
+      sent += chunk.length;
+      if (sent > APK_MAX_BYTES) cb(new Error("APK size cap exceeded"));
+      else cb(null, chunk);
+    },
+  });
+  const stream = Readable.fromWeb(upstream.body as any);
+  stream.on("error", () => { res.destroy(); });
+  capGuard.on("error", () => { stream.destroy(); res.destroy(); });
+  stream.pipe(capGuard).pipe(res);
 });
 
 // ── Login history (Phase 7) ────────────────────────────────────────────────

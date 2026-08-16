@@ -60,6 +60,8 @@
     "expo-file-system": "~19.0.23",
     "expo-network": "~8.0.8",
     "expo-print": "^15.0.8",
-    "expo-sharing": "^14.0.8"
+    "expo-sharing": "^14.0.8",
+    "html-to-image": "1.11.13",
+    "react-native-view-shot": "4.0.3"
   }
 }

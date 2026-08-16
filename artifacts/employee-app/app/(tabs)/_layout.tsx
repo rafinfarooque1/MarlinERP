@@ -46,54 +46,46 @@ function useTabVisibility(): TabVisibility {
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 function NativeTabLayout({ vis }: { vis: TabVisibility }) {
+  // Every screen gets a trigger and visibility rides the `hidden` flag: a
+  // screen without a trigger is unreachable in the native navigator, which is
+  // exactly how Payslips/Attendance/Leaves broke on iOS for ERP users — the
+  // More-menu links pushed routes the tab bar never registered. Conditional
+  // `{cond && <Trigger/>}` children also emit "children must be of type
+  // Screen" warnings, so `hidden` handles both.
   return (
     <NativeTabs>
       <NativeTabs.Trigger name="index">
         <Icon sf={{ default: 'house' as any, selected: 'house.fill' as any }} />
         <Label>Home</Label>
       </NativeTabs.Trigger>
-      {vis.sales && (
-        <NativeTabs.Trigger name="sales">
-          <Icon sf={{ default: 'cart' as any, selected: 'cart.fill' as any }} />
-          <Label>Sales</Label>
-        </NativeTabs.Trigger>
-      )}
-      {vis.dispatch && (
-        <NativeTabs.Trigger name="dispatch">
-          <Icon sf={{ default: 'shippingbox' as any, selected: 'shippingbox.fill' as any }} />
-          <Label>Dispatch</Label>
-        </NativeTabs.Trigger>
-      )}
-      {vis.stock && (
-        <NativeTabs.Trigger name="stock">
-          <Icon sf={{ default: 'archivebox' as any, selected: 'archivebox.fill' as any }} />
-          <Label>Stock</Label>
-        </NativeTabs.Trigger>
-      )}
-      {vis.erp && (
-        <NativeTabs.Trigger name="more">
-          <Icon sf={{ default: 'ellipsis.circle' as any, selected: 'ellipsis.circle.fill' as any }} />
-          <Label>More</Label>
-        </NativeTabs.Trigger>
-      )}
-      {!vis.erp && (
-        <NativeTabs.Trigger name="payslips">
-          <Icon sf={{ default: 'doc.text' as any, selected: 'doc.text.fill' as any }} />
-          <Label>Payslips</Label>
-        </NativeTabs.Trigger>
-      )}
-      {!vis.erp && (
-        <NativeTabs.Trigger name="attendance">
-          <Icon sf={{ default: 'calendar' as any, selected: 'calendar.fill' as any }} />
-          <Label>Attendance</Label>
-        </NativeTabs.Trigger>
-      )}
-      {!vis.erp && (
-        <NativeTabs.Trigger name="leaves">
-          <Icon sf={{ default: 'leaf' as any, selected: 'leaf.fill' as any }} />
-          <Label>Leaves</Label>
-        </NativeTabs.Trigger>
-      )}
+      <NativeTabs.Trigger name="sales" hidden={!vis.sales}>
+        <Icon sf={{ default: 'cart' as any, selected: 'cart.fill' as any }} />
+        <Label>Sales</Label>
+      </NativeTabs.Trigger>
+      <NativeTabs.Trigger name="dispatch" hidden={!vis.dispatch}>
+        <Icon sf={{ default: 'shippingbox' as any, selected: 'shippingbox.fill' as any }} />
+        <Label>Dispatch</Label>
+      </NativeTabs.Trigger>
+      <NativeTabs.Trigger name="stock" hidden={!vis.stock}>
+        <Icon sf={{ default: 'archivebox' as any, selected: 'archivebox.fill' as any }} />
+        <Label>Stock</Label>
+      </NativeTabs.Trigger>
+      <NativeTabs.Trigger name="more" hidden={!vis.erp}>
+        <Icon sf={{ default: 'ellipsis.circle' as any, selected: 'ellipsis.circle.fill' as any }} />
+        <Label>More</Label>
+      </NativeTabs.Trigger>
+      <NativeTabs.Trigger name="payslips" hidden={vis.erp}>
+        <Icon sf={{ default: 'doc.text' as any, selected: 'doc.text.fill' as any }} />
+        <Label>Payslips</Label>
+      </NativeTabs.Trigger>
+      <NativeTabs.Trigger name="attendance" hidden={vis.erp}>
+        <Icon sf={{ default: 'calendar' as any, selected: 'calendar.fill' as any }} />
+        <Label>Attendance</Label>
+      </NativeTabs.Trigger>
+      <NativeTabs.Trigger name="leaves" hidden={vis.erp}>
+        <Icon sf={{ default: 'leaf' as any, selected: 'leaf.fill' as any }} />
+        <Label>Leaves</Label>
+      </NativeTabs.Trigger>
     </NativeTabs>
   );
 }

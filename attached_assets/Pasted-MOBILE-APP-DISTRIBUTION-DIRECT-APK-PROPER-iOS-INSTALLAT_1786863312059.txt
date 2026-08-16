@@ -1,0 +1,478 @@
+MOBILE APP DISTRIBUTION — DIRECT APK + PROPER iOS INSTALLATION
+
+IMPORTANT:
+We do NOT want to publish the ERP mobile app publicly on Google Play Store or Apple App Store at this stage.
+
+The ERP website should provide a professional "Download Mobile App" experience.
+
+PRIMARY REQUIREMENT:
+
+ANDROID
+→ Provide a direct downloadable APK file.
+
+iOS
+→ Do NOT provide a fake/direct .ipa download that ordinary iPhone users cannot install.
+→ Use an Apple-supported installation/distribution method.
+→ Keep the iOS option configurable so we can connect the correct installation URL later.
+
+============================================================
+1. WEBSITE DOWNLOAD MOBILE APP MENU
+============================================================
+
+Keep the existing:
+
+Profile/User Menu
+→ Download Mobile App
+
+When clicked, open a professional mobile-app download modal/page.
+
+Show two clear options:
+
+--------------------------------
+ANDROID
+--------------------------------
+
+Android
+
+[ Download APK ]
+
+Text:
+
+"Download the Android app directly."
+
+Clicking Download APK must download the actual APK file.
+
+Do NOT redirect to Google Play Store.
+
+Do NOT show a Google Play badge.
+
+--------------------------------
+iOS
+--------------------------------
+
+iPhone / iOS
+
+[ Install iOS App ]
+
+Use a configurable Apple-supported installation/distribution URL.
+
+Do NOT pretend that an arbitrary .ipa file can be installed by every iPhone user.
+
+Do NOT show an App Store link unless a real App Store listing has actually been configured.
+
+============================================================
+2. APK HOSTING
+============================================================
+
+The APK must be hosted from a stable HTTPS location.
+
+Do not hardcode a temporary local-development path.
+
+Use configurable environment/settings such as:
+
+ANDROID_APK_URL
+
+or an equivalent application setting.
+
+Example:
+
+ANDROID_APK_URL=https://your-domain.com/downloads/erp-mobile.apk
+
+The actual production URL must be configurable.
+
+Do not hardcode a fake URL.
+
+============================================================
+3. APK DOWNLOAD
+============================================================
+
+When the user clicks:
+
+Download APK
+
+the browser should download the actual APK.
+
+The response must use the appropriate downloadable file behavior.
+
+The filename should be professional, for example:
+
+ERP-Mobile.apk
+
+or:
+
+CompanyERP-Mobile.apk
+
+Do not generate a corrupt/empty file.
+
+============================================================
+4. APK VERSIONING
+============================================================
+
+Support version information.
+
+Example:
+
+Version 1.0.0
+
+Show:
+
+Android App
+Version 1.0.0
+[ Download APK ]
+
+Make the version configurable.
+
+For example:
+
+ANDROID_APP_VERSION
+
+Do not hardcode the version into multiple frontend files.
+
+============================================================
+5. APK UPDATE SUPPORT
+============================================================
+
+The website should know the currently available APK version.
+
+Where practical, expose configuration such as:
+
+ANDROID_APK_URL
+ANDROID_APP_VERSION
+ANDROID_MIN_VERSION
+
+This allows future APK updates without rebuilding the website download UI.
+
+Do NOT automatically force-install updates.
+
+The website only provides the current APK download.
+
+============================================================
+6. iOS DISTRIBUTION
+============================================================
+
+IMPORTANT:
+
+Do NOT create a misleading:
+
+"Download IPA"
+
+button.
+
+A normal iPhone user cannot simply download an arbitrary unsigned/incorrectly signed .ipa from the website and install it like an Android APK.
+
+Instead provide:
+
+[ Install iOS App ]
+
+The destination must come from a configurable setting:
+
+IOS_INSTALL_URL
+
+Possible future values may point to the appropriate Apple-supported distribution method.
+
+Do not hardcode an App Store URL.
+
+Do not claim:
+
+"Available on App Store"
+
+unless a real App Store listing is configured.
+
+============================================================
+7. CONFIGURATION
+============================================================
+
+Add configurable settings for:
+
+ANDROID_APK_URL
+ANDROID_APP_VERSION
+IOS_INSTALL_URL
+IOS_APP_VERSION where useful
+
+Optional:
+
+ANDROID_APP_RELEASE_NOTES
+IOS_APP_RELEASE_NOTES
+
+The frontend should consume these settings.
+
+Never hardcode store URLs or fake download URLs.
+
+============================================================
+8. DEVICE-AWARE UI
+============================================================
+
+The modal should detect the user's device where practical.
+
+Android:
+
+Highlight:
+
+Download APK
+
+iOS:
+
+Highlight:
+
+Install iOS App
+
+Desktop:
+
+Show both options.
+
+For desktop users, the QR code can be useful.
+
+If an Android APK URL is configured:
+
+Generate a QR code pointing to the APK download URL.
+
+If an iOS installation URL is configured:
+
+Generate a QR code pointing to that installation URL.
+
+Do not show a QR code that points to a non-existent/fake destination.
+
+============================================================
+9. QR CODE
+============================================================
+
+Use the actual configured URL.
+
+Android QR:
+
+ANDROID_APK_URL
+
+iOS QR:
+
+IOS_INSTALL_URL
+
+Do not encode a fake URL.
+
+The QR caption must accurately describe the destination.
+
+Example:
+
+"Scan to download Android APK"
+
+or:
+
+"Scan to install iOS app"
+
+Only use the iOS wording when IOS_INSTALL_URL is actually configured.
+
+============================================================
+10. MISSING CONFIGURATION
+============================================================
+
+If:
+
+ANDROID_APK_URL
+
+is missing:
+
+Do not show a broken download button.
+
+Show:
+
+"Android app download is not currently available."
+
+If:
+
+IOS_INSTALL_URL
+
+is missing:
+
+Show:
+
+"iOS installation is not currently configured."
+
+Do not display fake store badges.
+
+============================================================
+11. SECURITY
+============================================================
+
+The APK must be served only over HTTPS in production.
+
+Do not expose private server files.
+
+Do not allow arbitrary file paths through a URL parameter.
+
+Only serve the configured APK.
+
+Do not create a public file-upload vulnerability.
+
+============================================================
+12. ADMIN CONFIGURATION
+============================================================
+
+If the ERP already has application settings, add these settings there rather than creating an unrelated configuration system.
+
+Admin should be able to configure:
+
+Android APK URL
+Android Version
+iOS Installation URL
+iOS Version
+
+Normal employees/users should only see the download interface.
+
+They must not be able to modify these settings.
+
+============================================================
+13. DO NOT CHANGE MOBILE APP FUNCTIONALITY
+============================================================
+
+This task is ONLY about app distribution/download.
+
+Do NOT change:
+
+Mobile Dashboard
+Mobile POS
+Mobile Receipt Voucher
+Mobile Payment Voucher
+Permissions
+Location security
+Accounting
+GST
+Payroll
+Backend voucher logic
+
+The existing mobile application must continue working exactly as it currently does.
+
+============================================================
+14. WEBSITE MODAL DESIGN
+============================================================
+
+Make the Download Mobile App modal professional and simple.
+
+Example:
+
+-----------------------------------------
+        Download Mobile App
+
+   Access your ERP from your phone.
+
+   ┌───────────────────────────────┐
+   │  Android                      │
+   │  Version 1.0.0                │
+   │                               │
+   │  [ Download APK ]             │
+   └───────────────────────────────┘
+
+   ┌───────────────────────────────┐
+   │  iPhone / iOS                 │
+   │  Version 1.0.0                │
+   │                               │
+   │  [ Install iOS App ]          │
+   └───────────────────────────────┘
+
+   QR Code
+
+   Close
+-----------------------------------------
+
+Keep it clean.
+
+Do not make it look like the app is publicly available in stores when it is not.
+
+============================================================
+15. ANDROID INSTALLATION INFORMATION
+============================================================
+
+After APK download, show a short helpful note where appropriate:
+
+"Android may ask you to allow installation from this source."
+
+Do not give misleading instructions.
+
+============================================================
+16. TESTING
+============================================================
+
+Test:
+
+1. Android device
+→ Download APK
+→ file downloads
+→ file is non-empty
+→ file is valid APK
+→ filename correct
+
+2. Desktop
+→ Download APK works
+
+3. iPhone
+→ Install iOS App opens configured IOS_INSTALL_URL
+
+4. No Android URL configured
+→ no broken button
+
+5. No iOS URL configured
+→ no broken button
+
+6. QR code
+→ scans to the correct configured URL
+
+7. Admin configuration
+→ values can be changed
+
+8. Normal employee
+→ cannot modify app distribution settings
+
+9. HTTPS production URL
+
+10. Existing Download Mobile App menu continues working.
+
+============================================================
+17. IMPORTANT ACCEPTANCE CRITERIA
+============================================================
+
+The final system must NOT require:
+
+Google Play Store publication
+Apple App Store publication
+
+for the Android APK download flow.
+
+Android:
+
+ERP Website
+→ Download Mobile App
+→ Download APK
+→ Install APK on Android
+
+iOS:
+
+ERP Website
+→ Download Mobile App
+→ Install iOS App
+→ Apple-supported configured distribution method
+
+Do NOT attempt to make iOS behave like Android by providing an arbitrary .ipa download.
+
+============================================================
+18. FINAL REPORT
+============================================================
+
+After implementation report:
+
+- APK URL/configuration
+- APK version
+- APK download test result
+- APK validity result
+- iOS installation URL/configuration
+- QR test result
+- desktop test
+- Android test
+- iOS test
+- configuration test
+- permission test
+
+If iOS distribution is not yet configured, explicitly report:
+
+"iOS installation distribution is not configured yet."
+
+Do NOT mark it as working merely because the button exists.
+
+Do not publish anything to Google Play Store or Apple App Store as part of this task.

@@ -522,7 +522,7 @@ function makeStyles(colors: ReturnType<typeof useColors>, insets: { top: number;
     yearRow: {
       flexDirection: 'row',
       paddingHorizontal: 16,
-      paddingTop: Platform.OS === 'web' ? insets.top + 67 + 12 : 12,
+      paddingTop: Platform.OS === 'web' ? insets.top + 67 + 12 : insets.top + 12,
       paddingBottom: 12,
       gap: 8,
       borderBottomWidth: 1,

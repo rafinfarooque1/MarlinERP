@@ -466,7 +466,7 @@ function makeStyles(colors: ReturnType<typeof useColors>, insets: { top: number;
       justifyContent: 'space-between',
       alignItems: 'center',
       paddingHorizontal: 16,
-      paddingTop: Platform.OS === 'web' ? insets.top + 67 + 16 : 16,
+      paddingTop: Platform.OS === 'web' ? insets.top + 67 + 16 : insets.top + 16,
       paddingBottom: 12,
       borderBottomWidth: 1,
       borderBottomColor: colors.border,

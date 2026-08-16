@@ -145,3 +145,5 @@
 - [Mobile ERP foundation](mobile-erp-foundation.md) — session boundaries must clear query cache + location snapshot synchronously (global keys, headers outside keys); deny-first tab gating; payroll/leave-balance still 403 non-HR hierarchies.
 - [Mobile billing-flow lessons](mobile-sales-flow.md) — fallback-bearing empty states gate on RESOLVED queries; web confirmDialog is sync so defer retries past the submit lock; business dates = local calendar, never toISOString.
 - [Route-guard audit CI](route-guard-audit.md) — audit-route-guards.ts fails CI on unguarded writes (exemptions stay exact) + check-permissions #6 pins App.tsx guard keys; a comment claiming a fix ≠ the fix.
+- [Mobile app distribution](mobile-app-distribution.md) — no app stores BY CHOICE: public APK proxy + Apple-supported iOS link; SSRF-hardened fetch; raw .ipa always rejected; background test hosts die between shell sessions.
+- [HR employee lifecycle](hr-employee-lifecycle.md) — app-created employees carry a pay_components row (delete removes it, history blocks with 400); leave cancel = status flip; POS cash sale payments are receipt-backed → system-delete the receipt before cancel.

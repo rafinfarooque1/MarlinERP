@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
+import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   useDispatchQueue,
@@ -232,39 +233,49 @@ export default function DispatchScreen() {
           </Text>
         ) : null}
 
-        {/* One forward step only — the button always shows the allowed next move */}
-        {dispatchPerm.canEdit && row.status === 'PENDING' ? (
+        {/* View opens the full bill; the transition button (when allowed)
+            always shows the one forward move for this card. */}
+        <View style={styles.btnRow}>
           <Pressable
-            style={({ pressed }) => [styles.actionBtn, styles.readyBtn, (pressed || busy) && { opacity: 0.7 }]}
-            onPress={() => transition(row, 'READY')}
-            disabled={setStatusM.isPending}
+            style={({ pressed }) => [styles.actionBtn, styles.viewBtn, pressed && { opacity: 0.7 }]}
+            onPress={() => router.push(`/sale/${row.saleId}`)}
           >
-            {busy ? (
-              <ActivityIndicator size="small" color={colors.primary} />
-            ) : (
-              <>
-                <Feather name="check-square" size={15} color={colors.primary} />
-                <Text style={[styles.actionBtnText, { color: colors.primary }]}>Mark Ready</Text>
-              </>
-            )}
+            <Feather name="eye" size={15} color={colors.foreground} />
+            <Text style={[styles.actionBtnText, { color: colors.foreground }]}>View</Text>
           </Pressable>
-        ) : null}
-        {dispatchPerm.canEdit && row.status === 'READY' ? (
-          <Pressable
-            style={({ pressed }) => [styles.actionBtn, styles.dispatchBtn, (pressed || busy) && { opacity: 0.7 }]}
-            onPress={() => onMarkDispatched(row)}
-            disabled={setStatusM.isPending}
-          >
-            {busy ? (
-              <ActivityIndicator size="small" color={colors.primaryForeground} />
-            ) : (
-              <>
-                <Feather name="truck" size={15} color={colors.primaryForeground} />
-                <Text style={[styles.actionBtnText, { color: colors.primaryForeground }]}>Mark Dispatched</Text>
-              </>
-            )}
-          </Pressable>
-        ) : null}
+          {dispatchPerm.canEdit && row.status === 'PENDING' ? (
+            <Pressable
+              style={({ pressed }) => [styles.actionBtn, styles.growBtn, styles.readyBtn, (pressed || busy) && { opacity: 0.7 }]}
+              onPress={() => transition(row, 'READY')}
+              disabled={setStatusM.isPending}
+            >
+              {busy ? (
+                <ActivityIndicator size="small" color={colors.primary} />
+              ) : (
+                <>
+                  <Feather name="check-square" size={15} color={colors.primary} />
+                  <Text style={[styles.actionBtnText, { color: colors.primary }]}>Mark Ready</Text>
+                </>
+              )}
+            </Pressable>
+          ) : null}
+          {dispatchPerm.canEdit && row.status === 'READY' ? (
+            <Pressable
+              style={({ pressed }) => [styles.actionBtn, styles.growBtn, styles.dispatchBtn, (pressed || busy) && { opacity: 0.7 }]}
+              onPress={() => onMarkDispatched(row)}
+              disabled={setStatusM.isPending}
+            >
+              {busy ? (
+                <ActivityIndicator size="small" color={colors.primaryForeground} />
+              ) : (
+                <>
+                  <Feather name="truck" size={15} color={colors.primaryForeground} />
+                  <Text style={[styles.actionBtnText, { color: colors.primaryForeground }]}>Mark Dispatched</Text>
+                </>
+              )}
+            </Pressable>
+          ) : null}
+        </View>
       </View>
     );
   };
@@ -406,6 +417,7 @@ const makeStyles = (colors: ReturnType<typeof useColors>) =>
     metaRow: { flexDirection: 'row', justifyContent: 'space-between' },
     metaText: { fontSize: 12, fontFamily: 'Outfit_400Regular', color: colors.mutedForeground },
     stampText: { fontSize: 11, fontFamily: 'Outfit_400Regular', color: colors.mutedForeground },
+    btnRow: { flexDirection: 'row', gap: 8 },
     actionBtn: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -413,7 +425,10 @@ const makeStyles = (colors: ReturnType<typeof useColors>) =>
       gap: 7,
       borderRadius: 10,
       height: 44,
+      flex: 1,
     },
+    growBtn: { flex: 1.7 },
+    viewBtn: { borderWidth: 1, borderColor: colors.border, backgroundColor: colors.card },
     readyBtn: { borderWidth: 1.5, borderColor: colors.primary, backgroundColor: colors.primary + '10' },
     dispatchBtn: { backgroundColor: colors.primary },
     actionBtnText: { fontSize: 14, fontFamily: 'Outfit_600SemiBold' },

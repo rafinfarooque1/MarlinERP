@@ -193,31 +193,38 @@ const SETTING_GROUPS: SettingGroup[] = [
   {
     icon: Smartphone,
     title: 'Mobile App',
-    description: 'Store links behind the "Download Mobile App" menu and its QR code',
+    description: 'Direct-install links behind the "Download Mobile App" menu — the app is not on the public app stores',
     settings: [
       {
-        key: 'mobileAppIosUrl',
-        label: 'App Store Link (iPhone)',
+        key: 'androidApkUrl',
+        label: 'Android APK File Link',
         type: 'text',
         defaultValue: '',
         description:
-          'The full https:// link to your app on the Apple App Store. Leave empty until the app is published there — the download window shows "Coming soon" instead of a dead button.',
+          'The full https:// link to the hosted APK file. The Download APK button and its QR code serve this file with a clean filename. Leave empty until an APK is built and hosted — the download window then says Android download is not available yet.',
       },
       {
-        key: 'mobileAppAndroidUrl',
-        label: 'Google Play Link (Android)',
+        key: 'androidAppVersion',
+        label: 'Android App Version',
         type: 'text',
         defaultValue: '',
         description:
-          'The full https:// link to your app on Google Play. Leave empty until the app is published there.',
+          'Shown next to the Download APK button (e.g. 1.0.0) and included in the downloaded filename. Update it whenever a new APK is hosted.',
       },
       {
-        key: 'mobileAppFallbackUrl',
-        label: 'Fallback Download Page (optional)',
+        key: 'iosInstallUrl',
+        label: 'iOS Installation Link',
         type: 'text',
         defaultValue: '',
         description:
-          'Where the QR code sends people when neither store link is set — e.g. a direct APK or an instructions page. The QR scans on any phone: iPhones go to the App Store link, Android to Google Play, and anything else here.',
+          'An Apple-supported install destination — a TestFlight invite link, an itms-services:// install link, or a real App Store listing later. iPhones cannot install a plain .ipa file from a browser, so this must be one of Apple\u2019s supported methods. Leave empty until configured.',
+      },
+      {
+        key: 'iosAppVersion',
+        label: 'iOS App Version',
+        type: 'text',
+        defaultValue: '',
+        description: 'Shown next to the Install iOS App button (e.g. 1.0.0).',
       },
     ],
   },

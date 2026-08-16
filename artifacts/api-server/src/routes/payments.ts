@@ -130,35 +130,6 @@ router.post("/sales/:id/payments", requireModuleAction(["page:/sales/pos", "page
   // sale stays allowed: the sale document itself is not being changed.)
   if (await respondIfMonthLocked(res, pool, [pDate], "sale payment")) return;
 
-  // ── Idempotency (double-click / network retry) ────────────────────────────
-  // A replay of the same clientRequestId must return the ORIGINAL collection
-  // (200, idempotentReplay) — never post a second receipt or double the paid
-  // figure. The key is stored on the sale_payments row and is the identity a
-  // replay matches on.
-  if (clientRequestId) {
-    const { rows: [prior] } = await pool.query(
-      `SELECT * FROM sale_payments WHERE sale_id = $1 AND client_request_id = $2 LIMIT 1`,
-      [saleId, clientRequestId],
-    );
-    if (prior) {
-      res.status(200).json({
-        id: prior.id,
-        saleId: prior.sale_id,
-        paymentDate: prior.payment_date,
-        method: prior.method,
-        amount: Number(prior.amount),
-        referenceNumber: prior.reference_number,
-        notes: prior.notes,
-        reconciliationStatus: prior.reconciliation_status,
-        outletId: prior.outlet_id,
-        createdBy: prior.created_by,
-        createdAt: prior.created_at,
-        idempotentReplay: true,
-      });
-      return;
-    }
-  }
-
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -172,6 +143,64 @@ router.post("/sales/:id/payments", requireModuleAction(["page:/sales/pos", "page
       [saleId]
     );
     if (!sale) { await client.query("ROLLBACK"); res.status(404).json({ error: "Sale not found" }); return; }
+
+    // The collection belongs to the location that made the sale — stamped on
+    // the receipt so the location's own money book stays complete.
+    const locType = sale.location_type ?? 'outlet';
+    const locId   = Number(sale.location_id ?? sale.outlet_id);
+
+    // A branch may only take money for its own sales. The posting below moves
+    // cash through the *sale's* ledgers, so without this a warehouse user could
+    // collect into another location's till just by using its sale id. Head
+    // Office stays unrestricted; this is the narrow money scope on purpose —
+    // seeing an outlet's invoice does not mean holding its cash box.
+    // This gate runs FIRST — before the cancellation and overpayment checks —
+    // so an out-of-scope caller learns nothing about the sale's state: the
+    // overpayment message quotes the balance due, which is exactly the figure
+    // a foreign branch must not be able to probe for.
+    const caller = callerLocation((req as any).employee);
+    if (caller.locationType !== 'headoffice' &&
+        (locType !== caller.locationType || locId !== caller.locationId)) {
+      await client.query("ROLLBACK");
+      res.status(403).json({
+        error: "This sale was made at another location. Collections are recorded by the location that made the sale.",
+      });
+      return;
+    }
+
+    // ── Idempotency (double-click / network retry) ────────────────────────
+    // A replay of the same clientRequestId must return the ORIGINAL collection
+    // (200, idempotentReplay) — never post a second receipt or double the paid
+    // figure. Deliberately AFTER the scope gate: the replay echoes the prior
+    // payment row (amount, date, reference), which an out-of-scope caller must
+    // not be able to fish for — a clientRequestId is client-generated data,
+    // not an authorization credential. It sits BEFORE the cancellation check
+    // so a legitimate retry keeps its idempotent answer even if the sale's
+    // state moved between the original call and the retry.
+    if (clientRequestId) {
+      const { rows: [prior] } = await client.query(
+        `SELECT * FROM sale_payments WHERE sale_id = $1 AND client_request_id = $2 LIMIT 1`,
+        [saleId, clientRequestId],
+      );
+      if (prior) {
+        await client.query("ROLLBACK");
+        res.status(200).json({
+          id: prior.id,
+          saleId: prior.sale_id,
+          paymentDate: prior.payment_date,
+          method: prior.method,
+          amount: Number(prior.amount),
+          referenceNumber: prior.reference_number,
+          notes: prior.notes,
+          reconciliationStatus: prior.reconciliation_status,
+          outletId: prior.outlet_id,
+          createdBy: prior.created_by,
+          createdAt: prior.created_at,
+          idempotentReplay: true,
+        });
+        return;
+      }
+    }
 
     // Cancellation already restored the stock, reversed the customer balance and
     // removed the receipt. Collecting against it afterwards would put the cash
@@ -229,26 +258,6 @@ router.post("/sales/:id/payments", requireModuleAction(["page:/sales/pos", "page
 
     let clearingReceiptId: number | null = null;
     let reconciliationStatus: string | null = null;
-
-    // The collection belongs to the location that made the sale — stamped on
-    // the receipt so the location's own money book stays complete.
-    const locType = sale.location_type ?? 'outlet';
-    const locId   = Number(sale.location_id ?? sale.outlet_id);
-
-    // A branch may only take money for its own sales. The posting below moves
-    // cash through the *sale's* ledgers, so without this a warehouse user could
-    // collect into another location's till just by using its sale id. Head
-    // Office stays unrestricted; this is the narrow money scope on purpose —
-    // seeing an outlet's invoice does not mean holding its cash box.
-    const caller = callerLocation((req as any).employee);
-    if (caller.locationType !== 'headoffice' &&
-        (locType !== caller.locationType || locId !== caller.locationId)) {
-      await client.query("ROLLBACK");
-      res.status(403).json({
-        error: "This sale was made at another location. Collections are recorded by the location that made the sale.",
-      });
-      return;
-    }
 
     // ── Explicit destination account (modern path) ───────────────────────
     // The picked ledger must be a live Cash & Bank account OF THE SALE'S

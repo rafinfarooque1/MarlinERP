@@ -591,7 +591,7 @@ function makeStyles(colors: ReturnType<typeof useColors>, insets: { top: number;
   return StyleSheet.create({
     root: { flex: 1, backgroundColor: colors.background },
     content: {
-      paddingTop: Platform.OS === 'web' ? insets.top + 67 + 16 : 16,
+      paddingTop: Platform.OS === 'web' ? insets.top + 67 + 16 : insets.top + 16,
       paddingBottom: insets.bottom + (Platform.OS === 'web' ? 34 : 100),
       paddingHorizontal: 16,
     },

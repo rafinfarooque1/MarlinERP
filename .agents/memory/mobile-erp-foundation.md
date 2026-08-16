@@ -26,6 +26,11 @@ A Head Office user's selected location restores from `employee.uiLocationPref` a
 ## Self-service HR endpoints still 403 for non-HR hierarchies
 `GET /hr/payroll` and `GET /hr/leave-balance` return 403 for employees whose hierarchy lacks the HR page rights — unlike `/hr/advances`, which self-scopes. Pre-existing server behavior; on mobile it silently empties the payslip/leave tiles for such users. Fix direction: self-scope like advances (see session-401-contract.md).
 
+## iOS NativeTabs: every routable screen needs a trigger
+On iOS the tab layout uses expo-router NativeTabs (liquid glass); a screen in the tabs group WITHOUT a `NativeTabs.Trigger` is unregistered — `router.push` to it silently no-ops. Visibility must ride the trigger's `hidden` prop, never conditional `{cond && <Trigger/>}` rendering (which also spams "children must be of type Screen" warnings).
+**Why:** web/Android use the classic `Tabs` layout where `href: null` keeps routes pushable, so the breakage is invisible everywhere except a real iOS device — exactly how More→Payslips/Attendance/Leaves shipped broken for ERP users.
+**How to apply:** when adding a screen to `(tabs)`, give it a trigger in BOTH layouts; test hidden-tab navigation on iOS, not just web. Screens shown without a native header need `insets.top` padding on native too, not only web.
+
 ## Expo e2e note
 A `ReferenceError` for a symbol that greps clean in source = stale Metro HMR bundle in a long-lived tester browser; a fresh page load clears it.
 
