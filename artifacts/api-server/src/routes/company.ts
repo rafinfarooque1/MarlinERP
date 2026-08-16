@@ -614,7 +614,12 @@ router.get("/public/app/apk", async (_req, res): Promise<void> => {
     }
     res.setHeader("Content-Type", "application/vnd.android.package-archive");
     res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
-    res.setHeader("Content-Length", String(size));
+    // Deliberately NO Content-Length: the deployed platform's front-end
+    // (Cloud Run) rejects non-chunked responses larger than 32 MB and
+    // replaces them with an empty HTTP 500 before any byte is sent — the
+    // ~90 MB APK must go out as a chunked stream. Dev has no such proxy,
+    // which is why a fixed length "worked" there and only broke in
+    // production. Size integrity is still enforced above via the manifest.
     const rs = objectFile.createReadStream();
     rs.on("error", (err) => {
       console.error("[public/app/apk] storage stream error:", err);

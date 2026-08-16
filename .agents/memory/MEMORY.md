@@ -74,6 +74,7 @@
 - [List vs detail casing](list-detail-casing.md) — list endpoints can return raw snake_case rows while detail reads map camelCase; generated types lie about list shape — curl before keying UI on a field.
 - [GST paise split](gst-paise-split.md) — CGST/SGST = half + exact remainder, never two independent rounds; server and client math must match; regression on an odd-paise case.
 - [Prod runtime binaries](prod-runtime-binaries.md) — deployed runtime lacks dev-workspace CLIs (zip/unzip → spawn ENOENT only in prod); use in-process libs; pg_dump IS present.
+- [Autoscale response limits](autoscale-response-limits.md) — prod front-end kills non-chunked responses >32 MB with an instant EMPTY 500 (no app headers); never set Content-Length on big downloads, stream chunked.
 - [Guard route coverage & flag failure mode](guard-route-coverage.md) — privilege-bearing values (e.g. hierarchy level 1 = full access) need guards on CREATE/DELETE too, not just edit; permissive-default flags must fail closed on read errors.
 - [Asset module design](asset-module.md) — purchase row IS the register entry (current location+status live on it); assets router must precede inventory's GET /assets/:id; GST capitalised, no ITC/depreciation postings.
 - [GSTIN scope vs transfer resolver](gstin-scope-vs-transfer.md) — two resolvers ON PURPOSE: filing scope falls back to company GSTIN, transfer classification must not; per-bill vendor settlement = FIFO, boundable per vendor.
