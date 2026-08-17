@@ -41,7 +41,9 @@ export default function Login() {
 
   useEffect(() => {
     if (stage === 'ready') {
-      setLocation('/profile/me');
+      // Already authenticated — skip the login form and go straight to the
+      // dashboard. Use replace so pressing Back does not loop back here.
+      setLocation('/', { replace: true });
     }
   }, [setLocation, stage]);
 
@@ -61,9 +63,12 @@ export default function Login() {
         localStorage.setItem('marlin_user', JSON.stringify(response.employee));
         acceptSession();
         if ((response.employee as any).mustChangePassword) {
-          setLocation('/change-password');
+          setLocation('/change-password', { replace: true });
         } else {
-          setLocation('/profile/me');
+          // Successful login → go straight to the dashboard.
+          // replace: true so the login page is removed from history;
+          // pressing Back after login will not reopen the login form.
+          setLocation('/', { replace: true });
         }
       },
       onError: (error: any) => {

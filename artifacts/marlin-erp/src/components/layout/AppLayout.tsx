@@ -473,7 +473,10 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
     localStorage.removeItem('marlin_auth_token');
     localStorage.removeItem('marlin_user');
     queryClient.clear(); // wipe all cached data so next login loads fresh
-    setLocation('/login');
+    // replace: true removes the current ERP page from the browser history
+    // stack, so pressing Back after reaching /login cannot return to an
+    // authenticated page. AuthGuard provides a second safety net regardless.
+    setLocation('/login', { replace: true });
   };
 
   const openChangePw = () => {
