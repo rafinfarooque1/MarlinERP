@@ -9,7 +9,7 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_DOMAIN": "erpmarlin.replit.app"
+        "EXPO_PUBLIC_DOMAIN": "frozenfruits.store"
       }
     }
   }

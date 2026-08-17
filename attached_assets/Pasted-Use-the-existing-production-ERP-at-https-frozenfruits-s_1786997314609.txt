@@ -1,0 +1,55 @@
+Use the existing production ERP at https://frozenfruits.store.
+
+The latest production health check is complete. DO NOT restore the database, reset data, delete data, unpublish the app, or shut down the current production deployment.
+
+Fix the remaining mobile/APK issues identified in the health report:
+
+1. Fix the production Employee App:
+   https://frozenfruits.store/employee-app/
+   It currently returns HTTP 500.
+   Diagnose the actual production routing/deployment problem and fix it.
+   Verify the URL returns HTTP 200 and the Employee App loads correctly.
+
+2. Fix the APK API domain:
+   In artifacts/employee-app/eas.json, replace the old:
+   erpmarlin.replit.app
+   with:
+   frozenfruits.store
+
+   Make sure no other mobile configuration still points to the old ERP domain.
+
+3. Configure EXPO_TOKEN correctly in the NEW Replit project.
+   Do not print, expose, or commit the token.
+   Verify the secret is available to the EAS build environment.
+
+4. After fixing the above, verify the Expo/EAS configuration.
+   Do NOT start a production APK build yet unless I explicitly ask you to.
+
+5. Verify that the mobile app will communicate with:
+   https://frozenfruits.store
+
+6. Run safe tests:
+   - Employee App HTTP status
+   - API connectivity
+   - Login endpoint
+   - Mobile API configuration
+   - EAS configuration
+   - production deployment logs
+   - frontend build
+   - TypeScript/build checks where appropriate
+
+7. Also fix the old Marlin logo shown on the ERP login page so the branding consistently uses Frozen Fruits branding.
+
+8. Do not modify production accounting records or payroll data.
+
+At the end, give me a concise report showing:
+- What was broken
+- What you changed
+- What was verified
+- Employee App HTTP status
+- API domain now configured
+- Whether EXPO_TOKEN is available
+- Whether the production ERP remains healthy
+- Whether it is now safe to start the first Android EAS build
+
+Do not claim a fix until you actually test it.
