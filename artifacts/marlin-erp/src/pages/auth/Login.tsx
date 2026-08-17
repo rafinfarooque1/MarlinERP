@@ -105,12 +105,12 @@ export default function Login() {
         <div className="relative z-10 flex flex-col h-full px-12 py-10">
           {/* Logo */}
           <div>
-            <img
-              src="/marlin-logo.jpeg"
-              alt="Frozen Fruits ERP"
-              className="h-16 object-contain rounded-lg"
-              style={{ filter: 'drop-shadow(0 2px 8px rgba(0,0,0,0.4))' }}
-            />
+            <div
+              className="inline-flex items-center gap-2 px-3 py-2 rounded-lg"
+              style={{ background: 'rgba(255,255,255,0.12)', border: '1px solid rgba(255,255,255,0.2)' }}
+            >
+              <span className="text-white font-bold text-lg tracking-tight">🧊 Frozen Fruits ERP</span>
+            </div>
           </div>
 
           {/* Centre copy */}
@@ -162,7 +162,9 @@ export default function Login() {
 
         {/* Mobile-only logo */}
         <div className="lg:hidden mb-8 text-center">
-          <img src="/marlin-logo.jpeg" alt="Frozen Fruits ERP" className="h-14 object-contain mx-auto mb-2" />
+          <div className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-primary/10 border border-primary/20 mb-2">
+            <span className="text-primary font-bold text-base tracking-tight">🧊 Frozen Fruits ERP</span>
+          </div>
           <p className="text-xs font-mono tracking-widest uppercase text-muted-foreground">Operations Terminal</p>
         </div>
 

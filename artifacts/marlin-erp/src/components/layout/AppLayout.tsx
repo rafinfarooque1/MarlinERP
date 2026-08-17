@@ -533,12 +533,12 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
           <div className="h-16 flex items-center justify-between px-4 border-b border-border shrink-0">
             {!collapsed && (
               <Link href="/" className="flex items-center h-10 max-w-[160px]">
-                <img src={logo || '/marlin-logo.jpeg'} alt="Frozen Fruits ERP" className="h-full w-full object-contain object-left" />
+                <img src={logo || '/favicon.svg'} alt="Frozen Fruits ERP" className="h-full w-full object-contain object-left" />
               </Link>
             )}
             {collapsed && (
               <div className="w-full flex justify-center">
-                <img src={logo || '/marlin-logo.jpeg'} alt="Logo" className="w-8 h-8 object-contain" />
+                <img src={logo || '/favicon.svg'} alt="Logo" className="w-8 h-8 object-contain" />
               </div>
             )}
 
