@@ -238,12 +238,14 @@ async function downloadFile(url, outputPath) {
 }
 
 async function downloadBundle(platform, timestamp) {
-  const entryPath = path.resolve(
-    projectRoot,
-    'node_modules',
-    'expo-router',
-    'entry',
-  );
+  // Metro's HTTP bundle URL handler resolves paths by raw filesystem lookup
+  // (not the module resolver), so it cannot follow pnpm symlinks. The
+  // canonical entry "node_modules/expo-router/entry" is a pnpm symlink →
+  // Metro returns 404. Instead, use a real file at the project root whose
+  // content is just `import 'expo-router/entry'`. Metro finds it by URL path
+  // (no symlink traversal needed), then the module resolver follows the pnpm
+  // symlink internally during compilation.
+  const entryPath = path.resolve(projectRoot, '_production-entry');
   // Metro is started with cwd=projectRoot, so bundle paths must be relative
   // to projectRoot — not the workspace root.
   const bundlePath = path.relative(projectRoot, entryPath);
