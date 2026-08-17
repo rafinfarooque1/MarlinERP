@@ -20,6 +20,7 @@
  * once, so it is also the one action that re-checks the password: a borrowed
  * session, an unlocked laptop or a stolen token is otherwise enough.
  */
+import { randomUUID } from "node:crypto";
 import { createWriteStream } from "node:fs";
 import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -38,8 +39,13 @@ import {
   backupArchiveExists,
   backupArchiveStream,
   deleteBackupArchive,
+  fetchBackupArchive,
   objectStorageConfigured,
+  signStagedUploadURL,
+  stagedUploadObjectName,
+  stagedUploadSize,
   stageUploadedArchive,
+  sweepStaleStagedUploads,
 } from "../lib/backup/files";
 import { databaseSizeBytes, serverVersion } from "../lib/backup/pgTools";
 import {
@@ -490,6 +496,98 @@ router.post("/backup/:id/verify", requireModuleAction(PERM, "add"), async (req: 
  * endpoint takes an id and never a path. A client-supplied storage path would be
  * a way to point the restore — or the download — at any object in the bucket.
  */
+/**
+ * Shared tail of both upload paths (direct stream and presigned finalize):
+ * inspect the local file, refuse a non-backup, stage it beside the other
+ * archives, catalogue it, and answer. Validation is identical whichever way
+ * the bytes arrived.
+ */
+async function catalogueLocalArchive(
+  localPath: string,
+  filename: string,
+  req: Request,
+  res: Response,
+): Promise<void> {
+  const size = (await stat(localPath)).size;
+  if (size === 0) {
+    res.status(400).json({ error: "The uploaded file was empty." });
+    return;
+  }
+
+  // Inspect BEFORE cataloguing, so a file that is not a backup at all is
+  // rejected instead of appearing in the list as though it were restorable.
+  const inspection = await inspectArchive(localPath);
+  let manifest: any = null;
+  let ok = false;
+  let findings: unknown[] = [];
+  try {
+    manifest = inspection.manifest;
+    ok = inspection.ok;
+    findings = inspection.findings;
+  } finally {
+    await inspection.dispose();
+  }
+
+  if (!manifest) {
+    res.status(400).json({
+      error:
+        "This file is not a recognised backup archive — it has no manifest. Upload a ZIP created by this module.",
+      findings,
+    });
+    return;
+  }
+
+  const objectPath = await stageUploadedArchive(localPath, filename);
+  // Hashed by streaming the file, not readFile: an archive may be up to 2 GB
+  // and buffering it whole would trade a disk read for an OOM.
+  const checksum = await sha256File(localPath);
+
+  const { rows } = await pool.query<{ id: number }>(
+    `INSERT INTO backup_meta.backups
+       (filename, object_path, scope, trigger, status, size_bytes, checksum,
+        erp_version, database_version, schema_version, git_commit,
+        table_count, row_count, file_count, manifest, created_by)
+     VALUES ($1,$2,$3,'uploaded','ready',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+     RETURNING id`,
+    [
+      filename,
+      objectPath,
+      manifest.scope ?? "complete",
+      size,
+      checksum,
+      manifest.erpVersion ?? "",
+      manifest.databaseVersion ?? "",
+      manifest.schemaVersion ?? "",
+      manifest.gitCommit ?? "",
+      (manifest.tables ?? []).length,
+      (manifest.tables ?? []).reduce((s: number, t: any) => s + Number(t.rows ?? 0), 0),
+      manifest.files?.count ?? 0,
+      JSON.stringify(manifest),
+      who(req),
+    ],
+  );
+
+  logActivity({
+    action: "CREATE",
+    module: "backup",
+    entityType: "backup",
+    entityId: rows[0].id,
+    description: `Backup archive uploaded — ${filename} (${formatBytes(size)})`,
+    user: who(req),
+    metadata: { ip: clientIp(req), valid: ok, findings },
+  }).catch(() => {});
+
+  res.status(201).json({
+    id: rows[0].id,
+    filename,
+    sizeBytes: size,
+    sizeLabel: formatBytes(size),
+    ok,
+    findings,
+    manifest,
+  });
+}
+
 router.post(
   "/backup/upload",
   requireHeadOffice("restore a backup"),
@@ -541,89 +639,135 @@ router.post(
       }
       if (tooBig) return;
 
-      const size = (await stat(localPath)).size;
-      if (size === 0) {
-        res.status(400).json({ error: "The uploaded file was empty." });
-        return;
-      }
-
-      // Inspect BEFORE cataloguing, so a file that is not a backup at all is
-      // rejected instead of appearing in the list as though it were restorable.
-      const inspection = await inspectArchive(localPath);
-      let manifest: any = null;
-      let ok = false;
-      let findings: unknown[] = [];
-      try {
-        manifest = inspection.manifest;
-        ok = inspection.ok;
-        findings = inspection.findings;
-      } finally {
-        await inspection.dispose();
-      }
-
-      if (!manifest) {
-        res.status(400).json({
-          error:
-            "This file is not a recognised backup archive — it has no manifest. Upload a ZIP created by this module.",
-          findings,
-        });
-        return;
-      }
-
-      const objectPath = await stageUploadedArchive(localPath, filename);
-      // Hashed by streaming the file, not readFile: an archive may be up to 2 GB
-      // and buffering it whole would trade a disk read for an OOM.
-      const checksum = await sha256File(localPath);
-
-      const { rows } = await pool.query<{ id: number }>(
-        `INSERT INTO backup_meta.backups
-           (filename, object_path, scope, trigger, status, size_bytes, checksum,
-            erp_version, database_version, schema_version, git_commit,
-            table_count, row_count, file_count, manifest, created_by)
-         VALUES ($1,$2,$3,'uploaded','ready',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
-         RETURNING id`,
-        [
-          filename,
-          objectPath,
-          manifest.scope ?? "complete",
-          size,
-          checksum,
-          manifest.erpVersion ?? "",
-          manifest.databaseVersion ?? "",
-          manifest.schemaVersion ?? "",
-          manifest.gitCommit ?? "",
-          (manifest.tables ?? []).length,
-          (manifest.tables ?? []).reduce((s: number, t: any) => s + Number(t.rows ?? 0), 0),
-          manifest.files?.count ?? 0,
-          JSON.stringify(manifest),
-          who(req),
-        ],
-      );
-
-      logActivity({
-        action: "CREATE",
-        module: "backup",
-        entityType: "backup",
-        entityId: rows[0].id,
-        description: `Backup archive uploaded — ${filename} (${formatBytes(size)})`,
-        user: who(req),
-        metadata: { ip: clientIp(req), valid: ok, findings },
-      }).catch(() => {});
-
-      res.status(201).json({
-        id: rows[0].id,
-        filename,
-        sizeBytes: size,
-        sizeLabel: formatBytes(size),
-        ok,
-        findings,
-        manifest,
-      });
+      await catalogueLocalArchive(localPath, filename, req, res);
     } catch (e: any) {
       req.log?.error({ err: e }, "Backup upload failed");
       res.status(500).json({ error: `The upload failed: ${String(e?.message ?? e)}` });
     } finally {
       await rm(dir, { recursive: true, force: true }).catch(() => {});
+    }
+  },
+);
+
+/**
+ * Direct-to-bucket upload, step 1: hand out a presigned PUT target.
+ *
+ * The published app's front-end rejects any request body over 32 MB with its
+ * own bare 413 before this server sees a byte — the request-side twin of the
+ * response limit that broke large downloads. A real archive is routinely
+ * bigger, so the browser PUTs the bytes straight to the bucket and the direct
+ * /backup/upload route above stays only as the small-file/dev path.
+ *
+ * The client gets an opaque uuid, never an object name: finalize reconstructs
+ * the staging path itself, so no request can point the catalogue — or the
+ * later restore — at an arbitrary bucket object.
+ */
+router.post(
+  "/backup/upload-url",
+  requireHeadOffice("restore a backup"),
+  requireModuleAction(PERM, "edit"),
+  async (req: Request, res: Response) => {
+    if (!objectStorageConfigured()) {
+      res.status(503).json({ error: "Object storage is not configured for this app." });
+      return;
+    }
+    const size = Number(req.body?.size);
+    if (!Number.isFinite(size) || size <= 0) {
+      res.status(400).json({ error: "File size is required." });
+      return;
+    }
+    if (size > MAX_UPLOAD_BYTES) {
+      res.status(413).json({
+        error: `That archive is larger than the ${formatBytes(MAX_UPLOAD_BYTES)} upload limit.`,
+      });
+      return;
+    }
+    try {
+      const key = randomUUID();
+      const uploadURL = await signStagedUploadURL(key);
+      // The signed URL cannot carry a size constraint (the sidecar signer
+      // takes no signed headers), so the metadata size check at finalize is
+      // the enforcement point. Abandoned uploads are swept opportunistically
+      // from BOTH ends of the flow so cleanup does not depend on a finalize
+      // ever happening; this path is reachable only by Head Office admins
+      // with edit rights on the backup page, who can already fill the bucket
+      // by creating backups.
+      sweepStaleStagedUploads().catch(() => {});
+      res.json({ key, uploadURL });
+    } catch (e: any) {
+      req.log?.error({ err: e }, "Backup upload-url failed");
+      res.status(500).json({ error: "Could not prepare the upload. Try again." });
+    }
+  },
+);
+
+/**
+ * Direct-to-bucket upload, step 2: pull the staged object down, then run the
+ * exact same inspection and cataloguing as the direct route. The size is
+ * re-checked from object metadata BEFORE downloading — the declared size at
+ * step 1 is only a courtesy check, and disk here is finite.
+ */
+router.post(
+  "/backup/upload/finalize",
+  requireHeadOffice("restore a backup"),
+  requireModuleAction(PERM, "edit"),
+  async (req: Request, res: Response) => {
+    if (!objectStorageConfigured()) {
+      res.status(503).json({ error: "Object storage is not configured for this app." });
+      return;
+    }
+    const key = String(req.body?.key ?? "");
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(key)) {
+      res.status(400).json({ error: "Invalid upload reference." });
+      return;
+    }
+    const rawName = String(req.body?.filename ?? "uploaded-backup.zip");
+    const filename = rawName.replace(/[^A-Za-z0-9._-]/g, "_").slice(-120) || "uploaded-backup.zip";
+
+    const objectName = stagedUploadObjectName(key);
+    const dir = await mkdtemp(join(tmpdir(), "marlin-upload-"));
+    const localPath = join(dir, filename);
+
+    // Two finalize calls for the same key must not both catalogue the archive.
+    // An advisory lock serializes them; the loser then finds the staging
+    // object already deleted (the winner's finally block removes it) and gets
+    // a clean 400 instead of inserting a duplicate backup record.
+    const lock = await pool.connect();
+    try {
+      await lock.query("SELECT pg_advisory_lock(hashtextextended($1, 823542))", [key]);
+      const size = await stagedUploadSize(objectName);
+      if (size === null) {
+        res.status(400).json({
+          error: "The uploaded file was not found in storage — the upload may have failed. Try again.",
+        });
+        return;
+      }
+      if (size > MAX_UPLOAD_BYTES) {
+        res.status(413).json({
+          error: `That archive is larger than the ${formatBytes(MAX_UPLOAD_BYTES)} upload limit.`,
+        });
+        return;
+      }
+      await fetchBackupArchive(objectName, localPath);
+      await catalogueLocalArchive(localPath, filename, req, res);
+    } catch (e: any) {
+      req.log?.error({ err: e }, "Backup upload finalize failed");
+      if (!res.headersSent) {
+        res.status(500).json({ error: `The upload failed: ${String(e?.message ?? e)}` });
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true }).catch(() => {});
+      // The staged copy has served its purpose whichever way this went: on
+      // success the archive now lives under incoming/, on failure it is junk.
+      // Deleted BEFORE the lock is released, so a concurrent finalize for the
+      // same key wakes up to a missing object and a clean 400.
+      await deleteBackupArchive(objectName).catch(() => {});
+      await lock
+        .query("SELECT pg_advisory_unlock(hashtextextended($1, 823542))", [key])
+        .catch(() => {});
+      lock.release();
+      // Opportunistic sweep of uploads that never reached finalize at all.
+      sweepStaleStagedUploads().catch(() => {});
     }
   },
 );

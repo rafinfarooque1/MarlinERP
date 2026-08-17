@@ -27,7 +27,7 @@ import { mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { pipeline } from "node:stream/promises";
 
-import { objectStorageClient, parseObjectPath } from "../objectStorage";
+import { objectStorageClient, parseObjectPath, signObjectPutURL } from "../objectStorage";
 
 /** Archives live beside the uploads but must never be swept into one. */
 const BACKUP_PREFIX = "backups/";
@@ -181,4 +181,61 @@ export async function deleteBackupArchive(objectName: string): Promise<void> {
 export async function stageUploadedArchive(localPath: string, filename: string): Promise<string> {
   const safe = filename.replace(/[^A-Za-z0-9._-]/g, "_").slice(-120);
   return putBackupArchive(localPath, `incoming/${Date.now()}_${safe}`);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Direct-to-bucket upload staging
+//
+// The published app runs behind a front-end that rejects any request body over
+// 32 MB with its own bare 413 before the app sees a byte — the same limit that
+// broke large downloads, on the request side. A real backup archive is
+// routinely bigger than that, so the browser PUTs the bytes straight to the
+// bucket with a presigned URL and the server then pulls, inspects and
+// catalogues the object. The client only ever holds an opaque uuid; the object
+// name is reconstructed server-side, so no request can name a bucket path.
+//
+// Staging lives under BACKUP_PREFIX so listUploadObjects() never sweeps a
+// half-finished upload into a file backup.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const UPLOAD_STAGING_PREFIX = `${BACKUP_PREFIX}staging/`;
+
+export function stagedUploadObjectName(key: string): string {
+  const { prefix } = privateDirParts();
+  return `${prefix}${UPLOAD_STAGING_PREFIX}${key}`;
+}
+
+/** One hour: signature validity gates the START of the PUT, and a large archive
+ *  on a slow link needs headroom to begin retries. */
+export async function signStagedUploadURL(key: string): Promise<string> {
+  const { bucketName } = privateDirParts();
+  return signObjectPutURL(bucketName, stagedUploadObjectName(key), 3600);
+}
+
+export async function stagedUploadSize(objectName: string): Promise<number | null> {
+  const { bucketName } = privateDirParts();
+  const file = objectStorageClient.bucket(bucketName).file(objectName);
+  const [exists] = await file.exists();
+  if (!exists) return null;
+  const [metadata] = await file.getMetadata();
+  return Number(metadata?.size ?? 0);
+}
+
+/**
+ * Abandoned uploads (PUT succeeded, finalize never called) would otherwise sit
+ * in the bucket forever at archive sizes. Swept opportunistically on each
+ * finalize; anything older than a day cannot still be an in-flight upload.
+ */
+export async function sweepStaleStagedUploads(): Promise<void> {
+  const { bucketName, prefix } = privateDirParts();
+  const [files] = await objectStorageClient
+    .bucket(bucketName)
+    .getFiles({ prefix: `${prefix}${UPLOAD_STAGING_PREFIX}` });
+  const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+  for (const f of files) {
+    const created = new Date(String(f.metadata?.timeCreated ?? "")).getTime();
+    if (Number.isFinite(created) && created < cutoff) {
+      await f.delete({ ignoreNotFound: true }).catch(() => {});
+    }
+  }
 }

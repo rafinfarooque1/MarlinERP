@@ -249,6 +249,19 @@ export function parseObjectPath(path: string): {
   };
 }
 
+/**
+ * Signed PUT for a server-chosen object name. Exported for the backup module's
+ * direct-to-bucket upload path; the caller constructs the object name itself —
+ * a client never names an object.
+ */
+export async function signObjectPutURL(
+  bucketName: string,
+  objectName: string,
+  ttlSec: number,
+): Promise<string> {
+  return signObjectURL({ bucketName, objectName, method: 'PUT', ttlSec });
+}
+
 async function signObjectURL({
   bucketName,
   objectName,

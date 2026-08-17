@@ -5,6 +5,18 @@ description: Why a large download with an explicit Content-Length works in dev b
 
 # Explicit Content-Length > 32 MB = empty 500 in production only
 
+**Requests have the same 32 MB cap:** the front-end answers an inbound body
+over 32 MB with its own bare HTML `413 Request Entity Too Large` ("Your client
+issued a request that was too large") before the app sees a byte — app-level
+limits and friendly errors never run. Large uploads must bypass the app server
+entirely: presigned PUT straight to object storage, then a finalize endpoint
+where the server pulls and validates the object. Rules for that flow: the
+client holds only an opaque uuid and the server reconstructs the object name
+(no request may name a bucket path); the sidecar signer cannot bind a size to
+the URL, so enforce the limit on object METADATA before downloading; serialize
+finalize on an advisory lock keyed by the uuid; sweep abandoned staging
+objects from both ends of the flow, never only at finalize.
+
 **The rule:** any endpoint that can serve a response body larger than 32 MB
 must NOT set an explicit `Content-Length`. Let Node stream it
 (`Transfer-Encoding: chunked`); the platform allows streamed responses of any
