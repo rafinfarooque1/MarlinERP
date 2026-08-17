@@ -782,7 +782,7 @@ function MwBannerChips({ monthly, values, testPrefix }: { monthly: MonthlyView; 
  * between the name and the whole-range figure. Without `monthly` the render
  * is byte-for-byte what it always was.
  */
-function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, onRename, onMove, onViewStatement, onManage, canAdd, canEdit, canDelete, monthly }: {
+function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, onRename, onMove, onViewStatement, onManage, canAdd, canEdit, canDelete, monthly, bsExpansion, plExpansion, activeTab, onTabChange }: {
   fs: FinancialStatements | undefined;
   isLoading: boolean; isError: boolean; error: unknown;
   onCreated: () => void;
@@ -795,10 +795,12 @@ function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, on
   canAdd?: boolean; canEdit?: boolean; canDelete?: boolean;
   /** Month Wise mode: per-month series + drill-down handlers. */
   monthly?: MonthlyView;
+  /** Expansion state lifted to parent so the PDF handler can read it. */
+  bsExpansion: StatementExpansion;
+  plExpansion: StatementExpansion;
+  activeTab: 'balance_sheet' | 'profit_loss';
+  onTabChange: (tab: 'balance_sheet' | 'profit_loss') => void;
 }) {
-  // Same ids appear on both statements, so each keeps its own namespaced state.
-  const bsExpansion = useStatementExpansion('balance_sheet');
-  const plExpansion = useStatementExpansion('profit_loss');
 
   const bs  = fs?.balanceSheet;
   const pl  = fs?.profitAndLoss;
@@ -900,7 +902,7 @@ function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, on
           {/* The account hierarchy is no longer a tab — the two statements are the
               primary views, and the same ChartHierarchy editor opens over either
               of them via "Manage Chart of Accounts". */}
-          <Tabs defaultValue="balance_sheet">
+          <Tabs value={activeTab} onValueChange={v => onTabChange(v as 'balance_sheet' | 'profit_loss')}>
             <TabsList className="grid w-full max-w-md grid-cols-2">
               <TabsTrigger value="balance_sheet" className="gap-1.5 text-xs">
                 <Landmark className="w-3.5 h-3.5" /> Balance Sheet
@@ -1305,6 +1307,11 @@ export default function ChartOfAccounts() {
   const [selectedLedger, setSelectedLedger] = useState<{ node: StatementTarget; fromDate?: string; toDate?: string } | null>(null);
   const [manageOpen, setManageOpen] = useState(false);
   const [pdfBusy, setPdfBusy]     = useState(false);
+  const [activeTab, setActiveTab] = useState<'balance_sheet' | 'profit_loss'>('balance_sheet');
+  // Expansion state lifted here so the PDF handler can read the current open set
+  // without mutating any visible UI state.
+  const bsExpansion               = useStatementExpansion('balance_sheet');
+  const plExpansion               = useStatementExpansion('profit_loss');
   const queryClient               = useQueryClient();
   const outletsVisible            = useIsLocationKindEnabled('outlet');
   // Global location selector scopes the statements to that location's slice of
@@ -1425,10 +1432,14 @@ export default function ChartOfAccounts() {
         : fromDate           ? `From ${fmtDate(fromDate)}`
         : `Up to ${fmtDate(toDate!)}`;
 
-      // 6. Generate & download
+      // 6. Generate & download — snapshot the current expansion state so the PDF
+      //    reflects exactly what the user sees (same tab, same open/closed nodes).
+      const expansion = activeTab === 'balance_sheet' ? bsExpansion : plExpansion;
       const { generateChartOfAccountsPdf } = await import('./ChartOfAccountsPdf');
       await generateChartOfAccountsPdf({
         fs,
+        statement: activeTab,
+        isOpen: (id: number) => expansion.isOpen(id),
         mw: monthWise && mwData ? { months: mwData.months, series: mwData.series } : null,
         issuer,
         logoDataUrl,
@@ -1598,6 +1609,10 @@ export default function ChartOfAccounts() {
           onViewStatement={onViewStatement}
           onManage={canManageChart ? () => setManageOpen(true) : undefined}
           canAdd={perm.canAdd} canEdit={perm.canEdit} canDelete={perm.canDelete}
+          bsExpansion={bsExpansion}
+          plExpansion={plExpansion}
+          activeTab={activeTab}
+          onTabChange={setActiveTab}
           monthly={monthWise && mwData ? {
             months: mwData.months,
             series: mwData.series,
