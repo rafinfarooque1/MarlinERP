@@ -62,6 +62,11 @@ export interface Warehouse {
   invoiceFooter?: string | null;
   /** @nullable */
   authorizedSignatory?: string | null;
+  /**
+     * Letterhead logo as an inline PNG/JPEG data URI. Null means this location prints the company logo (or a lettermark when neither has one).
+     * @nullable
+     */
+  logoUrl?: string | null;
   /** Billing fields still missing from the seller identity this warehouse will print on an invoice, e.g. ["GSTIN", "Bank details"]. Resolved server-side after the company-level bank/UPI fallback, so an empty array means invoices from here come out complete. Read-only. */
   billingIncomplete?: string[];
   outletCount?: number;

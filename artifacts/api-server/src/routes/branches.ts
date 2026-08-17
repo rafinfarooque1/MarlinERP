@@ -8,14 +8,38 @@ import {
 } from "@workspace/api-zod";
 import { outletWritesBlocked, OUTLETS_DISABLED_MESSAGE, OUTLETS_DISABLED_CODE } from "../lib/featureFlags";
 import { normalizeUpiId } from "../lib/upi";
+import { validateLogoDataUrl } from "../lib/logoImage";
 import { normalizeWarehouseBilling, validateGstin, stateCodeFromGstin, loadWarehouseIssuer, loadWarehouseIssuers } from "../lib/billingProfile";
 import { parsePaging, setPagingHeaders, applyPaging } from "../lib/paging";
 import { provisionRentLedgers, syncRentLedgerNames, rentLedgerIdsFor } from "../lib/rentLedgers";
 import { resolveChartParentId } from "../lib/chartGroups";
 import { warehouseDeleteSummary, permanentlyDeleteWarehouse, deleteConfirmationPhrase } from "../lib/warehouseLifecycle";
 import { logActivity } from "../lib/audit";
+import { salesCounterScope } from "../lib/voucherNumber";
 
 const router = Router();
+
+/**
+ * New locations bill in the SHORT number format from their very first sale —
+ * SB2C/26-27/1, one continuous serial that never resets in April. Existing
+ * locations were converted onto this format in Aug 2026 (admin renumber);
+ * seeding the row at creation keeps the rule global without changing the
+ * allocator's default (absence of a row still means the legacy long format
+ * for anything that predates the conversion).
+ */
+async function seedShortNumberFormat(locationType: "warehouse" | "outlet", id: number): Promise<void> {
+  try {
+    const scope = await salesCounterScope(pool, { type: locationType, id });
+    await pool.query(
+      `INSERT INTO sales_number_formats (number_scope, fy_short, pad, continuous, created_by)
+       VALUES ($1, true, 0, true, 'system:new-location')
+       ON CONFLICT (number_scope) DO NOTHING`,
+      [scope]
+    );
+  } catch (e) {
+    console.warn(`[branches] short number format seed failed for ${locationType}:${id}:`, e);
+  }
+}
 
 // ── Ledger helpers ─────────────────────────────────────────────────────────
 
@@ -190,6 +214,13 @@ router.post("/warehouses", requireModuleAction("page:/headoffice/warehouses", "a
   const billing = normalizeWarehouseBilling(parsed.data as Record<string, unknown>);
   if (!billing.ok) { res.status(400).json({ error: billing.error, field: billing.field }); return; }
   const values = { ...parsed.data, ...billing.value, upiId: upi.value };
+  // Letterhead logo — same rules as the company logo, validated server-side so
+  // every stored value is embeddable by the PDF renderers as-is.
+  if ('logoUrl' in values) {
+    const logo = validateLogoDataUrl(values.logoUrl);
+    if (!logo.ok) { res.status(400).json({ error: logo.error, field: "logoUrl" }); return; }
+    values.logoUrl = logo.value;
+  }
   // The GST state code is the first two digits of the GSTIN, so it is derived
   // rather than accepted: a client that submits both could otherwise store a
   // code that contradicts the registration and silently flip the intra/inter
@@ -207,6 +238,7 @@ router.post("/warehouses", requireModuleAction("page:/headoffice/warehouses", "a
     );
     await provisionRentLedgers(pool, row.id, row.name);
   } catch (e) { console.warn('[branches] rent registration failed:', e); }
+  await seedShortNumberFormat("warehouse", row.id);
   const { rows: [ledgers] } = await pool.query<{ cash_ledger_id: number | null; sales_ledger_id: number | null; purchase_ledger_id: number | null }>(
     `SELECT cash_ledger_id, sales_ledger_id, purchase_ledger_id FROM warehouses WHERE id = $1`, [row.id]
   );
@@ -239,6 +271,11 @@ router.patch("/warehouses/:id", requireModuleAction("page:/headoffice/warehouses
   if ('gstNumber' in patch) {
     const gstErr = validateGstin(patch['gstNumber']);
     if (gstErr) { res.status(400).json({ error: gstErr, field: "gstNumber" }); return; }
+  }
+  if ('logoUrl' in patch) {
+    const logo = validateLogoDataUrl(patch['logoUrl']);
+    if (!logo.ok) { res.status(400).json({ error: logo.error, field: "logoUrl" }); return; }
+    patch['logoUrl'] = logo.value;
   }
   const billing = normalizeWarehouseBilling(patch);
   if (!billing.ok) { res.status(400).json({ error: billing.error, field: billing.field }); return; }
@@ -449,6 +486,8 @@ router.post("/outlets", requireModuleAction("page:/headoffice/outlets", "add"), 
   // Save GST fields (raw columns not in Drizzle schema)
   const { gstin: gNew = null, state: stNew = null, stateCode: scO = null } = req.body as any;
   await pool.query(`UPDATE outlets SET gstin = $1, state = $2, state_code = $3 WHERE id = $4`, [gNew || null, stNew || null, scO || null, row.id]);
+  // After ledger provisioning, so a mirror outlet folds onto its warehouse scope.
+  await seedShortNumberFormat("outlet", row.id);
   const { rows: [ledgers] } = await pool.query<{ cash_ledger_id: number | null; sales_ledger_id: number | null; gstin: string | null; state: string | null; state_code: string | null }>(
     `SELECT cash_ledger_id, sales_ledger_id, COALESCE(gstin,'') AS gstin, COALESCE(state,'') AS state, COALESCE(state_code,'') AS state_code FROM outlets WHERE id = $1`, [row.id]
   );

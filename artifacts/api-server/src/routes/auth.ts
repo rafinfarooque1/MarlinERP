@@ -146,7 +146,8 @@ router.post('/auth/login', async (req, res): Promise<void> => {
   const { rows } = await pool.query(
     `SELECT id, name, username, password_hash, email, phone, hierarchy_id,
             branch_type, branch_id, salary, join_date, photo_url, is_active,
-            COALESCE(must_change_password, false) AS must_change_password
+            COALESCE(must_change_password, false) AS must_change_password,
+            ui_location_pref
      FROM employees WHERE LOWER(TRIM(username)) = LOWER($1)
      ORDER BY (username = $1) DESC, id ASC LIMIT 1`,
     [username],

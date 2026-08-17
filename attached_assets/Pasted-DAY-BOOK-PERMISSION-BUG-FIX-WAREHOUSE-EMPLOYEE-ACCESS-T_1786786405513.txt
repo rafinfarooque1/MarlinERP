@@ -1,0 +1,221 @@
+DAY BOOK PERMISSION BUG — FIX WAREHOUSE EMPLOYEE ACCESS
+
+There is currently a permission bug in the ERP.
+
+A warehouse employee has been given permission to VIEW the Day Book, but the employee still cannot see/open the Day Book.
+
+Fix this without changing the existing Day Book functionality.
+
+============================================================
+1. EXPECTED BEHAVIOUR
+============================================================
+
+If a warehouse employee has:
+
+Day Book → View = ENABLED
+
+then the employee MUST:
+
+- see Day Book in the navigation/menu
+- open the Day Book page
+- view the Day Book
+- see the Day Book data permitted for their assigned location
+
+Do not require Admin access just to view Day Book.
+
+============================================================
+2. LOCATION SECURITY
+============================================================
+
+Warehouse employee:
+
+→ can see Day Book
+
+BUT:
+
+→ must see ONLY the Day Book entries belonging to their assigned warehouse/location.
+
+They must NOT see:
+
+- Head Office Day Book
+- other warehouse Day Book
+- other outlet Day Book
+- All Locations consolidated Day Book
+
+unless their role explicitly has permission for those locations.
+
+============================================================
+3. HEAD OFFICE
+============================================================
+
+Head Office employees should follow the existing location/permission model.
+
+If they have Day Book View permission:
+
+Head Office selected
+→ show Head Office Day Book only.
+
+If the employee has the special All Locations permission:
+
+All Locations selected
+→ show consolidated Day Book.
+
+Do not expose All Locations merely because the employee is from Head Office.
+
+============================================================
+4. CHECK FRONTEND PERMISSION
+============================================================
+
+Inspect the Day Book navigation/menu permission check.
+
+The menu may currently be checking the wrong permission key, role, module name, or route permission.
+
+Find the actual permission used by the Day Book module.
+
+Ensure:
+
+Day Book → View
+
+controls visibility of the Day Book menu item.
+
+Do not hardcode Admin-only visibility.
+
+============================================================
+5. CHECK BACKEND AUTHORIZATION
+============================================================
+
+Do not fix this only by showing the menu.
+
+Check the Day Book API/backend authorization.
+
+If:
+
+user has Day Book View permission
+
+the API must allow the request.
+
+Then apply the user's location restrictions.
+
+The backend must NOT return:
+
+403 Forbidden
+
+when the user legitimately has Day Book View permission.
+
+============================================================
+6. CHECK PERMISSION NAMING
+============================================================
+
+Audit for mismatches such as:
+
+daybook
+day_book
+dayBook
+Day Book
+daybook.view
+day_book.view
+
+or different permission IDs being used between:
+
+- Permission Settings
+- Sidebar
+- Frontend route
+- Backend API
+- Role permissions
+
+Use ONE canonical permission.
+
+Do not create duplicate permissions unnecessarily.
+
+============================================================
+7. CHECK ROLE INHERITANCE
+============================================================
+
+Verify that warehouse employee roles correctly inherit/use the assigned Day Book permission.
+
+Example:
+
+Warehouse Employee
+Day Book
+View = ON
+
+must actually result in:
+
+navigation visible
+route accessible
+API accessible
+
+============================================================
+8. DO NOT CHANGE OTHER PERMISSIONS
+============================================================
+
+Do NOT broadly open accounting access.
+
+Do NOT give warehouse employees:
+
+- Delete
+- Edit
+- Create
+- Approve
+- All Locations
+
+unless those permissions are already explicitly assigned.
+
+Only fix the Day Book View permission.
+
+============================================================
+9. REGRESSION TEST
+============================================================
+
+Test at least:
+
+A. Warehouse employee
+Day Book View = ON
+→ menu visible
+→ page opens
+→ warehouse data visible
+
+B. Warehouse employee
+Day Book View = OFF
+→ menu hidden
+→ direct route/API access denied
+
+C. Head Office employee
+Day Book View = ON
+→ Head Office Day Book visible
+
+D. Head Office user with All Locations permission
+→ All Locations Day Book available
+
+E. Warehouse employee
+→ cannot access another warehouse's Day Book by changing URL, location ID, query parameter, or API request manually.
+
+F. Admin
+→ existing Day Book access remains unchanged.
+
+============================================================
+10. IMPORTANT
+============================================================
+
+This is a permission bug fix.
+
+Do not redesign Day Book.
+
+Do not change Day Book calculations.
+
+Do not change accounting entries.
+
+Do not change report totals.
+
+Do not change location accounting.
+
+Only fix the permission/navigation/backend authorization issue so that a warehouse employee with Day Book View permission can actually use Day Book within their permitted location.
+
+After fixing, run the permission regression test and report exactly:
+
+- root cause
+- frontend fix
+- backend fix
+- location restriction verification
+- tests passed
+- tests failed

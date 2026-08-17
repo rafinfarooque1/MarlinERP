@@ -8,13 +8,26 @@ import { invalidatePolicyCache } from "../lib/passwordPolicy";
 import { getActiveLockouts } from "../middleware/auth";
 import { requireModuleView, requireModuleAction } from "../middleware/permissions";
 import { normalizeUpiId } from "../lib/upi";
+import { validateLogoDataUrl } from "../lib/logoImage";
 import { createBackup } from "../lib/backup/create";
 import { runSalaryAccrual } from "../lib/salaryAccrual";
 import { objectStorageConfigured } from "../lib/backup/files";
+import { ObjectStorageService } from "../lib/objectStorage";
+import { readApkManifest } from "../lib/apkRelease";
 import { logActivity } from "../lib/audit";
 import { ensureStandardOrgTree } from "../migrations/orgHierarchyRestructure";
 
 const router = Router();
+
+// RETIRED mobile-APK settings keys. The Android release is owned entirely by
+// the automated build pipeline (EAS build → object-storage manifest, see
+// lib/apkRelease.ts) — nothing reads these keys any more. The PATCH below
+// strips them from both the client payload and the stored blob so stale
+// copies cannot linger or be forged back in.
+const RETIRED_MOBILE_KEYS: string[] = [
+  "androidApkObjectPath", "androidApkFileName", "androidApkSize", "androidApkUploadedAt",
+  "androidApkUrl", "androidAppVersion",
+];
 
 // Allowed fields for company settings update
 const ALLOWED_COMPANY_FIELDS = new Set([
@@ -33,34 +46,8 @@ function pickCompanyFields(body: Record<string, any>) {
   return result;
 }
 
-/**
- * Read the pixel dimensions from a PNG or JPEG buffer without decoding it.
- * A tiny compressed file can still declare enormous dimensions ("image bomb"),
- * and the invoice renderer would pay the decode cost on every PDF — so the
- * declared size is checked at upload time, from the format headers alone.
- * Returns null when the header cannot be read (which callers should reject).
- */
-function imagePixelDimensions(buf: Buffer): { width: number; height: number } | null {
-  // PNG: 8-byte signature, then the IHDR chunk with width/height at 16/20.
-  if (buf.length > 24 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) {
-    return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) };
-  }
-  // JPEG: walk the marker segments to the first SOF frame header.
-  if (buf.length > 4 && buf[0] === 0xff && buf[1] === 0xd8) {
-    let o = 2;
-    while (o + 9 < buf.length) {
-      if (buf[o] !== 0xff) { o++; continue; }
-      const marker = buf[o + 1];
-      if (marker === 0xff) { o++; continue; }
-      if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
-        return { height: buf.readUInt16BE(o + 5), width: buf.readUInt16BE(o + 7) };
-      }
-      if (marker === 0xd8 || marker === 0xd9 || (marker >= 0xd0 && marker <= 0xd7)) { o += 2; continue; }
-      o += 2 + buf.readUInt16BE(o + 2);
-    }
-  }
-  return null;
-}
+// Logo parsing/validation lives in ../lib/logoImage so the per-warehouse
+// letterhead upload enforces exactly the same rules.
 
 // ── Company Settings ──────────────────────────────────────────────────────
 
@@ -135,26 +122,9 @@ router.patch("/company/settings", requireModuleAction("page:/company/settings", 
   // string or null clears it. The app resizes uploads to ≤512px before
   // sending, so anything near the body limit is rejected rather than stored.
   if ('logoUrl' in data) {
-    const v = data.logoUrl;
-    if (v === null || v === '') {
-      data.logoUrl = null;
-    } else if (typeof v !== 'string' || !/^data:image\/(png|jpe?g);base64,[A-Za-z0-9+/=]+$/.test(v)) {
-      res.status(400).json({ error: 'logoUrl must be a PNG or JPEG data URI, or empty to remove the logo' });
-      return;
-    } else if (v.length > 700_000) {
-      res.status(400).json({ error: 'Logo image is too large — please upload a smaller image' });
-      return;
-    } else {
-      const dims = imagePixelDimensions(Buffer.from(v.slice(v.indexOf(',') + 1), 'base64'));
-      if (!dims || dims.width < 1 || dims.height < 1) {
-        res.status(400).json({ error: 'Logo image could not be read — please upload a valid PNG or JPEG' });
-        return;
-      }
-      if (dims.width > 4096 || dims.height > 4096) {
-        res.status(400).json({ error: 'Logo image dimensions are too large — maximum 4096×4096 pixels' });
-        return;
-      }
-    }
+    const logo = validateLogoDataUrl(data.logoUrl);
+    if (!logo.ok) { res.status(400).json({ error: logo.error }); return; }
+    data.logoUrl = logo.value;
   }
 
   // paymentTerms / invoiceFooter are handled via raw SQL (columns added by
@@ -243,6 +213,67 @@ router.patch("/company/settings", requireModuleAction("page:/company/settings", 
     if (gsu.weeklyOffExhaustedAction !== undefined && gsu.weeklyOffExhaustedAction !== null
         && gsu.weeklyOffExhaustedAction !== 'ask' && gsu.weeklyOffExhaustedAction !== 'absent') {
       res.status(400).json({ error: 'When casual leave is exhausted, the action must be Ask or Mark Unpaid' }); return;
+    }
+    // Mobile app distribution settings: these feed PUBLIC endpoints
+    // (GET /api/public/app + /api/public/app/apk), so only vetted URLs may
+    // ever be stored — anything else could turn the QR into an open redirect
+    // to a javascript:/data: payload. Empty/null means "not available yet"
+    // and the UI shows an honest notice instead of a dead button.
+    //
+    // Scheme rules per key:
+    //  - androidApkUrl: where the server FETCHES the APK from when someone
+    //    clicks Download APK. https only; http://localhost is tolerated in
+    //    development builds only — the file must never travel over plain http
+    //    in prod, and in prod a localhost URL would be an SSRF against our own
+    //    services (the download endpoint is public).
+    //  - iosInstallUrl: an Apple-supported install destination — a TestFlight
+    //    https link, a real App Store https link, or an itms-services://
+    //    OTA-manifest link (ad-hoc/enterprise distribution). NEVER a raw .ipa
+    //    file; iPhones cannot install one from a browser, so offering it would
+    //    be a fake download — reject it outright.
+    //  - legacy mobileApp*Url keys: kept readable so old stored blobs still
+    //    save, plain http(s).
+    for (const [key, label, schemes] of [
+      ['iosInstallUrl',        'iOS installation link',   'ios-install'],
+      ['mobileAppIosUrl',      'App Store link',          'http'],
+      ['mobileAppAndroidUrl',  'Google Play link',        'http'],
+      ['mobileAppFallbackUrl', 'Fallback download page link', 'http'],
+    ] as const) {
+      const v = gsu[key];
+      if (v === undefined || v === null) continue;
+      if (typeof v !== 'string') { res.status(400).json({ error: `${label} must be a URL or empty` }); return; }
+      const t = v.trim();
+      if (t === '') { gsu[key] = ''; continue; }
+      if (t.length > 500) { res.status(400).json({ error: `${label} must be 500 characters or fewer` }); return; }
+      let ok = false;
+      try {
+        const u = new URL(t);
+        if (schemes === 'ios-install') {
+          ok = u.protocol === 'https:' || u.protocol === 'itms-services:';
+          if (ok && /\.ipa$/i.test(u.pathname)) {
+            res.status(400).json({ error: `${label} must not point at an .ipa file — iPhones cannot install one from a browser. Use a TestFlight link or an itms-services:// install link instead.` });
+            return;
+          }
+        } else {
+          ok = u.protocol === 'https:' || u.protocol === 'http:';
+        }
+      } catch { ok = false; }
+      if (!ok) { res.status(400).json({ error: `${label} must be a full https:// link${schemes === 'ios-install' ? ' (or an itms-services:// install link)' : ''}` }); return; }
+      gsu[key] = t;
+    }
+    // App version labels are display strings shown in the download window —
+    // keep them short and filename-safe. (The ANDROID version is no longer a
+    // setting: it is recorded by the build pipeline from the app source.)
+    for (const [key, label] of [
+      ['iosAppVersion',     'iOS app version'],
+    ] as const) {
+      const v = gsu[key];
+      if (v === undefined || v === null) continue;
+      if (typeof v !== 'string') { res.status(400).json({ error: `${label} must be text like 1.0.0` }); return; }
+      const t = v.trim();
+      if (t.length > 50) { res.status(400).json({ error: `${label} must be 50 characters or fewer` }); return; }
+      if (t && !/^[\w. +()-]*$/.test(t)) { res.status(400).json({ error: `${label} may only contain letters, numbers, dots, dashes and spaces` }); return; }
+      gsu[key] = t;
     }
   }
 
@@ -401,7 +432,19 @@ router.patch("/company/settings", requireModuleAction("page:/company/settings", 
       `SELECT general_settings FROM company_settings WHERE id = $1`, [row.id]);
     const prevGS = typeof prevRow?.general_settings === "string"
       ? JSON.parse(prevRow.general_settings) : (prevRow?.general_settings ?? {});
-    await pool.query(`UPDATE company_settings SET general_settings = $1 WHERE id = $2`, [JSON.stringify(generalSettingsUpdate), row.id]);
+    // The retired mobile-APK keys are dropped outright: the Android release
+    // lives in the object-storage manifest now (lib/apkRelease.ts), so any
+    // copy of these keys — sent by an old client OR already in the stored
+    // blob — is stripped inside the UPDATE itself.
+    for (const k of RETIRED_MOBILE_KEYS) {
+      delete (generalSettingsUpdate as Record<string, unknown>)[k];
+    }
+    await pool.query(
+      `UPDATE company_settings
+         SET general_settings = $1::jsonb - $3::text[]
+       WHERE id = $2`,
+      [JSON.stringify(generalSettingsUpdate), row.id, RETIRED_MOBILE_KEYS],
+    );
     // A changed pay policy immediately changes what open days are worth — the
     // salary books must follow now, not at the next hourly sweep. Locked
     // (approved/paid) months are skipped by the sweep itself.
@@ -417,6 +460,194 @@ router.patch("/company/settings", requireModuleAction("page:/company/settings", 
     }
   }
   res.json({ ...row, ...(await extraSettingsFields(row.id)) });
+});
+
+// ── Public mobile-app distribution endpoints ───────────────────────────────
+// The app is deliberately NOT on Google Play / the App Store. Distribution is:
+//   Android → direct APK download (server-proxied so the filename is clean)
+//   iOS     → a configurable Apple-supported install link (TestFlight /
+//             OTA manifest / a real store listing later). Never an .ipa file —
+//             ordinary iPhones cannot install one from a browser.
+//
+// Both endpoints are PUBLIC (auth exemption in app.ts) because they are hit by
+// phones that are not logged in (QR scans). They disclose only the configured
+// install destinations — no business data.
+const escapeHtml = (s: string) =>
+  s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+// One read path for the distribution config. The Android side comes from
+// the build pipeline's manifest in object storage (shape-validated on read,
+// see lib/apkRelease.ts) — never from a setting or a URL. The iOS side stays
+// a validated setting: defence in depth — the PATCH already validates, but
+// these endpoints serve unauthenticated visitors, so the EXACT same rules
+// are re-applied at read time.
+async function readAppDistribution() {
+  const [{ rows: [r] }, android] = await Promise.all([
+    pool.query<any>(
+      `SELECT company_name, general_settings FROM company_settings ORDER BY id LIMIT 1`,
+    ),
+    readApkManifest(),
+  ]);
+  const gs = typeof r?.general_settings === "string"
+    ? JSON.parse(r.general_settings) : (r?.general_settings ?? {});
+  // Mirrors the PATCH 'ios-install' rule, including the raw-.ipa refusal.
+  const cleanIos = (v: unknown): string | null => {
+    if (typeof v !== "string") return null;
+    const t = v.trim();
+    if (!t || t.length > 500) return null;
+    try {
+      const u = new URL(t);
+      if (u.protocol !== "https:" && u.protocol !== "itms-services:") return null;
+      if (/\.ipa$/i.test(u.pathname)) return null;
+      return t;
+    } catch { return null; }
+  };
+  const cleanVersion = (v: unknown): string | null => {
+    if (typeof v !== "string") return null;
+    const t = v.trim();
+    return t && t.length <= 50 && /^[\w. +()-]*$/.test(t) ? t : null;
+  };
+  return {
+    companyName: String(r?.company_name || "Marlin Frozen Fruits"),
+    // null → no Android release published (honest unavailability, never stale)
+    android,
+    iosUrl: cleanIos(gs?.iosInstallUrl),
+    iosVersion: cleanVersion(gs?.iosAppVersion),
+  };
+}
+
+// GET /public/app — the stable link printed QR codes carry. Sends each device
+// where it can actually install from; shows an honest page otherwise.
+router.get("/public/app", async (req, res): Promise<void> => {
+  // Config changes must take effect on the next scan — never cache.
+  res.set("Cache-Control", "no-store");
+  const cfg = await readAppDistribution();
+
+  const ua = String(req.get("user-agent") ?? "");
+  const isIos     = /iPhone|iPad|iPod/i.test(ua);
+  const isAndroid = /Android/i.test(ua);
+  // The APK link points at OUR download endpoint, not the raw hosted file, so
+  // the browser gets a clean filename and the hosting can move without
+  // invalidating anything already printed or shared.
+  const apkConfigured = Boolean(cfg.android);
+  if (isAndroid && apkConfigured) { res.redirect(302, "/api/public/app/apk"); return; }
+  if (isIos && cfg.iosUrl)        { res.redirect(302, cfg.iosUrl); return; }
+
+  const company = escapeHtml(cfg.companyName);
+  const btn = (href: string, label: string) =>
+    `<a class="btn" href="${escapeHtml(href)}">${label}</a>`;
+  const sections: string[] = [];
+  if (apkConfigured) {
+    sections.push(
+      `<div class="plat"><h2>Android${cfg.android ? ` <span class="ver">Version ${escapeHtml(cfg.android.version)}</span>` : ""}</h2>
+       ${btn("/api/public/app/apk", "Download APK")}
+       <p class="note">Android may ask you to allow installation from this source.</p></div>`);
+  } else {
+    sections.push(`<div class="plat"><h2>Android</h2><p class="note">Android app download is not currently available.</p></div>`);
+  }
+  if (cfg.iosUrl) {
+    sections.push(
+      `<div class="plat"><h2>iPhone / iOS${cfg.iosVersion ? ` <span class="ver">Version ${escapeHtml(cfg.iosVersion)}</span>` : ""}</h2>
+       ${btn(cfg.iosUrl, "Install iOS App")}</div>`);
+  } else {
+    sections.push(`<div class="plat"><h2>iPhone / iOS</h2><p class="note">iOS installation is not currently configured.</p></div>`);
+  }
+  res.status(200).type("html").send(`<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>${company} — Mobile App</title>
+<style>
+  body{margin:0;font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;background:#f6f7f9;color:#111827;
+       display:flex;align-items:center;justify-content:center;min-height:100vh;padding:24px;box-sizing:border-box}
+  .card{background:#fff;border:1px solid #e5e7eb;border-radius:16px;padding:36px 28px;max-width:420px;width:100%;
+        text-align:center;box-shadow:0 8px 24px rgba(0,0,0,.06)}
+  h1{font-size:20px;margin:0 0 6px}
+  h2{font-size:15px;margin:0 0 10px}
+  .ver{color:#6b7280;font-weight:500;font-size:12px}
+  .sub{color:#6b7280;font-size:14px;line-height:1.6;margin:0 0 20px}
+  .plat{border:1px solid #e5e7eb;border-radius:12px;padding:16px;margin-top:12px}
+  .note{color:#6b7280;font-size:12px;line-height:1.5;margin:10px 0 0}
+  .btn{display:block;background:#111827;color:#fff;text-decoration:none;border-radius:10px;padding:13px 16px;
+       font-size:14px;font-weight:600}
+  .btn:hover{background:#1f2937}
+</style></head>
+<body><div class="card"><h1>${company} Mobile App</h1>
+<p class="sub">Access your ERP from your phone.</p>${sections.join("")}</div></body></html>`);
+});
+
+// GET /public/app/apk — streams the current APK release to the browser as a
+// real file download. The served object comes exclusively from the automated
+// build pipeline's manifest (lib/apkRelease.ts) — no user input, no external
+// URLs, no upload path. Honest 404 when no release is published; 502 if the
+// manifest points at an object that has gone missing (storage outage or
+// out-of-band deletion) — never a silent fallback.
+router.get("/public/app/apk", async (_req, res): Promise<void> => {
+  res.set("Cache-Control", "no-store");
+  const cfg = await readAppDistribution();
+  if (!cfg.android) {
+    res.status(404).json({ error: "Android app download is not currently available." });
+    return;
+  }
+  const fail = () => {
+    if (!res.headersSent) res.status(502).json({ error: "The APK file could not be read from storage." });
+    else res.destroy();
+  };
+  // Professional, stable filename: company name + the version the pipeline
+  // recorded at build time (from the app source, not a hand-typed setting).
+  const safe = (s: string) => s.replace(/[^\w.-]+/g, "-").replace(/^-+|-+$/g, "");
+  const base = safe(cfg.companyName) || "ERP";
+  const fileName = `${base}-Mobile-v${safe(cfg.android.version)}.apk`;
+  try {
+    const svc = new ObjectStorageService();
+    const objectFile = await svc.getObjectEntityFile(cfg.android.publishedPath);
+    const [meta] = await objectFile.getMetadata();
+    // Integrity gate: the object must still be the exact release the pipeline
+    // recorded. A size mismatch means it was changed after publication
+    // (corruption or an out-of-band write) — refuse to distribute unverified
+    // bytes rather than serve them.
+    const size = Number(meta.size ?? 0);
+    if (!Number.isFinite(size) || size !== cfg.android.size) {
+      console.error(`[public/app/apk] object size ${size} != manifest size ${cfg.android.size} — refusing to serve`);
+      fail();
+      return;
+    }
+    res.setHeader("Content-Type", "application/vnd.android.package-archive");
+    res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
+    // Deliberately NO Content-Length: the deployed platform's front-end
+    // (Cloud Run) rejects non-chunked responses larger than 32 MB and
+    // replaces them with an empty HTTP 500 before any byte is sent — the
+    // ~90 MB APK must go out as a chunked stream. Dev has no such proxy,
+    // which is why a fixed length "worked" there and only broke in
+    // production. Size integrity is still enforced above via the manifest.
+    const rs = objectFile.createReadStream();
+    rs.on("error", (err) => {
+      console.error("[public/app/apk] storage stream error:", err);
+      fail();
+    });
+    rs.pipe(res);
+  } catch (err) {
+    console.error("[public/app/apk] published APK unavailable:", err);
+    fail();
+  }
+});
+
+// GET /public/app/info — machine-readable release availability for the web
+// client (Download Mobile App modal + the Settings page's read-only Android
+// release card). Public by design: it discloses exactly what the /public/app
+// landing page already shows an unauthenticated visitor — nothing more.
+router.get("/public/app/info", async (_req, res): Promise<void> => {
+  res.set("Cache-Control", "no-store");
+  const cfg = await readAppDistribution();
+  res.json({
+    companyName: cfg.companyName,
+    android: cfg.android
+      ? { available: true, version: cfg.android.version, size: cfg.android.size, builtAt: cfg.android.builtAt }
+      : { available: false },
+    ios: cfg.iosUrl
+      ? { available: true, url: cfg.iosUrl, ...(cfg.iosVersion ? { version: cfg.iosVersion } : {}) }
+      : { available: false },
+  });
 });
 
 // ── Login history (Phase 7) ────────────────────────────────────────────────

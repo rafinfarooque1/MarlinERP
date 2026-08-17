@@ -1,0 +1,73 @@
+The Android APK build is successful, but the actual production download endpoint is still failing.
+
+I tested the real URL:
+
+/api/public/app/apk
+
+and the browser returns:
+
+HTTP ERROR 500
+
+The Download Mobile App modal is showing the Download APK button correctly, but clicking it does not download the 89.9 MB v1.0.0 APK.
+
+Fix the download endpoint before marking this task complete.
+
+Requirements:
+
+1. Investigate the actual server-side cause of the HTTP 500 on:
+   GET /api/public/app/apk
+
+2. Verify that the endpoint can locate the currently published APK artifact from persistent storage.
+
+3. Verify that the endpoint works from the PUBLIC production domain, not only from the Replit development environment.
+
+4. Return the actual APK bytes with the correct headers:
+   Content-Type: application/vnd.android.package-archive
+   Content-Disposition: attachment; filename="frozen-fruits-Mobile-v1.0.0.apk"
+
+5. Do not change the existing automatic EAS build pipeline.
+
+6. Do not restore:
+   - APK upload
+   - APK URL field
+   - manual version field
+
+7. Keep the QR code pointing to the same ERP download endpoint.
+
+8. Test all three separately:
+
+   A. Direct browser:
+      /api/public/app/apk
+
+   B. Profile → Download Mobile App → Download APK
+
+   C. Scan the QR code from an actual phone and download the APK.
+
+9. Verify the downloaded file is actually the 89.9 MB APK and not:
+   - HTML
+   - JSON
+   - an error response
+   - a redirect page
+   - a zero-byte file
+
+10. Test after restarting/redeploying the server to make sure persistent storage is still accessible.
+
+11. Check server logs while requesting:
+   GET /api/public/app/apk
+
+12. Do not mark the task complete until the real production URL successfully downloads the APK.
+
+FINAL ACCEPTANCE TEST:
+
+ERP Profile
+→ Download Mobile App
+→ Download APK
+→ actual APK download starts
+
+AND
+
+Phone
+→ Scan QR
+→ actual APK download starts
+
+The browser screenshot currently proves that /api/public/app/apk returns HTTP 500, so fix that specific issue first.

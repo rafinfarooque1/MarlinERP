@@ -37,6 +37,7 @@
  */
 import { Router, type IRouter } from "express";
 import { pool } from "@workspace/db";
+import { createHash } from "node:crypto";
 import { logActivity } from "../lib/audit";
 import { renameTrail } from "../lib/invoiceReclass";
 import {
@@ -93,16 +94,35 @@ type Plan = {
 
 type PlanError = { error: string; status: number; code?: string };
 
-function parseTarget(body: any): { locationType: string; locationId: number; b2cStart: number; b2bStart: number } | string {
+type Target = {
+  locationType: string;
+  locationId: number;
+  b2cStart: number;
+  b2bStart: number;
+  /**
+   * 'restart'  — rebuild the sequence from the chosen starting serials
+   *              (bill-book continuation, the original Ragiguda use case);
+   * 'preserve' — KEEP every bill's existing serial and change only the printed
+   *              shape: SB2C/2026-27/000528 → SB2C/26-27/528. Gaps left by
+   *              deleted bills stay gaps — no bill's number moves to another
+   *              bill, so a printed copy in a customer's hands still matches.
+   */
+  mode: "restart" | "preserve";
+};
+
+function parseTarget(body: any): Target | string {
   const locationType = String(body?.locationType ?? "");
   const locationId = Number(body?.locationId);
-  const b2cStart = Number(body?.b2cStart);
-  const b2bStart = Number(body?.b2bStart);
+  const mode = body?.mode == null ? "restart" : String(body.mode);
+  if (mode !== "restart" && mode !== "preserve") return "mode must be 'restart' or 'preserve'";
+  // Starting serials only exist in restart mode — preserve keeps each bill's own.
+  const b2cStart = mode === "preserve" ? 1 : Number(body?.b2cStart);
+  const b2bStart = mode === "preserve" ? 1 : Number(body?.b2bStart);
   if (!["warehouse", "outlet", "headoffice"].includes(locationType)) return "locationType must be warehouse, outlet or headoffice";
   if (locationType !== "headoffice" && (!Number.isInteger(locationId) || locationId <= 0)) return "locationId is required";
   if (!Number.isInteger(b2cStart) || b2cStart < 1) return "b2cStart must be a whole number of 1 or more";
   if (!Number.isInteger(b2bStart) || b2bStart < 1) return "b2bStart must be a whole number of 1 or more";
-  return { locationType, locationId: locationType === "headoffice" ? 0 : locationId, b2cStart, b2bStart };
+  return { locationType, locationId: locationType === "headoffice" ? 0 : locationId, b2cStart, b2bStart, mode };
 }
 
 async function locationName(q: Q, locationType: string, locationId: number): Promise<string | null> {
@@ -122,7 +142,7 @@ async function locationName(q: Q, locationType: string, locationId: number): Pro
  */
 async function computePlan(
   q: Q,
-  opts: { locationType: string; locationId: number; b2cStart: number; b2bStart: number },
+  opts: Target,
   forUpdate: boolean,
 ): Promise<Plan | PlanError> {
   const name = await locationName(q, opts.locationType, opts.locationId);
@@ -198,7 +218,12 @@ async function computePlan(
   const perSeries: Plan["perSeries"] = {};
   for (const r of rows) {
     const series = r.invoice_series as "SB2B" | "SB2C";
-    const serial = counters[series]++;
+    // preserve: the bill keeps its own stamped serial — only the shape changes.
+    // A row without a parseable serial maps to 0 here for display; the
+    // oddShaped tripwire blocks apply outright, so 0 can never be written.
+    const serial = opts.mode === "preserve"
+      ? (Number.isFinite(Number(r.invoice_serial)) && r.invoice_serial != null ? Number(r.invoice_serial) : 0)
+      : counters[series]++;
     const newFy = shortFyLabel(String(r.invoice_fy ?? ""));
     const newNumber = `${series}/${newFy}/${serial}`;
     planRows.push({
@@ -217,8 +242,13 @@ async function computePlan(
     });
     const s = (perSeries[series] ??= { count: 0, firstNew: newNumber, lastNew: newNumber, lastSerial: serial });
     s.count += 1;
-    s.lastNew = newNumber;
-    s.lastSerial = serial;
+    // lastSerial drives the counter advance after apply — it must be the MAX
+    // serial, which in preserve mode is not necessarily the last row visited
+    // (chronological order can interleave FYs).
+    if (serial >= s.lastSerial) {
+      s.lastSerial = serial;
+      s.lastNew = newNumber;
+    }
   }
 
   return { scope, locationName: name, rows: planRows, oddShaped: Number(odd?.c ?? 0), isRerun, perSeries };
@@ -251,6 +281,19 @@ async function trailCounts(q: Q, scope: string): Promise<{ paired: number; orpha
   return { paired: Number(paired?.c ?? 0), orphans: Number(orphans?.c ?? 0) };
 }
 
+/**
+ * Fingerprint of the exact plan the administrator saw: scope, mode and the
+ * full ordered old→new mapping. Apply refuses when its re-derived plan hashes
+ * differently — expectedTotal alone cannot catch "same bill count, different
+ * location/mode/start" after the selects changed mid-preview.
+ */
+function planChecksum(scope: string, mode: string, rows: Array<{ saleId: number; oldNumber: string; newNumber: string }>): string {
+  const h = createHash("sha256");
+  h.update(`${scope}|${mode}`);
+  for (const r of rows) h.update(`|${r.saleId}:${r.oldNumber}>${r.newNumber}`);
+  return h.digest("hex");
+}
+
 // ── Preview: the full OLD → NEW mapping, zero writes ────────────────────────
 router.post("/admin/sales-renumber/preview", async (req, res): Promise<void> => {
   if (!(await requireLevelOne(req, res))) return;
@@ -264,6 +307,8 @@ router.post("/admin/sales-renumber/preview", async (req, res): Promise<void> => 
   res.json({
     locationName: plan.locationName,
     scope: plan.scope,
+    mode: target.mode,
+    planChecksum: planChecksum(plan.scope, target.mode, plan.rows),
     total: plan.rows.length,
     perSeries: plan.perSeries,
     oddShaped: plan.oddShaped,
@@ -289,6 +334,11 @@ router.post("/admin/sales-renumber/apply", async (req, res): Promise<void> => {
   const expectedTotal = Number(req.body?.expectedTotal);
   if (!Number.isInteger(expectedTotal) || expectedTotal < 0) {
     res.status(400).json({ error: "expectedTotal (from the preview) is required" });
+    return;
+  }
+  const expectedChecksum = typeof req.body?.planChecksum === "string" ? req.body.planChecksum : "";
+  if (!/^[0-9a-f]{64}$/.test(expectedChecksum)) {
+    res.status(400).json({ error: "planChecksum (from the preview) is required" });
     return;
   }
   const actor = String((req as any).employee?.username ?? "admin");
@@ -319,6 +369,15 @@ router.post("/admin/sales-renumber/apply", async (req, res): Promise<void> => {
       await client.query("ROLLBACK");
       res.status(409).json({
         error: `The bill count changed since the preview (expected ${expectedTotal}, found ${plan.rows.length}). Run the preview again and re-check.`,
+      });
+      return;
+    }
+    // The plan must be BITWISE the one previewed — same location, same mode,
+    // same start serials, same bills mapping to the same new numbers.
+    if (planChecksum(plan.scope, target.mode, plan.rows) !== expectedChecksum) {
+      await client.query("ROLLBACK");
+      res.status(409).json({
+        error: "The plan changed since the preview (different bills, numbers or settings). Run the preview again and re-check.",
       });
       return;
     }
@@ -393,9 +452,18 @@ router.post("/admin/sales-renumber/apply", async (req, res): Promise<void> => {
     // survives anywhere; that is the documented, super-admin-accepted cost of
     // a corrected re-run. The duplicate self-check above the COMMIT backstops
     // everything visible.
+    // Rewinding is only ever correct for a RESTART-mode corrected re-run (the
+    // scope was rebuilt onto lower serials on purpose). A PRESERVE-mode apply
+    // never moves a serial down, so its counter must only ever move forward —
+    // GREATEST — and it additionally folds in the high-water mark of the OLD
+    // per-FY counter rows: the counter key changes to 'ALL' here, and serials
+    // burned by since-deleted bills live only in those old rows. Without this
+    // floor, warehouse:2's counter at 918 with top stored bill 898 would
+    // re-issue 899–918 — numbers that were once printed on real bills.
+    const rewind = plan.isRerun && target.mode === "restart";
     for (const [series, key] of [["SB2C", "b2c"], ["SB2B", "b2b"]] as const) {
       const planLast = plan.perSeries[series]?.lastSerial
-        ?? (series === "SB2C" ? target.b2cStart - 1 : target.b2bStart - 1);
+        ?? (target.mode === "preserve" ? 0 : (series === "SB2C" ? target.b2cStart - 1 : target.b2bStart - 1));
       const { rows: [outside] } = await client.query(
         `SELECT COALESCE(MAX(invoice_serial), 0)::int AS m FROM sales
           WHERE number_scope = $1 AND invoice_series = $2 AND branch_transfer_id IS NOT NULL`,
@@ -409,12 +477,21 @@ router.post("/admin/sales-renumber/apply", async (req, res): Promise<void> => {
             AND NOT EXISTS (SELECT 1 FROM sales s WHERE s.id = l.sale_id)`,
         [plan.scope, series]
       );
-      const last = Math.max(planLast, Number(outside?.m ?? 0), Number(ghost?.m ?? 0));
+      const floors = [planLast, Number(outside?.m ?? 0), Number(ghost?.m ?? 0)];
+      if (!rewind) {
+        const { rows: [prior] } = await client.query(
+          `SELECT COALESCE(MAX(last_number), 0)::int AS m FROM voucher_sequences
+            WHERE voucher_type = $1`,
+          [`${SALES_SERIES[key].counter}@${plan.scope}`]
+        );
+        floors.push(Number(prior?.m ?? 0));
+      }
+      const last = Math.max(...floors);
       await client.query(
         `INSERT INTO voucher_sequences (voucher_type, fy_label, last_number)
          VALUES ($1, 'ALL', $2)
          ON CONFLICT (voucher_type, fy_label)
-         DO UPDATE SET last_number = ${plan.isRerun
+         DO UPDATE SET last_number = ${rewind
            ? "EXCLUDED.last_number"
            : "GREATEST(voucher_sequences.last_number, EXCLUDED.last_number)"}`,
         [`${SALES_SERIES[key].counter}@${plan.scope}`, last]

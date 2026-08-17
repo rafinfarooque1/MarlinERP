@@ -185,8 +185,9 @@ const { rows: imported } = await sql(
 assert('Both imported bills exist', imported.length === 2, JSON.stringify(imported));
 const b2b = imported.find((r) => r.legacy_invoice_number === `${TAG}/OLD/9001`);
 const b2c = imported.find((r) => r.legacy_invoice_number === `${TAG}/OLD/9002`);
-assert('GST-customer bill drew an SB2B number', /^SB2B\/\d{4}-\d{2}\/\d{6}$/.test(b2b?.invoice_number ?? ''), b2b?.invoice_number);
-assert('Walk-in-customer bill drew an SB2C number', /^SB2C\/\d{4}-\d{2}\/\d{6}$/.test(b2c?.invoice_number ?? ''), b2c?.invoice_number);
+// Aug 2026: short FY label, no zero padding — SB2C/26-27/528.
+assert('GST-customer bill drew an SB2B number', /^SB2B\/\d{2}-\d{2}\/[1-9]\d*$/.test(b2b?.invoice_number ?? ''), b2b?.invoice_number);
+assert('Walk-in-customer bill drew an SB2C number', /^SB2C\/\d{2}-\d{2}\/[1-9]\d*$/.test(b2c?.invoice_number ?? ''), b2c?.invoice_number);
 assert('File number never landed in invoice_number', imported.every((r) => !r.invoice_number.includes(TAG)));
 
 {
@@ -214,7 +215,7 @@ console.log('\n[3] POS allocation continues cleanly after the import (no counter
   if (res.status === 201 && res.data?.id) createdSales.push(res.data.id);
   const num = res.data?.invoiceNumber ?? res.data?.invoice_number;
   assert('POS sale right after the import is accepted', res.status === 201, JSON.stringify(res.data).slice(0, 150));
-  assert('POS sale drew a fresh SB2C number', /^SB2C\/\d{4}-\d{2}\/\d{6}$/.test(num ?? ''), num);
+  assert('POS sale drew a fresh SB2C number', /^SB2C\/\d{2}-\d{2}\/[1-9]\d*$/.test(num ?? ''), num);
   assert('POS number differs from the imported ones', num !== b2c?.invoice_number && num !== b2b?.invoice_number, num);
 }
 

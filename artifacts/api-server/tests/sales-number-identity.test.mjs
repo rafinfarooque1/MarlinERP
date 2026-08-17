@@ -145,8 +145,10 @@ const results = await Promise.all(LOCS.flatMap((loc) => [makeSale(loc), makeSale
 for (const r of results) if (r.status === 201 && r.data?.id) createdSales.push(r.data.id);
 assert('All six concurrent sales are accepted', results.every((r) => r.status === 201),
   JSON.stringify(results.map((r) => r.status)));
+// Aug 2026: every location bills in the SHORT format — SB2C/26-27/528
+// (short FY label, no zero padding, continuous serial).
 assert('Every printed number is clean SB2C/FY/serial — no location code',
-  results.every((r) => /^SB2C\/\d{4}-\d{2}\/\d{6}$/.test(r.data?.invoiceNumber ?? r.data?.invoice_number ?? '')),
+  results.every((r) => /^SB2C\/\d{2}-\d{2}\/[1-9]\d*$/.test(r.data?.invoiceNumber ?? r.data?.invoice_number ?? '')),
   JSON.stringify(results.map((r) => r.data?.invoiceNumber ?? r.data?.invoice_number)));
 
 const { rows: idRows } = await sql(
@@ -154,10 +156,10 @@ const { rows: idRows } = await sql(
      FROM sales WHERE id = ANY($1) ORDER BY id`, [createdSales]);
 assert('Every new sale is stamped with its full internal identity',
   idRows.length === 6 && idRows.every((r) =>
-    r.number_scope && r.invoice_series === 'SB2C' && /^\d{4}-\d{2}$/.test(r.invoice_fy ?? '') && Number.isInteger(r.invoice_serial)),
+    r.number_scope && r.invoice_series === 'SB2C' && /^\d{2}-\d{2}$/.test(r.invoice_fy ?? '') && Number.isInteger(r.invoice_serial)),
   JSON.stringify(idRows));
 assert('Stamped serial matches the printed number exactly',
-  idRows.every((r) => r.invoice_number === `${r.invoice_series}/${r.invoice_fy}/${String(r.invoice_serial).padStart(6, '0')}`),
+  idRows.every((r) => r.invoice_number === `${r.invoice_series}/${r.invoice_fy}/${String(r.invoice_serial)}`),
   JSON.stringify(idRows.map((r) => [r.invoice_number, r.invoice_serial])));
 
 for (const loc of LOCS) {

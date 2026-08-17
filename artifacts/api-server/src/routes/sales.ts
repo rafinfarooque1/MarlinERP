@@ -2573,7 +2573,10 @@ router.get("/sales/:id/invoice.pdf", async (req, res): Promise<void> => {
   res.send(buffer);
 });
 
-router.get("/sales/:id", requireModuleView("page:/sales/pos"), async (req, res): Promise<void> => {
+// Dispatch staff may open the bill they are packing (view-only surface —
+// PDF/share stay gated on the sales page's own download right client-side,
+// and every write on this sale still requires the sales page rights).
+router.get("/sales/:id", requireModuleView(["page:/sales/pos", "page:/operations/dispatch"]), async (req, res): Promise<void> => {
   const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const id = parseInt(raw, 10);
   const { pool: pgPool } = await import("@workspace/db");

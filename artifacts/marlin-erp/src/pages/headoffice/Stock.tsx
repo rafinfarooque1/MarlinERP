@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useLocation } from 'wouter';
-import { usePaginatedStock, useListWarehouses, useListOutlets, useListStockBatches, type StockBatch } from '@workspace/api-client-react';
+import { usePaginatedStock, useGetMe, useListWarehouses, useListOutlets, useListStockBatches, type StockBatch } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -134,7 +134,17 @@ export default function Stock() {
     available: (s: any) => Number(s.available),
     stockValue: (s: any) => Number(s.stockValue),
   });
-  const branchOptions = branchType === 'warehouse' ? warehouses : branchType === 'outlet' ? outlets : [];
+  // Location lockdown: branch users' pickers must not name foreign locations —
+  // the server already scopes the stock rows; this closes the display leak.
+  const { data: me } = useGetMe();
+  const isHOUser = ((me as any)?.branchType ?? 'headoffice') === 'headoffice';
+  const scopedWarehouses = isHOUser
+    ? warehouses
+    : (warehouses as any[]).filter((w) => (me as any)?.branchType === 'warehouse' && Number(w.id) === Number((me as any)?.branchId));
+  const scopedOutlets = isHOUser
+    ? outlets
+    : (outlets as any[]).filter((o) => (me as any)?.branchType === 'outlet' && Number(o.id) === Number((me as any)?.branchId));
+  const branchOptions = branchType === 'warehouse' ? scopedWarehouses : branchType === 'outlet' ? scopedOutlets : [];
 
   // Resolve the open detail row from CURRENT data. If a refetch dropped the
   // row (filters changed, stock moved), the sheet simply closes.

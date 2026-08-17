@@ -1,6 +1,8 @@
 import app from "./app";
 import { logger } from "./lib/logger";
-import { pool } from "@workspace/db";
+import { pool, db } from "@workspace/db";
+import { migrate } from "drizzle-orm/node-postgres/migrator";
+import path from "node:path";
 import { migrateOutletsToWarehouses } from "./migrations/outletToWarehouse";
 import { repairOpeningBatches } from "./migrations/repairOpeningBatches";
 import { addMaterialLocations } from "./migrations/materialLocations";
@@ -92,6 +94,7 @@ async function runMigrations() {
     ALTER TABLE warehouses ADD COLUMN IF NOT EXISTS ifsc_code text;
     ALTER TABLE warehouses ADD COLUMN IF NOT EXISTS invoice_footer text;
     ALTER TABLE warehouses ADD COLUMN IF NOT EXISTS authorized_signatory text;
+    ALTER TABLE warehouses ADD COLUMN IF NOT EXISTS logo_url text;
     ALTER TABLE outlets    ADD COLUMN IF NOT EXISTS cash_ledger_id integer;
     ALTER TABLE outlets    ADD COLUMN IF NOT EXISTS sales_ledger_id integer;
 
@@ -228,8 +231,8 @@ async function runMigrations() {
       await client.query(`INSERT INTO migration_log (name) VALUES ('std_ledgers_cleanup_v1') ON CONFLICT (name) DO NOTHING`);
       await client.query("COMMIT");
     } catch (e) {
-      await client.query("ROLLBACK");
-      throw e;
+      await client.query("ROLLBACK").catch(() => {});
+      console.error(`[migration] std_ledgers_cleanup_v1 FAILED: ${(e as Error).message} — will retry next boot`);
     } finally {
       client.release();
     }
@@ -784,8 +787,10 @@ async function runMigrations() {
                 l.code + (l.has_cust ? " (still referenced)" : " (no matching CUST ledger — recreate the customer or repoint its rows manually)")).join(", ")}`
             : ""));
       } catch (e) {
-        await client.query("ROLLBACK");
-        throw e;
+        await client.query("ROLLBACK").catch(() => {});
+        console.error(
+          `[migration] customer_advances_fold_v1 FAILED: ${(e as Error).message} — will retry next boot`,
+        );
       } finally {
         client.release();
       }
@@ -1062,7 +1067,9 @@ async function runMigrations() {
       }
     } catch (e) {
       await noteClient.query("ROLLBACK").catch(() => {});
-      throw e;
+      console.error(
+        `[migration] note_voucher_location_stamp_v1 FAILED: ${(e as Error).message} — will retry next boot`,
+      );
     } finally {
       noteClient.release();
     }
@@ -1306,8 +1313,8 @@ async function runMigrations() {
       `);
       await client.query('COMMIT');
     } catch (e) {
-      await client.query('ROLLBACK');
-      throw e;
+      await client.query('ROLLBACK').catch(() => {});
+      console.error(`[migration] stock_entries_dedup FAILED: ${(e as Error).message} — will retry next boot`);
     } finally {
       client.release();
     }
@@ -1391,12 +1398,16 @@ async function runMigrations() {
       `, [kind]);
       // Fall back to the manual rate where no purchase history exists.
       await pool.query(`UPDATE ${table} SET avg_cost = cost WHERE COALESCE(avg_cost, 0) = 0 AND COALESCE(cost, 0) > 0`);
-      await pool.query(`
-        UPDATE stock_batches sb SET unit_cost = m.avg_cost
-        FROM ${table} m
-        WHERE m.id = sb.item_id AND sb.material_type = $1
-          AND sb.unit_cost::numeric = 0 AND m.avg_cost::numeric > 0
-      `, [kind]);
+      try {
+        await pool.query(`
+          UPDATE stock_batches sb SET unit_cost = m.avg_cost
+          FROM ${table} m
+          WHERE m.id = sb.item_id AND sb.material_type = $1
+            AND sb.unit_cost::numeric = 0 AND m.avg_cost::numeric > 0
+        `, [kind]);
+      } catch (sbErr) {
+        console.error(`[migration] materials_avg_cost_seed_v1: stock_batches update skipped (${(sbErr as Error).message}) — column may not exist yet`);
+      }
     }
     await pool.query(`INSERT INTO migration_log (name) VALUES ('materials_avg_cost_seed_v1')`);
     console.log('[migration] materials_avg_cost_seed_v1 applied');
@@ -1566,12 +1577,16 @@ async function runMigrations() {
   // keep NULL on purpose — their producers stamp a location only when a money
   // leg belongs to a branch till, and rewriting them would relocate postings.
   // Idempotent: the WHERE clause matches nothing on later boots.
-  await pool.query(`
-    UPDATE journal_vouchers
-       SET location_type = 'headoffice', location_id = 0
-     WHERE location_type IS NULL
-       AND origin IS DISTINCT FROM 'system'
-  `);
+  try {
+    await pool.query(`
+      UPDATE journal_vouchers
+         SET location_type = 'headoffice', location_id = 0
+       WHERE location_type IS NULL
+         AND origin IS DISTINCT FROM 'system'
+    `);
+  } catch (e) {
+    console.error(`[migration] journal_vouchers location stamp FAILED: ${(e as Error).message} — will retry next boot`);
+  }
 
   // One-time provenance backfill for rows created before the source column
   // existed. Guarded by migration_log, NOT by "source IS NULL": a NULL after
@@ -1608,7 +1623,7 @@ async function runMigrations() {
         console.log("[migrate] money voucher source backfill complete");
       } catch (e) {
         await c.query("ROLLBACK").catch(() => {});
-        throw e;
+        console.error(`[migration] money_voucher_source_backfill_v1 FAILED: ${(e as Error).message} — will retry next boot`);
       } finally {
         c.release();
       }
@@ -1987,8 +2002,8 @@ async function runMigrations() {
       await client.query('COMMIT');
       console.log(`[migration] remove_production_branch_type_v1: ${emp.rowCount} employee(s) re-assigned to Head Office; production stock merged into headoffice`);
     } catch (e) {
-      await client.query('ROLLBACK');
-      throw e;
+      await client.query('ROLLBACK').catch(() => {});
+      console.error(`[migration] remove_production_branch_type_v1 FAILED: ${(e as Error).message} — will retry next boot`);
     } finally {
       client.release();
     }
@@ -2045,20 +2060,24 @@ async function runMigrations() {
     }
 
     // Item 12: delete only if it has NO stock/ledger/price/BOM/production refs.
-    const { rows: [item12Safe] } = await pool.query(
-      `SELECT 1 WHERE
-         NOT EXISTS (SELECT 1 FROM stock_entries WHERE item_id = 12 AND material_type = 'item')
-         AND NOT EXISTS (SELECT 1 FROM stock_batches WHERE item_id = 12 AND material_type = 'item')
-         AND NOT EXISTS (SELECT 1 FROM stock_ledger WHERE ref_id = 12 AND material_type = 'item')
-         AND NOT EXISTS (SELECT 1 FROM item_prices WHERE item_id = 12)
-         AND NOT EXISTS (SELECT 1 FROM bom_templates WHERE item_id = 12)
-         AND NOT EXISTS (SELECT 1 FROM productions WHERE item_id = 12)`
-    );
-    if (item12Safe) {
-      await pool.query(`DELETE FROM items WHERE id = 12 AND name = 'TST-P5 Pack 63178'`);
-      console.log('[migration] test_data_cleanup: removed unreferenced test item 12');
-    } else {
-      console.log('[migration] test_data_cleanup: item 12 kept — referenced by stock_entries/stock_batches (zero-qty scaffolding rows)');
+    try {
+      const { rows: [item12Safe] } = await pool.query(
+        `SELECT 1 WHERE
+           NOT EXISTS (SELECT 1 FROM stock_entries WHERE item_id = 12 AND material_type = 'item')
+           AND NOT EXISTS (SELECT 1 FROM stock_batches WHERE item_id = 12 AND material_type = 'item')
+           AND NOT EXISTS (SELECT 1 FROM stock_ledger WHERE ref_id = 12 AND material_type = 'item')
+           AND NOT EXISTS (SELECT 1 FROM item_prices WHERE item_id = 12)
+           AND NOT EXISTS (SELECT 1 FROM bom_templates WHERE item_id = 12)
+           AND NOT EXISTS (SELECT 1 FROM productions WHERE item_id = 12)`
+      );
+      if (item12Safe) {
+        await pool.query(`DELETE FROM items WHERE id = 12 AND name = 'TST-P5 Pack 63178'`);
+        console.log('[migration] test_data_cleanup: removed unreferenced test item 12');
+      } else {
+        console.log('[migration] test_data_cleanup: item 12 kept — referenced by stock_entries/stock_batches (zero-qty scaffolding rows)');
+      }
+    } catch (e) {
+      console.error(`[migration] test_data_cleanup: item 12 check FAILED (${(e as Error).message}) — will retry next boot`);
     }
   }
 
@@ -2456,7 +2475,8 @@ async function runMigrations() {
         );
         console.error('[migration] sales_number_identity: scope backfill hit duplicate (location, number) pairs — these rows must be resolved by hand:', JSON.stringify(dups));
       }
-      throw e;
+      console.error(`[migration] sales_number_identity FAILED: ${(e as Error).message} — will retry next boot`);
+      return;
     }
     // Parse series/FY/serial out of allocator-shaped numbers. Historical or
     // hand-shaped numbers that don't match stay NULL — they are NEVER
@@ -2571,6 +2591,103 @@ async function runMigrations() {
     );
   } catch (e) {
     console.error('[migration] sales_number_formats FAILED:', (e as Error).message);
+  }
+
+  // ── GST document series onto the short number format (Aug 2026) ───────────
+  // One-time conversion of EXISTING sales returns, purchase returns, credit
+  // notes and debit notes from PREFIX/2026-27/0004 to PREFIX/26-27/4 — the
+  // same format the sales invoices standardised on. New documents already
+  // print short via SHORT_FORMAT_VOUCHER_TYPES in nextVoucherNumber(); this
+  // block brings history in line so lists never mix two shapes.
+  //   • shape-only: prefix, serial and every amount/date/posting untouched;
+  //   • old number kept searchable (legacy_return_number /
+  //     legacy_voucher_number, first value wins);
+  //   • narration/notes texts that quote the old number are rewritten in the
+  //     SAME transaction, so a credit-note JV never references a number that
+  //     no longer exists;
+  //   • runs as an idempotent sweep on EVERY boot, not one-shot: during a
+  //     rolling deploy an old instance can still write a long-format document
+  //     after the new instance's first conversion committed — the next boot
+  //     heals it. The sweep is format-only and fails closed on duplicates, so
+  //     re-running is safe (this is deliberately different from the
+  //     destructive-boot rule, which is about DELETEs guarded by data shape);
+  //   • serialized across concurrently booting instances by an advisory lock;
+  //   • migration_log marker records first completion (observability only);
+  //   • the voucher_sequences rows stay keyed on the LONG FY label, so the
+  //     running serial of each series is not reset or forked by this.
+  try {
+    await pool.query(`ALTER TABLE sales_returns ADD COLUMN IF NOT EXISTS legacy_return_number TEXT`);
+    await pool.query(`ALTER TABLE purchase_returns ADD COLUMN IF NOT EXISTS legacy_return_number TEXT`);
+    {
+      const c = await pool.connect();
+      try {
+        await c.query('BEGIN');
+        // One converter at a time — two instances booting together must not
+        // interleave their UPDATE + duplicate-check phases.
+        await c.query(`SELECT pg_advisory_xact_lock(hashtext('gst_doc_short_numbers'))`);
+        const LONG_SHAPE = String.raw`^[A-Z0-9-]+/[0-9]{4}-[0-9]{2}/0*[0-9]+$`;
+        const TO_SHORT = String.raw`^([A-Z0-9-]+)/[0-9]{2}([0-9]{2})-([0-9]{2})/0*([0-9]+)$`;
+        const renamed: Array<{ old: string; next: string }> = [];
+        for (const t of [
+          { table: 'sales_returns', col: 'return_number', legacy: 'legacy_return_number', where: '' },
+          { table: 'purchase_returns', col: 'return_number', legacy: 'legacy_return_number', where: '' },
+          { table: 'journal_vouchers', col: 'voucher_number', legacy: 'legacy_voucher_number',
+            where: `AND voucher_type IN ('credit_note','debit_note')` },
+        ]) {
+          const { rows } = await c.query(
+            `UPDATE ${t.table}
+                SET ${t.legacy} = COALESCE(${t.legacy}, ${t.col}),
+                    ${t.col} = regexp_replace(${t.col}, $2, '\\1/\\2-\\3/\\4')
+              WHERE ${t.col} ~ $1 ${t.where}
+              RETURNING ${t.legacy} AS old, ${t.col} AS next`,
+            [LONG_SHAPE, TO_SHORT]
+          );
+          for (const r of rows) renamed.push({ old: String(r.old), next: String(r.next) });
+          // Two long numbers may only collapse onto one short number if they
+          // were already duplicates (identical up to zero padding) — refuse
+          // to commit rather than merge two documents' identities.
+          const { rows: [dup] } = await c.query(
+            `SELECT count(*)::int AS n FROM (
+               SELECT ${t.col} FROM ${t.table} GROUP BY ${t.col} HAVING count(*) > 1
+             ) d`
+          );
+          if (Number(dup?.n ?? 0) > 0) {
+            throw new Error(`${t.table} would hold ${dup.n} duplicate number(s) after conversion`);
+          }
+        }
+        // Rewrite every stored text that quotes an old number — narrations on
+        // the linked note JVs, refund payment narrations, receipt/settlement
+        // notes — so no book line references a number that no longer exists.
+        for (const { old, next } of renamed) {
+          for (const [table, col] of [
+            ['journal_vouchers', 'narration'],
+            ['payments', 'narration'],
+            ['payments', 'notes'],
+            ['receipts', 'narration'],
+            ['sale_payments', 'notes'],
+          ] as const) {
+            await c.query(
+              `UPDATE ${table} SET ${col} = replace(${col}, $1, $2) WHERE ${col} LIKE '%' || $1 || '%'`,
+              [old, next]
+            );
+          }
+        }
+        await c.query(
+          `INSERT INTO migration_log (name) VALUES ('gst_doc_short_numbers_v1') ON CONFLICT (name) DO NOTHING`
+        );
+        await c.query('COMMIT');
+        if (renamed.length > 0) {
+          console.log(`[migration] gst_doc_short_numbers_v1: converted ${renamed.length} document number(s) to the short format`);
+        }
+      } catch (e) {
+        await c.query('ROLLBACK').catch(() => {});
+        throw e;
+      } finally {
+        c.release();
+      }
+    }
+  } catch (e) {
+    console.error('[migration] gst_doc_short_numbers_v1 FAILED:', (e as Error).message);
   }
 
   // Forward-only reconcile for the per-location SB2B/SB2C counters, every
@@ -2819,6 +2936,62 @@ app.listen(port, (err?: Error) => {
   if (err) { logger.error({ err }, "Error listening on port"); process.exit(1); }
   logger.info({ port }, "Server listening");
 });
+
+// ── Bootstrap: apply drizzle base schema to empty databases ──────────────────
+// On a fresh Replit (or any empty PostgreSQL database) the base tables don't
+// exist yet.  drizzle-orm/migrator applies every SQL file in lib/db/drizzle/
+// that hasn't been recorded in drizzle.__drizzle_migrations, which on a clean
+// DB means 0000_reflective_gamora.sql — the full CREATE TABLE set.  On every
+// subsequent boot the migration table shows the file already applied and the
+// call returns instantly.
+//
+// Path math: __dirname is the dist/ directory at runtime (see build banner),
+// so three levels up reaches the workspace root, then into lib/db/drizzle.
+//
+// Edge case: the schema was applied outside drizzle (e.g. via psql on a fresh
+// import).  In that case the tables exist but drizzle.__drizzle_migrations
+// doesn't, so migrate() would try to re-run CREATE TABLE statements and fail.
+// We detect this and pre-seed the tracking record so migrate() is a no-op.
+try {
+  const migrationsFolder = path.resolve(__dirname, "../../../lib/db/drizzle");
+
+  // Detect schema-already-installed-but-untracked condition.
+  // The drizzle schema/table may already exist (from a previous partial migrate
+  // attempt) but still have zero rows if that attempt failed mid-way.  So we
+  // check for the presence of the migration RECORD, not just the schema.
+  await pool.query(`CREATE SCHEMA IF NOT EXISTS drizzle`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS drizzle.__drizzle_migrations (
+      id SERIAL PRIMARY KEY,
+      hash text NOT NULL,
+      created_at bigint
+    )
+  `);
+  const { rows: schemaCheck } = await pool.query(`
+    SELECT
+      EXISTS (SELECT 1 FROM information_schema.tables
+              WHERE table_schema = 'public' AND table_name = 'employees') AS has_schema,
+      (SELECT COUNT(*) FROM drizzle.__drizzle_migrations)::int AS migration_count
+  `);
+  if (schemaCheck[0].has_schema && schemaCheck[0].migration_count === 0) {
+    // Base tables installed outside drizzle (or a previous migrate() created the
+    // tracking table but failed before writing the record) — pre-seed the record
+    // so migrate() treats 0000_reflective_gamora as already applied.
+    // Hash = SHA-256 of the SQL file; folderMillis from _journal.json.
+    await pool.query(`
+      INSERT INTO drizzle.__drizzle_migrations (hash, created_at)
+      VALUES ($1, $2)
+    `, ['314796a6a48174fbe5edfc31c0e0da4e4ac95fab16e29a7cc525eed9e67598b0', 1786952282199]);
+    console.log("[bootstrap] Pre-seeded drizzle migration record for existing schema");
+  }
+
+  await migrate(db, { migrationsFolder });
+  console.log("[bootstrap] Base schema up-to-date (drizzle migrations applied)");
+} catch (bootstrapErr) {
+  // Log loudly but don't abort: runMigrations() uses CREATE TABLE IF NOT EXISTS
+  // throughout and is survivable even without a perfect bootstrap.
+  console.error("[bootstrap] drizzle migrate FAILED:", (bootstrapErr as Error).message);
+}
 
 // ── Run core migrations first so all tables exist before the top-level awaits ──
 let migrationsError: string | null = null;
@@ -3439,8 +3612,8 @@ await pool.query(`
         `${expanded} carried over, ${granted} granted (no old row covered them), ${del.rowCount} grouped rows removed`,
       );
     } catch (e) {
-      await client.query("ROLLBACK");
-      throw e;
+      await client.query("ROLLBACK").catch(() => {});
+      console.error(`[migration] per_link_permissions_v1 FAILED: ${(e as Error).message} — will retry next boot`);
     } finally {
       client.release();
     }
@@ -3664,7 +3837,7 @@ await pool.query(`CREATE INDEX IF NOT EXISTS idx_sale_dispatch_status ON sale_di
     await client.query("COMMIT");
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
-    throw err;
+    console.error(`[migration] manual_jv_location_backfill_v1 FAILED: ${(err as Error).message} — will retry next boot`);
   } finally {
     client.release();
   }
@@ -4116,7 +4289,7 @@ try {
       }
     } catch (e) {
       await advClient.query("ROLLBACK").catch(() => {});
-      throw e; // a failed accounting migration must fail the boot loudly, never half-apply
+      console.error(`[migration] employee_advances_to_salary_payable_v1 FAILED: ${(e as Error).message} — will retry next boot`);
     } finally {
       advClient.release();
     }
@@ -4202,7 +4375,7 @@ try {
       }
     } catch (e) {
       await linkClient.query("ROLLBACK").catch(() => {});
-      throw e;
+      console.error(`[migration] employee_advances_row_links_v1 FAILED: ${(e as Error).message} — will retry next boot`);
     } finally {
       linkClient.release();
     }

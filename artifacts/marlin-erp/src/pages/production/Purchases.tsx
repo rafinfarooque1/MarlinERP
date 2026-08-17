@@ -1,10 +1,9 @@
 import { useEffect, useState } from 'react';
 import { useLocation } from 'wouter';
 import {
-  usePaginatedPurchases, fetchAllPurchases, useListVendors, useListMaterials, useListRawMaterials, useListItems,
-  getListPurchasesQueryKey, useDeletePurchase, useGetCompanySettings, useGetPurchase,
+  usePaginatedPurchases, fetchAllPurchases, useListMaterials, useListRawMaterials, useListItems,
+  getListPurchasesQueryKey, useDeletePurchase, useGetPurchase,
 } from '@workspace/api-client-react';
-import { downloadPurchaseInvoicePDF } from '@/lib/purchasePdf';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -13,7 +12,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { Plus, Search, Trash2, ShoppingCart, Download, Eye, Calendar, FileDown, Edit2, AlertTriangle, FileText, Wallet, Receipt } from 'lucide-react';
 import { toast } from 'sonner';
-import { downloadCSV } from '@/lib/download';
+import { downloadCSV, downloadPDFFromEndpoint } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
 import { usePermission } from '@/lib/usePermission';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
@@ -65,7 +64,6 @@ export default function Purchases() {
   useEffect(() => {
     if (page > totalPages) setPage(totalPages);
   }, [page, totalPages]);
-  const { data: vendors = [] } = useListVendors();
   const { data: materials = [] } = useListMaterials();
   const { data: rawMaterials = [] } = useListRawMaterials();
   const { data: finishedItems = [] } = useListItems();
@@ -107,7 +105,6 @@ export default function Purchases() {
     });
 
   const deleteMutation = useDeletePurchase();
-  const { data: companySettings } = useGetCompanySettings();
 
   const getMaterialName = (li: any) => {
     if (li.materialName) return li.materialName; // server-enriched
@@ -116,18 +113,14 @@ export default function Purchases() {
     return materials.find((m: any) => m.id === li.materialId)?.name || `Item #${li.materialId}`;
   };
 
+  // Server-rendered from the stored bill under the receiving location's
+  // letterhead — the client sends only the id.
   const handleDownloadPO = async (p: any) => {
     try {
-      // The stored line already carries its name and unit; the client maps are
-      // only a fallback for a bill saved before that enrichment existed.
-      const lineItems = (p.lineItems ?? []).map((li: any) => ({
-        ...li,
-        materialName: li.materialName || getMaterialName(li),
-      }));
-      const vendor = (vendors as any[]).find((v: any) => v.id === p.vendorId);
-      await downloadPurchaseInvoicePDF({ ...p, lineItems }, companySettings ?? {}, vendor);
-    } catch {
-      toast.error('Could not generate the purchase invoice PDF');
+      await downloadPDFFromEndpoint('/api/pdf/purchase-bill', { id: p.id },
+        `Purchase-Invoice-PB-${String(p.id).padStart(4, '0')}.pdf`);
+    } catch (e: any) {
+      toast.error(e?.message || 'Could not generate the purchase invoice PDF');
     }
   };
 

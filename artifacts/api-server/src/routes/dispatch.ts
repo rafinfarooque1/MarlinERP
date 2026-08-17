@@ -41,27 +41,40 @@ const REQUIRED_CURRENT: Record<string, DispatchStatus> = {
 /** Days of sales the board shows when the caller sends no explicit window. */
 const DEFAULT_WINDOW_DAYS = 30;
 
-function summariseLineItems(lineItems: unknown): { itemCount: number; totalQty: number; itemsSummary: string } {
-  const lines = Array.isArray(lineItems) ? lineItems : [];
+interface DispatchLine {
+  name: string;
+  quantity: number;
+  unit: string;
+}
+
+function summariseLineItems(lineItems: unknown): { itemCount: number; totalQty: number; itemsSummary: string; lines: DispatchLine[] } {
+  const raw = Array.isArray(lineItems) ? lineItems : [];
   const names: string[] = [];
+  const lines: DispatchLine[] = [];
   let totalQty = 0;
-  for (const li of lines) {
+  for (const li of raw) {
     const name = String((li as any)?.itemName ?? "").trim();
     if (name) names.push(name);
     const q = Number((li as any)?.quantity ?? 0);
     if (Number.isFinite(q)) totalQty += q;
+    lines.push({
+      name: name || "(unnamed item)",
+      quantity: Number.isFinite(q) ? q : 0,
+      unit: String((li as any)?.unit ?? "").trim(),
+    });
   }
   const shown = names.slice(0, 3).join(", ");
   const more = names.length > 3 ? ` +${names.length - 3} more` : "";
   return {
-    itemCount: lines.length,
+    itemCount: raw.length,
     totalQty: Math.round(totalQty * 1000) / 1000,
     itemsSummary: shown + more,
+    lines,
   };
 }
 
 function rowToQueueEntry(r: any) {
-  const { itemCount, totalQty, itemsSummary } = summariseLineItems(r.line_items);
+  const { itemCount, totalQty, itemsSummary, lines } = summariseLineItems(r.line_items);
   return {
     saleId: Number(r.id),
     invoiceNumber: r.invoice_number,
@@ -76,6 +89,7 @@ function rowToQueueEntry(r: any) {
     itemCount,
     totalQty,
     itemsSummary,
+    lines,
     status: (r.dispatch_status ?? "PENDING") as DispatchStatus,
     readyAt: r.ready_at ? (r.ready_at instanceof Date ? r.ready_at.toISOString() : String(r.ready_at)) : null,
     readyBy: r.ready_by ?? null,

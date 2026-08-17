@@ -5,6 +5,12 @@ import { customFetch } from './custom-fetch';
 
 export type DispatchStatus = 'PENDING' | 'READY' | 'DISPATCHED';
 
+export interface DispatchLine {
+  name: string;
+  quantity: number;
+  unit: string;
+}
+
 export interface DispatchQueueEntry {
   saleId: number;
   invoiceNumber: string;
@@ -19,6 +25,8 @@ export interface DispatchQueueEntry {
   itemCount: number;
   totalQty: number;
   itemsSummary: string;
+  /** Full picking list — one entry per invoice line. */
+  lines: DispatchLine[];
   status: DispatchStatus;
   readyAt: string | null;
   readyBy: string | null;

@@ -29,6 +29,8 @@ export interface ItemOption {
   name: string;
   /** SKU / item code — searchable, and shown when the `code` column is on. */
   code?: string | null;
+  /** Barcode / EAN — searchable so a scanner wedge (types digits + Enter) finds the item. */
+  barcode?: string | null;
   /** HSN — searchable, and shown when the `hsn` column is on. */
   hsn?: string | null;
   /** Unit of measure, rendered next to `available`. */
@@ -124,7 +126,8 @@ export function SearchableItemSelect({
     return items.filter(i =>
       i.name.toLowerCase().includes(q) ||
       (i.code ?? '').toLowerCase().includes(q) ||
-      (i.hsn ?? '').toLowerCase().includes(q),
+      (i.hsn ?? '').toLowerCase().includes(q) ||
+      (i.barcode ?? '').toLowerCase().includes(q),
     );
   }, [items, query]);
 
@@ -167,9 +170,12 @@ export function SearchableItemSelect({
             'w-full justify-between font-normal',
             !selected && 'text-muted-foreground',
             className,
+            // Long product names WRAP instead of truncating — placed after the
+            // caller's className so h-auto wins over any fixed h-8/h-9 passed in.
+            'h-auto min-h-8 py-1.5 whitespace-normal',
           )}
         >
-          <span className="truncate" title={selected?.name}>{selected?.name ?? placeholder}</span>
+          <span className="min-w-0 text-left break-words leading-snug">{selected?.name ?? placeholder}</span>
           <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
         </Button>
       </PopoverTrigger>

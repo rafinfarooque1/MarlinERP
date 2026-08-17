@@ -15,6 +15,25 @@ export const DEFAULT_VOUCHER_PREFIXES: Record<string, string> = {
   expense: "EXP",
 };
 
+/**
+ * GST document series that print the SHORT number format — PREFIX/26-27/4
+ * (short FY label, no zero padding) — matching the sales invoice format the
+ * business standardised on in Aug 2026. Internal vouchers (payments,
+ * receipts, journal, contra, expense) deliberately keep the long padded
+ * format: the owner chose to convert customer/GST documents only.
+ *
+ * IMPORTANT: this changes only the PRINTED shape. The voucher_sequences row
+ * stays keyed on the canonical long FY label ("2026-27"), so the running
+ * serial continues exactly where it was — a format change must never reset
+ * or fork a statutory sequence mid-year.
+ */
+export const SHORT_FORMAT_VOUCHER_TYPES: ReadonlySet<string> = new Set([
+  "sales_return",
+  "purchase_return",
+  "credit_note",
+  "debit_note",
+]);
+
 export const VOUCHER_TYPE_LABELS: Record<string, string> = {
   payment: "Payment",
   receipt: "Receipt",
@@ -90,6 +109,12 @@ export async function nextVoucherNumber(
     [voucherType, fyLabel]
   );
 
+  // GST document series print short — SR/26-27/5 — but the sequence row above
+  // is ALWAYS keyed on the long label, so the serial never resets on a format
+  // change. Internal vouchers keep the long padded shape.
+  if (SHORT_FORMAT_VOUCHER_TYPES.has(voucherType)) {
+    return `${prefix}/${shortFyLabel(fyLabel)}/${String(seq.last_number)}`;
+  }
   return `${prefix}/${fyLabel}/${String(seq.last_number).padStart(4, "0")}`;
 }
 

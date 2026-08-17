@@ -1,0 +1,168 @@
+The production Android APK is now installing and opening correctly.
+
+However, login from the installed Android app is failing.
+
+The mobile app shows an HTTP error on the Sign In screen after entering valid employee credentials.
+
+IMPORTANT:
+Do not rebuild or redesign the login UI.
+Do not create a separate authentication system.
+Do not change the existing ERP authentication rules.
+
+Fix the mobile app's connection to the EXISTING ERP login backend.
+
+==================================================
+MOBILE LOGIN DEBUGGING
+==================================================
+
+1. Reproduce the login failure using the production APK.
+
+2. Identify the exact API endpoint the mobile app calls when Sign In is pressed.
+
+3. Log/inspect:
+
+- request URL
+- HTTP method
+- request payload shape
+- response status
+- response body
+- API base URL
+- authentication headers
+- CORS/origin handling if applicable
+- HTTPS/production-domain configuration
+
+Do NOT log or expose the user's password.
+
+==================================================
+IMPORTANT
+==================================================
+
+The website ERP login already works.
+
+The mobile app MUST use the same existing authentication backend and authentication rules.
+
+Compare:
+
+WEB LOGIN
+vs
+MOBILE LOGIN
+
+and determine exactly why the mobile request is being rejected.
+
+==================================================
+CHECK THESE FIRST
+==================================================
+
+A. Production API base URL
+
+Make sure the APK is NOT calling:
+
+localhost
+127.0.0.1
+10.0.2.2
+a Replit development URL
+an old API URL
+an Expo development URL
+
+The production APK must use the live ERP/API domain.
+
+B. Authentication endpoint
+
+Confirm that the mobile app is calling the current production login endpoint.
+
+Do not invent a second endpoint.
+
+C. Request format
+
+Confirm the mobile request matches the existing backend contract exactly.
+
+D. Headers
+
+Check whether the backend expects any required headers.
+
+E. CORS / origin
+
+If the API rejects the request because of origin/CORS handling, fix the server configuration appropriately.
+
+Do not weaken authentication or security merely to make the request work.
+
+F. Employee authentication
+
+The mobile login must support the existing employee credentials and existing permission/location rules.
+
+Do not bypass:
+
+- employee permissions
+- location restrictions
+- password rules
+- forced password change
+- account status
+- role restrictions
+
+==================================================
+TEST WITH A REAL ACCOUNT
+==================================================
+
+Use a valid test employee account.
+
+Do not expose its password in logs.
+
+Test:
+
+Mobile APK
+→ Sign In
+→ API request
+→ authentication
+→ successful session/token
+→ dashboard
+
+==================================================
+AFTER LOGIN
+==================================================
+
+Once login succeeds, verify:
+
+1. Dashboard opens.
+2. Current location is correct.
+3. Employee permissions are respected.
+4. Warehouse/Head Office restrictions are respected.
+5. Logout works.
+6. Login again works.
+7. Session/token persists correctly where intended.
+
+==================================================
+IMPORTANT — DO NOT FAKE SUCCESS
+==================================================
+
+Do not simply change the UI to hide the HTTP error.
+
+Do not hardcode a successful login.
+
+Do not create mock authentication.
+
+Fix the actual production API connection.
+
+==================================================
+FINAL ACCEPTANCE TEST
+==================================================
+
+Install the actual production APK on an Android phone.
+
+Open:
+
+Marlin Employee Portal
+
+Enter valid employee credentials.
+
+Press:
+
+Sign In
+
+Expected:
+
+Successful authentication
+→ Employee dashboard
+
+No HTTP error.
+
+Report the exact root cause found and the fix applied.

@@ -14,7 +14,7 @@ import {
   useListStockTransfers, useCreateStockTransfer,
   useListItems, useListRawMaterials, useListMaterials,
   useListWarehouses, useListStock,
-  getListStockTransfersQueryKey, useGetCompanySettings,
+  getListStockTransfersQueryKey,
   useSuggestBatches, useListStockBatches,
   useGetMe,
   type StockBatch,
@@ -388,7 +388,6 @@ export default function Transfers() {
   // view labels each row from the transfer's own `fromName`/`toName`, so past
   // transfers to/from an outlet keep displaying that outlet even when disabled.
   const { data: outlets = [] }      = useEnabledOutlets();
-  const { data: companySettings }   = useGetCompanySettings();
   const queryClient = useQueryClient();
   const createMutation = useCreateStockTransfer();
 
@@ -678,21 +677,11 @@ export default function Transfers() {
   };
 
   // ── PDF download ────────────────────────────────────────────────────────────
+  // Server-rendered from the stored transfer under the dispatching location's
+  // letterhead — the client sends only the id.
   const handleDownloadPDF = async (t: any) => {
-    const cs = companySettings as any;
-    const lineItems = (t.lineItems || []).map((li: any) => {
-      const item = allItemsMap.get(`${li.materialType ?? 'item'}:${li.itemId}`);
-      return { name: item?.name ?? `Item #${li.itemId}`, hsnCode: (item as any)?.hsnCode, quantity: li.quantity, unit: item?.unit ?? '' };
-    });
     try {
-      await downloadPDFFromEndpoint('/api/pdf/challan', {
-        cs, challanNo: t.challanNumber,
-        date: new Date(t.transferDate).toLocaleDateString('en-IN'),
-        fromName: t.fromName, fromType: t.fromType,
-        toName: t.toName,     toType: t.toType,
-        lineItems, isInterstate: t.isInterstate, status: t.status,
-        notes: t.notes, approvedBy: t.approvedBy,
-      }, `${t.challanNumber || 'Challan'}.pdf`);
+      await downloadPDFFromEndpoint('/api/pdf/challan', { id: t.id }, `${t.challanNumber || 'Challan'}.pdf`);
     } catch (e: any) { toast.error(e?.message || 'Failed to generate PDF'); }
   };
 

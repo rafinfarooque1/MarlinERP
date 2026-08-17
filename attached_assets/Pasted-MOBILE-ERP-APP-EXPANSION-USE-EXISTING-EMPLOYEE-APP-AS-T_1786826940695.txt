@@ -1,0 +1,1207 @@
+MOBILE ERP APP EXPANSION — USE EXISTING EMPLOYEE APP AS THE MASTER UI
+
+IMPORTANT:
+
+There is already a working mobile app for this ERP.
+
+The current app is mainly an Employee Portal containing:
+
+- Home
+- Payslips
+- Attendance
+- Leaves
+- Check In / Check Out
+- Employee information
+
+I have provided the current app screen recording.
+
+DO NOT throw away the existing mobile app.
+
+DO NOT redesign it from scratch.
+
+Use the CURRENT MOBILE APP as the master visual/design reference and expand it into a proper ERP mobile application.
+
+The current app already has a good modern mobile UI:
+- dark professional theme
+- rounded cards
+- bottom navigation
+- large touch-friendly controls
+- clean typography
+- colored status indicators
+- compact dashboard cards
+- mobile-first layout
+
+KEEP THIS DESIGN LANGUAGE.
+
+The objective is to add ERP operational functionality while preserving the existing Employee Portal functionality.
+
+============================================================
+1. MOBILE APP SHOULD BECOME ERP COMPANION APP
+============================================================
+
+The mobile app must support:
+
+1. Dashboard
+2. Sales
+3. Dispatch
+4. Stock
+5. Payment Voucher
+6. Receipt Voucher
+7. Attendance
+8. Payslips
+9. Leaves
+10. Employee Profile / My Details
+
+The exact modules visible to a user must depend on their ERP permissions and assigned location.
+
+Do NOT show modules that the user does not have permission to access.
+
+============================================================
+2. EXISTING EMPLOYEE FEATURES MUST REMAIN
+============================================================
+
+Do NOT break the existing:
+
+Home
+Payslips
+Attendance
+Leaves
+Check In
+Check Out
+Employee details
+
+Keep all existing employee functionality working.
+
+The new ERP modules should be integrated into the existing application rather than replacing it.
+
+============================================================
+3. LOGIN
+============================================================
+
+Use the existing ERP authentication system.
+
+The mobile app must use the same user credentials and permission model as the ERP website.
+
+Do NOT create a separate user/account system.
+
+After login:
+
+Load the user's:
+
+- role
+- permissions
+- employee
+- location
+- assigned warehouse/outlet
+- Head Office access
+- All Locations permission
+
+automatically.
+
+============================================================
+4. LOCATION RULES
+============================================================
+
+Follow the exact ERP location permission model.
+
+WAREHOUSE EMPLOYEE:
+
+Can see only their assigned warehouse.
+
+OUTLET EMPLOYEE:
+
+Can see only their assigned outlet.
+
+HEAD OFFICE EMPLOYEE:
+
+Current Location selector may contain:
+
+- Head Office
+- permitted warehouses/outlets
+- All Locations
+
+All Locations:
+
+→ consolidated data
+
+Head Office:
+
+→ Head Office data ONLY
+
+Warehouse:
+
+→ that warehouse ONLY
+
+IMPORTANT:
+
+Never allow a warehouse employee to access another warehouse by changing:
+
+URL
+API parameter
+location ID
+request payload
+mobile route
+
+Location security must be enforced by backend APIs.
+
+============================================================
+5. MOBILE DASHBOARD
+============================================================
+
+Create a mobile version of the existing ERP Business Dashboard.
+
+Use the same business metrics as the website, but optimized for mobile.
+
+Show cards such as:
+
+Sales
+Purchases
+Inventory Value
+Receivables
+Payables
+Cash Balance
+Bank Balance
+Gross Profit
+Net Profit
+Payments
+Receipts
+
+The default dashboard period should be:
+
+TODAY
+
+not This Month.
+
+Each KPI card should be tappable.
+
+Example:
+
+Sales
+→ Sales list
+
+Purchases
+→ Purchase list
+
+Inventory
+→ Stock
+
+Receivables
+→ Outstanding / Receivables
+
+Payables
+→ Outstanding / Payables
+
+Payments
+→ Payment Vouchers
+
+Receipts
+→ Receipt Vouchers
+
+Cash
+→ Cash Book
+
+Bank
+→ Bank Book
+
+Gross Profit
+→ P&L / GP section
+
+Net Profit
+→ P&L / NP section
+
+============================================================
+6. MOBILE DASHBOARD DESIGN
+============================================================
+
+Use the existing employee app's visual style.
+
+Use:
+
+- dark background
+- rounded cards
+- clean icons
+- clear numeric values
+- subtle borders
+- compact sections
+- touch-friendly buttons
+- bottom navigation
+
+Do not simply shrink the desktop dashboard.
+
+Create a genuine mobile layout.
+
+Example:
+
+TODAY
+
+Sales
+₹xx,xxx
+
+Purchases
+₹xx,xxx
+
+Receivables
+₹xx,xxx
+
+Payables
+₹xx,xxx
+
+Then:
+
+Quick Actions
+
+New Sale
+Stock
+Dispatch
+Receipt
+Payment
+
+Then:
+
+Business Insights
+
+Top Items
+Low Stock
+Pending Dispatch
+Outstanding
+etc.
+
+============================================================
+7. SALES MODULE
+============================================================
+
+Add a mobile Sales module.
+
+The mobile Sales module must use the existing ERP Sales/POS backend.
+
+Do NOT create separate mobile accounting logic.
+
+Show:
+
+Today's Sales
+Recent Sales
+Search
+Filter
+Customer
+Location
+Status
+Amount
+Payment Status
+
+Allow authorized users to create a New Sale.
+
+New Sale must use the same business logic as the website POS.
+
+Support:
+
+Customer
+Location
+Items
+Quantity
+MRP
+Selling Rate
+Discount
+GST
+Other Charges
+Payment Mode
+Cash
+Bank
+Credit
+Partial Payment
+Overpayment
+
+The mobile UI should be optimized for fast billing.
+
+============================================================
+8. MOBILE NEW SALE
+============================================================
+
+Use a full-screen mobile transaction flow.
+
+Do NOT use a tiny desktop popup squeezed into mobile.
+
+Step/section structure:
+
+SALE
+
+Location
+Customer
+Date
+
+ITEMS
+
+Search / Scan Item
+
+Item
+Qty
+Rate
+Discount
+Tax
+Amount
+
+SUMMARY
+
+Subtotal
+Discount
+Tax
+Other Charges
+Grand Total
+
+PAYMENT
+
+Payment Mode
+Amount Paid
+Balance
+
+COMPLETE SALE
+
+The user must be able to complete a sale comfortably using one hand where practical.
+
+============================================================
+9. CUSTOMER PRICE HISTORY
+============================================================
+
+When authorized user selects an item for a customer:
+
+Show a small warning/history icon.
+
+Tap it:
+
+Show recent selling prices for that customer and item.
+
+Example:
+
+Last Sale
+₹165
+
+Previous
+₹170
+
+Previous
+₹160
+
+Do not automatically change the selling price.
+
+============================================================
+10. DISPATCH MODULE
+============================================================
+
+Add a mobile Dispatch module.
+
+This is a warehouse operational module.
+
+It is NOT another sales/accounting module.
+
+When a POS sale is created:
+
+The relevant sale appears in the Dispatch queue.
+
+Warehouse employee sees:
+
+Customer
+Phone
+Address
+Invoice Number
+Items
+Quantity
+Status
+
+Do NOT show unnecessary financial information to warehouse dispatch staff.
+
+Workflow:
+
+PENDING
+→ READY
+→ DISPATCHED
+
+Warehouse employee can:
+
+View
+Mark Ready
+Mark Dispatched
+
+IMPORTANT:
+
+Dispatch status must NOT:
+
+create another sale
+create purchase
+reduce stock again
+create accounting entries
+change revenue
+change customer balance
+
+The original POS sale already handles accounting and stock.
+
+Dispatch is only fulfillment tracking.
+
+============================================================
+11. MOBILE DISPATCH LIST
+============================================================
+
+Use attractive mobile cards.
+
+Example:
+
+ORDER #SB2C/26-27/528
+
+Customer Name
+Phone
+Location
+
+3 Items
+
+Mango — 20 kg
+Avocado — 10 kg
+Blueberry — 5 kg
+
+[READY]
+
+Then:
+
+[DISPATCH]
+
+Use clear status colors.
+
+============================================================
+12. STOCK MODULE
+============================================================
+
+Add Stock to the mobile app.
+
+Show:
+
+Current Stock
+Item
+SKU
+Quantity
+Unit
+MRP
+Unit Cost where permitted
+Location
+Storage Location
+
+Search item.
+
+Filter:
+
+Location
+Item Type
+Low Stock
+Available
+etc.
+
+Do NOT expose valuation information to users who do not have the valuation permission.
+
+============================================================
+13. MOBILE ITEM DETAIL
+============================================================
+
+When user taps an item:
+
+Show:
+
+Item Name
+SKU
+Current Quantity
+Unit
+MRP
+Unit Cost if permitted
+
+Batch
+Manufacture Date
+Expiry Date
+Shelf Life
+
+Storage Locations
+
+Example:
+
+Freezer 1
+30 kg
+
+Freezer 2
+18 kg
+
+Unassigned
+0 kg
+
+============================================================
+14. ITEM TRACKING
+============================================================
+
+Where the user has permission, provide mobile access to Item Tracking.
+
+Show:
+
+Purchases
+Sales
+Returns
+Transfers
+Adjustments
+Production
+Current Locations
+
+Timeline format is preferred on mobile.
+
+Example:
+
+10 Aug
+Purchase
+Vendor A
++50 kg
+
+12 Aug
+Moved
+Freezer 1
+30 kg
+
+14 Aug
+Sale
+Customer B
+-10 kg
+
+Current:
+40 kg
+
+============================================================
+15. RECEIPT VOUCHER
+============================================================
+
+Add Receipt Voucher to mobile.
+
+Use the existing Receipt Voucher backend.
+
+Do NOT create separate accounting logic.
+
+Authorized users can create:
+
+Receipt Voucher
+
+Fields:
+
+Location
+Date
+Party Type
+Received From
+Ledger
+Amount
+Payment Mode
+Reference
+Narration
+
+Party Type:
+
+Customer
+Vendor
+Employee
+Other Ledger
+
+Employee:
+
+Only employee-related ledgers allowed by the existing accounting rules.
+
+Other Ledger:
+
+Appropriate Chart of Accounts ledgers.
+
+============================================================
+16. PAYMENT VOUCHER
+============================================================
+
+Add Payment Voucher to mobile.
+
+Use existing Payment Voucher backend.
+
+Fields:
+
+Location
+Date
+Party Type
+Payment To
+Ledger
+Amount
+Payment Mode
+Reference
+Narration
+
+Party Type:
+
+Customer
+Vendor
+Employee
+Other Ledger
+
+Employee:
+
+Salary Payable
+Salary Expense
+
+according to existing ERP rules.
+
+Do not create a separate employee advance accounting system.
+
+============================================================
+17. VOUCHER SECURITY
+============================================================
+
+Follow existing permissions.
+
+View
+Create
+Edit
+Delete
+Download
+
+must all be permission controlled.
+
+Delete remains Admin-only where already defined.
+
+A warehouse employee must not gain accounting privileges merely because the mobile app exists.
+
+============================================================
+18. MOBILE VOUCHER UI
+============================================================
+
+Use the existing app style.
+
+Use:
+
+rounded sections
+large touch fields
+searchable dropdowns
+bottom action area
+clear amount display
+
+Avoid tiny desktop-style tables.
+
+For Party Type:
+
+Customer
+Vendor
+Employee
+Other Ledger
+
+After selecting Party Type:
+
+show only the appropriate list.
+
+============================================================
+19. MOBILE SEARCHABLE DROPDOWNS
+============================================================
+
+Every long selection list must have:
+
+Search field
+Scrollable results
+Clear selection
+Current selection
+
+Examples:
+
+Customers
+Vendors
+Employees
+Items
+Ledgers
+Banks
+Payment Accounts
+Warehouses
+Storage Locations
+
+Do NOT use giant unsearchable dropdowns.
+
+============================================================
+20. MOBILE NAVIGATION
+============================================================
+
+Keep the existing bottom navigation concept.
+
+Do not overload it with too many tabs.
+
+Recommended structure:
+
+Home
+Sales
+Dispatch
+Stock
+More
+
+Inside More:
+
+Payment Vouchers
+Receipt Vouchers
+Payslips
+Attendance
+Leaves
+Profile
+
+However, dynamically show/hide modules according to permissions.
+
+For users who mainly use employee functionality, keep:
+
+Home
+Payslips
+Attendance
+Leaves
+
+available.
+
+============================================================
+21. PROFILE
+============================================================
+
+Keep the existing profile/user area.
+
+Show:
+
+Name
+Username
+Role
+Location
+Employee information
+
+Include:
+
+Logout
+
+Do not expose admin settings to normal users.
+
+============================================================
+22. APP DOWNLOAD FROM ERP WEBSITE
+============================================================
+
+Add an "Download App" option to the ERP website.
+
+Location:
+
+Top-right profile/user menu.
+
+Example:
+
+Profile icon
+↓
+Download Mobile App
+
+The user clicks:
+
+Download Mobile App
+
+and gets the appropriate installation option.
+
+============================================================
+23. IOS + ANDROID
+============================================================
+
+The mobile application must support:
+
+iOS
+Android
+
+Prefer a single cross-platform codebase where practical.
+
+Do not create two completely unrelated applications unless technically required.
+
+The app must use the same ERP backend APIs.
+
+============================================================
+24. APP DOWNLOAD EXPERIENCE
+============================================================
+
+From the website:
+
+Profile Icon
+→ Download Mobile App
+
+Show a professional download page/modal.
+
+Example:
+
+GET THE ERP MOBILE APP
+
+Manage your business from anywhere.
+
+[ App Store ]
+[ Google Play ]
+
+If direct store links are not yet available:
+
+provide a configurable download page/QR code system.
+
+The URLs must be configurable through the deployment environment/settings rather than hardcoded throughout the application.
+
+============================================================
+25. QR CODE
+============================================================
+
+The website's Download App screen should optionally show:
+
+Scan to Download
+
+QR Code
+
+The QR code should intelligently direct:
+
+iPhone
+→ App Store
+
+Android
+→ Google Play
+
+Desktop:
+→ show both options.
+
+============================================================
+26. PWA / INSTALLABLE WEB APP
+============================================================
+
+If native App Store / Play Store deployment is not yet available, prepare the application for installability as a PWA where technically appropriate.
+
+However:
+
+Do NOT pretend a PWA is an App Store/Google Play application.
+
+Clearly separate:
+
+Native App
+PWA
+
+depending on the actual deployment state.
+
+============================================================
+27. PUSH NOTIFICATIONS
+============================================================
+
+Design the mobile architecture so push notifications can be added.
+
+Potential future notifications:
+
+New sale
+Pending dispatch
+Low stock
+Payment received
+New receipt
+Payroll available
+
+Do not implement unnecessary notifications unless the infrastructure already supports them.
+
+============================================================
+28. OFFLINE / NETWORK HANDLING
+============================================================
+
+Mobile app must handle poor network conditions gracefully.
+
+If network is unavailable:
+
+Show:
+
+No Internet Connection
+
+Do not silently submit a transaction twice.
+
+For financial transactions:
+
+use idempotency protection.
+
+Never create duplicate:
+
+Sales
+Payments
+Receipts
+Vouchers
+
+because the user tapped the button twice or network retried.
+
+============================================================
+29. SECURITY
+============================================================
+
+Mobile app must use secure authentication.
+
+Do not store sensitive credentials insecurely.
+
+Respect existing session/token rules.
+
+Backend must enforce:
+
+Role
+Permission
+Location
+Action
+
+Do not rely on mobile UI restrictions.
+
+A user must not gain access by manually calling an API.
+
+============================================================
+30. DOCUMENTS FROM MOBILE
+============================================================
+
+Where appropriate, allow:
+
+View Invoice
+Download Invoice PDF
+View Receipt
+Download Voucher PDF
+
+Use the same professional document templates already defined for the ERP website.
+
+Location-specific header must remain correct.
+
+============================================================
+31. MOBILE PERFORMANCE
+============================================================
+
+Optimize for:
+
+fast startup
+fast navigation
+small API payloads
+pagination
+lazy loading
+cached read-only data where safe
+
+Do not load the entire ERP database into the mobile app.
+
+============================================================
+32. RESPONSIVE DESIGN
+============================================================
+
+The mobile app should support common:
+
+iPhone
+Android phone
+small phone
+large phone
+
+screen sizes.
+
+Do not assume one fixed resolution.
+
+============================================================
+33. DESIGN LANGUAGE
+============================================================
+
+Use the existing Employee Portal as the visual foundation.
+
+Preserve the feel of:
+
+Dark navy/black background
+Bright cyan primary action
+Rounded cards
+Soft borders
+Large readable numbers
+Clean icons
+Bottom navigation
+Touch-friendly controls
+
+But extend the design to create a professional ERP mobile experience.
+
+Do NOT make the new modules look like a completely different application.
+
+============================================================
+34. WEBSITE ↔ MOBILE CONSISTENCY
+============================================================
+
+Website and mobile app must use the same:
+
+users
+customers
+vendors
+items
+stock
+locations
+sales
+receipts
+payments
+employees
+permissions
+accounting
+GST data
+
+The mobile app is another client of the same ERP.
+
+It is NOT a separate ERP.
+
+============================================================
+35. IMPORTANT ACCOUNTING RULE
+============================================================
+
+Mobile transactions must call the existing ERP backend services.
+
+DO NOT duplicate accounting logic inside the mobile application.
+
+Example:
+
+Mobile Sale
+→ existing Sale API/service
+→ existing accounting engine
+→ existing inventory engine
+→ existing ledger
+→ existing reports/dashboard
+
+Mobile Receipt
+→ existing Receipt Voucher backend
+
+Mobile Payment
+→ existing Payment Voucher backend
+
+============================================================
+36. TESTING
+============================================================
+
+Test the mobile app using:
+
+Admin
+Head Office user
+Warehouse manager
+Warehouse employee
+Outlet employee
+
+Verify each user's modules according to permissions.
+
+Test:
+
+Login
+Logout
+Dashboard
+Sales
+New Sale
+Partial Payment
+Credit Sale
+Stock
+Item Detail
+Storage Location
+Dispatch
+Ready
+Dispatched
+Receipt Voucher
+Payment Voucher
+Attendance
+Payslip
+Leaves
+Profile
+
+============================================================
+37. LOCATION SECURITY TEST
+============================================================
+
+Warehouse A employee:
+
+must see only Warehouse A.
+
+Try manually selecting:
+
+Warehouse B
+
+→ must be denied.
+
+Try API request for Warehouse B:
+
+→ must be denied.
+
+Try All Locations:
+
+→ must be denied.
+
+Head Office authorized employee:
+
+Head Office
+→ Head Office only
+
+All Locations
+→ consolidated
+
+Warehouse
+→ selected warehouse only
+
+============================================================
+38. FINAL ACCEPTANCE CRITERIA
+============================================================
+
+The final result should be:
+
+EXISTING EMPLOYEE APP
++
+ERP BUSINESS FUNCTIONS
++
+SAME ERP BACKEND
++
+SAME PERMISSIONS
++
+SAME LOCATION SECURITY
++
+MOBILE-FIRST UX
+
+The user should be able to open the ERP website and click:
+
+Profile
+→ Download Mobile App
+
+and access the official iOS / Android download options.
+
+The mobile app should then allow authorized users to perform the required ERP operations without needing the desktop website for:
+
+Sales
+Dispatch
+Stock
+Payment Voucher
+Receipt Voucher
+Dashboard
+
+while preserving:
+
+Attendance
+Payslips
+Leaves
+Employee Profile
+
+============================================================
+39. IMPLEMENTATION SAFETY
+============================================================
+
+Before making changes:
+
+1. Inspect the existing mobile app.
+2. Inspect the existing ERP backend APIs.
+3. Inspect authentication.
+4. Inspect permissions.
+5. Inspect location restrictions.
+6. Identify which APIs can be reused.
+7. Do not duplicate existing backend logic.
+8. Create a checkpoint before major changes.
+
+Implement incrementally.
+
+Do not break the existing employee app.
+
+============================================================
+40. FINAL REPORT
+============================================================
+
+At completion report:
+
+- existing mobile features preserved
+- new mobile modules added
+- backend APIs reused
+- new APIs created
+- permission changes
+- location-security verification
+- iOS status
+- Android status
+- website Download App implementation
+- App Store link status
+- Google Play link status
+- PWA status if applicable
+- tests performed
+- bugs found
+- bugs fixed
+- remaining deployment requirements
+
+IMPORTANT:
+
+Do not claim that an iOS/Android app has been published unless it has actually been built and published.
+
+If App Store/Google Play credentials or publishing configuration are required, clearly identify what remains.
+
+The mobile app must remain a secure client of the existing ERP, not a separate accounting/inventory system.

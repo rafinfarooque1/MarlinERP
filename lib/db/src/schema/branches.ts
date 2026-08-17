@@ -40,6 +40,8 @@ export const warehousesTable = pgTable("warehouses", {
 
   invoiceFooter: text("invoice_footer"),
   authorizedSignatory: text("authorized_signatory"),
+  /** Letterhead logo as an inline PNG/JPEG data URI. Null = use company logo. */
+  logoUrl: text("logo_url"),
 
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),

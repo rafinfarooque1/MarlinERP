@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import {
   useListWarehouses, useCreateWarehouse, useUpdateWarehouse, getListWarehousesQueryKey,
   useGetMe, useListHierarchies,
@@ -17,7 +17,8 @@ import { StateCombobox } from '@/components/ui/state-combobox';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Plus, Search, Edit2, Trash2, Warehouse, Download, Eye, ShieldOff, AlertTriangle, CheckCircle2, Ban, Power, Loader2 } from 'lucide-react';
+import { Plus, Search, Edit2, Trash2, Warehouse, Download, Eye, ShieldOff, AlertTriangle, CheckCircle2, Ban, Power, Loader2, Upload, X, ImageIcon } from 'lucide-react';
+import { normaliseLogo, readFileAsDataUrl } from '@/lib/logoUpload';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV } from '@/lib/download';
@@ -147,7 +148,13 @@ export default function Warehouses() {
 
   const form = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: EMPTY });
 
-  const openAdd = () => { setEditingId(null); form.reset(EMPTY); setIsOpen(true); };
+  // The letterhead logo lives outside the RHF string fields: it is an image
+  // managed by its own picker, sent alongside the form values on save.
+  const [logoDataUrl, setLogoDataUrl] = useState<string | null>(null);
+  const [logoBusy, setLogoBusy] = useState(false);
+  const logoInputRef = useRef<HTMLInputElement | null>(null);
+
+  const openAdd = () => { setEditingId(null); form.reset(EMPTY); setLogoDataUrl(null); setIsOpen(true); };
   const openEdit = (w: WarehouseRow) => {
     setEditingId(w.id);
     // Spread over EMPTY so a column the server has not filled in yet arrives as
@@ -159,7 +166,22 @@ export default function Warehouses() {
       next[k] = typeof v === 'string' ? v : '';
     }
     form.reset(next);
+    const logo = src['logoUrl'];
+    setLogoDataUrl(typeof logo === 'string' && logo.startsWith('data:image/') ? logo : null);
     setIsOpen(true);
+  };
+
+  const onPickLogo = async (file: File | undefined) => {
+    if (!file) return;
+    setLogoBusy(true);
+    try {
+      setLogoDataUrl(await normaliseLogo(await readFileAsDataUrl(file)));
+    } catch {
+      toast.error('Could not read that image — please choose a PNG or JPEG');
+    } finally {
+      setLogoBusy(false);
+      if (logoInputRef.current) logoInputRef.current.value = '';
+    }
   };
 
   const onSubmit = (data: FormValues) => {
@@ -171,7 +193,8 @@ export default function Warehouses() {
       },
       onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
     };
-    const payload = { ...data, gstNumber: data.gstNumber.toUpperCase(), ifscCode: (data.ifscCode || '').toUpperCase() };
+    // Empty string clears the stored logo; the server validates the data URI.
+    const payload = { ...data, gstNumber: data.gstNumber.toUpperCase(), ifscCode: (data.ifscCode || '').toUpperCase(), logoUrl: logoDataUrl ?? '' };
     if (editingId) updateMutation.mutate({ id: editingId, data: payload as any }, opts);
     else createMutation.mutate({ data: payload as any }, opts);
   };
@@ -455,6 +478,33 @@ export default function Warehouses() {
               </Section>
 
               <Section title="Invoice Settings">
+                <div className="sm:col-span-2 space-y-1.5">
+                  <span className="text-sm font-medium">Letterhead Logo</span>
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-md border border-border bg-muted/40">
+                      {logoDataUrl
+                        ? <img src={logoDataUrl} alt="Location logo" className="max-h-full max-w-full object-contain" />
+                        : <ImageIcon className="h-6 w-6 text-muted-foreground" />}
+                    </div>
+                    <div className="flex flex-col gap-1.5">
+                      <div className="flex gap-2">
+                        <Button type="button" variant="outline" size="sm" disabled={logoBusy}
+                          onClick={() => logoInputRef.current?.click()}>
+                          {logoBusy ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Upload className="mr-1.5 h-3.5 w-3.5" />}
+                          {logoDataUrl ? 'Replace' : 'Upload'}
+                        </Button>
+                        {logoDataUrl && (
+                          <Button type="button" variant="ghost" size="sm" onClick={() => setLogoDataUrl(null)}>
+                            <X className="mr-1 h-3.5 w-3.5" />Remove
+                          </Button>
+                        )}
+                      </div>
+                      <p className="text-xs text-muted-foreground">Printed on this location’s invoices and vouchers. Falls back to the company logo when blank.</p>
+                    </div>
+                    <input ref={logoInputRef} type="file" accept="image/png,image/jpeg" className="hidden"
+                      onChange={e => onPickLogo(e.target.files?.[0])} />
+                  </div>
+                </div>
                 <FormField control={form.control} name="authorizedSignatory" render={({ field }) => (
                   <FormItem className="sm:col-span-2"><FormLabel>Authorised Signatory</FormLabel><FormControl><Input placeholder="Name printed above the signature line" {...field} /></FormControl><FormMessage /></FormItem>
                 )} />

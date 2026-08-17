@@ -1557,20 +1557,25 @@ export async function buildDerivedPostings(opts: { toDate?: string; q?: Q } = {}
 // balance for the same day and journal-only movements were shown as a lump.
 
 router.get("/accounts/day-book", requireModuleView("page:/accounts/day-book"), async (req, res): Promise<void> => {
-  // LBAC: the day book is a Head Office accounting view
-  if ((req as any).employee?.branchType !== 'headoffice') {
-    res.json({ date: "", entries: [], totals: { count: 0, amount: 0, debit: 0, credit: 0, byType: {} } });
-    return;
-  }
+  // LBAC first (same rule as statementLocationFilter in accounts.ts): a branch
+  // caller holding the Day Book view right is PINNED to their own location's
+  // slice of the books — the selector headers and query params are ignored, so
+  // no URL/header tampering can widen the view. Head Office narrows freely via
+  // the global selector; no filter = consolidated book (existing behaviour).
+  const dbEmp = (req as any).employee as { branchType?: string; branchId?: number } | undefined;
+  const isBranchCaller = !!dbEmp?.branchType && dbEmp.branchType !== "headoffice";
   const q = String((req.query as any).date ?? "");
   const date = isDate(q) ? q : new Date().toISOString().slice(0, 10);
-  const locFilter = getPostingLocationFilter(req);
+  const locFilter: PostingLocationFilter | null = isBranchCaller
+    ? { type: dbEmp!.branchType as "warehouse" | "outlet", id: Number(dbEmp!.branchId ?? 0) }
+    : getPostingLocationFilter(req);
 
   const dayPostings = (await buildDerivedPostings({ toDate: date }))
     .filter((p) => String(p.date).slice(0, 10) === date);
   // The company-level bucket is reported, never dropped: a filtered day book
-  // says how much of the day it cannot attribute to any location.
-  const companyLevel = locFilter && locFilter.type !== "company" ? companyLevelSummary(dayPostings) : null;
+  // says how much of the day it cannot attribute to any location. Branch
+  // callers don't get it — those totals are Head Office figures.
+  const companyLevel = !isBranchCaller && locFilter && locFilter.type !== "company" ? companyLevelSummary(dayPostings) : null;
   const postings = filterPostingsByLocation(dayPostings, locFilter);
 
   const { rows: ledgerRows } = await pool.query(`SELECT id, name FROM account_ledgers`);

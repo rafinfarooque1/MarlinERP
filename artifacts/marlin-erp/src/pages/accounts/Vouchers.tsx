@@ -30,9 +30,7 @@ import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { usePermission } from '@/lib/usePermission';
 import { AccountCombobox } from '@/components/ui/account-combobox';
-import { downloadCSV } from '@/lib/download';
-import { useGetCompanySettings } from '@workspace/api-client-react';
-import { downloadVoucherPDF } from '@/lib/pdfUtils';
+import { downloadCSV, downloadPDFFromEndpoint } from '@/lib/download';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { useVoucherLocationChoice, parseLocKey, LocationSelectField } from '@/lib/voucherLocation';
 import { useIsAdmin } from '@/lib/useIsAdmin';
@@ -846,7 +844,6 @@ export default function Vouchers() {
 
   const isLoading = l1 || l2 || l3 || l4 || l5 || l6;
 
-  const { data: cs } = useGetCompanySettings();
 
   const [search, setSearch]       = useState('');
   const [fromDate, setFromDate]   = useState('');
@@ -1150,7 +1147,14 @@ export default function Vouchers() {
                             variant="ghost" size="icon"
                             className="h-7 w-7 text-muted-foreground hover:text-primary"
                             title="Download PDF"
-                            onClick={() => downloadVoucherPDF(row, cs)}
+                            onClick={() => {
+                              // Server-rendered under the issuing location's
+                              // letterhead — never assembled from screen data.
+                              const p = row.type === 'payment' || row.type === 'receipt'
+                                ? downloadPDFFromEndpoint('/api/pdf/money-voucher', { kind: row.type, id: row.id }, `${row.voucherNumber}.pdf`)
+                                : downloadPDFFromEndpoint('/api/pdf/journal-voucher', { id: row.id }, `${row.voucherNumber}.pdf`);
+                              p.catch((e: any) => toast.error(e?.message ?? 'PDF failed'));
+                            }}
                           >
                             <FileDown className="h-3.5 w-3.5" />
                           </Button>

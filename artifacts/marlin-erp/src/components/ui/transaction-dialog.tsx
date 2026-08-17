@@ -123,9 +123,11 @@ export const TransactionDialogContent = React.forwardRef<
         className,
       )}
       onInteractOutside={e => {
-        // Outside clicks are the ACCIDENTAL dismissal path — while the form
-        // is dirty they are ignored outright (no confirmation popup spam).
-        if (dirty) e.preventDefault();
+        // Outside clicks NEVER close a transaction window — dirty or not.
+        // Closing is always deliberate: Escape, the ✕ button, or a Cancel
+        // button (each still guarded by the dirty confirmation above).
+        void dirty;
+        e.preventDefault();
         onInteractOutside?.(e);
       }}
       {...props}

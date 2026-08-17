@@ -1,0 +1,839 @@
+GLOBAL ERP DOCUMENT PRINT / PDF / EXCEL FORMAT STANDARDIZATION
+
+I need a complete professional document-output redesign across the ERP.
+
+IMPORTANT:
+Do not change the accounting, inventory, GST, payroll, voucher, sales, purchase, return, or other business logic.
+
+This is primarily a DOCUMENT PRESENTATION / PRINT / PDF / EXCEL FORMAT update.
+
+The goal is that every document generated from the ERP looks professional, consistent, branded, and suitable for real business use.
+
+============================================================
+1. CREATE ONE GLOBAL DOCUMENT DESIGN SYSTEM
+============================================================
+
+Create a reusable document template/design system.
+
+All supported ERP documents must use a consistent professional format.
+
+Do NOT create completely different random formats for each module.
+
+Use one common visual identity:
+
+- professional border
+- company/brand logo where appropriate
+- clean typography
+- consistent spacing
+- consistent header
+- consistent footer
+- consistent table styling
+- consistent number formatting
+- consistent date formatting
+- consistent page numbering
+- consistent totals section
+
+The design should look like a professional accounting/ERP document, not a raw browser export.
+
+============================================================
+2. IMPORTANT LOCATION RULE
+============================================================
+
+The document must use the DETAILS OF THE SELECTED LOCATION.
+
+If the transaction belongs to:
+
+Head Office
+→ show Head Office details.
+
+Warehouse A
+→ show Warehouse A details.
+
+Warehouse B
+→ show Warehouse B details.
+
+Outlet A
+→ show Outlet A details.
+
+Do NOT automatically display a generic company profile in place of the selected warehouse/location.
+
+The selected location's:
+
+- Logo where configured
+- Location name
+- Address
+- Phone
+- Email
+- GSTIN
+- other configured business details
+
+should be used.
+
+If the location does not have its own logo:
+
+fall back to the appropriate company logo without breaking the document.
+
+============================================================
+3. DOCUMENT HEADER
+============================================================
+
+Use a clean professional header.
+
+Example structure:
+
+[LOGO]
+
+LOCATION NAME
+Address
+Phone | Email
+GSTIN
+
+------------------------------------------------------------
+
+DOCUMENT TITLE
+
+Example:
+
+SALES INVOICE
+PURCHASE INVOICE
+RECEIPT VOUCHER
+PAYMENT VOUCHER
+JOURNAL VOUCHER
+SALES RETURN
+PURCHASE RETURN
+LEDGER STATEMENT
+
+Then show key document information:
+
+Document Number
+Date
+Location
+Customer / Vendor / Party
+Reference Number where applicable
+
+============================================================
+4. SALES INVOICE / BILL
+============================================================
+
+Sales invoice PDF/print must have a professional bordered format.
+
+Include:
+
+Location Logo
+Location Name
+Location Address
+GSTIN
+Phone / Email
+
+SALES INVOICE
+
+Invoice Number
+Invoice Date
+Customer Name
+Customer Address
+Customer GSTIN
+Place of Supply
+
+Item table:
+
+S.No
+Item
+HSN/SAC
+Qty
+Unit
+MRP
+Rate
+Discount
+Taxable Value
+GST %
+CGST
+SGST
+IGST
+Amount
+
+Then:
+
+Subtotal
+Discount
+Other Charges
+Taxable Amount
+CGST
+SGST
+IGST
+Round Off
+Grand Total
+
+Payment Status
+Payment Mode
+
+Amount Paid
+Balance
+
+Use the existing ERP GST/accounting logic.
+
+Do NOT recalculate financial values differently for the print template.
+
+============================================================
+5. PURCHASE INVOICE
+============================================================
+
+Purchase PDF/print must use the same professional visual language.
+
+Show:
+
+Location details
+Purchase Invoice title
+Purchase Number
+Purchase Date
+Vendor
+Vendor Invoice Number
+Vendor Invoice Date
+GSTIN
+Place of Supply
+
+Item table:
+
+S.No
+Item
+HSN/SAC
+Batch
+Manufacture Date
+Expiry Date
+Qty
+Unit
+Purchase Rate
+Discount
+Taxable Value
+GST %
+CGST
+SGST
+IGST
+Amount
+
+Summary:
+
+Subtotal
+Discount
+Other Charges
+Taxable
+CGST
+SGST
+IGST
+Round Off
+Grand Total
+
+Do not change purchase accounting logic.
+
+============================================================
+6. RECEIPT VOUCHER
+============================================================
+
+Create a professional bordered Receipt Voucher template.
+
+Header:
+
+Location Logo
+Location Name
+Location Address
+GSTIN
+Contact information
+
+TITLE:
+
+RECEIPT VOUCHER
+
+Then:
+
+Receipt Number
+Date
+Location
+Party Type
+Received From
+Ledger
+Amount
+Payment Mode
+Reference
+Narration
+
+Include a clean amount section.
+
+Example:
+
+Amount Received: ₹10,000.00
+
+Amount in Words:
+
+Rupees Ten Thousand Only
+
+Footer:
+
+Prepared By
+Approved By where applicable
+Authorized Signature
+
+System-generated vouchers must still be clearly identifiable where required.
+
+============================================================
+7. PAYMENT VOUCHER
+============================================================
+
+Same professional format as Receipt Voucher.
+
+TITLE:
+
+PAYMENT VOUCHER
+
+Include:
+
+Payment Number
+Date
+Location
+Party Type
+Payment To
+Ledger
+Payment Mode
+Amount
+Reference
+Narration
+
+Amount
+Amount in Words
+
+Prepared By
+Approved By
+Authorized Signature
+
+============================================================
+8. JOURNAL VOUCHER
+============================================================
+
+Professional bordered format.
+
+Show:
+
+Journal Number
+Date
+Location
+Narration
+
+Table:
+
+S.No
+Ledger
+Description
+Debit
+Credit
+
+Then:
+
+Total Debit
+Total Credit
+
+The document must clearly show:
+
+Total Debit = Total Credit
+
+Do not change the accounting calculation.
+
+============================================================
+9. SALES RETURN
+============================================================
+
+Sales Return print/PDF must have the same document design system.
+
+Show:
+
+Location details
+Return Number
+Return Date
+Original Invoice Number
+Original Invoice Date
+Customer
+GSTIN
+
+Items:
+
+Item
+Qty
+Original Rate
+Taxable Value
+GST
+Return Amount
+
+Summary:
+
+Subtotal
+Tax
+Other Charges where applicable
+Grand Total
+
+============================================================
+10. PURCHASE RETURN
+============================================================
+
+Same format.
+
+Show:
+
+Location
+Return Number
+Date
+Original Purchase Number
+Vendor
+Vendor Invoice Number
+Vendor Invoice Date
+
+Item details
+Quantity
+Original Purchase Rate
+Tax
+Return Value
+
+Summary.
+
+============================================================
+11. LEDGER STATEMENT
+============================================================
+
+Ledger PDF must look like a proper accounting statement.
+
+Header:
+
+Location Logo
+Location Name
+Address
+GSTIN
+
+LEDGER STATEMENT
+
+Ledger Name
+Party Type
+Period
+Location
+
+Table:
+
+Date
+Voucher Type
+Voucher Number
+Description
+Debit
+Credit
+Running Balance
+
+At bottom:
+
+Opening Balance
+Total Debit
+Total Credit
+Closing Balance
+
+Use the same border/header/footer design.
+
+Do NOT display internal backend codes such as:
+
+STD SALES
+STD PURCHASE
+etc.
+
+Display the clean ledger name.
+
+============================================================
+12. LEDGER EXCEL EXPORT
+============================================================
+
+Excel export should also be professionally formatted.
+
+Include:
+
+Report title
+Location
+Ledger
+Period
+Generated date
+
+Formatted header row.
+
+Columns:
+
+Date
+Voucher Type
+Voucher Number
+Description
+Debit
+Credit
+Balance
+
+Freeze header row.
+
+Use proper currency/number formatting.
+
+Add totals at the bottom.
+
+Do not export raw database fields.
+
+Do not expose internal IDs unless specifically required.
+
+============================================================
+13. OTHER ACCOUNTING REPORTS
+============================================================
+
+Apply the same professional document/export system to:
+
+Day Book
+Cash Book
+Bank Book
+Trial Balance
+Profit & Loss
+Balance Sheet
+Receivables
+Payables
+GST Summary
+GSTR reports
+Stock reports
+Item Tracking
+Other accounting reports
+
+Each report should have:
+
+Location
+Date/period
+Report title
+Filters used
+Data table
+Totals
+Generated timestamp where appropriate
+
+============================================================
+14. PDF STANDARD
+============================================================
+
+PDF documents must:
+
+- be clean
+- be printable
+- have proper margins
+- have professional borders
+- have readable tables
+- repeat table headers on multiple pages
+- handle long item lists
+- handle long ledger names
+- handle long customer/vendor names
+- automatically create additional pages
+- never cut off totals
+- never overlap text
+- never clip columns
+
+For multi-page documents:
+
+Header should repeat where appropriate.
+
+Page number:
+
+Page 1 of 3
+Page 2 of 3
+Page 3 of 3
+
+Footer should remain consistent.
+
+============================================================
+15. EXCEL STANDARD
+============================================================
+
+Excel exports must not simply dump raw database rows.
+
+Create professional Excel reports.
+
+Include:
+
+Title
+Location
+Period
+Generated date
+
+Formatted column headers.
+
+Auto-fit reasonable column widths.
+
+Freeze header.
+
+Proper currency formatting.
+
+Proper date formatting.
+
+Totals where applicable.
+
+Do not include unnecessary technical/database columns.
+
+============================================================
+16. CSV
+============================================================
+
+Where CSV is supported, preserve the existing CSV functionality.
+
+Ensure:
+
+- correct headers
+- correct values
+- no corrupted characters
+- correct date format
+- correct numeric values
+
+Do not replace CSV with PDF/Excel.
+
+============================================================
+17. PRINT BUTTON
+============================================================
+
+The browser print experience should use the same document template.
+
+Do not print the application's sidebar, navigation, buttons, or unrelated UI.
+
+Print only the actual document/report.
+
+The printed result should visually match the PDF as closely as practical.
+
+============================================================
+18. LOCATION-SPECIFIC DOCUMENTS
+============================================================
+
+This is critical.
+
+The same document template must work for:
+
+Head Office
+Warehouse
+Outlet
+
+Example:
+
+If Sale is created at:
+
+Warehouse Kochi
+
+the invoice must show:
+
+Warehouse Kochi
+Warehouse Kochi address
+Warehouse Kochi GST details
+Warehouse Kochi contact details
+
+NOT:
+
+Head Office details.
+
+If a purchase is created at Head Office:
+
+show Head Office details.
+
+If a voucher is created at Outlet A:
+
+show Outlet A details.
+
+============================================================
+19. LOGO
+============================================================
+
+Use the configured location/company logo according to the location hierarchy.
+
+Logo should:
+
+- maintain aspect ratio
+- never stretch
+- never become pixelated unnecessarily
+- fit naturally in the header
+
+Do not show multiple unrelated logos.
+
+============================================================
+20. SHARED TEMPLATE ARCHITECTURE
+============================================================
+
+Do not create separate duplicated PDF/print implementations for every module.
+
+Create a reusable document rendering system.
+
+For example:
+
+DocumentTemplate
+DocumentHeader
+LocationHeader
+DocumentMeta
+DocumentTable
+DocumentSummary
+DocumentFooter
+
+Then use the same components for:
+
+Sales
+Purchase
+Sales Return
+Purchase Return
+Receipt
+Payment
+Journal
+Ledger
+Reports
+
+Different documents should supply different data/configuration.
+
+============================================================
+21. DATA SOURCE
+============================================================
+
+Document output must use the existing backend transaction data.
+
+Do NOT create separate calculations for:
+
+GST
+Totals
+Discount
+Tax
+Balance
+Ledger
+Inventory
+Outstanding
+
+The document renderer must consume the already validated transaction/report data.
+
+============================================================
+22. EXISTING DOCUMENT NUMBERS
+============================================================
+
+Preserve the existing document numbering system.
+
+Do not alter invoice/voucher numbers as part of this task.
+
+Only display the existing document number.
+
+============================================================
+23. RESPONSIVE / UI EXPORT ACTIONS
+============================================================
+
+Where a document has:
+
+PDF
+Excel
+CSV
+Print
+
+buttons:
+
+make the buttons consistent across the ERP.
+
+Use clear icons + labels.
+
+Example:
+
+[ PDF ] [ Excel ] [ CSV ] [ Print ]
+
+Do not show a button that doesn't actually work.
+
+============================================================
+24. EXPORT VALIDATION
+============================================================
+
+Test every export.
+
+For every module verify:
+
+PDF downloads
+PDF opens
+Excel downloads
+Excel opens
+CSV downloads where applicable
+Print works
+
+Test:
+
+Head Office
+Warehouse
+Outlet
+
+Test:
+
+short data
+long data
+multiple items
+multiple pages
+long customer name
+long vendor name
+long ledger name
+
+============================================================
+25. IMPORTANT — DO NOT BREAK EXISTING LOGIC
+============================================================
+
+This task is ONLY for:
+
+Document presentation
+PDF
+Excel
+CSV
+Print
+Formatting
+Location-specific headers
+Professional templates
+
+Do NOT modify:
+
+Accounting logic
+Ledger posting
+Inventory posting
+GST calculation
+Payroll calculation
+Permissions
+Stock movement
+Document numbering
+Month locking
+
+unless a technical change is absolutely required to correctly render the document.
+
+============================================================
+26. FINAL ACCEPTANCE CRITERIA
+============================================================
+
+When the work is complete, every supported ERP document should look like it belongs to the SAME professional ERP.
+
+Sales Invoice
+Purchase Invoice
+Sales Return
+Purchase Return
+Receipt Voucher
+Payment Voucher
+Journal Voucher
+Ledger
+Day Book
+Cash Book
+Bank Book
+Trial Balance
+P&L
+Balance Sheet
+GST Reports
+Stock Reports
+
+must have a consistent professional visual language.
+
+Most importantly:
+
+SELECTED LOCATION
+→ LOCATION LOGO
+→ LOCATION NAME
+→ LOCATION ADDRESS
+→ LOCATION GSTIN
+→ LOCATION CONTACT DETAILS
+
+must be used correctly.
+
+The final result should be suitable for:
+
+Printing
+PDF sharing
+WhatsApp sharing
+Email
+Customer communication
+Vendor communication
+Internal accounting
+Management reporting
+
+Do a complete PDF/Excel/Print regression test before declaring this task complete.

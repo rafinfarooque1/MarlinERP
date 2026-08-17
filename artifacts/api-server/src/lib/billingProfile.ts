@@ -64,6 +64,11 @@ export interface InvoiceIssuer {
   invoiceFooter: string;
   signatory: string;
   /**
+   * Letterhead logo as an inline data URI: the location's own logo when it has
+   * one, else the company logo, else null (renderers draw a lettermark).
+   */
+  logoUrl: string | null;
+  /**
    * Human-readable gaps in this profile, e.g. a missing GSTIN. Surfaced in the
    * UI so an incomplete invoice is caught before it is sent, rather than after
    * a customer queries it.
@@ -214,27 +219,28 @@ interface WarehouseRow {
   bank_account_holder: string | null; bank_name: string | null; bank_branch: string | null;
   bank_account_number: string | null; ifsc_code: string | null;
   invoice_footer: string | null; authorized_signatory: string | null;
+  logo_url: string | null;
 }
 
 const WAREHOUSE_COLS = `
   id, name, state, state_code, gst_number, address, phone, upi_id,
   billing_name, email, city, district, pincode, fssai_number,
   bank_account_holder, bank_name, bank_branch, bank_account_number, ifsc_code,
-  invoice_footer, authorized_signatory`;
+  invoice_footer, authorized_signatory, logo_url`;
 
 interface CompanyRow {
   company_name: string | null; address: string | null; city: string | null; state: string | null;
   pincode: string | null; phone: string | null; email: string | null; gst_number: string | null;
   bank_name: string | null; bank_account: string | null; ifsc_code: string | null;
   bank_branch: string | null; account_type: string | null; bank_account_holder: string | null;
-  invoice_footer: string | null; upi_id: string | null;
+  invoice_footer: string | null; upi_id: string | null; logo_url: string | null;
 }
 
 async function loadCompany(pool: Pool): Promise<CompanyRow | null> {
   const { rows: [row] } = await pool.query<CompanyRow>(
     `SELECT company_name, address, city, state, pincode, phone, email, gst_number,
             bank_name, bank_account, ifsc_code, bank_branch, account_type, bank_account_holder,
-            invoice_footer, upi_id
+            invoice_footer, upi_id, logo_url
        FROM company_settings ORDER BY id LIMIT 1`,
   );
   return row ?? null;
@@ -316,6 +322,7 @@ function fromWarehouse(w: WarehouseRow, company: CompanyRow | null): InvoiceIssu
     upiId: s(w.upi_id) || s(company?.upi_id),
     invoiceFooter: s(w.invoice_footer) || s(company?.invoice_footer),
     signatory: s(w.authorized_signatory),
+    logoUrl: s(w.logo_url) || s(company?.logo_url) || null,
   });
 }
 
@@ -340,6 +347,7 @@ function fromCompany(company: CompanyRow | null): InvoiceIssuer {
     upiId: s(c?.upi_id),
     invoiceFooter: s(c?.invoice_footer),
     signatory: "",
+    logoUrl: s(c?.logo_url) || null,
   });
 }
 
@@ -361,7 +369,7 @@ function missingLocationIssuer(source: "warehouse" | "outlet", id: number): Invo
     tradeName: "",
     addressLines: [],
     phone: "", email: "", gstin: "", fssai: "", state: "", stateCode: "", pincode: "",
-    bank: null, upiId: "", invoiceFooter: "", signatory: "",
+    bank: null, upiId: "", invoiceFooter: "", signatory: "", logoUrl: null,
   });
 }
 

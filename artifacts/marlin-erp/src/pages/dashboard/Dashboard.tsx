@@ -468,6 +468,7 @@ export default function Dashboard() {
       onClick: drillTo('/reports/financial', 'bank'),
     },
     // ── Row 6: GP · NP — both read the P&L's own summary, never a re-sum ──
+    // NP sits beside GP (under Bank Balance) per owner spec, Aug 2026.
     {
       label: 'GP',
       value: pf?.gross == null ? '—' : fmt(pf.gross),
@@ -475,14 +476,12 @@ export default function Dashboard() {
       hint: 'Gross Profit · tap for P&L',
       onClick: drill('pl-gross-profit'),
     },
-    // ── Row 7: NP — the bottom line takes the full row ──────────────────────
     {
       label: 'NP',
       value: pf?.net == null ? '—' : fmt(pf.net),
       tone: pf?.net == null ? 'default' : pf.net >= 0 ? 'pos' : 'neg',
       hint: 'Net Profit · tap for P&L',
       onClick: drill('pl-net-profit'),
-      className: 'md:col-span-2',
     },
   ];
 

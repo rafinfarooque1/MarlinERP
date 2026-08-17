@@ -137,6 +137,10 @@ export class ObjectStorageService {
     });
   }
 
+  // The mobile-APK upload/publish helpers that used to live here are gone on
+  // purpose: the Android APK is produced by the automated build pipeline and
+  // published through lib/apkRelease.ts — there is no manual upload path.
+
   async getObjectEntityFile(objectPath: string): Promise<File> {
     if (!objectPath.startsWith('/objects/')) {
       throw new ObjectNotFoundError();

@@ -9,10 +9,10 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { Settings2, Save, Loader2, Bell, Receipt, DollarSign, Globe, Store, ScanBarcode, Trash2, TriangleAlert, CalendarRange, CalendarOff, FileText, Plus, ShieldCheck, ShieldOff, Upload } from 'lucide-react';
+import { Settings2, Save, Loader2, Bell, Receipt, DollarSign, Globe, Store, ScanBarcode, Trash2, TriangleAlert, CalendarRange, CalendarOff, FileText, Plus, ShieldCheck, ShieldOff, Upload, Smartphone } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
-import { customFetch, useGetMe, useListHierarchies } from '@workspace/api-client-react';
+import { customFetch, useGetMe, useGetPublicAppInfo, useListHierarchies } from '@workspace/api-client-react';
 import { Textarea } from '@/components/ui/textarea';
 import { PageHeader } from '@/components/app/page-header';
 import InvoiceRenumberingSection from './InvoiceRenumberingSection';
@@ -191,6 +191,28 @@ const SETTING_GROUPS: SettingGroup[] = [
     ],
   },
   {
+    icon: Smartphone,
+    title: 'Mobile App',
+    description: 'The "Download Mobile App" window — Android releases come from the automated build pipeline; iOS uses an Apple-supported install link. The app is not on the public app stores',
+    settings: [
+      {
+        key: 'iosInstallUrl',
+        label: 'iOS Installation Link',
+        type: 'text',
+        defaultValue: '',
+        description:
+          'An Apple-supported install destination — a TestFlight invite link, an itms-services:// install link, or a real App Store listing later. iPhones cannot install a plain .ipa file from a browser, so this must be one of Apple\u2019s supported methods. Leave empty until configured.',
+      },
+      {
+        key: 'iosAppVersion',
+        label: 'iOS App Version',
+        type: 'text',
+        defaultValue: '',
+        description: 'Shown next to the Install iOS App button (e.g. 1.0.0).',
+      },
+    ],
+  },
+  {
     icon: Globe,
     title: 'Regional',
     description: 'Locale, timezone, and currency settings',
@@ -201,6 +223,57 @@ const SETTING_GROUPS: SettingGroup[] = [
     ],
   },
 ];
+
+// ── Android release status (Settings → Mobile App) ──────────────────────────
+// READ-ONLY by design: the Android APK is produced by the automated build
+// pipeline (EAS cloud build → validation → object storage) — there is no
+// upload button, no URL field and no manual version entry. A new release is
+// shipped by running `pnpm run build:android` in the workspace; this card
+// only reports what is currently live. The version shown was recorded by the
+// pipeline from the app source at build time, so it always matches the APK
+// that phones actually download.
+
+function formatBytes(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return '';
+  if (n >= 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  if (n >= 1024) return `${(n / 1024).toFixed(0)} KB`;
+  return `${n} B`;
+}
+
+function AndroidReleaseCard() {
+  const { data: info, isLoading } = useGetPublicAppInfo();
+  const android = info?.android;
+  return (
+    <div className="p-4">
+      <label className="text-sm font-medium">Android App Release</label>
+      <p className="text-xs text-muted-foreground mt-1 max-w-lg">
+        Android releases are produced by the automated build pipeline — the app is built from its
+        source code, verified, and published automatically. There is nothing to upload or configure here.
+      </p>
+      {isLoading ? (
+        <p className="mt-3 text-xs text-muted-foreground">Checking the current release…</p>
+      ) : android?.available ? (
+        <div className="mt-3 flex items-center gap-2 text-sm flex-wrap">
+          <span className="inline-flex items-center gap-1.5 rounded-md bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 px-2 py-1 text-xs font-medium">
+            <ShieldCheck className="w-3.5 h-3.5" /> Version {android.version} published
+          </span>
+          <span className="text-xs text-muted-foreground whitespace-nowrap">
+            {formatBytes(Number(android.size) || 0)}
+            {android.builtAt ? ` · ${new Date(android.builtAt).toLocaleDateString()}` : ''}
+          </span>
+          <Button size="sm" variant="outline" asChild>
+            <a href="/api/public/app/apk">Test Download</a>
+          </Button>
+        </div>
+      ) : (
+        <p className="mt-3 text-xs text-muted-foreground">
+          No Android release has been published yet — the download window tells Android users the app
+          is not currently available. The first successful automated build will appear here on its own.
+        </p>
+      )}
+    </div>
+  );
+}
 
 function getDefaults() {
   const init: Record<string, any> = {};
@@ -1146,6 +1219,10 @@ export default function Settings() {
       // and every location dropdown must re-read it now rather than up to a
       // minute later when the flags query goes stale on its own.
       await queryClient.invalidateQueries({ queryKey: ['company', 'feature-flags'] });
+      // The Download Mobile App modal (and anything else on useGetCompanySettings)
+      // reads this blob from the generated query — refresh it now so freshly
+      // saved store links show up without a page reload.
+      await queryClient.invalidateQueries({ queryKey: ['/api/company/settings'] });
       toast.success('Settings saved');
     } catch (e: any) {
       toast.error(e?.data?.error || e.message || 'Failed to save settings');
@@ -1204,6 +1281,7 @@ export default function Settings() {
               <div className="p-6 flex items-center gap-2 text-muted-foreground text-sm"><Loader2 className="w-4 h-4 animate-spin" /> Loading…</div>
             ) : (
               <div className="divide-y divide-border">
+                {group.title === 'Mobile App' && <AndroidReleaseCard />}
                 {group.settings.map(setting => (
                   <div key={setting.key} className="p-4 flex items-center justify-between gap-4">
                     <div className="flex-1">

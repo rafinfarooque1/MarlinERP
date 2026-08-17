@@ -1,0 +1,430 @@
+IMPORTANT UI CORRECTION — USE PURCHASE ADD WINDOW AS THE EXACT MASTER DESIGN
+
+The current POS/Quotation transaction window shown in the latest screen recording is NOT what I want.
+
+Do NOT create another custom POS/Quotation popup design.
+
+I want the existing PURCHASE → ADD PURCHASE transaction window to become the MASTER TRANSACTION WINDOW DESIGN.
+
+============================================================
+1. EXACT DESIGN REUSE
+============================================================
+
+Take the existing working Purchase → Add Purchase window as the exact UI/UX reference.
+
+POS → New Sale
+Quotation → New Quotation
+
+must use the SAME:
+
+- window/container size
+- width
+- height
+- position
+- border radius
+- spacing
+- padding
+- header structure
+- section structure
+- field layout
+- typography
+- button style
+- item-entry layout
+- summary layout
+- footer/action layout
+- responsive behavior
+- scrolling behavior
+- close behavior
+
+Do NOT redesign the Purchase window.
+
+Do NOT create a second transaction-window component with a different design.
+
+Instead, extract/reuse the existing Purchase Add transaction-window component/layout wherever technically possible.
+
+The Purchase Add window is the visual MASTER.
+
+============================================================
+2. POS NEW SALE
+============================================================
+
+When user clicks:
+
+Point of Sale
+→ New Sale
+
+open the transaction window using EXACTLY the same window design as:
+
+Purchase
+→ Add Purchase
+
+Only the business fields/content should differ.
+
+Keep the Purchase window's:
+
+- overall dimensions
+- layout proportions
+- visual hierarchy
+- spacing
+- header
+- body structure
+- action area
+- responsive behavior
+
+Change only the POS-specific fields.
+
+POS content should contain:
+
+Selling Location
+Date
+Customer
+Payment Mode
+
+then:
+
+Cart Items
+
+Item
+SKU
+Quantity
+MRP
+Selling Rate
+Discount
+GST
+Amount
+Delete
+
+then:
+
+Other Charges
+
+then:
+
+Invoice Summary
+
+Subtotal
+Discount
+Taxable Amount
+CGST
+SGST
+IGST
+Other Charges
+Grand Total
+
+then the POS action:
+
+Cancel
+Complete Sale
+
+Do not make POS visually different from Purchase.
+
+============================================================
+3. QUOTATION NEW QUOTATION
+============================================================
+
+When user clicks:
+
+Quotation
+→ New Quotation
+
+open EXACTLY the same transaction window as Purchase → Add Purchase.
+
+Same:
+
+- size
+- structure
+- spacing
+- header
+- sections
+- item table
+- summary
+- buttons
+- responsive behavior
+
+Only replace the business fields.
+
+Quotation header:
+
+Quotation Number
+Date
+Location
+Customer
+Payment Terms
+Sales Person
+
+Sales Person must be a searchable employee dropdown.
+
+Only employees belonging to the selected location should be selectable.
+
+Item section:
+
+Item
+SKU
+Quantity
+Rate
+Discount
+Tax
+Amount
+Delete
+
+Summary:
+
+Subtotal
+Discount
+Taxable Amount
+CGST
+SGST
+IGST
+Other Charges where applicable
+Grand Total
+
+Actions:
+
+Cancel
+Save Quotation
+
+============================================================
+4. DO NOT CHANGE PURCHASE
+============================================================
+
+The existing Purchase Add window is the reference.
+
+Do NOT unnecessarily modify the Purchase Add UI while implementing this.
+
+Do not make Purchase worse in order to make POS/Quotation match.
+
+Instead:
+
+REUSE THE PURCHASE TRANSACTION UI SYSTEM.
+
+If the current Purchase window is already implemented using a reusable component:
+
+extend that component.
+
+If it is currently hardcoded:
+
+extract its presentation/layout into a shared reusable component without changing the Purchase appearance.
+
+============================================================
+5. EXACT VISUAL CONSISTENCY
+============================================================
+
+The following must look the same across:
+
+Purchase Add
+POS New Sale
+Quotation New
+
+Same:
+
+Header height
+Card borders
+Input heights
+Input radius
+Button heights
+Button radius
+Font sizes
+Label sizes
+Section spacing
+Item-row spacing
+Summary-card styling
+Action button placement
+Close button placement
+Modal backdrop
+Scrollbar behavior
+Responsive breakpoints
+
+The user should feel:
+
+"I am opening the same transaction screen, but for a different transaction type."
+
+NOT:
+
+"Every module has its own popup design."
+
+============================================================
+6. RESPONSIVE RULE
+============================================================
+
+The Purchase Add window's responsive behavior should become the global transaction-window standard.
+
+Desktop:
+Use the same comfortable large layout as Purchase Add.
+
+Laptop:
+Automatically fit the viewport.
+
+Tablet:
+Adapt sections without breaking the layout.
+
+Mobile:
+Use the same transaction-window design but adapt vertically.
+
+IMPORTANT:
+
+NO unwanted horizontal scrolling.
+
+Long item names must wrap.
+
+Long ledger names must wrap.
+
+Long customer/vendor names must wrap.
+
+Do not shrink text to an unreadable size just to fit.
+
+Do not force users to scroll sideways.
+
+============================================================
+7. OUTSIDE CLICK PROTECTION
+============================================================
+
+The transaction window must NOT close when clicking outside.
+
+This applies to:
+
+Purchase
+POS
+Quotation
+Journal Voucher
+Receipt Voucher
+Payment Voucher
+other important transaction forms
+
+Only close when:
+
+Cancel
+Close
+Save/Complete
+or an explicit confirmed discard action
+
+If unsaved data exists:
+
+show:
+
+"Discard unsaved changes?"
+
+Continue Editing
+Discard
+
+Never silently lose entered transaction data.
+
+============================================================
+8. POS BUSINESS LOGIC MUST NOT CHANGE
+============================================================
+
+This is a UI refactor.
+
+Do NOT rewrite the existing POS accounting logic.
+
+Preserve:
+
+Customer
+Location
+Payment modes
+Cash/Bank assignment
+Credit sales
+Partial payment
+Overpayment
+GST
+Discount
+Other Charges
+Customer price history
+Stock deduction
+Receipt accounting
+Invoice generation
+
+Only change the presentation/transaction-window UI unless a previously specified bug requires a backend change.
+
+============================================================
+9. QUOTATION BUSINESS LOGIC MUST NOT CHANGE
+============================================================
+
+Preserve:
+
+Quotation creation
+Customer
+Location
+Sales Person
+Payment Terms
+Items
+Discount
+GST
+Totals
+Quotation numbering
+Quotation → Sale conversion
+
+Only change the transaction-window UI.
+
+============================================================
+10. PURCHASE BUSINESS LOGIC MUST NOT CHANGE
+============================================================
+
+Do not break:
+
+Vendor
+Location
+Purchase Date
+Vendor Invoice Number
+Vendor Invoice Date
+Batch
+Manufacture Date
+Expiry Date
+MRP
+Purchase Rate
+Discount
+GST
+Direct Expense Other Charges
+Stock creation
+Accounting
+Totals
+
+The Purchase Add window remains the MASTER reference.
+
+============================================================
+11. MOBILE TEST
+============================================================
+
+After implementation test all three:
+
+Purchase Add
+POS New Sale
+Quotation New
+
+at:
+
+Desktop
+Laptop
+Tablet
+Mobile
+
+Compare the screens.
+
+They must clearly look like the same transaction-window system.
+
+============================================================
+12. ACCEPTANCE CRITERIA
+============================================================
+
+This task is NOT complete if POS/Quotation merely look "similar" to Purchase.
+
+They must use the SAME transaction-window design system/component and visually match the Purchase Add window as closely as practical.
+
+Do not introduce a new design language.
+
+Do not add unnecessary UI elements.
+
+Do not make the POS window smaller.
+
+Do not make the Quotation window smaller.
+
+Do not create a different popup size for POS.
+
+Do not create a different popup size for Quotation.
+
+PURCHASE ADD = MASTER.
+
+POS NEW SALE = SAME WINDOW DESIGN + POS CONTENT.
+
+QUOTATION NEW = SAME WINDOW DESIGN + QUOTATION CONTENT.
+
+Verify visually before declaring completion.

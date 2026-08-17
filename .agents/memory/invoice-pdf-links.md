@@ -45,6 +45,9 @@ ONE canonical renderer: `api-server/src/services/invoicePdf.ts` (jsPDF + qrcode 
 - Renderer backfills each field INDEPENDENTLY from the items table for old rows (never gate hsn/unit backfill on name being missing).
 - Standard PDF fonts lack the ₹ glyph — use "Rs.".
 
+## Invoice buttons on OTHER pages (Dispatch etc.)
+- The share-token endpoint authorizes `download` on the SALES pages any-of set (`page:/sales/pos`, `page:/outstanding`) — a page with its own permission key (e.g. Dispatch) that adds invoice PDF buttons must gate them on `usePermission(['page:/sales/pos','page:/outstanding']).canDownload`, or roles with only that page's rights get buttons that always 403.
+
 ## Auth on PDF fetches
 - ALL /api routes require `Authorization: Bearer` (base64 `id:x`); `credentials: 'include'` alone → 401. `downloadPDFFromEndpoint` (marlin-erp `lib/download.ts`) attaches the token from localStorage `marlin_auth_token` — any new direct `fetch` to the API must do the same rather than relying on cookies.
 - **How to apply:** when a PDF/download flow 401s with "Authentication required", check the Bearer header first, not the server.

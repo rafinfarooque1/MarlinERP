@@ -1,0 +1,384 @@
+CONTINUE ERP FINAL ACCEPTANCE — DO NOT REBUILD COMPLETED WORK
+
+The previous work shows:
+
+#335 Mobile Receipt & Payment Vouchers
+→ implemented
+→ server contract verified
+→ PDF verified
+→ E2E passed
+→ code review passed
+→ cleanup completed
+
+#336 Mobile Business Dashboard
+→ implemented
+→ exact figure parity verified
+→ E2E passed
+→ code review findings fixed
+→ Head Office scope verified
+→ completed
+
+#337 Download Mobile App
+→ implemented
+→ configuration/device redirects were checked
+→ code review passed
+→ BUT validation could not run
+→ therefore perform a focused validation now before considering it fully accepted
+
+#338 Cross-role testing, location security proof and final report
+→ NOT completed
+→ previous agent stopped during acceptance testing because the temporary admin-user setup was flagged.
+
+IMPORTANT:
+Do NOT roll back.
+Do NOT rebuild #335 or #336.
+Do NOT modify working functionality unless a genuine defect is found.
+
+Continue from the current checkpoint/state.
+
+============================================================
+1. FINAL ACCEPTANCE TEST
+============================================================
+
+Perform a read-only-first acceptance audit across the existing ERP/mobile implementation.
+
+Test realistic roles:
+
+- Admin
+- Head Office employee
+- Warehouse employee
+- Outlet employee
+- Employee with restricted permissions
+
+Do not use real user credentials.
+
+Create temporary test users only through the existing supported user/role mechanism.
+
+Do NOT bypass authentication.
+Do NOT extract passwords.
+Do NOT weaken security.
+Do NOT disable permission checks.
+
+If creating a temporary privileged test user is required, use the application's legitimate admin/user-management flow.
+
+============================================================
+2. LOCATION SECURITY
+============================================================
+
+Verify:
+
+WAREHOUSE USER
+
+→ sees only assigned warehouse data.
+
+Must NOT access:
+
+- another warehouse
+- outlet
+- Head Office
+- All Locations
+
+even by manually changing:
+
+URL
+location ID
+query parameter
+request body
+API parameter
+
+HEAD OFFICE USER
+
+Current Location selector should correctly support:
+
+Head Office
+permitted warehouses/outlets
+All Locations only when explicitly authorized
+
+Head Office selected:
+
+→ Head Office data ONLY.
+
+All Locations selected:
+
+→ consolidated data ONLY when the user has the appropriate permission.
+
+Do not confuse Head Office with All Locations.
+
+============================================================
+3. MOBILE RECEIPT VOUCHER
+============================================================
+
+Verify:
+
+- permission
+- location restriction
+- customer/vendor/employee/other-ledger rules
+- ledger validation
+- month locking
+- amount validation
+- backend posting
+- voucher number
+- PDF generation
+- PDF location details
+
+Confirm mobile Receipt Voucher uses the EXISTING backend.
+
+No duplicate accounting entry.
+
+============================================================
+4. MOBILE PAYMENT VOUCHER
+============================================================
+
+Verify the same:
+
+- permissions
+- location
+- party type
+- employee ledger restrictions
+- Salary Payable / Salary Expense rules
+- month lock
+- backend posting
+- voucher PDF
+- accounting entries
+
+Confirm Payment Voucher uses the existing backend.
+
+============================================================
+5. MOBILE DASHBOARD
+============================================================
+
+Verify:
+
+Today is the default period.
+
+KPI values exactly match the website/BI endpoint.
+
+Test:
+
+Sales
+Purchases
+Inventory
+Gross Profit
+Net Profit
+Receivables
+Payables
+Cash
+Bank
+Payments
+Receipts
+
+where supported.
+
+Every tappable KPI must open the correct destination.
+
+Verify location scope.
+
+Warehouse user:
+→ warehouse figures only.
+
+Head Office:
+→ Head Office figures only unless All Locations is explicitly selected/permitted.
+
+All Locations:
+→ consolidated figures.
+
+Do not expose unauthorized figures through the mobile API.
+
+============================================================
+6. DOWNLOAD MOBILE APP
+============================================================
+
+Run the validation that previously could not run.
+
+Verify:
+
+Profile/User menu
+→ Download Mobile App
+
+Modal opens.
+
+Verify:
+
+- QR code
+- configured store links
+- fallback behavior
+- no hardcoded fake store listing
+- Android/iOS configuration
+- missing configuration handling
+
+Do not claim an app-store listing exists unless the configured link actually exists.
+
+============================================================
+7. DAY BOOK PERMISSION REGRESSION
+============================================================
+
+Explicitly test the previously identified bug.
+
+Warehouse employee with:
+
+Day Book → View = ON
+
+MUST:
+
+- see Day Book in navigation
+- open Day Book
+- receive Day Book data
+- see only their assigned location
+
+Warehouse employee without Day Book View:
+
+→ must not see it
+→ direct API/page access must remain blocked.
+
+This must be tested at BOTH:
+
+frontend permission layer
+backend authorization layer
+
+============================================================
+8. GENERAL PERMISSION HEALTH CHECK
+============================================================
+
+Audit the existing permission matrix.
+
+Do NOT broaden permissions.
+
+Check:
+
+View
+Create
+Edit
+Delete
+Export
+Approve
+Print
+Location Access
+All Locations Access
+
+Particularly verify:
+
+Sales
+Purchase
+POS
+Quotation
+Receipt
+Payment
+Journal
+Day Book
+Cash Book
+Bank Book
+Ledger
+GST
+Stock
+Customers
+Vendors
+Employees
+Payroll
+Storage Locations
+Item Tracking
+Reports
+
+Only fix genuine permission mismatches.
+
+============================================================
+9. ACCOUNTING SAFETY
+============================================================
+
+After testing, verify:
+
+Trial Balance
+
+Debit = Credit
+
+Check that test transactions have not created duplicate postings.
+
+Verify:
+
+Receipt
+Payment
+Sales
+Purchase
+Payroll
+Dashboard
+
+remain consistent.
+
+Delete/clean temporary test transactions through the application's legitimate cleanup mechanism.
+
+Do NOT manually delete database records unless the existing system's approved test-cleanup process requires it.
+
+============================================================
+10. EXPORT VALIDATION
+============================================================
+
+Verify PDF/Excel/CSV exports that were recently changed.
+
+Especially:
+
+Receipt Voucher PDF
+Payment Voucher PDF
+Dashboard/image output
+Day Book
+Ledger
+GST reports
+
+A button existing is NOT sufficient.
+
+Actually generate and open the files.
+
+============================================================
+11. MOBILE + WEB REGRESSION
+============================================================
+
+Do not redesign anything during this acceptance pass.
+
+Only fix genuine defects discovered during testing.
+
+Run:
+
+Typecheck
+Build
+Backend tests
+Relevant E2E tests
+Permission tests
+Location-isolation tests
+
+============================================================
+12. FINAL REPORT
+============================================================
+
+At completion provide a factual report:
+
+COMPLETED AND VERIFIED:
+- #335
+- #336
+- #337 validation result
+- #338 acceptance result
+
+For every test:
+
+PASS
+FAIL
+NOT TESTABLE
+
+If something cannot be tested, explicitly say:
+
+NOT VERIFIED
+
+Do NOT mark the ERP "fully complete" unless the cross-role permission/location tests have actually passed.
+
+============================================================
+IMPORTANT SAFETY RULE
+============================================================
+
+Do not attempt to bypass authentication or security controls to perform testing.
+
+Use temporary test accounts through the application's legitimate role-management system.
+
+Do not expose or retrieve real passwords.
+
+Do not disable permission middleware.
+
+Do not weaken location isolation.
+
+The objective is to PROVE the existing security model works, not to circumvent it.

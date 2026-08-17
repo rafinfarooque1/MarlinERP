@@ -1744,7 +1744,29 @@ router.patch("/hr/employees/:id", requireModuleAction("page:/hr/employees", "edi
 router.delete("/hr/employees/:id", requireModuleAction("page:/hr/employees", "delete"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const [emp] = await db.select().from(employeesTable).where(eq(employeesTable.id, id)).limit(1);
-  await db.delete(employeesTable).where(eq(employeesTable.id, id));
+  // The pay-structure row is auto-seeded at creation, so it must leave with the
+  // employee — otherwise NO app-created employee is ever deletable (the FK has
+  // no cascade). History tables (attendance, payroll, leaves, advances) stay
+  // blocking on purpose: deleting a person out from under signed-off records
+  // would orphan them. That conflict must read as a clean refusal, not a 500.
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(`DELETE FROM pay_components WHERE employee_id = $1`, [id]);
+    await client.query(`DELETE FROM employees WHERE id = $1`, [id]);
+    await client.query("COMMIT");
+  } catch (e: any) {
+    await client.query("ROLLBACK").catch(() => {});
+    if (e?.code === '23503') {
+      res.status(400).json({
+        error: "This employee has attendance, payroll, leave or advance history and cannot be deleted. Mark them inactive instead — history stays intact and they can no longer sign in.",
+      });
+      return;
+    }
+    throw e;
+  } finally {
+    client.release();
+  }
   logActivity({
     action: "DELETE", module: "hr", entityType: "employee", entityId: id,
     description: `Employee ${emp?.name ?? `#${id}`} deleted`,

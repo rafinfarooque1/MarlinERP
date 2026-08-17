@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef } from 'react';
+import { Fragment, useState, useMemo, useEffect, useRef } from 'react';
 import { SearchableItemSelect, type ItemOption } from '@/components/ui/searchable-item-select';
 import { entryScopeKeyDown, autoFocusFirst, focusAndOpen, focusField, useEntryShortcuts } from '@/lib/keyboard-entry';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -21,8 +21,15 @@ import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { DialogClose, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { DialogClose, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { TransactionDialog, TransactionDialogContent } from '@/components/ui/transaction-dialog';
+// The shared transaction-window vocabulary — extracted from the Purchase
+// master page so this dialog renders as the same design system.
+import {
+  TXN_CARD, TXN_HEADER_GRID, TXN_LINES_BOX, txnLinesHead, txnLineRow, TXN_SUBROW,
+  TXN_BOTTOM_GRID, TXN_SUMMARY_CARD, TXN_ACTION_BAR_DIALOG, TXN_ACTION_BAR_INNER_DIALOG,
+  TxnCellLabel as CellLabel,
+} from '@/components/app/transaction-window';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -143,6 +150,11 @@ const saleLineSchema = z.object({
   message: 'Cannot exceed the unit price',
   path: ['unitDiscount'],
 });
+/** One shared column template for the cart header strip and every ≥lg row —
+ *  the Purchase master's table pattern. Below lg the cells wrap into labelled
+ *  2/4-column grids instead; no horizontal scrolling at any width. */
+const SALE_GRID_LG = 'lg:grid-cols-[minmax(200px,1fr)_88px_72px_88px_96px_88px_60px_104px_32px]';
+
 /** Other Charges on the invoice — Packing & Transport, freight, hamali,
  *  courier… Flat post-tax amounts the customer owes on top of the goods
  *  (no GST on them). Posted Cr <chosen expense ledger> in the books; the
@@ -806,6 +818,13 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   // Default ON whenever a customer with an advance is picked.
   useEffect(() => { setApplyAdvance(true); }, [watchCustomerId]);
 
+  // Bill discount entry unit — ₹ (absolute) or % of the pre-discount basis.
+  // Pure entry convenience: a % converts to the ₹ amount before compute and
+  // submit, so the server (which only knows ₹) is untouched. Resets to ₹ on
+  // every open — stored sales always hold the ₹ amount.
+  const [billDiscountMode, setBillDiscountMode] = useState<'amount' | 'percent'>('amount');
+  useEffect(() => { if (isOpen) setBillDiscountMode('amount'); }, [isOpen]);
+
   // A new sale may only be Cash or Credit — Bank/UPI are collected later, never
   // set at sale time (the API rejects them on create). Editing an existing
   // bank/upi sale must not blank its mode, so that stored value stays selectable
@@ -863,6 +882,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
     id: it.id,
     name: it.name,
     code: it.itemCode || null,
+    barcode: it.barcode || null,
     hsn: it.hsnCode || null,
     uom: it.unit || null,
     available: stockMap.get(it.id) ?? 0,
@@ -1038,7 +1058,15 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
     // proportion to their bases (largest remainder), mirroring the server's
     // allocation so the preview and the stored invoice agree to the paisa.
     const basisSum = Math.round(prepared.reduce((s, p) => s + p.basis, 0) * 100) / 100;
-    const billDiscount = Math.min(Math.max(0, Math.round(Number(form.watch('billDiscount') ?? 0) * 100) / 100), basisSum);
+    // The typed value is either ₹ or a % of the basis (toggle beside the
+    // input). A % converts to paise HERE, so the allocation below and the
+    // submit payload always carry the ₹ amount the server expects.
+    const typedBillDisc = Math.max(0, Number(form.watch('billDiscount') ?? 0));
+    const billDiscount = Math.min(
+      billDiscountMode === 'percent'
+        ? Math.round(basisSum * Math.min(typedBillDisc, 100)) / 100
+        : Math.round(typedBillDisc * 100) / 100,
+      basisSum);
     const basePaise = prepared.map(p => Math.max(0, Math.round(p.basis * 100)));
     const weightSum = basePaise.reduce((s, b) => s + b, 0);
     const totalPaise = Math.round(billDiscount * 100);
@@ -1083,7 +1111,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
     // them), mirroring the server: total = goods + GST − coupon + charges.
     const otherTotal = Math.round(((form.watch('otherCharges') ?? []) as any[])
       .reduce((t, c) => t + (Number(c?.amount) || 0), 0) * 100) / 100;
-    return { grossItemValue, grossTotal, subtotal, cgstTotal, sgstTotal, igstTotal, taxTotal, itemDiscountTotal, billDiscount, grandTotal, discountAmount, otherTotal, finalAmount: Math.round((grandTotal - discountAmount + otherTotal) * 100) / 100 };
+    return { grossItemValue, grossTotal, subtotal, cgstTotal, sgstTotal, igstTotal, taxTotal, itemDiscountTotal, basisSum, billDiscount, grandTotal, discountAmount, otherTotal, finalAmount: Math.round((grandTotal - discountAmount + otherTotal) * 100) / 100 };
   };
 
   const totals = computeCartTotals();
@@ -1152,6 +1180,10 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
       lineItems: enrichedItems,
       customerId: data.customerId || undefined,
       discountTotal: discountAmount,
+      // The ₹ bill discount actually applied — overrides the raw typed form
+      // value spread from `data`, which is a percentage while the % toggle
+      // is on and must never reach the server as-is.
+      billDiscount,
       // Always sent: on edit the list REPLACES the stored charges, so removing
       // the last row genuinely clears them (absent would preserve).
       otherCharges: (data.otherCharges ?? [])
@@ -1735,7 +1767,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
         dirty={form.formState.isDirty || (!!convertFrom && !editItem)}
         onOpenChange={v => { setIsOpen(v); if (!v) { setEditItem(null); setConvertFrom(null); form.reset(effectiveDefaultValues); } }}
       >
-        <TransactionDialogContent className="sm:max-w-3xl" onOpenAutoFocus={autoFocusFirst}>
+        <TransactionDialogContent className="sm:max-w-6xl" onOpenAutoFocus={autoFocusFirst}>
           <DialogHeader><DialogTitle>{editItem
             ? `Edit Sale — ${editItem.invoiceNumber}`
             : convertFrom
@@ -1753,9 +1785,13 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
               data-kbd-scope
               onKeyDown={entryScopeKeyDown({ onSave: kbdSave, onComplete: kbdSave, onAddLine: kbdAddLine, onDeleteLine: kbdDeleteLine })}
               onSubmit={form.handleSubmit(onSubmit)}
-              className="space-y-5"
+              className="space-y-6"
             >
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* ── Sale header — the same section card + 3-column field grid
+                  as the Purchase master (docs/UI_CONVENTIONS.md → Transaction
+                  windows). ── */}
+              <div className={`${TXN_CARD} space-y-4`}>
+              <div className={TXN_HEADER_GRID}>
                 <FormField control={form.control} name="locationId" render={({ field }) => (
                   <FormItem><FormLabel>Selling Location <span className="text-destructive">*</span></FormLabel>
                     {/* Branch staff never choose — their login decides the
@@ -2015,8 +2051,10 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
               </div>
               )}
 
-              {/* Line items */}
-              <div>
+              </div>{/* /header card */}
+
+              {/* ── Cart Items — the master's line-item table ── */}
+              <div className={TXN_CARD}>
                 {!watchLocationId || watchLocationId === 0 ? (
                   <div className="p-6 border border-dashed border-border rounded-lg text-center text-muted-foreground">Select a selling location above to load available stock</div>
                 ) : availableItems.length === 0 && !editItem ? (
@@ -2031,9 +2069,20 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                 ) : (
                   <>
                     <div className="flex justify-between items-center mb-3">
-                      <p className="font-semibold">Cart Items <span className="text-xs text-muted-foreground font-normal ml-1">({availableItems.length} in stock)</span></p>
+                      <p className="text-sm font-medium">Cart Items <span className="text-xs text-muted-foreground font-normal ml-1">({availableItems.length} in stock)</span></p>
                     </div>
-                    <div className="overflow-x-auto"><div className="min-w-[720px] space-y-2">
+                    <div className={TXN_LINES_BOX}>
+                    <div className={txnLinesHead(SALE_GRID_LG)}>
+                      <span>Item</span>
+                      <span>SKU</span>
+                      <span className="text-right">Qty</span>
+                      <span className="text-right">MRP ₹</span>
+                      <span className="text-right">Rate ₹</span>
+                      <span className="text-right">Disc/Unit ₹</span>
+                      <span className="text-center">GST %</span>
+                      <span className="text-right">Amount ₹</span>
+                      <span />
+                    </div>
                       {fields.map((field, index) => {
                         const itemId   = form.watch(`lineItems.${index}.itemId`);
                         const qty      = form.watch(`lineItems.${index}.quantity`);
@@ -2061,17 +2110,18 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                         const lineTotal = gst.lineGross; // final line total (GST-inclusive, either mode)
 
                         return (
-                          <div key={field.id} data-kbd-row={index} className="p-3 bg-muted/20 rounded-lg border border-border space-y-2">
-                            {/* Row 1: Item selector + (for registered customers)
-                                a read-only price-history popover — the last few
-                                prices THIS customer paid for the item. */}
+                          <Fragment key={field.id}>
+                          <div data-kbd-row={index} className={txnLineRow(SALE_GRID_LG)}>
+                            {/* Item selector + (for registered customers) a
+                                read-only price-history popover. Full row below
+                                lg so long names wrap instead of scrolling. */}
                             <FormField control={form.control} name={`lineItems.${index}.itemId`} render={({ field: f }) => (
-                              <FormItem>
-                                <FormLabel className="text-xs">Item</FormLabel>
-                                <div className="flex items-center gap-1">
+                              <FormItem className="col-span-2 sm:col-span-4 lg:col-span-1 space-y-1 min-w-0">
+                                <CellLabel>Item</CellLabel>
+                                <div className="flex items-center gap-1 min-w-0">
                                   <div className="flex-1 min-w-0">
                                     <FormControl><SearchableItemSelect
-                                      className="h-8 text-xs"
+                                      className="h-9 text-xs"
                                       columns={['available', 'mrp', 'gst']}
                                       advanceOnSelect
                                       data-testid={`input-line-item-${index}`}
@@ -2085,40 +2135,60 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                                     /></FormControl>
                                   </div>
                                   <PriceHistoryButton customerId={watchCustomerId} itemId={Number(f.value) || 0} />
+                                  {/* Below lg the trailing delete column is hidden, so the
+                                      remove control lives beside the picker instead. */}
+                                  <Button type="button" variant="ghost" size="icon" tabIndex={-1} className="lg:hidden h-9 w-8 shrink-0 text-destructive" onClick={() => remove(index)} disabled={fields.length === 1}><Trash2 className="w-3.5 h-3.5" /></Button>
                                 </div>
+                                {itemId > 0 && (() => {
+                                  const it: any = getItem(itemId);
+                                  return it?.unit ? (
+                                    <p className="text-[10px] text-muted-foreground">per {it.unit}</p>
+                                  ) : null;
+                                })()}
                               </FormItem>
                             )} />
 
-                            {/* Row 2: Qty + MRP display (read-only) + Discount + Line total */}
-                            <div className="grid grid-cols-12 gap-2 items-end">
-                              <div className="col-span-2">
-                                <FormField control={form.control} name={`lineItems.${index}.quantity`} render={({ field: f }) => (
-                                  <FormItem>
-                                    <FormLabel className="text-xs">Qty {itemId > 0 && <span className="text-muted-foreground">(max {maxQty})</span>}</FormLabel>
-                                    <FormControl><Input type="number" min={1} max={itemId > 0 ? maxQty : undefined} className="h-8 text-xs" {...f} /></FormControl>
-                                  </FormItem>
-                                )} />
+                            {/* SKU — display-only, straight from the Item Master. */}
+                            <div className="space-y-1 min-w-0">
+                              <CellLabel>SKU</CellLabel>
+                              <div className="h-9 flex items-center text-xs font-mono truncate">
+                                {itemId > 0 ? ((getItem(itemId) as any)?.itemCode || '—') : '—'}
                               </div>
+                            </div>
+                            <div className="space-y-1 min-w-0">
+                              <FormField control={form.control} name={`lineItems.${index}.quantity`} render={({ field: f }) => (
+                                <FormItem className="space-y-1">
+                                  <CellLabel>Qty</CellLabel>
+                                  <FormControl><Input type="number" min={1} max={itemId > 0 ? maxQty : undefined} className="h-9 text-xs text-right" {...f} /></FormControl>
+                                </FormItem>
+                              )} />
+                              {itemId > 0 && <p className="text-[10px] text-muted-foreground text-right">max {maxQty}</p>}
+                            </div>
+                            {/* MRP — display-only; the sale price floor. */}
+                            <div className="space-y-1 min-w-0">
+                              <CellLabel>MRP ₹</CellLabel>
+                              <div className="h-9 flex items-center justify-end text-xs font-mono">
+                                {(() => { const m = getMrpFloor(itemId); return m > 0 ? inr(m) : '—'; })()}
+                              </div>
+                            </div>
 
                               {/* MRP — editable UPWARD only. Floor = Item Master
                                   MRP (or, on an old invoice, the line's saved
                                   price if the master rose since). Anything below
                                   is rejected and snapped back; reductions go
                                   through Discount. */}
-                              <div className="col-span-3">
+                              <div className="space-y-1 min-w-0">
                                 <FormField control={form.control} name={`lineItems.${index}.unitPrice`} render={({ field: f }) => {
                                   const floor = getMrpFloor(itemId);
                                   return (
-                                    <FormItem>
-                                      <FormLabel className="text-xs">
-                                        MRP (₹) {floor > 0 && <span className="text-[10px] text-muted-foreground font-normal">min {inr(floor)}</span>}
-                                      </FormLabel>
+                                    <FormItem className="space-y-1">
+                                      <CellLabel>Rate ₹</CellLabel>
                                       <FormControl>
                                         <Input
                                           type="number"
                                           step="0.01"
                                           min={floor > 0 ? floor : 0}
-                                          className="h-8 text-xs font-mono"
+                                          className="h-9 text-xs text-right font-mono"
                                           data-testid={`input-line-mrp-${index}`}
                                           data-field={`line-mrp-${index}`}
                                           data-last-field={!discountsEnabled && index === fields.length - 1 ? '1' : undefined}
@@ -2139,28 +2209,6 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                                 {itemId > 0 && getPrice(itemId) <= 0 && (
                                   <p className="mt-1 text-[10px] text-amber-500">Set MRP in Item Master</p>
                                 )}
-                                {/* Taxable: checked → price is the taxable base, GST added on top;
-                                    unchecked → price is final, GST extracted from it. */}
-                                <FormField control={form.control} name={`lineItems.${index}.taxable`} render={({ field: f }) => (
-                                  <label
-                                    className="mt-1 flex items-center gap-1.5 cursor-pointer select-none w-fit"
-                                    title={f.value
-                                      ? 'Price is the taxable base — GST will be added on top'
-                                      : 'Price includes GST — tax is extracted from it'}
-                                  >
-                                    <Checkbox
-                                      className="h-3.5 w-3.5"
-                                      checked={!!f.value}
-                                      onCheckedChange={(v) => {
-                                        f.onChange(v === true);
-                                        form.setValue(`lineItems.${index}.taxableTouched`, true);
-                                      }}
-                                    />
-                                    <span className="text-[10px] text-muted-foreground">
-                                      Taxable{taxRate > 0 ? (f.value ? ' (+GST on top)' : ' (GST incl.)') : ''}
-                                    </span>
-                                  </label>
-                                )} />
                               </div>
 
                               {/* Item discount — ₹ off EVERY unit's MRP.
@@ -2168,26 +2216,27 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                                   existing amount on an edited historical sale
                                   stays visible read-only and is resubmitted
                                   unchanged. */}
-                              <div className="col-span-3">
+                              <div className="space-y-1 min-w-0">
                                 {!discountsEnabled ? (
                                   unitDisc > 0 ? (
-                                    <div className="pt-5">
-                                      <p className="text-[10px] text-muted-foreground font-medium">
-                                        Disc {inr(unitDisc)}/unit (existing)
+                                    <>
+                                      <CellLabel>Disc/Unit ₹</CellLabel>
+                                      <p className="text-[10px] text-muted-foreground font-medium lg:h-9 lg:flex lg:items-center lg:justify-end">
+                                        {inr(unitDisc)}/unit (existing)
                                       </p>
-                                    </div>
+                                    </>
                                   ) : null
                                 ) : (
                                 <FormField control={form.control} name={`lineItems.${index}.unitDiscount`} render={({ field: f }) => (
-                                  <FormItem>
-                                    <FormLabel className="text-xs">Disc / Unit (₹)</FormLabel>
+                                  <FormItem className="space-y-1">
+                                    <CellLabel>Disc/Unit ₹</CellLabel>
                                     <FormControl>
                                       <Input
                                         type="number" min={0} step="0.01"
                                         max={itemId > 0 ? unitPrice : undefined}
                                         disabled={!itemId || unitPrice <= 0}
                                         placeholder="0"
-                                        className="h-8 text-xs"
+                                        className="h-9 text-xs text-right"
                                         data-last-field={index === fields.length - 1 ? '1' : undefined}
                                         {...f}
                                         value={(f.value as any) ?? ''}
@@ -2204,38 +2253,62 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                                 )}
                               </div>
 
-                              <div className="col-span-3 text-right pb-0.5 space-y-0.5">
-                                {itemId > 0 ? (
-                                  unitPrice > 0 ? (
-                                    <>
-                                      <p className="text-xs text-muted-foreground">Subtotal {inr(gst.lineSubtotal)}</p>
-                                      {taxRate > 0 && (
-                                        <p className="text-xs text-amber-500 font-medium">
-                                          {isInterState ? 'IGST' : 'CGST+SGST'} ({taxRate}%) = {inr(gst.taxAmount)}
-                                        </p>
-                                      )}
-                                      {taxRate === 0 && <p className="text-xs text-muted-foreground/50">No GST</p>}
-                                      {disc > 0 && (
-                                        <p className="text-xs text-emerald-600 font-medium">Disc −{inr(Math.min(disc, qty * unitPrice))}</p>
-                                      )}
-                                      <p className="font-mono font-bold text-primary text-sm">{inr(lineTotal)}</p>
-                                    </>
-                                  ) : (
-                                    <p className="text-xs text-amber-400 italic">No MRP</p>
-                                  )
-                                ) : (
-                                  <p className="text-muted-foreground text-xs">—</p>
-                                )}
+                              <div className="space-y-1 min-w-0">
+                                <CellLabel>GST %</CellLabel>
+                                <div className="h-9 flex items-center lg:justify-center text-xs">{itemId > 0 ? `${taxRate}%` : '—'}</div>
                               </div>
-                              <div className="col-span-1 pb-0.5 flex justify-end">
-                                <Button type="button" variant="ghost" size="icon" tabIndex={-1} className="h-7 w-7 text-destructive" onClick={() => remove(index)} disabled={fields.length === 1}><Trash2 className="w-3 h-3" /></Button>
+                              <div className="space-y-1 min-w-0 sm:col-span-2 lg:col-span-1">
+                                <CellLabel>Amount ₹</CellLabel>
+                                <div className="h-9 flex items-center justify-end text-sm font-mono font-medium tabular-nums whitespace-nowrap">
+                                  {itemId > 0
+                                    ? (unitPrice > 0 ? inr(lineTotal) : <span className="text-xs text-amber-400 italic font-sans">No MRP</span>)
+                                    : '—'}
+                                </div>
                               </div>
+                              <Button type="button" variant="ghost" size="icon" tabIndex={-1} className="hidden lg:inline-flex h-8 w-8 text-destructive justify-self-end" onClick={() => remove(index)} disabled={fields.length === 1}><Trash2 className="w-3.5 h-3.5" /></Button>
                             </div>
-                          </div>
+                            {/* Per-line GST breakdown + taxable toggle — the
+                                tinted sub-strip, like the master's batch strip. */}
+                            <div data-kbd-row={index} className={TXN_SUBROW}>
+                              {/* Taxable: checked → price is the taxable base, GST added on top;
+                                  unchecked → price is final, GST extracted from it. */}
+                              <FormField control={form.control} name={`lineItems.${index}.taxable`} render={({ field: f }) => (
+                                <label
+                                  className="flex items-center gap-1.5 cursor-pointer select-none w-fit"
+                                  title={f.value
+                                    ? 'Price is the taxable base — GST will be added on top'
+                                    : 'Price includes GST — tax is extracted from it'}
+                                >
+                                  <Checkbox
+                                    className="h-3.5 w-3.5"
+                                    checked={!!f.value}
+                                    onCheckedChange={(v) => {
+                                      f.onChange(v === true);
+                                      form.setValue(`lineItems.${index}.taxableTouched`, true);
+                                    }}
+                                  />
+                                  <span className="text-[10px] text-muted-foreground">
+                                    Taxable{taxRate > 0 ? (f.value ? ' (+GST on top)' : ' (GST incl.)') : ''}
+                                  </span>
+                                </label>
+                              )} />
+                              {itemId > 0 && unitPrice > 0 && (
+                                <>
+                                  <span className="text-[10px] text-muted-foreground">Subtotal <span className="font-mono">{inr(gst.lineSubtotal)}</span></span>
+                                  {taxRate > 0
+                                    ? <span className="text-[10px] text-amber-500 font-medium">{isInterState ? 'IGST' : 'CGST+SGST'} ({taxRate}%) = {inr(gst.taxAmount)}</span>
+                                    : <span className="text-[10px] text-muted-foreground/50">No GST</span>}
+                                  {disc > 0 && (
+                                    <span className="text-[10px] text-emerald-600 font-medium">Disc −{inr(Math.min(disc, qty * unitPrice))} → {inr(Math.max(0, unitPrice - unitDisc))}/unit</span>
+                                  )}
+                                </>
+                              )}
+                            </div>
+                          </Fragment>
                         );
                       })}
-                    </div></div>
-                    <Button type="button" variant="outline" size="sm" className="mt-3 w-full border-dashed" onClick={() => append({ itemId: 0, quantity: 1, unitPrice: 0, unitDiscount: 0, taxable: customerHasGstin, taxableTouched: false })}>
+                    </div>
+                    <Button type="button" variant="outline" size="sm" className="mt-2" onClick={() => append({ itemId: 0, quantity: 1, unitPrice: 0, unitDiscount: 0, taxable: customerHasGstin, taxableTouched: false })}>
                       <Plus className="w-3 h-3 mr-1" /> Add Item
                     </Button>
                   </>
@@ -2248,7 +2321,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                   ledger in the books. Historical sales with legacy expense
                   ledgers keep their stored meaning ("(legacy)" entries when
                   editing). ── */}
-              <div>
+              <div className={TXN_CARD}>
                 <h3 className="text-sm font-semibold mb-2">
                   Other Charges{' '}
                   <span className="text-xs font-normal text-muted-foreground">(packing / delivery recovery… — added to the invoice total, no GST, posts to a Direct Income ledger)</span>
@@ -2287,15 +2360,12 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                 </Button>
               </div>
 
-              {/* ── Tax Summary + Footer ── */}
-              <DialogFooter className="flex-col gap-0 sm:flex-col w-full pt-2 border-t border-border max-md:sticky max-md:bottom-0 max-md:z-20 max-md:-mx-4 max-md:-mb-4 max-md:px-4 max-md:pb-4 max-md:bg-background/95 max-md:backdrop-blur">
-                {hasItems && (
-                  <div className="w-full mb-3 rounded-lg border border-border overflow-hidden text-sm">
-                    {/* Header */}
-                    <div className="px-3 py-1.5 bg-muted/30 text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-                      Invoice Summary
-                    </div>
-                    <div className="px-3 py-2 space-y-1.5">
+              {/* ── Invoice Summary — bottom-right card, the exact position
+                  and styling of the master's bill summary. ── */}
+              {hasItems && (
+                <div className={TXN_BOTTOM_GRID}>
+                  <div className={`${TXN_SUMMARY_CARD} md:col-start-2`} data-testid="section-invoice-summary">
+                    <h3 className="text-sm font-semibold">Invoice Summary</h3>
                       {/* Gross → item discounts → bill discount → taxable.
                           Both discounts are PRE-tax and already netted into the
                           taxable/GST figures below — shown here so the cashier
@@ -2319,19 +2389,52 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                       {discountsEnabled ? (
                       <div className="flex justify-between items-center gap-2">
                         <span className="text-emerald-600 font-medium">Bill Discount (pre-tax)</span>
-                        <FormField control={form.control} name="billDiscount" render={({ field: f }) => (
-                          <FormItem className="space-y-0">
-                            <FormControl>
-                              <Input
-                                type="number" min={0} step="0.01"
-                                placeholder="0"
-                                className="h-7 w-28 text-xs text-right font-mono"
-                                {...f}
-                                value={(f.value as any) ?? ''}
-                              />
-                            </FormControl>
-                          </FormItem>
-                        )} />
+                        <div className="flex items-center gap-1.5">
+                          {/* % mode: show the resulting ₹ so the cashier sees
+                              exactly what comes off the bill. */}
+                          {billDiscountMode === 'percent' && totals.billDiscount > 0 && (
+                            <span className="font-mono text-xs text-emerald-600" data-testid="text-bill-discount-computed">−{inr(totals.billDiscount)}</span>
+                          )}
+                          <FormField control={form.control} name="billDiscount" render={({ field: f }) => (
+                            <FormItem className="space-y-0">
+                              <FormControl>
+                                <Input
+                                  type="number" min={0} step="0.01"
+                                  max={billDiscountMode === 'percent' ? 100 : undefined}
+                                  placeholder="0"
+                                  className="h-7 w-20 text-xs text-right font-mono"
+                                  data-testid="input-bill-discount"
+                                  {...f}
+                                  value={(f.value as any) ?? ''}
+                                />
+                              </FormControl>
+                            </FormItem>
+                          )} />
+                          {/* ₹/% toggle — switching CONVERTS the typed value so
+                              the effective discount stays identical (₹ → its %
+                              of the basis, % → the ₹ it produced). */}
+                          <div className="flex rounded-md border overflow-hidden shrink-0">
+                            {(['amount', 'percent'] as const).map((m) => (
+                              <button
+                                key={m}
+                                type="button"
+                                data-testid={m === 'amount' ? 'button-bill-discount-rupee' : 'button-bill-discount-percent'}
+                                aria-pressed={billDiscountMode === m}
+                                className={`h-7 px-2 text-xs font-medium transition-colors ${billDiscountMode === m ? 'bg-primary text-primary-foreground' : 'bg-background text-muted-foreground hover:bg-muted'}`}
+                                onClick={() => {
+                                  if (m === billDiscountMode) return;
+                                  const { billDiscount: effective, basisSum } = computeCartTotals();
+                                  setBillDiscountMode(m);
+                                  form.setValue('billDiscount', m === 'percent'
+                                    ? (basisSum > 0 ? Math.round((effective / basisSum) * 10000) / 100 : 0)
+                                    : effective);
+                                }}
+                              >
+                                {m === 'amount' ? '₹' : '%'}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
                       </div>
                       ) : Number(form.watch('billDiscount') ?? 0) > 0 ? (
                         <div className="flex justify-between items-center gap-2">
@@ -2414,18 +2517,28 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                         <span>{totals.discountAmount > 0 || totals.otherTotal > 0 ? 'Amount Payable' : 'Grand Total'}</span>
                         <span className="font-mono text-primary">{inr(totals.finalAmount)}</span>
                       </div>
-                    </div>
                   </div>
-                )}
-                <div className="flex gap-2 justify-end w-full">
-                  <DialogClose asChild><Button variant="outline" type="button">Cancel</Button></DialogClose>
-                  <Button type="submit" disabled={(editItem ? updateMutation.isPending : createMutation.isPending) || !watchLocationId || (!editItem && availableItems.length === 0) || totals.finalAmount === 0}>
-                    {editItem
-                      ? (updateMutation.isPending ? 'Saving…' : 'Save Changes')
-                      : (createMutation.isPending ? 'Processing…' : 'Complete Sale')}
-                  </Button>
                 </div>
-              </DialogFooter>
+              )}
+
+              {/* ── Sticky action bar — the dialog flavour of the master's
+                  bottom bar: running total left, actions right. ── */}
+              <div className={TXN_ACTION_BAR_DIALOG}>
+                <div className={TXN_ACTION_BAR_INNER_DIALOG}>
+                  <div className="text-sm font-bold flex items-baseline gap-2 min-w-0">
+                    <span className="text-muted-foreground font-medium text-xs uppercase tracking-wide shrink-0">{totals.discountAmount > 0 || totals.otherTotal > 0 ? 'Amount Payable' : 'Grand Total'}</span>
+                    <span className="font-mono text-primary text-base truncate">{inr(totals.finalAmount)}</span>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <DialogClose asChild><Button variant="outline" type="button">Cancel</Button></DialogClose>
+                    <Button type="submit" disabled={(editItem ? updateMutation.isPending : createMutation.isPending) || !watchLocationId || (!editItem && availableItems.length === 0) || totals.finalAmount === 0}>
+                      {editItem
+                        ? (updateMutation.isPending ? 'Saving…' : 'Save Changes')
+                        : (createMutation.isPending ? 'Processing…' : 'Complete Sale')}
+                    </Button>
+                  </div>
+                </div>
+              </div>
             </form>
           </Form>
         </TransactionDialogContent>

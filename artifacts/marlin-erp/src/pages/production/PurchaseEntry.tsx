@@ -30,6 +30,12 @@ import { calcPurchaseBill, calcPurchaseLine, type PriceMode } from '@workspace/p
 import { useQueryClient } from '@tanstack/react-query';
 import { useEntryShortcuts } from '@/lib/keyboard-entry';
 import { PageHeader } from '@/components/app/page-header';
+// This page is the MASTER transaction-window design — the shared primitives
+// below are extracted from it verbatim so POS and Quotations render the same.
+import {
+  TXN_CARD, TXN_HEADER_GRID, TXN_LINES_BOX, txnLinesHead, txnLineRow, TXN_SUBROW,
+  TXN_BOTTOM_GRID, TXN_SUMMARY_CARD, TXN_ACTION_BAR_PAGE, TXN_ACTION_BAR_INNER, TxnCellLabel,
+} from '@/components/app/transaction-window';
 import { inr } from '@/lib/currency';
 
 const GST_RATES = [0, 5, 12, 18, 28] as const;
@@ -105,11 +111,9 @@ const gstinState = (g: unknown) => {
 };
 const plainState = (s: unknown) => String(s ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
 
-/** Tiny label shown above each line field below lg, where the header row is
- *  hidden. Plain <label>, not FormLabel — these are register()-driven inputs. */
-const CellLabel = ({ children, className = '' }: { children: React.ReactNode; className?: string }) => (
-  <span className={`lg:hidden text-[10px] uppercase tracking-wide text-muted-foreground font-medium ${className}`}>{children}</span>
-);
+/** Tiny label shown above each line field below lg — the shared transaction
+ *  window primitive (this page is the MASTER design the others copy). */
+const CellLabel = TxnCellLabel;
 
 export default function PurchaseEntry() {
   const perm = usePermission('page:/production/purchase');
@@ -546,8 +550,8 @@ export default function PurchaseEntry() {
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
             {/* ── Bill header ── */}
-            <div className="bg-card border border-border rounded-xl shadow-sm p-4 sm:p-6">
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 items-start">
+            <div className={TXN_CARD}>
+              <div className={TXN_HEADER_GRID}>
                 <FormField control={form.control} name="vendorId" render={({ field }) => (
                   <FormItem><FormLabel>Vendor <span className="text-destructive">*</span></FormLabel>
                     {/* Searchable, scrollable picker — a plain dropdown outgrows
@@ -621,7 +625,7 @@ export default function PurchaseEntry() {
             </div>
 
             {/* ── Line Items ── */}
-            <div className="bg-card border border-border rounded-xl shadow-sm p-4 sm:p-6">
+            <div className={TXN_CARD}>
               <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-2 mb-3">
                 <div className="flex flex-wrap items-end gap-x-6 gap-y-2">
                   <div className="text-sm font-medium pb-2">Line Items</div>
@@ -680,13 +684,13 @@ export default function PurchaseEntry() {
                   {' '}Mfg and expiry dates are required; leave batch blank to have one issued.
                 </p>
               </div>
-              <div className="border border-border rounded-lg overflow-hidden">
+              <div className={TXN_LINES_BOX}>
                 {/* One Enter handler for every line input: next field, or Add
                     Line from the row's last field. See handleLineKeyDown.
                     Below lg the grid wraps into labelled cells instead of
                     scrolling sideways — no horizontal scroll at any width. */}
                 <div data-kbd-scope onKeyDown={handleLineKeyDown}>
-                <div className={`hidden lg:grid gap-2 bg-muted/30 text-xs font-medium text-muted-foreground uppercase tracking-wide px-3 py-2.5 ${GRID_LG}`}>
+                <div className={txnLinesHead(GRID_LG)}>
                   <span>Item Name</span>
                   <span>HSN Code</span>
                   <span className="text-right">Qty</span>
@@ -704,7 +708,7 @@ export default function PurchaseEntry() {
                   );
                   return (
                     <Fragment key={field.id}>
-                    <div data-kbd-row={index} className={`grid items-end lg:items-center gap-2 px-3 py-2.5 border-t border-border grid-cols-2 sm:grid-cols-4 ${GRID_LG}`}>
+                    <div data-kbd-row={index} className={txnLineRow(GRID_LG)}>
                       {/* Item type + item selector combined. Full row below lg
                           so long names have the whole width and wrap the grid
                           vertically instead of scrolling sideways. */}
@@ -758,6 +762,7 @@ export default function PurchaseEntry() {
                               id: m.id,
                               name: m.name,
                               code: m.itemCode || null,
+                              barcode: m.barcode || null,
                               hsn: m.hsnCode || null,
                               gstRate: m.taxRate == null ? null : Number(m.taxRate),
                             }))}
@@ -774,6 +779,19 @@ export default function PurchaseEntry() {
                             <X className="w-3.5 h-3.5" />
                           </Button>
                         </div>
+                        {/* Unit + MRP straight from the master — display only,
+                            nothing here feeds the costing arithmetic. */}
+                        {Number(li.materialId) > 0 && (() => {
+                          const kind = form.watch(`lineItems.${index}.materialType`);
+                          const arr: any[] = kind === 'raw_material' ? rawMaterials : kind === 'item' ? finishedItems : materials;
+                          const m: any = arr.find((x: any) => Number(x.id) === Number(li.materialId));
+                          return m ? (
+                            <p className="text-[10px] text-muted-foreground">
+                              Unit <span className="font-mono">{m.unit || '—'}</span>
+                              {Number(m.mrp ?? 0) > 0 && <> · MRP {inr(Number(m.mrp))}</>}
+                            </p>
+                          ) : null;
+                        })()}
                       </div>
                       {/* HSN fills itself from the Item Master; it is out of
                           the tab order (still mouse-editable) so Tab goes
@@ -815,7 +833,7 @@ export default function PurchaseEntry() {
                         expiry-checked without dates, so those stay required;
                         the number is issued by the server when left blank.
                         Wraps naturally on narrow screens. */}
-                    <div data-kbd-row={index} className="flex flex-wrap items-center gap-x-3 gap-y-2 px-3 py-1.5 bg-emerald-500/[0.03]">
+                    <div data-kbd-row={index} className={TXN_SUBROW}>
                       <div className="flex items-center gap-2 min-w-0 grow basis-56">
                         <span className="text-[10px] uppercase tracking-wide text-muted-foreground shrink-0">Batch</span>
                         <Input className="h-8 text-xs font-mono min-w-0" placeholder="Auto on save (or vendor lot no.)" {...form.register(`lineItems.${index}.batchNumber`)} />
@@ -853,7 +871,7 @@ export default function PurchaseEntry() {
             {/* ── Other Purchase Charges — freight, loading, transport and the
                 like. Posted to the chosen Direct Expense ledger and owed to
                 the vendor; kept OUT of stock cost, item rates and GST. ── */}
-            <div className="bg-card border border-border rounded-xl shadow-sm p-4 sm:p-6">
+            <div className={TXN_CARD}>
               <h3 className="text-sm font-semibold mb-2">
                 Other Charges{' '}
                 <span className="text-xs font-normal text-muted-foreground">(freight, loading, transport… — booked as Direct Expenses, never into stock cost)</span>
@@ -893,13 +911,13 @@ export default function PurchaseEntry() {
             </div>
 
             {/* ── Notes + Bill Summary — side by side on wide screens. ── */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div className="bg-card border border-border rounded-xl shadow-sm p-4 sm:p-6">
+            <div className={TXN_BOTTOM_GRID}>
+              <div className={TXN_CARD}>
                 <FormField control={form.control} name="notes" render={({ field }) => (
                   <FormItem><FormLabel>Notes</FormLabel><FormControl><Textarea rows={3} placeholder="Optional notes" {...field} /></FormControl></FormItem>
                 )} />
               </div>
-              <div className="bg-card border border-border rounded-xl shadow-sm p-4 sm:p-6 space-y-2 text-sm">
+              <div className={TXN_SUMMARY_CARD}>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Subtotal {priceMode === 'inclusive' ? '(GST incl.)' : ''}</span>
                   <span className="font-mono">{inr(bill.subtotal)}</span>
@@ -932,8 +950,8 @@ export default function PurchaseEntry() {
 
             {/* ── Sticky action bar — the running total and Save stay in view
                 however long the line-item list grows, at every width. ── */}
-            <div className="fixed bottom-0 left-0 right-0 z-20 border-t border-border bg-background/95 backdrop-blur">
-              <div className="flex items-center justify-between gap-3 px-4 py-2.5 md:px-8">
+            <div className={TXN_ACTION_BAR_PAGE}>
+              <div className={TXN_ACTION_BAR_INNER}>
                 <div className="text-sm font-bold flex items-baseline gap-2 min-w-0">
                   <span className="text-muted-foreground font-medium text-xs uppercase tracking-wide shrink-0">{otherTotal > 0 ? 'Total Payable' : 'Grand Total'}</span>
                   <span className="font-mono text-primary text-base truncate">{inr(grandPayable)}</span>
