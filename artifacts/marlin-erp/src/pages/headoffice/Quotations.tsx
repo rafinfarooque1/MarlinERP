@@ -732,7 +732,7 @@ export default function Quotations() {
       const message = composeQuotationMessage({
         quotation: q,
         pdfUrl,
-        companyName: cs?.companyName ?? cs?.name ?? 'Marlin Frozen Fruits',
+        companyName: cs?.companyName ?? cs?.name ?? 'Frozen Fruits ERP',
         resolveItemName: id => itemsMap.get(id)?.name,
         linkValidDays: link.validForDays,
       });

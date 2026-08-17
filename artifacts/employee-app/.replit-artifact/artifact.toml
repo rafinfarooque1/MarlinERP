@@ -1,6 +1,6 @@
 kind = "mobile"
 previewPath = "/employee-app/"
-title = "Marlin Employee App"
+title = "Frozen Fruits Employee App"
 version = "1.0.0"
 id = "artifacts/employee-app"
 router = "expo-domain"

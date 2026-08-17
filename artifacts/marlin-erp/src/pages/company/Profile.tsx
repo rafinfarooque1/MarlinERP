@@ -30,6 +30,7 @@ const schema = z.object({
   name: z.string().min(1, 'Company name required'),
   gstNumber: z.string().optional(),
   pan: z.string().optional(),
+  fssai: z.string().optional(),
   phone: z.string().optional(),
   email: z.string().email().optional().or(z.literal('')),
   website: z.string().optional(),
@@ -63,7 +64,7 @@ type FormValues = z.infer<typeof schema>;
  * about. Starting blank keeps every field controlled for the whole lifetime.
  */
 const BLANK: FormValues = {
-  name: '', gstNumber: '', pan: '', phone: '', email: '', website: '',
+  name: '', gstNumber: '', pan: '', fssai: '', phone: '', email: '', website: '',
   address: '', city: '', state: '', pincode: '',
   bankName: '', bankAccount: '', ifscCode: '', bankBranch: '',
   accountType: '', bankAccountHolder: '',
@@ -88,6 +89,7 @@ export default function Profile() {
       name: p.companyName || p.name || '',
       gstNumber: p.gstNumber || '',
       pan: p.panNumber || p.pan || '',
+      fssai: p.fssaiNumber || '',
       phone: p.phone || '',
       email: p.email || '',
       website: p.website || '',
@@ -119,6 +121,7 @@ export default function Profile() {
       companyName: data.name,
       gstNumber: data.gstNumber,
       panNumber: data.pan,
+      fssaiNumber: (data.fssai || '').trim(),
       phone: data.phone,
       email: data.email || undefined,
       website: data.website,
@@ -304,6 +307,9 @@ export default function Profile() {
                   )} />
                   <FormField control={form.control} name="pan" render={({ field }) => (
                     <FormItem><FormLabel>PAN</FormLabel><FormControl><Input className="font-mono uppercase" {...field} /></FormControl></FormItem>
+                  )} />
+                  <FormField control={form.control} name="fssai" render={({ field }) => (
+                    <FormItem><FormLabel>FSSAI Licence No.</FormLabel><FormControl><Input placeholder="e.g. 10012345678901" className="font-mono" {...field} /></FormControl></FormItem>
                   )} />
                 </div>
               </Section>

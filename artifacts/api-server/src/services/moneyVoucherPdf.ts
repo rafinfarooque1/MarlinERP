@@ -225,7 +225,12 @@ export async function generateMoneyVoucherPdf(data: MoneyVoucherPdfInput): Promi
   if (trail) { txt(trail, M, y, { size: 7, color: MUT }); y += 8; }
 
   // ── Signatures ────────────────────────────────────────────────────────────
-  y = Math.max(y, 235);
+  // Content-driven: the row sits just below the last printed line rather than
+  // at a fixed page anchor (which left a large blank band on short vouchers).
+  // If the body already ran past the safe band (very long narrations), the row
+  // moves to a fresh page instead of being stamped over the content.
+  y += 4;
+  if (y > 255) { doc.addPage(); y = 24; }
   const sigW = CW / 3;
   const sigs = isReceipt
     ? ["Received By", "Authorized Signatory", "Payer's Signature"]

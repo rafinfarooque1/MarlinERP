@@ -74,7 +74,7 @@ export function DownloadAppDialog({ open, onOpenChange }: {
     return () => { cancelled = true; };
   }, [open, isDesktop, apkConfigured, iosUrl, apkDownloadUrl]);
 
-  const companyName = (settings as any)?.companyName || 'Marlin Frozen Fruits';
+  const companyName = (settings as any)?.companyName || 'Frozen Fruits ERP';
   const logoUrl = (settings as any)?.logoUrl as string | null | undefined;
 
   const AndroidCard = (

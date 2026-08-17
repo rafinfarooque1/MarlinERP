@@ -68,7 +68,7 @@ export default function LoginScreen() {
           <View style={styles.logoCircle}>
             <Feather name="briefcase" size={36} color={colors.primaryForeground} />
           </View>
-          <Text style={styles.brandName}>Marlin</Text>
+          <Text style={styles.brandName}>Frozen Fruits</Text>
           <Text style={styles.brandSub}>Employee Portal</Text>
         </View>
 
@@ -153,7 +153,7 @@ export default function LoginScreen() {
           </Pressable>
         </View>
 
-        <Text style={styles.footer}>Marlin Frozen Fruits Pvt. Ltd.</Text>
+        <Text style={styles.footer}>Frozen Fruits ERP</Text>
       </ScrollView>
     </KeyboardAvoidingView>
   );

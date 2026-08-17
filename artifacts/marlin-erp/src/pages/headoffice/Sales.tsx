@@ -1452,7 +1452,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
       const message = composeInvoiceMessage({
         sale,
         pdfUrl,
-        companyName: cs?.companyName ?? cs?.name ?? 'Marlin Frozen Fruits',
+        companyName: cs?.companyName ?? cs?.name ?? 'Frozen Fruits ERP',
         resolveItemName: id => itemsMap.get(id)?.name,
         linkValidDays: link.validForDays,
       });

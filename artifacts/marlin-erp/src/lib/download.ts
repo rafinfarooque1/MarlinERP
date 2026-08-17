@@ -1,3 +1,23 @@
+/**
+ * The selected working location, as the same x-location headers the API client
+ * attaches to every read. Server-side PDF/Excel exports print under the current
+ * location's letterhead, so these raw-fetch helpers must carry the context too
+ * (it is a view preference the server treats as a filter, never authority).
+ */
+function locationHeaders(): Record<string, string> {
+  try {
+    const raw = localStorage.getItem('marlin_sales_location');
+    if (!raw) return {};
+    const s = JSON.parse(raw) as { locationType?: string | null; locationId?: number | null };
+    if ((s.locationType === 'warehouse' || s.locationType === 'outlet') && s.locationId) {
+      return { 'x-location-type': s.locationType, 'x-location-id': String(Number(s.locationId)) };
+    }
+    return {};
+  } catch {
+    return {};
+  }
+}
+
 /** Export an array of objects as a CSV file download. */
 export function downloadCSV(filename: string, rows: Record<string, unknown>[]) {
   if (!rows.length) return;
@@ -62,6 +82,7 @@ export async function downloadPDFFromEndpoint(
       headers: {
         'Content-Type': 'application/json',
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...locationHeaders(),
       },
       credentials: 'include',
       body: JSON.stringify(data),
@@ -95,7 +116,7 @@ export async function downloadFileFromEndpoint(
   const token = localStorage.getItem('marlin_auth_token');
   const resp = await fetch(endpoint, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...locationHeaders() },
     credentials: 'include',
     body: JSON.stringify(data),
   });
@@ -125,7 +146,7 @@ export async function printPDFFromEndpoint(endpoint: string, data: unknown): Pro
     const token = localStorage.getItem('marlin_auth_token');
     const resp = await fetch(endpoint, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...locationHeaders() },
       credentials: 'include',
       body: JSON.stringify(data),
     });

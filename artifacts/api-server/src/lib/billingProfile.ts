@@ -231,6 +231,7 @@ const WAREHOUSE_COLS = `
 interface CompanyRow {
   company_name: string | null; address: string | null; city: string | null; state: string | null;
   pincode: string | null; phone: string | null; email: string | null; gst_number: string | null;
+  fssai_number: string | null;
   bank_name: string | null; bank_account: string | null; ifsc_code: string | null;
   bank_branch: string | null; account_type: string | null; bank_account_holder: string | null;
   invoice_footer: string | null; upi_id: string | null; logo_url: string | null;
@@ -238,7 +239,7 @@ interface CompanyRow {
 
 async function loadCompany(pool: Pool): Promise<CompanyRow | null> {
   const { rows: [row] } = await pool.query<CompanyRow>(
-    `SELECT company_name, address, city, state, pincode, phone, email, gst_number,
+    `SELECT company_name, address, city, state, pincode, phone, email, gst_number, fssai_number,
             bank_name, bank_account, ifsc_code, bank_branch, account_type, bank_account_holder,
             invoice_footer, upi_id, logo_url
        FROM company_settings ORDER BY id LIMIT 1`,
@@ -339,7 +340,7 @@ function fromCompany(company: CompanyRow | null): InvoiceIssuer {
     phone: s(c?.phone),
     email: s(c?.email),
     gstin: s(c?.gst_number),
-    fssai: "",
+    fssai: s(c?.fssai_number),
     state: s(c?.state),
     stateCode: stateCodeFromGstin(c?.gst_number),
     pincode: s(c?.pincode),
@@ -403,6 +404,7 @@ interface OutletRow {
   id: number; name: string; warehouse_id: number | null; address: string | null;
   phone: string | null; upi_id: string | null; gstin: string | null;
   state: string | null; state_code: string | null;
+  email: string | null; fssai_number: string | null; logo_url: string | null;
 }
 
 /**
@@ -450,7 +452,8 @@ export async function resolveLocationIssuer(
   if (!outletId) return fromCompany(company);
 
   const { rows: [o] } = await pool.query<OutletRow>(
-    `SELECT id, name, warehouse_id, address, phone, upi_id, gstin, state, state_code
+    `SELECT id, name, warehouse_id, address, phone, upi_id, gstin, state, state_code,
+            email, fssai_number, logo_url
        FROM outlets WHERE id = $1`, [outletId],
   );
   if (!o) return missingLocationIssuer("outlet", outletId);
@@ -469,10 +472,13 @@ export async function resolveLocationIssuer(
     tradeName: s(o.name) || base.tradeName,
     addressLines: ownAddress.length > 0 ? ownAddress : base.addressLines,
     phone: s(o.phone) || base.phone,
+    email: s(o.email) || base.email,
     gstin: s(o.gstin) || base.gstin,
+    fssai: s(o.fssai_number) || base.fssai,
     state: s(o.state) || base.state,
     stateCode: s(o.state_code) || stateCodeFromGstin(o.gstin) || base.stateCode,
     upiId: s(o.upi_id) || base.upiId,
+    logoUrl: s(o.logo_url) || base.logoUrl,
   };
   return sealed(resolved);
 }

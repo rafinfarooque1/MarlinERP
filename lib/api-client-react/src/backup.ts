@@ -294,17 +294,41 @@ export const useUpdateBackupSettings = () =>
 /**
  * Upload an archive from the administrator's machine.
  *
- * Sent as a raw body rather than multipart: the server streams it straight to
- * disk, and a multipart wrapper would mean buffering an arbitrarily large archive
- * in memory on the way through.
+ * The file goes STRAIGHT to object storage via a presigned URL rather than
+ * through the API server: the published app's front-end rejects any request
+ * body over 32 MB with its own bare 413 before the app sees a byte, and a real
+ * backup archive is routinely bigger than that. The server issues the
+ * destination (an opaque key), the browser PUTs the bytes to the bucket, and
+ * the finalize call makes the server pull, inspect and catalogue the archive —
+ * so validation is identical to a direct upload.
  */
 export const useUploadBackup = () =>
   useMutation<UploadResponse, Error, { file: File }>({
-    mutationFn: ({ file }) =>
-      customFetch<UploadResponse>(
-        `/api/backup/upload?filename=${encodeURIComponent(file.name)}`,
-        { method: "POST", headers: { "Content-Type": "application/zip" }, body: file },
-      ),
+    mutationFn: async ({ file }) => {
+      const { key, uploadURL } = await customFetch<{ key: string; uploadURL: string }>(
+        "/api/backup/upload-url",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ filename: file.name, size: file.size }),
+        },
+      );
+      const put = await fetch(uploadURL, {
+        method: "PUT",
+        headers: { "Content-Type": "application/zip" },
+        body: file,
+      });
+      if (!put.ok) {
+        throw new Error(
+          "The file could not be uploaded to storage. Check your connection and try again.",
+        );
+      }
+      return customFetch<UploadResponse>("/api/backup/upload/finalize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ key, filename: file.name }),
+      });
+    },
   });
 
 /**

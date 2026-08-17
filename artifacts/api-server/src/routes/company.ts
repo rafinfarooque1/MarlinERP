@@ -63,6 +63,7 @@ async function extraSettingsFields(id: number): Promise<{
   upiEnabled: boolean; upiId: string; upiPayeeName: string;
   showUpiQrOnInvoice: boolean; showBankDetailsOnInvoice: boolean;
   bankBranch: string; accountType: string; bankAccountHolder: string;
+  fssaiNumber: string;
 }> {
   const { rows: [r] } = await pool.query<any>(
     `SELECT payment_terms, invoice_footer, production_overhead_percent,
@@ -72,7 +73,7 @@ async function extraSettingsFields(id: number): Promise<{
             esi_enabled, esi_employee_percent, esi_employer_percent,
             upi_enabled, upi_id, upi_payee_name,
             show_upi_qr_on_invoice, show_bank_details_on_invoice,
-            bank_branch, account_type, bank_account_holder
+            bank_branch, account_type, bank_account_holder, fssai_number
      FROM company_settings WHERE id = $1`, [id]
   );
   return {
@@ -102,6 +103,7 @@ async function extraSettingsFields(id: number): Promise<{
     bankBranch: r?.bank_branch ?? '',
     accountType: r?.account_type ?? '',
     bankAccountHolder: r?.bank_account_holder ?? '',
+    fssaiNumber: r?.fssai_number ?? '',
   };
 }
 
@@ -130,7 +132,7 @@ router.patch("/company/settings", requireModuleAction("page:/company/settings", 
   // paymentTerms / invoiceFooter are handled via raw SQL (columns added by
   // startup migration; Drizzle's .set() would drop unknown keys).
   const pdfUpdates: Array<[column: string, value: string | null]> = [];
-  for (const [bodyKey, column] of [['paymentTerms', 'payment_terms'], ['invoiceFooter', 'invoice_footer']] as const) {
+  for (const [bodyKey, column] of [['paymentTerms', 'payment_terms'], ['invoiceFooter', 'invoice_footer'], ['fssaiNumber', 'fssai_number']] as const) {
     if (bodyKey in req.body) {
       const v = (req.body as any)[bodyKey];
       if (v !== null && typeof v !== 'string') { res.status(400).json({ error: `${bodyKey} must be a string or null` }); return; }
@@ -508,7 +510,7 @@ async function readAppDistribution() {
     return t && t.length <= 50 && /^[\w. +()-]*$/.test(t) ? t : null;
   };
   return {
-    companyName: String(r?.company_name || "Marlin Frozen Fruits"),
+    companyName: String(r?.company_name || "Frozen Fruits ERP"),
     // null → no Android release published (honest unavailability, never stale)
     android,
     iosUrl: cleanIos(gs?.iosInstallUrl),

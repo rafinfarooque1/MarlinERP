@@ -107,7 +107,7 @@ export default function Login() {
           <div>
             <img
               src="/marlin-logo.jpeg"
-              alt="Marlin Frozen Fruits"
+              alt="Frozen Fruits ERP"
               className="h-16 object-contain rounded-lg"
               style={{ filter: 'drop-shadow(0 2px 8px rgba(0,0,0,0.4))' }}
             />
@@ -122,7 +122,7 @@ export default function Login() {
               One system.<br />All operations.
             </h1>
             <p className="text-white/60 text-base max-w-sm leading-relaxed">
-              Manage production, inventory, sales, payroll, and accounts — all in one place built for Marlin's workflow.
+              Manage production, inventory, sales, payroll, and accounts — all in one place, built for your workflow.
             </p>
 
             {/* Stat pills */}
@@ -146,7 +146,7 @@ export default function Login() {
 
           {/* Footer */}
           <p className="text-white/25 text-xs">
-            © {new Date().getFullYear()} Marlin Frozen Fruits. Internal use only.
+            © {new Date().getFullYear()} Frozen Fruits ERP. Internal use only.
           </p>
         </div>
       </div>
@@ -162,7 +162,7 @@ export default function Login() {
 
         {/* Mobile-only logo */}
         <div className="lg:hidden mb-8 text-center">
-          <img src="/marlin-logo.jpeg" alt="Marlin" className="h-14 object-contain mx-auto mb-2" />
+          <img src="/marlin-logo.jpeg" alt="Frozen Fruits ERP" className="h-14 object-contain mx-auto mb-2" />
           <p className="text-xs font-mono tracking-widest uppercase text-muted-foreground">Operations Terminal</p>
         </div>
 

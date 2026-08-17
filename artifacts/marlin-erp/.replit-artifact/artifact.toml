@@ -1,6 +1,6 @@
 kind = "web"
 previewPath = "/"
-title = "Marlin Frozen Fruits ERP"
+title = "Frozen Fruits ERP"
 version = "1.0.0"
 id = "artifacts/marlin-erp"
 router = "path"
