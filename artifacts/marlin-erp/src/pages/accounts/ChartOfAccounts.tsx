@@ -9,7 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { CalendarDays, Store, TrendingDown, TrendingUp, Landmark, BarChart3, ChevronDown, ChevronRight, Package, Lock, Trash2, ScrollText, ArrowUpRight, ArrowDownLeft, ShieldOff, AlertTriangle, Settings2, FoldVertical, UnfoldVertical, Folder } from 'lucide-react';
+import { CalendarDays, Store, TrendingDown, TrendingUp, Landmark, BarChart3, ChevronDown, ChevronRight, Package, Lock, Trash2, ScrollText, ArrowUpRight, ArrowDownLeft, ShieldOff, AlertTriangle, Settings2, FoldVertical, UnfoldVertical, Folder, FileDown, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { usePermission } from '@/lib/usePermission';
 import { useLocationContext, locationFilterParams } from '@/lib/locationContext';
@@ -1304,6 +1304,7 @@ export default function ChartOfAccounts() {
   // a month cell shows exactly that month's entries.
   const [selectedLedger, setSelectedLedger] = useState<{ node: StatementTarget; fromDate?: string; toDate?: string } | null>(null);
   const [manageOpen, setManageOpen] = useState(false);
+  const [pdfBusy, setPdfBusy]     = useState(false);
   const queryClient               = useQueryClient();
   const outletsVisible            = useIsLocationKindEnabled('outlet');
   // Global location selector scopes the statements to that location's slice of
@@ -1365,6 +1366,81 @@ export default function ChartOfAccounts() {
     () => computeDateRange(period, customFrom, customTo),
     [period, customFrom, customTo],
   );
+
+  // ── PDF export ────────────────────────────────────────────────────────────
+  const handleDownloadPdf = async () => {
+    if (!fs) { toast.error('No data to export yet — wait for the statements to load'); return; }
+    setPdfBusy(true);
+    try {
+      // 1. Company settings (always needed as the base identity)
+      const cs = await customFetch<any>('/api/company/settings');
+
+      // 2. Location-specific details (when a warehouse or outlet is scoped)
+      let locData: any = null;
+      let locType: string | undefined;
+
+      if (outletId !== 'all') {
+        try { locData = await customFetch<any>(`/api/outlets/${outletId}`); } catch { /* ignore */ }
+        locType = 'outlet';
+      } else if (effLoc.locationType) {
+        const url = effLoc.locationType === 'warehouse'
+          ? `/api/warehouses/${effLoc.locationId}`
+          : `/api/outlets/${effLoc.locationId}`;
+        try { locData = await customFetch<any>(url); } catch { /* ignore */ }
+        locType = effLoc.locationType;
+      }
+
+      // 3. Location label shown in the PDF header
+      let locationLabel: string;
+      if (outletId !== 'all') {
+        locationLabel = outlets.find(o => o.id === Number(outletId))?.name ?? `Outlet #${outletId}`;
+      } else if (effLoc.locationType) {
+        const all = [...(fs.filters.warehouses ?? []), ...(fs.filters.outlets ?? [])];
+        locationLabel = all.find(l => l.id === effLoc.locationId)?.name ?? 'Selected Location';
+      } else {
+        locationLabel = 'All Locations';
+      }
+
+      // 4. Build issuer — prefer location-specific data, fall back to company
+      const isWh    = locType === 'warehouse';
+      const tradeName = locData?.name ?? cs.companyName ?? 'Company';
+      const addrParts = isWh
+        ? [locData?.address, [locData?.city, locData?.state, locData?.pincode].filter(Boolean).join(', ')].filter(Boolean)
+        : [cs.address, [cs.city, cs.state, cs.pincode].filter(Boolean).join(', ')].filter(Boolean);
+      const issuer = {
+        tradeName,
+        addressLines: addrParts as string[],
+        phone:  (isWh ? locData?.phone   : null) ?? cs.phone        ?? '',
+        email:  locData?.email              ?? cs.email        ?? '',
+        gstin:  (isWh ? locData?.gstNumber : locData?.gstin) ?? cs.gstNumber ?? '',
+        fssai:  locData?.fssaiNumber        ?? cs.fssaiNumber  ?? '',
+      };
+      const logoDataUrl: string | null = locData?.logoUrl ?? cs.logoUrl ?? null;
+
+      // 5. Period label
+      const fmtDate = (d: string) =>
+        new Date(`${d}T00:00:00`).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+      const periodLabel = !fromDate && !toDate ? 'All Dates'
+        : fromDate && toDate ? `${fmtDate(fromDate)} – ${fmtDate(toDate)}`
+        : fromDate           ? `From ${fmtDate(fromDate)}`
+        : `Up to ${fmtDate(toDate!)}`;
+
+      // 6. Generate & download
+      const { generateChartOfAccountsPdf } = await import('./ChartOfAccountsPdf');
+      await generateChartOfAccountsPdf({
+        fs,
+        mw: monthWise && mwData ? { months: mwData.months, series: mwData.series } : null,
+        issuer,
+        logoDataUrl,
+        locationLabel,
+        periodLabel,
+      });
+    } catch (e: any) {
+      toast.error(e?.message ?? 'Could not generate PDF');
+    } finally {
+      setPdfBusy(false);
+    }
+  };
 
   const qKey = useMemo(
     () => ['fin-stmt', fromDate, toDate, effLoc.locationType ?? null, effLoc.locationId ?? null],
@@ -1492,6 +1568,21 @@ export default function ChartOfAccounts() {
               </Select>
             </div>
           )}
+
+          {/* ── Download PDF ── */}
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 px-3 text-xs gap-1.5 ml-auto"
+            onClick={handleDownloadPdf}
+            disabled={pdfBusy || isLoading || !fs}
+            data-testid="coa-download-pdf"
+          >
+            {pdfBusy
+              ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Generating…</>
+              : <><FileDown className="w-3.5 h-3.5" /> Download PDF</>
+            }
+          </Button>
         </div>
 
         {/* ── The statements — with month columns folded in when Month Wise is ON ── */}

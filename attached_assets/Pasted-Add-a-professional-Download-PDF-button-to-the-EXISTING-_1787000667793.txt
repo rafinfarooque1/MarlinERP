@@ -1,0 +1,130 @@
+Add a professional “Download PDF” button to the EXISTING Chart of Accounts page.
+
+IMPORTANT: The PDF must be an export of the CURRENT Chart of Accounts screen. Do NOT create a separate report/table or a different accounting layout.
+
+PDF REQUIREMENTS:
+
+1. The PDF must show exactly the same information currently visible on the Chart of Accounts screen:
+- Balance Sheet or Profit & Loss tab currently selected
+- Liabilities
+- Assets
+- Account hierarchy
+- Parent accounts
+- Child accounts
+- Account names
+- Amounts
+- Current filters
+- Month Wise columns when Month Wise is enabled
+- Total column
+- Same currency formatting
+- Same debit/credit signs
+- Same calculated values
+
+2. MONTH WISE:
+When “Month Wise” is ON, add each month as a column directly inside the existing Chart of Accounts structure.
+
+Example:
+
+ACCOUNT | APR 2026 | MAY 2026 | JUN 2026 | JUL 2026 | AUG 2026 | TOTAL
+Sales   | ₹5,000   | ₹1,000   | ₹2,000   | ₹2,000   | ₹3,000   | ₹13,000
+
+The PDF must use the exact values already displayed by the Chart of Accounts. Do not create different calculations or hardcoded values.
+
+3. PDF HEADER / LOCATION:
+
+At the top of every PDF show the applicable location information.
+
+If “All Locations” is selected:
+- Use Company Profile details
+- Company logo
+- Company name
+- Company address
+- Phone
+- Email
+- GSTIN
+- Other configured company details
+- Clearly display: “All Locations”
+
+If “Head Office” is selected:
+- Use the Company Profile / Head Office details
+- Company logo
+- Company name
+- Address
+- Phone
+- Email
+- GSTIN
+- Clearly display: “Head Office”
+
+If a Warehouse / Outlet is selected:
+- Use THAT warehouse/outlet's own uploaded logo
+- Use THAT warehouse/outlet's own details
+- Warehouse/outlet name
+- Address
+- Phone
+- Email
+- GSTIN and other configured details
+- Clearly display the selected warehouse/outlet name
+
+Do NOT use a warehouse logo when All Locations or Head Office is selected.
+
+4. PDF DESIGN:
+
+Make the PDF professional and suitable for accounting records.
+
+Include:
+- Logo
+- Location/company details
+- Report title: “Chart of Accounts”
+- Selected period/filter
+- Balance Sheet or Profit & Loss title
+- Proper borders
+- Proper column alignment
+- Currency formatting
+- Page numbers
+- Generated date/time
+- Repeat header and column headings on every page
+- Landscape orientation when Month Wise has many columns
+- Automatic multi-page support
+
+5. MOST IMPORTANT:
+
+The PDF must visually match the CURRENT Chart of Accounts screen as closely as possible.
+
+If the user is viewing:
+
+Month Wise → Balance Sheet → Liabilities + Assets
+
+then the downloaded PDF must contain that same structure, same month columns, same accounts and same amounts.
+
+Do NOT create another accounting report.
+Do NOT create another table below the Chart of Accounts.
+Do NOT change the existing Chart of Accounts calculations.
+Do NOT change the existing accounting logic.
+
+The PDF is simply an accurate, professional print/export version of the existing Chart of Accounts.
+
+6. DOWNLOAD BUTTON:
+
+Add a clearly visible “Download PDF” button to the existing Chart of Accounts page.
+
+The button must download the PDF directly.
+
+7. VERIFY BEFORE COMPLETING:
+
+Test all of these:
+
+- All Locations + Balance Sheet + Month Wise
+- Head Office + Balance Sheet + Month Wise
+- Warehouse + Balance Sheet + Month Wise
+- Profit & Loss + Month Wise
+- Normal/non-month-wise view
+- Multiple pages
+- Correct logo for each location
+- Correct company/warehouse details
+- Correct month columns
+- Correct totals
+- PDF values must exactly match the values shown on screen
+
+Do not modify production accounting data, transactions, database records, permissions, or existing Chart of Accounts behavior.
+
+Only implement the PDF export and the required PDF formatting logic.
