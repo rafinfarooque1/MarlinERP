@@ -293,6 +293,10 @@ export async function addDataImport(): Promise<void> {
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_import_batches_migration ON import_batches (migration_id) WHERE migration_id IS NOT NULL`);
 
+  // Ensure the legacy_invoice_number column exists on sales before indexing it.
+  // On fresh databases the column may not yet be present (it is added by an earlier
+  // boot migration only if that migration ran to completion).
+  await pool.query(`ALTER TABLE sales ADD COLUMN IF NOT EXISTS legacy_invoice_number text`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_sales_legacy_no ON sales (legacy_invoice_number) WHERE legacy_invoice_number IS NOT NULL`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_jv_legacy_no ON journal_vouchers (legacy_voucher_number) WHERE legacy_voucher_number IS NOT NULL`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_receipts_legacy_no ON receipts (legacy_voucher_number) WHERE legacy_voucher_number IS NOT NULL`);
