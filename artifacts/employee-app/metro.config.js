@@ -19,6 +19,14 @@ config.watchFolders = [
   path.join(workspaceRoot, 'node_modules'),
 ];
 
+// pnpm stores packages under workspaceRoot/node_modules/.pnpm/ and symlinks
+// them into each package's node_modules/. Metro in --no-dev (production) mode
+// does NOT follow symlinks for bundle URL routing by default, which causes
+// HTTP 404 when build.js requests the bundle for 'node_modules/expo-router/entry'.
+// Enabling unstable_enableSymlinks makes Metro follow symlinks in resolution so
+// the pnpm-managed symlinks resolve correctly in both dev and production builds.
+config.resolver.unstable_enableSymlinks = true;
+
 // Resolve modules from the workspace root so shared packages work.
 config.resolver.nodeModulesPaths = [
   path.join(projectRoot, 'node_modules'),

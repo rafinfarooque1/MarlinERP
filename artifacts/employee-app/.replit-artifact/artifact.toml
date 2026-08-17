@@ -22,6 +22,7 @@ args = ["pnpm", "--filter", "@workspace/employee-app", "run", "build"]
 [services.production.build.env]
 EXPO_PUBLIC_DOMAIN = "frozenfruits.store"
 NODE_ENV = "production"
+CI = "1"
 
 [services.production.run]
 args = ["pnpm", "--filter", "@workspace/employee-app", "run", "serve"]
