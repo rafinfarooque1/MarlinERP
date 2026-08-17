@@ -1,0 +1,661 @@
+FULL PRODUCTION ERP HEALTH CHECK — NEW PUBLISHED ERP
+
+The old ERP deployment has already been shut down.
+
+This is the NEW ERP project that is currently published and running.
+
+Production domain:
+https://frozenfruits.store
+
+I need a COMPLETE PRODUCTION HEALTH CHECK of this new ERP before I make any further changes.
+
+IMPORTANT:
+- Do NOT shut down the current published ERP.
+- Do NOT unpublish it.
+- Do NOT delete anything.
+- Do NOT reset the database.
+- Do NOT restore any backup.
+- Do NOT modify production accounting data.
+- Do NOT create permanent test transactions.
+- Do NOT change production settings unless absolutely required for a safe diagnostic.
+- This task is REVIEW + TESTING ONLY.
+- If a fix is necessary, report it first instead of making a destructive change.
+
+Use the currently authorized admin session for testing. Do not expose or print any login credentials, passwords, tokens, secrets, or API keys.
+
+============================================================
+1. PRODUCTION AVAILABILITY
+============================================================
+
+Check the live ERP at:
+
+https://frozenfruits.store
+
+Verify:
+
+- Website loads correctly
+- Login works
+- Admin access works
+- Frontend loads without errors
+- Backend/API is reachable
+- Database connection works
+- Sessions work
+- Logout/login works
+- Navigation works
+- No critical errors on startup
+- No continuous server crashes
+- No HTTP 500/502/503 errors
+
+Check both browser console errors and server/API logs.
+
+============================================================
+2. DATABASE HEALTH
+============================================================
+
+Verify that the new ERP is connected to the correct production database.
+
+Check:
+
+- Database connection
+- Tables
+- Migrations
+- Schema
+- Foreign keys
+- Indexes
+- Sequences
+- Constraints
+- Missing migrations
+- Database errors
+- Connection pool problems
+
+DO NOT modify production data.
+
+Confirm that existing ERP data is accessible.
+
+Check representative records from:
+
+- Customers
+- Suppliers
+- Products
+- Employees
+- Warehouses
+- Outlets
+- Accounts
+- Sales
+- Purchases
+- Vouchers
+- Inventory
+- Payroll
+
+============================================================
+3. ACCOUNTING HEALTH
+============================================================
+
+Verify that the accounting system is functioning correctly.
+
+Check:
+
+- Chart of Accounts
+- Ledger
+- Day Book
+- Cash Book
+- Bank Book
+- Trial Balance
+- Profit & Loss
+- Balance Sheet
+- Receivables
+- Payables
+- Receipt Vouchers
+- Payment Vouchers
+- Journal Vouchers
+
+Verify that transactions flow correctly into the accounting system.
+
+Check for:
+
+- Unbalanced entries
+- Broken ledger references
+- Missing accounts
+- Incorrect totals
+- Duplicate postings
+- Sequence problems
+- Broken voucher references
+
+Do not create permanent transactions.
+
+============================================================
+4. SALES
+============================================================
+
+Check:
+
+- Sales list
+- Sales creation
+- Sales invoice
+- Sales return
+- Customer selection
+- Product selection
+- Stock impact
+- Receivable impact
+- Invoice numbering
+- PDF generation
+- Excel export
+- Permissions
+- Location restrictions
+
+Verify that the sales module is functioning without errors.
+
+============================================================
+5. PURCHASE
+============================================================
+
+Check:
+
+- Purchase list
+- Purchase creation
+- Supplier selection
+- Product selection
+- Purchase invoice
+- Purchase return
+- Stock impact
+- Payable impact
+- Invoice numbering
+- PDF
+- Excel
+- Permissions
+- Location restrictions
+
+============================================================
+6. POS
+============================================================
+
+Check the Point of Sale module.
+
+Verify:
+
+- POS loads
+- Product search
+- Cart
+- Customer
+- Payment
+- Invoice
+- Receipt
+- Stock reduction
+- Payment accounting
+- Invoice numbering
+- Print/download
+- Mobile responsiveness
+
+Do not create permanent sales.
+
+Use read-only or temporary test flow where possible.
+
+============================================================
+7. INVENTORY
+============================================================
+
+Check:
+
+- Stock
+- Stock balance
+- Warehouse stock
+- Outlet stock
+- Inventory valuation
+- Stock movements
+- Product quantities
+- Location filtering
+- Stock transfer module
+- Production impact
+- POS stock reduction
+- Sales stock reduction
+- Purchase stock addition
+
+Verify that one location cannot incorrectly see or modify another location's restricted stock.
+
+============================================================
+8. WAREHOUSE / LOCATION SECURITY
+============================================================
+
+This is VERY IMPORTANT.
+
+Test:
+
+- Head Office
+- Warehouse
+- Outlet
+
+Verify that location permissions work correctly.
+
+Check:
+
+- Current location
+- User location
+- Warehouse access
+- Stock visibility
+- Sales visibility
+- Purchase visibility
+- Voucher visibility
+- Reports
+- Day Book
+- Ledger
+- Payroll
+- Employee data
+
+Verify that a warehouse employee cannot access unauthorized locations.
+
+Verify that Head Office can access the appropriate consolidated information.
+
+============================================================
+9. COMPANY + LOCATION BRANDING
+============================================================
+
+Verify the new branding implementation.
+
+ERP product name should be:
+
+"Frozen Fruits ERP"
+
+Check that old product branding such as:
+
+"Marlin Frozen Fruits ERP"
+
+is not incorrectly displayed as the ERP product name.
+
+Verify:
+
+HEAD OFFICE
+- Company profile
+- Company logo
+- Company details
+
+WAREHOUSE
+- Warehouse-specific logo
+- Warehouse-specific details
+
+OUTLET
+- Outlet-specific logo
+- Outlet-specific details
+
+Generate a sample/read-only document where possible and verify that the CURRENT LOCATION's logo and details are used.
+
+There must be no cross-location logo/detail leakage.
+
+============================================================
+10. PDF / DOCUMENTS
+============================================================
+
+Check:
+
+- Sales invoice PDF
+- Purchase invoice PDF
+- Sales return PDF
+- Purchase return PDF
+- Receipt voucher PDF
+- Payment voucher PDF
+- Ledger PDF
+- Other voucher PDFs
+- Excel exports
+
+Verify:
+
+- Correct logo
+- Correct location details
+- Correct voucher number
+- Correct date
+- Correct amounts
+- Correct totals
+- Correct formatting
+- No broken layout
+- No unnecessary large blank space
+
+The voucher should flow naturally into the signature section without the large blank area that existed previously.
+
+============================================================
+11. PAYROLL
+============================================================
+
+Check the current payroll implementation.
+
+Verify:
+
+- Employee list
+- Attendance
+- Working days
+- Leave
+- LOP
+- Casual leave
+- Sick leave
+- Payroll calculation
+- Gross pay
+- Deductions
+- Net pay
+- Salary payable
+- Employee advance
+- Payroll approval
+
+Verify that payroll calculations use the actual selected month's calendar days and attendance/leave information.
+
+Check for incorrect hardcoded working days.
+
+============================================================
+12. ATTENDANCE
+============================================================
+
+Check:
+
+- Attendance UI
+- Employee attendance
+- Present days
+- Leave
+- Holidays
+- Warehouse/location
+- Monthly attendance
+- Payroll connection
+
+Check mobile and desktop usability.
+
+============================================================
+13. DASHBOARD
+============================================================
+
+Check the Business Dashboard.
+
+Verify:
+
+- Today default filter
+- Date filters
+- Sales
+- Purchase
+- Inventory value
+- Expenses
+- Payables
+- Receivables
+- Payments
+- Receipts
+- Cash balance
+- Bank balance
+- GP
+- NP
+
+Verify that KPI cards open the correct underlying report/module.
+
+Check:
+
+- Sales by location
+- Top items
+- Top customers
+- Inventory
+- Production
+
+Check for broken navigation or incorrect numbers.
+
+============================================================
+14. CHART OF ACCOUNTS
+============================================================
+
+Check the current Chart of Accounts implementation.
+
+Verify:
+
+- Account hierarchy
+- Assets
+- Liabilities
+- Capital
+- Current Assets
+- Current Liabilities
+- P&L
+- Account balances
+- Expand/collapse
+- Existing filters
+
+Verify the new Month Wise functionality.
+
+When Month Wise is enabled, month columns must appear INSIDE THE EXISTING CHART OF ACCOUNTS.
+
+Example:
+
+Account | April | May | June | Total
+
+It must NOT be a separate report or separate table.
+
+Verify that monthly figures reconcile with the selected-period total.
+
+============================================================
+15. BACKUP & RESTORE
+============================================================
+
+Perform a SAFE audit of Backup & Restore.
+
+Check:
+
+- Create backup
+- Backup storage
+- Download
+- Upload
+- Manifest
+- Signature
+- Validation
+- Test restore
+- Object storage
+- Large files
+- Permissions
+- Security
+
+IMPORTANT:
+
+DO NOT restore anything into the production database.
+
+DO NOT delete existing backups.
+
+If a restore test is necessary, use a temporary/test database.
+
+The previous error was:
+
+"Archive validation — The manifest signature does not match its contents."
+
+Verify whether this issue is now fixed.
+
+Also verify that downloading the approximately 80 MB backup works.
+
+============================================================
+16. MOBILE APP / APK
+============================================================
+
+Check the mobile application integration.
+
+Verify:
+
+- Expo configuration
+- Mobile app source
+- API URL
+- Login
+- Dashboard
+- Permissions
+- Location
+- Mobile navigation
+- Android configuration
+- iOS configuration
+- EAS configuration
+- EXPO_TOKEN configuration
+- APK release system
+- Download Mobile App
+- QR code
+
+Do not start a new production build.
+
+Do not publish to Play Store or App Store.
+
+The intended distribution model is direct APK distribution for Android.
+
+For iOS, verify what is technically configured and report any Apple platform limitations.
+
+============================================================
+17. SECURITY AUDIT
+============================================================
+
+Perform a safe security review.
+
+Check for:
+
+- Authentication bypass
+- Authorization bypass
+- IDOR
+- Location isolation failures
+- Missing permission checks
+- SQL injection risks
+- File path traversal
+- Unsafe file downloads
+- Unsafe uploads
+- Secret exposure
+- Session problems
+- CORS issues
+- Backup access problems
+
+Do not perform destructive security testing.
+
+Do not expose credentials or secrets in the report.
+
+============================================================
+18. PERFORMANCE
+============================================================
+
+Check:
+
+- API response times
+- Database queries
+- Slow pages
+- Dashboard loading
+- Chart of Accounts
+- Large reports
+- PDF generation
+- Backup creation
+- Backup download
+- Mobile API performance
+
+Identify any obvious bottlenecks.
+
+============================================================
+19. CODE / BUILD HEALTH
+============================================================
+
+Run safe checks:
+
+- TypeScript/typecheck
+- Build
+- Tests
+- Dependency issues
+- Broken imports
+- Runtime errors
+- Server errors
+- Frontend errors
+- Unused/broken packages
+- Migration issues
+
+Review recent code changes that could affect production.
+
+Do not revert the current code.
+
+============================================================
+20. LIVE DEPLOYMENT HEALTH
+============================================================
+
+Check the currently published deployment.
+
+Verify:
+
+- Deployment status
+- Server uptime
+- API health
+- Database
+- Storage
+- Environment variables
+- Secrets
+- Custom domain
+- SSL/HTTPS
+- Logs
+- Resource usage
+- Restart behaviour
+- Health checks
+
+DO NOT shut down or unpublish the current deployment.
+
+============================================================
+21. FINAL DETAILED REPORT
+============================================================
+
+After the complete audit, give me a professional ERP health report.
+
+Use this structure:
+
+1. OVERALL ERP STATUS
+
+Healthy / Needs Attention / Critical
+
+2. PRODUCTION STATUS
+
+3. DATABASE STATUS
+
+4. ACCOUNTING STATUS
+
+5. SALES STATUS
+
+6. PURCHASE STATUS
+
+7. POS STATUS
+
+8. INVENTORY STATUS
+
+9. WAREHOUSE/LOCATION SECURITY
+
+10. PAYROLL STATUS
+
+11. ATTENDANCE STATUS
+
+12. DASHBOARD STATUS
+
+13. CHART OF ACCOUNTS STATUS
+
+14. BACKUP & RESTORE STATUS
+
+15. PDF/DOCUMENT STATUS
+
+16. MOBILE/APK STATUS
+
+17. SECURITY STATUS
+
+18. PERFORMANCE STATUS
+
+19. DEPLOYMENT STATUS
+
+20. ERRORS FOUND
+
+21. WARNINGS
+
+22. WORKING CORRECTLY
+
+23. RECOMMENDED FIXES
+
+For EVERY problem provide:
+
+- Exact problem
+- Module
+- Severity: Critical / High / Medium / Low
+- Evidence
+- Likely cause
+- Recommended fix
+- Whether production downtime is required
+- Whether production data is affected
+
+At the end give:
+
+A. CRITICAL ISSUES — fix immediately
+B. HIGH PRIORITY — fix before normal production use
+C. MEDIUM PRIORITY
+D. LOW PRIORITY / UI improvements
+E. SAFE TO CONTINUE / NOT SAFE TO CONTINUE
+
+Do not claim anything is fixed unless you actually verified it.
+
+Do not hide errors.
+
+Do not make destructive changes during this audit.
