@@ -29,10 +29,14 @@ import { PageHeader } from '@/components/app/page-header';
 /* ── helpers ─────────────────────────────────────────────────────────────────── */
 function computeDateRange(period: string, from: string, to: string) {
   const today = new Date();
-  const iso = (d: Date) => d.toISOString().split('T')[0];
+  // Local calendar date — toISOString() is UTC, which for IST users would
+  // roll "today" back a day before 5:30 am and shift every preset early.
+  const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   if (period === 'month')   { const f = new Date(today.getFullYear(), today.getMonth(), 1);        return { fromDate: iso(f),  toDate: iso(today) }; }
   if (period === 'quarter') { const q = Math.floor(today.getMonth() / 3); const f = new Date(today.getFullYear(), q * 3, 1); return { fromDate: iso(f),  toDate: iso(today) }; }
-  if (period === 'year')    { return { fromDate: `${today.getFullYear()}-04-01`, toDate: iso(today) }; }
+  // Financial year (April–March): between January and March, "this year"
+  // started on 1 April of the PREVIOUS calendar year.
+  if (period === 'year')    { const fy = today.getMonth() + 1 >= 4 ? today.getFullYear() : today.getFullYear() - 1; return { fromDate: `${fy}-04-01`, toDate: iso(today) }; }
   if (period === 'custom')  { return { fromDate: from || undefined, toDate: to || undefined }; }
   return { fromDate: undefined, toDate: undefined };
 }
@@ -53,14 +57,19 @@ function LedgerCreationRetiredNote({ depth = 1 }: { depth?: number }) {
 }
 
 /* ── ledger statement sheet ──────────────────────────────────────────────────── */
-function LedgerStatementSheet({ ledgerNode, fromDate, toDate, onClose }: {
-  ledgerNode: StatementTarget; fromDate?: string; toDate?: string; onClose: () => void;
+function LedgerStatementSheet({ ledgerNode, fromDate, toDate, loc, onClose }: {
+  ledgerNode: StatementTarget; fromDate?: string; toDate?: string;
+  /** Effective location scope from the host page (its outlet dropdown can
+   *  override the global selector); absent = derive from global context. */
+  loc?: { locationType?: string; locationId?: number };
+  onClose: () => void;
 }) {
-  // Global location selector narrows the statement to that location's slice of
-  // the books; the query key must carry the same params or a location change
-  // would keep serving the cached slice.
+  // Location scope narrows the statement to that location's slice of the
+  // books; the query key must carry the same params or a location change
+  // would keep serving the cached slice. The host page passes its EFFECTIVE
+  // scope so the sheet always matches the figures the user clicked.
   const { locationState } = useLocationContext();
-  const locParams = locationFilterParams(locationState);
+  const locParams = loc ?? locationFilterParams(locationState);
   const qs = new URLSearchParams();
   if (fromDate) qs.set('fromDate', fromDate);
   if (toDate)   qs.set('toDate', toDate);
@@ -494,20 +503,27 @@ function StockBlock({ label, items, total }: { label: string; items: StockItem[]
 const Divider = () => <div className="border-t border-border/30 my-2 mx-2" />;
 
 /* ── section panel ───────────────────────────────────────────────────────────── */
-function Panel({ title, icon: Icon, total, hdrClass, borderClass, children }: {
+function Panel({ title, icon: Icon, total, hdrClass, borderClass, monthly, children }: {
   title: string; icon: React.ElementType; total: number;
-  hdrClass: string; borderClass: string; children: React.ReactNode;
+  hdrClass: string; borderClass: string;
+  /** Month Wise mode — the body gains the column header row and scrolls horizontally. */
+  monthly?: MonthlyView;
+  children: React.ReactNode;
 }) {
   return (
-    <div className={`bg-card border ${borderClass} rounded-xl overflow-hidden shadow-sm flex flex-col min-h-[340px]`}>
-      {/* Header */}
+    <div className={`bg-card border ${borderClass} rounded-xl overflow-hidden shadow-sm flex flex-col ${monthly ? '' : 'min-h-[340px]'}`}>
+      {/* Header — its figure IS the Total column's anchor: the whole-range engine output. */}
       <div className={`flex items-center gap-2 px-4 py-3 ${hdrClass}`}>
         <Icon className="w-4 h-4 shrink-0" />
         <span className="flex-1 text-sm font-bold uppercase tracking-widest">{title}</span>
         <span className="text-sm font-mono font-bold tabular-nums">{fmt(total)}</span>
       </div>
-      {/* Body */}
-      <div className="flex-1 py-2">{children}</div>
+      {/* Body — ONE horizontal scroll region per panel; the account-name column
+          is sticky inside it, so month columns scroll under the names. */}
+      <div className={`flex-1 py-2 ${monthly ? 'overflow-x-auto' : ''}`}>
+        {monthly && <MwHeaderRow monthly={monthly} />}
+        {children}
+      </div>
     </div>
   );
 }
@@ -554,110 +570,240 @@ function StatementToolbar({ expansion, expandableIds, onManage, statement }: {
   );
 }
 
-/* ── period filter ───────────────────────────────────────────────────────────── */
-const PERIODS = [
-  { value: 'all', label: 'All' },
-  { value: 'month', label: 'This Month' },
-  { value: 'quarter', label: 'Quarter' },
-  { value: 'year', label: 'This Year' },
-  { value: 'custom', label: 'Custom' },
-];
+/* ── Month Wise columns ──────────────────────────────────────────────────────
+ * The "Month Wise" toggle never opens another report — it adds month columns
+ * INTO the statements rendered below. One aggregated endpoint
+ * (/accounts/financial-statements/monthly) runs the same engine once per month
+ * of the selected range and returns a per-node series keyed `n:<id>` (chart
+ * nodes), `grp:<name>` (the nine statement heads) plus named scalars for the
+ * auto rows; these components lay that series out as fixed-width cells after
+ * each row's name. Rows here are read-only — chart editing stays in the
+ * normal view and the Manage dialog — but expand/collapse and drill-down keep
+ * working: a month cell opens the ledger scoped to exactly that month, the
+ * Total column (and the name) opens the whole selected period.
+ * Cell semantics match the engine's reading of a sub-range: Balance Sheet
+ * cells are the position AS AT that month's end; P&L cells are that month's
+ * activity, so P&L month cells sum exactly to the Total column.
+ */
+interface MonthlyStatements {
+  fromDate: string | null; toDate: string | null;
+  months: { key: string; from: string; to: string }[];
+  series: Record<string, number[]>;
+}
+interface MonthlyView {
+  months: { key: string; from: string; to: string }[];
+  series: Record<string, number[]>;
+  /** Open the ledger sheet scoped to one month's dates. */
+  onCell: (node: StatementTarget, from: string, to: string) => void;
+  /** Open the ledger sheet for the whole selected range (Total column / name). */
+  onTotal: (node: StatementTarget) => void;
+}
 
-/* ── main ─────────────────────────────────────────────────────────────────────── */
-export default function ChartOfAccounts() {
-  const perm = usePermission('page:/accounts/chart');
-  const [period, setPeriod]       = useState('all');
-  const [customFrom, setFrom]     = useState('');
-  const [customTo, setTo]         = useState('');
-  const [outletId, setOutletId]   = useState('all');
-  const [selectedLedger, setSelectedLedger] = useState<StatementTarget | null>(null);
-  const [manageOpen, setManageOpen] = useState(false);
+const mwLabel = (ym: string) =>
+  new Date(`${ym}-01T00:00:00`).toLocaleDateString('en-IN', { month: 'short', year: 'numeric' });
+
+/* Fixed column widths keep every row's cells vertically aligned; the name
+ * column is sticky so account names stay put while month columns scroll. */
+const MW_NAME  = 'sticky left-0 z-10 bg-card w-[240px] min-w-[240px] sm:w-[280px] sm:min-w-[280px] shrink-0';
+const MW_CELL  = 'w-32 shrink-0 text-right px-1 font-mono tabular-nums';
+const MW_TOTAL = 'w-36 shrink-0 pr-3 flex items-center justify-end';
+
+function MwCells({ monthly, values, node }: {
+  monthly: MonthlyView; values: number[];
+  /** Leaf ledger — makes each cell a drill-down into that month. */
+  node?: StatementTarget;
+}) {
+  return (
+    <>
+      {monthly.months.map((m, i) => {
+        const v = values[i] ?? 0;
+        const text = v === 0 ? '—' : fmt(v);
+        const tone = v === 0 ? 'text-muted-foreground/35' : 'text-foreground/75';
+        return node ? (
+          <button
+            key={m.key}
+            onClick={() => monthly.onCell(node, m.from, m.to)}
+            className={`${MW_CELL} text-[11px] py-1 ${tone} hover:text-primary hover:underline`}
+            title={`${node.name} — ${mwLabel(m.key)}`}
+            data-testid={`mw-cell-${node.id}-${m.key}`}
+          >
+            {text}
+          </button>
+        ) : (
+          <span key={m.key} className={`${MW_CELL} text-[11px] py-1 ${tone}`}>{text}</span>
+        );
+      })}
+    </>
+  );
+}
+
+function MwHeaderRow({ monthly }: { monthly: MonthlyView }) {
+  return (
+    <div className="flex items-center w-max min-w-full border-b border-border/40 mb-1">
+      <span className={`${MW_NAME} pl-3 py-1 text-[10px] uppercase tracking-wider text-muted-foreground`}>Account</span>
+      {monthly.months.map(m => (
+        <span key={m.key} className={`${MW_CELL} py-1 text-[10px] uppercase tracking-wider text-muted-foreground`} data-testid={`mw-col-${m.key}`}>
+          {mwLabel(m.key)}
+        </span>
+      ))}
+      <span className={`${MW_TOTAL} py-1 text-[10px] uppercase tracking-wider text-muted-foreground font-semibold`}>Total</span>
+    </div>
+  );
+}
+
+/** One statement row in Month Wise mode — recursive over sub-groups/ledgers. */
+function MwLedgerLine({ node, depth, monthly, expansion }: {
+  node: LedgerNode; depth: number; monthly: MonthlyView; expansion: StatementExpansion;
+}) {
+  const hasChildren = node.children.length > 0;
+  const open = hasChildren && expansion.isOpen(node.id);
+  const pl = `${8 + depth * 16}px`;
+  const isLeaf = !hasChildren;
+  return (
+    <div>
+      <div className="flex items-center w-max min-w-full">
+        <div className={`${MW_NAME} flex items-center gap-1.5 py-1 pr-2`} style={{ paddingLeft: pl }}>
+          {hasChildren ? (
+            <button
+              onClick={() => expansion.toggle(node.id)}
+              className="shrink-0 text-muted-foreground/50 hover:text-muted-foreground"
+              aria-label={open ? 'Collapse' : 'Expand'} aria-expanded={open}
+              data-testid={`stmt-toggle-${node.id}`}
+            >
+              {open ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+            </button>
+          ) : (
+            <span className="w-1 h-1 rounded-full bg-muted-foreground/25 shrink-0" />
+          )}
+          {node.isGroup && <Folder className="w-3.5 h-3.5 text-violet-400/80 shrink-0" />}
+          <span
+            className={`flex-1 truncate text-xs select-none ${node.isGroup ? 'font-semibold text-foreground/80' : depth === 1 ? 'text-foreground font-medium' : 'text-muted-foreground'} ${isLeaf ? 'cursor-pointer hover:text-primary' : ''}`}
+            onClick={isLeaf ? () => monthly.onTotal(node) : undefined}
+            title={node.name}
+          >
+            {node.name}
+          </span>
+        </div>
+        <MwCells monthly={monthly} values={monthly.series[`n:${node.id}`] ?? []} node={isLeaf ? node : undefined} />
+        <span className={`${MW_TOTAL} py-1`}>
+          {isLeaf ? (
+            <button onClick={() => monthly.onTotal(node)} title={`${node.name} — full period`} data-testid={`mw-total-${node.id}`}>
+              <BalTag balance={node.balance} size="xs" natural={naturalSide(node.type)} />
+            </button>
+          ) : (
+            <BalTag balance={node.balance} size="xs" natural={naturalSide(node.type)} />
+          )}
+        </span>
+      </div>
+      {open && node.children.map(c => (
+        <MwLedgerLine key={c.id} node={c} depth={depth + 1} monthly={monthly} expansion={expansion} />
+      ))}
+    </div>
+  );
+}
+
+/** A statement group head (Capital Account, Current Assets, …) with columns. */
+function MwGroupBlock({ group, seriesKey, monthly, expansion }: {
+  group: GroupSummary; seriesKey: string; monthly: MonthlyView; expansion: StatementExpansion;
+}) {
+  const groupId = group.id;
+  const hasChildren = group.children.length > 0;
+  const open = hasChildren && groupId != null && expansion.isOpen(groupId);
+  return (
+    <div className="mb-2">
+      <div className="flex items-center w-max min-w-full">
+        <div className={`${MW_NAME} flex items-center gap-2 py-1.5 pl-2 pr-2`}>
+          {hasChildren && groupId != null ? (
+            <button
+              onClick={() => expansion.toggle(groupId)}
+              className="shrink-0 text-muted-foreground/60 hover:text-foreground"
+              aria-label={open ? 'Collapse' : 'Expand'} aria-expanded={open}
+              data-testid={`stmt-toggle-${groupId}`}
+            >
+              {open ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+            </button>
+          ) : <span className="w-3.5 shrink-0" />}
+          <span className="flex-1 truncate text-xs font-bold text-foreground/70 uppercase tracking-wide">{group.name}</span>
+        </div>
+        <MwCells monthly={monthly} values={monthly.series[seriesKey] ?? []} />
+        <span className={`${MW_TOTAL} py-1.5 text-[11px] font-mono font-semibold tabular-nums text-foreground/70`}>
+          {group.total === 0 ? '—' : fmt(group.total)}
+        </span>
+      </div>
+      {open && group.children.map(node => (
+        <MwLedgerLine key={node.id} node={node} depth={1} monthly={monthly} expansion={expansion} />
+      ))}
+      {!hasChildren && <p className="pl-8 py-1 text-[11px] text-muted-foreground/40 italic">No ledgers yet</p>}
+      <div className="border-b border-border/20 mx-2 mt-1" />
+    </div>
+  );
+}
+
+/** Auto/summary rows (Sales Account, Opening Stock, Reserves & Surplus, …). */
+function MwAutoRow({ label, values, total, monthly, accent, sub }: {
+  label: string; values: number[]; total: number; monthly: MonthlyView;
+  accent?: string; sub?: string;
+}) {
+  return (
+    <div className="flex items-center w-max min-w-full">
+      <div className={`${MW_NAME} flex items-center gap-2 py-1.5 pl-3 pr-2`}>
+        <span className={`flex-1 truncate text-xs ${accent ?? 'text-muted-foreground italic'}`}>{label}</span>
+        {sub && <span className="text-[10px] text-muted-foreground/50 italic truncate max-w-[90px]">{sub}</span>}
+      </div>
+      <MwCells monthly={monthly} values={values} />
+      <span className={`${MW_TOTAL} py-1.5 text-[11px] font-mono tabular-nums ${accent ?? 'text-muted-foreground'}`}>
+        {total === 0 ? '—' : fmt(total)}
+      </span>
+    </div>
+  );
+}
+
+/** Per-month chips inside the Gross/Net Profit banners — the banners span the
+ *  full page width outside the panels' scroll regions, so aligned columns are
+ *  not possible there; labelled chips carry the same monthly figures instead. */
+function MwBannerChips({ monthly, values, testPrefix }: { monthly: MonthlyView; values: number[]; testPrefix: string }) {
+  return (
+    <div className="w-full flex flex-wrap gap-1.5 pt-1.5">
+      {monthly.months.map((m, i) => (
+        <span key={m.key} className="text-[10px] font-mono tabular-nums px-1.5 py-0.5 rounded bg-background/40 border border-current/10 opacity-90" data-testid={`${testPrefix}-${m.key}`}>
+          {mwLabel(m.key)}: {fmt(values[i] ?? 0)}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+/* ── statements view ─────────────────────────────────────────────────────────
+ * The COMPLETE Balance Sheet + Profit & Loss presentation. Nothing is
+ * recomputed here — the payload is the financial-statements engine output for
+ * whatever range the caller fetched. When `monthly` is present (the Month
+ * Wise toggle), the SAME statements gain month columns: hierarchy, totals and
+ * expand/collapse are untouched, each row simply renders its per-month series
+ * between the name and the whole-range figure. Without `monthly` the render
+ * is byte-for-byte what it always was.
+ */
+function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, onRename, onMove, onViewStatement, onManage, canAdd, canEdit, canDelete, monthly }: {
+  fs: FinancialStatements | undefined;
+  isLoading: boolean; isError: boolean; error: unknown;
+  onCreated: () => void;
+  onDelete?: (id: number, name: string) => void;
+  onRename?: (id: number, newName: string) => void;
+  onMove?: (nodeId: number, newParentId: number) => void;
+  onViewStatement: (node: StatementTarget) => void;
+  /** Present only where managing the chart is allowed (the Summary view). */
+  onManage?: () => void;
+  canAdd?: boolean; canEdit?: boolean; canDelete?: boolean;
+  /** Month Wise mode: per-month series + drill-down handlers. */
+  monthly?: MonthlyView;
+}) {
   // Same ids appear on both statements, so each keeps its own namespaced state.
-  const bsExpansion               = useStatementExpansion('balance_sheet');
-  const plExpansion               = useStatementExpansion('profit_loss');
-  const queryClient               = useQueryClient();
-  const outletsVisible            = useIsLocationKindEnabled('outlet');
-  // Global location selector scopes the statements to that location's slice of
-  // the books (the page's own outlet dropdown is a separate, legacy narrowing).
-  const { locationState }         = useLocationContext();
-  const locParams                 = locationFilterParams(locationState);
-  // A filter still holding an outlet would keep scoping the statements after the
-  // control to clear it disappears, quietly narrowing every figure on screen.
-  useClearOutletSelection(outletId !== 'all', () => setOutletId('all'));
-
-  const onViewStatement = (node: StatementTarget) => setSelectedLedger(node);
-
-  const onRename = async (id: number, newName: string) => {
-    try {
-      await customFetch(`/api/accounts/chart/${id}`, { method: 'PATCH', body: JSON.stringify({ name: newName }) });
-      toast.success('Ledger renamed');
-      queryClient.invalidateQueries({ queryKey: qKey });
-    } catch (e: any) {
-      toast.error(e?.data?.error || e?.message || 'Could not rename ledger');
-    }
-  };
-
-  const onDelete = async (id: number, name: string) => {
-    if (!window.confirm(`Delete "${name}"? This cannot be undone.`)) return;
-    try {
-      await customFetch(`/api/accounts/chart/${id}`, { method: 'DELETE' });
-      toast.success(`"${name}" deleted`);
-      queryClient.invalidateQueries({ queryKey: qKey });
-    } catch (e: any) {
-      toast.error(e?.data?.error || e?.message || 'Could not delete');
-    }
-  };
-
-  const onMove = async (nodeId: number, newParentId: number) => {
-    try {
-      await customFetch(`/api/accounts/chart/${nodeId}/move`, {
-        method: 'PATCH',
-        body: JSON.stringify({ parentId: newParentId }),
-      });
-      toast.success('Moved successfully');
-      queryClient.invalidateQueries({ queryKey: qKey });
-    } catch (e: any) {
-      toast.error(e?.data?.error || e?.message || 'Could not move account');
-    }
-  };
-
-  const { fromDate, toDate } = useMemo(
-    () => computeDateRange(period, customFrom, customTo),
-    [period, customFrom, customTo],
-  );
-
-  const qKey = useMemo(
-    () => ['fin-stmt', fromDate, toDate, outletId, locParams.locationType ?? null, locParams.locationId ?? null],
-    [fromDate, toDate, outletId, locParams.locationType, locParams.locationId],
-  );
-
-  const { data: fs, isLoading, isError, error } = useQuery<FinancialStatements>({
-    queryKey: qKey,
-    queryFn: () => {
-      const p = new URLSearchParams();
-      if (fromDate) p.set('fromDate', fromDate);
-      if (toDate)   p.set('toDate', toDate);
-      if (outletId && outletId !== 'all') p.set('outletId', outletId);
-      if (locParams.locationType) {
-        p.set('locationType', locParams.locationType);
-        p.set('locationId', String(locParams.locationId));
-      }
-      const qs = p.toString();
-      return customFetch(`/api/accounts/financial-statements${qs ? `?${qs}` : ''}`, { method: 'GET' });
-    },
-    staleTime: 30_000,
-  });
-
-  const onCreated = () => queryClient.invalidateQueries({ queryKey: qKey });
+  const bsExpansion = useStatementExpansion('balance_sheet');
+  const plExpansion = useStatementExpansion('profit_loss');
 
   const bs  = fs?.balanceSheet;
   const pl  = fs?.profitAndLoss;
   const exp = fs?.profitAndLoss?.expenses;
   const inc = fs?.profitAndLoss?.incomes;
-  // The statements payload always carries every outlet, for historical reports.
-  // This dropdown is a selector, so it offers them only while the module is on —
-  // and the whole control disappears when the list comes back empty.
-  const outlets = outletsVisible ? (fs?.filters?.outlets ?? []) : [];
 
   // "Expand All" needs the nodes that genuinely have children, taken from the
   // real children arrays of the groups each statement renders.
@@ -692,83 +838,37 @@ export default function ChartOfAccounts() {
   const plExpTotal = (exp?.indirectExpenses.total ?? 0) + (grossProfit !== null && grossProfit < 0 ? -grossProfit : 0);
   const plIncTotal = (inc?.indirectIncomes.total ?? 0) + (grossProfit !== null && grossProfit > 0 ? grossProfit : 0);
 
-  // Managing the chart mutates it, so it follows the same 'edit' gate other
-  // pages use. The backend guards stay authoritative regardless.
-  const canManageChart = perm.canEdit;
+  // ── Month Wise derived series ──
+  // Every figure below is read (or added pairwise) from the server's per-month
+  // engine output — the same "display, never recompute" rule as the Totals.
+  const mwS = (k: string): number[] => monthly?.series[k] ?? [];
+  const mwMonths   = monthly?.months ?? [];
+  const mwSales    = mwS('sales'),     mwSalesRet = mwS('salesReturns');
+  const mwPur      = mwS('purchases'), mwPurRet   = mwS('purchaseReturns');
+  const mwGp       = mwS('gp');
+  const mwGrossSales = mwMonths.map((_, i) => (mwSales[i] ?? 0) + (mwSalesRet[i] ?? 0));
+  const mwGrossPur   = mwMonths.map((_, i) => (mwPur[i] ?? 0) + (mwPurRet[i] ?? 0));
+  const mwNegSalesRet = mwMonths.map((_, i) => -(mwSalesRet[i] ?? 0));
+  const mwNegPurRet   = mwMonths.map((_, i) => -(mwPurRet[i] ?? 0));
+  // The c/d balancing rows are two-sided per month: profit months carry down
+  // on the debit side, loss months on the credit side.
+  const mwGpPos = mwGp.map(v => (v > 0 ? v : 0));
+  const mwGpNeg = mwGp.map(v => (v < 0 ? -v : 0));
 
-  if (!perm.isLoading && !perm.canView) {
+  if (isLoading) {
+    return <div className="py-16 text-center text-muted-foreground text-sm animate-pulse">Computing financial statements…</div>;
+  }
+  if (isError) {
     return (
-      <AppLayout>
-        <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4 text-center">
-          <div className="w-16 h-16 rounded-2xl bg-destructive/10 flex items-center justify-center">
-            <ShieldOff className="w-8 h-8 text-destructive" />
-          </div>
-          <div>
-            <h2 className="text-xl font-bold">Access Denied</h2>
-            <p className="text-muted-foreground mt-1 text-sm">
-              You don't have permission to view this page.<br />
-              Contact your administrator to request access.
-            </p>
-          </div>
-        </div>
-      </AppLayout>
+      <div className="py-10 text-center space-y-2">
+        <p className="text-red-400 text-sm font-medium">Failed to load financial statements</p>
+        <p className="text-muted-foreground text-xs">{(error as any)?.message ?? 'Unknown error'}</p>
+      </div>
     );
   }
-
   return (
-    <AppLayout>
-      <div className="space-y-5">
+    <>
 
-        {/* ── Header ── */}
-        <PageHeader
-          title="Chart of Accounts"
-          description="Account hierarchy, Balance Sheet & Profit & Loss · All figures computed live from transactions"
-          icon={Landmark}
-        />
-
-        {/* ── Filter bar ── */}
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="flex items-center gap-1 bg-muted/20 rounded-lg p-1">
-            <CalendarDays className="w-3.5 h-3.5 text-muted-foreground ml-1 shrink-0" />
-            {PERIODS.map(p => (
-              <button key={p.value} onClick={() => setPeriod(p.value)}
-                className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors
-                  ${period === p.value ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}>
-                {p.label}
-              </button>
-            ))}
-          </div>
-          {period === 'custom' && (
-            <div className="flex items-center gap-1.5">
-              <Input type="date" value={customFrom} onChange={e => setFrom(e.target.value)} className="h-8 text-xs w-36" />
-              <span className="text-muted-foreground text-xs">to</span>
-              <Input type="date" value={customTo} onChange={e => setTo(e.target.value)} className="h-8 text-xs w-36" />
-            </div>
-          )}
-          {outlets.length > 0 && (
-            <div className="flex items-center gap-1.5">
-              <Store className="w-3.5 h-3.5 text-muted-foreground" />
-              <Select value={outletId} onValueChange={setOutletId}>
-                <SelectTrigger className="h-8 text-xs w-36"><SelectValue placeholder="All Outlets" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Outlets</SelectItem>
-                  {outlets.map(o => <SelectItem key={o.id} value={String(o.id)}>{o.name}</SelectItem>)}
-                </SelectContent>
-              </Select>
-            </div>
-          )}
-        </div>
-
-        {/* ── Tabs ── */}
-        {isLoading ? (
-          <div className="py-16 text-center text-muted-foreground text-sm animate-pulse">Computing financial statements…</div>
-        ) : isError ? (
-          <div className="py-10 text-center space-y-2">
-            <p className="text-red-400 text-sm font-medium">Failed to load financial statements</p>
-            <p className="text-muted-foreground text-xs">{(error as any)?.message ?? 'Unknown error'}</p>
-          </div>
-        ) : (
-          <>
           {/* ── Integrity warning banner ──
               'difference' is no longer a plug figure — on healthy books it is ~0.
               Any non-zero difference or any reported integrity issue is a REAL
@@ -816,10 +916,13 @@ export default function ChartOfAccounts() {
                 statement="balance-sheet"
                 expansion={bsExpansion}
                 expandableIds={bsExpandable}
-                onManage={canManageChart ? () => setManageOpen(true) : undefined}
+                onManage={onManage}
               />
 
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              {/* Month Wise stacks the two panels so each gets the full width
+                  for its month columns — one horizontal scroll per panel, never
+                  nested. */}
+              <div className={`grid grid-cols-1 ${monthly ? '' : 'lg:grid-cols-2'} gap-4`}>
 
                 {/* ── Liabilities ── */}
                 <Panel
@@ -827,17 +930,32 @@ export default function ChartOfAccounts() {
                   total={bs?.liabilities.total ?? 0}
                   hdrClass="bg-red-500/10 text-red-400 border-b border-red-500/15"
                   borderClass="border-red-500/20"
+                  monthly={monthly}
                 >
-                  {bs && (
+                  {bs && (monthly ? (
+                    <>
+                      {/* Same groups, same order — with month columns. BS cells
+                          are the position as at each month's END, so the last
+                          month IS the Total (a balance is not a sum of months). */}
+                      <MwGroupBlock group={bs.liabilities.capitalAccount} seriesKey="grp:capital" monthly={monthly} expansion={bsExpansion} />
+                      <MwGroupBlock group={bs.liabilities.loans} seriesKey="grp:loans" monthly={monthly} expansion={bsExpansion} />
+                      <MwGroupBlock group={bs.liabilities.currentLiabilities} seriesKey="grp:curliab" monthly={monthly} expansion={bsExpansion} />
+                      <MwAutoRow
+                        label="Reserves & Surplus (P&L)"
+                        values={mwS('pandl')} total={bs.liabilities.pandlCarryForward} monthly={monthly}
+                        accent={bs.liabilities.pandlCarryForward >= 0 ? 'text-emerald-400 font-semibold' : 'text-red-400 font-semibold'}
+                      />
+                    </>
+                  ) : (
                     <>
                       {/* Capital Account */}
-                      <GroupBlock group={bs.liabilities.capitalAccount} onCreated={onCreated} expansion={bsExpansion} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={perm.canAdd} canEdit={perm.canEdit} canDelete={perm.canDelete} />
+                      <GroupBlock group={bs.liabilities.capitalAccount} onCreated={onCreated} expansion={bsExpansion} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={canAdd} canEdit={canEdit} canDelete={canDelete} />
 
                       {/* Loans */}
-                      <GroupBlock group={bs.liabilities.loans} onCreated={onCreated} expansion={bsExpansion} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={perm.canAdd} canEdit={perm.canEdit} canDelete={perm.canDelete} />
+                      <GroupBlock group={bs.liabilities.loans} onCreated={onCreated} expansion={bsExpansion} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={canAdd} canEdit={canEdit} canDelete={canDelete} />
 
                       {/* Current Liabilities — STD-DTX (Duty & Tax) is already a child ledger with correct balance */}
-                      <GroupBlock group={bs.liabilities.currentLiabilities} onCreated={onCreated} expansion={bsExpansion} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={perm.canAdd} canEdit={perm.canEdit} canDelete={perm.canDelete} />
+                      <GroupBlock group={bs.liabilities.currentLiabilities} onCreated={onCreated} expansion={bsExpansion} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={canAdd} canEdit={canEdit} canDelete={canDelete} />
 
                       <Divider />
 
@@ -855,7 +973,7 @@ export default function ChartOfAccounts() {
                           line anymore — a non-zero difference is a defect surfaced in
                           the integrity warning banner above, not a plug figure here. */}
                     </>
-                  )}
+                  ))}
                 </Panel>
 
                 {/* ── Assets ── */}
@@ -864,10 +982,21 @@ export default function ChartOfAccounts() {
                   total={bs?.assets.total ?? 0}
                   hdrClass="bg-emerald-500/10 text-emerald-400 border-b border-emerald-500/15"
                   borderClass="border-emerald-500/20"
+                  monthly={monthly}
                 >
-                  {bs && (
+                  {bs && (monthly ? (
                     <>
-                      <GroupBlock group={bs.assets.fixedAssets} onCreated={onCreated} expansion={bsExpansion} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={perm.canAdd} canEdit={perm.canEdit} canDelete={perm.canDelete} />
+                      <MwGroupBlock group={bs.assets.fixedAssets} seriesKey="grp:fixed" monthly={monthly} expansion={bsExpansion} />
+                      <MwAutoRow
+                        label="Closing Stock"
+                        values={mwS('bsClosingStock')} total={bs.assets.closingStock} monthly={monthly}
+                        accent="text-foreground/80 font-semibold"
+                      />
+                      <MwGroupBlock group={bs.assets.currentAssets} seriesKey="grp:curassets" monthly={monthly} expansion={bsExpansion} />
+                    </>
+                  ) : (
+                    <>
+                      <GroupBlock group={bs.assets.fixedAssets} onCreated={onCreated} expansion={bsExpansion} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={canAdd} canEdit={canEdit} canDelete={canDelete} />
 
                       {/* Closing Stock — a real asset line. Before this change closing
                           stock never appeared on the balance sheet, which is why a
@@ -879,9 +1008,9 @@ export default function ChartOfAccounts() {
                         </span>
                       </div>
 
-                      <GroupBlock group={bs.assets.currentAssets} onCreated={onCreated} expansion={bsExpansion} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={perm.canAdd} canEdit={perm.canEdit} canDelete={perm.canDelete} />
+                      <GroupBlock group={bs.assets.currentAssets} onCreated={onCreated} expansion={bsExpansion} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={canAdd} canEdit={canEdit} canDelete={canDelete} />
                     </>
-                  )}
+                  ))}
                 </Panel>
               </div>
             </TabsContent>
@@ -897,7 +1026,7 @@ export default function ChartOfAccounts() {
                 statement="profit-loss"
                 expansion={plExpansion}
                 expandableIds={plExpandable}
-                onManage={canManageChart ? () => setManageOpen(true) : undefined}
+                onManage={onManage}
               />
 
               {/* ── Trading Account ── */}
@@ -905,7 +1034,7 @@ export default function ChartOfAccounts() {
                 <span className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">Trading Account</span>
                 <div className="flex-1 border-t border-border/30" />
               </div>
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <div className={`grid grid-cols-1 ${monthly ? '' : 'lg:grid-cols-2'} gap-4`}>
 
                 {/* ── Trading Expense (Debit) ── */}
                 <Panel
@@ -913,8 +1042,33 @@ export default function ChartOfAccounts() {
                   total={tradingExpTotal}
                   hdrClass="bg-red-500/10 text-red-400 border-b border-red-500/15"
                   borderClass="border-red-500/20"
+                  monthly={monthly}
                 >
-                  {exp && (
+                  {exp && (monthly ? (
+                    <>
+                      {/* P&L cells are month ACTIVITY — every row's months sum to
+                          its Total. Opening/Closing stock per month are the
+                          engine's own boundary valuations for that month. */}
+                      <MwAutoRow label="Opening Stock" values={mwS('openingStock')} total={exp.openingStock} monthly={monthly} accent="text-foreground/80 font-semibold" />
+                      {purchaseReturns !== 0 ? (
+                        <>
+                          <MwAutoRow label="Purchase Account" values={mwGrossPur} total={exp.purchases + purchaseReturns} monthly={monthly} sub="auto" />
+                          <MwAutoRow label="Less: Purchase Returns" values={mwNegPurRet} total={-purchaseReturns} monthly={monthly} sub="debit notes" />
+                          <MwAutoRow label="Net Purchases" values={mwPur} total={exp.purchases} monthly={monthly} accent="text-foreground/80" />
+                        </>
+                      ) : (
+                        <MwAutoRow label="Purchase Account" values={mwPur} total={exp.purchases} monthly={monthly} sub="auto" />
+                      )}
+                      <Divider />
+                      <MwGroupBlock group={exp.directExpenses} seriesKey="grp:direxp" monthly={monthly} expansion={plExpansion} />
+                      {grossProfit !== null && grossProfit > 0 && (
+                        <>
+                          <Divider />
+                          <MwAutoRow label="Gross Profit c/d" values={mwGpPos} total={grossProfit} monthly={monthly} accent="text-emerald-500" sub="to P&L" />
+                        </>
+                      )}
+                    </>
+                  ) : (
                     <>
                       {/* Opening Stock */}
                       <StockBlock
@@ -938,7 +1092,7 @@ export default function ChartOfAccounts() {
                       <Divider />
 
                       {/* Direct Expenses */}
-                      <GroupBlock group={exp.directExpenses} onCreated={onCreated} expansion={plExpansion} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={perm.canAdd} canEdit={perm.canEdit} canDelete={perm.canDelete} />
+                      <GroupBlock group={exp.directExpenses} onCreated={onCreated} expansion={plExpansion} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={canAdd} canEdit={canEdit} canDelete={canDelete} />
 
                       {/* Balancing transfer — makes both Trading sides equal */}
                       {grossProfit !== null && grossProfit > 0 && (
@@ -948,7 +1102,7 @@ export default function ChartOfAccounts() {
                         </>
                       )}
                     </>
-                  )}
+                  ))}
                 </Panel>
 
                 {/* ── Trading Income (Credit) ── */}
@@ -957,8 +1111,30 @@ export default function ChartOfAccounts() {
                   total={tradingIncTotal}
                   hdrClass="bg-emerald-500/10 text-emerald-400 border-b border-emerald-500/15"
                   borderClass="border-emerald-500/20"
+                  monthly={monthly}
                 >
-                  {inc && (
+                  {inc && (monthly ? (
+                    <>
+                      {salesReturns !== 0 ? (
+                        <>
+                          <MwAutoRow label="Sales Account" values={mwGrossSales} total={grossSales} monthly={monthly} sub="auto" />
+                          <MwAutoRow label="Less: Sales Returns" values={mwNegSalesRet} total={-salesReturns} monthly={monthly} sub="credit notes" />
+                          <MwAutoRow label="Net Sales" values={mwSales} total={inc.sales} monthly={monthly} accent="text-foreground/80" />
+                        </>
+                      ) : (
+                        <MwAutoRow label="Sales Account" values={mwSales} total={inc.sales} monthly={monthly} sub="auto" />
+                      )}
+                      <Divider />
+                      <MwGroupBlock group={inc.directIncomes} seriesKey="grp:dirinc" monthly={monthly} expansion={plExpansion} />
+                      <MwAutoRow label="Closing Stock" values={mwS('closingStock')} total={inc.closingStock} monthly={monthly} accent="text-foreground/80 font-semibold" />
+                      {grossProfit !== null && grossProfit < 0 && (
+                        <>
+                          <Divider />
+                          <MwAutoRow label="Gross Loss c/d" values={mwGpNeg} total={-grossProfit} monthly={monthly} accent="text-red-400" sub="to P&L" />
+                        </>
+                      )}
+                    </>
+                  ) : (
                     <>
                       {/* Sales Account (auto) — gross + returns split shown only
                           when credit notes exist; `sales` is already the net. */}
@@ -975,7 +1151,7 @@ export default function ChartOfAccounts() {
                       <Divider />
 
                       {/* Direct Incomes */}
-                      <GroupBlock group={inc.directIncomes} onCreated={onCreated} expansion={plExpansion} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={perm.canAdd} canEdit={perm.canEdit} canDelete={perm.canDelete} />
+                      <GroupBlock group={inc.directIncomes} onCreated={onCreated} expansion={plExpansion} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={canAdd} canEdit={canEdit} canDelete={canDelete} />
 
                       {/* Closing Stock */}
                       <StockBlock
@@ -992,7 +1168,7 @@ export default function ChartOfAccounts() {
                         </>
                       )}
                     </>
-                  )}
+                  ))}
                 </Panel>
               </div>
 
@@ -1000,7 +1176,7 @@ export default function ChartOfAccounts() {
               {pl && grossProfit !== null && (
                 <div
                   data-testid="coa-gross-profit"
-                  className={`flex items-center gap-3 px-4 py-3 rounded-xl my-4 text-sm font-semibold
+                  className={`flex flex-wrap items-center gap-3 px-4 py-3 rounded-xl my-4 text-sm font-semibold
                   ${grossProfit >= 0
                     ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
                     : 'bg-red-500/10 text-red-400 border border-red-500/20'}`}>
@@ -1008,6 +1184,7 @@ export default function ChartOfAccounts() {
                   <span>{grossProfit >= 0 ? 'Gross Profit' : 'Gross Loss'}</span>
                   <span className="text-[10px] font-normal opacity-70">Net Sales − Cost of Goods Sold · carried down</span>
                   <span className="font-mono text-base ml-auto">{fmt(Math.abs(grossProfit))}</span>
+                  {monthly && <MwBannerChips monthly={monthly} values={mwGp} testPrefix="mw-gp" />}
                 </div>
               )}
 
@@ -1016,7 +1193,7 @@ export default function ChartOfAccounts() {
                 <span className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">Profit &amp; Loss Account</span>
                 <div className="flex-1 border-t border-border/30" />
               </div>
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <div className={`grid grid-cols-1 ${monthly ? '' : 'lg:grid-cols-2'} gap-4`}>
 
                 {/* ── P&L Expense (Debit) ── */}
                 <Panel
@@ -1024,8 +1201,19 @@ export default function ChartOfAccounts() {
                   total={plExpTotal}
                   hdrClass="bg-red-500/10 text-red-400 border-b border-red-500/15"
                   borderClass="border-red-500/20"
+                  monthly={monthly}
                 >
-                  {exp && (
+                  {exp && (monthly ? (
+                    <>
+                      {grossProfit !== null && grossProfit < 0 && (
+                        <>
+                          <MwAutoRow label="Gross Loss b/d" values={mwGpNeg} total={-grossProfit} monthly={monthly} accent="text-red-400" sub="from Trading" />
+                          <Divider />
+                        </>
+                      )}
+                      <MwGroupBlock group={exp.indirectExpenses} seriesKey="grp:indexp" monthly={monthly} expansion={plExpansion} />
+                    </>
+                  ) : (
                     <>
                       {grossProfit !== null && grossProfit < 0 && (
                         <>
@@ -1034,9 +1222,9 @@ export default function ChartOfAccounts() {
                         </>
                       )}
                       {/* Indirect Expenses */}
-                      <GroupBlock group={exp.indirectExpenses} onCreated={onCreated} expansion={plExpansion} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={perm.canAdd} canEdit={perm.canEdit} canDelete={perm.canDelete} />
+                      <GroupBlock group={exp.indirectExpenses} onCreated={onCreated} expansion={plExpansion} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={canAdd} canEdit={canEdit} canDelete={canDelete} />
                     </>
-                  )}
+                  ))}
                 </Panel>
 
                 {/* ── P&L Income (Credit) ── */}
@@ -1045,8 +1233,19 @@ export default function ChartOfAccounts() {
                   total={plIncTotal}
                   hdrClass="bg-emerald-500/10 text-emerald-400 border-b border-emerald-500/15"
                   borderClass="border-emerald-500/20"
+                  monthly={monthly}
                 >
-                  {inc && (
+                  {inc && (monthly ? (
+                    <>
+                      {grossProfit !== null && grossProfit >= 0 && (
+                        <>
+                          <MwAutoRow label="Gross Profit b/d" values={mwGpPos} total={grossProfit} monthly={monthly} accent="text-emerald-500" sub="from Trading" />
+                          <Divider />
+                        </>
+                      )}
+                      <MwGroupBlock group={inc.indirectIncomes} seriesKey="grp:indinc" monthly={monthly} expansion={plExpansion} />
+                    </>
+                  ) : (
                     <>
                       {grossProfit !== null && grossProfit >= 0 && (
                         <>
@@ -1055,9 +1254,9 @@ export default function ChartOfAccounts() {
                         </>
                       )}
                       {/* Indirect Incomes (Other Income) */}
-                      <GroupBlock group={inc.indirectIncomes} onCreated={onCreated} expansion={plExpansion} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={perm.canAdd} canEdit={perm.canEdit} canDelete={perm.canDelete} />
+                      <GroupBlock group={inc.indirectIncomes} onCreated={onCreated} expansion={plExpansion} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={canAdd} canEdit={canEdit} canDelete={canDelete} />
                     </>
-                  )}
+                  ))}
                 </Panel>
               </div>
 
@@ -1065,7 +1264,7 @@ export default function ChartOfAccounts() {
               {pl && (
                 <div
                   data-testid="coa-net-profit"
-                  className={`flex items-center gap-3 px-4 py-3 rounded-xl mt-4 text-sm font-semibold
+                  className={`flex flex-wrap items-center gap-3 px-4 py-3 rounded-xl mt-4 text-sm font-semibold
                   ${pl.netProfit >= 0
                     ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
                     : 'bg-red-500/10 text-red-400 border border-red-500/20'}`}>
@@ -1073,12 +1272,248 @@ export default function ChartOfAccounts() {
                   <span>{pl.netProfit >= 0 ? 'Net Profit' : 'Net Loss'}</span>
                   <span className="text-[10px] font-normal opacity-70">Gross {grossProfit !== null && grossProfit < 0 ? 'Loss' : 'Profit'} + Other Income − Indirect Expenses</span>
                   <span className="font-mono text-base ml-auto">{fmt(Math.abs(pl.netProfit))}</span>
+                  {monthly && <MwBannerChips monthly={monthly} values={mwS('np')} testPrefix="mw-np" />}
                 </div>
               )}
             </TabsContent>
           </Tabs>
-          </>
+    </>
+  );
+}
+
+/* ── period filter ───────────────────────────────────────────────────────────── */
+const PERIODS = [
+  { value: 'all', label: 'All' },
+  { value: 'month', label: 'This Month' },
+  { value: 'quarter', label: 'Quarter' },
+  { value: 'year', label: 'This Year' },
+  { value: 'custom', label: 'Custom' },
+];
+
+/* ── main ─────────────────────────────────────────────────────────────────────── */
+export default function ChartOfAccounts() {
+  const perm = usePermission('page:/accounts/chart');
+  const [period, setPeriod]       = useState('all');
+  const [customFrom, setFrom]     = useState('');
+  const [customTo, setTo]         = useState('');
+  const [outletId, setOutletId]   = useState('all');
+  // Month Wise is ONE toggle: ON folds month columns into the statements
+  // below; OFF leaves the page exactly as it always was. No separate views.
+  const [monthWise, setMonthWise] = useState(false);
+  // The sheet remembers WHICH period asked for it, so a ledger opened from
+  // a month cell shows exactly that month's entries.
+  const [selectedLedger, setSelectedLedger] = useState<{ node: StatementTarget; fromDate?: string; toDate?: string } | null>(null);
+  const [manageOpen, setManageOpen] = useState(false);
+  const queryClient               = useQueryClient();
+  const outletsVisible            = useIsLocationKindEnabled('outlet');
+  // Global location selector scopes the statements to that location's slice of
+  // the books.
+  const { locationState }         = useLocationContext();
+  const locParams                 = locationFilterParams(locationState);
+  // A filter still holding an outlet would keep scoping the statements after the
+  // control to clear it disappears, quietly narrowing every figure on screen.
+  useClearOutletSelection(outletId !== 'all', () => setOutletId('all'));
+  // The page's outlet dropdown narrows via the SAME canonical location filter
+  // the global selector uses — the legacy `outletId` param was never read by
+  // the server, so it silently did nothing. An explicit outlet pick here wins
+  // over the global context (query params beat headers server-side), and the
+  // SAME effective scope feeds the statements, the Month Wise columns and the
+  // ledger sheet so every figure on screen agrees.
+  const effLoc: { locationType?: string; locationId?: number } = outletId !== 'all'
+    ? { locationType: 'outlet', locationId: Number(outletId) }
+    : locParams;
+
+  const onViewStatement = (node: StatementTarget) => setSelectedLedger({ node, fromDate, toDate });
+
+  const onRename = async (id: number, newName: string) => {
+    try {
+      await customFetch(`/api/accounts/chart/${id}`, { method: 'PATCH', body: JSON.stringify({ name: newName }) });
+      toast.success('Ledger renamed');
+      // Chart edits change the statements for EVERY range — including the
+      // Month Wise columns — so invalidate the whole family.
+      queryClient.invalidateQueries({ queryKey: ['fin-stmt'] });
+    } catch (e: any) {
+      toast.error(e?.data?.error || e?.message || 'Could not rename ledger');
+    }
+  };
+
+  const onDelete = async (id: number, name: string) => {
+    if (!window.confirm(`Delete "${name}"? This cannot be undone.`)) return;
+    try {
+      await customFetch(`/api/accounts/chart/${id}`, { method: 'DELETE' });
+      toast.success(`"${name}" deleted`);
+      queryClient.invalidateQueries({ queryKey: ['fin-stmt'] });
+    } catch (e: any) {
+      toast.error(e?.data?.error || e?.message || 'Could not delete');
+    }
+  };
+
+  const onMove = async (nodeId: number, newParentId: number) => {
+    try {
+      await customFetch(`/api/accounts/chart/${nodeId}/move`, {
+        method: 'PATCH',
+        body: JSON.stringify({ parentId: newParentId }),
+      });
+      toast.success('Moved successfully');
+      queryClient.invalidateQueries({ queryKey: ['fin-stmt'] });
+    } catch (e: any) {
+      toast.error(e?.data?.error || e?.message || 'Could not move account');
+    }
+  };
+
+  const { fromDate, toDate } = useMemo(
+    () => computeDateRange(period, customFrom, customTo),
+    [period, customFrom, customTo],
+  );
+
+  const qKey = useMemo(
+    () => ['fin-stmt', fromDate, toDate, effLoc.locationType ?? null, effLoc.locationId ?? null],
+    [fromDate, toDate, effLoc.locationType, effLoc.locationId],
+  );
+
+  const { data: fs, isLoading, isError, error } = useQuery<FinancialStatements>({
+    queryKey: qKey,
+    queryFn: () => {
+      const p = new URLSearchParams();
+      if (fromDate) p.set('fromDate', fromDate);
+      if (toDate)   p.set('toDate', toDate);
+      if (effLoc.locationType) {
+        p.set('locationType', effLoc.locationType);
+        p.set('locationId', String(effLoc.locationId));
+      }
+      const qs = p.toString();
+      return customFetch(`/api/accounts/financial-statements${qs ? `?${qs}` : ''}`, { method: 'GET' });
+    },
+    staleTime: 30_000,
+  });
+
+  // Month Wise columns — ONE aggregated request covering every month in the
+  // range (never a call per account or per month). The key starts with
+  // 'fin-stmt' so every chart-edit invalidation refreshes the columns too.
+  const { data: mwData, isLoading: mwLoading, isError: mwIsError, error: mwError } = useQuery<MonthlyStatements>({
+    queryKey: ['fin-stmt', 'monthly', fromDate, toDate, effLoc.locationType ?? null, effLoc.locationId ?? null],
+    queryFn: () => {
+      const p = new URLSearchParams();
+      if (fromDate) p.set('fromDate', fromDate);
+      if (toDate)   p.set('toDate', toDate);
+      if (effLoc.locationType) {
+        p.set('locationType', effLoc.locationType);
+        p.set('locationId', String(effLoc.locationId));
+      }
+      const qs = p.toString();
+      return customFetch(`/api/accounts/financial-statements/monthly${qs ? `?${qs}` : ''}`, { method: 'GET' });
+    },
+    enabled: monthWise,
+    staleTime: 30_000,
+  });
+
+  const onCreated = () => queryClient.invalidateQueries({ queryKey: ['fin-stmt'] });
+
+  // The statements payload always carries every outlet, for historical reports.
+  // This dropdown is a selector, so it offers them only while the module is on —
+  // and the whole control disappears when the list comes back empty.
+  const outlets = outletsVisible ? (fs?.filters?.outlets ?? []) : [];
+
+  // Managing the chart mutates it, so it follows the same 'edit' gate other
+  // pages use. The backend guards stay authoritative regardless.
+  const canManageChart = perm.canEdit;
+
+  if (!perm.isLoading && !perm.canView) {
+    return (
+      <AppLayout>
+        <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4 text-center">
+          <div className="w-16 h-16 rounded-2xl bg-destructive/10 flex items-center justify-center">
+            <ShieldOff className="w-8 h-8 text-destructive" />
+          </div>
+          <div>
+            <h2 className="text-xl font-bold">Access Denied</h2>
+            <p className="text-muted-foreground mt-1 text-sm">
+              You don't have permission to view this page.<br />
+              Contact your administrator to request access.
+            </p>
+          </div>
+        </div>
+      </AppLayout>
+    );
+  }
+
+  return (
+    <AppLayout>
+      <div className="space-y-5">
+
+        {/* ── Header ── */}
+        <PageHeader
+          title="Chart of Accounts"
+          description="Account hierarchy, Balance Sheet & Profit & Loss · All figures computed live from transactions"
+          icon={Landmark}
+        />
+
+        {/* ── Filter bar ── */}
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-1 bg-muted/20 rounded-lg p-1">
+            <CalendarDays className="w-3.5 h-3.5 text-muted-foreground ml-1 shrink-0" />
+            {PERIODS.map(p => (
+              <button key={p.value} onClick={() => setPeriod(p.value)}
+                className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors
+                  ${period === p.value ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}>
+                {p.label}
+              </button>
+            ))}
+          </div>
+          {/* ONE toggle — ON adds month columns to the statements below, OFF
+              returns the page to exactly its normal self. */}
+          <button
+            onClick={() => setMonthWise(m => !m)}
+            data-testid="coa-month-wise-toggle"
+            aria-pressed={monthWise}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors
+              ${monthWise
+                ? 'bg-primary text-primary-foreground border-primary shadow-sm'
+                : 'bg-muted/20 text-muted-foreground border-transparent hover:text-foreground'}`}
+          >
+            <BarChart3 className="w-3.5 h-3.5" /> Month Wise
+          </button>
+          {period === 'custom' && (
+            <div className="flex items-center gap-1.5">
+              <Input type="date" value={customFrom} onChange={e => setFrom(e.target.value)} className="h-8 text-xs w-36" />
+              <span className="text-muted-foreground text-xs">to</span>
+              <Input type="date" value={customTo} onChange={e => setTo(e.target.value)} className="h-8 text-xs w-36" />
+            </div>
+          )}
+          {outlets.length > 0 && (
+            <div className="flex items-center gap-1.5">
+              <Store className="w-3.5 h-3.5 text-muted-foreground" />
+              <Select value={outletId} onValueChange={setOutletId}>
+                <SelectTrigger className="h-8 text-xs w-36"><SelectValue placeholder="All Outlets" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Outlets</SelectItem>
+                  {outlets.map(o => <SelectItem key={o.id} value={String(o.id)}>{o.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+        </div>
+
+        {/* ── The statements — with month columns folded in when Month Wise is ON ── */}
+        {monthWise && mwIsError && (
+          <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-400" data-testid="mw-error">
+            {(mwError as any)?.data?.error ?? (mwError as any)?.message ?? 'Could not load the month columns'}
+          </div>
         )}
+        <StatementsView
+          fs={fs} isLoading={isLoading || (monthWise && mwLoading)} isError={isError} error={error}
+          onCreated={onCreated}
+          onDelete={onDelete} onRename={onRename} onMove={onMove}
+          onViewStatement={onViewStatement}
+          onManage={canManageChart ? () => setManageOpen(true) : undefined}
+          canAdd={perm.canAdd} canEdit={perm.canEdit} canDelete={perm.canDelete}
+          monthly={monthWise && mwData ? {
+            months: mwData.months,
+            series: mwData.series,
+            onCell: (node, f, t) => setSelectedLedger({ node, fromDate: f, toDate: t }),
+            onTotal: onViewStatement,
+          } : undefined}
+        />
       </div>
 
       {/* ── Manage Chart of Accounts ──
@@ -1112,9 +1547,10 @@ export default function ChartOfAccounts() {
 
       {selectedLedger && (
         <LedgerStatementSheet
-          ledgerNode={selectedLedger}
-          fromDate={fromDate}
-          toDate={toDate}
+          ledgerNode={selectedLedger.node}
+          fromDate={selectedLedger.fromDate}
+          toDate={selectedLedger.toDate}
+          loc={effLoc}
           onClose={() => setSelectedLedger(null)}
         />
       )}
