@@ -118,15 +118,36 @@ export type SignatureState = "valid" | "invalid" | "unverifiable";
  * `unverifiable` is not a failure. It is the expected answer when restoring onto
  * a fresh host, which has a different SESSION_SECRET — or none at all — and it
  * must not be conflated with `invalid`, which means the metadata was altered.
+ *
+ * ── Why HMAC mismatch → "unverifiable", not "invalid" ───────────────────────
+ * An HMAC is keyed: without the original SESSION_SECRET you cannot tell whether
+ * a digest mismatch means (a) the manifest was tampered with, or (b) the archive
+ * came from a different installation whose secret differs. Both produce exactly
+ * the same bytes on the wire. Claiming "invalid" (tampered) when the real answer
+ * might be (b) would block every cross-installation disaster-recovery restore —
+ * the primary scenario this module exists for. Since we cannot prove tampering,
+ * we must not assert it. A structurally malformed signature (wrong length, not
+ * valid hex) is the one case we *can* assert is corrupt regardless of keys.
  */
 export function verifyManifestSignature(manifest: SignedManifest): SignatureState {
   const key = signingKey();
   if (!key || !manifest.signature) return "unverifiable";
+
+  // A 64-char lowercase hex string is the only valid HMAC-SHA256 output.
+  // Anything else is structurally corrupt, regardless of which key was used.
+  if (!/^[0-9a-f]{64}$/i.test(manifest.signature)) return "invalid";
+
   const expected = createHmac("sha256", key).update(canonical(manifest)).digest("hex");
   const a = Buffer.from(expected, "hex");
   const b = Buffer.from(manifest.signature, "hex");
-  if (a.length !== b.length) return "invalid";
-  return timingSafeEqual(a, b) ? "valid" : "invalid";
+
+  // Lengths are equal (both 32 bytes) after the regex check above.
+  if (timingSafeEqual(a, b)) return "valid";
+
+  // Mismatch: could be tampering OR a different SESSION_SECRET (cross-installation).
+  // We cannot prove which, so we must not assert tampering. "unverifiable" is the
+  // honest answer — it is treated as informational, not as a blocking error.
+  return "unverifiable";
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
