@@ -25,14 +25,19 @@ import {
 } from './chartCommon';
 import { ChartHierarchy } from './ChartHierarchy';
 import { PageHeader } from '@/components/app/page-header';
+import { PeriodBreakdown } from '@/components/app/period-breakdown';
 
 /* ── helpers ─────────────────────────────────────────────────────────────────── */
 function computeDateRange(period: string, from: string, to: string) {
   const today = new Date();
-  const iso = (d: Date) => d.toISOString().split('T')[0];
+  // Local calendar date — toISOString() is UTC, which for IST users would
+  // roll "today" back a day before 5:30 am and shift every preset early.
+  const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   if (period === 'month')   { const f = new Date(today.getFullYear(), today.getMonth(), 1);        return { fromDate: iso(f),  toDate: iso(today) }; }
   if (period === 'quarter') { const q = Math.floor(today.getMonth() / 3); const f = new Date(today.getFullYear(), q * 3, 1); return { fromDate: iso(f),  toDate: iso(today) }; }
-  if (period === 'year')    { return { fromDate: `${today.getFullYear()}-04-01`, toDate: iso(today) }; }
+  // Financial year (April–March): between January and March, "this year"
+  // started on 1 April of the PREVIOUS calendar year.
+  if (period === 'year')    { const fy = today.getMonth() + 1 >= 4 ? today.getFullYear() : today.getFullYear() - 1; return { fromDate: `${fy}-04-01`, toDate: iso(today) }; }
   if (period === 'custom')  { return { fromDate: from || undefined, toDate: to || undefined }; }
   return { fromDate: undefined, toDate: undefined };
 }
@@ -570,6 +575,9 @@ export default function ChartOfAccounts() {
   const [customFrom, setFrom]     = useState('');
   const [customTo, setTo]         = useState('');
   const [outletId, setOutletId]   = useState('all');
+  // Tally-style breakdown views: 'summary' = the two statements (unchanged
+  // default); 'month'/'day' swap the statements area for the period table.
+  const [view, setView]           = useState<'summary' | 'month' | 'day'>('summary');
   const [selectedLedger, setSelectedLedger] = useState<StatementTarget | null>(null);
   const [manageOpen, setManageOpen] = useState(false);
   // Same ids appear on both statements, so each keeps its own namespaced state.
@@ -738,6 +746,15 @@ export default function ChartOfAccounts() {
               </button>
             ))}
           </div>
+          <div className="flex items-center gap-1 bg-muted/20 rounded-lg p-1">
+            {([['summary', 'Summary'], ['month', 'Month Wise'], ['day', 'Day Wise']] as const).map(([v, l]) => (
+              <button key={v} onClick={() => setView(v)}
+                className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors
+                  ${view === v ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}>
+                {l}
+              </button>
+            ))}
+          </div>
           {period === 'custom' && (
             <div className="flex items-center gap-1.5">
               <Input type="date" value={customFrom} onChange={e => setFrom(e.target.value)} className="h-8 text-xs w-36" />
@@ -760,7 +777,18 @@ export default function ChartOfAccounts() {
         </div>
 
         {/* ── Tabs ── */}
-        {isLoading ? (
+        {view !== 'summary' ? (
+          <PeriodBreakdown
+            granularity={view}
+            fromDate={fromDate}
+            toDate={toDate}
+            locationType={locParams.locationType}
+            locationId={locParams.locationId}
+            // Clicking a bucket drills into the EXISTING statements for that
+            // exact range — custom period + back to Summary, no new report.
+            onDrill={(f, t) => { setPeriod('custom'); setFrom(f); setTo(t); setView('summary'); }}
+          />
+        ) : isLoading ? (
           <div className="py-16 text-center text-muted-foreground text-sm animate-pulse">Computing financial statements…</div>
         ) : isError ? (
           <div className="py-10 text-center space-y-2">

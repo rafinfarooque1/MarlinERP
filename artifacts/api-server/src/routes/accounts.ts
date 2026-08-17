@@ -16,6 +16,7 @@ import { lineTaxHeads } from "../lib/gst";
 import { logActivity } from "../lib/audit";
 import { closingStockValuation } from "../lib/valuation";
 import { buildBooks } from "../lib/books";
+import { buildPeriodicSummary } from "../lib/periodicSummary";
 import { buildDerivedPostings } from "./journal";
 import { outletWritesBlocked, OUTLETS_DISABLED_MESSAGE, OUTLETS_DISABLED_CODE } from "../lib/featureFlags";
 import { getUserDataScope, scopeSalesWhere, scopeBranchWhere } from "../lib/dataScope";
@@ -3517,6 +3518,52 @@ router.get("/accounts/financial-statements", requireModuleView(["page:/accounts/
     ...(location ? { location: { type: location.type, id: location.id }, companyLevel } : {}),
     filters: { warehouses, outlets },
     ...books,
+  });
+});
+
+// ── Month-wise / Day-wise summary (Tally-style period breakdown) ──────────
+//
+// Same engine, bucketed: figures come from the SAME posting stream and stock
+// valuations as the financial statements (lib/periodicSummary.ts), so month
+// totals reconcile with the range P&L and day totals with the month — by
+// construction. Guard and LBAC mirror /accounts/financial-statements exactly:
+// this is the same data at a different grain, so it must never be visible to
+// anyone the statements are not.
+router.get("/accounts/periodic-summary", requireModuleView(["page:/accounts/chart", "page:/reports/sales"]), async (req, res): Promise<void> => {
+  const { granularity, fromDate, toDate, page, pageSize } = req.query as Record<string, string | undefined>;
+  if (granularity !== "month" && granularity !== "day") {
+    res.status(400).json({ error: "granularity must be 'month' or 'day'" }); return;
+  }
+  if ((fromDate !== undefined && !isIsoDate(fromDate)) || (toDate !== undefined && !isIsoDate(toDate))) {
+    res.status(400).json({ error: "fromDate/toDate must be valid YYYY-MM-DD dates" }); return;
+  }
+  const posInt = (v: string | undefined): number | undefined => {
+    if (v === undefined) return undefined;
+    const n = Number(v);
+    return Number.isInteger(n) && n >= 1 ? n : undefined;
+  };
+
+  // LBAC: branch users always get their own location's slice — the view
+  // header/query cannot widen it. Head Office keeps the free selector.
+  const psEmp = (req as any).employee as { branchType?: string; branchId?: number } | undefined;
+  const psBranch = psEmp?.branchType && psEmp.branchType !== 'headoffice';
+  const location = psBranch
+    ? { type: psEmp!.branchType as "warehouse" | "outlet", id: Number(psEmp!.branchId ?? 0) }
+    : getPostingLocationFilter(req);
+
+  const summary = await buildPeriodicSummary(buildDerivedPostings, {
+    granularity,
+    fromDate: fromDate ?? null,
+    toDate: toDate ?? null,
+    location,
+    page: posInt(page),
+    pageSize: posInt(pageSize),
+  });
+
+  res.json({
+    locationScoped: location != null,
+    ...(location ? { location: { type: location.type, id: location.id } } : {}),
+    ...summary,
   });
 });
 

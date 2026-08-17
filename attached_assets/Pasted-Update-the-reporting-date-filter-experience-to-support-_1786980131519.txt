@@ -1,0 +1,517 @@
+Update the reporting/date-filter experience to support proper Tally Prime-style MONTH-WISE and DAY-WISE analysis.
+
+CURRENT SCREEN:
+Accounts → Chart of Accounts
+
+The existing date filter currently has:
+- All
+- This Month
+- Quarter
+- This Year
+- Custom
+
+I need to improve this without breaking the existing filters.
+
+==================================================
+1. ADD TWO VIEW OPTIONS
+==================================================
+
+Add:
+
+[ Month Wise ]   [ Day Wise ]
+
+These are reporting/view modes, not replacements for the existing date filters.
+
+The UI should be clean, compact, and consistent with the existing ERP design.
+
+==================================================
+2. MONTH-WISE
+==================================================
+
+When the user selects:
+
+Month Wise
+
+show the financial/business data grouped by month.
+
+Example:
+
+Month Wise
+
+April 2026
+Sales
+Purchase
+Expenses
+Payments
+Receipts
+Receivables
+Payables
+GP
+NP
+etc.
+
+May 2026
+Sales
+Purchase
+Expenses
+Payments
+Receipts
+Receivables
+Payables
+GP
+NP
+etc.
+
+June 2026
+...
+
+The exact metrics should follow whatever metrics are already available in the respective report.
+
+DO NOT create fake calculations.
+
+Use the existing accounting/reporting backend calculations.
+
+==================================================
+3. MONTH SELECTION
+==================================================
+
+If the existing filter is:
+
+Quarter
+
+and the user selects:
+
+Month Wise
+
+then the selected quarter should be broken down into its individual months.
+
+Example:
+
+Quarter: Q1
+
+Month Wise:
+
+April
+May
+June
+
+Each month should be clickable.
+
+When the user clicks a month:
+
+April
+
+open/show the detailed April data using the existing report/detail screen.
+
+Do not create a separate duplicate reporting system.
+
+==================================================
+4. IF THIS MONTH IS SELECTED
+==================================================
+
+If the existing date filter is:
+
+This Month
+
+and the user selects:
+
+Month Wise
+
+show the selected month's summary.
+
+Example:
+
+August 2026
+
+Month Wise
+
+August 2026
+Sales ₹...
+Purchase ₹...
+Expenses ₹...
+GP ₹...
+NP ₹...
+
+The month should be clickable to open the detailed transactions/report for that month.
+
+==================================================
+5. DAY-WISE
+==================================================
+
+Add:
+
+Day Wise
+
+When selected, break the selected date range into individual days.
+
+Example:
+
+August 2026
+
+01 Aug
+Sales
+Purchase
+Expenses
+Payments
+Receipts
+GP
+NP
+
+02 Aug
+Sales
+Purchase
+Expenses
+Payments
+Receipts
+GP
+NP
+
+03 Aug
+...
+
+31 Aug
+...
+
+Again, use the existing accounting/reporting calculations.
+
+==================================================
+6. QUARTER + DAY-WISE
+==================================================
+
+If:
+
+Quarter → Day Wise
+
+is selected:
+
+show every day within the selected quarter.
+
+Example:
+
+April 1
+April 2
+April 3
+...
+April 30
+
+May 1
+May 2
+...
+May 31
+
+June 1
+...
+June 30
+
+==================================================
+7. YEAR + MONTH-WISE
+==================================================
+
+If:
+
+This Year → Month Wise
+
+is selected:
+
+show all months in the selected financial year.
+
+Example:
+
+April
+May
+June
+July
+August
+September
+October
+November
+December
+January
+February
+March
+
+This must respect the ERP's configured financial year.
+
+Do NOT assume January–December if the ERP uses April–March.
+
+==================================================
+8. YEAR + DAY-WISE
+==================================================
+
+If:
+
+This Year → Day Wise
+
+is selected:
+
+show daily figures for the selected financial year.
+
+Because this can be a large dataset, use pagination/lazy loading if required.
+
+Do not load thousands of rows unnecessarily.
+
+==================================================
+9. CUSTOM DATE RANGE
+==================================================
+
+If the user selects:
+
+Custom
+
+and enters:
+
+01/08/2026 → 17/08/2026
+
+then:
+
+Month Wise
+
+should group the selected range by month.
+
+Day Wise
+
+should show:
+
+01 Aug
+02 Aug
+03 Aug
+...
+17 Aug
+
+Only include dates inside the selected range.
+
+==================================================
+10. CLICKABLE MONTH / DAY
+==================================================
+
+Month rows and day rows should be clickable.
+
+Example:
+
+August 2026
+₹1,25,000 Sales
+
+Click August 2026
+
+→ open the existing detailed report for:
+
+01 Aug 2026 → 31 Aug 2026
+
+Similarly:
+
+17 Aug 2026
+
+Click
+
+→ open the existing detailed report for:
+
+17 Aug 2026
+
+Do NOT create duplicate report pages.
+
+Reuse existing report/detail navigation.
+
+==================================================
+11. TALLY-STYLE BEHAVIOUR
+==================================================
+
+The goal is similar to the practical reporting workflow in Tally Prime:
+
+Select period
+→ choose Month Wise / Day Wise
+→ see summarized figures
+→ click the period
+→ drill down into transactions.
+
+Keep it simple and fast.
+
+==================================================
+12. APPLY THROUGHOUT RELEVANT REPORTS
+==================================================
+
+Wherever the ERP already has period-based financial/business reports, use the same Month Wise / Day Wise pattern where applicable.
+
+Examples:
+
+Sales
+Purchase
+Expenses
+Payments
+Receipts
+Cash
+Bank
+Receivables
+Payables
+Inventory value
+Gross Profit
+Net Profit
+Ledger
+Day Book
+Trial Balance
+Profit & Loss
+Balance Sheet
+GST reports where date grouping makes sense
+
+Do not force Month Wise / Day Wise into reports where it doesn't logically apply.
+
+==================================================
+13. IMPORTANT ACCOUNTING ACCURACY
+==================================================
+
+Do not calculate Month Wise or Day Wise numbers separately using frontend approximations.
+
+Use the same backend/accounting engine that produces the existing totals.
+
+Month-wise total must reconcile with the selected period total.
+
+Day-wise totals must reconcile with the month/period total.
+
+Example:
+
+April Day Wise total
+=
+April Month Wise total
+
+April + May + June
+=
+Q1 total
+
+Financial-year months
+=
+Financial-year total
+
+==================================================
+14. LOCATION FILTER
+==================================================
+
+This must respect the existing Current Location rules.
+
+If Head Office user selects:
+
+All Locations
+
+then Month Wise / Day Wise data may show consolidated data.
+
+If:
+
+Head Office
+
+is selected:
+
+show only Head Office data.
+
+If:
+
+Warehouse A
+
+is selected:
+
+show only Warehouse A data.
+
+Do not leak data from another location.
+
+==================================================
+15. UI
+==================================================
+
+Make the UI simple and attractive.
+
+Suggested:
+
+Date Range:
+[ This Month ▼ ]
+
+View:
+[ Summary ] [ Month Wise ] [ Day Wise ]
+
+When Month Wise is selected:
+
+Period | Sales | Purchase | Expense | Payment | Receipt | GP | NP
+
+When Day Wise is selected:
+
+Date | Sales | Purchase | Expense | Payment | Receipt | GP | NP
+
+Use the existing ERP table/card styling.
+
+Do not create horizontal scrolling unnecessarily.
+
+Make it responsive for desktop and mobile.
+
+==================================================
+16. DEFAULT BEHAVIOUR
+==================================================
+
+Do not change the existing default date filter unless already specified elsewhere.
+
+The existing date filter should continue to work.
+
+Month Wise / Day Wise should be additional reporting controls.
+
+==================================================
+17. PERFORMANCE
+==================================================
+
+Do not request every transaction individually for every day/month.
+
+Create/use an efficient aggregated backend query.
+
+Prefer:
+
+one period aggregation request
+
+instead of:
+
+31 separate API calls for 31 days.
+
+Use caching where appropriate.
+
+==================================================
+18. TESTING
+==================================================
+
+Verify:
+
+This Month + Month Wise
+Quarter + Month Wise
+This Year + Month Wise
+Custom + Month Wise
+
+This Month + Day Wise
+Quarter + Day Wise
+This Year + Day Wise
+Custom + Day Wise
+
+Verify:
+
+Month totals reconcile with the original report totals.
+
+Day totals reconcile with month totals.
+
+Location filtering works.
+
+Clicking a month opens the correct date range.
+
+Clicking a day opens the correct date.
+
+No existing reports are broken.
+
+==================================================
+FINAL RESULT
+==================================================
+
+I want the ERP reporting experience to work like:
+
+Date Filter
+↓
+Month Wise / Day Wise
+↓
+Summary by month/day
+↓
+Click month/day
+↓
+Detailed existing report
+
+Do NOT redesign the entire Accounts module.
+
+Implement this as a clean enhancement to the existing reporting/filter system.
