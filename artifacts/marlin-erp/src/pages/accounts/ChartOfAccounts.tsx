@@ -9,7 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { CalendarDays, Store, TrendingDown, TrendingUp, Landmark, BarChart3, ChevronDown, ChevronRight, Package, Lock, Trash2, ScrollText, ArrowUpRight, ArrowDownLeft, ShieldOff, AlertTriangle, Settings2, FoldVertical, UnfoldVertical, Folder } from 'lucide-react';
+import { CalendarDays, ChevronLeft, Store, TrendingDown, TrendingUp, Landmark, BarChart3, ChevronDown, ChevronRight, Package, Lock, Trash2, ScrollText, ArrowUpRight, ArrowDownLeft, ShieldOff, AlertTriangle, Settings2, FoldVertical, UnfoldVertical, Folder } from 'lucide-react';
 import { toast } from 'sonner';
 import { usePermission } from '@/lib/usePermission';
 import { useLocationContext, locationFilterParams } from '@/lib/locationContext';
@@ -25,7 +25,6 @@ import {
 } from './chartCommon';
 import { ChartHierarchy } from './ChartHierarchy';
 import { PageHeader } from '@/components/app/page-header';
-import { PeriodBreakdown } from '@/components/app/period-breakdown';
 
 /* ── helpers ─────────────────────────────────────────────────────────────────── */
 function computeDateRange(period: string, from: string, to: string) {
@@ -58,14 +57,19 @@ function LedgerCreationRetiredNote({ depth = 1 }: { depth?: number }) {
 }
 
 /* ── ledger statement sheet ──────────────────────────────────────────────────── */
-function LedgerStatementSheet({ ledgerNode, fromDate, toDate, onClose }: {
-  ledgerNode: StatementTarget; fromDate?: string; toDate?: string; onClose: () => void;
+function LedgerStatementSheet({ ledgerNode, fromDate, toDate, loc, onClose }: {
+  ledgerNode: StatementTarget; fromDate?: string; toDate?: string;
+  /** Effective location scope from the host page (its outlet dropdown can
+   *  override the global selector); absent = derive from global context. */
+  loc?: { locationType?: string; locationId?: number };
+  onClose: () => void;
 }) {
-  // Global location selector narrows the statement to that location's slice of
-  // the books; the query key must carry the same params or a location change
-  // would keep serving the cached slice.
+  // Location scope narrows the statement to that location's slice of the
+  // books; the query key must carry the same params or a location change
+  // would keep serving the cached slice. The host page passes its EFFECTIVE
+  // scope so the sheet always matches the figures the user clicked.
   const { locationState } = useLocationContext();
-  const locParams = locationFilterParams(locationState);
+  const locParams = loc ?? locationFilterParams(locationState);
   const qs = new URLSearchParams();
   if (fromDate) qs.set('fromDate', fromDate);
   if (toDate)   qs.set('toDate', toDate);
@@ -559,113 +563,42 @@ function StatementToolbar({ expansion, expandableIds, onManage, statement }: {
   );
 }
 
-/* ── period filter ───────────────────────────────────────────────────────────── */
-const PERIODS = [
-  { value: 'all', label: 'All' },
-  { value: 'month', label: 'This Month' },
-  { value: 'quarter', label: 'Quarter' },
-  { value: 'year', label: 'This Year' },
-  { value: 'custom', label: 'Custom' },
-];
+/* ── period bucket labels ────────────────────────────────────────────────────── */
+const monthLabel = (key: string) =>
+  new Date(`${key}-01T00:00:00`).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
+const dayLabel = (key: string) =>
+  new Date(`${key}T00:00:00`).toLocaleDateString('en-IN', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' });
+const fmtBucketDate = (d: string) =>
+  new Date(`${d}T00:00:00`).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
 
-/* ── main ─────────────────────────────────────────────────────────────────────── */
-export default function ChartOfAccounts() {
-  const perm = usePermission('page:/accounts/chart');
-  const [period, setPeriod]       = useState('all');
-  const [customFrom, setFrom]     = useState('');
-  const [customTo, setTo]         = useState('');
-  const [outletId, setOutletId]   = useState('all');
-  // Tally-style breakdown views: 'summary' = the two statements (unchanged
-  // default); 'month'/'day' swap the statements area for the period table.
-  const [view, setView]           = useState<'summary' | 'month' | 'day'>('summary');
-  const [selectedLedger, setSelectedLedger] = useState<StatementTarget | null>(null);
-  const [manageOpen, setManageOpen] = useState(false);
+/* ── statements view ─────────────────────────────────────────────────────────
+ * The COMPLETE Balance Sheet + Profit & Loss presentation, extracted so the
+ * exact same rendering serves both the Summary view and every Month Wise /
+ * Day Wise period section. Nothing is recomputed here — the payload is the
+ * financial-statements engine output for whatever range the caller fetched.
+ * Read-only mounts (the period sections) simply omit the edit handlers, so
+ * chart management stays a Summary-only affordance.
+ */
+function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, onRename, onMove, onViewStatement, onManage, canAdd, canEdit, canDelete }: {
+  fs: FinancialStatements | undefined;
+  isLoading: boolean; isError: boolean; error: unknown;
+  onCreated: () => void;
+  onDelete?: (id: number, name: string) => void;
+  onRename?: (id: number, newName: string) => void;
+  onMove?: (nodeId: number, newParentId: number) => void;
+  onViewStatement: (node: StatementTarget) => void;
+  /** Present only where managing the chart is allowed (the Summary view). */
+  onManage?: () => void;
+  canAdd?: boolean; canEdit?: boolean; canDelete?: boolean;
+}) {
   // Same ids appear on both statements, so each keeps its own namespaced state.
-  const bsExpansion               = useStatementExpansion('balance_sheet');
-  const plExpansion               = useStatementExpansion('profit_loss');
-  const queryClient               = useQueryClient();
-  const outletsVisible            = useIsLocationKindEnabled('outlet');
-  // Global location selector scopes the statements to that location's slice of
-  // the books (the page's own outlet dropdown is a separate, legacy narrowing).
-  const { locationState }         = useLocationContext();
-  const locParams                 = locationFilterParams(locationState);
-  // A filter still holding an outlet would keep scoping the statements after the
-  // control to clear it disappears, quietly narrowing every figure on screen.
-  useClearOutletSelection(outletId !== 'all', () => setOutletId('all'));
-
-  const onViewStatement = (node: StatementTarget) => setSelectedLedger(node);
-
-  const onRename = async (id: number, newName: string) => {
-    try {
-      await customFetch(`/api/accounts/chart/${id}`, { method: 'PATCH', body: JSON.stringify({ name: newName }) });
-      toast.success('Ledger renamed');
-      queryClient.invalidateQueries({ queryKey: qKey });
-    } catch (e: any) {
-      toast.error(e?.data?.error || e?.message || 'Could not rename ledger');
-    }
-  };
-
-  const onDelete = async (id: number, name: string) => {
-    if (!window.confirm(`Delete "${name}"? This cannot be undone.`)) return;
-    try {
-      await customFetch(`/api/accounts/chart/${id}`, { method: 'DELETE' });
-      toast.success(`"${name}" deleted`);
-      queryClient.invalidateQueries({ queryKey: qKey });
-    } catch (e: any) {
-      toast.error(e?.data?.error || e?.message || 'Could not delete');
-    }
-  };
-
-  const onMove = async (nodeId: number, newParentId: number) => {
-    try {
-      await customFetch(`/api/accounts/chart/${nodeId}/move`, {
-        method: 'PATCH',
-        body: JSON.stringify({ parentId: newParentId }),
-      });
-      toast.success('Moved successfully');
-      queryClient.invalidateQueries({ queryKey: qKey });
-    } catch (e: any) {
-      toast.error(e?.data?.error || e?.message || 'Could not move account');
-    }
-  };
-
-  const { fromDate, toDate } = useMemo(
-    () => computeDateRange(period, customFrom, customTo),
-    [period, customFrom, customTo],
-  );
-
-  const qKey = useMemo(
-    () => ['fin-stmt', fromDate, toDate, outletId, locParams.locationType ?? null, locParams.locationId ?? null],
-    [fromDate, toDate, outletId, locParams.locationType, locParams.locationId],
-  );
-
-  const { data: fs, isLoading, isError, error } = useQuery<FinancialStatements>({
-    queryKey: qKey,
-    queryFn: () => {
-      const p = new URLSearchParams();
-      if (fromDate) p.set('fromDate', fromDate);
-      if (toDate)   p.set('toDate', toDate);
-      if (outletId && outletId !== 'all') p.set('outletId', outletId);
-      if (locParams.locationType) {
-        p.set('locationType', locParams.locationType);
-        p.set('locationId', String(locParams.locationId));
-      }
-      const qs = p.toString();
-      return customFetch(`/api/accounts/financial-statements${qs ? `?${qs}` : ''}`, { method: 'GET' });
-    },
-    staleTime: 30_000,
-  });
-
-  const onCreated = () => queryClient.invalidateQueries({ queryKey: qKey });
+  const bsExpansion = useStatementExpansion('balance_sheet');
+  const plExpansion = useStatementExpansion('profit_loss');
 
   const bs  = fs?.balanceSheet;
   const pl  = fs?.profitAndLoss;
   const exp = fs?.profitAndLoss?.expenses;
   const inc = fs?.profitAndLoss?.incomes;
-  // The statements payload always carries every outlet, for historical reports.
-  // This dropdown is a selector, so it offers them only while the module is on —
-  // and the whole control disappears when the list comes back empty.
-  const outlets = outletsVisible ? (fs?.filters?.outlets ?? []) : [];
 
   // "Expand All" needs the nodes that genuinely have children, taken from the
   // real children arrays of the groups each statement renders.
@@ -699,6 +632,611 @@ export default function ChartOfAccounts() {
   const tradingIncTotal = tradingIncBase + (grossProfit !== null && grossProfit < 0 ? -grossProfit : 0);
   const plExpTotal = (exp?.indirectExpenses.total ?? 0) + (grossProfit !== null && grossProfit < 0 ? -grossProfit : 0);
   const plIncTotal = (inc?.indirectIncomes.total ?? 0) + (grossProfit !== null && grossProfit > 0 ? grossProfit : 0);
+
+  if (isLoading) {
+    return <div className="py-16 text-center text-muted-foreground text-sm animate-pulse">Computing financial statements…</div>;
+  }
+  if (isError) {
+    return (
+      <div className="py-10 text-center space-y-2">
+        <p className="text-red-400 text-sm font-medium">Failed to load financial statements</p>
+        <p className="text-muted-foreground text-xs">{(error as any)?.message ?? 'Unknown error'}</p>
+      </div>
+    );
+  }
+  return (
+    <>
+
+          {/* ── Integrity warning banner ──
+              'difference' is no longer a plug figure — on healthy books it is ~0.
+              Any non-zero difference or any reported integrity issue is a REAL
+              defect (orphan ledgers, unbalanced opening balances, unmatched
+              production-costing overlay, incomplete stock ledgers) and is surfaced
+              here to investigate, never as an ordinary balance-sheet line. */}
+          {fs?.integrity && (!fs.integrity.balanced || fs.integrity.issues.length > 0) && (
+            <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 mb-4">
+              <div className="flex items-center gap-2 text-amber-500 font-semibold text-sm">
+                <AlertTriangle className="w-4 h-4 shrink-0" />
+                <span>Books integrity check failed — investigate before relying on these statements</span>
+              </div>
+              {Math.abs(fs.integrity.difference) > 0.01 && (
+                <p className="mt-1.5 text-xs text-amber-500/90">
+                  Unexplained difference of <span className="font-mono font-semibold">{fmt(Math.abs(fs.integrity.difference))}</span>{' '}
+                  — the balance sheet does not tie out. This is a defect, not a balancing figure.
+                </p>
+              )}
+              {fs.integrity.issues.length > 0 && (
+                <ul className="mt-2 space-y-1 text-xs text-amber-600/90 dark:text-amber-300/90 list-disc pl-5">
+                  {fs.integrity.issues.map((issue, i) => (
+                    <li key={i}>{issue}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+
+          {/* The account hierarchy is no longer a tab — the two statements are the
+              primary views, and the same ChartHierarchy editor opens over either
+              of them via "Manage Chart of Accounts". */}
+          <Tabs defaultValue="balance_sheet">
+            <TabsList className="grid w-full max-w-md grid-cols-2">
+              <TabsTrigger value="balance_sheet" className="gap-1.5 text-xs">
+                <Landmark className="w-3.5 h-3.5" /> Balance Sheet
+              </TabsTrigger>
+              <TabsTrigger value="profit_loss" className="gap-1.5 text-xs">
+                <BarChart3 className="w-3.5 h-3.5" /> Profit &amp; Loss
+              </TabsTrigger>
+            </TabsList>
+
+            {/* ══════════════════ BALANCE SHEET ══════════════════ */}
+            <TabsContent value="balance_sheet" className="mt-4">
+              <StatementToolbar
+                statement="balance-sheet"
+                expansion={bsExpansion}
+                expandableIds={bsExpandable}
+                onManage={onManage}
+              />
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+
+                {/* ── Liabilities ── */}
+                <Panel
+                  title="Liabilities" icon={TrendingDown}
+                  total={bs?.liabilities.total ?? 0}
+                  hdrClass="bg-red-500/10 text-red-400 border-b border-red-500/15"
+                  borderClass="border-red-500/20"
+                >
+                  {bs && (
+                    <>
+                      {/* Capital Account */}
+                      <GroupBlock group={bs.liabilities.capitalAccount} onCreated={onCreated} expansion={bsExpansion} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={canAdd} canEdit={canEdit} canDelete={canDelete} />
+
+                      {/* Loans */}
+                      <GroupBlock group={bs.liabilities.loans} onCreated={onCreated} expansion={bsExpansion} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={canAdd} canEdit={canEdit} canDelete={canDelete} />
+
+                      {/* Current Liabilities — STD-DTX (Duty & Tax) is already a child ledger with correct balance */}
+                      <GroupBlock group={bs.liabilities.currentLiabilities} onCreated={onCreated} expansion={bsExpansion} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={canAdd} canEdit={canEdit} canDelete={canDelete} />
+
+                      <Divider />
+
+                      {/* Reserves & Surplus (P&L) — cumulative retained earnings
+                          (all postings up to toDate), not just the period profit. */}
+                      <div className={`flex items-center gap-2 py-2 px-3 mx-2 rounded-lg text-xs font-semibold
+                        ${bs.liabilities.pandlCarryForward >= 0
+                          ? 'bg-emerald-500/10 text-emerald-400'
+                          : 'bg-red-500/10 text-red-400'}`}>
+                        <span className="flex-1">Reserves &amp; Surplus (P&amp;L)</span>
+                        <span className="font-mono tabular-nums">{fmt(Math.abs(bs.liabilities.pandlCarryForward))}</span>
+                      </div>
+
+                      {/* 'Difference' is intentionally NOT rendered as a balance-sheet
+                          line anymore — a non-zero difference is a defect surfaced in
+                          the integrity warning banner above, not a plug figure here. */}
+                    </>
+                  )}
+                </Panel>
+
+                {/* ── Assets ── */}
+                <Panel
+                  title="Assets" icon={TrendingUp}
+                  total={bs?.assets.total ?? 0}
+                  hdrClass="bg-emerald-500/10 text-emerald-400 border-b border-emerald-500/15"
+                  borderClass="border-emerald-500/20"
+                >
+                  {bs && (
+                    <>
+                      <GroupBlock group={bs.assets.fixedAssets} onCreated={onCreated} expansion={bsExpansion} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={canAdd} canEdit={canEdit} canDelete={canDelete} />
+
+                      {/* Closing Stock — a real asset line. Before this change closing
+                          stock never appeared on the balance sheet, which is why a
+                          plug 'Difference' was needed. It now shows explicitly. */}
+                      <div className="flex items-center gap-2 py-2 px-3 mx-2 mb-2 rounded-lg text-xs font-semibold bg-emerald-500/5 text-foreground/80">
+                        <span className="flex-1">Closing Stock</span>
+                        <span className="font-mono tabular-nums text-foreground/70">
+                          {bs.assets.closingStock === 0 ? '—' : fmt(bs.assets.closingStock)}
+                        </span>
+                      </div>
+
+                      <GroupBlock group={bs.assets.currentAssets} onCreated={onCreated} expansion={bsExpansion} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={canAdd} canEdit={canEdit} canDelete={canDelete} />
+                    </>
+                  )}
+                </Panel>
+              </div>
+            </TabsContent>
+
+            {/* ══════════════════ PROFIT & LOSS ══════════════════
+                Standard vertical order: Trading Account (Sales/Returns, Opening
+                Stock, Purchases/Returns, Direct Expenses, Closing Stock) → Gross
+                Profit banner → Profit & Loss Account (GP b/d, Other Income,
+                Indirect Expenses) → Net Profit banner. GP/NP are the engine's
+                own summary figures — identical to the dashboard tiles. */}
+            <TabsContent value="profit_loss" className="mt-4">
+              <StatementToolbar
+                statement="profit-loss"
+                expansion={plExpansion}
+                expandableIds={plExpandable}
+                onManage={onManage}
+              />
+
+              {/* ── Trading Account ── */}
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">Trading Account</span>
+                <div className="flex-1 border-t border-border/30" />
+              </div>
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+
+                {/* ── Trading Expense (Debit) ── */}
+                <Panel
+                  title="Expense (Debit)" icon={TrendingDown}
+                  total={tradingExpTotal}
+                  hdrClass="bg-red-500/10 text-red-400 border-b border-red-500/15"
+                  borderClass="border-red-500/20"
+                >
+                  {exp && (
+                    <>
+                      {/* Opening Stock */}
+                      <StockBlock
+                        label="Opening Stock"
+                        items={exp.openingStockItems}
+                        total={exp.openingStock}
+                      />
+
+                      {/* Purchase Account (auto) — gross + returns split shown only
+                          when debit notes exist; `purchases` is already the net. */}
+                      {purchaseReturns !== 0 ? (
+                        <>
+                          <AutoRow label="Purchase Account" amount={exp.purchases + purchaseReturns} sub="auto · from purchase orders" />
+                          <AutoRow label="Less: Purchase Returns" amount={-purchaseReturns} sub="debit notes" />
+                          <AutoRow label="Net Purchases" amount={exp.purchases} accent="text-foreground/80" />
+                        </>
+                      ) : (
+                        <AutoRow label="Purchase Account" amount={exp.purchases} sub="auto · from purchase orders" />
+                      )}
+
+                      <Divider />
+
+                      {/* Direct Expenses */}
+                      <GroupBlock group={exp.directExpenses} onCreated={onCreated} expansion={plExpansion} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={canAdd} canEdit={canEdit} canDelete={canDelete} />
+
+                      {/* Balancing transfer — makes both Trading sides equal */}
+                      {grossProfit !== null && grossProfit > 0 && (
+                        <>
+                          <Divider />
+                          <AutoRow label="Gross Profit c/d" amount={grossProfit} accent="text-emerald-500" sub="carried down to P&L" />
+                        </>
+                      )}
+                    </>
+                  )}
+                </Panel>
+
+                {/* ── Trading Income (Credit) ── */}
+                <Panel
+                  title="Income (Credit)" icon={TrendingUp}
+                  total={tradingIncTotal}
+                  hdrClass="bg-emerald-500/10 text-emerald-400 border-b border-emerald-500/15"
+                  borderClass="border-emerald-500/20"
+                >
+                  {inc && (
+                    <>
+                      {/* Sales Account (auto) — gross + returns split shown only
+                          when credit notes exist; `sales` is already the net. */}
+                      {salesReturns !== 0 ? (
+                        <>
+                          <AutoRow label="Sales Account" amount={grossSales} sub="auto · from sales invoices" />
+                          <AutoRow label="Less: Sales Returns" amount={-salesReturns} sub="credit notes" />
+                          <AutoRow label="Net Sales" amount={inc.sales} accent="text-foreground/80" />
+                        </>
+                      ) : (
+                        <AutoRow label="Sales Account" amount={inc.sales} sub="auto · from sales invoices" />
+                      )}
+
+                      <Divider />
+
+                      {/* Direct Incomes */}
+                      <GroupBlock group={inc.directIncomes} onCreated={onCreated} expansion={plExpansion} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={canAdd} canEdit={canEdit} canDelete={canDelete} />
+
+                      {/* Closing Stock */}
+                      <StockBlock
+                        label="Closing Stock"
+                        items={inc.closingStockItems}
+                        total={inc.closingStock}
+                      />
+
+                      {/* Balancing transfer — makes both Trading sides equal */}
+                      {grossProfit !== null && grossProfit < 0 && (
+                        <>
+                          <Divider />
+                          <AutoRow label="Gross Loss c/d" amount={-grossProfit} accent="text-red-400" sub="carried down to P&L" />
+                        </>
+                      )}
+                    </>
+                  )}
+                </Panel>
+              </div>
+
+              {/* ── Gross Profit banner — same highlighted style as Net Profit ── */}
+              {pl && grossProfit !== null && (
+                <div
+                  data-testid="coa-gross-profit"
+                  className={`flex items-center gap-3 px-4 py-3 rounded-xl my-4 text-sm font-semibold
+                  ${grossProfit >= 0
+                    ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                    : 'bg-red-500/10 text-red-400 border border-red-500/20'}`}>
+                  {grossProfit >= 0 ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />}
+                  <span>{grossProfit >= 0 ? 'Gross Profit' : 'Gross Loss'}</span>
+                  <span className="text-[10px] font-normal opacity-70">Net Sales − Cost of Goods Sold · carried down</span>
+                  <span className="font-mono text-base ml-auto">{fmt(Math.abs(grossProfit))}</span>
+                </div>
+              )}
+
+              {/* ── Profit & Loss Account ── */}
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">Profit &amp; Loss Account</span>
+                <div className="flex-1 border-t border-border/30" />
+              </div>
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+
+                {/* ── P&L Expense (Debit) ── */}
+                <Panel
+                  title="Expense (Debit)" icon={TrendingDown}
+                  total={plExpTotal}
+                  hdrClass="bg-red-500/10 text-red-400 border-b border-red-500/15"
+                  borderClass="border-red-500/20"
+                >
+                  {exp && (
+                    <>
+                      {grossProfit !== null && grossProfit < 0 && (
+                        <>
+                          <AutoRow label="Gross Loss b/d" amount={-grossProfit} accent="text-red-400" sub="from Trading Account" />
+                          <Divider />
+                        </>
+                      )}
+                      {/* Indirect Expenses */}
+                      <GroupBlock group={exp.indirectExpenses} onCreated={onCreated} expansion={plExpansion} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={canAdd} canEdit={canEdit} canDelete={canDelete} />
+                    </>
+                  )}
+                </Panel>
+
+                {/* ── P&L Income (Credit) ── */}
+                <Panel
+                  title="Income (Credit)" icon={TrendingUp}
+                  total={plIncTotal}
+                  hdrClass="bg-emerald-500/10 text-emerald-400 border-b border-emerald-500/15"
+                  borderClass="border-emerald-500/20"
+                >
+                  {inc && (
+                    <>
+                      {grossProfit !== null && grossProfit >= 0 && (
+                        <>
+                          <AutoRow label="Gross Profit b/d" amount={grossProfit} accent="text-emerald-500" sub="from Trading Account" />
+                          <Divider />
+                        </>
+                      )}
+                      {/* Indirect Incomes (Other Income) */}
+                      <GroupBlock group={inc.indirectIncomes} onCreated={onCreated} expansion={plExpansion} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={canAdd} canEdit={canEdit} canDelete={canDelete} />
+                    </>
+                  )}
+                </Panel>
+              </div>
+
+              {/* ── Net P&L banner — unchanged, closing the statement ── */}
+              {pl && (
+                <div
+                  data-testid="coa-net-profit"
+                  className={`flex items-center gap-3 px-4 py-3 rounded-xl mt-4 text-sm font-semibold
+                  ${pl.netProfit >= 0
+                    ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                    : 'bg-red-500/10 text-red-400 border border-red-500/20'}`}>
+                  {pl.netProfit >= 0 ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />}
+                  <span>{pl.netProfit >= 0 ? 'Net Profit' : 'Net Loss'}</span>
+                  <span className="text-[10px] font-normal opacity-70">Gross {grossProfit !== null && grossProfit < 0 ? 'Loss' : 'Profit'} + Other Income − Indirect Expenses</span>
+                  <span className="font-mono text-base ml-auto">{fmt(Math.abs(pl.netProfit))}</span>
+                </div>
+              )}
+            </TabsContent>
+          </Tabs>
+    </>
+  );
+}
+
+
+/* ── Month Wise / Day Wise ────────────────────────────────────────────────────
+ * Tally-style period presentation of the SAME Chart of Accounts: the selected
+ * range is split into month/day buckets (server-enumerated, so "All" starts
+ * where the books begin), and each expanded bucket fetches the EXISTING
+ * /accounts/financial-statements for exactly that sub-range and renders the
+ * complete statements through the very same StatementsView above. Figures
+ * reconcile with the Summary by construction — it is the same endpoint, same
+ * engine, same location scope. Sections load lazily on expansion, so a long
+ * day range never fires hundreds of requests up front.
+ */
+interface PeriodicBucketsResp {
+  granularity: 'month' | 'day';
+  fromDate: string | null;
+  toDate: string | null;
+  page: number;
+  pageSize: number;
+  totalBuckets: number;
+  buckets: { key: string; from: string; to: string }[];
+}
+
+function BucketStatements({ from, to, locationType, locationId, onViewLedger }: {
+  from: string; to: string;
+  locationType?: string; locationId?: number;
+  onViewLedger: (node: StatementTarget) => void;
+}) {
+  // Identical key shape and params to the Summary query — a bucket someone
+  // already viewed (or later opens via Custom dates) is served from cache.
+  const { data, isLoading, isError, error } = useQuery<FinancialStatements>({
+    queryKey: ['fin-stmt', from, to, locationType ?? null, locationId ?? null],
+    queryFn: () => {
+      const p = new URLSearchParams();
+      p.set('fromDate', from);
+      p.set('toDate', to);
+      if (locationType) { p.set('locationType', locationType); p.set('locationId', String(locationId)); }
+      return customFetch(`/api/accounts/financial-statements?${p.toString()}`, { method: 'GET' });
+    },
+    staleTime: 30_000,
+  });
+  return (
+    <div className="space-y-3">
+      <p className="text-[11px] text-muted-foreground">
+        Balance Sheet as on {fmtBucketDate(to)} · Profit &amp; Loss for this period · account clicks open the ledger for these dates
+      </p>
+      <StatementsView
+        fs={data} isLoading={isLoading} isError={isError} error={error}
+        onCreated={() => {}}
+        onViewStatement={onViewLedger}
+      />
+    </div>
+  );
+}
+
+function PeriodicStatements({ granularity, fromDate, toDate, locationType, locationId, onViewLedger }: {
+  granularity: 'month' | 'day';
+  /** '' / undefined = unbounded — the server derives the start from the books. */
+  fromDate?: string; toDate?: string;
+  locationType?: string; locationId?: number;
+  onViewLedger: (node: StatementTarget, from: string, to: string) => void;
+}) {
+  // A new range/location/grain is a new breakdown — never show page 3 of it.
+  // The reset must be synchronous: an effect would let one render fire the
+  // query for the NEW range at the OLD page number before resetting. Keying
+  // the stored page by the input tuple ignores stale entries in-render.
+  const rangeKey = `${granularity}|${fromDate ?? ''}|${toDate ?? ''}|${locationType ?? ''}|${locationId ?? ''}`;
+  const [pageState, setPageState] = useState({ key: rangeKey, page: 1 });
+  const page = pageState.key === rangeKey ? pageState.page : 1;
+  const setPage = (p: number) => setPageState({ key: rangeKey, page: p });
+
+  const { data, isLoading, isError, error } = useQuery<PeriodicBucketsResp>({
+    queryKey: ['periodic-buckets', granularity, fromDate || '', toDate || '', locationType || '', locationId || 0, page],
+    queryFn: () => {
+      const p = new URLSearchParams({ granularity, page: String(page) });
+      if (fromDate) p.set('fromDate', fromDate);
+      if (toDate) p.set('toDate', toDate);
+      if (locationType) { p.set('locationType', locationType); p.set('locationId', String(locationId)); }
+      return customFetch(`/api/accounts/periodic-summary?${p.toString()}`, { method: 'GET' });
+    },
+    staleTime: 60_000,
+  });
+
+  // Which sections are open. Default: every bucket on a short page, otherwise
+  // just the first — the rest load lazily as they are opened. Keyed by the
+  // page tuple so changing range/page synchronously discards stale opens.
+  const pageKey = `${rangeKey}|${page}`;
+  const [openState, setOpenState] = useState<{ key: string; open: Record<string, boolean> } | null>(null);
+  const buckets = data?.buckets ?? [];
+  const effOpen = openState && openState.key === pageKey ? openState.open : null;
+  const isOpen = (key: string, idx: number) => effOpen ? !!effOpen[key] : (buckets.length <= 3 || idx === 0);
+  const toggle = (key: string) => {
+    const next: Record<string, boolean> = {};
+    buckets.forEach((b, i) => { next[b.key] = isOpen(b.key, i); });
+    next[key] = !next[key];
+    setOpenState({ key: pageKey, open: next });
+  };
+
+  const label = granularity === 'month' ? monthLabel : dayLabel;
+  const totalPages = data ? Math.max(Math.ceil(data.totalBuckets / data.pageSize), 1) : 1;
+  const paged = totalPages > 1;
+
+  if (isError) {
+    return (
+      <div className="py-10 text-center space-y-1">
+        <p className="text-red-400 text-sm font-medium">Failed to load the period breakdown</p>
+        <p className="text-muted-foreground text-xs">{(error as any)?.data?.error ?? (error as any)?.message ?? 'Unknown error'}</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      {isLoading ? (
+        [...Array(4)].map((_, i) => <div key={i} className="h-14 bg-muted/30 rounded-xl animate-pulse" />)
+      ) : buckets.length === 0 ? (
+        <p className="py-10 text-center text-sm text-muted-foreground">No transactions in this period</p>
+      ) : (
+        buckets.map((b, i) => {
+          const open = isOpen(b.key, i);
+          return (
+            <div key={b.key} className="bg-card border border-border rounded-xl overflow-hidden">
+              <button
+                onClick={() => toggle(b.key)}
+                className="flex items-center gap-2 w-full px-4 py-3 hover:bg-muted/10 transition-colors text-left"
+                aria-expanded={open}
+                data-testid={`coa-bucket-${b.key}`}
+              >
+                {open ? <ChevronDown className="w-4 h-4 text-muted-foreground shrink-0" /> : <ChevronRight className="w-4 h-4 text-muted-foreground shrink-0" />}
+                <CalendarDays className="w-4 h-4 text-primary shrink-0" />
+                <span className="flex-1 text-sm font-semibold">{label(b.key)}</span>
+                <span className="hidden sm:block text-[11px] text-muted-foreground font-mono">
+                  {b.from === b.to ? fmtBucketDate(b.from) : `${fmtBucketDate(b.from)} → ${fmtBucketDate(b.to)}`}
+                </span>
+              </button>
+              {open && (
+                <div className="border-t border-border/50 p-3 sm:p-4">
+                  <BucketStatements
+                    from={b.from} to={b.to}
+                    locationType={locationType} locationId={locationId}
+                    onViewLedger={(node) => onViewLedger(node, b.from, b.to)}
+                  />
+                </div>
+              )}
+            </div>
+          );
+        })
+      )}
+
+      {paged && (
+        <div className="flex items-center justify-between">
+          <p className="text-xs text-muted-foreground">
+            Page {data?.page ?? page} of {totalPages} · {data?.totalBuckets} {granularity === 'month' ? 'months' : 'days'}
+          </p>
+          <div className="flex items-center gap-1.5">
+            <Button variant="outline" size="sm" className="h-7 px-2 text-xs" disabled={page <= 1 || isLoading} onClick={() => setPage(page - 1)}>
+              <ChevronLeft className="w-3.5 h-3.5" /> Prev
+            </Button>
+            <Button variant="outline" size="sm" className="h-7 px-2 text-xs" disabled={page >= totalPages || isLoading} onClick={() => setPage(page + 1)}>
+              Next <ChevronRight className="w-3.5 h-3.5" />
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ── period filter ───────────────────────────────────────────────────────────── */
+const PERIODS = [
+  { value: 'all', label: 'All' },
+  { value: 'month', label: 'This Month' },
+  { value: 'quarter', label: 'Quarter' },
+  { value: 'year', label: 'This Year' },
+  { value: 'custom', label: 'Custom' },
+];
+
+/* ── main ─────────────────────────────────────────────────────────────────────── */
+export default function ChartOfAccounts() {
+  const perm = usePermission('page:/accounts/chart');
+  const [period, setPeriod]       = useState('all');
+  const [customFrom, setFrom]     = useState('');
+  const [customTo, setTo]         = useState('');
+  const [outletId, setOutletId]   = useState('all');
+  // Tally-style breakdown views: 'summary' = the two statements (unchanged
+  // default); 'month'/'day' swap the statements area for the period table.
+  const [view, setView]           = useState<'summary' | 'month' | 'day'>('summary');
+  // The sheet remembers WHICH period asked for it, so a ledger opened from
+  // a Month/Day Wise section shows exactly that period's entries.
+  const [selectedLedger, setSelectedLedger] = useState<{ node: StatementTarget; fromDate?: string; toDate?: string } | null>(null);
+  const [manageOpen, setManageOpen] = useState(false);
+  const queryClient               = useQueryClient();
+  const outletsVisible            = useIsLocationKindEnabled('outlet');
+  // Global location selector scopes the statements to that location's slice of
+  // the books.
+  const { locationState }         = useLocationContext();
+  const locParams                 = locationFilterParams(locationState);
+  // A filter still holding an outlet would keep scoping the statements after the
+  // control to clear it disappears, quietly narrowing every figure on screen.
+  useClearOutletSelection(outletId !== 'all', () => setOutletId('all'));
+  // The page's outlet dropdown narrows via the SAME canonical location filter
+  // the global selector uses — the legacy `outletId` param was never read by
+  // the server, so it silently did nothing. An explicit outlet pick here wins
+  // over the global context (query params beat headers server-side), and the
+  // SAME effective scope feeds the Summary, the Month/Day Wise buckets and the
+  // ledger sheet so every figure on screen agrees.
+  const effLoc: { locationType?: string; locationId?: number } = outletId !== 'all'
+    ? { locationType: 'outlet', locationId: Number(outletId) }
+    : locParams;
+
+  const onViewStatement = (node: StatementTarget) => setSelectedLedger({ node, fromDate, toDate });
+
+  const onRename = async (id: number, newName: string) => {
+    try {
+      await customFetch(`/api/accounts/chart/${id}`, { method: 'PATCH', body: JSON.stringify({ name: newName }) });
+      toast.success('Ledger renamed');
+      // Chart edits change the statements for EVERY range — the Summary and
+      // every Month/Day Wise bucket — so invalidate the whole family.
+      queryClient.invalidateQueries({ queryKey: ['fin-stmt'] });
+    } catch (e: any) {
+      toast.error(e?.data?.error || e?.message || 'Could not rename ledger');
+    }
+  };
+
+  const onDelete = async (id: number, name: string) => {
+    if (!window.confirm(`Delete "${name}"? This cannot be undone.`)) return;
+    try {
+      await customFetch(`/api/accounts/chart/${id}`, { method: 'DELETE' });
+      toast.success(`"${name}" deleted`);
+      queryClient.invalidateQueries({ queryKey: ['fin-stmt'] });
+    } catch (e: any) {
+      toast.error(e?.data?.error || e?.message || 'Could not delete');
+    }
+  };
+
+  const onMove = async (nodeId: number, newParentId: number) => {
+    try {
+      await customFetch(`/api/accounts/chart/${nodeId}/move`, {
+        method: 'PATCH',
+        body: JSON.stringify({ parentId: newParentId }),
+      });
+      toast.success('Moved successfully');
+      queryClient.invalidateQueries({ queryKey: ['fin-stmt'] });
+    } catch (e: any) {
+      toast.error(e?.data?.error || e?.message || 'Could not move account');
+    }
+  };
+
+  const { fromDate, toDate } = useMemo(
+    () => computeDateRange(period, customFrom, customTo),
+    [period, customFrom, customTo],
+  );
+
+  const qKey = useMemo(
+    () => ['fin-stmt', fromDate, toDate, effLoc.locationType ?? null, effLoc.locationId ?? null],
+    [fromDate, toDate, effLoc.locationType, effLoc.locationId],
+  );
+
+  const { data: fs, isLoading, isError, error } = useQuery<FinancialStatements>({
+    queryKey: qKey,
+    queryFn: () => {
+      const p = new URLSearchParams();
+      if (fromDate) p.set('fromDate', fromDate);
+      if (toDate)   p.set('toDate', toDate);
+      if (effLoc.locationType) {
+        p.set('locationType', effLoc.locationType);
+        p.set('locationId', String(effLoc.locationId));
+      }
+      const qs = p.toString();
+      return customFetch(`/api/accounts/financial-statements${qs ? `?${qs}` : ''}`, { method: 'GET' });
+    },
+    staleTime: 30_000,
+  });
+
+  const onCreated = () => queryClient.invalidateQueries({ queryKey: ['fin-stmt'] });
+
+  // The statements payload always carries every outlet, for historical reports.
+  // This dropdown is a selector, so it offers them only while the module is on —
+  // and the whole control disappears when the list comes back empty.
+  const outlets = outletsVisible ? (fs?.filters?.outlets ?? []) : [];
 
   // Managing the chart mutates it, so it follows the same 'edit' gate other
   // pages use. The backend guards stay authoritative regardless.
@@ -776,336 +1314,26 @@ export default function ChartOfAccounts() {
           )}
         </div>
 
-        {/* ── Tabs ── */}
+        {/* ── Views: Summary = the statements as before; Month/Day Wise = the
+            SAME complete statements repeated per period, loaded lazily ── */}
         {view !== 'summary' ? (
-          <PeriodBreakdown
+          <PeriodicStatements
             granularity={view}
             fromDate={fromDate}
             toDate={toDate}
-            locationType={locParams.locationType}
-            locationId={locParams.locationId}
-            // Clicking a bucket drills into the EXISTING statements for that
-            // exact range — custom period + back to Summary, no new report.
-            onDrill={(f, t) => { setPeriod('custom'); setFrom(f); setTo(t); setView('summary'); }}
+            locationType={effLoc.locationType}
+            locationId={effLoc.locationId}
+            onViewLedger={(node, f, t) => setSelectedLedger({ node, fromDate: f, toDate: t })}
           />
-        ) : isLoading ? (
-          <div className="py-16 text-center text-muted-foreground text-sm animate-pulse">Computing financial statements…</div>
-        ) : isError ? (
-          <div className="py-10 text-center space-y-2">
-            <p className="text-red-400 text-sm font-medium">Failed to load financial statements</p>
-            <p className="text-muted-foreground text-xs">{(error as any)?.message ?? 'Unknown error'}</p>
-          </div>
         ) : (
-          <>
-          {/* ── Integrity warning banner ──
-              'difference' is no longer a plug figure — on healthy books it is ~0.
-              Any non-zero difference or any reported integrity issue is a REAL
-              defect (orphan ledgers, unbalanced opening balances, unmatched
-              production-costing overlay, incomplete stock ledgers) and is surfaced
-              here to investigate, never as an ordinary balance-sheet line. */}
-          {fs?.integrity && (!fs.integrity.balanced || fs.integrity.issues.length > 0) && (
-            <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 mb-4">
-              <div className="flex items-center gap-2 text-amber-500 font-semibold text-sm">
-                <AlertTriangle className="w-4 h-4 shrink-0" />
-                <span>Books integrity check failed — investigate before relying on these statements</span>
-              </div>
-              {Math.abs(fs.integrity.difference) > 0.01 && (
-                <p className="mt-1.5 text-xs text-amber-500/90">
-                  Unexplained difference of <span className="font-mono font-semibold">{fmt(Math.abs(fs.integrity.difference))}</span>{' '}
-                  — the balance sheet does not tie out. This is a defect, not a balancing figure.
-                </p>
-              )}
-              {fs.integrity.issues.length > 0 && (
-                <ul className="mt-2 space-y-1 text-xs text-amber-600/90 dark:text-amber-300/90 list-disc pl-5">
-                  {fs.integrity.issues.map((issue, i) => (
-                    <li key={i}>{issue}</li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          )}
-
-          {/* The account hierarchy is no longer a tab — the two statements are the
-              primary views, and the same ChartHierarchy editor opens over either
-              of them via "Manage Chart of Accounts". */}
-          <Tabs defaultValue="balance_sheet">
-            <TabsList className="grid w-full max-w-md grid-cols-2">
-              <TabsTrigger value="balance_sheet" className="gap-1.5 text-xs">
-                <Landmark className="w-3.5 h-3.5" /> Balance Sheet
-              </TabsTrigger>
-              <TabsTrigger value="profit_loss" className="gap-1.5 text-xs">
-                <BarChart3 className="w-3.5 h-3.5" /> Profit &amp; Loss
-              </TabsTrigger>
-            </TabsList>
-
-            {/* ══════════════════ BALANCE SHEET ══════════════════ */}
-            <TabsContent value="balance_sheet" className="mt-4">
-              <StatementToolbar
-                statement="balance-sheet"
-                expansion={bsExpansion}
-                expandableIds={bsExpandable}
-                onManage={canManageChart ? () => setManageOpen(true) : undefined}
-              />
-
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-
-                {/* ── Liabilities ── */}
-                <Panel
-                  title="Liabilities" icon={TrendingDown}
-                  total={bs?.liabilities.total ?? 0}
-                  hdrClass="bg-red-500/10 text-red-400 border-b border-red-500/15"
-                  borderClass="border-red-500/20"
-                >
-                  {bs && (
-                    <>
-                      {/* Capital Account */}
-                      <GroupBlock group={bs.liabilities.capitalAccount} onCreated={onCreated} expansion={bsExpansion} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={perm.canAdd} canEdit={perm.canEdit} canDelete={perm.canDelete} />
-
-                      {/* Loans */}
-                      <GroupBlock group={bs.liabilities.loans} onCreated={onCreated} expansion={bsExpansion} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={perm.canAdd} canEdit={perm.canEdit} canDelete={perm.canDelete} />
-
-                      {/* Current Liabilities — STD-DTX (Duty & Tax) is already a child ledger with correct balance */}
-                      <GroupBlock group={bs.liabilities.currentLiabilities} onCreated={onCreated} expansion={bsExpansion} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={perm.canAdd} canEdit={perm.canEdit} canDelete={perm.canDelete} />
-
-                      <Divider />
-
-                      {/* Reserves & Surplus (P&L) — cumulative retained earnings
-                          (all postings up to toDate), not just the period profit. */}
-                      <div className={`flex items-center gap-2 py-2 px-3 mx-2 rounded-lg text-xs font-semibold
-                        ${bs.liabilities.pandlCarryForward >= 0
-                          ? 'bg-emerald-500/10 text-emerald-400'
-                          : 'bg-red-500/10 text-red-400'}`}>
-                        <span className="flex-1">Reserves &amp; Surplus (P&amp;L)</span>
-                        <span className="font-mono tabular-nums">{fmt(Math.abs(bs.liabilities.pandlCarryForward))}</span>
-                      </div>
-
-                      {/* 'Difference' is intentionally NOT rendered as a balance-sheet
-                          line anymore — a non-zero difference is a defect surfaced in
-                          the integrity warning banner above, not a plug figure here. */}
-                    </>
-                  )}
-                </Panel>
-
-                {/* ── Assets ── */}
-                <Panel
-                  title="Assets" icon={TrendingUp}
-                  total={bs?.assets.total ?? 0}
-                  hdrClass="bg-emerald-500/10 text-emerald-400 border-b border-emerald-500/15"
-                  borderClass="border-emerald-500/20"
-                >
-                  {bs && (
-                    <>
-                      <GroupBlock group={bs.assets.fixedAssets} onCreated={onCreated} expansion={bsExpansion} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={perm.canAdd} canEdit={perm.canEdit} canDelete={perm.canDelete} />
-
-                      {/* Closing Stock — a real asset line. Before this change closing
-                          stock never appeared on the balance sheet, which is why a
-                          plug 'Difference' was needed. It now shows explicitly. */}
-                      <div className="flex items-center gap-2 py-2 px-3 mx-2 mb-2 rounded-lg text-xs font-semibold bg-emerald-500/5 text-foreground/80">
-                        <span className="flex-1">Closing Stock</span>
-                        <span className="font-mono tabular-nums text-foreground/70">
-                          {bs.assets.closingStock === 0 ? '—' : fmt(bs.assets.closingStock)}
-                        </span>
-                      </div>
-
-                      <GroupBlock group={bs.assets.currentAssets} onCreated={onCreated} expansion={bsExpansion} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={perm.canAdd} canEdit={perm.canEdit} canDelete={perm.canDelete} />
-                    </>
-                  )}
-                </Panel>
-              </div>
-            </TabsContent>
-
-            {/* ══════════════════ PROFIT & LOSS ══════════════════
-                Standard vertical order: Trading Account (Sales/Returns, Opening
-                Stock, Purchases/Returns, Direct Expenses, Closing Stock) → Gross
-                Profit banner → Profit & Loss Account (GP b/d, Other Income,
-                Indirect Expenses) → Net Profit banner. GP/NP are the engine's
-                own summary figures — identical to the dashboard tiles. */}
-            <TabsContent value="profit_loss" className="mt-4">
-              <StatementToolbar
-                statement="profit-loss"
-                expansion={plExpansion}
-                expandableIds={plExpandable}
-                onManage={canManageChart ? () => setManageOpen(true) : undefined}
-              />
-
-              {/* ── Trading Account ── */}
-              <div className="flex items-center gap-2 mb-2">
-                <span className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">Trading Account</span>
-                <div className="flex-1 border-t border-border/30" />
-              </div>
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-
-                {/* ── Trading Expense (Debit) ── */}
-                <Panel
-                  title="Expense (Debit)" icon={TrendingDown}
-                  total={tradingExpTotal}
-                  hdrClass="bg-red-500/10 text-red-400 border-b border-red-500/15"
-                  borderClass="border-red-500/20"
-                >
-                  {exp && (
-                    <>
-                      {/* Opening Stock */}
-                      <StockBlock
-                        label="Opening Stock"
-                        items={exp.openingStockItems}
-                        total={exp.openingStock}
-                      />
-
-                      {/* Purchase Account (auto) — gross + returns split shown only
-                          when debit notes exist; `purchases` is already the net. */}
-                      {purchaseReturns !== 0 ? (
-                        <>
-                          <AutoRow label="Purchase Account" amount={exp.purchases + purchaseReturns} sub="auto · from purchase orders" />
-                          <AutoRow label="Less: Purchase Returns" amount={-purchaseReturns} sub="debit notes" />
-                          <AutoRow label="Net Purchases" amount={exp.purchases} accent="text-foreground/80" />
-                        </>
-                      ) : (
-                        <AutoRow label="Purchase Account" amount={exp.purchases} sub="auto · from purchase orders" />
-                      )}
-
-                      <Divider />
-
-                      {/* Direct Expenses */}
-                      <GroupBlock group={exp.directExpenses} onCreated={onCreated} expansion={plExpansion} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={perm.canAdd} canEdit={perm.canEdit} canDelete={perm.canDelete} />
-
-                      {/* Balancing transfer — makes both Trading sides equal */}
-                      {grossProfit !== null && grossProfit > 0 && (
-                        <>
-                          <Divider />
-                          <AutoRow label="Gross Profit c/d" amount={grossProfit} accent="text-emerald-500" sub="carried down to P&L" />
-                        </>
-                      )}
-                    </>
-                  )}
-                </Panel>
-
-                {/* ── Trading Income (Credit) ── */}
-                <Panel
-                  title="Income (Credit)" icon={TrendingUp}
-                  total={tradingIncTotal}
-                  hdrClass="bg-emerald-500/10 text-emerald-400 border-b border-emerald-500/15"
-                  borderClass="border-emerald-500/20"
-                >
-                  {inc && (
-                    <>
-                      {/* Sales Account (auto) — gross + returns split shown only
-                          when credit notes exist; `sales` is already the net. */}
-                      {salesReturns !== 0 ? (
-                        <>
-                          <AutoRow label="Sales Account" amount={grossSales} sub="auto · from sales invoices" />
-                          <AutoRow label="Less: Sales Returns" amount={-salesReturns} sub="credit notes" />
-                          <AutoRow label="Net Sales" amount={inc.sales} accent="text-foreground/80" />
-                        </>
-                      ) : (
-                        <AutoRow label="Sales Account" amount={inc.sales} sub="auto · from sales invoices" />
-                      )}
-
-                      <Divider />
-
-                      {/* Direct Incomes */}
-                      <GroupBlock group={inc.directIncomes} onCreated={onCreated} expansion={plExpansion} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={perm.canAdd} canEdit={perm.canEdit} canDelete={perm.canDelete} />
-
-                      {/* Closing Stock */}
-                      <StockBlock
-                        label="Closing Stock"
-                        items={inc.closingStockItems}
-                        total={inc.closingStock}
-                      />
-
-                      {/* Balancing transfer — makes both Trading sides equal */}
-                      {grossProfit !== null && grossProfit < 0 && (
-                        <>
-                          <Divider />
-                          <AutoRow label="Gross Loss c/d" amount={-grossProfit} accent="text-red-400" sub="carried down to P&L" />
-                        </>
-                      )}
-                    </>
-                  )}
-                </Panel>
-              </div>
-
-              {/* ── Gross Profit banner — same highlighted style as Net Profit ── */}
-              {pl && grossProfit !== null && (
-                <div
-                  data-testid="coa-gross-profit"
-                  className={`flex items-center gap-3 px-4 py-3 rounded-xl my-4 text-sm font-semibold
-                  ${grossProfit >= 0
-                    ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-                    : 'bg-red-500/10 text-red-400 border border-red-500/20'}`}>
-                  {grossProfit >= 0 ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />}
-                  <span>{grossProfit >= 0 ? 'Gross Profit' : 'Gross Loss'}</span>
-                  <span className="text-[10px] font-normal opacity-70">Net Sales − Cost of Goods Sold · carried down</span>
-                  <span className="font-mono text-base ml-auto">{fmt(Math.abs(grossProfit))}</span>
-                </div>
-              )}
-
-              {/* ── Profit & Loss Account ── */}
-              <div className="flex items-center gap-2 mb-2">
-                <span className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">Profit &amp; Loss Account</span>
-                <div className="flex-1 border-t border-border/30" />
-              </div>
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-
-                {/* ── P&L Expense (Debit) ── */}
-                <Panel
-                  title="Expense (Debit)" icon={TrendingDown}
-                  total={plExpTotal}
-                  hdrClass="bg-red-500/10 text-red-400 border-b border-red-500/15"
-                  borderClass="border-red-500/20"
-                >
-                  {exp && (
-                    <>
-                      {grossProfit !== null && grossProfit < 0 && (
-                        <>
-                          <AutoRow label="Gross Loss b/d" amount={-grossProfit} accent="text-red-400" sub="from Trading Account" />
-                          <Divider />
-                        </>
-                      )}
-                      {/* Indirect Expenses */}
-                      <GroupBlock group={exp.indirectExpenses} onCreated={onCreated} expansion={plExpansion} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={perm.canAdd} canEdit={perm.canEdit} canDelete={perm.canDelete} />
-                    </>
-                  )}
-                </Panel>
-
-                {/* ── P&L Income (Credit) ── */}
-                <Panel
-                  title="Income (Credit)" icon={TrendingUp}
-                  total={plIncTotal}
-                  hdrClass="bg-emerald-500/10 text-emerald-400 border-b border-emerald-500/15"
-                  borderClass="border-emerald-500/20"
-                >
-                  {inc && (
-                    <>
-                      {grossProfit !== null && grossProfit >= 0 && (
-                        <>
-                          <AutoRow label="Gross Profit b/d" amount={grossProfit} accent="text-emerald-500" sub="from Trading Account" />
-                          <Divider />
-                        </>
-                      )}
-                      {/* Indirect Incomes (Other Income) */}
-                      <GroupBlock group={inc.indirectIncomes} onCreated={onCreated} expansion={plExpansion} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={perm.canAdd} canEdit={perm.canEdit} canDelete={perm.canDelete} />
-                    </>
-                  )}
-                </Panel>
-              </div>
-
-              {/* ── Net P&L banner — unchanged, closing the statement ── */}
-              {pl && (
-                <div
-                  data-testid="coa-net-profit"
-                  className={`flex items-center gap-3 px-4 py-3 rounded-xl mt-4 text-sm font-semibold
-                  ${pl.netProfit >= 0
-                    ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-                    : 'bg-red-500/10 text-red-400 border border-red-500/20'}`}>
-                  {pl.netProfit >= 0 ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />}
-                  <span>{pl.netProfit >= 0 ? 'Net Profit' : 'Net Loss'}</span>
-                  <span className="text-[10px] font-normal opacity-70">Gross {grossProfit !== null && grossProfit < 0 ? 'Loss' : 'Profit'} + Other Income − Indirect Expenses</span>
-                  <span className="font-mono text-base ml-auto">{fmt(Math.abs(pl.netProfit))}</span>
-                </div>
-              )}
-            </TabsContent>
-          </Tabs>
-          </>
+          <StatementsView
+            fs={fs} isLoading={isLoading} isError={isError} error={error}
+            onCreated={onCreated}
+            onDelete={onDelete} onRename={onRename} onMove={onMove}
+            onViewStatement={onViewStatement}
+            onManage={canManageChart ? () => setManageOpen(true) : undefined}
+            canAdd={perm.canAdd} canEdit={perm.canEdit} canDelete={perm.canDelete}
+          />
         )}
       </div>
 
@@ -1140,9 +1368,10 @@ export default function ChartOfAccounts() {
 
       {selectedLedger && (
         <LedgerStatementSheet
-          ledgerNode={selectedLedger}
-          fromDate={fromDate}
-          toDate={toDate}
+          ledgerNode={selectedLedger.node}
+          fromDate={selectedLedger.fromDate}
+          toDate={selectedLedger.toDate}
+          loc={effLoc}
           onClose={() => setSelectedLedger(null)}
         />
       )}

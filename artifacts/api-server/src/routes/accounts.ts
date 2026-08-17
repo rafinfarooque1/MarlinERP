@@ -16,7 +16,7 @@ import { lineTaxHeads } from "../lib/gst";
 import { logActivity } from "../lib/audit";
 import { closingStockValuation } from "../lib/valuation";
 import { buildBooks } from "../lib/books";
-import { buildPeriodicSummary } from "../lib/periodicSummary";
+import { buildPeriodicBuckets } from "../lib/periodicSummary";
 import { buildDerivedPostings } from "./journal";
 import { outletWritesBlocked, OUTLETS_DISABLED_MESSAGE, OUTLETS_DISABLED_CODE } from "../lib/featureFlags";
 import { getUserDataScope, scopeSalesWhere, scopeBranchWhere } from "../lib/dataScope";
@@ -3521,14 +3521,16 @@ router.get("/accounts/financial-statements", requireModuleView(["page:/accounts/
   });
 });
 
-// ── Month-wise / Day-wise summary (Tally-style period breakdown) ──────────
+// ── Month-wise / Day-wise bucket enumeration ──────────────────────────────
 //
-// Same engine, bucketed: figures come from the SAME posting stream and stock
-// valuations as the financial statements (lib/periodicSummary.ts), so month
-// totals reconcile with the range P&L and day totals with the month — by
-// construction. Guard and LBAC mirror /accounts/financial-statements exactly:
-// this is the same data at a different grain, so it must never be visible to
-// anyone the statements are not.
+// Lists WHICH month/day buckets the selected range contains (deriving the
+// start from the first posting in scope when the range is open-ended). The
+// figures themselves are NOT computed here: the client fetches
+// /accounts/financial-statements for each bucket's exact sub-range, so every
+// period shows the complete statements and reconciles with the Summary view
+// by construction. Guard and LBAC mirror /accounts/financial-statements
+// exactly: the derived range start leaks when the books begin, so it must
+// never be visible to anyone the statements are not.
 router.get("/accounts/periodic-summary", requireModuleView(["page:/accounts/chart", "page:/reports/sales"]), async (req, res): Promise<void> => {
   const { granularity, fromDate, toDate, page, pageSize } = req.query as Record<string, string | undefined>;
   if (granularity !== "month" && granularity !== "day") {
@@ -3551,7 +3553,7 @@ router.get("/accounts/periodic-summary", requireModuleView(["page:/accounts/char
     ? { type: psEmp!.branchType as "warehouse" | "outlet", id: Number(psEmp!.branchId ?? 0) }
     : getPostingLocationFilter(req);
 
-  const summary = await buildPeriodicSummary(buildDerivedPostings, {
+  const summary = await buildPeriodicBuckets(buildDerivedPostings, {
     granularity,
     fromDate: fromDate ?? null,
     toDate: toDate ?? null,

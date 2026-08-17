@@ -34,10 +34,9 @@ import {
   ExportButtons, reportViewFromUrl,
   type RangeState, type LocationFilterState, type LocationOption, type Col, type ReportDoc,
 } from '../shared';
-import { PeriodBreakdown } from '@/components/app/period-breakdown';
 
 type FinReport =
-  | 'pnl' | 'periodic' | 'balanceSheet' | 'trialBalance' | 'dayBook' | 'ledgers'
+  | 'pnl' | 'balanceSheet' | 'trialBalance' | 'dayBook' | 'ledgers'
   | 'cash' | 'bank' | 'cashBank' | 'gst' | 'expenses' | 'salary' | 'books';
 
 const MONEY_COL = { label: 'Amount', align: 'right' as const, width: 1.4 };
@@ -1378,47 +1377,19 @@ function BooksLinks() {
   );
 }
 
-// ── Month-wise / Day-wise breakdown (Tally-style) ─────────────────────────────
-function PeriodicBreakdownReport({ range, loc, onOpenDetail }: {
-  range: RangeState; loc: LocationFilterState; onOpenDetail: (from: string, to: string) => void;
-}) {
-  const { options, loading: locLoading } = useLocationOptions();
-  const [granularity, setGranularity] = useState<'month' | 'day'>('month');
-  return (
-    <div className="space-y-4">
-      <RangeBar range={range}>
-        <LocationFilter state={loc} options={options} loading={locLoading} />
-      </RangeBar>
-      <ReportPicker
-        options={[{ value: 'month', label: 'Month Wise' }, { value: 'day', label: 'Day Wise' }]}
-        value={granularity} onChange={setGranularity}
-      />
-      <PeriodBreakdown
-        granularity={granularity}
-        fromDate={range.from || undefined}
-        toDate={range.to || undefined}
-        locationType={loc.type || undefined}
-        locationId={loc.id || undefined}
-        onDrill={onOpenDetail}
-      />
-    </div>
-  );
-}
-
 // ── Section root ──────────────────────────────────────────────────────────────
 export default function FinancialSection() {
   const { canDownload } = usePermission('page:/reports/sales');
   const range = useDateRange('fy');
   const loc = useLocationFilter();
   const [report, setReport] = useState<FinReport>(() =>
-    reportViewFromUrl<FinReport>(['pnl', 'periodic', 'balanceSheet', 'trialBalance', 'dayBook', 'ledgers', 'cash', 'bank', 'cashBank', 'gst', 'expenses', 'salary', 'books']) ?? 'pnl');
+    reportViewFromUrl<FinReport>(['pnl', 'balanceSheet', 'trialBalance', 'dayBook', 'ledgers', 'cash', 'bank', 'cashBank', 'gst', 'expenses', 'salary', 'books']) ?? 'pnl');
   const cap = { canDownload };
   return (
     <div className="space-y-4">
       <ReportPicker
         options={[
           { value: 'pnl', label: 'Profit & Loss' },
-          { value: 'periodic', label: 'Month / Day Wise' },
           { value: 'balanceSheet', label: 'Balance Sheet' },
           { value: 'trialBalance', label: 'Trial Balance' },
           { value: 'ledgers', label: 'Ledgers' },
@@ -1434,14 +1405,6 @@ export default function FinancialSection() {
         value={report} onChange={setReport}
       />
       {report === 'pnl' && <PnlReport range={range} loc={loc} {...cap} />}
-      {report === 'periodic' && (
-        <PeriodicBreakdownReport
-          range={range} loc={loc}
-          // A bucket click opens the EXISTING detailed P&L for exactly that
-          // period — the breakdown is a navigation layer, not a new report.
-          onOpenDetail={(f, t) => { range.setPreset('custom'); range.setFrom(f); range.setTo(t); setReport('pnl'); }}
-        />
-      )}
       {report === 'balanceSheet' && <BalanceSheetReport range={range} loc={loc} {...cap} />}
       {report === 'trialBalance' && <TrialBalanceReport range={range} loc={loc} {...cap} />}
       {report === 'ledgers' && <LedgersReport range={range} loc={loc} {...cap} />}

@@ -1,0 +1,533 @@
+UPDATE THE EXISTING CHART OF ACCOUNTS — DO NOT CREATE A SEPARATE REPORT
+
+I need a very specific change to the EXISTING Chart of Accounts screen.
+
+IMPORTANT:
+Do NOT create a separate "Month Wise Report".
+Do NOT create a separate KPI table.
+Do NOT replace the existing Chart of Accounts.
+
+The current Chart of Accounts screen must remain exactly as it is, with ALL existing account groups, accounts, balances, hierarchy and tabs.
+
+I only want to add MONTH-WISE and DAY-WISE viewing to the SAME existing Chart of Accounts.
+
+==================================================
+CURRENT SCREEN
+==================================================
+
+The existing Chart of Accounts already shows:
+
+LIABILITIES
+- Capital Accounts
+- Loans (Liability)
+- Current Liabilities
+- Reserves & Surplus (P&L)
+
+ASSETS
+- Fixed Asset
+- Closing Stock
+- Current Asset
+
+and all the existing account hierarchy underneath these groups.
+
+KEEP ALL OF THIS.
+
+Do not remove, rearrange, rename, or replace any existing account.
+
+==================================================
+ADD MONTH-WISE AND DAY-WISE
+==================================================
+
+Add two buttons/options directly into the existing Chart of Accounts reporting/filter area:
+
+[ Month Wise ]   [ Day Wise ]
+
+These should control HOW THE EXISTING CHART OF ACCOUNTS DATA IS DISPLAYED.
+
+They are NOT separate reports.
+
+==================================================
+MONTH-WISE BEHAVIOUR
+==================================================
+
+When I select:
+
+Month Wise
+
+the SAME Chart of Accounts should remain visible.
+
+The difference is that the balances/details should be shown month by month.
+
+For example, if the selected period is a Quarter:
+
+Quarter
+→ Month Wise
+
+then show:
+
+April 2026
+  LIABILITIES
+    Capital Accounts
+    Loans (Liability)
+    Current Liabilities
+    Reserves & Surplus (P&L)
+
+  ASSETS
+    Fixed Asset
+    Closing Stock
+    Current Asset
+
+May 2026
+  LIABILITIES
+    Capital Accounts
+    Loans (Liability)
+    Current Liabilities
+    Reserves & Surplus (P&L)
+
+  ASSETS
+    Fixed Asset
+    Closing Stock
+    Current Asset
+
+June 2026
+  LIABILITIES
+    Capital Accounts
+    Loans (Liability)
+    Current Liabilities
+    Reserves & Surplus (P&L)
+
+  ASSETS
+    Fixed Asset
+    Closing Stock
+    Current Asset
+
+The EXACT SAME Chart of Accounts hierarchy must be used.
+
+Only the reporting period changes.
+
+==================================================
+VERY IMPORTANT
+==================================================
+
+I want EVERY ACCOUNT that is currently visible in Chart of Accounts to participate in Month Wise and Day Wise.
+
+Do NOT only show:
+
+Sales
+Purchase
+Expense
+Payment
+Receipt
+GP
+NP
+
+That is NOT what I want.
+
+I want the COMPLETE existing Chart of Accounts.
+
+For example, if the existing Chart of Accounts contains:
+
+Assets
+  Fixed Asset
+  Current Asset
+    Cash
+    Bank
+    Inventory
+    Employee Advance
+
+Liabilities
+  Current Liabilities
+  Payables
+
+Capital
+  Capital Accounts
+
+P&L
+  Reserves & Surplus
+  Income
+  Expenses
+
+ALL of these must remain available in Month Wise and Day Wise.
+
+==================================================
+DAY-WISE BEHAVIOUR
+==================================================
+
+When I select:
+
+Day Wise
+
+the SAME Chart of Accounts remains.
+
+But instead of showing only the period total, show the existing account hierarchy for each day in the selected period.
+
+Example:
+
+01 August 2026
+  ASSETS
+    Cash
+    Bank
+    Inventory
+    ...
+
+  LIABILITIES
+    Payables
+    ...
+
+02 August 2026
+  ASSETS
+    Cash
+    Bank
+    Inventory
+    ...
+
+03 August 2026
+  ...
+
+etc.
+
+The account structure must remain exactly the same.
+
+==================================================
+EXISTING DATE FILTER MUST REMAIN
+==================================================
+
+Keep the existing date/period filter exactly as it currently works:
+
+All
+This Month
+Quarter
+This Year
+Custom
+
+Do NOT remove these.
+
+Month Wise and Day Wise are VIEW OPTIONS applied to the selected period.
+
+==================================================
+QUARTER + MONTH WISE
+==================================================
+
+If I select:
+
+Quarter
+
+and then:
+
+Month Wise
+
+the existing Chart of Accounts should be shown month by month for the months inside that quarter.
+
+Example:
+
+Q1
+
+April
+May
+June
+
+Each month contains the COMPLETE Chart of Accounts.
+
+==================================================
+QUARTER + DAY WISE
+==================================================
+
+If I select:
+
+Quarter
+
+and:
+
+Day Wise
+
+show the COMPLETE Chart of Accounts day by day for every day in the selected quarter.
+
+==================================================
+THIS MONTH + MONTH WISE
+==================================================
+
+If:
+
+This Month
++
+Month Wise
+
+is selected,
+
+show the selected month's complete Chart of Accounts.
+
+The month itself can be selected/drilled into.
+
+==================================================
+THIS MONTH + DAY WISE
+==================================================
+
+If:
+
+This Month
++
+Day Wise
+
+is selected,
+
+show the complete Chart of Accounts for each day of that month.
+
+==================================================
+THIS YEAR + MONTH WISE
+==================================================
+
+If:
+
+This Year
++
+Month Wise
+
+is selected,
+
+show:
+
+April
+May
+June
+July
+August
+September
+October
+November
+December
+January
+February
+March
+
+according to the ERP financial year.
+
+For EACH month, show the COMPLETE existing Chart of Accounts.
+
+Do not use calendar-year January–December if the ERP financial year is April–March.
+
+==================================================
+CUSTOM + MONTH WISE
+==================================================
+
+If the user selects:
+
+Custom
+
+01/08/2026 → 17/08/2026
+
+and then:
+
+Month Wise
+
+show the Chart of Accounts grouped according to the month(s) contained in that selected range.
+
+==================================================
+CUSTOM + DAY WISE
+==================================================
+
+If:
+
+01/08/2026 → 17/08/2026
++
+Day Wise
+
+show:
+
+01 Aug
+02 Aug
+03 Aug
+...
+17 Aug
+
+For each day, retain the COMPLETE Chart of Accounts structure.
+
+==================================================
+TALLY-STYLE DRILL DOWN
+==================================================
+
+The important concept is:
+
+Existing Chart of Accounts
+        ↓
+Select Date / Period
+        ↓
+Month Wise OR Day Wise
+        ↓
+Same Chart of Accounts
+        ↓
+Select a month/day
+        ↓
+Drill into the existing account details/transactions
+
+This should feel like a Tally Prime-style period drill-down.
+
+==================================================
+DO NOT DUPLICATE THE ACCOUNTING ENGINE
+==================================================
+
+Use the existing Chart of Accounts/accounting backend.
+
+Do not create a second accounting calculation system.
+
+All balances must come from the same accounting ledger data already used by the current Chart of Accounts.
+
+The numbers must reconcile.
+
+For example:
+
+April Chart of Accounts
++
+May Chart of Accounts
++
+June Chart of Accounts
+=
+Quarter Chart of Accounts
+
+Likewise:
+
+Day-wise values
+=
+the corresponding month-wise values.
+
+==================================================
+LOCATION RULES
+==================================================
+
+Respect the existing location system.
+
+If Current Location is:
+
+All Locations
+
+show consolidated Chart of Accounts data.
+
+If:
+
+Head Office
+
+show only Head Office.
+
+If:
+
+Warehouse
+
+show only that warehouse.
+
+If:
+
+Outlet
+
+show only that outlet.
+
+Do not mix locations.
+
+==================================================
+UI REQUIREMENT
+==================================================
+
+Keep the CURRENT Chart of Accounts UI and hierarchy.
+
+Do not redesign it into a dashboard.
+
+Do not turn it into a KPI report.
+
+Add the Month Wise / Day Wise controls naturally beside the existing period filters.
+
+The screen should still look like:
+
+Chart of Accounts
+
+[ All ] [ This Month ] [ Quarter ] [ This Year ] [ Custom ]
+
+[ Month Wise ] [ Day Wise ]
+
+------------------------------------------------
+
+LIABILITIES                         ASSETS
+
+Capital Accounts                    Fixed Asset
+Loans (Liability)                   Closing Stock
+Current Liabilities                 Current Asset
+Reserves & Surplus (P&L)
+
+------------------------------------------------
+
+with the SAME existing account hierarchy.
+
+The only difference is that Month Wise / Day Wise determines the reporting period presentation.
+
+==================================================
+ACCOUNT CLICK / DRILL DOWN
+==================================================
+
+Existing account click behaviour must continue to work.
+
+If I click an account under a particular month:
+
+April 2026
+→ Current Asset
+→ Cash
+
+open the existing detailed account/ledger view filtered to April 2026.
+
+If I click:
+
+17 August 2026
+→ Current Asset
+→ Cash
+
+open the existing detailed ledger filtered to 17 August 2026.
+
+Do not create a duplicate ledger screen.
+
+==================================================
+IMPORTANT ACCOUNTING BEHAVIOUR
+==================================================
+
+Do not show only transaction activity.
+
+Accounts with no activity should still follow the existing Chart of Accounts hierarchy/visibility rules.
+
+The purpose is to see the SAME Chart of Accounts across different periods.
+
+==================================================
+PERFORMANCE
+==================================================
+
+Use efficient aggregated backend queries.
+
+Do not make one API request per account per day.
+
+Do not make hundreds/thousands of frontend requests.
+
+Use the existing accounting aggregation logic where possible.
+
+Use lazy loading/expansion if the number of days/months makes the page large.
+
+==================================================
+FINAL REQUIREMENT
+==================================================
+
+I am NOT asking for a new report.
+
+I am asking you to enhance the EXISTING Chart of Accounts with:
+
+MONTH WISE
+and
+DAY WISE
+
+while preserving EVERYTHING already visible in Chart of Accounts.
+
+The user should be able to look at the SAME complete Chart of Accounts:
+
+- overall
+- month by month
+- day by day
+
+using the existing date filters.
+
+Do not remove anything from the current Chart of Accounts.
+Do not replace it with sales/purchase/expense KPIs.
+Do not create a separate reporting page.
+
+Implement Month Wise and Day Wise as views INSIDE THE EXISTING CHART OF ACCOUNTS.
