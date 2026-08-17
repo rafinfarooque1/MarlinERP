@@ -118,7 +118,7 @@ async function main() {
 
   const { version, projectId } = readAppJson();
   const apiDomain = assertBakedApiDomain();
-  console.log(`▸ Building Marlin Employee App v${version} (Android APK) via EAS`);
+  console.log(`▸ Building Frozen Fruits Employee App v${version} (Android APK) via EAS`);
   console.log(`▸ App will talk to: https://${apiDomain}`);
 
   if (!projectId) {

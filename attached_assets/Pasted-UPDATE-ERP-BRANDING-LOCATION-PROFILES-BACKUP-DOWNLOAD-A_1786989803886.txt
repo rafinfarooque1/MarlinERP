@@ -1,0 +1,570 @@
+UPDATE ERP BRANDING, LOCATION PROFILES, BACKUP DOWNLOAD, AND VOUCHER PDF LAYOUT
+
+I need the following changes across the ERP.
+
+============================================================
+1. CHANGE ERP NAME / BRANDING
+============================================================
+
+Wherever the ERP currently displays:
+
+"Marlin Frozen Fruits ERP"
+"Marlin Frozen Fruits"
+"Marlin ERP"
+or similar ERP branding referring to the product name,
+
+change the ERP/product name to:
+
+"Frozen Fruits ERP"
+
+IMPORTANT:
+
+This is the PRODUCT/ERP name.
+
+Do not remove or change the actual company/business information configured for Head Office or warehouses.
+
+Search the entire application for the old ERP/product branding and update all relevant places, including:
+
+- Browser/page titles
+- Login page
+- Navigation/sidebar branding
+- Dashboard
+- Mobile app references where applicable
+- Download Mobile App
+- PDF metadata/title where applicable
+- Error/empty states
+- Backup/restore UI where applicable
+- Any visible ERP branding
+- Generated documents where the ERP product name is displayed
+
+Do NOT blindly replace legitimate company names inside accounting/business data.
+
+============================================================
+2. COMPANY PROFILE MUST BELONG ONLY TO HEAD OFFICE
+============================================================
+
+Change the profile architecture so that:
+
+COMPANY PROFILE = HEAD OFFICE ONLY.
+
+The Company Profile should contain the main legal/company information:
+
+- Company name
+- Company logo
+- Address
+- Phone
+- Email
+- GSTIN
+- FSSAI
+- Other company/legal details already supported
+
+This profile is ONLY for Head Office/company-level information.
+
+Warehouse and Outlet users/locations must NOT use the Company Profile as their document header.
+
+============================================================
+3. LOCATION / WAREHOUSE PROFILE
+============================================================
+
+Every warehouse/location must have its OWN profile/details.
+
+For every warehouse and outlet, provide separate fields for:
+
+- Location/Warehouse name
+- Logo
+- Address
+- Phone
+- Email
+- GSTIN if applicable
+- FSSAI if applicable
+- Other location-specific details required on documents
+
+Example:
+
+Head Office
+→ Head Office Profile
+→ Head Office Logo
+→ Head Office Details
+
+Warehouse A
+→ Warehouse A Profile
+→ Warehouse A Logo
+→ Warehouse A Details
+
+Warehouse B
+→ Warehouse B Profile
+→ Warehouse B Logo
+→ Warehouse B Details
+
+Outlet A
+→ Outlet A Profile
+→ Outlet A Logo
+→ Outlet A Details
+
+============================================================
+4. LOCATION LOGO UPLOAD
+============================================================
+
+In the warehouse/location configuration, provide:
+
+[ Upload Logo ]
+
+for each individual location.
+
+The uploaded logo must be stored against THAT location.
+
+Do not use one global warehouse logo.
+
+Each location must have its own logo.
+
+Example:
+
+Warehouse A → logo A
+
+Warehouse B → logo B
+
+Outlet A → logo C
+
+============================================================
+5. LOCATION DETAILS UPLOAD/EDIT
+============================================================
+
+Each location must be able to maintain its own document details.
+
+When the user selects a location, the ERP should load that location's:
+
+- Logo
+- Name
+- Address
+- Phone
+- Email
+- GSTIN
+- FSSAI
+- Other document details
+
+Do not show another warehouse's details.
+
+============================================================
+6. VOUCHER PDF MUST USE CURRENT LOCATION PROFILE
+============================================================
+
+This is very important.
+
+Whenever a voucher/document is generated from a location, use THAT LOCATION'S logo and details.
+
+For example:
+
+Current Location = Warehouse A
+
+Generate Receipt Voucher
+
+→ PDF must use Warehouse A logo
+→ PDF must use Warehouse A details
+
+Current Location = Warehouse B
+
+Generate Receipt Voucher
+
+→ PDF must use Warehouse B logo
+→ PDF must use Warehouse B details
+
+Current Location = Head Office
+
+Generate Receipt Voucher
+
+→ PDF must use Head Office logo
+→ PDF must use Head Office/company details
+
+Do NOT use the global Company Profile logo for warehouse documents.
+
+============================================================
+7. APPLY LOCATION BRANDING TO ALL DOCUMENTS
+============================================================
+
+The location-specific branding should be used consistently for generated documents, including where applicable:
+
+- Sales invoices
+- Purchase invoices
+- Sales returns
+- Purchase returns
+- Receipt vouchers
+- Payment vouchers
+- Journal vouchers
+- Credit notes
+- Debit notes
+- Ledger PDFs
+- Other accounting vouchers
+- Warehouse-related documents
+- Any printable/downloadable document generated from a location
+
+The document header should dynamically use:
+
+CURRENT LOCATION PROFILE
+
+not a global company logo.
+
+============================================================
+8. VOUCHER PDF — REMOVE THE HUGE BLANK SPACE
+============================================================
+
+Refer to the supplied voucher screenshot.
+
+The current Receipt Voucher PDF has a very large empty/blank area after the transaction/total section.
+
+Remove this unnecessary blank space.
+
+The PDF content must continue naturally after:
+
+- Particulars
+- Narration
+- Total
+- Amount in Words
+
+Then show the signature section immediately below with appropriate spacing.
+
+Do NOT reserve a large fixed-height area.
+
+The voucher should be CONTENT-DRIVEN.
+
+If the voucher has only a few transaction rows, the PDF should still remain compact.
+
+============================================================
+9. VOUCHER PDF MUST NOT HAVE FIXED EMPTY HEIGHT
+============================================================
+
+Do NOT use a fixed large min-height/spacer for the voucher body.
+
+The document should flow naturally:
+
+Header
+↓
+Voucher information
+↓
+Particulars
+↓
+Narration
+↓
+Total
+↓
+Amount in Words
+↓
+Recorded by / Received by
+↓
+Authorized Signature
+↓
+Payer's Signature
+↓
+Footer
+
+No huge unused vertical area between the transaction section and signatures.
+
+The signature section should move upward automatically based on the actual content.
+
+============================================================
+10. KEEP THE CURRENT VOUCHER DESIGN
+============================================================
+
+Do NOT redesign the entire voucher.
+
+Keep the current professional format:
+
+- Logo/header
+- Voucher title
+- Voucher number
+- Date
+- Location
+- Particulars
+- Amount
+- Total
+- Amount in words
+- Signature lines
+- Footer
+
+Only remove the unnecessary blank space and make the document vertically compact.
+
+============================================================
+11. BACKUP DOWNLOAD ERROR
+============================================================
+
+There is currently an error when downloading a backup from:
+
+Company
+→ Backup & Restore
+→ Backups
+→ Download
+
+The screenshot shows the Backup & Restore page and an HTTP 500 error.
+
+FIX THIS COMPLETELY.
+
+Do not simply hide the error.
+
+Find the actual cause of the HTTP 500 response.
+
+The existing backup file must be downloadable successfully.
+
+============================================================
+12. BACKUP DOWNLOAD REQUIREMENTS
+============================================================
+
+For every valid backup:
+
+Click:
+
+Download
+
+→ the backup archive should download successfully.
+
+Verify:
+
+- HTTP response is successful
+- correct Content-Type
+- correct Content-Disposition
+- correct filename
+- complete file is downloaded
+- ZIP/archive is not corrupted
+- downloaded archive can be opened
+- backup contents remain intact
+
+Do not alter the backup data itself just to make the download work.
+
+============================================================
+13. LARGE BACKUP FILES
+============================================================
+
+The screenshot shows backups around 80 MB.
+
+Make sure the download implementation supports large backup archives.
+
+Do not load the entire backup into an unsafe/inappropriate memory buffer if the existing architecture supports streaming.
+
+Use a proper file-stream/download response where appropriate.
+
+The download must work for both:
+
+- small backups
+- large backups
+
+============================================================
+14. BACKUP SECURITY
+============================================================
+
+Fix the download error without weakening backup security.
+
+A user must only be able to download backups they are authorized to access.
+
+Do not expose arbitrary filesystem paths.
+
+Do not allow a user to manipulate a backup filename/path to download unrelated server files.
+
+Preserve the existing permission system.
+
+============================================================
+15. BACKUP RESTORE MUST NOT BREAK
+============================================================
+
+After fixing the download:
+
+Verify that:
+
+- existing backups still appear
+- backup metadata still appears
+- Proven to Restore status still works
+- Restore functionality still works
+- Automatic backups still work
+- Manual backups still work
+- Delete backup still works
+- Download works
+
+Do not break any existing Backup & Restore functionality.
+
+============================================================
+16. LOCATION + BACKUP
+============================================================
+
+Backup functionality is system-level.
+
+Do NOT accidentally make backups location-specific.
+
+The location profile changes apply to document branding, not to the underlying backup architecture.
+
+============================================================
+17. BRANDING DATA MODEL
+============================================================
+
+Do not duplicate company-level data unnecessarily.
+
+Use a clear separation:
+
+Company Profile
+    ↓
+Head Office / legal company information
+
+Location Profile
+    ↓
+Warehouse / Outlet-specific information
+
+Documents
+    ↓
+Use current location profile
+
+This must be reflected consistently in frontend and backend.
+
+============================================================
+18. CURRENT LOCATION RULE
+============================================================
+
+When generating any location-based document:
+
+Determine the current location from the existing ERP location context.
+
+Use that location's profile.
+
+Do NOT rely only on the logged-in employee's default location if the ERP already supports current-location selection.
+
+Example:
+
+Current Location:
+Warehouse B
+
+Even if the user is an employee who has access to multiple locations, when Warehouse B is selected:
+
+document = Warehouse B branding.
+
+============================================================
+19. FALLBACK
+============================================================
+
+If a warehouse/location does not yet have a logo:
+
+Use the existing sensible fallback.
+
+Do not show another warehouse's logo.
+
+If a location has no logo, use the company/Head Office logo only as an explicit fallback if necessary and clearly supported by the current document system.
+
+But once a location logo is uploaded:
+
+ALWAYS use that location logo for that location's documents.
+
+Likewise for location details.
+
+============================================================
+20. TESTING
+============================================================
+
+Test at minimum:
+
+HEAD OFFICE
+- Upload Head Office logo/details
+- Generate voucher
+- Verify Head Office branding
+
+WAREHOUSE A
+- Upload Warehouse A logo/details
+- Generate voucher
+- Verify Warehouse A branding
+
+WAREHOUSE B
+- Upload Warehouse B logo/details
+- Generate voucher
+- Verify Warehouse B branding
+
+Confirm Warehouse A never receives Warehouse B's logo/details.
+
+Confirm Warehouse B never receives Warehouse A's logo/details.
+
+============================================================
+21. VOUCHER PDF TEST
+============================================================
+
+Generate a Receipt Voucher and Payment Voucher.
+
+Verify:
+
+- correct location logo
+- correct location details
+- correct voucher number
+- correct date
+- correct particulars
+- correct amount
+- correct total
+- correct amount in words
+- signatures appear immediately after content
+- NO large blank area
+- footer remains correctly positioned
+
+Also test a voucher with multiple transaction rows to ensure the layout expands naturally.
+
+============================================================
+22. BACKUP DOWNLOAD TEST
+============================================================
+
+Use the existing backup shown in the Backup & Restore screen.
+
+Click Download.
+
+Confirm:
+
+HTTP 200/successful response
+→ archive downloads
+→ archive opens successfully
+→ backup contents are intact.
+
+Test both a smaller and the approximately 80 MB backup if available.
+
+============================================================
+23. DO NOT BREAK EXISTING FEATURES
+============================================================
+
+Do not break:
+
+- Company Profile
+- Location selection
+- Head Office
+- Warehouses
+- Outlets
+- Sales
+- Purchases
+- Vouchers
+- PDF generation
+- Excel generation
+- Backup
+- Restore
+- Permissions
+- Current location security
+- Accounting
+
+============================================================
+FINAL ACCEPTANCE CRITERIA
+============================================================
+
+1. ERP product branding says:
+
+"Frozen Fruits ERP"
+
+instead of the old "Marlin Frozen Fruits ERP" branding.
+
+2. Company Profile is Head Office/company-level only.
+
+3. Every warehouse/outlet has its own profile.
+
+4. Every warehouse/outlet can upload its own logo.
+
+5. Every warehouse/outlet can maintain its own document details.
+
+6. Voucher PDFs use the currently selected location's logo/details.
+
+7. The voucher PDF has NO unnecessary large blank space.
+
+8. Voucher content flows naturally into the signature section.
+
+9. Backup download no longer returns HTTP 500.
+
+10. Backup archives download successfully and remain valid.
+
+11. Existing Backup & Restore functionality remains intact.
+
+12. No existing accounting/location/permission behaviour is broken.
+
+Implement these changes in the existing architecture rather than creating parallel systems.

@@ -3237,6 +3237,19 @@ await pool.query(`ALTER TABLE outlets ADD COLUMN IF NOT EXISTS gstin       TEXT`
 await pool.query(`ALTER TABLE outlets ADD COLUMN IF NOT EXISTS state       TEXT`);
 await pool.query(`ALTER TABLE outlets ADD COLUMN IF NOT EXISTS state_code  TEXT`);
 
+// ── Outlet letterhead profile ─────────────────────────────────────────────────
+// An outlet inherits its parent warehouse's identity but may override its own
+// contact details, FSSAI licence and letterhead logo — same additive model as
+// the warehouse billing profile above.
+await pool.query(`ALTER TABLE outlets ADD COLUMN IF NOT EXISTS email        TEXT`);
+await pool.query(`ALTER TABLE outlets ADD COLUMN IF NOT EXISTS fssai_number TEXT`);
+await pool.query(`ALTER TABLE outlets ADD COLUMN IF NOT EXISTS logo_url     TEXT`);
+
+// ── Company FSSAI licence ─────────────────────────────────────────────────────
+// Head Office's own FSSAI number, printed on documents that fall back to the
+// company letterhead (locations hold their own fssai_number columns already).
+await pool.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS fssai_number TEXT`);
+
 // ── Warehouse state code ──────────────────────────────────────────────────────
 await pool.query(`ALTER TABLE warehouses ADD COLUMN IF NOT EXISTS state_code TEXT`);
 

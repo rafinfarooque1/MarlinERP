@@ -206,7 +206,7 @@ export async function listZipEntries(zipFile: string): Promise<string[]> {
 }
 
 /**
- * `Marlin_Backup_2026_07_29_2300.zip` — the name from the brief.
+ * `FrozenFruits_Backup_2026_07_29_2300.zip`.
  *
  * Local time, because it is read by a person who wants to recognise "the one I
  * took this afternoon", and a UTC stamp would be off by hours for them.
@@ -215,5 +215,5 @@ export function backupFilename(now: Date, scope: BackupScope): string {
   const p = (n: number) => String(n).padStart(2, "0");
   const stamp = `${now.getFullYear()}_${p(now.getMonth() + 1)}_${p(now.getDate())}_${p(now.getHours())}${p(now.getMinutes())}`;
   const suffix = scope === "complete" ? "" : `_${scope}`;
-  return `Marlin_Backup_${stamp}${suffix}.zip`;
+  return `FrozenFruits_Backup_${stamp}${suffix}.zip`;
 }

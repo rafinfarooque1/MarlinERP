@@ -87,7 +87,7 @@ export const DashboardShareReport = forwardRef<HTMLDivElement, DashboardShareRep
         {/* Footer */}
         <div className="mt-6 flex items-center justify-between border-t border-slate-200 pt-3">
           <p className="text-[11px] text-slate-400">Generated {generatedAt}</p>
-          <p className="text-[11px] font-medium text-slate-400">Marlin Frozen Fruits ERP</p>
+          <p className="text-[11px] font-medium text-slate-400">Frozen Fruits ERP</p>
         </div>
       </div>
     );

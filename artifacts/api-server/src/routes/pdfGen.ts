@@ -19,7 +19,8 @@ import { generatePurchaseBillPdf } from "../services/purchaseBillPdf";
 import { loadPurchaseBillDoc } from "./purchases";
 import { getUserDataScope } from "../lib/dataScope";
 import { ownLocationScope, scopeLedgerIds, scopeMoneyWhere, callerLocation } from "../lib/moneyScope";
-import { resolveLocationIssuer } from "../lib/billingProfile";
+import { resolveLocationIssuer, type InvoiceIssuer } from "../lib/billingProfile";
+import { getLocationFilter } from "../lib/requestLocation";
 import { pool } from "@workspace/db";
 
 const router = Router();
@@ -194,16 +195,71 @@ const REPORT_EXPORT_PAGES = [
   "page:/accounts/trial-balance",
 ];
 
+/**
+ * Letterhead identity for a books/report export.
+ *
+ * The export prints under the CURRENT working location's profile (the global
+ * sidebar selector rides in as x-location-type/x-location-id — a view filter
+ * the page's own data already honoured). The header is client-sent view
+ * context, so it is intersected with the caller's LBAC scope before it may
+ * select a letterhead. Head Office, "All Locations", an out-of-scope id or a
+ * deleted location all fall back to the company profile, so the header is
+ * never empty; a live in-scope location always prints under its own identity,
+ * matching the invoice convention.
+ */
+async function reportHeaderProfile(req: any): Promise<ReportPdfInput["cs"]> {
+  try {
+    const loc = getLocationFilter(req);
+    if (loc && (loc.locationType === "warehouse" || loc.locationType === "outlet")) {
+      // The header is a client view filter, never authority: intersect it with
+      // the caller's location scope (LBAC) before letting it pick a letterhead.
+      // A forged or out-of-scope id falls back to the company profile instead
+      // of leaking another location's GSTIN/address onto an export.
+      const emp = (req as any).employee as { branchType: string; branchId: number } | undefined;
+      const scope = await getUserDataScope(emp ?? { branchType: "headoffice", branchId: 0 });
+      const allowed = scope.isHeadOffice
+        || (loc.locationType === "warehouse" && scope.warehouseIds.includes(loc.locationId))
+        || (loc.locationType === "outlet" && scope.outletIds.includes(loc.locationId));
+      if (allowed) {
+        const issuer: InvoiceIssuer = await resolveLocationIssuer(pool, loc.locationType, loc.locationId);
+        // A live location always prints under its own identity — even with a
+        // blank profile — matching the invoice convention (seller = the
+        // location, never the company). Only a deleted location (blank issuer)
+        // drops through to the company profile.
+        if (issuer.tradeName || issuer.addressLines.length > 0) {
+          return {
+            companyName: issuer.tradeName || issuer.locationName || undefined,
+            address: issuer.addressLines.join(", ") || undefined,
+            gstNumber: issuer.gstin || undefined,
+            phone: issuer.phone || undefined,
+            email: issuer.email || undefined,
+          };
+        }
+      }
+    }
+  } catch { /* fall through to the company profile */ }
+  const { rows: [cs] } = await pool.query<any>(
+    `SELECT company_name, address, city, state, pincode, gst_number, phone, email
+     FROM company_settings ORDER BY id LIMIT 1`,
+  ).catch(() => ({ rows: [undefined as any] }));
+  return cs ? {
+    companyName: cs.company_name ?? undefined,
+    address: cs.address ?? undefined,
+    city: cs.city ?? undefined,
+    state: cs.state ?? undefined,
+    pincode: cs.pincode ?? undefined,
+    gstNumber: cs.gst_number ?? undefined,
+    phone: cs.phone ?? undefined,
+    email: cs.email ?? undefined,
+  } : undefined;
+}
+
 router.post("/pdf/report", requireModuleAction(REPORT_EXPORT_PAGES, "download"), async (req, res) => {
   try {
     const body = validateReportBody(req, res, "PDF");
     if (!body) return;
 
-    // Company header comes from server-side settings — clients never send it.
-    const { rows: [cs] } = await pool.query<any>(
-      `SELECT company_name, address, city, state, pincode, gst_number, phone, email
-       FROM company_settings ORDER BY id LIMIT 1`,
-    ).catch(() => ({ rows: [undefined as any] }));
+    const cs = await reportHeaderProfile(req);
 
     const buffer = generateReportPdf({
       title: body.title,
@@ -212,16 +268,7 @@ router.post("/pdf/report", requireModuleAction(REPORT_EXPORT_PAGES, "download"),
       orientation: body.orientation === "landscape" ? "landscape" : "portrait",
       sections: body.sections,
       footerNote: typeof body.footerNote === "string" ? body.footerNote : undefined,
-      cs: cs ? {
-        companyName: cs.company_name ?? undefined,
-        address: cs.address ?? undefined,
-        city: cs.city ?? undefined,
-        state: cs.state ?? undefined,
-        pincode: cs.pincode ?? undefined,
-        gstNumber: cs.gst_number ?? undefined,
-        phone: cs.phone ?? undefined,
-        email: cs.email ?? undefined,
-      } : undefined,
+      cs,
     });
     const safe = body.title.replace(/[^A-Za-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "Report";
     res.setHeader("Content-Type", "application/pdf");
@@ -242,10 +289,7 @@ router.post("/xlsx/report", requireModuleAction(REPORT_EXPORT_PAGES, "download")
     const body = validateReportBody(req, res, "Excel");
     if (!body) return;
 
-    const { rows: [cs] } = await pool.query<any>(
-      `SELECT company_name, address, city, state, pincode, gst_number, phone, email
-       FROM company_settings ORDER BY id LIMIT 1`,
-    ).catch(() => ({ rows: [undefined as any] }));
+    const cs = await reportHeaderProfile(req);
 
     const buffer = await generateReportXlsx({
       title: body.title,
@@ -254,16 +298,7 @@ router.post("/xlsx/report", requireModuleAction(REPORT_EXPORT_PAGES, "download")
       orientation: body.orientation === "landscape" ? "landscape" : "portrait",
       sections: body.sections,
       footerNote: typeof body.footerNote === "string" ? body.footerNote : undefined,
-      cs: cs ? {
-        companyName: cs.company_name ?? undefined,
-        address: cs.address ?? undefined,
-        city: cs.city ?? undefined,
-        state: cs.state ?? undefined,
-        pincode: cs.pincode ?? undefined,
-        gstNumber: cs.gst_number ?? undefined,
-        phone: cs.phone ?? undefined,
-        email: cs.email ?? undefined,
-      } : undefined,
+      cs,
     });
     const safe = body.title.replace(/[^A-Za-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "Report";
     res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");

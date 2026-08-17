@@ -40,7 +40,7 @@ function coerce(v: string | number): string | number {
 
 export function generateReportXlsx(input: ReportPdfInput): Promise<Buffer> {
   const wb = new ExcelJS.Workbook();
-  wb.creator = input.cs?.companyName ?? "Marlin Frozen Fruits";
+  wb.creator = input.cs?.companyName ?? "Frozen Fruits ERP";
   const ws = wb.addWorksheet(input.title.slice(0, 28) || "Report", {
     views: [{ state: "frozen", ySplit: 0 }],
     pageSetup: { orientation: input.orientation === "landscape" ? "landscape" : "portrait", fitToPage: true, fitToWidth: 1, fitToHeight: 0 },

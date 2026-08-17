@@ -288,16 +288,23 @@ router.get(
   requireModuleAction(PERM, "download"),
   async (req: Request, res: Response) => {
     const id = Number(req.params.id);
-    const backup = await loadBackup(id);
-    if (!backup || backup.status !== "ready") {
-      res.status(404).json({ error: "That backup is not available for download." });
-      return;
-    }
-    if (!backup.object_path || !(await backupArchiveExists(backup.object_path))) {
-      res.status(410).json({
-        error:
-          "The archive file for this backup is no longer in storage. Its record remains, but the file itself is gone.",
-      });
+    let backup: Awaited<ReturnType<typeof loadBackup>>;
+    try {
+      backup = await loadBackup(id);
+      if (!backup || backup.status !== "ready") {
+        res.status(404).json({ error: "That backup is not available for download." });
+        return;
+      }
+      if (!backup.object_path || !(await backupArchiveExists(backup.object_path))) {
+        res.status(410).json({
+          error:
+            "The archive file for this backup is no longer in storage. Its record remains, but the file itself is gone.",
+        });
+        return;
+      }
+    } catch (e) {
+      req.log?.error({ err: e }, "Backup download pre-check failed");
+      res.status(500).json({ error: "Could not read that backup's record from storage. Try again." });
       return;
     }
 
@@ -313,7 +320,10 @@ router.get(
     }).catch(() => {});
 
     res.setHeader("Content-Type", "application/zip");
-    res.setHeader("Content-Length", String(Number(backup.size_bytes)));
+    // Deliberately NO Content-Length: the deployed (Autoscale) front-end kills
+    // non-chunked responses larger than ~32 MB with an instant empty 500, and
+    // real backups routinely exceed that. Chunked streaming is the only shape
+    // that survives; browsers simply show an indeterminate progress bar.
     res.setHeader("Content-Disposition", `attachment; filename="${backup.filename}"`);
     res.setHeader("X-Content-Type-Options", "nosniff");
 
@@ -554,7 +564,7 @@ router.post(
       if (!manifest) {
         res.status(400).json({
           error:
-            "This file is not a Marlin backup archive — it has no manifest. Upload a ZIP created by this module.",
+            "This file is not a recognised backup archive — it has no manifest. Upload a ZIP created by this module.",
           findings,
         });
         return;

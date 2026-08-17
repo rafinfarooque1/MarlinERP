@@ -29,8 +29,8 @@ a second on a large download, it is this limit.
   (verify object metadata size against the manifest BEFORE streaming).
 - Trade-off: browsers can't show download % or resume; expose size via a
   side-channel (info endpoint) if the UI needs it.
-- Known remaining offenders when this was learned: backup downloads
-  (`routes/backup.ts` sets Content-Length from `size_bytes`) and the generic
+- Backup downloads were FIXED (Aug 2026): Content-Length dropped, chunked
+  streaming verified in dev. Known remaining offender: the generic
   `/storage/objects/*` path (`downloadObject()` in lib/objectStorage.ts adds
   Content-Length from object metadata). PDF buffers are sub-MB and fine.
 - Second prod-only risk on big downloads: the platform request timeout is

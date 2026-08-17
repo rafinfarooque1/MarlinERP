@@ -1,4 +1,6 @@
-# Marlin Frozen Fruits ERP — Complete System Audit
+# Frozen Fruits ERP (Marlin Frozen Fruits) — Complete System Audit
+
+> **Rebrand note (17 Aug 2026):** the product is now branded **"Frozen Fruits ERP"** across web, mobile, PDFs and backup filenames (`FrozenFruits_Backup_*`). Internal keys deliberately keep the old name (localStorage `marlin_*` keys, `marlin-backup-manifest-v1` HMAC literal, `marlin_verify_` prefixes, `com.marlin.employeeapp` package). Warehouses AND outlets now carry full letterhead profiles (logo, contact, GSTIN, FSSAI); report/Excel exports print under the working location's letterhead (LBAC-scoped), and `company_settings` gained `fssai_number`.
 
 **Date:** 1 August 2026 · **Type:** Read-only discovery & documentation (no code or data modified)
 **Scope:** `artifacts/api-server` (Express 5 API), `artifacts/marlin-erp` (React web), `artifacts/employee-app` (Expo mobile), `lib/*` shared packages, development database.

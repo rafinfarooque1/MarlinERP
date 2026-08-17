@@ -100,7 +100,7 @@ export function generateReportPdf(data: ReportPdfInput): Buffer {
   };
 
   const cs = data.cs ?? {};
-  const companyName  = cs.companyName || "Marlin Frozen Fruits";
+  const companyName  = cs.companyName || "Frozen Fruits ERP";
   const companyAddr  = [cs.address, cs.city, cs.state, cs.pincode].filter(Boolean).join(", ");
   const companyGstin = cs.gstNumber || cs.gstin || "";
   const contactLine  = [cs.phone ? `+${cs.phone}` : "", cs.email].filter(Boolean).join("   |   ");
@@ -111,7 +111,9 @@ export function generateReportPdf(data: ReportPdfInput): Buffer {
   // 1. HEADER — brand header + report badge
   // ══════════════════════════════════════════════════════════════════════════
   fill(M, y, 11, 11, NAVY);
-  txt("M", M + 5.5, y + 7.8, { bold: true, size: 9, color: WHITE, align: "center" });
+  // Lettermark = first letter of whoever's letterhead this is (location or
+  // company), not a hardcoded brand initial.
+  txt((companyName.trim().charAt(0) || "F").toUpperCase(), M + 5.5, y + 7.8, { bold: true, size: 9, color: WHITE, align: "center" });
   txt(companyName.toUpperCase(), M + 14, y + 7, { bold: true, size: 14, color: NAVY });
   if (companyAddr)  txt(companyAddr, M + 14, y + 12, { size: 7, color: MGRAY });
   if (contactLine)  txt(contactLine, M + 14, y + 17, { size: 6.5, color: MGRAY });

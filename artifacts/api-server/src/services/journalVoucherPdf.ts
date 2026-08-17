@@ -230,7 +230,11 @@ export async function generateJournalVoucherPdf(data: JournalVoucherPdfInput): P
   if (trail) { txt(trail, M, y, { size: 7, color: MUT }); y += 8; }
 
   // ── Signatures ────────────────────────────────────────────────────────────
-  y = Math.min(Math.max(y, 235), PH - 30);
+  // Content-driven (no fixed 235mm anchor): sits below the last printed line,
+  // capped so it never collides with the fixed footer.
+  // Overflowing bodies push the row to a fresh page rather than overprinting.
+  y += 4;
+  if (y > PH - 30) { doc.addPage(); y = 24; }
   drawSignatureRow(doc, ["Prepared By", "Checked By", "Authorized Signatory"], y, M, CW);
 
   drawGeneratedNote(doc, `This is a computer-generated ${TITLES[data.kind].toLowerCase()}.`, M);
