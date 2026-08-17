@@ -1,0 +1,499 @@
+UPDATE THE EXISTING CHART OF ACCOUNTS — MONTH-WISE COLUMNS INSIDE THE SAME CHART
+
+IMPORTANT:
+This is a correction to the previous requirement.
+
+REMOVE DAY WISE COMPLETELY.
+
+I ONLY NEED MONTH WISE.
+
+And I do NOT want a separate Month Wise report, separate table, separate section, separate page, or separate dashboard.
+
+MONTH-WISE MUST BE BUILT DIRECTLY INTO THE EXISTING CHART OF ACCOUNTS.
+
+============================================================
+1. KEEP THE CURRENT CHART OF ACCOUNTS
+============================================================
+
+Do not redesign or replace the current Chart of Accounts.
+
+Keep the exact existing:
+
+- account hierarchy
+- Assets
+- Liabilities
+- Capital Accounts
+- Current Assets
+- Current Liabilities
+- Fixed Assets
+- Closing Stock
+- Reserves & Surplus (P&L)
+- all child accounts
+- expand/collapse behaviour
+- existing balances
+- existing account click/drill-down behaviour
+
+Everything currently visible must remain.
+
+============================================================
+2. ADD ONLY ONE BUTTON
+============================================================
+
+Add one button/toggle:
+
+[ Month Wise ]
+
+There must be NO:
+
+Day Wise
+
+Remove it completely from the previous implementation/request.
+
+============================================================
+3. MONTH WISE MUST MODIFY THE EXISTING COLUMNS
+============================================================
+
+When Month Wise is OFF:
+
+show the current Chart of Accounts exactly as it currently works.
+
+When Month Wise is ON:
+
+DO NOT create another table.
+
+DO NOT create another section.
+
+DO NOT open another page.
+
+DO NOT move the Chart of Accounts somewhere else.
+
+Instead, ADD MONTH COLUMNS DIRECTLY INTO THE EXISTING CHART OF ACCOUNTS.
+
+============================================================
+4. EXACT EXAMPLE
+============================================================
+
+Suppose the current Chart of Accounts has:
+
+Sales
+Purchase
+Expenses
+Cash
+Bank
+Receivables
+Payables
+Inventory
+etc.
+
+When Month Wise is ON, the SAME rows should become:
+
+Account          April      May       June       Total
+-------------------------------------------------------
+Sales            5,000      1,000     2,000      8,000
+Purchase         3,000        800     1,500      5,300
+Expenses           500        200       300      1,000
+Cash             ...        ...       ...        ...
+Bank             ...        ...       ...        ...
+Receivables      ...        ...       ...        ...
+Payables         ...        ...       ...        ...
+Inventory        ...        ...       ...        ...
+
+The month columns are part of the SAME Chart of Accounts.
+
+============================================================
+5. MONTHS MUST COME FROM THE CURRENT DATE FILTER
+============================================================
+
+The existing date filter must remain.
+
+For example:
+
+[ All ] [ This Month ] [ Quarter ] [ This Year ] [ Custom ]
+
+If the selected period contains:
+
+April
+May
+June
+
+and Month Wise is ON:
+
+the Chart of Accounts automatically adds:
+
+April | May | June
+
+as columns.
+
+============================================================
+6. QUARTER
+============================================================
+
+If the user selects:
+
+Quarter
+
+and Month Wise is ON:
+
+show the months belonging to that selected quarter as columns.
+
+Example:
+
+| Account | April | May | June | Total |
+
+The existing Chart of Accounts rows remain unchanged.
+
+============================================================
+7. THIS YEAR
+============================================================
+
+If the user selects:
+
+This Year
+
+and Month Wise is ON:
+
+show all financial-year months as columns.
+
+If the ERP financial year is April → March:
+
+| Account | Apr | May | Jun | Jul | Aug | Sep | Oct | Nov | Dec | Jan | Feb | Mar | Total |
+
+Use the ERP's actual financial year configuration.
+
+Do NOT assume January–December.
+
+============================================================
+8. THIS MONTH
+============================================================
+
+If the existing filter is:
+
+This Month
+
+and Month Wise is ON:
+
+show the selected month's column.
+
+Example:
+
+| Account | August 2026 | Total |
+
+The current Chart of Accounts remains underneath.
+
+============================================================
+9. CUSTOM DATE RANGE
+============================================================
+
+If the user selects:
+
+Custom
+
+01/04/2026 → 30/06/2026
+
+and enables Month Wise:
+
+show:
+
+| Account | April | May | June | Total |
+
+Only months falling inside the selected date range should appear.
+
+============================================================
+10. THE ACCOUNT HIERARCHY MUST REMAIN
+============================================================
+
+This is extremely important.
+
+The Month Wise columns must work with the EXISTING hierarchical Chart of Accounts.
+
+Example:
+
+ASSETS
+
+    Fixed Asset              April    May    June    Total
+        Furniture            ...
+        Equipment            ...
+
+    Current Asset            April    May    June    Total
+        Cash                 ...
+        Bank                 ...
+        Inventory            ...
+        Employee Advance     ...
+
+LIABILITIES
+
+    Current Liabilities      April    May    June    Total
+        Payables             ...
+
+RESERVES & SURPLUS (P&L)     April    May    June    Total
+
+Do not flatten the hierarchy.
+
+Do not turn this into a generic transaction report.
+
+============================================================
+11. TOTAL COLUMN
+============================================================
+
+When Month Wise is ON, include a Total column after the month columns.
+
+Example:
+
+Account | April | May | June | Total
+
+The Total must equal the sum of the displayed month values.
+
+Do not calculate this separately using frontend approximations.
+
+Use the same accounting calculation engine as the existing Chart of Accounts.
+
+============================================================
+12. BALANCE CALCULATION
+============================================================
+
+Each month column must represent the correct accounting value for that month according to the existing Chart of Accounts logic.
+
+Do not simply divide the overall total by the number of months.
+
+Do not estimate.
+
+Do not distribute totals artificially.
+
+Use actual transactions/accounting entries belonging to each month.
+
+============================================================
+13. LOCATION FILTER
+============================================================
+
+Month Wise must respect the existing Current Location filter.
+
+If:
+
+All Locations
+
+is selected:
+
+show consolidated monthly values.
+
+If:
+
+Head Office
+
+is selected:
+
+show only Head Office monthly values.
+
+If:
+
+Warehouse A
+
+is selected:
+
+show only Warehouse A monthly values.
+
+If:
+
+Outlet A
+
+is selected:
+
+show only Outlet A monthly values.
+
+Do not mix location data.
+
+============================================================
+14. CLICKING AN ACCOUNT
+============================================================
+
+Existing Chart of Accounts account-click behaviour must continue.
+
+If the user clicks:
+
+Sales → April
+
+the system should open the existing Sales/detail/ledger view filtered to:
+
+April
+
+and the currently selected location.
+
+If the user clicks:
+
+Sales → May
+
+open the same existing detail screen filtered to May.
+
+If the user clicks:
+
+Sales → Total
+
+show the complete selected-period detail.
+
+Do not create a new duplicate report screen.
+
+============================================================
+15. UI REQUIREMENT
+============================================================
+
+The Month Wise columns must visually look like they belong to the existing Chart of Accounts.
+
+Do NOT put Month Wise underneath the Chart of Accounts.
+
+Do NOT put Month Wise above the Chart of Accounts as another report.
+
+Do NOT create cards.
+
+Do NOT create a separate table.
+
+The actual Chart of Accounts table/grid itself gains the additional columns.
+
+The structure should be:
+
+                    Chart of Accounts
+
+[All] [This Month] [Quarter] [This Year] [Custom]
+
+                         [ Month Wise ]
+
+------------------------------------------------------------
+
+Account                  April      May      June      Total
+
+LIABILITIES
+
+  Capital Accounts        ...        ...       ...       ...
+
+  Loans (Liability)       ...        ...       ...       ...
+
+  Current Liabilities     ...        ...       ...       ...
+
+RESERVES & SURPLUS        ...        ...       ...       ...
+
+ASSETS
+
+  Fixed Asset             ...        ...       ...       ...
+
+  Closing Stock           ...        ...       ...       ...
+
+  Current Asset           ...        ...       ...       ...
+
+------------------------------------------------------------
+
+This is ONE Chart of Accounts.
+
+============================================================
+16. RESPONSIVE UI
+============================================================
+
+If many month columns exist, make the Chart of Accounts horizontally scrollable only as necessary.
+
+Keep:
+
+Account name
+
+visible/sticky on the left if possible.
+
+Month columns should scroll horizontally.
+
+Do not create awkward nested horizontal scrolling.
+
+On desktop, show as many month columns as comfortably fit.
+
+On mobile, maintain the existing mobile-friendly Chart of Accounts experience and allow controlled horizontal scrolling for the month columns.
+
+============================================================
+17. MONTH WISE OFF
+============================================================
+
+This is critical.
+
+When Month Wise is OFF:
+
+the current Chart of Accounts must return to its original appearance.
+
+No month columns.
+
+No additional calculations.
+
+No layout change.
+
+It should work exactly as it does today.
+
+============================================================
+18. ACCOUNTING ACCURACY
+============================================================
+
+All monthly values must come from the existing accounting/ledger backend.
+
+Do not create a second accounting engine.
+
+The following must reconcile:
+
+April + May + June
+=
+selected quarter total
+
+Financial-year month columns
+=
+financial-year total
+
+Month Wise OFF total
+=
+Month Wise ON Total column
+
+============================================================
+19. PERFORMANCE
+============================================================
+
+Do not make separate API calls for every account and every month.
+
+Use an aggregated backend query.
+
+The backend should return the monthly values for the existing Chart of Accounts hierarchy efficiently.
+
+Do not break the existing Chart of Accounts performance.
+
+============================================================
+20. FINAL REQUIREMENT — VERY IMPORTANT
+============================================================
+
+I am NOT asking for:
+
+❌ Month Wise report
+❌ Day Wise report
+❌ Separate table
+❌ Separate page
+❌ Separate section
+❌ Dashboard
+❌ KPI report
+
+I am asking for:
+
+CURRENT CHART OF ACCOUNTS
++
+ONE "MONTH WISE" BUTTON
++
+MONTH COLUMNS ADDED DIRECTLY INSIDE THE EXISTING CHART OF ACCOUNTS.
+
+Example:
+
+CURRENT:
+
+Account                     Balance
+Sales                       ₹8,000
+Purchase                    ₹5,300
+Expenses                    ₹1,000
+
+MONTH WISE ON:
+
+Account              April      May      June      Total
+---------------------------------------------------------
+Sales                ₹5,000     ₹1,000   ₹2,000    ₹8,000
+Purchase             ₹3,000       ₹800   ₹1,500    ₹5,300
+Expenses               ₹500       ₹200     ₹300    ₹1,000
+
+These are NOT two different reports.
+
+It is the SAME Chart of Accounts with additional month columns.
+
+Implement exactly this behaviour.

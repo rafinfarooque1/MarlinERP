@@ -3521,51 +3521,107 @@ router.get("/accounts/financial-statements", requireModuleView(["page:/accounts/
   });
 });
 
-// ── Month-wise / Day-wise bucket enumeration ──────────────────────────────
+// ── Month-wise statement columns ──────────────────────────────────────────
 //
-// Lists WHICH month/day buckets the selected range contains (deriving the
-// start from the first posting in scope when the range is open-ended). The
-// figures themselves are NOT computed here: the client fetches
-// /accounts/financial-statements for each bucket's exact sub-range, so every
-// period shows the complete statements and reconciles with the Summary view
-// by construction. Guard and LBAC mirror /accounts/financial-statements
-// exactly: the derived range start leaks when the books begin, so it must
-// never be visible to anyone the statements are not.
-router.get("/accounts/periodic-summary", requireModuleView(["page:/accounts/chart", "page:/reports/sales"]), async (req, res): Promise<void> => {
-  const { granularity, fromDate, toDate, page, pageSize } = req.query as Record<string, string | undefined>;
-  if (granularity !== "month" && granularity !== "day") {
-    res.status(400).json({ error: "granularity must be 'month' or 'day'" }); return;
-  }
+// One aggregated call behind the Chart of Accounts "Month Wise" toggle: it
+// enumerates the months the selected range contains (deriving the start from
+// the first posting in scope when open-ended), runs the SAME statements
+// engine once per month, and returns a compact per-node series the client
+// lays out as extra columns inside the existing statements. Per-month
+// semantics match the engine's own reading of a sub-range: Balance Sheet
+// figures are as of the month's end, P&L figures are the month's activity —
+// so P&L columns sum exactly to the whole-range figure and the last BS
+// column IS the whole-range closing position. No money is computed here.
+// Guard and LBAC mirror /accounts/financial-statements exactly.
+router.get("/accounts/financial-statements/monthly", requireModuleView(["page:/accounts/chart", "page:/reports/sales"]), async (req, res): Promise<void> => {
+  const { fromDate, toDate } = req.query as { fromDate?: string; toDate?: string };
   if ((fromDate !== undefined && !isIsoDate(fromDate)) || (toDate !== undefined && !isIsoDate(toDate))) {
     res.status(400).json({ error: "fromDate/toDate must be valid YYYY-MM-DD dates" }); return;
   }
-  const posInt = (v: string | undefined): number | undefined => {
-    if (v === undefined) return undefined;
-    const n = Number(v);
-    return Number.isInteger(n) && n >= 1 ? n : undefined;
-  };
 
   // LBAC: branch users always get their own location's slice — the view
   // header/query cannot widen it. Head Office keeps the free selector.
-  const psEmp = (req as any).employee as { branchType?: string; branchId?: number } | undefined;
-  const psBranch = psEmp?.branchType && psEmp.branchType !== 'headoffice';
-  const location = psBranch
-    ? { type: psEmp!.branchType as "warehouse" | "outlet", id: Number(psEmp!.branchId ?? 0) }
+  const msEmp = (req as any).employee as { branchType?: string; branchId?: number } | undefined;
+  const msBranch = msEmp?.branchType && msEmp.branchType !== 'headoffice';
+  const location = msBranch
+    ? { type: msEmp!.branchType as "warehouse" | "outlet", id: Number(msEmp!.branchId ?? 0) }
     : getPostingLocationFilter(req);
 
-  const summary = await buildPeriodicBuckets(buildDerivedPostings, {
-    granularity,
+  const MAX_MONTH_COLUMNS = 62; // ~5 financial years of columns — beyond that the table is unreadable anyway
+  const window = await buildPeriodicBuckets(buildDerivedPostings, {
+    granularity: "month",
     fromDate: fromDate ?? null,
     toDate: toDate ?? null,
     location,
-    page: posInt(page),
-    pageSize: posInt(pageSize),
+    page: 1,
+    pageSize: MAX_MONTH_COLUMNS,
   });
+  if (window.totalBuckets > MAX_MONTH_COLUMNS) {
+    res.status(400).json({ error: `The selected range spans ${window.totalBuckets} months — narrow it with a Custom date range to use Month Wise.` });
+    return;
+  }
+
+  // Flatten one month's engine output into series[key][monthIdx]. Keys:
+  //   n:<ledgerId>  every chart node (sub-groups carry their subtree total)
+  //   grp:<name>    the nine statement group heads
+  //   named scalars for the auto rows and section totals.
+  // Missing keys stay 0 for months where a node had no balance/activity.
+  const series: Record<string, number[]> = {};
+  const nMonths = window.buckets.length;
+  const flatten = (b: Awaited<ReturnType<typeof buildBooks>>, idx: number) => {
+    const put = (k: string, v: unknown) => {
+      if (!series[k]) series[k] = new Array(nMonths).fill(0);
+      series[k][idx] = Number(v ?? 0);
+    };
+    const walkNode = (n: { id: number; balance: number; children?: unknown[] }) => {
+      put(`n:${n.id}`, n.balance);
+      (n.children as typeof n[] | undefined)?.forEach(walkNode);
+    };
+    const grp = (key: string, g: { id: number | null; total: number; children?: unknown[] } | undefined) => {
+      if (!g) return;
+      put(`grp:${key}`, g.total);
+      if (g.id != null) put(`n:${g.id}`, g.total);
+      (g.children as Parameters<typeof walkNode>[0][] | undefined)?.forEach(walkNode);
+    };
+    const bs = b.balanceSheet, pl = b.profitAndLoss;
+    grp("capital", bs.liabilities.capitalAccount);
+    grp("loans", bs.liabilities.loans);
+    grp("curliab", bs.liabilities.currentLiabilities);
+    grp("fixed", bs.assets.fixedAssets);
+    grp("curassets", bs.assets.currentAssets);
+    grp("direxp", pl.expenses.directExpenses);
+    grp("indexp", pl.expenses.indirectExpenses);
+    grp("dirinc", pl.incomes.directIncomes);
+    grp("indinc", pl.incomes.indirectIncomes);
+    put("liabTotal", bs.liabilities.total);
+    put("assetsTotal", bs.assets.total);
+    put("pandl", bs.liabilities.pandlCarryForward);
+    put("bsClosingStock", bs.assets.closingStock);
+    put("sales", pl.incomes.sales);
+    put("salesReturns", pl.incomes.salesReturns);
+    put("purchases", pl.expenses.purchases);
+    put("purchaseReturns", pl.expenses.purchaseReturns);
+    put("openingStock", pl.expenses.openingStock);
+    put("closingStock", pl.incomes.closingStock);
+    put("gp", pl.summary?.grossProfit ?? null);
+    put("np", pl.netProfit);
+  };
+
+  // Sequential on purpose: each run derives the full posting stream, and a
+  // Promise.all over 12 months would stampede the pool for no latency win.
+  for (let i = 0; i < window.buckets.length; i++) {
+    const b = window.buckets[i];
+    const books = await buildBooks(buildDerivedPostings, { fromDate: b.from, toDate: b.to, location });
+    flatten(books, i);
+  }
 
   res.json({
     locationScoped: location != null,
     ...(location ? { location: { type: location.type, id: location.id } } : {}),
-    ...summary,
+    fromDate: window.fromDate,
+    toDate: window.toDate,
+    months: window.buckets,
+    series,
   });
 });
 

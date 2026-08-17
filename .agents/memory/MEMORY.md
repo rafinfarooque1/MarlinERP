@@ -137,7 +137,7 @@
 - [Storage locations & placements](storage-placements.md) — additive layer over stock_entries (qty truth); unplaced = site total − Σ placements, derived, never stored; 3-level cap (freezer→rack→shelf), walk the FULL ancestor chain.
 - [Transaction dialog guard](transaction-dialog-guard.md) — every close path (Cancel AND Close buttons) must be DialogClose-wrapped or the dirty guard is bypassed; sm:max-w-* only; exceptions recorded in UI_CONVENTIONS.md.
 - [UI modernization sweep](ui-modernization-sweep.md) — artifacts/marlin-erp/docs/UI_CONVENTIONS.md (in the web artifact, NOT workspace docs/) is the binding page-style contract; page kit in components/app/*; supersedes "sidebar frozen".
-- [Periodic breakdown](periodic-breakdown.md) — Month/Day Wise buckets reconcile via telescoping valuation boundaries; inception opening mirrors the undated statements ON PURPOSE; pager reset must be synchronous.
+- [Month Wise columns](periodic-breakdown.md) — ONE toggle folds month columns into the statements (Day Wise removed); P&L cells sum to Total, BS cells are as-at month end; one aggregated endpoint.
 - [Dispatch board](dispatch-board.md) — per-document status layer pattern: additive table, absence-of-row = initial status, forward-only transitions re-checked under the row lock; books-unchanged provable by hash.
 - [Books drill-down & exports](books-drilldown.md) — statement/day-book rows carry provenance keys mapped in ONE drilldown.ts; targets open via ?view= params; new export pages must join REPORT_EXPORT_PAGES.
 - [Workspace reset & rollback semantics](workspace-reset-recovery.md) — merge/cancel events revert TRACKED files to HEAD (untracked survive); re-verify wiring by marker greps; surviving tests + pg_dump -s are the recovery contract.
