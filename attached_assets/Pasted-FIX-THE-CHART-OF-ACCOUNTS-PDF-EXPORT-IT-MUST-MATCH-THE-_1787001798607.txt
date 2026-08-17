@@ -1,0 +1,415 @@
+FIX THE CHART OF ACCOUNTS PDF EXPORT — IT MUST MATCH THE CURRENT SCREEN STATE EXACTLY.
+
+The current PDF export is NOT correct.
+
+I selected:
+- Profit & Loss
+- Month Wise
+- Current location: Frozen Hub - Calicut
+
+But the downloaded PDF included the entire Balance Sheet as well as Profit & Loss, and it also expanded account groups that were NOT expanded on the screen.
+
+For example, the current downloaded PDF contains BALANCE SHEET on pages 1–5 and PROFIT & LOSS on pages 6–7. This must NOT happen.
+
+IMPORTANT:
+The PDF must represent the CURRENT VISIBLE STATE of the Chart of Accounts page, not the complete underlying accounting dataset.
+
+==================================================
+1. SELECTED REPORT TYPE MUST BE RESPECTED
+==================================================
+
+If the user selects:
+
+Balance Sheet
+
+then PDF contains ONLY the Balance Sheet.
+
+If the user selects:
+
+Profit & Loss
+
+then PDF contains ONLY Profit & Loss.
+
+NEVER include the other report in the PDF.
+
+Example:
+
+If the screen currently shows:
+
+Chart of Accounts
+Month Wise
+Profit & Loss selected
+
+then the PDF must contain ONLY:
+
+PROFIT & LOSS
+
+and its visible sections.
+
+Do NOT append Balance Sheet before or after it.
+
+==================================================
+2. EXPANSION / COLLAPSE STATE MUST BE RESPECTED
+==================================================
+
+This is extremely important.
+
+The PDF must use the EXACT expansion state currently visible on the screen.
+
+If an account/group is collapsed on the screen:
+- Do NOT show its children in the PDF.
+
+If an account/group is expanded on the screen:
+- Show its children in the PDF.
+
+If nothing is expanded:
+- The PDF must show nothing expanded.
+
+If only one particular subgroup is expanded:
+- ONLY that subgroup's children should appear.
+
+Do NOT automatically call "Expand All" during PDF generation.
+
+Do NOT generate the PDF from the raw complete account hierarchy.
+
+Do NOT assume all groups are expanded.
+
+The PDF must capture the same hierarchy visibility that the user is currently seeing.
+
+Example:
+
+SCREEN:
+
+CURRENT LIABILITIES
+    > Duty & Tax
+    > Sundry Creditors
+    > Salary Payable
+
+If all are collapsed, PDF must show exactly that.
+
+If user expands only:
+
+CURRENT LIABILITIES
+    > Duty & Tax
+         Output CGST
+         Output SGST
+         Input CGST
+         Input SGST
+
+then the PDF must show exactly that expansion and nothing else.
+
+==================================================
+3. MONTH WISE MUST BE RESPECTED
+==================================================
+
+If "Month Wise" is selected on the screen, the PDF must contain the same month columns currently visible.
+
+Example:
+
+ACCOUNT | APR 2026 | MAY 2026 | JUN 2026 | JUL 2026 | AUG 2026 | TOTAL
+
+The PDF must use exactly the same months currently displayed on screen.
+
+Do NOT add extra months.
+
+Do NOT remove months.
+
+Do NOT recalculate them differently.
+
+Do NOT use a separate monthly report.
+
+Month Wise is part of the existing Chart of Accounts and must remain inside the same report.
+
+==================================================
+4. RESPECT ALL CURRENT FILTERS
+==================================================
+
+The PDF must reflect every filter currently selected on the Chart of Accounts page.
+
+This includes:
+
+- All / This Month / Quarter / This Year / Custom
+- Month Wise
+- Balance Sheet / Profit & Loss
+- Current Location
+- Any date range
+- Any other currently active Chart of Accounts filter
+
+Do not fetch the complete report independently and ignore the UI state.
+
+Use the same state/data that the visible Chart of Accounts is using.
+
+==================================================
+5. LOCATION
+==================================================
+
+The PDF header must use the currently selected location.
+
+If the screen says:
+
+Frozen Hub - Calicut
+
+then the PDF must say:
+
+Location: Frozen Hub - Calicut
+
+and use the Frozen Hub - Calicut logo and location/company details.
+
+If the screen says:
+
+Head Office
+
+then use the Head Office/company profile logo and details.
+
+If the screen says:
+
+All Locations
+
+then use the Company Profile details and company logo, and clearly show:
+
+Location: All Locations
+
+If a warehouse/outlet is selected, use that warehouse's own:
+- logo
+- name
+- address
+- phone
+- email
+- GSTIN
+- other configured details
+
+Do NOT use the Head Office details for a warehouse.
+
+==================================================
+6. PDF MUST MATCH WHAT USER SEES
+==================================================
+
+The key rule is:
+
+"WHAT I SEE ON THE CHART OF ACCOUNTS SCREEN IS WHAT I GET IN THE PDF."
+
+The PDF is an export/print representation of the current Chart of Accounts view.
+
+It is NOT a separate report generator.
+
+Do NOT create a second accounting calculation engine.
+
+Do NOT independently reconstruct the entire Chart of Accounts hierarchy.
+
+Do NOT export hidden/collapsed content.
+
+Do NOT export unselected report sections.
+
+==================================================
+7. CURRENT SCREEN EXAMPLE
+==================================================
+
+Suppose the user currently sees:
+
+Chart of Accounts
+
+All
+This Month
+Quarter
+This Year
+Custom
+Month Wise [ON]
+
+Profit & Loss [SELECTED]
+
+Then:
+
+PDF = ONLY Profit & Loss + Month Wise columns.
+
+If the user has not expanded anything:
+
+PDF = collapsed hierarchy exactly as shown.
+
+If the user expands one subgroup:
+
+PDF = that subgroup expanded, exactly as shown.
+
+If the user changes to Balance Sheet:
+
+PDF = ONLY Balance Sheet.
+
+If the user turns Month Wise OFF:
+
+PDF must no longer show month columns.
+
+==================================================
+8. DO NOT MUTATE THE SCREEN STATE
+==================================================
+
+Clicking "Download PDF" must NOT:
+
+- Expand All
+- Collapse All
+- Change Balance Sheet/P&L
+- Change Month Wise
+- Change location
+- Change date filter
+- Change any account selection
+- Navigate to another page
+
+The screen must remain exactly as it was before clicking Download PDF.
+
+The PDF generation must be read-only.
+
+==================================================
+9. IMPLEMENTATION REQUIREMENT
+==================================================
+
+Do not simply export the complete financialStatements/monthlyStatements dataset.
+
+Instead, identify the SAME rendered/filtered account tree that the Chart of Accounts UI uses.
+
+The PDF generator must receive/use:
+
+- currently selected statement type
+- currently selected period
+- currently selected location
+- currently enabled Month Wise state
+- currently visible month columns
+- currently expanded account/group IDs
+- currently visible account rows
+- the same calculated values shown in the UI
+
+The visible account list must be filtered BEFORE passing it to the PDF renderer.
+
+Conceptually:
+
+visibleRows =
+    currentChartOfAccountsRows
+    filteredByCurrentStatement
+    filteredByCurrentExpansionState
+    filteredByCurrentFilters
+
+Then render visibleRows.
+
+Do NOT use:
+
+allAccounts
+or
+allFinancialStatements
+
+directly for PDF generation.
+
+==================================================
+10. PDF LAYOUT
+==================================================
+
+Keep the existing professional PDF design.
+
+Include:
+
+- Correct location/company logo
+- Location/company details
+- CHART OF ACCOUNTS title
+- Current period
+- Current report type
+- Current Month Wise columns
+- Current visible account hierarchy
+- Current values
+- Total column
+- Page numbers
+- Generated date/time
+
+Landscape mode is fine when required for Month Wise columns.
+
+Repeat column headers on subsequent pages.
+
+==================================================
+11. MOST IMPORTANT TEST CASES
+==================================================
+
+Before saying this is fixed, test these exact cases:
+
+TEST 1:
+- Profit & Loss
+- Month Wise ON
+- Nothing expanded
+
+Expected:
+PDF contains ONLY Profit & Loss.
+No Balance Sheet.
+No hidden child accounts.
+
+TEST 2:
+- Profit & Loss
+- Month Wise ON
+- Expand only one subgroup
+
+Expected:
+PDF contains ONLY Profit & Loss.
+Only that subgroup is expanded.
+Everything else remains collapsed.
+
+TEST 3:
+- Balance Sheet
+- Month Wise ON
+- Nothing expanded
+
+Expected:
+PDF contains ONLY Balance Sheet.
+No Profit & Loss.
+
+TEST 4:
+- Balance Sheet
+- Month Wise ON
+- Expand one subgroup
+
+Expected:
+PDF matches the exact expansion state.
+
+TEST 5:
+- Profit & Loss
+- Month Wise OFF
+
+Expected:
+No monthly columns.
+PDF matches the normal Chart of Accounts view.
+
+TEST 6:
+- All Locations
+
+Expected:
+Company Profile details/logo and "Location: All Locations".
+
+TEST 7:
+- Head Office
+
+Expected:
+Head Office/company profile details/logo.
+
+TEST 8:
+- Warehouse selected
+
+Expected:
+That warehouse's own uploaded logo and details.
+
+==================================================
+12. VERIFY AGAINST THE SCREEN
+==================================================
+
+After implementation:
+
+1. Open Chart of Accounts.
+2. Select Profit & Loss.
+3. Select Month Wise.
+4. Leave all groups collapsed.
+5. Download PDF.
+6. Compare PDF against the screen.
+
+Then expand ONLY one subgroup.
+Download again.
+Verify that ONLY that subgroup is expanded.
+
+Then switch to Balance Sheet.
+Download again.
+Verify that P&L is completely absent.
+
+Do not consider the task complete until the PDF is a faithful snapshot/export of the current Chart of Accounts state.
+
+NO changes to accounting calculations, transactions, database records, or financial data.
+ONLY fix the PDF export behavior.

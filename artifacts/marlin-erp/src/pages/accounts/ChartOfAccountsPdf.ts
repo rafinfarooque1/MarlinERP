@@ -1,10 +1,14 @@
 /**
  * Client-side PDF export for the Chart of Accounts page.
  *
- * Mirrors the EXACT data already displayed on screen — no re-computation, no
- * server round-trip. Accepts the same `FinancialStatements` + optional monthly
- * series that the React components render, builds rows in the same order and
- * with the same figures, then emits a landscape-if-many-months jsPDF document.
+ * WYSIWYG — the PDF contains EXACTLY what the user currently sees:
+ *   • Only the selected statement (Balance Sheet OR Profit & Loss, never both)
+ *   • Only the nodes that are currently expanded — collapsed groups show
+ *     only their header row, exactly as the screen does
+ *   • The same Month Wise columns (or none) that are currently visible
+ *
+ * The caller snapshots the current UI state and passes it in; nothing is
+ * re-fetched, re-calculated, or assumed.
  */
 import { jsPDF } from 'jspdf';
 import {
@@ -20,6 +24,14 @@ export type { LetterheadIssuer };
 
 export interface CoaPdfOpts {
   fs: FinancialStatements;
+  /** Which statement tab the user has open. ONLY that statement is rendered. */
+  statement: 'balance_sheet' | 'profit_loss';
+  /**
+   * Snapshot of the expansion state for the ACTIVE statement.
+   * Called with a group/ledger id — returns true only if it was open on screen.
+   * Collapsed nodes produce only their header row, just as the UI does.
+   */
+  isOpen: (id: number) => boolean;
   /** Monthly data when "Month Wise" is ON; null for normal view. */
   mw: {
     months: { key: string; from: string; to: string }[];
@@ -77,38 +89,60 @@ function mwLabel(ym: string): string {
   });
 }
 
-// ─── Row builders ─────────────────────────────────────────────────────────────
+// ─── Row builders (expansion-aware) ──────────────────────────────────────────
 
 function zeroArr(n: number): number[] { return new Array(n).fill(0); }
 
-function ledgerRows(node: LedgerNode, depth: number, series: Record<string, number[]>, n: number): Row[] {
+/**
+ * Builds rows for a leaf/group ledger node.
+ * Children are included ONLY if the node's id is open in the current expansion
+ * state — exactly mirroring what the UI renders.
+ */
+function ledgerRows(
+  node: LedgerNode,
+  depth: number,
+  series: Record<string, number[]>,
+  n: number,
+  isOpen: (id: number) => boolean,
+): Row[] {
   const out: Row[] = [];
   const mv = series[`n:${node.id}`] ?? zeroArr(n);
+  const hasChildren = node.children.length > 0;
   out.push({
-    kind: node.children.length > 0 ? 'group' : 'leaf',
+    kind: hasChildren ? 'group' : 'leaf',
     name: node.name,
     indent: depth * 4,
     months: mv,
     total: node.balance,
   });
-  for (const child of node.children) {
-    out.push(...ledgerRows(child, depth + 1, series, n));
+  // Recurse only when this node is expanded on screen
+  if (hasChildren && isOpen(node.id)) {
+    for (const child of node.children) {
+      out.push(...ledgerRows(child, depth + 1, series, n, isOpen));
+    }
   }
   return out;
 }
 
+/**
+ * Builds rows for a top-level group (Capital Account, Current Assets, …).
+ * Children are included ONLY if the group's id is open in the expansion state.
+ */
 function groupRows(
   group: GroupSummary,
   seriesKey: string,
   series: Record<string, number[]>,
   n: number,
-  depth = 0,
+  isOpen: (id: number) => boolean,
 ): Row[] {
   const out: Row[] = [];
   const mv = series[seriesKey] ?? zeroArr(n);
-  out.push({ kind: 'group', name: group.name, indent: depth * 4, months: mv, total: group.total });
-  for (const child of group.children) {
-    out.push(...ledgerRows(child, depth + 1, series, n));
+  out.push({ kind: 'group', name: group.name, indent: 0, months: mv, total: group.total });
+  // Expand children only when the group is open on screen
+  if (group.id != null && isOpen(group.id)) {
+    for (const child of group.children) {
+      out.push(...ledgerRows(child, 1, series, n, isOpen));
+    }
   }
   return out;
 }
@@ -116,7 +150,7 @@ function groupRows(
 // ─── Main generator ───────────────────────────────────────────────────────────
 
 export async function generateChartOfAccountsPdf(opts: CoaPdfOpts): Promise<void> {
-  const { fs, mw, issuer, logoDataUrl, locationLabel, periodLabel } = opts;
+  const { fs, statement, isOpen, mw, issuer, logoDataUrl, locationLabel, periodLabel } = opts;
   const months  = mw ? mw.months : [];
   const series  = mw ? mw.series : {};
   const N       = months.length;
@@ -137,6 +171,7 @@ export async function generateChartOfAccountsPdf(opts: CoaPdfOpts): Promise<void
   const TOTAL_W = mw ? 28 : CW * 0.30;
   const MONTH_W = N > 0 ? (CW - NAME_W - TOTAL_W) / N : 0;
 
+  const statementLabel = statement === 'balance_sheet' ? 'Balance Sheet' : 'Profit & Loss';
   const colHeaders = ['Account', ...months.map(m => mwLabel(m.key)), 'Total'];
 
   const p = new Painter(doc);
@@ -154,8 +189,9 @@ export async function generateChartOfAccountsPdf(opts: CoaPdfOpts): Promise<void
         badgeTitle: 'CHART OF ACCOUNTS',
         accent: NAVY,
         metaRows: [
-          ['Location', locationLabel],
-          ['Period',   periodLabel],
+          ['Statement', statementLabel],
+          ['Location',  locationLabel],
+          ['Period',    periodLabel],
         ],
         margin: M,
         width: CW,
@@ -165,7 +201,7 @@ export async function generateChartOfAccountsPdf(opts: CoaPdfOpts): Promise<void
     const y = M;
     p.fill(M, y, CW, 6.5, SEC_BG);
     p.txt(issuer.tradeName.toUpperCase(), M + 2, y + 4.5, { bold: true, size: 7.5, color: WHITE });
-    const right = `Chart of Accounts  ·  ${locationLabel}  ·  ${periodLabel}`;
+    const right = `${statementLabel}  ·  ${locationLabel}  ·  ${periodLabel}`;
     p.txt(right, M + CW - 2, y + 4.5, { size: 6.5, color: WHITE, align: 'right' });
     return y + 9;
   };
@@ -280,137 +316,140 @@ export async function generateChartOfAccountsPdf(opts: CoaPdfOpts): Promise<void
   const rowSpacer = (): Row =>
     ({ kind: 'spacer',  name: '', indent: 0, months: zeroArr(N), total: 0 });
 
-  // ── Balance Sheet section ─────────────────────────────────────────────────
+  // ── First page ────────────────────────────────────────────────────────────
 
   let y = drawPageHeader();
   y = drawColHeaders(y);
 
-  const bs = fs.balanceSheet;
+  // ── BALANCE SHEET ─────────────────────────────────────────────────────────
 
-  const bsRows: Row[] = [
-    rowSect('BALANCE SHEET'),
-    rowSpacer(),
-    rowPanel('LIABILITIES'),
-    ...groupRows(bs.liabilities.capitalAccount,      'grp:capital', series, N),
-    ...groupRows(bs.liabilities.loans,               'grp:loans',   series, N),
-    ...groupRows(bs.liabilities.currentLiabilities,  'grp:curliab', series, N),
-    rowAuto('Reserves & Surplus (P&L)', sv('pandl'), bs.liabilities.pandlCarryForward),
-    rowTotal('Total Liabilities', bs.liabilities.total, sv('liabTotal')),
-    rowSpacer(),
-    rowPanel('ASSETS'),
-    ...groupRows(bs.assets.fixedAssets,   'grp:fixed',    series, N),
-    rowAuto('Closing Stock', sv('bsClosingStock'), bs.assets.closingStock),
-    ...groupRows(bs.assets.currentAssets, 'grp:curassets', series, N),
-    rowTotal('Total Assets', bs.assets.total, sv('assetsTotal')),
-  ];
+  if (statement === 'balance_sheet') {
+    const bs = fs.balanceSheet;
 
-  y = renderRows(bsRows, y);
+    // groupRows respects isOpen — collapsed groups show only the header row
+    const bsRows: Row[] = [
+      rowSect('BALANCE SHEET'),
+      rowSpacer(),
+      rowPanel('LIABILITIES'),
+      ...groupRows(bs.liabilities.capitalAccount,     'grp:capital', series, N, isOpen),
+      ...groupRows(bs.liabilities.loans,              'grp:loans',   series, N, isOpen),
+      ...groupRows(bs.liabilities.currentLiabilities, 'grp:curliab', series, N, isOpen),
+      rowAuto('Reserves & Surplus (P&L)', sv('pandl'), bs.liabilities.pandlCarryForward),
+      rowTotal('Total Liabilities', bs.liabilities.total, sv('liabTotal')),
+      rowSpacer(),
+      rowPanel('ASSETS'),
+      ...groupRows(bs.assets.fixedAssets,   'grp:fixed',     series, N, isOpen),
+      rowAuto('Closing Stock', sv('bsClosingStock'), bs.assets.closingStock),
+      ...groupRows(bs.assets.currentAssets, 'grp:curassets', series, N, isOpen),
+      rowTotal('Total Assets', bs.assets.total, sv('assetsTotal')),
+    ];
 
-  // ── Profit & Loss section — always starts on a fresh page ─────────────────
+    renderRows(bsRows, y);
 
-  doc.addPage();
-  y = drawPageHeader();
-  y = drawColHeaders(y);
+  // ── PROFIT & LOSS ─────────────────────────────────────────────────────────
 
-  const pl  = fs.profitAndLoss;
-  const exp = pl.expenses;
-  const inc = pl.incomes;
+  } else {
+    const pl  = fs.profitAndLoss;
+    const exp = pl.expenses;
+    const inc = pl.incomes;
 
-  const salesReturns    = inc.salesReturns    ?? 0;
-  const grossSales      = inc.grossSales      ?? (inc.sales + salesReturns);
-  const purchaseReturns = exp.purchaseReturns ?? 0;
-  const grossProfit: number = pl.summary?.grossProfit
-    ?? ((inc.sales + inc.closingStock + inc.directIncomes.total)
-       - (exp.openingStock + exp.purchases + exp.directExpenses.total));
+    const salesReturns    = inc.salesReturns    ?? 0;
+    const grossSales      = inc.grossSales      ?? (inc.sales + salesReturns);
+    const purchaseReturns = exp.purchaseReturns ?? 0;
+    const grossProfit: number = pl.summary?.grossProfit
+      ?? ((inc.sales + inc.closingStock + inc.directIncomes.total)
+         - (exp.openingStock + exp.purchases + exp.directExpenses.total));
 
-  // Per-month derived arrays — same arithmetic as StatementsView
-  const mwSales      = sv('sales');
-  const mwSalesRet   = sv('salesReturns');
-  const mwPur        = sv('purchases');
-  const mwPurRet     = sv('purchaseReturns');
-  const mwGp         = sv('gp');
-  const mwNp         = sv('np');
-  const mwGrossSales = add(mwSales, mwSalesRet);
-  const mwGrossPur   = add(mwPur,   mwPurRet);
-  const mwGpPos      = mwGp.map(v => v > 0 ?  v : 0);
-  const mwGpNeg      = mwGp.map(v => v < 0 ? -v : 0);
+    // Per-month derived arrays — same arithmetic as StatementsView
+    const mwSales      = sv('sales');
+    const mwSalesRet   = sv('salesReturns');
+    const mwPur        = sv('purchases');
+    const mwPurRet     = sv('purchaseReturns');
+    const mwGp         = sv('gp');
+    const mwNp         = sv('np');
+    const mwGrossSales = add(mwSales, mwSalesRet);
+    const mwGrossPur   = add(mwPur,   mwPurRet);
+    const mwGpPos      = mwGp.map(v => v > 0 ?  v : 0);
+    const mwGpNeg      = mwGp.map(v => v < 0 ? -v : 0);
 
-  const tradingExpBase  = exp.openingStock + exp.purchases + exp.directExpenses.total;
-  const tradingIncBase  = inc.sales + inc.closingStock + inc.directIncomes.total;
-  const tradingExpTotal = tradingExpBase + (grossProfit > 0 ?  grossProfit : 0);
-  const tradingIncTotal = tradingIncBase + (grossProfit < 0 ? -grossProfit : 0);
-  const plExpTotal      = exp.indirectExpenses.total + (grossProfit < 0 ? -grossProfit : 0);
-  const plIncTotal      = inc.indirectIncomes.total  + (grossProfit > 0 ?  grossProfit : 0);
+    const tradingExpBase  = exp.openingStock + exp.purchases + exp.directExpenses.total;
+    const tradingIncBase  = inc.sales + inc.closingStock + inc.directIncomes.total;
+    const tradingExpTotal = tradingExpBase + (grossProfit > 0 ?  grossProfit : 0);
+    const tradingIncTotal = tradingIncBase + (grossProfit < 0 ? -grossProfit : 0);
+    const plExpTotal      = exp.indirectExpenses.total + (grossProfit < 0 ? -grossProfit : 0);
+    const plIncTotal      = inc.indirectIncomes.total  + (grossProfit > 0 ?  grossProfit : 0);
 
-  const plRows: Row[] = [
-    rowSect('PROFIT & LOSS'),
-    rowSpacer(),
+    // groupRows respects isOpen — collapsed groups show only their header row
+    const plRows: Row[] = [
+      rowSect('PROFIT & LOSS'),
+      rowSpacer(),
 
-    // ── Trading Account ──
-    rowPanel('TRADING ACCOUNT — EXPENSE (DEBIT)'),
-    rowAuto('Opening Stock', sv('openingStock'), exp.openingStock),
-    ...(purchaseReturns !== 0
-      ? [
-          rowAuto('Purchase Account',       mwGrossPur,              exp.purchases + purchaseReturns),
-          rowAuto('Less: Purchase Returns', neg(mwPurRet),           -purchaseReturns),
-          rowAuto('Net Purchases',          mwPur,                   exp.purchases),
-        ]
-      : [rowAuto('Purchase Account', mwPur, exp.purchases)]),
-    ...groupRows(exp.directExpenses, 'grp:direxp', series, N),
-    ...(grossProfit > 0 ? [rowAuto('Gross Profit c/d', mwGpPos, grossProfit)] : []),
-    rowTotal('Total', tradingExpTotal),
-    rowSpacer(),
+      // ── Trading Account ──
+      rowPanel('TRADING ACCOUNT — EXPENSE (DEBIT)'),
+      rowAuto('Opening Stock', sv('openingStock'), exp.openingStock),
+      ...(purchaseReturns !== 0
+        ? [
+            rowAuto('Purchase Account',       mwGrossPur,              exp.purchases + purchaseReturns),
+            rowAuto('Less: Purchase Returns', neg(mwPurRet),           -purchaseReturns),
+            rowAuto('Net Purchases',          mwPur,                   exp.purchases),
+          ]
+        : [rowAuto('Purchase Account', mwPur, exp.purchases)]),
+      ...groupRows(exp.directExpenses, 'grp:direxp', series, N, isOpen),
+      ...(grossProfit > 0 ? [rowAuto('Gross Profit c/d', mwGpPos, grossProfit)] : []),
+      rowTotal('Total', tradingExpTotal),
+      rowSpacer(),
 
-    rowPanel('TRADING ACCOUNT — INCOME (CREDIT)'),
-    ...(salesReturns !== 0
-      ? [
-          rowAuto('Sales Account',          mwGrossSales,            grossSales),
-          rowAuto('Less: Sales Returns',    neg(mwSalesRet),         -salesReturns),
-          rowAuto('Net Sales',              mwSales,                 inc.sales),
-        ]
-      : [rowAuto('Sales Account', mwSales, inc.sales)]),
-    ...groupRows(inc.directIncomes, 'grp:dirinc', series, N),
-    rowAuto('Closing Stock', sv('closingStock'), inc.closingStock),
-    ...(grossProfit < 0 ? [rowAuto('Gross Loss c/d', mwGpNeg, -grossProfit)] : []),
-    rowTotal('Total', tradingIncTotal),
-    rowSpacer(),
+      rowPanel('TRADING ACCOUNT — INCOME (CREDIT)'),
+      ...(salesReturns !== 0
+        ? [
+            rowAuto('Sales Account',       mwGrossSales,            grossSales),
+            rowAuto('Less: Sales Returns', neg(mwSalesRet),         -salesReturns),
+            rowAuto('Net Sales',           mwSales,                 inc.sales),
+          ]
+        : [rowAuto('Sales Account', mwSales, inc.sales)]),
+      ...groupRows(inc.directIncomes, 'grp:dirinc', series, N, isOpen),
+      rowAuto('Closing Stock', sv('closingStock'), inc.closingStock),
+      ...(grossProfit < 0 ? [rowAuto('Gross Loss c/d', mwGpNeg, -grossProfit)] : []),
+      rowTotal('Total', tradingIncTotal),
+      rowSpacer(),
 
-    // ── Gross Profit / Loss banner ──
-    {
-      kind: 'banner',
-      name: grossProfit >= 0 ? 'GROSS PROFIT' : 'GROSS LOSS',
-      indent: 0,
-      months: mwGp.map(v => Math.abs(v)),
-      total: Math.abs(grossProfit),
-      profitPositive: grossProfit >= 0,
-    },
-    rowSpacer(),
+      // ── Gross Profit / Loss banner ──
+      {
+        kind: 'banner',
+        name: grossProfit >= 0 ? 'GROSS PROFIT' : 'GROSS LOSS',
+        indent: 0,
+        months: mwGp.map(v => Math.abs(v)),
+        total: Math.abs(grossProfit),
+        profitPositive: grossProfit >= 0,
+      },
+      rowSpacer(),
 
-    // ── P&L Account ──
-    rowPanel('P&L ACCOUNT — EXPENSE (DEBIT)'),
-    ...(grossProfit < 0 ? [rowAuto('Gross Loss b/d', mwGpNeg, -grossProfit)] : []),
-    ...groupRows(exp.indirectExpenses, 'grp:indexp', series, N),
-    rowTotal('Total', plExpTotal),
-    rowSpacer(),
+      // ── P&L Account ──
+      rowPanel('P&L ACCOUNT — EXPENSE (DEBIT)'),
+      ...(grossProfit < 0 ? [rowAuto('Gross Loss b/d', mwGpNeg, -grossProfit)] : []),
+      ...groupRows(exp.indirectExpenses, 'grp:indexp', series, N, isOpen),
+      rowTotal('Total', plExpTotal),
+      rowSpacer(),
 
-    rowPanel('P&L ACCOUNT — INCOME (CREDIT)'),
-    ...(grossProfit >= 0 ? [rowAuto('Gross Profit b/d', mwGpPos, grossProfit)] : []),
-    ...groupRows(inc.indirectIncomes, 'grp:indinc', series, N),
-    rowTotal('Total', plIncTotal),
-    rowSpacer(),
+      rowPanel('P&L ACCOUNT — INCOME (CREDIT)'),
+      ...(grossProfit >= 0 ? [rowAuto('Gross Profit b/d', mwGpPos, grossProfit)] : []),
+      ...groupRows(inc.indirectIncomes, 'grp:indinc', series, N, isOpen),
+      rowTotal('Total', plIncTotal),
+      rowSpacer(),
 
-    // ── Net Profit / Loss banner ──
-    {
-      kind: 'banner',
-      name: pl.netProfit >= 0 ? 'NET PROFIT' : 'NET LOSS',
-      indent: 0,
-      months: mwNp.map(v => Math.abs(v)),
-      total: Math.abs(pl.netProfit),
-      profitPositive: pl.netProfit >= 0,
-    },
-  ];
+      // ── Net Profit / Loss banner ──
+      {
+        kind: 'banner',
+        name: pl.netProfit >= 0 ? 'NET PROFIT' : 'NET LOSS',
+        indent: 0,
+        months: mwNp.map(v => Math.abs(v)),
+        total: Math.abs(pl.netProfit),
+        profitPositive: pl.netProfit >= 0,
+      },
+    ];
 
-  renderRows(plRows, y);
+    renderRows(plRows, y);
+  }
 
   // ── Footer on every page ──────────────────────────────────────────────────
 
@@ -419,11 +458,12 @@ export async function generateChartOfAccountsPdf(opts: CoaPdfOpts): Promise<void
   });
   stampFooters(
     doc,
-    `${locationLabel}  ·  ${periodLabel}  ·  Generated: ${generated}  ·  Chart of Accounts`,
+    `${statementLabel}  ·  ${locationLabel}  ·  ${periodLabel}  ·  Generated: ${generated}`,
   );
 
   // ── Download ──────────────────────────────────────────────────────────────
 
   const slug = locationLabel.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
-  doc.save(`chart-of-accounts-${slug}-${Date.now()}.pdf`);
+  const stmtSlug = statement === 'balance_sheet' ? 'balance-sheet' : 'profit-and-loss';
+  doc.save(`${stmtSlug}-${slug}-${Date.now()}.pdf`);
 }
