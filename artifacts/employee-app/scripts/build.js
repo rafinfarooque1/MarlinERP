@@ -57,6 +57,14 @@ function stripProtocol(domain) {
 }
 
 function getDeploymentDomain() {
+  // EXPO_PUBLIC_DOMAIN is explicitly configured for this deployment and must
+  // take priority. REPLIT_INTERNAL_APP_DOMAIN is the internal Replit hostname
+  // (e.g. old-project-name.replit.app) which is NOT the custom domain served
+  // to end-users, so it must lose to an explicit EXPO_PUBLIC_DOMAIN setting.
+  if (process.env.EXPO_PUBLIC_DOMAIN) {
+    return stripProtocol(process.env.EXPO_PUBLIC_DOMAIN);
+  }
+
   if (process.env.REPLIT_INTERNAL_APP_DOMAIN) {
     return stripProtocol(process.env.REPLIT_INTERNAL_APP_DOMAIN);
   }
@@ -65,12 +73,8 @@ function getDeploymentDomain() {
     return stripProtocol(process.env.REPLIT_DEV_DOMAIN);
   }
 
-  if (process.env.EXPO_PUBLIC_DOMAIN) {
-    return stripProtocol(process.env.EXPO_PUBLIC_DOMAIN);
-  }
-
   console.error(
-    'ERROR: No deployment domain found. Set REPLIT_INTERNAL_APP_DOMAIN, REPLIT_DEV_DOMAIN, or EXPO_PUBLIC_DOMAIN',
+    'ERROR: No deployment domain found. Set EXPO_PUBLIC_DOMAIN, REPLIT_INTERNAL_APP_DOMAIN, or REPLIT_DEV_DOMAIN',
   );
   process.exit(1);
 }
@@ -150,12 +154,18 @@ async function startMetro(expoPublicDomain, expoPublicReplId) {
 
   metroProcess = spawn(
     'pnpm',
-    ['exec', 'expo', 'start', '--no-dev', '--minify', '--localhost'],
+    ['exec', 'expo', 'start', '--no-dev', '--minify', '--localhost', '--port', '8081'],
     {
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: false,
       cwd: projectRoot,
-      env,
+      env: {
+        ...env,
+        // Force non-interactive mode so Expo does not prompt for login.
+        // EXPO_TOKEN is available from Replit Secrets and will be used
+        // automatically by the Expo CLI for authentication.
+        CI: '1',
+      },
     },
   );
 
@@ -177,6 +187,11 @@ async function startMetro(expoPublicDomain, expoPublicReplId) {
 
     const healthy = await checkMetroHealth();
     if (healthy) {
+      // The /status endpoint returns 200 as soon as Metro binds to the port,
+      // but the bundle resolver may still be initialising. Give it a few extra
+      // seconds before the first bundle request to avoid spurious 404s.
+      console.log('Metro healthy — waiting 5s for bundler initialisation...');
+      await new Promise((resolve) => setTimeout(resolve, 5000));
       console.log('Metro ready');
       return;
     }
@@ -250,8 +265,30 @@ async function downloadBundle(platform, timestamp) {
   );
 
   console.log(`Fetching ${platform} bundle...`);
-  await downloadFile(url.toString(), output);
-  console.log(`${platform} bundle ready`);
+
+  // Retry up to 12 times with a 10s back-off. Metro's HTTP status endpoint
+  // returns 200 as soon as it binds to the port, but the pnpm-symlink resolver
+  // (unstable_enableSymlinks) may still need a few extra seconds to index the
+  // dependency graph — during which bundle requests return 404. Retrying
+  // silently handles that window without failing the build.
+  const maxAttempts = 12;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      await downloadFile(url.toString(), output);
+      console.log(`${platform} bundle ready`);
+      return;
+    } catch (error) {
+      const is404 = error.message.includes('HTTP 404');
+      if (is404 && attempt < maxAttempts) {
+        console.log(
+          `[attempt ${attempt}/${maxAttempts}] Bundle not ready yet (${error.message}), retrying in 10s...`,
+        );
+        await new Promise((resolve) => setTimeout(resolve, 10000));
+      } else {
+        throw error;
+      }
+    }
+  }
 }
 
 async function downloadManifest(platform) {

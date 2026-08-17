@@ -1,0 +1,66 @@
+The latest production republish failed during the BUILD stage.
+
+Do NOT shut down, unpublish, replace, restore, reset, or modify the currently running production deployment or production database.
+
+Do NOT start the APK/EAS build yet.
+
+First investigate the actual publishing BUILD failure.
+
+1. Open and inspect the complete Build logs from the failed publish.
+2. Identify the exact command that failed and the exact error message.
+3. Determine whether the failure is caused by:
+   - artifact.toml configuration
+   - pnpm/build command
+   - Metro/Expo configuration
+   - missing dependency
+   - environment variable
+   - TypeScript/build error
+   - incorrect PORT/BASE_PATH
+   - another deployment-specific issue
+
+4. Fix only the root cause of the production build failure.
+5. Do not remove or weaken existing ERP functionality to make the build pass.
+6. Do not change the production database or business data.
+7. Do not change accounting, sales, purchase, inventory, payroll, or backup data.
+8. Preserve the existing production domain:
+   https://frozenfruits.store
+
+After fixing the build:
+
+- Run the production build locally/in the Replit environment.
+- Confirm it completes successfully.
+- Verify the Employee App build configuration remains:
+  BASE_PATH=/employee-app/
+  EXPO_PUBLIC_DOMAIN=frozenfruits.store
+- Verify there are no remaining erpmarlin.replit.app references in the mobile configuration.
+- Verify EXPO_TOKEN exists as a secret, but NEVER print its value.
+- Verify the ERP frontend build succeeds.
+
+Only after all checks pass, attempt a new production publish.
+
+After publishing, verify:
+
+1. https://frozenfruits.store/ → HTTP 200
+2. https://frozenfruits.store/employee-app/ → HTTP 200
+3. /api/healthz → HTTP 200
+4. Login page loads.
+5. Existing ERP login and business modules still work.
+6. Production database remains connected.
+7. Backup & Restore remains functional.
+8. Employee App actually loads instead of returning HTTP 500.
+
+Do NOT start an Android EAS/APK build yet.
+
+At the end, give me:
+- exact original build error
+- root cause
+- files changed
+- fix applied
+- build result
+- publish result
+- Employee App HTTP status
+- API health status
+- confirmation that production data was untouched
+- any remaining warnings/errors
+
+Do not claim success unless you actually verify each item.
