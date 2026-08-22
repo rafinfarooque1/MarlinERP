@@ -29,3 +29,12 @@ refuse deletion (they are history).
 
 **LBAC:** asset rows are scoped on `COALESCE(current_location, purchase location)` — a
 transfer changes who can see the asset. Reports offer `locationBasis=purchase|current`.
+
+**Voucher location:** every non-zero asset purchase voucher must carry the same resolved
+location as its purchase row; the voucher location is required for located statements and
+must be stamped during the purchase transaction, not inferred later.
+**Why:** asset purchases are accounting transactions, so an unstamped journal voucher
+disappears from location-filtered books even when the register row is correctly located.
+**How to apply:** stamp `location_type/location_id` from the resolved purchase location on
+every future fixed-asset journal voucher; do not rewrite historical production vouchers
+without an explicit data-repair decision.
