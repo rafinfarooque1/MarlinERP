@@ -21,6 +21,7 @@ import { addBackupRestore } from "./migrations/backupRestore";
 import { addExpensePaymentModes } from "./migrations/expensePaymentModes";
 import { addFixedAssets } from "./migrations/fixedAssets";
 import { addAssetModule } from "./migrations/assetModule";
+import { repairAssetPurchaseAccounting } from "./migrations/assetPurchaseAccountingRepair";
 import { addPurchaseBillFields } from "./migrations/purchaseBills";
 import { addSaleOtherCharges } from "./migrations/saleOtherCharges";
 import { addVoucherProvenance } from "./migrations/voucherProvenance";
@@ -4756,6 +4757,7 @@ await addFixedAssets(pool);
 // asset_purchases, transfer + disposal history. Must follow addFixedAssets —
 // it extends the tables that migration creates.
 await addAssetModule(pool);
+await repairAssetPurchaseAccounting(pool);
 
 // Manual Purchase Bill: stored rate mode, the batch-number allocator and the
 // duplicate-invoice guard. Independent of the ledger seeding above.
