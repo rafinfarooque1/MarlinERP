@@ -10,7 +10,7 @@ import {
 } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { usePermission } from '@/lib/usePermission';
-import { useLocationContext, locationFilterParams } from '@/lib/locationContext';
+import { useLocationContext, locationFilterParams, locationKeysParams } from '@/lib/locationContext';
 import {
   Card, CardContent, CardHeader, CardTitle, CardDescription,
 } from '@/components/ui/card';
@@ -235,13 +235,17 @@ export default function Dashboard() {
       f.locationType = loc.locationType;
       f.locationId = loc.locationId;
     }
+    const keys = locationKeysParams(locationState);
+    if (keys) f.locationKeys = keys;
     return f;
   }, [range.from, range.to, locationState]);
 
   const { data: bi, isLoading, isError } = useGetDashboardBi(filters);
 
   const pLabel = periodLabel(range.from || undefined, range.to || undefined);
-  const reportLocationLabel = bi?.scope.label === 'All locations' ? 'All Locations' : bi?.scope.label;
+  const reportLocationLabel = locationState.locationKeys?.length
+    ? (locationState.locationNames ?? locationState.locationKeys).join(' + ')
+    : bi?.scope.label === 'All locations' ? 'All Locations' : bi?.scope.label;
 
   // Permission gate
   if (!dashPerm.isLoading && !dashPerm.canView) {
@@ -279,8 +283,14 @@ export default function Dashboard() {
   // Payments/Receipts tiles always agree with the books for the range and
   // location. Null exactly when the balance tiles are null.
   const mf = bi?.moneyFlows;
-  const showLocationBreakdown = !!bi?.scope.isAllLocations;
+  const showLocationBreakdown = !!bi?.scope.isAllLocations || !!locationState.locationKeys?.length;
   const locationBreakdown = bi?.locationBreakdown ?? [];
+  const selectedMetric = (metric: keyof typeof locationBreakdown[number]) =>
+    locationState.locationKeys?.length
+      ? locationBreakdown.reduce((sum, row) => sum + Number(row[metric] ?? 0), 0)
+      : null;
+  const dashboardValue = (metric: keyof typeof locationBreakdown[number], fallback: number | null | undefined) =>
+    selectedMetric(metric) ?? fallback;
   type BreakdownMetric = keyof Omit<typeof locationBreakdown[number], 'locationType' | 'locationId' | 'name'>;
   const locationLines = (metric: BreakdownMetric) =>
     showLocationBreakdown
@@ -398,11 +408,11 @@ export default function Dashboard() {
 
   const summaryCards: SummaryCard[] = [
     // ── Row 1: Sales · Purchases ────────────────────────────────────────────
-    { label: 'Sales', value: fmt(s?.total ?? 0), tone: 'pos', hint: locationHint('sales'), onClick: drillTo('/reports/sales', 'register') },
-    { label: 'Purchases', value: fmt(bi?.purchases.total ?? 0), hint: locationHint('purchases'), onClick: drillTo('/reports/purchases', 'register') },
+    { label: 'Sales', value: fmt(dashboardValue('sales', s?.total) ?? 0), tone: 'pos', hint: locationHint('sales'), onClick: drillTo('/reports/sales', 'register') },
+    { label: 'Purchases', value: fmt(dashboardValue('purchases', bi?.purchases.total) ?? 0), hint: locationHint('purchases'), onClick: drillTo('/reports/purchases', 'register') },
     // ── Row 2: Inventory · Expenses ─────────────────────────────────────────
     ...(hasInventory
-      ? [{ label: 'Inventory Value', value: fmt(bi!.inventory.valuation ?? 0), tone: 'info' as CardTone, hint: locationHint('inventoryValue'), onClick: drillTo('/reports/inventory', 'valuation') }]
+      ? [{ label: 'Inventory Value', value: fmt(dashboardValue('inventoryValue', bi!.inventory.valuation) ?? 0), tone: 'info' as CardTone, hint: locationHint('inventoryValue'), onClick: drillTo('/reports/inventory', 'valuation') }]
       : []),
     // Expenses and the balance tiles come from the accounting postings, which
     // carry no location. The API returns null for a single-location login
@@ -410,7 +420,7 @@ export default function Dashboard() {
     // the gap instead of a misleading zero.
     {
       label: 'Expenses',
-      value: bi?.expenses?.total == null ? '—' : fmt(bi.expenses.total),
+      value: dashboardValue('expense', bi?.expenses?.total) == null ? '—' : fmt(dashboardValue('expense', bi?.expenses?.total)!),
       tone: (bi?.expenses?.total ?? 0) > 0 ? 'neg' : 'default',
       // Same three-way breakdown style as the Payables card. Salary and Rent
       // are read off the same P&L build as the total and Other is the exact
@@ -438,7 +448,7 @@ export default function Dashboard() {
     // control account alone and showed nothing at all for unpaid wages.
     {
       label: 'Payables',
-      value: (bi?.payables as any)?.allPayables == null ? '—' : fmt((bi!.payables as any).allPayables),
+      value: dashboardValue('payables', (bi?.payables as any)?.allPayables ?? bi?.payables?.total) == null ? '—' : fmt(dashboardValue('payables', (bi?.payables as any)?.allPayables ?? bi?.payables?.total)!),
       tone: (bi?.payables as any)?.allPayables == null ? 'default' : 'neg',
       // Breakdown of everything the company owes: trade creditors, accrued
       // salary and accrued rent — the same three figures allPayables sums, so
@@ -458,7 +468,7 @@ export default function Dashboard() {
     },
     {
       label: 'Receivables',
-      value: bi?.receivables?.total == null ? '—' : fmt(bi.receivables.total),
+      value: dashboardValue('receivables', bi?.receivables?.total) == null ? '—' : fmt(dashboardValue('receivables', bi?.receivables?.total)!),
       tone: bi?.receivables?.total == null ? 'default' : (bi?.receivables?.overdue ?? 0) > 0 ? 'warn' : 'info',
       hint: locationHint('receivables'),
       onClick: drillTo('/reports/parties', 'receivables'),
@@ -470,14 +480,14 @@ export default function Dashboard() {
     // excludes bank movements and could never equal these figures.
     {
       label: 'Payments',
-      value: mf == null ? '—' : fmt(mf.totalOut),
+      value: dashboardValue('payments', mf?.totalOut) == null ? '—' : fmt(dashboardValue('payments', mf?.totalOut)!),
       tone: mf == null ? 'default' : mf.totalOut > 0 ? 'neg' : 'default',
       hint: locationHint('payments', mf == null ? undefined : `Cash ${fmt(mf.cashOut)} · Bank ${fmt(mf.bankOut)}`),
       onClick: drillTo('/reports/financial', 'cashBank'),
     },
     {
       label: 'Receipts',
-      value: mf == null ? '—' : fmt(mf.totalIn),
+      value: dashboardValue('receipts', mf?.totalIn) == null ? '—' : fmt(dashboardValue('receipts', mf?.totalIn)!),
       tone: mf == null ? 'default' : mf.totalIn > 0 ? 'pos' : 'default',
       hint: locationHint('receipts', mf == null ? undefined : `Cash ${fmt(mf.cashIn)} · Bank ${fmt(mf.bankIn)}`),
       onClick: drillTo('/reports/financial', 'cashBank'),
@@ -485,14 +495,14 @@ export default function Dashboard() {
     // ── Row 5: Cash · Bank ──────────────────────────────────────────────────
     {
       label: 'Cash Balance',
-      value: bi?.cash?.balance == null ? '—' : fmt(bi.cash.balance),
+      value: dashboardValue('cash', bi?.cash?.balance) == null ? '—' : fmt(dashboardValue('cash', bi?.cash?.balance)!),
       tone: bi?.cash?.balance == null ? 'default' : bi.cash.balance >= 0 ? 'pos' : 'neg',
       hint: locationHint('cash'),
       onClick: drillTo('/reports/financial', 'cash'),
     },
     {
       label: 'Bank Balance',
-      value: bi?.bank?.balance == null ? '—' : fmt(bi.bank.balance),
+      value: dashboardValue('bank', bi?.bank?.balance) == null ? '—' : fmt(dashboardValue('bank', bi?.bank?.balance)!),
       tone: bi?.bank?.balance == null ? 'default' : bi.bank.balance >= 0 ? 'pos' : 'neg',
       hint: locationHint('bank'),
       onClick: drillTo('/reports/financial', 'bank'),
@@ -501,14 +511,14 @@ export default function Dashboard() {
     // NP sits beside GP (under Bank Balance) per owner spec, Aug 2026.
     {
       label: 'GP',
-      value: pf?.gross == null ? '—' : fmt(pf.gross),
+      value: dashboardValue('grossProfit', pf?.gross) == null ? '—' : fmt(dashboardValue('grossProfit', pf?.gross)!),
       tone: pf?.gross == null ? 'default' : pf.gross >= 0 ? 'pos' : 'neg',
       hint: locationHint('grossProfit', 'Gross Profit · tap for P&L'),
       onClick: drill('pl-gross-profit'),
     },
     {
       label: 'NP',
-      value: pf?.net == null ? '—' : fmt(pf.net),
+      value: dashboardValue('netProfit', pf?.net) == null ? '—' : fmt(dashboardValue('netProfit', pf?.net)!),
       tone: pf?.net == null ? 'default' : pf.net >= 0 ? 'pos' : 'neg',
       hint: locationHint('netProfit', 'Net Profit · tap for P&L'),
       onClick: drill('pl-net-profit'),
@@ -540,7 +550,7 @@ export default function Dashboard() {
     if (!c) return []; // permission-hidden (Inventory) — omitted, like on screen
     return [{
       label: out,
-      value: typeof c.value === 'string' ? c.value : '—',
+       value: typeof c.value === 'string' ? c.value : '—',
       tone: c.tone,
       hint: showLocationBreakdown ? undefined : fallbackHint,
       locationLines: showLocationBreakdown
@@ -556,15 +566,15 @@ export default function Dashboard() {
   // Payments|Receipts, Cash|Bank, GP|NP; when Inventory is permission-hidden,
   // Expenses spans its full row so every later semantic pair stays intact.
   const mobileCards: MobileKpi[] = [
-    { label: 'Sales', icon: TrendingUp, value: fmt(s?.total ?? 0), tone: 'pos', lines: locationLines('sales'), onClick: drillTo('/reports/sales', 'register') },
-    { label: 'Purchases', icon: ShoppingCart, value: fmt(bi?.purchases.total ?? 0), lines: locationLines('purchases'), onClick: drillTo('/reports/purchases', 'register') },
+     { label: 'Sales', icon: TrendingUp, value: fmt(dashboardValue('sales', s?.total) ?? 0), tone: 'pos', lines: locationLines('sales'), onClick: drillTo('/reports/sales', 'register') },
+     { label: 'Purchases', icon: ShoppingCart, value: fmt(dashboardValue('purchases', bi?.purchases.total) ?? 0), lines: locationLines('purchases'), onClick: drillTo('/reports/purchases', 'register') },
     ...(hasInventory
-       ? [{ label: 'Inventory', icon: Boxes, value: fmt(bi!.inventory.valuation ?? 0), tone: 'info' as CardTone, lines: locationLines('inventoryValue'), onClick: drillTo('/reports/inventory', 'valuation') }]
+        ? [{ label: 'Inventory', icon: Boxes, value: fmt(dashboardValue('inventoryValue', bi!.inventory.valuation) ?? 0), tone: 'info' as CardTone, lines: locationLines('inventoryValue'), onClick: drillTo('/reports/inventory', 'valuation') }]
       : []),
     {
       label: 'Expenses',
       icon: Receipt,
-      value: bi?.expenses?.total == null ? '—' : fmt(bi.expenses.total),
+       value: dashboardValue('expense', bi?.expenses?.total) == null ? '—' : fmt(dashboardValue('expense', bi?.expenses?.total)!),
       tone: (bi?.expenses?.total ?? 0) > 0 ? 'neg' : 'default',
       lines: showLocationBreakdown
         ? locationLines('expense')
@@ -581,8 +591,8 @@ export default function Dashboard() {
     {
       label: 'Payables',
       icon: ArrowUpRight,
-      value: (bi?.payables as any)?.allPayables == null ? '—' : fmt((bi!.payables as any).allPayables),
-      tone: (bi?.payables as any)?.allPayables == null ? 'default' : 'neg',
+       value: dashboardValue('payables', (bi?.payables as any)?.allPayables ?? bi?.payables?.total) == null ? '—' : fmt(dashboardValue('payables', (bi?.payables as any)?.allPayables ?? bi?.payables?.total)!),
+       tone: dashboardValue('payables', (bi?.payables as any)?.allPayables ?? bi?.payables?.total) == null ? 'default' : 'neg',
       lines: showLocationBreakdown
         ? locationLines('payables')
         : (bi?.payables as any)?.salaryPayable != null
@@ -597,7 +607,7 @@ export default function Dashboard() {
     {
       label: 'Receivables',
       icon: ArrowDownRight,
-      value: bi?.receivables?.total == null ? '—' : fmt(bi.receivables.total),
+       value: dashboardValue('receivables', bi?.receivables?.total) == null ? '—' : fmt(dashboardValue('receivables', bi?.receivables?.total)!),
       tone: bi?.receivables?.total == null ? 'default' : (bi?.receivables?.overdue ?? 0) > 0 ? 'warn' : 'info',
       lines: locationLines('receivables'),
       onClick: drillTo('/reports/parties', 'receivables'),
@@ -605,7 +615,7 @@ export default function Dashboard() {
     {
       label: 'Payments',
       icon: Banknote,
-      value: mf == null ? '—' : fmt(mf.totalOut),
+       value: dashboardValue('payments', mf == null ? null : mf.totalOut) == null ? '—' : fmt(dashboardValue('payments', mf?.totalOut)!),
       tone: mf == null ? 'default' : mf.totalOut > 0 ? 'neg' : 'default',
       lines: showLocationBreakdown
         ? locationLines('payments')
@@ -620,7 +630,7 @@ export default function Dashboard() {
     {
       label: 'Receipts',
       icon: HandCoins,
-      value: mf == null ? '—' : fmt(mf.totalIn),
+       value: dashboardValue('receipts', mf == null ? null : mf.totalIn) == null ? '—' : fmt(dashboardValue('receipts', mf?.totalIn)!),
       tone: mf == null ? 'default' : mf.totalIn > 0 ? 'pos' : 'default',
       lines: showLocationBreakdown
         ? locationLines('receipts')
@@ -635,7 +645,7 @@ export default function Dashboard() {
     {
       label: 'Cash',
       icon: Wallet,
-      value: bi?.cash?.balance == null ? '—' : fmt(bi.cash.balance),
+       value: dashboardValue('cash', bi?.cash?.balance) == null ? '—' : fmt(dashboardValue('cash', bi?.cash?.balance)!),
       tone: bi?.cash?.balance == null ? 'default' : bi.cash.balance >= 0 ? 'pos' : 'neg',
       lines: locationLines('cash'),
       onClick: drillTo('/reports/financial', 'cash'),
@@ -643,7 +653,7 @@ export default function Dashboard() {
     {
       label: 'Bank',
       icon: Landmark,
-      value: bi?.bank?.balance == null ? '—' : fmt(bi.bank.balance),
+       value: dashboardValue('bank', bi?.bank?.balance) == null ? '—' : fmt(dashboardValue('bank', bi?.bank?.balance)!),
       tone: bi?.bank?.balance == null ? 'default' : bi.bank.balance >= 0 ? 'pos' : 'neg',
       lines: locationLines('bank'),
       onClick: drillTo('/reports/financial', 'bank'),
@@ -651,7 +661,7 @@ export default function Dashboard() {
     {
       label: 'GP',
       icon: PieChart,
-      value: pf?.gross == null ? '—' : fmt(pf.gross),
+       value: dashboardValue('grossProfit', pf?.gross) == null ? '—' : fmt(dashboardValue('grossProfit', pf?.gross)!),
       tone: pf?.gross == null ? 'default' : pf.gross >= 0 ? 'pos' : 'neg',
       lines: locationLines('grossProfit'),
       desc: showLocationBreakdown ? undefined : 'Gross Profit',
@@ -660,7 +670,7 @@ export default function Dashboard() {
     {
       label: 'NP',
       icon: BarChart3,
-      value: pf?.net == null ? '—' : fmt(pf.net),
+       value: dashboardValue('netProfit', pf?.net) == null ? '—' : fmt(dashboardValue('netProfit', pf?.net)!),
       tone: pf?.net == null ? 'default' : pf.net >= 0 ? 'pos' : 'neg',
       lines: locationLines('netProfit'),
       desc: showLocationBreakdown ? undefined : 'Net Profit',
