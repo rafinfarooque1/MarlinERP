@@ -1,0 +1,916 @@
+IMPLEMENT A COMPLETE LOCATION-AWARE ACCOUNTING AND CASH/BANK SYSTEM.
+
+This is a production ERP. Do NOT break existing accounting, financial data, vouchers, transactions, permissions, or calculations.
+
+The goal is to make location handling consistent across the entire ERP.
+
+============================================================
+CORE LOCATION RULE
+============================================================
+
+There are two different concepts and they MUST NOT be mixed:
+
+1. ACCOUNT LOCATION ASSIGNMENT
+2. TRANSACTION LOCATION
+
+An account can be assigned to one or more locations.
+
+A transaction must always have its own historical location.
+
+Changing an account's location assignment later MUST NEVER modify the location of an old transaction.
+
+============================================================
+1. CASH & BANK — MULTIPLE LOCATION ASSIGNMENT
+============================================================
+
+The Cash & Bank module currently allows an account such as:
+
+- Cash
+- HDFC Bank
+- ICICI Bank
+- SBI Bank
+- Petty Cash
+- Other cash/bank accounts
+
+to have a Location.
+
+Change this so that a Cash or Bank account can be assigned to MULTIPLE locations.
+
+Example:
+
+HDFC Bank
+
+Allowed Locations:
+
+☑ Head Office
+☑ Frozen Hub - Calicut
+☑ Frozen Hub - Rajaguda
+☐ Tropicane - Kochi
+☐ Tropicane - Ecity
+
+This means HDFC Bank is available for transactions in:
+
+- Head Office
+- Frozen Hub - Calicut
+- Frozen Hub - Rajaguda
+
+It does NOT mean that every HDFC transaction belongs to all three locations.
+
+The account is simply AVAILABLE to those locations.
+
+============================================================
+2. CASH/BANK ACCOUNT LOCATION UI
+============================================================
+
+In the Cash & Bank account create/edit screen, replace the current single-location selector with a multi-select location selector.
+
+Example:
+
+Location
+
+[ Select locations ]
+
+☑ Head Office
+☑ Frozen Hub - Calicut
+☑ Frozen Hub - Rajaguda
+☐ Tropicane - Kochi
+☐ Tropicane - Ecity
+
+Provide:
+
+- Select All
+- Clear All
+- Search locations if there are many
+- Selected location count if useful
+
+Display selected locations clearly after selection.
+
+Example:
+
+3 locations selected
+
+or:
+
+Head Office
+Frozen Hub - Calicut
+Frozen Hub - Rajaguda
+
+Do NOT display the locations as one comma-separated database field if the existing architecture supports a relational mapping.
+
+Prefer a proper account-to-location relationship/table.
+
+============================================================
+3. MULTIPLE LOCATION ACCOUNT AVAILABILITY
+============================================================
+
+If a Cash/Bank account is assigned to multiple locations:
+
+Example:
+
+HDFC Bank
+Locations:
+- Head Office
+- Frozen Hub - Calicut
+- Frozen Hub - Rajaguda
+
+Then when creating a NEW transaction:
+
+If current location = Head Office
+→ HDFC is available.
+
+If current location = Frozen Hub - Calicut
+→ HDFC is available.
+
+If current location = Frozen Hub - Rajaguda
+→ HDFC is available.
+
+If current location = Tropicane - Kochi
+→ HDFC should NOT be available unless Kochi is also assigned.
+
+This is an account availability rule.
+
+============================================================
+4. TRANSACTION LOCATION IS STILL SINGLE
+============================================================
+
+This is extremely important.
+
+Even though a Cash/Bank account can be assigned to multiple locations, EACH TRANSACTION must have ONE actual location.
+
+Example:
+
+HDFC Bank is assigned to:
+
+Head Office
+Frozen Hub - Calicut
+Frozen Hub - Rajaguda
+
+Transaction 1:
+
+HDFC Bank
+Payment ₹50,000
+Location = Head Office
+
+Transaction 2:
+
+HDFC Bank
+Receipt ₹30,000
+Location = Frozen Hub - Calicut
+
+Transaction 3:
+
+HDFC Bank
+Payment ₹20,000
+Location = Frozen Hub - Rajaguda
+
+These are three separate transactions with three separate locations.
+
+DO NOT store a transaction as belonging to all three locations simply because the account is available in all three.
+
+============================================================
+5. HISTORICAL TRANSACTION IMMUTABILITY
+============================================================
+
+Changing the Cash/Bank account's allowed locations MUST NOT change old transactions.
+
+Example:
+
+Today HDFC Bank is assigned to:
+
+Head Office
+Calicut
+
+Old transaction:
+
+₹50,000
+Location = Calicut
+
+Tomorrow administrator removes Calicut from the HDFC Bank account and adds:
+
+Rajaguda
+
+The old ₹50,000 transaction MUST STILL remain:
+
+Location = Calicut
+
+Do not rewrite it.
+
+Do not migrate it.
+
+Do not recalculate it.
+
+Only NEW transactions must follow the new account-location availability.
+
+============================================================
+6. CASH & BANK — MULTIPLE LOCATION FILTER
+============================================================
+
+The Cash & Bank module must support:
+
+- All Locations
+- One Location
+- Multiple Locations
+
+When multiple locations are selected, show Cash/Bank data belonging to ANY of the selected locations.
+
+Example:
+
+Selected:
+
+☑ Head Office
+☑ Frozen Hub - Calicut
+☐ Frozen Hub - Rajaguda
+☐ Tropicane - Kochi
+
+Cash & Bank should show:
+
+Head Office cash/bank transactions
++
+Frozen Hub - Calicut cash/bank transactions
+
+Do NOT show:
+
+Rajaguda
+Kochi
+
+unless they are selected.
+
+============================================================
+7. MULTIPLE LOCATION SELECTION MUST NOT CREATE DUPLICATES
+============================================================
+
+If the same Cash/Bank account is available in multiple selected locations, do NOT duplicate the account merely because it belongs to multiple selected locations.
+
+Example:
+
+HDFC Bank is assigned to:
+
+Head Office
+Calicut
+Rajaguda
+
+User selects:
+
+Head Office
+Calicut
+
+HDFC Bank should appear ONCE in the account list.
+
+Its transactions should be filtered to:
+
+Head Office
++
+Calicut
+
+Do NOT show the same transaction twice.
+
+Use DISTINCT/account-level deduplication where required.
+
+============================================================
+8. CASH/BANK BALANCE WITH MULTIPLE LOCATIONS
+============================================================
+
+When multiple locations are selected:
+
+Calculate the balance using transactions from ONLY the selected locations.
+
+Example:
+
+HDFC:
+
+Head Office balance = ₹1,00,000
+Calicut balance = ₹2,00,000
+Rajaguda balance = ₹50,000
+
+If selected:
+
+Head Office + Calicut
+
+Displayed balance:
+
+₹3,00,000
+
+Do NOT include Rajaguda.
+
+If selected:
+
+Calicut only
+
+Displayed balance:
+
+₹2,00,000
+
+If selected:
+
+All Locations
+
+Displayed balance:
+
+₹3,50,000
+
+The same rule must apply to:
+
+- Cash balance
+- Bank balance
+- Opening balance where applicable
+- Closing balance
+- Inflows
+- Outflows
+- Receipts
+- Payments
+
+============================================================
+9. CASH & BANK TRANSACTION CREATION
+============================================================
+
+When creating a Cash/Bank transaction:
+
+The currently selected location determines the transaction location.
+
+Example:
+
+Current location:
+
+Frozen Hub - Calicut
+
+HDFC Bank is available there.
+
+Create payment:
+
+₹50,000
+
+The transaction MUST store:
+
+location = Frozen Hub - Calicut
+
+It must NOT store:
+
+Head Office
+Calicut
+Rajaguda
+
+as multiple transaction locations.
+
+============================================================
+10. MULTIPLE LOCATION SELECTOR VS TRANSACTION LOCATION
+============================================================
+
+Do not confuse these:
+
+Account allowed locations:
+[MULTIPLE]
+
+Transaction location:
+[SINGLE]
+
+Report filter:
+[MULTIPLE]
+
+Example:
+
+HDFC Bank allowed locations:
+Head Office + Calicut + Rajaguda
+
+Transaction:
+₹10,000 payment
+Location = Calicut
+
+Report filter:
+Head Office + Calicut
+
+Result:
+₹10,000 transaction is included.
+
+Report filter:
+Rajaguda only
+
+Result:
+₹10,000 transaction is NOT included.
+
+============================================================
+11. GLOBAL LOCATION SELECTOR
+============================================================
+
+The ERP's location selector must support:
+
+All Locations
+Head Office
+Frozen Hub - Rajaguda
+Frozen Hub - Calicut
+Tropicane - Kochi
+Tropicane - Ecity
+etc.
+
+For modules that support consolidated reporting, allow:
+
+- All Locations
+- Single Location
+- Multiple Locations where appropriate
+
+Cash & Bank specifically MUST support multiple selected locations.
+
+Do not force the Cash & Bank report to use only one location.
+
+============================================================
+12. HEAD OFFICE
+============================================================
+
+Head Office is a normal location.
+
+If:
+
+Current Location = Head Office
+
+show ONLY Head Office data.
+
+This applies to:
+
+- Dashboard
+- Sales
+- Purchases
+- Inventory
+- Expenses
+- Payables
+- Receivables
+- Payments
+- Receipts
+- Cash
+- Bank
+- Ledgers
+- Vouchers
+- Assets
+- Reports
+
+Do NOT automatically show all locations because the user is in Head Office.
+
+Authorized Head Office users may select:
+
+All Locations
+
+to see consolidated data.
+
+============================================================
+13. ALL LOCATIONS
+============================================================
+
+When:
+
+Current Location = All Locations
+
+show consolidated data from all authorized locations.
+
+For dashboard metrics, show:
+
+TOTAL
+
+and location-wise breakdown.
+
+Required:
+
+Sales
+Purchase
+Inventory Value
+Expense
+Payables
+Receivables
+Payments
+Receipts
+Cash
+Bank
+Gross Profit
+Net Profit
+
+Example:
+
+SALES
+
+Total              ₹10,00,000
+
+Head Office         ₹2,00,000
+Frozen Hub - Calicut ₹4,00,000
+Frozen Hub - Rajaguda ₹2,00,000
+Tropicane - Kochi    ₹1,00,000
+Tropicane - Ecity    ₹1,00,000
+
+The total must reconcile exactly.
+
+============================================================
+14. SPECIFIC LOCATION DASHBOARD
+============================================================
+
+If:
+
+Current Location = Frozen Hub - Calicut
+
+show only:
+
+Sales
+₹4,00,000
+
+Purchase
+₹3,00,000
+
+etc.
+
+Do NOT show a location breakdown when only one location is selected.
+
+============================================================
+15. MULTIPLE LOCATION DASHBOARD
+============================================================
+
+If the dashboard supports multiple selected locations, show:
+
+TOTAL
+
+plus breakdown for ONLY the selected locations.
+
+Example:
+
+Selected:
+
+Head Office
+Calicut
+
+Sales
+
+Total
+₹6,00,000
+
+Head Office
+₹2,00,000
+
+Frozen Hub - Calicut
+₹4,00,000
+
+Do NOT include Rajaguda or Kochi.
+
+If the current dashboard UI does not yet support multiple-location selection, implement it consistently without creating a separate dashboard.
+
+============================================================
+16. LEDGER STATEMENT
+============================================================
+
+Ledger Statement must show Narration.
+
+When:
+
+All Locations
+
+show:
+
+Date
+Description
+Narration
+Type
+Location
+Debit
+Credit
+Balance
+
+When:
+
+one specific location
+
+show:
+
+Date
+Description
+Narration
+Type
+Debit
+Credit
+Balance
+
+Do NOT show Location column for a single selected location.
+
+If multiple locations are selected:
+
+show Location column.
+
+Example:
+
+Head Office + Calicut
+
+Date | Description | Narration | Type | Location | Debit | Credit | Balance
+
+Every transaction must show its actual stored location.
+
+============================================================
+17. ASSET PURCHASE ACCOUNTING
+============================================================
+
+Fix the existing issue where an asset purchased from a vendor appears in the Asset module but not correctly in the Vendor Ledger and Fixed Asset Ledger.
+
+When an asset is purchased from a vendor:
+
+Vendor ledger:
+→ vendor payable/credit entry
+
+Fixed Asset ledger:
+→ appropriate asset debit entry
+
+Asset module:
+→ asset record
+
+General Ledger:
+→ correct accounting posting
+
+Reports:
+→ correct accounting impact
+
+Do not create duplicate accounting entries.
+
+The transaction must also receive the correct transaction location.
+
+============================================================
+18. LOCATION-AWARE ACCOUNTING
+============================================================
+
+Audit all financial posting paths.
+
+Every relevant transaction must retain a transaction-level location, including:
+
+- Sales
+- Purchases
+- Sales Returns
+- Purchase Returns
+- Payments
+- Receipts
+- Journal Vouchers
+- Cash
+- Bank
+- Assets
+- Expenses
+- Income
+- Customer transactions
+- Vendor transactions
+- Inventory/accounting postings
+- Opening balances where applicable
+
+Do NOT dynamically determine historical transaction location from the account's CURRENT location.
+
+============================================================
+19. DATABASE DESIGN
+============================================================
+
+Inspect the existing database architecture before changing it.
+
+For Cash/Bank accounts, if the current schema supports only:
+
+account.locationId
+
+replace/extend it with a proper many-to-many relationship where appropriate.
+
+Conceptually:
+
+cash_bank_account
+    ↓
+cash_bank_account_locations
+    ↓
+location
+
+One Cash/Bank account:
+→ many allowed locations
+
+One location:
+→ many Cash/Bank accounts
+
+But accounting transaction:
+
+transaction
+→ one location
+
+Do not store multiple transaction locations.
+
+Use proper foreign keys and indexes.
+
+Do not use comma-separated location IDs in a string field.
+
+============================================================
+20. PERMISSIONS
+============================================================
+
+Respect existing user permissions.
+
+A user must only be able to:
+
+- select locations they are authorized to access
+- see transactions they are authorized to see
+- see Cash/Bank accounts available to their authorized locations
+
+All Locations must not bypass permissions.
+
+============================================================
+21. HISTORICAL DATA SAFETY
+============================================================
+
+Before database changes:
+
+inspect existing data.
+
+Do NOT alter:
+
+- transaction amounts
+- debit/credit values
+- voucher numbers
+- dates
+- narrations
+- existing account balances
+
+Do NOT rewrite historical location assignments just because account-location assignments are being changed.
+
+If migration is required, use a deterministic and safe migration.
+
+Do not guess historical locations.
+
+============================================================
+22. CASH/BANK TEST CASES
+============================================================
+
+TEST 1 — MULTI-LOCATION ACCOUNT
+
+Create/edit:
+
+HDFC Bank
+
+Assign:
+
+Head Office
+Calicut
+Rajaguda
+
+Verify HDFC appears as available in all three locations.
+
+TEST 2 — UNASSIGNED LOCATION
+
+Select:
+
+Tropicane - Kochi
+
+Verify HDFC is NOT available if Kochi is not assigned.
+
+TEST 3 — TRANSACTION LOCATION
+
+Select:
+
+Calicut
+
+Create HDFC payment ₹50,000.
+
+Verify:
+
+Transaction location = Calicut.
+
+TEST 4 — CHANGE ACCOUNT LOCATIONS
+
+Change HDFC allowed locations to:
+
+Head Office
+Rajaguda
+
+Remove Calicut.
+
+Verify:
+
+Old ₹50,000 Calicut transaction still has:
+
+Location = Calicut
+
+TEST 5 — NEW TRANSACTION
+
+Select Rajaguda.
+
+Create new HDFC payment.
+
+Verify:
+
+New transaction location = Rajaguda.
+
+TEST 6 — MULTIPLE REPORT FILTER
+
+Select:
+
+Head Office + Calicut
+
+Verify Cash & Bank shows transactions from both.
+
+Do not show Rajaguda.
+
+TEST 7 — NO DUPLICATES
+
+HDFC is assigned to multiple selected locations.
+
+Verify HDFC account appears once.
+
+Verify each transaction appears once.
+
+TEST 8 — BALANCE
+
+If:
+
+Head Office = ₹1,00,000
+Calicut = ₹2,00,000
+Rajaguda = ₹50,000
+
+Select:
+
+Head Office + Calicut
+
+Expected:
+
+₹3,00,000
+
+TEST 9 — ALL LOCATIONS
+
+Expected:
+
+₹3,50,000
+
+TEST 10 — SINGLE LOCATION
+
+Select:
+
+Calicut
+
+Expected:
+
+₹2,00,000
+
+No Location column in the ledger.
+
+TEST 11 — MULTIPLE LOCATION LEDGER
+
+Select:
+
+Head Office + Calicut
+
+Expected:
+
+Location column appears.
+
+Every transaction shows its actual location.
+
+TEST 12 — ASSET PURCHASE
+
+Verify asset purchase appears correctly in:
+
+Asset
+Vendor Ledger
+Fixed Asset Ledger
+General Ledger
+Relevant reports
+
+and has the correct transaction location.
+
+============================================================
+23. DO NOT BREAK EXISTING ERP
+============================================================
+
+Do not redesign the ERP unnecessarily.
+
+Do not create duplicate modules.
+
+Do not create a separate Cash & Bank system.
+
+Do not create a separate dashboard.
+
+Do not create a separate ledger engine.
+
+Extend the existing architecture.
+
+Reuse existing:
+
+- accounting posting engine
+- transaction model
+- location model
+- dashboard calculations
+- ledger calculations
+- permissions
+- Cash & Bank screens
+- reporting components
+
+Only add the required many-to-many account-location relationship and correct transaction-level filtering/storage.
+
+============================================================
+24. FINAL VERIFICATION
+============================================================
+
+After implementation, provide a detailed report confirming:
+
+1. Cash/Bank accounts can be assigned to multiple locations.
+2. Multiple selected locations work in Cash & Bank.
+3. Account availability follows allowed locations.
+4. Transactions still have exactly one historical location.
+5. Changing account locations does not modify historical transactions.
+6. Cash/Bank balances reconcile correctly.
+7. Ledger shows Narration.
+8. Ledger shows Location only for All Locations or multiple-location views.
+9. Head Office behaves as a normal location.
+10. All Locations provides consolidated data.
+11. Dashboard location totals reconcile with consolidated totals.
+12. Asset purchases appear in Vendor Ledger and Fixed Asset Ledger.
+13. Existing accounting data has not been altered incorrectly.
+14. No duplicate transactions are created.
+15. Existing permissions remain enforced.
+
+Do not claim the implementation is complete until these tests pass.
