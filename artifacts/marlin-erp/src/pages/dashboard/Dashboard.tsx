@@ -283,7 +283,7 @@ export default function Dashboard() {
   // Payments/Receipts tiles always agree with the books for the range and
   // location. Null exactly when the balance tiles are null.
   const mf = bi?.moneyFlows;
-  const showLocationBreakdown = !!bi?.scope.isAllLocations || !!locationState.locationKeys?.length;
+  const showLocationBreakdown = !!bi?.scope.isAllLocations || (locationState.locationKeys?.length ?? 0) > 0;
   const locationBreakdown = bi?.locationBreakdown ?? [];
   const selectedMetric = (metric: keyof typeof locationBreakdown[number]) =>
     locationState.locationKeys?.length
