@@ -430,6 +430,7 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
   const requestedLocationKeys = typeof q.locationKeys === "string"
     ? q.locationKeys.split(",").map((key) => key.trim()).filter((key) => /^(headoffice|warehouse|outlet)(:\d+)?$/.test(key))
     : [];
+  const isNoLocations = q.locationKeys === "none";
   if (!reqLocType && headerLoc) {
     reqLocType = headerLoc.locationType;
     reqLocId = headerLoc.locationId;
@@ -471,6 +472,7 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
   // Resolve a friendly scope label.
   let scopeLabel = "All locations";
   if (isMultiLocations) scopeLabel = "Selected locations";
+  if (isNoLocations) scopeLabel = "No locations";
   if (effLocType && effLocId != null) {
     if (effLocType === "warehouse") {
       const { rows } = await pool.query(`SELECT name FROM warehouses WHERE id = $1`, [effLocId]);
@@ -482,7 +484,7 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       scopeLabel = "Head Office";
     }
   }
-  const isAllLocations = scope.isHeadOffice && effLocType == null && !isMultiLocations;
+  const isAllLocations = scope.isHeadOffice && effLocType == null && !isMultiLocations && !isNoLocations;
 
   // ── WHERE-builder for the `sales` table (alias s) ─────────────────────────
   // Always excludes branch transfers and cancelled invoices; applies date and
