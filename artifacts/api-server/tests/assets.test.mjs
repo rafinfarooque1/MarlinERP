@@ -114,7 +114,8 @@ console.log('\n[1] Purchase posting per payment mode + GST paise math');
 
 async function voucherLines(purchaseId) {
   return (await sql(
-    `SELECT al.code, jl.debit::numeric AS debit, jl.credit::numeric AS credit, jv.source_module
+    `SELECT al.code, jl.debit::numeric AS debit, jl.credit::numeric AS credit, jv.source_module,
+            jv.location_type AS voucher_location_type, jv.location_id AS voucher_location_id
      FROM asset_purchases ap
      JOIN journal_vouchers jv ON jv.id = ap.journal_voucher_id
      JOIN journal_voucher_lines jl ON jl.voucher_id = jv.id
@@ -136,6 +137,8 @@ let lines = await voucherLines(cash.data.id);
 assert('Cash: Dr STD-FIXED-ASSET for total', lines[0]?.code === 'STD-FIXED-ASSET' && Number(lines[0]?.debit) === 3199.10);
 assert('Cash: Cr STD-CASH for total', lines[1]?.code === 'STD-CASH' && Number(lines[1]?.credit) === 3199.10);
 assert('Voucher source_module = fixed_asset', lines[0]?.source_module === 'fixed_asset');
+assert('Cash voucher keeps its resolved location stamp',
+  lines[0]?.voucher_location_type === 'headoffice' && Number(lines[0]?.voucher_location_id) === 1);
 
 const bank = await post('/assets/purchases', {
   assetName: `${TAG} Printer`, categoryId: catId, purchaseDate: '2026-07-20',
@@ -146,6 +149,8 @@ assert('Bank purchase created', bank.status === 201);
 if (bank.data?.id) createdPurchaseIds.push(bank.data.id);
 lines = await voucherLines(bank.data.id);
 assert('Bank: Cr STD-BANK', lines[1]?.code === 'STD-BANK' && Number(lines[1]?.credit) === 9440);
+assert('Bank voucher keeps its resolved location stamp',
+  lines[0]?.voucher_location_type === 'headoffice' && Number(lines[0]?.voucher_location_id) === 1);
 
 const credit = await post('/assets/purchases', {
   assetName: `${TAG} Freezer`, categoryId: catId, purchaseDate: '2026-07-30',

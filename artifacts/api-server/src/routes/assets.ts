@@ -491,10 +491,11 @@ router.post("/assets/purchases", requireModuleAction(PG_PURCHASES, "add"), async
       const { rows: [voucher] } = await client.query(
         `INSERT INTO journal_vouchers
            (voucher_type, voucher_number, voucher_date, narration, party_ledger_id, total_amount, created_by,
-            origin, source_module)
-         VALUES ('journal', $1, $2, $3, $4, $5, $6, 'system', 'fixed_asset') RETURNING id`,
+            origin, source_module, location_type, location_id)
+         VALUES ('journal', $1, $2, $3, $4, $5, $6, 'system', 'fixed_asset', $7, $8) RETURNING id`,
         [voucherNumber, purchaseDate, narration,
-         paymentMode === "credit" ? creditLedgerId : null, totalCost, createdBy],
+         paymentMode === "credit" ? creditLedgerId : null, totalCost, createdBy,
+         loc.type, loc.id],
       );
       voucherId = Number(voucher.id);
       await client.query(
