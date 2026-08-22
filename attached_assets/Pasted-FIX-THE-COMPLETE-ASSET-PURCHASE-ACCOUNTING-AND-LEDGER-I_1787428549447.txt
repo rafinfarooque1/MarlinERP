@@ -1,0 +1,504 @@
+FIX THE COMPLETE ASSET PURCHASE ACCOUNTING AND LEDGER ISSUE IN THE LIVE/PUBLISHED ERP.
+
+IMPORTANT:
+
+This is not only for future Asset Purchases.
+
+There are already existing Asset Purchase transactions in the LIVE/PRODUCTION ERP that are missing from:
+
+1. Vendor Ledger
+2. Fixed Asset Ledger
+
+These existing transactions must also be safely repaired.
+
+The final system must work for:
+
+A. All existing Asset Purchases already entered in Live/Production.
+B. Every new Asset Purchase created in the future.
+
+Do not only fix the UI.
+Do not only fix future transactions.
+Do not manually display Asset Purchase records in the ledger UI.
+
+Fix the actual accounting posting and ledger integration.
+
+====================================================
+PART 1 — DIAGNOSE THE ROOT CAUSE
+====================================================
+
+First inspect an existing affected Asset Purchase in the LIVE database.
+
+Trace the complete flow:
+
+Asset Purchase
+→ asset_purchases record
+→ payment/vendor selection
+→ accounting voucher/journal
+→ journal header
+→ journal lines
+→ ledger/account postings
+→ Vendor Ledger
+→ Fixed Asset Ledger
+→ Trial Balance
+→ Chart of Accounts
+→ location filtering
+
+For every existing affected Asset Purchase, determine:
+
+- Was the Asset Purchase record created correctly?
+- Was a voucher/journal created?
+- Was the voucher posted?
+- Is the voucher balanced?
+- Are the correct debit and credit journal lines present?
+- Which ledger/account IDs were used?
+- Is the Fixed Asset account line present?
+- Is the Vendor/Creditor account line present for credit purchases?
+- Are the debit/credit directions correct?
+- Is the journal/voucher location_type present?
+- Is the journal/voucher location_id present?
+- Are the accounts available for that location?
+- Are the journal lines being excluded by the Vendor Ledger query?
+- Are the journal lines being excluded by the Fixed Asset Ledger query?
+- Are existing vouchers missing location data?
+- Are ledger/account mappings missing because of the new multi-location accounting changes?
+
+Compare an affected Asset Purchase against a normal Purchase/Voucher that correctly appears in the relevant ledgers.
+
+Find the exact root cause before implementing the repair.
+
+====================================================
+PART 2 — REQUIRED ACCOUNTING POSTINGS
+====================================================
+
+The existing ERP accounting architecture and conventions must be preserved.
+
+For a Vendor/Credit Asset Purchase, the accounting result must effectively be:
+
+Fixed Asset Account / Asset Ledger       DEBIT
+Vendor / Creditor Ledger                 CREDIT
+
+For example:
+
+Asset Purchase: ₹100,000 on credit from Vendor A
+
+Fixed Asset Account     Dr ₹100,000
+Vendor A                Cr ₹100,000
+
+Result:
+
+- The Asset Purchase must appear in the Fixed Asset Ledger.
+- The Asset Purchase must appear in Vendor A's Ledger.
+- Vendor outstanding/payable must update correctly.
+- Trial Balance must remain balanced.
+
+For Cash Asset Purchases:
+
+Fixed Asset Account     DEBIT
+Cash Account            CREDIT
+
+The transaction must appear in:
+
+- Fixed Asset Ledger
+- Cash Ledger
+
+For Bank Asset Purchases:
+
+Fixed Asset Account     DEBIT
+Bank Account            CREDIT
+
+The transaction must appear in:
+
+- Fixed Asset Ledger
+- Bank Ledger
+
+For any other existing payment modes, follow the ERP's existing accounting rules.
+
+Do not invent a new accounting model if the current ERP already has established posting rules.
+
+====================================================
+PART 3 — FIX THE FIXED ASSET LEDGER
+====================================================
+
+Every Asset Purchase must appear in the correct Fixed Asset Ledger.
+
+Verify:
+
+- Correct Fixed Asset account.
+- Correct amount.
+- Correct debit/credit.
+- Correct purchase date.
+- Correct voucher/reference number.
+- Correct narration.
+- Correct asset information/reference where appropriate.
+- Correct location.
+- Correct opening/running balance.
+- Correct inclusion in Chart of Accounts.
+- Correct inclusion in Trial Balance where applicable.
+
+The entry must come from the actual accounting/journal posting system.
+
+DO NOT solve this by reading the asset_purchases table directly and showing it as a fake ledger entry.
+
+====================================================
+PART 4 — FIX THE VENDOR LEDGER
+====================================================
+
+For every Asset Purchase made on credit from a Vendor:
+
+The transaction must appear in the selected Vendor's actual accounting ledger.
+
+Verify:
+
+- Correct Vendor/Creditor ledger.
+- Correct amount.
+- Correct debit/credit according to the existing ERP convention.
+- Correct voucher/reference number.
+- Correct date.
+- Correct narration.
+- Correct outstanding/payable balance.
+- Correct running balance.
+- Correct location.
+
+Again:
+
+DO NOT create a separate Asset Purchase list inside Vendor Ledger.
+
+The Vendor Ledger must receive the transaction through the actual accounting journal/ledger posting mechanism.
+
+====================================================
+PART 5 — FIX EXISTING LIVE/PRODUCTION TRANSACTIONS
+====================================================
+
+There are already Asset Purchases entered in LIVE that are missing from the Vendor Ledger and/or Fixed Asset Ledger.
+
+These must be repaired safely.
+
+Create a production-safe, IDEMPOTENT repair/backfill process.
+
+The repair process must:
+
+1. Scan existing Asset Purchases.
+
+2. Identify whether each Asset Purchase already has:
+
+   - a valid accounting voucher/journal
+   - a Fixed Asset ledger posting
+   - a Vendor ledger posting where required
+   - correct debit/credit lines
+   - correct location_type
+   - correct location_id
+
+3. For transactions that are already correct:
+   - DO NOTHING.
+   - Do not duplicate anything.
+
+4. For transactions that are missing required accounting postings:
+   - Repair only the missing or invalid posting.
+   - Reuse the existing Asset Purchase data.
+   - Preserve the original purchase date.
+   - Preserve the original Vendor.
+   - Preserve the original Asset.
+   - Preserve the original amount.
+   - Preserve the original transaction/reference where possible.
+   - Use the original selected location.
+
+5. Prevent duplicates.
+
+The repair MUST be idempotent.
+
+Running it:
+
+Once → fixes missing entries.
+
+Running it again → must not create duplicate vouchers or duplicate ledger lines.
+
+Before inserting anything, check for:
+
+- existing repair voucher/reference
+- existing linked voucher
+- existing journal lines
+- existing account posting
+- existing Vendor posting
+- existing Fixed Asset posting
+
+Do not create a second accounting transaction if a valid transaction already exists.
+
+====================================================
+PART 6 — LOCATION-AWARE ACCOUNTING
+====================================================
+
+The ERP now supports:
+
+- Head Office
+- Individual Warehouses/Locations
+- All Locations
+
+Asset Purchase accounting must respect this completely.
+
+If an Asset Purchase was created in:
+
+HEAD OFFICE
+
+Then:
+
+- Fixed Asset Ledger → Head Office entry.
+- Vendor Ledger → Head Office entry.
+- Cash/Bank if applicable → Head Office entry.
+- Dashboard/reporting → Head Office only when Head Office is selected.
+
+If created in:
+
+FROZEN HUB - CALICUT
+
+Then the transaction must appear only in:
+
+- Calicut Fixed Asset Ledger.
+- Calicut Vendor Ledger.
+- Calicut Cash/Bank where applicable.
+
+Same for every other location.
+
+When:
+
+ALL LOCATIONS
+
+is selected, the transaction must appear in the consolidated results.
+
+IMPORTANT:
+
+Head Office is a normal location for filtering.
+
+Head Office ≠ All Locations.
+
+The repair process must also assign/fix the correct location for existing Asset Purchase accounting entries where the original Asset Purchase record contains a valid location.
+
+If historical vouchers have:
+
+location_type = NULL
+location_id = NULL
+
+but the linked Asset Purchase has a valid location, safely repair the location relationship if and only if the relationship can be determined reliably.
+
+Do not guess a location.
+
+If the original Asset Purchase has no reliable location, report it separately instead of assigning an arbitrary location.
+
+====================================================
+PART 7 — MULTI-LOCATION SHARED ACCOUNTS
+====================================================
+
+Because Cash/Bank and accounting accounts can now belong to multiple locations:
+
+Verify that the repair does not break shared accounts.
+
+An account can be available in:
+
+- Head Office
+- One warehouse
+- Multiple warehouses
+- All assigned locations
+
+The repair must use the relational account-location membership logic.
+
+Do not revert to the old single-owner location logic.
+
+Branch/location users must never see transactions from other locations unless:
+
+All Locations
+
+is explicitly selected and the user has permission.
+
+====================================================
+PART 8 — LIVE/PRODUCTION ISSUE
+====================================================
+
+The issue must be fixed in the actual LIVE/PUBLISHED ERP.
+
+Do not stop after:
+
+- API build passed.
+- Preview works.
+- Development works.
+- Code is ready to publish.
+
+Required process:
+
+1. Diagnose the existing Live Asset Purchase records.
+2. Implement the accounting/ledger fix.
+3. Implement the safe repair/backfill for existing records.
+4. Run the repair in a controlled, production-safe way.
+5. Verify that existing affected Asset Purchases now appear correctly.
+6. Verify that new Asset Purchases also work correctly.
+7. Publish/redeploy the latest code.
+8. Verify the actual Live/Published application.
+
+====================================================
+PART 9 — REPAIR EXISTING DATA SAFELY
+====================================================
+
+Before running any production repair:
+
+Produce a dry-run report showing:
+
+- Total existing Asset Purchases scanned.
+- Number already correct.
+- Number missing Fixed Asset posting.
+- Number missing Vendor posting.
+- Number missing both.
+- Number with missing location.
+- Number that cannot be safely repaired automatically.
+- Exact IDs/references of affected transactions.
+
+Then perform the repair.
+
+After the repair, produce a final report:
+
+- Number repaired.
+- Number skipped because already correct.
+- Number requiring manual review.
+- Number of vouchers created.
+- Number of journal lines created.
+- Number of location stamps repaired.
+
+Do not:
+
+- reset the database.
+- truncate tables.
+- delete accounting history.
+- delete Asset Purchases.
+- duplicate vouchers.
+- duplicate journal entries.
+- change correct transactions.
+
+====================================================
+PART 10 — VERIFY EXISTING ASSET PURCHASES
+====================================================
+
+After repair, verify at least the existing affected Asset Purchases in LIVE:
+
+For each repaired transaction:
+
+Asset Purchase
+→ exists
+
+Accounting Voucher
+→ exists and is balanced
+
+Fixed Asset Ledger
+→ entry visible
+
+Vendor Ledger
+→ entry visible for credit purchases
+
+Cash/Bank Ledger
+→ entry visible for cash/bank purchases
+
+Chart of Accounts
+→ balance reflects posting
+
+Trial Balance
+→ remains balanced
+
+Location Filter
+→ transaction appears only in the correct location
+
+All Locations
+→ transaction appears in consolidated reporting
+
+Voucher details:
+→ correct date
+→ correct amount
+→ correct narration
+→ correct reference number
+→ correct location
+
+====================================================
+PART 11 — VERIFY NEW ASSET PURCHASES
+====================================================
+
+After repairing existing records, create/test a NEW Asset Purchase.
+
+Test:
+
+A. Credit/Vendor Asset Purchase
+
+Confirm:
+
+[ ] Asset Purchase saves.
+[ ] Accounting voucher is created.
+[ ] Fixed Asset Ledger shows the entry.
+[ ] Vendor Ledger shows the entry.
+[ ] Vendor outstanding/payable updates.
+[ ] Trial Balance remains balanced.
+[ ] Correct location is saved.
+
+B. Cash Asset Purchase
+
+Confirm:
+
+[ ] Fixed Asset Ledger shows the entry.
+[ ] Cash Ledger shows the payment/outflow.
+[ ] Correct location is saved.
+
+C. Bank Asset Purchase
+
+Confirm:
+
+[ ] Fixed Asset Ledger shows the entry.
+[ ] Bank Ledger shows the payment/outflow.
+[ ] Correct location is saved.
+
+====================================================
+PART 12 — FINAL ACCEPTANCE CRITERIA
+====================================================
+
+DO NOT MARK THIS TASK COMPLETE UNTIL ALL OF THE FOLLOWING ARE TRUE:
+
+EXISTING LIVE DATA:
+
+[ ] Existing affected Asset Purchases have been checked.
+[ ] Missing ledger/accounting postings are identified.
+[ ] Safe idempotent repair/backfill is implemented.
+[ ] Existing affected transactions are repaired where possible.
+[ ] No duplicate vouchers were created.
+[ ] No duplicate ledger lines were created.
+[ ] Correct existing transactions were not modified unnecessarily.
+[ ] Existing Asset Purchases now appear in the Fixed Asset Ledger.
+[ ] Existing credit Asset Purchases now appear in the correct Vendor Ledger.
+[ ] Existing transactions respect their original location.
+
+NEW TRANSACTIONS:
+
+[ ] New Asset Purchases create correct accounting entries.
+[ ] New Asset Purchases appear in Fixed Asset Ledger.
+[ ] Credit Asset Purchases appear in Vendor Ledger.
+[ ] Cash Asset Purchases appear in Cash Ledger.
+[ ] Bank Asset Purchases appear in Bank Ledger.
+[ ] Location stamping is correct.
+
+LIVE APPLICATION:
+
+[ ] Latest fix is deployed to the published/live ERP.
+[ ] The actual Live application is verified.
+[ ] No relevant API/server errors remain.
+[ ] Trial Balance remains balanced.
+[ ] Location filtering works.
+[ ] Head Office shows only Head Office data.
+[ ] Individual warehouses show only their own data.
+[ ] All Locations shows consolidated data.
+
+IMPORTANT FINAL INSTRUCTION:
+
+First diagnose the complete accounting flow and existing affected Live records.
+
+Then fix the root cause.
+
+Then safely repair the existing Asset Purchases already entered in Live.
+
+Then verify both the Fixed Asset Ledger and Vendor Ledger.
+
+Then verify a new Asset Purchase.
+
+Do not finish with "ready to publish", "preview works", or "build passed".
+
+The task is complete only when BOTH existing and new Asset Purchases correctly flow through the real accounting system and appear in the appropriate Vendor Ledger and Fixed Asset Ledger in the LIVE/PUBLISHED ERP.

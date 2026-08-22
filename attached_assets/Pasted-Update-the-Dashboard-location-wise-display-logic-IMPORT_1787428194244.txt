@@ -1,0 +1,234 @@
+Update the Dashboard location-wise display logic.
+
+IMPORTANT: Do not change the current dashboard design, layout, cards, styling, filters, calculations, or existing functionality except for the location-wise breakdown described below.
+
+## 1. When "All Locations" is selected
+
+Each dashboard metric card must show:
+
+1. The consolidated total for all locations.
+2. A location-wise breakdown below the total.
+
+Example:
+
+Sales
+Total: ₹10,00,000
+
+Head Office: ₹2,00,000
+Frozen Hub - Calicut: ₹4,00,000
+Frozen Hub - Rajaguda: ₹2,00,000
+Tropicane - Kochi: ₹1,00,000
+Tropicane - Ecity: ₹1,00,000
+
+Apply the exact same behavior to all of these dashboard metrics:
+
+- Sales
+- Purchases
+- Inventory Value
+- Expense
+- Payables
+- Receivables
+- Payments
+- Receipts
+- Cash
+- Bank
+- Gross Profit (GP)
+- Net Profit (NP)
+
+For every metric:
+
+TOTAL = consolidated value across all locations
+
+Below the total, show the amount for each location.
+
+The location-wise amounts must be calculated using the same dashboard date filter currently selected.
+
+Example:
+
+Purchases
+Total: ₹5,00,000
+
+Head Office: ₹1,00,000
+Frozen Hub - Calicut: ₹2,00,000
+Frozen Hub - Rajaguda: ₹50,000
+Tropicane - Kochi: ₹75,000
+Tropicane - Ecity: ₹75,000
+
+The sum of all location amounts must match the consolidated total wherever the accounting calculation is additive.
+
+## 2. When a specific location is selected
+
+Do NOT show the location-wise breakdown.
+
+Show only the selected location's value.
+
+Example:
+
+If "Frozen Hub - Calicut" is selected:
+
+Sales
+₹4,00,000
+
+Purchases
+₹2,00,000
+
+Inventory Value
+₹X
+
+etc.
+
+The dashboard must remain clean exactly like the current dashboard design.
+
+No list of other locations.
+No consolidated "All Locations" breakdown.
+No other location data.
+
+## 3. Head Office must behave exactly like a normal location
+
+Head Office is NOT automatically "All Locations".
+
+This is critical.
+
+When the location selector is:
+
+Head Office
+
+Then the entire application must show ONLY Head Office data, exactly the same way selecting a warehouse/location shows only that warehouse's data.
+
+For example, when Head Office is selected:
+
+- Dashboard → Head Office data only
+- Sales → Head Office transactions only
+- Purchases → Head Office transactions only
+- Inventory → Head Office inventory only
+- Expenses → Head Office expenses only
+- Payments → Head Office payments only
+- Receipts → Head Office receipts only
+- Cash → Head Office cash only
+- Bank → Head Office bank only
+- Payables → Head Office payables only
+- Receivables → Head Office receivables only
+- GP → Head Office calculation only
+- NP → Head Office calculation only
+- Ledger and reports → Head Office data only
+
+Head Office must behave exactly like:
+
+Frozen Hub - Calicut
+Frozen Hub - Rajaguda
+Tropicane - Kochi
+Tropicane - Ecity
+
+The ONLY difference is that Head Office users may also have the option to select "All Locations".
+
+## 4. "All Locations" is the only consolidated mode
+
+Only when the location selector is explicitly set to:
+
+All Locations
+
+should the system:
+
+- Combine data from all locations.
+- Show consolidated totals.
+- Show the location-wise breakdown on the dashboard.
+
+Selecting Head Office must NEVER automatically return All Locations data.
+
+If the current implementation treats Head Office as company-wide/global data, fix that behavior.
+
+The filtering logic must clearly distinguish:
+
+HEAD OFFICE SELECTED
+→ Head Office data only
+
+WAREHOUSE/BRANCH SELECTED
+→ That location's data only
+
+ALL LOCATIONS SELECTED
+→ Consolidated data from all locations
+
+## 5. Dashboard data must actually change when the location changes
+
+Currently, changing between Head Office and All Locations can show the same values.
+
+Fix this.
+
+The dashboard API/data query must use the selected location as an actual filter.
+
+For example:
+
+All Locations:
+Sales = Head Office + Calicut + Rajaguda + Kochi + Ecity
+
+Head Office:
+Sales = Head Office only
+
+Frozen Hub - Calicut:
+Sales = Calicut only
+
+The same must apply to every dashboard metric.
+
+Do not only change the label in the UI. The underlying API queries and calculations must return correctly filtered data.
+
+## 6. Keep current dashboard format
+
+Do not redesign the dashboard.
+
+Keep the existing cards, layout, typography, colors, date filters, charts, and responsive behavior.
+
+Only add the location-wise breakdown when:
+
+Location = All Locations
+
+For a specific location, keep the current simple format:
+
+Sales
+₹2,00,000
+
+not:
+
+Sales
+Total: ₹2,00,000
+Head Office: ...
+Calicut: ...
+etc.
+
+## 7. Verification
+
+After implementation, verify these scenarios with actual data:
+
+1. Select Head Office
+   - Dashboard shows only Head Office values.
+
+2. Select Frozen Hub - Calicut
+   - Dashboard shows only Calicut values.
+
+3. Select another branch
+   - Dashboard changes to that branch's values only.
+
+4. Select All Locations
+   - Dashboard shows consolidated total.
+   - Dashboard also shows each location's amount below the total.
+
+5. Confirm that All Locations total matches the combined location data.
+
+6. Confirm that switching from Head Office to All Locations changes the numbers whenever other locations have data.
+
+7. Check all metrics:
+   - Sales
+   - Purchases
+   - Inventory Value
+   - Expense
+   - Payables
+   - Receivables
+   - Payments
+   - Receipts
+   - Cash
+   - Bank
+   - GP
+   - NP
+
+Do not stop at UI changes. Verify the backend/API filtering and the actual calculations.
+
+Do not modify unrelated functionality.
