@@ -87,11 +87,13 @@ async function allLocationLedgers(): Promise<LocationLedgerRow[]> {
     UNION ALL
     -- Cash & Bank accounts assigned to a branch behave exactly like the
     -- branch's till: money accounts the location's own staff may move money
-    -- through, invisible and unusable to every other branch.
-    SELECT ledger_id, location_type, location_id, 'cash' AS kind
-    FROM cash_bank_accounts
-    WHERE ledger_id IS NOT NULL AND location_id IS NOT NULL
-      AND location_type IN ('warehouse', 'outlet')
+    -- through, invisible and unusable to every other branch. Availability is
+    -- relational so one account can be used at several locations.
+    SELECT cba.ledger_id, cbal.location_type, cbal.location_id, 'cash' AS kind
+    FROM cash_bank_accounts cba
+    JOIN cash_bank_account_locations cbal ON cbal.account_id = cba.id
+    WHERE cba.ledger_id IS NOT NULL
+      AND cbal.location_type IN ('warehouse', 'outlet')
   `);
   return rows.map((r) => ({ ...r, ledger_id: Number(r.ledger_id), location_id: Number(r.location_id) }));
 }
@@ -330,17 +332,18 @@ export async function locationOwnedLedgerMap(): Promise<Map<number, LedgerOwner[
     UNION ALL
     SELECT 'outlet' AS lt, id, name, cash_ledger_id, sales_ledger_id, NULL::integer AS purchase_ledger_id FROM outlets
     UNION ALL
-    -- Cash & Bank accounts assigned to a branch: the branch owns that ledger
-    -- exactly like its till, so vouchers through it must be stamped to the
-    -- owner and its money stays inside the location's own books.
-    SELECT cba.location_type AS lt, cba.location_id AS id,
+    -- Cash & Bank account availability: a branch may record through the
+    -- account only when it is assigned here. The resulting voucher still gets
+    -- exactly one selected location stamp.
+    SELECT cbal.location_type AS lt, cbal.location_id AS id,
            COALESCE(w.name, o.name, 'branch') AS name,
            cba.ledger_id AS cash_ledger_id, NULL::integer AS sales_ledger_id, NULL::integer AS purchase_ledger_id
     FROM cash_bank_accounts cba
-    LEFT JOIN warehouses w ON cba.location_type = 'warehouse' AND w.id = cba.location_id
-    LEFT JOIN outlets    o ON cba.location_type = 'outlet'    AND o.id = cba.location_id
-    WHERE cba.ledger_id IS NOT NULL AND cba.location_id IS NOT NULL
-      AND cba.location_type IN ('warehouse', 'outlet')
+    JOIN cash_bank_account_locations cbal ON cbal.account_id = cba.id
+    LEFT JOIN warehouses w ON cbal.location_type = 'warehouse' AND w.id = cbal.location_id
+    LEFT JOIN outlets    o ON cbal.location_type = 'outlet'    AND o.id = cbal.location_id
+    WHERE cba.ledger_id IS NOT NULL
+      AND cbal.location_type IN ('warehouse', 'outlet')
   `);
   for (const r of rows) {
     const owner: LedgerOwner = { locationType: r.lt, locationId: Number(r.id), name: r.name };
@@ -377,11 +380,38 @@ export async function resolveMoneyVoucherLocation(
   fallback?: CallerLocation | null,
 ): Promise<{ ok: true; loc: CallerLocation } | { ok: false; status: number; error: string }> {
   const owned = await locationOwnedLedgerMap();
-  const owners = owned.get(Number(tillLedgerId)) ?? [];
-  // HO's own cash/bank = the STD-CASH/STD-BANK subtrees minus every branch till.
+  const legacyOwners = owned.get(Number(tillLedgerId)) ?? [];
+  // Cash/Bank availability is the authoritative ownership source for an
+  // account-backed ledger. Unlike legacy location ledgers it may include both
+  // Head Office and one or more branches at the same time.
+  const { rows: membershipRows } = await pool.query(
+    `SELECT cbal.location_type, cbal.location_id,
+            CASE cbal.location_type
+              WHEN 'headoffice' THEN 'Head Office'
+              WHEN 'warehouse' THEN COALESCE(w.name, 'Warehouse')
+              ELSE COALESCE(o.name, 'Outlet')
+            END AS name
+       FROM cash_bank_accounts cba
+       JOIN cash_bank_account_locations cbal ON cbal.account_id = cba.id
+       LEFT JOIN warehouses w ON cbal.location_type = 'warehouse' AND w.id = cbal.location_id
+       LEFT JOIN outlets o ON cbal.location_type = 'outlet' AND o.id = cbal.location_id
+      WHERE cba.ledger_id = $1`,
+    [tillLedgerId],
+  );
+  const owners = membershipRows.length > 0
+    ? membershipRows.map((row: any) => ({
+        locationType: String(row.location_type),
+        locationId: Number(row.location_id),
+        name: String(row.name),
+      }))
+    : legacyOwners;
+  // Ordinary HO cash/bank is the tree minus location-owned tills. A mapped
+  // account is HO-eligible only when it has an explicit headoffice:0 row.
   const hoSet = new Set(await headOfficeCashBankLedgerIds());
-  for (const id of owned.keys()) hoSet.delete(id);
-  const isHoTill = hoSet.has(Number(tillLedgerId));
+  if (membershipRows.length === 0) for (const id of owned.keys()) hoSet.delete(id);
+  const isHoTill = membershipRows.length > 0
+    ? owners.some((owner) => owner.locationType === "headoffice")
+    : hoSet.has(Number(tillLedgerId));
 
   const rawType = body?.locationType != null && body.locationType !== "" ? String(body.locationType) : "";
   if (rawType) {
@@ -430,6 +460,22 @@ export async function resolveMoneyVoucherLocation(
   }
 
   if (owners.length > 0) {
+    const isBranchUser = Boolean(employee?.branchType && employee.branchType !== "headoffice");
+    if (isBranchUser) {
+      const own = callerLocation(employee);
+      const ownMembership = owners.find((owner) =>
+        owner.locationType === own.locationType && Number(owner.locationId) === Number(own.locationId));
+      if (!ownMembership) {
+        return { ok: false, status: 403, error: "That Cash/Bank account is not available at your location." };
+      }
+      // A branch can omit the request location only because its own membership
+      // is unambiguous. Never let a shared account's arbitrary first owner
+      // stamp a branch user's voucher to another location.
+      return { ok: true, loc: own };
+    }
+    if (owners.length > 1) {
+      return { ok: false, status: 400, error: "Please select the location for this shared Cash/Bank account." };
+    }
     const pick = owners.find(o => o.locationType === "warehouse") ?? owners[0];
     return { ok: true, loc: { locationType: pick.locationType, locationId: Number(pick.locationId) } };
   }

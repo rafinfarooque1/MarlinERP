@@ -1539,6 +1539,12 @@ paths:
       operationId: listCashBankAccounts
       tags: [accounts]
       summary: List cash and bank accounts
+      parameters:
+        - name: locationKeys
+          in: query
+          required: false
+          description: Comma-separated location keys (headoffice:0, warehouse:id, outlet:id). Filters accounts and ledger-derived balances by an OR location set.
+          schema: { type: string }
       responses:
         "200":
           description: Cash/bank accounts
@@ -3390,6 +3396,14 @@ components:
               debit: { type: number }
               credit: { type: number }
               balance: { type: number }
+              reference: { type: ["string", "null"] }
+              entryType: { type: string }
+              narration:
+                type: string
+                description: Human-readable narration; mirrors description for legacy posting sources.
+              locationType: { type: ["string", "null"] }
+              locationId: { type: ["integer", "null"] }
+              locationName: { type: ["string", "null"] }
 
     CashBankAccount:
       type: object
@@ -3433,11 +3447,16 @@ components:
           type: ["integer", "null"]
         locationType:
           type: ["string", "null"]
-          description: headoffice, warehouse or outlet — the ONE location this account belongs to.
+          description: Legacy/default location retained for compatibility; account availability is in locations.
         locationId:
           type: ["integer", "null"]
         locationName:
           type: ["string", "null"]
+        locations:
+          type: array
+          items:
+            $ref: "#/components/schemas/CashBankAccountLocation"
+          description: Locations where this account may be selected for a new money transaction.
         source:
           type: string
           enum: [module, location, system, ledger]
@@ -3477,6 +3496,12 @@ components:
         locationId:
           type: integer
           description: Required when locationType is warehouse or outlet.
+        locations:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/CashBankAccountLocationInput"
+          description: Optional multi-location availability. When omitted, legacy locationType/locationId is used.
         openingBalance:
           type: number
           description: >-
@@ -3506,12 +3531,42 @@ components:
           enum: [headoffice, warehouse, outlet]
         locationId:
           type: integer
+        locations:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/CashBankAccountLocationInput"
+          description: Replaces the account's available locations. Omit to leave availability unchanged.
         openingBalance:
           type: number
           description: Replaces the ledger's opening balance for the current financial year.
         requiresReconciliation:
           type: boolean
           description: Bank/UPI accounts only — toggle the reconciliation requirement.
+
+    CashBankAccountLocation:
+      type: object
+      required: [locationType, locationId, locationName]
+      properties:
+        locationType:
+          type: string
+          enum: [headoffice, warehouse, outlet]
+        locationId:
+          type: integer
+          description: 0 for Head Office; the warehouse/outlet id otherwise.
+        locationName:
+          type: string
+
+    CashBankAccountLocationInput:
+      type: object
+      required: [locationType]
+      properties:
+        locationType:
+          type: string
+          enum: [headoffice, warehouse, outlet]
+        locationId:
+          type: integer
+          description: Required for warehouse/outlet; ignored for Head Office.
 
     Expense:
       type: object

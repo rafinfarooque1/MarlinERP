@@ -65,6 +65,7 @@ import type {
   LeaveInput,
   LedgerStatement,
   ListAttendanceParams,
+  ListCashBankAccountsParams,
   ListItemPricesParams,
   ListLeavesParams,
   ListPayrollParams,
@@ -6920,20 +6921,27 @@ export function useGetLedgerStatement<TData = Awaited<ReturnType<typeof getLedge
 
 
 
-export const getListCashBankAccountsUrl = () => {
+export const getListCashBankAccountsUrl = (params?: ListCashBankAccountsParams,) => {
+  const normalizedParams = new URLSearchParams();
 
+  Object.entries(params || {}).forEach(([key, value]) => {
 
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : String(value))
+    }
+  });
 
+  const stringifiedParams = normalizedParams.toString();
 
-  return `/api/accounts/cash-bank`
+  return stringifiedParams.length > 0 ? `/api/accounts/cash-bank?${stringifiedParams}` : `/api/accounts/cash-bank`
 }
 
 /**
  * @summary List cash and bank accounts
  */
-export const listCashBankAccounts = async ( options?: RequestInit): Promise<CashBankAccount[]> => {
+export const listCashBankAccounts = async (params?: ListCashBankAccountsParams, options?: RequestInit): Promise<CashBankAccount[]> => {
 
-  return customFetch<CashBankAccount[]>(getListCashBankAccountsUrl(),
+  return customFetch<CashBankAccount[]>(getListCashBankAccountsUrl(params),
   {
     ...options,
     method: 'GET'
@@ -6946,23 +6954,23 @@ export const listCashBankAccounts = async ( options?: RequestInit): Promise<Cash
 
 
 
-export const getListCashBankAccountsQueryKey = () => {
+export const getListCashBankAccountsQueryKey = (params?: ListCashBankAccountsParams,) => {
     return [
-    `/api/accounts/cash-bank`
+    `/api/accounts/cash-bank`, ...(params ? [params] : [])
     ] as const;
     }
 
 
-export const getListCashBankAccountsQueryOptions = <TData = Awaited<ReturnType<typeof listCashBankAccounts>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listCashBankAccounts>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+export const getListCashBankAccountsQueryOptions = <TData = Awaited<ReturnType<typeof listCashBankAccounts>>, TError = ErrorType<unknown>>(params?: ListCashBankAccountsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listCashBankAccounts>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 ) => {
 
 const {query: queryOptions, request: requestOptions} = options ?? {};
 
-  const queryKey =  queryOptions?.queryKey ?? getListCashBankAccountsQueryKey();
+  const queryKey =  queryOptions?.queryKey ?? getListCashBankAccountsQueryKey(params);
 
 
 
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof listCashBankAccounts>>> = ({ signal }) => listCashBankAccounts({ signal, ...requestOptions });
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listCashBankAccounts>>> = ({ signal }) => listCashBankAccounts(params, { signal, ...requestOptions });
 
 
 
@@ -6980,11 +6988,11 @@ export type ListCashBankAccountsQueryError = ErrorType<unknown>
  */
 
 export function useListCashBankAccounts<TData = Awaited<ReturnType<typeof listCashBankAccounts>>, TError = ErrorType<unknown>>(
-  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listCashBankAccounts>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+ params?: ListCashBankAccountsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listCashBankAccounts>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
 
-  const queryOptions = getListCashBankAccountsQueryOptions(options)
+  const queryOptions = getListCashBankAccountsQueryOptions(params,options)
 
   const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
 

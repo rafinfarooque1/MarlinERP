@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Link } from 'wouter';
 import {
   useListCashBankAccounts, useCreateCashBankAccount, useUpdateCashBankAccount, useDeleteCashBankAccount,
@@ -20,6 +20,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
+import { Checkbox } from '@/components/ui/checkbox';
 import { usePermission } from '@/lib/usePermission';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { PageHeader } from '@/components/app/page-header';
@@ -33,8 +34,9 @@ const BAD_BALANCE = 'Please enter a valid opening balance.';
 const schema = z.object({
   name: z.string().min(2, 'Name required (at least 2 characters)'),
   accountType: z.enum(['cash', 'bank', 'upi', 'other']),
-  // "headoffice" or "warehouse:3" / "outlet:2" — split before submit.
-  location: z.string(),
+  // One account may be available at several locations. This governs future
+  // selection only; every payment/receipt still stores one chosen location.
+  locations: z.array(z.string()).min(1, 'Select at least one available location.'),
   // Never parsed as numbers: leading zeros are significant and real account
   // numbers exceed the safe integer range.
   accountNumber: z.string().optional(),
@@ -58,7 +60,7 @@ type FormValues = z.infer<typeof schema>;
 
 type LocationType = 'headoffice' | 'warehouse' | 'outlet';
 function splitLocation(v: string): { locationType: LocationType; locationId?: number } {
-  if (v === 'headoffice') return { locationType: 'headoffice' };
+  if (v === 'headoffice' || v === 'headoffice:0') return { locationType: 'headoffice', locationId: 0 };
   const [locationType, id] = v.split(':');
   return { locationType: locationType as LocationType, locationId: Number(id) };
 }
@@ -70,7 +72,12 @@ export default function CashBank() {
   // behind it, which would name other branches.
   const { data: me } = useGetMe();
   const isHOUser = !(me as any)?.branchType || (me as any)?.branchType === 'headoffice';
-  const { data: accounts = [], isLoading } = useListCashBankAccounts();
+  const [availabilityFilter, setAvailabilityFilter] = useState<string[]>([]);
+  const [locationSearch, setLocationSearch] = useState('');
+  const { data: accounts = [], isLoading } = useListCashBankAccounts(
+    { locationKeys: availabilityFilter.join(',') },
+    { query: { enabled: true } } as any,
+  );
   const { data: warehouses = [] } = useListWarehouses();
   const { data: outlets = [] } = useListOutlets();
   const [search, setSearch] = useState('');
@@ -85,7 +92,7 @@ export default function CashBank() {
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
-    defaultValues: { name: '', accountType: 'bank', location: 'headoffice', accountNumber: '', bankName: '', ifscCode: '', openingBalance: 0, requiresReconciliation: true },
+    defaultValues: { name: '', accountType: 'bank', locations: ['headoffice:0'], accountNumber: '', bankName: '', ifscCode: '', openingBalance: 0, requiresReconciliation: true },
   });
 
   const watchType = form.watch('accountType');
@@ -93,7 +100,7 @@ export default function CashBank() {
 
   const openAdd = () => {
     setEditing(null);
-    form.reset({ name: '', accountType: 'bank', location: 'headoffice', accountNumber: '', bankName: '', ifscCode: '', openingBalance: 0, requiresReconciliation: true });
+    form.reset({ name: '', accountType: 'bank', locations: ['headoffice:0'], accountNumber: '', bankName: '', ifscCode: '', openingBalance: 0, requiresReconciliation: true });
     setIsOpen(true);
   };
   const openEdit = (a: any) => {
@@ -101,7 +108,8 @@ export default function CashBank() {
     form.reset({
       name: a.name ?? '',
       accountType: a.accountType,
-      location: a.locationType && a.locationType !== 'headoffice' && a.locationId != null ? `${a.locationType}:${a.locationId}` : 'headoffice',
+      locations: ((a.locations as any[] | undefined)?.map((l: any) => `${l.locationType}:${l.locationId}`)
+        ?? [`${a.locationType ?? 'headoffice'}:${a.locationId ?? 0}`]),
       accountNumber: a.accountNumber ?? '',
       bankName: a.bankName ?? '',
       ifscCode: a.ifscCode ?? '',
@@ -112,7 +120,7 @@ export default function CashBank() {
   };
 
   const onSubmit = (data: FormValues) => {
-    const loc = splitLocation(data.location);
+    const locations = data.locations.map(splitLocation);
     if (isEdit) {
       // Opening balance is only sent when the user typed one — 0 would
       // otherwise silently wipe an existing opening figure on every rename.
@@ -121,7 +129,7 @@ export default function CashBank() {
         id: editing.id,
         data: {
           name: data.name, bankName: data.bankName, accountNumber: data.accountNumber, ifscCode: data.ifscCode,
-          ...loc,
+          locations,
           ...(dirty.openingBalance ? { openingBalance: data.openingBalance } : {}),
           // Cash accounts never send the flag — the server rejects it for them.
           ...(data.accountType !== 'cash' ? { requiresReconciliation: data.requiresReconciliation } : {}),
@@ -131,8 +139,8 @@ export default function CashBank() {
         onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
       });
     } else {
-      const { location: _l, ...rest } = data;
-      createMutation.mutate({ data: { ...rest, ...loc } }, {
+      const { locations: _locations, ...rest } = data;
+      createMutation.mutate({ data: { ...rest, locations } as any }, {
         onSuccess: () => { toast.success('Account added — its ledger now appears under Chart of Accounts'); refresh(); setIsOpen(false); form.reset(); },
         onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
       });
@@ -147,11 +155,33 @@ export default function CashBank() {
     });
   };
 
-  const filtered = accounts.filter(a =>
-    a.name?.toLowerCase().includes(search.toLowerCase()) ||
-    a.bankName?.toLowerCase().includes(search.toLowerCase()) ||
-    (a as any).locationName?.toLowerCase().includes(search.toLowerCase())
+  const allLocationOptions = [
+    { key: 'headoffice:0', name: 'Head Office' },
+    ...warehouses.map((w: any) => ({ key: `warehouse:${w.id}`, name: w.name })),
+    ...outlets.map((o: any) => ({ key: `outlet:${o.id}`, name: o.name })),
+  ];
+  const ownLocationKey = !isHOUser && (me as any)?.branchType && (me as any)?.branchId
+    ? `${(me as any).branchType}:${(me as any).branchId}`
+    : null;
+  // Master lists remain unscoped for their own pages, but this accounting
+  // surface never offers a branch user another location to filter or assign.
+  const locationOptions = ownLocationKey
+    ? allLocationOptions.filter((location) => location.key === ownLocationKey)
+    : allLocationOptions;
+  const visibleLocationOptions = useMemo(
+    () => locationOptions.filter((location) => location.name.toLowerCase().includes(locationSearch.toLowerCase())),
+    [locationOptions, locationSearch],
   );
+  const rowLocations = (a: any) => (a.locations as any[] | undefined)
+    ?? [{ locationType: a.locationType ?? 'headoffice', locationId: a.locationId ?? 0, locationName: a.locationName ?? 'Head Office' }];
+  const locationText = (a: any) => rowLocations(a).map((l: any) => l.locationName).join(', ');
+  const filtered = accounts.filter(a => {
+    const matchesSearch =
+      a.name?.toLowerCase().includes(search.toLowerCase()) ||
+      a.bankName?.toLowerCase().includes(search.toLowerCase()) ||
+      locationText(a).toLowerCase().includes(search.toLowerCase());
+    return matchesSearch;
+  });
 
   // Every row carries a ledger-derived balance, so these sums are the books'
   // cash and bank positions — the same figures as the Cash Book, Bank Book,
@@ -162,7 +192,7 @@ export default function CashBank() {
   const { sorted, sort } = useTableSort(filtered, {
     name: a => a.name,
     type: a => a.accountType,
-    location: a => (a as any).locationName,
+    location: a => locationText(a),
     bank: a => a.bankName,
     accountNumber: a => a.accountNumber,
     balance: a => Number(a.balance ?? 0),
@@ -207,7 +237,7 @@ export default function CashBank() {
           actions={
             <>
               {perm.canDownload && (
-                <Button variant="outline" size="sm" onClick={() => downloadCSV('cash-bank.csv', filtered.map(a => ({ Name: a.name, Type: a.accountType, Location: (a as any).locationName || '', Bank: a.bankName || '', 'Account No': a.accountNumber || '', Balance: Number(a.balance ?? 0) })))}>
+                <Button variant="outline" size="sm" onClick={() => downloadCSV('cash-bank.csv', filtered.map(a => ({ Name: a.name, Type: a.accountType, 'Available at': locationText(a), Bank: a.bankName || '', 'Account No': a.accountNumber || '', Balance: Number(a.balance ?? 0) })))}>
                   <Download className="w-4 h-4 mr-2" /> Export
                 </Button>
               )}
@@ -235,9 +265,35 @@ export default function CashBank() {
           />
         </SummaryCardGrid>
 
-        <div className="relative max-w-xs max-md:max-w-full">
-          <Search className="w-4 h-4 text-muted-foreground absolute left-3 top-1/2 -translate-y-1/2" />
-          <Input placeholder="Search accounts..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9" />
+        <div className="flex flex-col gap-3">
+          <div className="relative max-w-xs max-md:max-w-full">
+            <Search className="w-4 h-4 text-muted-foreground absolute left-3 top-1/2 -translate-y-1/2" />
+            <Input placeholder="Search accounts..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9" />
+          </div>
+          <div className="rounded-lg border border-border bg-muted/20 px-3 py-2.5">
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+              <span className="text-xs font-medium text-muted-foreground">Filter accounts and balances by location</span>
+              {locationOptions.map((location) => {
+                const checked = availabilityFilter.includes(location.key);
+                return (
+                  <label key={location.key} className="flex items-center gap-1.5 text-sm cursor-pointer">
+                    <Checkbox
+                      checked={checked}
+                      onCheckedChange={(next) => setAvailabilityFilter((prev) =>
+                        next ? [...prev, location.key] : prev.filter((key) => key !== location.key))}
+                    />
+                    {location.name}
+                  </label>
+                );
+              })}
+              {availabilityFilter.length > 0 && (
+                <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => setAvailabilityFilter([])}>
+                  Clear
+                </Button>
+              )}
+            </div>
+            <p className="mt-1.5 text-xs text-muted-foreground">Multiple selections are combined with OR. Balances are recalculated from the matching posting slice.</p>
+          </div>
         </div>
 
         <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
@@ -265,7 +321,7 @@ export default function CashBank() {
                 <TableRow key={a.id} className="hover:bg-muted/10">
                   <TableCell className="font-semibold">{a.name}{sourceBadge(a)}</TableCell>
                   <TableCell><Badge variant="outline" className={`capitalize ${typeColor(a.accountType)}`}>{a.accountType}</Badge></TableCell>
-                  <TableCell className="text-sm text-muted-foreground">{(a as any).locationName || 'Head Office'}</TableCell>
+                  <TableCell className="text-sm text-muted-foreground">{locationText(a)}</TableCell>
                   <TableCell className="text-sm text-muted-foreground">{a.bankName || '—'}</TableCell>
                   <TableCell className="font-mono text-xs text-muted-foreground">{a.accountNumber || '—'}</TableCell>
                   <TableCell>
@@ -353,16 +409,37 @@ export default function CashBank() {
                     {isEdit && <p className="text-xs text-muted-foreground">Type decides the ledger's group and cannot change.</p>}
                     <FormMessage /></FormItem>
                 )} />
-                <FormField control={form.control} name="location" render={({ field }) => (
-                  <FormItem><FormLabel>Location</FormLabel>
-                    <Select onValueChange={field.onChange} value={field.value}>
-                      <FormControl><SelectTrigger><SelectValue /></SelectTrigger></FormControl>
-                      <SelectContent>
-                        <SelectItem value="headoffice">Head Office</SelectItem>
-                        {warehouses.map((w: any) => <SelectItem key={`w${w.id}`} value={`warehouse:${w.id}`}>{w.name}</SelectItem>)}
-                        {outlets.map((o: any) => <SelectItem key={`o${o.id}`} value={`outlet:${o.id}`}>{o.name}</SelectItem>)}
-                      </SelectContent>
-                    </Select><FormMessage /></FormItem>
+                <FormField control={form.control} name="locations" render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Available at <span className="text-destructive">*</span></FormLabel>
+                    <div className="flex gap-2">
+                      <Input placeholder="Search locations..." value={locationSearch} onChange={(event) => setLocationSearch(event.target.value)} />
+                      <Button type="button" variant="outline" size="sm" onClick={() => field.onChange(locationOptions.map((location) => location.key))}>Select All</Button>
+                      <Button type="button" variant="ghost" size="sm" onClick={() => field.onChange([])}>Clear All</Button>
+                    </div>
+                    <div className="max-h-32 overflow-y-auto rounded-md border border-input p-2 space-y-1">
+                      {visibleLocationOptions.map((location) => {
+                        const checked = field.value.includes(location.key);
+                        return (
+                          <label key={location.key} className="flex items-center gap-2 rounded px-1 py-1 text-sm cursor-pointer hover:bg-muted/50">
+                            <Checkbox
+                              checked={checked}
+                              onCheckedChange={(next) => field.onChange(
+                                next ? [...field.value, location.key] : field.value.filter((key) => key !== location.key),
+                              )}
+                            />
+                            {location.name}
+                          </label>
+                        );
+                      })}
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      {field.value.length} location{field.value.length === 1 ? '' : 's'} selected
+                      {field.value.length > 0 && `: ${locationOptions.filter((location) => field.value.includes(location.key)).map((location) => location.name).join(', ')}`}
+                    </p>
+                    <p className="text-xs text-muted-foreground">Controls where this account can be chosen for future transactions. Existing transactions keep their original location.</p>
+                    <FormMessage />
+                  </FormItem>
                 )} />
               </div>
               {(watchType === 'bank' || watchType === 'upi' || watchType === 'other') && (

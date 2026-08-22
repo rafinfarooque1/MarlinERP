@@ -5,6 +5,7 @@
  * Marlin Frozen Fruits ERP API
  * OpenAPI spec version: 0.1.0
  */
+import type { CashBankAccountLocationInput } from './cashBankAccountLocationInput';
 import type { CashBankInputAccountType } from './cashBankInputAccountType';
 import type { CashBankInputLocationType } from './cashBankInputLocationType';
 
@@ -18,6 +19,11 @@ export interface CashBankInput {
   locationType?: CashBankInputLocationType;
   /** Required when locationType is warehouse or outlet. */
   locationId?: number;
+  /**
+     * Optional multi-location availability. When omitted, legacy locationType/locationId is used.
+     * @minItems 1
+     */
+  locations?: CashBankAccountLocationInput[];
   /** Recorded as the backing ledger's opening balance (debit) through the opening-balances store — never a stored column. Absent or blank means 0. */
   openingBalance?: number;
   /** Bank/UPI accounts only — whether collections into this account must pass through Reconciliation before hitting the bank balance. Defaults to true for bank/UPI/other, ignored for cash. */

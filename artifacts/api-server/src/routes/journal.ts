@@ -365,18 +365,42 @@ async function checkLinesLocation(
   employee: { branchType?: string; branchId?: number } | undefined,
 ): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
   const owned = await locationOwnedLedgerMap();
-  // HO's own cash/bank = the STD-CASH/STD-BANK subtrees minus every branch till.
-  const hoCashBank = await ledgerIdsUnderCodes(["STD-CASH", "STD-BANK"]);
-  for (const id of owned.keys()) hoCashBank.delete(id);
-
   const ids = [...new Set(lines.map((l) => l.ledgerId))];
+  // Cash/Bank memberships are relational and may deliberately include both
+  // Head Office and a branch. They take precedence over the legacy owner map,
+  // which represents only actual location ledgers and branch memberships.
+  const { rows: membershipRows } = await pool.query(
+    `SELECT cba.ledger_id, cbal.location_type, cbal.location_id,
+            CASE cbal.location_type
+              WHEN 'headoffice' THEN 'Head Office'
+              WHEN 'warehouse' THEN COALESCE(w.name, 'Warehouse')
+              ELSE COALESCE(o.name, 'Outlet')
+            END AS name
+       FROM cash_bank_accounts cba
+       JOIN cash_bank_account_locations cbal ON cbal.account_id = cba.id
+       LEFT JOIN warehouses w ON cbal.location_type = 'warehouse' AND w.id = cbal.location_id
+       LEFT JOIN outlets o ON cbal.location_type = 'outlet' AND o.id = cbal.location_id
+      WHERE cba.ledger_id = ANY($1::int[])`, [ids],
+  );
+  const accountMemberships = new Map<number, Array<{ locationType: string; locationId: number; name: string }>>();
+  for (const row of membershipRows) {
+    const ledgerId = Number(row.ledger_id);
+    accountMemberships.set(ledgerId, [...(accountMemberships.get(ledgerId) ?? []), {
+      locationType: String(row.location_type), locationId: Number(row.location_id), name: String(row.name),
+    }]);
+  }
+  // HO's ordinary cash/bank accounts are the tree minus actual branch tills.
+  // Mapped accounts use their explicit headoffice:0 membership instead.
+  const hoCashBank = await ledgerIdsUnderCodes(["STD-CASH", "STD-BANK"]);
+  for (const id of owned.keys()) if (!accountMemberships.has(id)) hoCashBank.delete(id);
+
   const { rows: named } = await pool.query(
     `SELECT id, name FROM account_ledgers WHERE id = ANY($1)`, [ids]
   );
   const nameOf = (id: number) => named.find((r: any) => Number(r.id) === id)?.name ?? `ledger #${id}`;
 
   for (const l of lines) {
-    const owners = owned.get(l.ledgerId);
+    const owners = accountMemberships.get(l.ledgerId) ?? owned.get(l.ledgerId);
     if (owners) {
       const match = owners.some((o) => o.locationType === loc.locationType && o.locationId === loc.locationId);
       if (!match) {
@@ -491,11 +515,20 @@ router.get("/accounts/voucher-locations", requireModuleView(["page:/accounts/vou
   const hoCashBank = await ledgerIdsUnderCodes(["STD-CASH", "STD-BANK"]);
   for (const id of ownedMap.keys()) hoCashBank.delete(id);
 
-  // Branch-assigned Cash & Bank accounts join the branch's till in its picker.
+  // Cash & Bank availability is many-to-many. A secondary assignment belongs
+  // in the same location picker as the account's legacy/default assignment.
   const { rows: cbaRows } = await pool.query(
-    `SELECT ledger_id, location_type, location_id FROM cash_bank_accounts
-     WHERE ledger_id IS NOT NULL AND location_id IS NOT NULL AND location_type IN ('warehouse','outlet')`,
+    `SELECT cba.ledger_id, cbal.location_type, cbal.location_id
+       FROM cash_bank_accounts cba
+       JOIN cash_bank_account_locations cbal ON cbal.account_id = cba.id
+      WHERE cba.ledger_id IS NOT NULL
+        AND cbal.location_type IN ('headoffice','warehouse','outlet')`,
   );
+  // A shared account remains offered at HO only when its membership says so;
+  // do not infer the old mutually-exclusive "not branch-owned" rule.
+  for (const row of cbaRows) {
+    if (row.location_type === "headoffice") hoCashBank.add(Number(row.ledger_id));
+  }
   const branchCba = (lt: string, id: number) => cbaRows
     .filter((r: any) => r.location_type === lt && Number(r.location_id) === id)
     .map((r: any) => Number(r.ledger_id));
@@ -524,9 +557,14 @@ router.get("/accounts/voucher-locations", requireModuleView(["page:/accounts/vou
     ? all
     : all.filter((l) => l.locationType === own.locationType && l.locationId === Number(own.locationId));
 
-  const ownedLedgers = [...ownedMap.entries()].flatMap(([ledgerId, owners]) =>
+  const allOwnedLedgers = [...ownedMap.entries()].flatMap(([ledgerId, owners]) =>
     owners.map((o) => ({ ledgerId, locationType: o.locationType, locationId: o.locationId }))
   );
+  // The dialog does not need to know other branches' owner map. Returning it
+  // would disclose their locations to a branch user.
+  const ownedLedgers = isHO
+    ? allOwnedLedgers
+    : allOwnedLedgers.filter((owner) => owner.locationType === own.locationType && Number(owner.locationId) === Number(own.locationId));
 
   res.json({ locations, ownedLedgers, headOfficeCashBankLedgerIds: [...hoCashBank] });
 });

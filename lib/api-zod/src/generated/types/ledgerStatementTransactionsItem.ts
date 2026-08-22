@@ -13,4 +13,15 @@ export type LedgerStatementTransactionsItem = {
   debit?: number;
   credit?: number;
   balance?: number;
+  /** @nullable */
+  reference?: string | null;
+  entryType?: string;
+  /** Human-readable narration; mirrors description for legacy posting sources. */
+  narration?: string;
+  /** @nullable */
+  locationType?: string | null;
+  /** @nullable */
+  locationId?: number | null;
+  /** @nullable */
+  locationName?: string | null;
 };

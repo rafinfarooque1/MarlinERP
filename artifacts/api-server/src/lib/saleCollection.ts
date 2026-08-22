@@ -54,12 +54,18 @@ export async function resolveReceiveIntoAccount(
   }
   let allowed: Set<number>;
   if (locType === "headoffice") {
-    // Head Office's set is the whole cash+bank tree minus every ledger a
-    // branch owns (tills and branch-assigned accounts) — the same set the
-    // voucher pickers offer for Head Office.
+    // Head Office's ordinary set is the tree minus branch-owned ledgers.
+    // Explicit `headoffice:0` availability then adds shared accounts back.
     const tree = await ledgerIdsUnderCodes(["STD-CASH", "STD-BANK"]);
     const owned = await locationOwnedLedgerMap();
     allowed = new Set([...tree].filter((id) => !owned.has(id)));
+    const { rows: hoAccounts } = await q.query(
+      `SELECT cba.ledger_id
+         FROM cash_bank_accounts cba
+         JOIN cash_bank_account_locations cbal ON cbal.account_id = cba.id
+        WHERE cbal.location_type = 'headoffice' AND cba.ledger_id IS NOT NULL`,
+    );
+    for (const account of hoAccounts) allowed.add(Number(account.ledger_id));
   } else {
     const scope = locType === "warehouse"
       ? { isHeadOffice: false, warehouseIds: [locId], outletIds: [] }
@@ -175,19 +181,21 @@ export async function postSaleCollectionReceipt(
   //   · account, reconciliation OFF → post straight into that ledger;
   //   · account, reconciliation ON  → Electronic Clearing + pending;
   //   · no account at all → the legacy company-wide clearing flow, unchanged.
-  // HO sales match HO-assigned accounts on TYPE alone: cash_bank_accounts
-  // stores headoffice with a NULL id while sales use the placeholder id 1
-  // (ho-location-convention).
+  // HO sales match Head Office on TYPE alone (the sales placeholder id differs
+  // from the availability mapping's fixed zero). Availability is relational,
+  // so an account assigned as a secondary location is just as eligible as its
+  // legacy/default assignment.
   const wantType = method === "upi" ? "upi" : "bank";
   const { rows: [assigned] } = account
     ? { rows: [{ ledger_id: account.ledgerId, requires_reconciliation: account.requiresRecon, name: account.name }] }
     : await q.query(
         `SELECT cb.ledger_id, cb.requires_reconciliation, cb.name
            FROM cash_bank_accounts cb
+           JOIN cash_bank_account_locations cbal ON cbal.account_id = cb.id
            JOIN account_ledgers al ON al.id = cb.ledger_id AND COALESCE(al.is_active, true)
           WHERE cb.account_type = $1 AND cb.ledger_id IS NOT NULL
-            AND cb.location_type = $2
-            AND (cb.location_type = 'headoffice' OR cb.location_id = $3)
+             AND cbal.location_type = $2
+             AND (cbal.location_type = 'headoffice' OR cbal.location_id = $3)
           ORDER BY cb.id LIMIT 1`,
         [wantType, locType, locId],
       );

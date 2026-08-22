@@ -139,12 +139,18 @@ export async function warehouseDeleteSummary(c: Queryable, id: number): Promise<
     one(`SELECT COUNT(*) AS count FROM journal_voucher_lines l
           WHERE l.voucher_id IN (SELECT id FROM journal_vouchers WHERE location_type = 'warehouse' AND location_id = $1)`),
     one(`SELECT COUNT(*) AS count FROM stock_entries WHERE branch_type = 'warehouse' AND branch_id = $1 AND quantity::numeric <> 0`),
-    one(`SELECT COUNT(*) FILTER (WHERE account_type = 'cash') AS count FROM cash_bank_accounts WHERE location_type = 'warehouse' AND location_id = $1`),
+    one(`SELECT COUNT(*) FILTER (WHERE cba.account_type = 'cash') AS count
+           FROM cash_bank_accounts cba
+           JOIN cash_bank_account_locations cbal ON cbal.account_id = cba.id
+          WHERE cbal.location_type = 'warehouse' AND cbal.location_id = $1`),
     one(`SELECT (SELECT COUNT(*) FROM rent_accruals WHERE warehouse_id = $1)
              + (SELECT COUNT(*) FROM rent_payments WHERE warehouse_id = $1) AS count`),
   ]);
   const bankAccounts = await one(
-    `SELECT COUNT(*) FILTER (WHERE account_type <> 'cash') AS count FROM cash_bank_accounts WHERE location_type = 'warehouse' AND location_id = $1`);
+    `SELECT COUNT(*) FILTER (WHERE cba.account_type <> 'cash') AS count
+       FROM cash_bank_accounts cba
+       JOIN cash_bank_account_locations cbal ON cbal.account_id = cba.id
+      WHERE cbal.location_type = 'warehouse' AND cbal.location_id = $1`);
 
   // Money documents derive two postings each; JV lines are stored directly.
   const ledgerEntries = jvLines + 2 * (sales + purchases + receipts + payments + expenses);
@@ -242,11 +248,14 @@ export async function permanentlyDeleteWarehouse(
       [id, saleIds],
     )).rows.map((r: { id: number }) => Number(r.id));
 
-    // Ledgers owned by this warehouse: its own three, rent ledgers, and any
-    // cash/bank account ledgers stamped here.
+    // Ledgers owned by this warehouse: its own three, rent ledgers, and every
+    // Cash/Bank account available here (including secondary memberships).
     const rentLedgers = await rentLedgerIdsFor(client as any, id);
     const cbaLedgers = (await client.query<{ ledger_id: number | null }>(
-      `SELECT ledger_id FROM cash_bank_accounts WHERE location_type = 'warehouse' AND location_id = $1`, [id],
+      `SELECT cba.ledger_id
+         FROM cash_bank_accounts cba
+         JOIN cash_bank_account_locations cbal ON cbal.account_id = cba.id
+        WHERE cbal.location_type = 'warehouse' AND cbal.location_id = $1`, [id],
     )).rows.map((r: { ledger_id: number | null }) => r.ledger_id).filter((x: number | null): x is number => x != null);
     const ownLedgerIds = [wh.cash_ledger_id, wh.sales_ledger_id, wh.purchase_ledger_id, ...rentLedgers, ...cbaLedgers]
       .filter((x): x is number => x != null);
@@ -309,8 +318,14 @@ export async function permanentlyDeleteWarehouse(
       await del(t, `DELETE FROM ${t} WHERE branch_type = 'warehouse' AND branch_id = $1`, [id]);
     }
 
-    await del("cashBankAccounts",
-      `DELETE FROM cash_bank_accounts WHERE location_type = 'warehouse' AND location_id = $1`, [id]);
+    // Remove this location's availability first. A shared account survives
+    // with its other memberships; only an account with no availability left is
+    // removed (and the FK cascade clears its now-empty mapping).
+    await del("cashBankAccountLocations",
+      `DELETE FROM cash_bank_account_locations WHERE location_type = 'warehouse' AND location_id = $1`, [id]);
+    await del("orphanedCashBankAccounts",
+      `DELETE FROM cash_bank_accounts cba
+        WHERE NOT EXISTS (SELECT 1 FROM cash_bank_account_locations cbal WHERE cbal.account_id = cba.id)`, []);
     await del("locationMigrationMap",
       `DELETE FROM location_migration_map WHERE new_type = 'warehouse' AND new_id = $1`, [id]);
 
@@ -360,8 +375,18 @@ export async function permanentlyDeleteWarehouse(
     try { await sweepOrphanPartyLedgers(client as any); } catch { /* boot sweep re-heals */ }
 
     // ── The warehouse's own ledgers ────────────────────────────────────────
+    // A shared Cash/Bank account remains a live account at its other mapped
+    // locations. Its ledger and opening balance must survive this location's
+    // deletion even though it was part of the pre-delete ledger set.
+    const { rows: survivingShared } = await client.query<{ ledger_id: number }>(
+      `SELECT DISTINCT cba.ledger_id
+         FROM cash_bank_accounts cba
+         JOIN cash_bank_account_locations cbal ON cbal.account_id = cba.id
+        WHERE cba.ledger_id = ANY($1::int[])`, [ownLedgerIds]);
+    const survivingSharedIds = new Set(survivingShared.map((row) => Number(row.ledger_id)));
+    const removableOwnLedgerIds = ownLedgerIds.filter((ledgerId) => !survivingSharedIds.has(Number(ledgerId)));
     await del("openingBalances",
-      `DELETE FROM opening_balances WHERE ledger_id = ANY($1::int[])`, [ownLedgerIds]);
+      `DELETE FROM opening_balances WHERE ledger_id = ANY($1::int[])`, [removableOwnLedgerIds]);
     // Only ledgers nothing references any more may go; survivors fail validation.
     await del("accountLedgers",
       `DELETE FROM account_ledgers al WHERE al.id = ANY($1::int[])
@@ -370,7 +395,7 @@ export async function permanentlyDeleteWarehouse(
         AND NOT EXISTS (SELECT 1 FROM payments p WHERE p.paid_from_ledger_id = al.id OR p.paid_to_ledger_id = al.id OR p.advance_ledger_id = al.id)
         AND NOT EXISTS (SELECT 1 FROM expenses e WHERE e.ledger_account_id = al.id)
         AND NOT EXISTS (SELECT 1 FROM account_ledgers ch WHERE ch.parent_id = al.id)`,
-      [ownLedgerIds]);
+       [removableOwnLedgerIds]);
 
     await del("warehouse", `DELETE FROM warehouses WHERE id = $1`, [id]);
 
@@ -387,7 +412,7 @@ export async function permanentlyDeleteWarehouse(
       if (Number(r.count) > 0) failures.push(`${r.count} stock record(s) in ${t} still reference the warehouse`);
     }
     const { rows: [lref] } = await client.query(
-      `SELECT COUNT(*) AS count FROM account_ledgers WHERE id = ANY($1::int[])`, [ownLedgerIds]);
+      `SELECT COUNT(*) AS count FROM account_ledgers WHERE id = ANY($1::int[])`, [removableOwnLedgerIds]);
     if (Number(lref.count) > 0) failures.push(`${lref.count} of the warehouse's ledgers still carry postings from other locations`);
     const { rows: [tb] } = await client.query(
       `SELECT COALESCE(SUM(debit), 0) AS d, COALESCE(SUM(credit), 0) AS c FROM journal_voucher_lines`);
