@@ -1,0 +1,225 @@
+IMPORTANT: The Asset Purchase issue is FIXED and working correctly in the Demo/Preview environment, but the SAME ERROR STILL OCCURS in the LIVE/PUBLISHED production application after publishing.
+
+DO NOT assume the code is still broken.
+
+I need you to diagnose the difference between Demo/Preview and Live/Production and fix the LIVE issue.
+
+Problem:
+- Demo/Preview: Asset Purchase works correctly.
+- Live/Published site: Asset Purchase still produces the previous error.
+- Publishing/redeploying did not resolve the Live error.
+
+FIRST: DIAGNOSE, THEN FIX.
+
+1. Compare Demo vs Production
+
+Check the actual running environments and compare:
+
+- frontend build/version
+- backend/API build/version
+- environment variables
+- API endpoints
+- database connection
+- database schema
+- database migrations
+- migration status
+- production database tables/columns
+- production database constraints
+- production data required by Asset Purchase
+- server/runtime logs
+- browser/network API response
+- deployed artifact/version/commit
+
+Do NOT assume Demo and Production are using the same database or migration state.
+
+2. Check the LIVE error directly
+
+Open/use the published application and reproduce the Asset Purchase error.
+
+Capture the exact:
+
+- frontend error
+- API request
+- HTTP status
+- API response body
+- backend/server error
+- database error, if any
+- stack trace, if available
+
+Identify the exact root cause before making changes.
+
+3. Check Production database migrations
+
+This is especially important.
+
+Verify whether every migration required for the Asset Purchase fix has actually been executed against the PRODUCTION database.
+
+Compare:
+
+DEMO DATABASE
+vs
+PRODUCTION DATABASE
+
+Check for missing:
+
+- tables
+- columns
+- indexes
+- foreign keys
+- constraints
+- enum/value changes
+- data migrations
+- seed/configuration records
+
+If the fix depends on a migration that exists in Demo but was never executed in Production, run the proper production-safe migration.
+
+DO NOT reset, wipe, recreate, or replace the production database.
+
+DO NOT delete production accounting data.
+
+4. Check whether the published app is actually running the latest code
+
+Verify that the Live deployment contains the same Asset Purchase code that is working in Demo.
+
+Check:
+
+- deployment commit/version
+- generated build
+- backend artifact
+- frontend artifact
+- API deployment
+- cached/stale deployment
+- old server process/workflow
+
+If Live is running an older artifact, deploy the current working implementation.
+
+5. Compare the exact Asset Purchase request
+
+Perform the same Asset Purchase operation in:
+
+A. Demo
+B. Live
+
+Compare the network/API request.
+
+Check whether Live differs in:
+
+- request payload
+- locationId
+- assetId
+- vendorId
+- accountId
+- voucher data
+- transaction date
+- amount
+- tax/GST fields
+- depreciation fields
+- user/session information
+- API endpoint
+
+The goal is to find why the same feature behaves differently in Production.
+
+6. Production data safety
+
+This is an ERP/accounting system.
+
+DO NOT:
+
+- delete transactions
+- reset production data
+- recreate the production database
+- truncate tables
+- change existing accounting history
+- alter posted accounting entries unnecessarily
+- use demo data in production
+
+Any production migration must be additive and safe.
+
+7. Verify location-aware accounting compatibility
+
+Because the application now has location-aware accounting, specifically verify that Asset Purchase works correctly with the new location model.
+
+Check:
+
+- asset location
+- purchase location
+- vendor location/membership
+- asset account location
+- fixed asset ledger location
+- purchase voucher location
+- cash/bank/payment location
+- journal lines
+- shared account/location membership
+
+Make sure the production database has the required location relationships/mappings that Demo already has.
+
+8. Fix the ROOT CAUSE
+
+Do not create a frontend workaround.
+
+Do not hide the error.
+
+Do not return fake/success data.
+
+Do not disable validation just to make Asset Purchase appear to work.
+
+Fix the actual production issue.
+
+9. After fixing
+
+Run:
+
+- API build/typecheck
+- frontend build/typecheck
+- relevant accounting tests
+- Asset Purchase test
+- Fixed Asset Ledger test
+- Vendor Ledger test
+- Purchase Ledger test
+- location-scope test
+- production migration verification
+
+Then restart/redeploy the affected production service if required.
+
+10. Final live verification
+
+After deployment, test Asset Purchase AGAIN on the actual published/live URL.
+
+Verify:
+
+Asset Purchase
+→ Purchase transaction created correctly
+→ Asset created correctly
+→ Fixed Asset ledger updated
+→ Vendor ledger updated where applicable
+→ Accounting entries created correctly
+→ Location assigned correctly
+→ No duplicate transaction
+→ No incorrect consolidated-location entry
+→ Existing production data remains intact
+
+IMPORTANT:
+The Demo environment already proves that the application code can work.
+
+Therefore, focus first on finding the difference between Demo and Production.
+
+Likely areas to investigate are:
+
+1. Production migration not applied
+2. Production database schema differs from Demo
+3. Production database data/mappings differ from Demo
+4. Live deployment is running an older build
+5. Production environment variable/API configuration differs
+6. Production API is running stale code
+7. Location/account relationship missing in production
+8. Production-only authorization or database constraint
+9. Production-specific data causing the error
+
+Do not mark the task complete just because the build succeeds.
+
+The acceptance criterion is:
+
+DEMO Asset Purchase = WORKING
+LIVE Asset Purchase = WORKING
+
+Use the actual LIVE application to reproduce and verify the fix.
