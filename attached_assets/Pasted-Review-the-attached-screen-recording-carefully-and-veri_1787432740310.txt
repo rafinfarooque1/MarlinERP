@@ -1,0 +1,119 @@
+Review the attached screen recording carefully and verify the current mobile Dashboard location behavior.
+
+Do not assume the implementation is complete just because the Details and Consolidated buttons are visible.
+
+Verify the complete behavior end-to-end:
+
+1. ALL LOCATIONS + DETAILS
+- Show the consolidated total.
+- Under the total, show every location separately, one location per line.
+- Include Head Office and every warehouse/location.
+- Apply this to Sales, Purchases, Inventory, Expenses, Payables, Receivables, Payments, Receipts, Cash, Bank, GP and NP.
+
+2. ALL LOCATIONS + CONSOLIDATED
+- Show ONLY the consolidated total.
+- Do not show any location names or location values.
+
+3. SINGLE LOCATION
+Example: Head Office.
+- Show ONLY Head Office data.
+- Do not show other locations.
+- Do not show a location breakdown.
+- The KPI value must be only that location's value.
+
+4. MULTIPLE LOCATION SELECTION
+Example:
+Frozen Hub - Ragiuda + Frozen Hub - Calicut.
+
+- The total must equal ONLY those selected locations.
+- Details mode must show:
+  Frozen Hub - Ragiuda = amount
+  Frozen Hub - Calicut = amount
+- Consolidated mode must show only their combined total.
+- Never include unselected locations.
+
+5. SHARE
+This is critical.
+
+The Share report must use the EXACT current dashboard state:
+- Same date period
+- Same location selection
+- Same multiple-location selection
+- Same Details/Consolidated mode
+- Same KPI values
+
+If the screen says:
+
+All Locations
+Details
+
+then the shared report must show:
+
+SALES
+Total: ₹X
+
+Head Office: ₹X
+Frozen Hub - Ragiuda: ₹X
+Frozen Hub - Calicut: ₹X
+Tropicane - Kochi: ₹X
+Tropicane - Ecity: ₹X
+
+Each location MUST be on its own line.
+
+Do NOT compress locations into:
+"Head Office ₹0 · Ragiuda ₹X · Calicut ₹X..."
+
+If the screen says:
+
+All Locations
+Consolidated
+
+then the shared report must contain ONLY:
+
+SALES
+₹X
+
+with no location breakdown.
+
+If the screen says:
+
+Head Office
+Details
+
+the shared report must contain only Head Office's value.
+
+If the screen has multiple selected locations, the shared report must contain only those selected locations.
+
+6. MOBILE
+Use the attached recording as the reference for the mobile UI.
+
+Make sure:
+- Location names are readable.
+- No location is silently omitted.
+- No selected location is accidentally included/excluded.
+- Details and Consolidated buttons actually change the displayed data, not just the visual state.
+
+7. ACCOUNTING SAFETY
+Do not change any accounting formulas, transaction history, ledger balances, or existing financial data.
+
+Only fix location filtering, dashboard presentation, and share/report presentation where required.
+
+8. TEST BEFORE COMPLETION
+Actually test all of these scenarios:
+
+A. All Locations + Details
+B. All Locations + Consolidated
+C. Head Office
+D. One warehouse
+E. Two selected warehouses
+F. Two selected warehouses + Details
+G. Two selected warehouses + Consolidated
+H. Share from All Locations + Details
+I. Share from All Locations + Consolidated
+J. Share from a single location
+K. Share from multiple locations
+L. Mobile layout
+
+Do not mark the task complete until the actual displayed dashboard AND shared report match the selected location scope and report mode.
+
+If any behavior differs from the attached recording/requirements, fix it rather than only reporting it.
