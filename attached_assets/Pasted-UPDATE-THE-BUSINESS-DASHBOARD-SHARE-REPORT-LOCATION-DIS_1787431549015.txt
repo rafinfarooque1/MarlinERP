@@ -1,0 +1,610 @@
+UPDATE THE BUSINESS DASHBOARD + SHARE REPORT LOCATION DISPLAY.
+
+IMPORTANT:
+Do not change the existing accounting calculations, totals, formulas, or transaction data.
+
+The current dashboard already shows the correct All Locations data on screen.
+
+The problem is specifically the SHARE/REPORT output.
+
+====================================================
+1. CURRENT PROBLEM
+====================================================
+
+On the live dashboard, when "All Locations" is selected, the dashboard correctly shows:
+
+SALES
+Total: ₹47,748.50
+Head Office: ₹0.00
+Frozen Hub - Ragiuda: ₹44,308.50
+Frozen Hub - Calicut: ₹3,440.00
+Tropicane - Kochi: ₹0.00
+Tropicane - Ecity: ₹0.00
+
+And similarly for:
+
+- Purchases
+- Inventory Value
+- Expenses
+- Payables
+- Receivables
+- Payments
+- Receipts
+- Cash
+- Bank
+- Gross Profit
+- Net Profit
+
+The first attached screenshot is the desired dashboard style.
+
+However, when the dashboard is shared/generated as a report, the location values are currently compressed into one paragraph/line.
+
+Example of the CURRENT BAD SHARE FORMAT:
+
+SALES
+₹47,748.50
+
+Head Office ₹0.00 · Frozen Hub - Ragiuda ₹44,308.50 · Frozen Hub - Calicut ₹3,440.00 · Tropicane - Kochi ₹0.00 · Tropicane - Ecity ₹0.00
+
+This is difficult to read.
+
+====================================================
+2. REQUIRED SHARE FORMAT — DETAILS
+====================================================
+
+When "All Locations" is selected AND the report mode is "Details", the shared report must show every location on its OWN LINE.
+
+Example:
+
+SALES
+
+Total: ₹47,748.50
+
+Head Office                 ₹0.00
+Frozen Hub - Ragiuda        ₹44,308.50
+Frozen Hub - Calicut        ₹3,440.00
+Tropicane - Kochi            ₹0.00
+Tropicane - Ecity            ₹0.00
+
+
+PURCHASES
+
+Total: ₹11,676.00
+
+Head Office                 ₹0.00
+Frozen Hub - Ragiuda        ₹11,676.00
+Frozen Hub - Calicut        ₹0.00
+Tropicane - Kochi            ₹0.00
+Tropicane - Ecity            ₹0.00
+
+
+INVENTORY VALUE
+
+Total: ₹9,61,334.27
+
+Head Office                 ₹0.00
+Frozen Hub - Ragiuda        ₹7,77,594.51
+Frozen Hub - Calicut        ₹1,83,739.76
+Tropicane - Kochi            ₹0.00
+Tropicane - Ecity            ₹0.00
+
+
+And exactly the same structure for:
+
+- Expenses
+- Payables
+- Receivables
+- Payments
+- Receipts
+- Cash
+- Bank
+- Gross Profit
+- Net Profit
+
+Do NOT put the location values into one sentence.
+
+Each location must be a separate readable line.
+
+====================================================
+3. ADD REPORT MODE:
+====================================================
+
+Add a report display selector:
+
+[ Details ] [ Consolidated ]
+
+This selector must affect the dashboard Share/Report output.
+
+----------------------------------------------------
+DETAILS MODE
+----------------------------------------------------
+
+When:
+
+Location = All Locations
+Report Mode = Details
+
+Show:
+
+Metric
+Total
+Then every location separately, one line per location.
+
+Example:
+
+SALES
+₹47,748.50
+
+Head Office
+₹0.00
+
+Frozen Hub - Ragiuda
+₹44,308.50
+
+Frozen Hub - Calicut
+₹3,440.00
+
+Tropicane - Kochi
+₹0.00
+
+Tropicane - Ecity
+₹0.00
+
+Keep the report clean and professional, but preserve the complete location-wise breakdown.
+
+----------------------------------------------------
+CONSOLIDATED MODE
+----------------------------------------------------
+
+When:
+
+Location = All Locations
+Report Mode = Consolidated
+
+Show ONLY the consolidated total.
+
+Example:
+
+SALES
+₹47,748.50
+
+Do NOT show:
+
+Head Office
+Frozen Hub - Ragiuda
+Frozen Hub - Calicut
+Tropicane - Kochi
+Tropicane - Ecity
+
+Consolidated means TOTAL ONLY.
+
+====================================================
+4. SPECIFIC LOCATION SELECTION
+====================================================
+
+If the user selects a specific location, for example:
+
+Head Office
+
+the dashboard and report must show ONLY Head Office data.
+
+Example:
+
+SALES
+₹0.00
+
+Do NOT show:
+
+Frozen Hub - Ragiuda
+Frozen Hub - Calicut
+Tropicane - Kochi
+Tropicane - Ecity
+
+Do not show a location breakdown when a specific location is selected.
+
+The same applies to:
+
+- Head Office
+- Frozen Hub - Ragiuda
+- Frozen Hub - Calicut
+- Tropicane - Kochi
+- Tropicane - Ecity
+- Any future location
+
+Specific location = that location's data only.
+
+====================================================
+5. MULTIPLE LOCATION SELECTION
+====================================================
+
+The ERP already supports location selection.
+
+Make sure the dashboard and report correctly support multiple selected locations.
+
+For example, if the user selects:
+
+Frozen Hub - Ragiuda
++
+Frozen Hub - Calicut
+
+then the dashboard/report must calculate the combined data of ONLY those two locations.
+
+Example:
+
+Sales
+
+Frozen Hub - Ragiuda = ₹44,308.50
+Frozen Hub - Calicut = ₹3,440.00
+
+Selected-location total:
+
+₹47,748.50
+
+Do NOT include:
+
+Head Office
+Tropicane - Kochi
+Tropicane - Ecity
+
+unless they are also selected.
+
+====================================================
+6. MULTIPLE LOCATION REPORT MODES
+====================================================
+
+For multiple selected locations, support both modes.
+
+DETAILS:
+
+Show each selected location separately.
+
+Example:
+
+SALES
+
+Total: ₹47,748.50
+
+Frozen Hub - Ragiuda
+₹44,308.50
+
+Frozen Hub - Calicut
+₹3,440.00
+
+
+CONSOLIDATED:
+
+Show only:
+
+SALES
+₹47,748.50
+
+No individual location lines.
+
+====================================================
+7. ALL LOCATIONS BEHAVIOUR
+====================================================
+
+"All Locations" is a special consolidated scope.
+
+When All Locations is selected:
+
+DETAILS:
+→ Show total + every location line by line.
+
+CONSOLIDATED:
+→ Show total only.
+
+When a specific location is selected:
+
+→ Show only that location's total.
+→ Do not show location breakdown.
+
+When multiple locations are selected:
+
+DETAILS:
+→ Show total + each selected location separately.
+
+CONSOLIDATED:
+→ Show only the combined total.
+
+====================================================
+8. APPLY TO ALL DASHBOARD METRICS
+====================================================
+
+The exact same logic must apply to every KPI:
+
+1. Sales
+2. Purchases
+3. Inventory Value
+4. Expenses
+5. Payables
+6. Receivables
+7. Payments
+8. Receipts
+9. Cash
+10. Bank
+11. Gross Profit
+12. Net Profit
+
+Do not implement this only for Sales.
+
+All 12 metrics must follow the same scope and report-mode rules.
+
+====================================================
+9. SCREEN DASHBOARD
+====================================================
+
+Do not unnecessarily redesign the existing dashboard.
+
+The current mobile/desktop dashboard layout is acceptable.
+
+Preserve the existing KPI cards and their current styling.
+
+The important change is:
+
+- All Locations → location-wise information remains available.
+- Details → location-wise breakdown.
+- Consolidated → total only.
+- Specific location → only that location's total.
+- Multiple locations → only selected locations.
+
+The on-screen dashboard should remain readable on mobile.
+
+Do not truncate location names in a way that makes the data ambiguous.
+
+If space is limited, use responsive wrapping rather than hiding the location.
+
+====================================================
+10. SHARE REPORT
+====================================================
+
+The Share button/report generation MUST use exactly the same:
+
+- selected date range
+- selected period
+- selected location scope
+- selected multiple locations
+- report mode
+- dashboard calculations
+
+as the dashboard currently displayed.
+
+Do not independently recalculate the report using different logic.
+
+The shared report must represent the dashboard state at the moment Share is clicked.
+
+For example:
+
+Dashboard:
+
+Location = All Locations
+Period = Yesterday
+Mode = Details
+
+The shared report must be:
+
+Yesterday
+All Locations
+Details
+
+and show each location on a separate line.
+
+If:
+
+Dashboard:
+
+Location = All Locations
+Period = Yesterday
+Mode = Consolidated
+
+then the shared report must show only the consolidated totals.
+
+====================================================
+11. REPORT HEADER
+====================================================
+
+The shared report should clearly show:
+
+Business Dashboard
+
+Location:
+All Locations
+
+or:
+
+Location:
+Frozen Hub - Calicut
+
+or:
+
+Locations:
+Frozen Hub - Ragiuda + Frozen Hub - Calicut
+
+Also show:
+
+Date/Period:
+Yesterday / Today / Last 7 Days / This Month / Quarter / This FY / All Time / Custom
+
+Report Mode:
+Details
+or
+Consolidated
+
+Use the existing company profile details/logo/header where already implemented.
+
+====================================================
+12. REPORT LAYOUT
+====================================================
+
+For Details mode, use a clean structure such as:
+
+BUSINESS DASHBOARD
+
+All Locations
+Yesterday
+Details
+
+
+SALES
+Total: ₹47,748.50
+
+Head Office                  ₹0.00
+Frozen Hub - Ragiuda         ₹44,308.50
+Frozen Hub - Calicut         ₹3,440.00
+Tropicane - Kochi             ₹0.00
+Tropicane - Ecity             ₹0.00
+
+
+PURCHASES
+Total: ₹11,676.00
+
+Head Office                  ₹0.00
+Frozen Hub - Ragiuda         ₹11,676.00
+Frozen Hub - Calicut         ₹0.00
+Tropicane - Kochi             ₹0.00
+Tropicane - Ecity             ₹0.00
+
+Continue the same format for all remaining metrics.
+
+Make sure each metric is visually separated.
+
+Do not compress all locations into one paragraph.
+
+====================================================
+13. IMPORTANT — DATA ACCURACY
+====================================================
+
+Do NOT change the existing accounting formulas.
+
+Do NOT modify:
+
+- Sales calculation
+- Purchase calculation
+- Inventory valuation
+- Expense calculation
+- Payable calculation
+- Receivable calculation
+- Payment calculation
+- Receipt calculation
+- Cash calculation
+- Bank calculation
+- GP calculation
+- NP calculation
+
+Only change how the location-wise data is presented and scoped.
+
+The existing consolidated total must reconcile exactly to the sum of the applicable location values where the accounting model permits that reconciliation.
+
+====================================================
+14. TEST ALL SCENARIOS
+====================================================
+
+Before marking complete, test:
+
+TEST 1:
+All Locations + Details
+
+Expected:
+Total + every location separately.
+
+TEST 2:
+All Locations + Consolidated
+
+Expected:
+Total only.
+
+TEST 3:
+Head Office
+
+Expected:
+Head Office data only.
+
+TEST 4:
+Frozen Hub - Calicut
+
+Expected:
+Calicut data only.
+
+TEST 5:
+Multiple locations:
+Calicut + Ragiuda
+
+Expected:
+Combined total of only those two locations.
+
+Details:
+Show Calicut and Ragiuda separately.
+
+Consolidated:
+Show only their combined total.
+
+TEST 6:
+Share report from All Locations + Details.
+
+Expected:
+Same location-wise data as dashboard, with every location on its own line.
+
+TEST 7:
+Share report from All Locations + Consolidated.
+
+Expected:
+Total only.
+
+TEST 8:
+Share report from a specific location.
+
+Expected:
+Only that location's total.
+
+TEST 9:
+Mobile dashboard.
+
+Expected:
+Location names remain readable and are not incorrectly hidden or merged.
+
+====================================================
+15. DO NOT MARK COMPLETE TOO EARLY
+====================================================
+
+Do not say:
+
+"Build passed"
+"Preview works"
+"Ready to publish"
+
+unless the actual requested behaviour has been tested.
+
+The task is complete only when:
+
+[ ] All Locations + Details works.
+[ ] All Locations + Consolidated works.
+[ ] Specific location works.
+[ ] Multiple location selection works.
+[ ] Multiple location + Details works.
+[ ] Multiple location + Consolidated works.
+[ ] Share report matches the selected dashboard scope.
+[ ] Every location appears on its own line in Details mode.
+[ ] Consolidated mode contains no location breakdown.
+[ ] All 12 dashboard metrics follow the same rules.
+[ ] Mobile layout remains readable.
+[ ] Existing accounting totals are unchanged.
+[ ] No duplicate calculations or inconsistent report calculations were introduced.
+
+IMPORTANT:
+Use the first attached screenshot as the visual/content reference for the desired location-wise detail.
+
+Use the second attached screenshot as evidence of the current Share/Report problem.
+
+The key requirement is:
+
+DASHBOARD DETAILS = LOCATION-WISE, LINE BY LINE.
+
+SHARE DETAILS = THE SAME LOCATION-WISE INFORMATION, LINE BY LINE.
+
+CONSOLIDATED = TOTAL ONLY.
+
+SPECIFIC LOCATION = THAT LOCATION ONLY.
+
+MULTIPLE LOCATIONS = ONLY SELECTED LOCATIONS, WITH DETAILS OR CONSOLIDATED MODE.
+
+Do not collapse location data into a single sentence in the shared report.
