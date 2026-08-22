@@ -8,6 +8,7 @@ export interface DashboardBiFilters {
   toDate?: string;
   locationType?: 'warehouse' | 'outlet' | 'headoffice';
   locationId?: number;
+  locationKeys?: string[];
 }
 
 export interface BiDayPoint { date: string; total: number; count: number }
@@ -142,6 +143,7 @@ function biQS(params?: DashboardBiFilters): string {
     qs.set('locationType', params.locationType);
     if (params.locationId) qs.set('locationId', String(params.locationId));
   }
+  if (params?.locationKeys?.length) qs.set('locationKeys', params.locationKeys.join(','));
   return qs.toString();
 }
 

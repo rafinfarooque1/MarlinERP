@@ -20,6 +20,8 @@ import { useGetMe, useListWarehouses, useListOutlets, customFetch } from '@works
 import { useLocationContext, ALL_LOCATIONS, type LocationState } from '@/lib/locationContext';
 import { useOutletsEnabled } from '@/lib/useFeatureFlags';
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { Layers, MapPin, Store, Warehouse } from 'lucide-react';
 
@@ -172,6 +174,26 @@ export function GlobalLocationSelector({ collapsed = false }: { collapsed?: bool
     setLocation(next); // provider refetches the whole ERP view
     persistPref(next);
   };
+  const locationOptions = [
+    { key: 'headoffice', name: 'Head Office' },
+    ...(warehouses as any[]).map((w) => ({ key: `warehouse:${w.id}`, name: w.name })),
+    ...(outletsEnabled ? (outlets as any[]).map((o) => ({ key: `outlet:${o.id}`, name: o.name })) : []),
+  ];
+  const multiKeys = locationState.locationKeys ?? [];
+  const toggleMulti = (key: string) => {
+    const keys = multiKeys.includes(key) ? multiKeys.filter((k) => k !== key) : [...multiKeys, key];
+    if (keys.length < 2) {
+      const one = locationOptions.find((o) => o.key === keys[0]);
+      if (one?.key === 'headoffice') handleChange('headoffice:1');
+      else if (one) handleChange(one.key);
+      else handleChange('all');
+      return;
+    }
+    const names = keys.map((k) => locationOptions.find((o) => o.key === k)?.name ?? k);
+    const next: LocationState = { locationType: 'all', locationId: null, locationName: `${keys.length} locations`, locationKeys: keys, locationNames: names };
+    setLocation(next);
+    persistPref(next);
+  };
 
   return (
     <div data-testid="location-context-selector">
@@ -218,6 +240,24 @@ export function GlobalLocationSelector({ collapsed = false }: { collapsed?: bool
           )}
         </SelectContent>
       </Select>
+      {!isLocked && locationOptions.length > 1 && (
+        <Popover>
+          <PopoverTrigger asChild>
+            <button type="button" className="mt-2 w-full rounded-md border border-border px-2 py-1.5 text-left text-xs text-muted-foreground hover:bg-muted/50">
+              {multiKeys.length > 1 ? `${multiKeys.length} locations selected` : 'Select multiple locations'}
+            </button>
+          </PopoverTrigger>
+          <PopoverContent align="start" className="w-64 p-2">
+            <p className="px-2 pb-2 text-xs font-semibold">Dashboard locations</p>
+            {locationOptions.map((option) => (
+              <label key={option.key} className="flex cursor-pointer items-center gap-2 rounded px-2 py-2 text-sm hover:bg-muted">
+                <Checkbox checked={multiKeys.includes(option.key)} onCheckedChange={() => toggleMulti(option.key)} />
+                <span className="truncate">{option.name}</span>
+              </label>
+            ))}
+          </PopoverContent>
+        </Popover>
+      )}
     </div>
   );
 }

@@ -5,6 +5,9 @@ export interface LocationState {
   locationType: 'warehouse' | 'outlet' | 'headoffice' | 'all' | null;
   locationId: number | null;
   locationName: string;
+  /** Optional dashboard scope containing multiple location keys. */
+  locationKeys?: string[];
+  locationNames?: string[];
 }
 
 /** Canonical "no location filter" state used by the global selector. */
@@ -27,6 +30,10 @@ export function locationFilterParams(s: LocationState): { locationType?: 'wareho
   // per-table placeholder), so no locationId is sent.
   if (s.locationType === 'headoffice') return { locationType: 'headoffice' };
   return {};
+}
+
+export function locationKeysParams(s: LocationState): string[] | undefined {
+  return s.locationKeys?.length ? s.locationKeys : undefined;
 }
 
 const STORAGE_KEY = 'marlin_sales_location';
@@ -54,7 +61,8 @@ export function LocationProvider({ children }: { children: ReactNode }) {
   const setLocation = (state: LocationState) => {
     const changed =
       state.locationType !== locationState.locationType ||
-      state.locationId !== locationState.locationId;
+      state.locationId !== locationState.locationId ||
+      state.locationKeys?.join(',') !== locationState.locationKeys?.join(',');
     setLocationState(state);
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
     // The location headers ride OUTSIDE query keys, so every cached answer is

@@ -427,6 +427,9 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
   const headerLoc = getLocationFilter(req);
   let reqLocType = typeof q.locationType === "string" ? q.locationType : "";
   let reqLocId = Number(q.locationId);
+  const requestedLocationKeys = typeof q.locationKeys === "string"
+    ? q.locationKeys.split(",").map((key) => key.trim()).filter((key) => /^(headoffice|warehouse|outlet)(:\d+)?$/.test(key))
+    : [];
   if (!reqLocType && headerLoc) {
     reqLocType = headerLoc.locationType;
     reqLocId = headerLoc.locationId;
@@ -444,8 +447,12 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
 
   let effLocType: string | null = null;
   let effLocId: number | null = null;
+  const isMultiLocations = scope.isHeadOffice && requestedLocationKeys.length > 1;
   if (scope.isHeadOffice) {
-    if (reqLocType === "headoffice") {
+    if (isMultiLocations) {
+      // Multi-location BI uses the authoritative all-location calculations
+      // below, then narrows the per-location rows before returning them.
+    } else if (reqLocType === "headoffice") {
       // Head Office is singular and its placeholder id varies by table
       // (vouchers store 0, sales/stock store 1), so every predicate below
       // must match it on TYPE ALONE — an id equality would drop valid rows.
@@ -463,6 +470,7 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
 
   // Resolve a friendly scope label.
   let scopeLabel = "All locations";
+  if (isMultiLocations) scopeLabel = "Selected locations";
   if (effLocType && effLocId != null) {
     if (effLocType === "warehouse") {
       const { rows } = await pool.query(`SELECT name FROM warehouses WHERE id = $1`, [effLocId]);
@@ -474,7 +482,7 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       scopeLabel = "Head Office";
     }
   }
-  const isAllLocations = scope.isHeadOffice && effLocType == null;
+  const isAllLocations = scope.isHeadOffice && effLocType == null && !isMultiLocations;
 
   // ── WHERE-builder for the `sales` table (alias s) ─────────────────────────
   // Always excludes branch transfers and cancelled invoices; applies date and
@@ -784,7 +792,7 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
     payments: number | null; receipts: number | null; cash: number | null; bank: number | null;
     grossProfit: number | null; netProfit: number | null;
   }> = [];
-  if (isAllLocations) {
+  if (isAllLocations || isMultiLocations) {
     const [locationRows, purchaseLocationRows] = await Promise.all([
       pool.query(`
         SELECT 'headoffice'::text AS location_type, 0::int AS location_id, 'Head Office'::text AS name
@@ -851,6 +859,11 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       grossProfit: financials.profit.gross,
       netProfit: financials.profit.net,
     }));
+  }
+  if (isMultiLocations) {
+    const selected = new Set(requestedLocationKeys);
+    locationBreakdown = locationBreakdown.filter((loc) =>
+      selected.has(locationKey(loc.locationType, loc.locationId)));
   }
 
   res.json({
