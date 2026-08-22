@@ -130,6 +130,9 @@ try {
     const lq = `locationType=${locRow.lt}&locationId=${locRow.lid}`;
     const biL = (await get(`/dashboard/bi?fromDate=${EPOCH}&toDate=${TODAY}&${lq}`)).data;
     const regL = (await get(`/reports/sales-register?from=${EPOCH}&to=${TODAY}&${lq}`)).data;
+    assert("selected location is not treated as All Locations",
+      biL?.scope?.isAllLocations === false && Array.isArray(biL?.locationBreakdown) && biL.locationBreakdown.length === 0,
+      JSON.stringify({ scope: biL?.scope, breakdown: biL?.locationBreakdown?.length }));
     assert(`bi.sales.total == register total (located ${locRow.lt}#${locRow.lid}, query params)`,
       near(biL?.sales?.total, regL?.totals?.total),
       `bi=${biL?.sales?.total} reg=${regL?.totals?.total}`);
@@ -165,6 +168,20 @@ try {
     `summary=${summary?.totalSalesAmount} reg=${regAll?.totals?.total}`);
 
   const biAll = (await get(`/dashboard/bi?fromDate=${EPOCH}&toDate=${TODAY}`)).data;
+  assert("explicit All Locations returns a location breakdown",
+    biAll?.scope?.isAllLocations === true && Array.isArray(biAll?.locationBreakdown) && biAll.locationBreakdown.length > 0,
+    JSON.stringify({ scope: biAll?.scope, rows: biAll?.locationBreakdown?.length }));
+  const breakdownFields = [
+    "sales", "purchases", "inventoryValue", "expense", "payables", "receivables",
+    "payments", "receipts", "cash", "bank", "grossProfit", "netProfit",
+  ];
+  assert("location breakdown carries every dashboard metric",
+    (biAll?.locationBreakdown ?? []).every((row) =>
+      breakdownFields.every((field) => Object.prototype.hasOwnProperty.call(row, field))),
+    JSON.stringify(biAll?.locationBreakdown?.[0]));
+  assert("Σ location sales == consolidated sales",
+    near((biAll?.locationBreakdown ?? []).reduce((sum, row) => sum + Number(row.sales ?? 0), 0), biAll?.sales?.total),
+    `rows=${JSON.stringify(biAll?.locationBreakdown)}`);
   const byLoc = biAll?.sales?.byLocation ?? [];
   const locSum = byLoc.reduce((s, l) => s + Number(l.total ?? 0), 0);
   assert("Σ bi.sales.byLocation == bi.sales.total",

@@ -411,6 +411,9 @@ const asISODate = (d: unknown): string => {
   return s.length >= 10 ? s.slice(0, 10) : s;
 };
 
+const locationKey = (type: string, id: unknown): string =>
+  type === "headoffice" ? "headoffice" : `${type}:${Number(id)}`;
+
 router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promise<void> => {
   const q = req.query as Record<string, unknown>;
   const fromDate = typeof q.fromDate === "string" ? q.fromDate : "";
@@ -471,6 +474,7 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       scopeLabel = "Head Office";
     }
   }
+  const isAllLocations = scope.isHeadOffice && effLocType == null;
 
   // ── WHERE-builder for the `sales` table (alias s) ─────────────────────────
   // Always excludes branch transfers and cancelled invoices; applies date and
@@ -768,6 +772,87 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
   // Same rule as the Stock screen: no valuation right, no valuation figure.
   const showValuation = await canViewStockValuation((req as any).employee?.hierarchyId);
 
+  // The selected-location views above intentionally return only their selected
+  // slice. For an explicit All Locations view, build a parallel breakdown from
+  // the same source queries and the same derived-posting stream. This keeps the
+  // consolidated values authoritative while making every location visible
+  // without asking the client to re-sum documents.
+  let locationBreakdown: Array<{
+    locationType: string; locationId: number; name: string;
+    sales: number; purchases: number; inventoryValue: number;
+    expense: number | null; payables: number | null; receivables: number | null;
+    payments: number | null; receipts: number | null; cash: number | null; bank: number | null;
+    grossProfit: number | null; netProfit: number | null;
+  }> = [];
+  if (isAllLocations) {
+    const [locationRows, purchaseLocationRows] = await Promise.all([
+      pool.query(`
+        SELECT 'headoffice'::text AS location_type, 0::int AS location_id, 'Head Office'::text AS name
+        UNION ALL
+        SELECT 'warehouse'::text, id, name FROM warehouses
+        UNION ALL
+        SELECT 'outlet'::text, id, name FROM outlets
+        ORDER BY location_type, location_id
+      `),
+      pool.query(`
+        SELECT COALESCE(p.location_type, 'headoffice') AS location_type,
+               CASE WHEN COALESCE(p.location_type, 'headoffice') = 'headoffice'
+                    THEN 0 ELSE COALESCE(p.location_id, 0) END AS location_id,
+               COALESCE(SUM(p.total_amount::numeric), 0)::float AS total
+          FROM purchases p
+         WHERE p.branch_transfer_id IS NULL AND p.cancelled_at IS NULL
+           ${fromDate ? "AND p.purchase_date::date >= $1::date" : ""}
+           ${toDate ? `AND p.purchase_date::date <= $${fromDate ? 2 : 1}::date` : ""}
+         GROUP BY 1, 2
+      `, [fromDate, toDate].filter(Boolean)),
+    ]);
+    const locations = locationRows.rows.map((r: any) => ({
+      locationType: String(r.location_type),
+      locationId: Number(r.location_id),
+      name: String(r.name),
+    }));
+    const purchaseMap = new Map<string, number>();
+    for (const r of purchaseLocationRows.rows) {
+      purchaseMap.set(locationKey(String(r.location_type), r.location_id), money(r.total));
+    }
+    const salesMap = new Map<string, number>();
+    for (const r of salesByLoc.rows) {
+      salesMap.set(locationKey(String(r.location_type), r.location_id), money(r.total));
+    }
+    const inventoryMap = new Map<string, number>();
+    for (const r of valuation.byLocation) {
+      inventoryMap.set(locationKey(String(r.branchType), r.branchId), money(r.value));
+    }
+    const locationFinancials = await Promise.all(locations.map(async (loc) => {
+      const postingLocation = loc.locationType === "headoffice"
+        ? ({ type: "headoffice", id: null } as const)
+        : ({ type: loc.locationType as "warehouse" | "outlet", id: loc.locationId } as const);
+      const [financials, flows] = await Promise.all([
+        companyFinancials(cachedPostings, { fromDate: fromDate || null, toDate: toDate || null, location: postingLocation }),
+        rangeMoneyFlows(
+          (await cachedPostings(toDate ? { toDate } : {})) as never[],
+          { fromDate: fromDate || null, toDate: toDate || null, location: postingLocation, subtree: await ledgerSubtreeLookup() },
+        ),
+      ]);
+      return { loc, financials, flows };
+    }));
+    locationBreakdown = locationFinancials.map(({ loc, financials, flows }) => ({
+      ...loc,
+      sales: salesMap.get(locationKey(loc.locationType, loc.locationId)) ?? 0,
+      purchases: purchaseMap.get(locationKey(loc.locationType, loc.locationId)) ?? 0,
+      inventoryValue: inventoryMap.get(locationKey(loc.locationType, loc.locationId)) ?? 0,
+      expense: financials.expenses.total,
+      payables: money(financials.accountsPayable + financials.salaryPayable + financials.rentPayable),
+      receivables: financials.accountsReceivable,
+      payments: flows.totalOut,
+      receipts: flows.totalIn,
+      cash: financials.cashBalance,
+      bank: financials.bankBalance,
+      grossProfit: financials.profit.gross,
+      netProfit: financials.profit.net,
+    }));
+  }
+
   res.json({
     canViewValuation: showValuation,
     period: { fromDate: fromDate || null, toDate: toDate || null },
@@ -776,6 +861,7 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       locationId: effLocId,
       label: scopeLabel,
       isHeadOffice: scope.isHeadOffice,
+      isAllLocations,
     },
     sales: {
       total: salesTotal,
@@ -897,6 +983,7 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
     // build (or the mobile app) keeps rendering during rollout.
     moneyFlows,
     todayMoney: moneyFlows,
+    locationBreakdown,
     topItems: topItemsRows.rows.map((r: any) => ({
       itemId: Number(r.item_id), name: r.name, qty: qty(r.qty), revenue: money(r.revenue),
     })),
