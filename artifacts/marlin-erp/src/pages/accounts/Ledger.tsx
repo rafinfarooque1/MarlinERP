@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useLocation } from 'wouter';
 import { toast } from 'sonner';
-import { useGetLedgerStatement, useListAccountsFlat } from '@workspace/api-client-react';
+import { useGetLedgerStatement, useListAccountsFlat, useListWarehouses, useListOutlets } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -23,6 +23,8 @@ export default function Ledger() {
   const perm = usePermission('page:/accounts/ledger');
   const [, navigate] = useLocation();
   const { data: accounts = [] } = useListAccountsFlat();
+  const { data: warehouses = [] } = useListWarehouses();
+  const { data: outlets = [] } = useListOutlets();
   const [accountId, setAccountId] = useState<string>('');
   const now = new Date();
   const [fromDate, setFromDate] = useState(`${now.getFullYear()}-01-01`);
@@ -44,6 +46,14 @@ export default function Ledger() {
   );
 
   const entries = (statement as any)?.entries || (statement as any)?.transactions || [];
+  const showLocation = locationState.locationType === 'all';
+  const entryLocationName = (entry: any) => {
+    if (entry.locationName) return entry.locationName;
+    if (entry.locationType === 'headoffice') return 'Head Office';
+    if (entry.locationType === 'warehouse') return (warehouses as any[]).find((w) => Number(w.id) === Number(entry.locationId))?.name ?? `Warehouse #${entry.locationId}`;
+    if (entry.locationType === 'outlet') return (outlets as any[]).find((o) => Number(o.id) === Number(entry.locationId))?.name ?? `Outlet #${entry.locationId}`;
+    return 'Company';
+  };
   const account = (accounts as any[]).find((a: any) => a.id === Number(accountId));
 
   // Row drill-down: a statement line opens the document that produced it —
@@ -73,7 +83,8 @@ export default function Ledger() {
     sections: [{
       columns: [
         { label: 'Date' },
-        { label: 'Description', width: 3 },
+        { label: 'Narration', width: 3 },
+        ...(showLocation ? [{ label: 'Location' }] : []),
         { label: 'Type' },
         { label: 'Debit', align: 'right', width: 1.4 },
         { label: 'Credit', align: 'right', width: 1.4 },
@@ -81,13 +92,14 @@ export default function Ledger() {
       ],
       rows: (entries as any[]).map((e: any) => [
         new Date(e.date).toLocaleDateString('en-IN'),
-        e.description,
+        e.narration ?? e.description,
+        ...(showLocation ? [entryLocationName(e)] : []),
         e.entryType,
         e.debit ? pdfMoney(Number(e.debit)) : '',
         e.credit ? pdfMoney(Number(e.credit)) : '',
         pdfMoney(Number(e.balance ?? 0)),
       ] as (string | number)[]),
-      totalsRow: ['', 'Total', '', pdfMoney(Number((statement as any)?.totalDebit ?? 0)), pdfMoney(Number((statement as any)?.totalCredit ?? 0)), pdfMoney(Number((statement as any)?.closingBalance ?? 0))],
+      totalsRow: ['', 'Total', ...(showLocation ? [''] : []), '', pdfMoney(Number((statement as any)?.totalDebit ?? 0)), pdfMoney(Number((statement as any)?.totalCredit ?? 0)), pdfMoney(Number((statement as any)?.closingBalance ?? 0))],
     }],
   });
 
@@ -130,7 +142,7 @@ export default function Ledger() {
               canDownload={perm.canDownload}
               disabled={!entries.length}
               doc={doc}
-              onCSV={() => downloadCSV('ledger.csv', entries.map((e: any) => ({ Date: e.date, Description: e.description, Type: e.entryType, Debit: e.debit || 0, Credit: e.credit || 0, Balance: e.balance || 0 })))}
+               onCSV={() => downloadCSV('ledger.csv', entries.map((e: any) => ({ Date: e.date, Narration: e.narration ?? e.description, ...(showLocation ? { Location: entryLocationName(e) } : {}), Type: e.entryType, Debit: e.debit || 0, Credit: e.credit || 0, Balance: e.balance || 0 })))}
             />
           }
         />
@@ -176,7 +188,8 @@ export default function Ledger() {
             <TableHeader>
               <TableRow className="bg-muted/10">
                 <SortableHead k="date" sort={sort}>Date</SortableHead>
-                <SortableHead k="description" sort={sort}>Description</SortableHead>
+                <SortableHead k="description" sort={sort}>Narration</SortableHead>
+                {showLocation && <TableHead>Location</TableHead>}
                 <SortableHead k="type" sort={sort}>Type</SortableHead>
                 <SortableHead k="debit" sort={sort} className="text-right">Debit</SortableHead>
                 <SortableHead k="credit" sort={sort} className="text-right">Credit</SortableHead>
@@ -196,11 +209,12 @@ export default function Ledger() {
                   <TableCell className="text-sm">{new Date(e.date).toLocaleDateString('en-IN')}</TableCell>
                   <TableCell className="text-sm">
                     <span className="inline-flex items-center gap-1.5">
-                      {e.description}
+                       {e.narration ?? e.description}
                       {drill?.kind === 'link' && <ExternalLink className="w-3 h-3 text-muted-foreground/60 shrink-0" />}
                       {drill?.kind === 'info' && <Info className="w-3 h-3 text-muted-foreground/60 shrink-0" />}
                     </span>
                   </TableCell>
+                   {showLocation && <TableCell className="text-sm text-muted-foreground">{entryLocationName(e)}</TableCell>}
                   <TableCell><Badge variant="outline" className="text-xs capitalize">{e.entryType}</Badge></TableCell>
                   <TableCell className="text-right font-mono text-red-500">{e.debit ? `₹${Number(e.debit).toLocaleString('en-IN')}` : '—'}</TableCell>
                   <TableCell className="text-right font-mono text-emerald-500">{e.credit ? `₹${Number(e.credit).toLocaleString('en-IN')}` : '—'}</TableCell>

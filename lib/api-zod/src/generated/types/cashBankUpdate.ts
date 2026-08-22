@@ -5,6 +5,7 @@
  * Marlin Frozen Fruits ERP API
  * OpenAPI spec version: 0.1.0
  */
+import type { CashBankAccountLocationInput } from './cashBankAccountLocationInput';
 import type { CashBankUpdateLocationType } from './cashBankUpdateLocationType';
 
 export interface CashBankUpdate {
@@ -14,6 +15,11 @@ export interface CashBankUpdate {
   ifscCode?: string;
   locationType?: CashBankUpdateLocationType;
   locationId?: number;
+  /**
+     * Replaces the account's available locations. Omit to leave availability unchanged.
+     * @minItems 1
+     */
+  locations?: CashBankAccountLocationInput[];
   /** Replaces the ledger's opening balance for the current financial year. */
   openingBalance?: number;
   /** Bank/UPI accounts only — toggle the reconciliation requirement. */

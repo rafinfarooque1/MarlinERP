@@ -1,4 +1,4 @@
-import { pgTable, text, serial, timestamp, numeric, integer, date } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, timestamp, numeric, integer, date, uniqueIndex } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
@@ -24,6 +24,25 @@ export const cashBankAccountsTable = pgTable("cash_bank_accounts", {
   balance: numeric("balance", { precision: 12, scale: 2 }).notNull().default("0"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+/**
+ * Places where a managed Cash/Bank account may be used. An account can be
+ * available at several locations, while every money document still records
+ * one location stamp of its own. The raw legacy location columns remain on
+ * cash_bank_accounts as the compatibility/default owner snapshot.
+ */
+export const cashBankAccountLocationsTable = pgTable("cash_bank_account_locations", {
+  id: serial("id").primaryKey(),
+  accountId: integer("account_id").notNull().references(() => cashBankAccountsTable.id, { onDelete: "cascade" }),
+  locationType: text("location_type").notNull(),
+  // Head Office is represented consistently as id 0; branch values are the
+  // corresponding warehouse/outlet ids.
+  locationId: integer("location_id").notNull().default(0),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("cash_bank_account_locations_account_location_uniq")
+    .on(table.accountId, table.locationType, table.locationId),
+]);
 
 export const expensesTable = pgTable("expenses", {
   id: serial("id").primaryKey(),

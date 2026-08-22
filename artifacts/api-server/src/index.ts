@@ -4526,6 +4526,25 @@ await pool.query(`
   ALTER TABLE cash_bank_accounts ADD COLUMN IF NOT EXISTS ledger_id INTEGER;
   ALTER TABLE cash_bank_accounts ADD COLUMN IF NOT EXISTS location_type TEXT NOT NULL DEFAULT 'headoffice';
   ALTER TABLE cash_bank_accounts ADD COLUMN IF NOT EXISTS location_id INTEGER;
+  -- Account availability is relational: one Cash/Bank account can be usable at
+  -- several places without changing the historical location stamp on a payment,
+  -- receipt, expense or voucher. Head Office consistently uses location_id = 0.
+  CREATE TABLE IF NOT EXISTS cash_bank_account_locations (
+    id SERIAL PRIMARY KEY,
+    account_id INTEGER NOT NULL REFERENCES cash_bank_accounts(id) ON DELETE CASCADE,
+    location_type TEXT NOT NULL,
+    location_id INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT cash_bank_account_locations_type_check
+      CHECK (
+        (location_type = 'headoffice' AND location_id = 0)
+        OR (location_type IN ('warehouse', 'outlet') AND location_id > 0)
+      )
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS cash_bank_account_locations_account_location_uniq
+    ON cash_bank_account_locations(account_id, location_type, location_id);
+  CREATE INDEX IF NOT EXISTS cash_bank_account_locations_location_idx
+    ON cash_bank_account_locations(location_type, location_id);
 
   -- Per-account reconciliation switch. When TRUE, collections routed into the
   -- account go through Electronic Clearing + Reconciliation before reaching
@@ -4546,6 +4565,38 @@ await pool.query(`
       `UPDATE cash_bank_accounts SET requires_reconciliation = true WHERE account_type <> 'cash'`
     );
     await pool.query(`INSERT INTO migration_log (name) VALUES ('cash_bank_requires_recon_v1')`);
+  }
+}
+
+// One-time compatibility migration. It records each old single owner as the
+// first availability membership, then never derives memberships from the legacy
+// columns again: changing account availability must not be undone on restart.
+{
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows: [done] } = await client.query(
+      `SELECT 1 FROM migration_log WHERE name = 'cash_bank_account_locations_v1' FOR UPDATE`,
+    );
+    if (!done) {
+      await client.query(`
+        INSERT INTO cash_bank_account_locations (account_id, location_type, location_id)
+        SELECT id,
+               CASE WHEN location_type IN ('warehouse', 'outlet') AND location_id IS NOT NULL
+                    THEN location_type ELSE 'headoffice' END,
+               CASE WHEN location_type IN ('warehouse', 'outlet') AND location_id IS NOT NULL
+                    THEN location_id ELSE 0 END
+          FROM cash_bank_accounts
+        ON CONFLICT (account_id, location_type, location_id) DO NOTHING
+      `);
+      await client.query(`INSERT INTO migration_log (name) VALUES ('cash_bank_account_locations_v1')`);
+    }
+    await client.query("COMMIT");
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw e;
+  } finally {
+    client.release();
   }
 }
 
