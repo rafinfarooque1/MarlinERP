@@ -8,7 +8,7 @@
  */
 import { useEffect, useMemo, useState } from 'react';
 import {
-  useAssetPurchases, useCreateAssetPurchase, useDeleteAssetPurchase,
+  useAssetPurchases, useCreateAssetPurchase, useUpdateAssetPurchase, useDeleteAssetPurchase,
   useAssetCategories, useListVendors,
   type AssetPurchase, type AssetPaymentMode, type AssetPaymentStatus,
 } from '@workspace/api-client-react';
@@ -25,7 +25,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Plus, Search, Trash2, Download, Landmark, Paperclip, Wallet, Receipt } from 'lucide-react';
+import { Plus, Search, Trash2, Download, Landmark, Paperclip, Wallet, Receipt, Edit2 } from 'lucide-react';
 import { usePermission } from '@/lib/usePermission';
 import { toast } from 'sonner';
 import { downloadCSV } from '@/lib/download';
@@ -80,6 +80,7 @@ export default function AssetPurchases() {
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
   const [isOpen, setIsOpen] = useState(false);
+  const [editTarget, setEditTarget] = useState<AssetPurchase | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<AssetPurchase | null>(null);
   const [attachmentPath, setAttachmentPath] = useState<string | null>(null);
 
@@ -94,10 +95,13 @@ export default function AssetPurchases() {
   const { data: categories = [] } = useAssetCategories();
   const { data: vendors = [] } = useListVendors();
   const createPurchase = useCreateAssetPurchase();
+  const updatePurchase = useUpdateAssetPurchase();
   const deletePurchase = useDeleteAssetPurchase();
   const locations = useActingLocations();
 
-  const activeCategories = categories.filter(c => c.status === 'active');
+  const availableCategories = categories.filter(c =>
+    c.status === 'active' || (editTarget != null && c.id === editTarget.categoryId)
+  );
 
   const { sorted, sort } = useTableSort(purchases, {
     date: p => p.purchaseDate,
@@ -147,11 +151,12 @@ export default function AssetPurchases() {
 
   // Credit purchases start unpaid; cash/bank/upi settle at entry.
   useEffect(() => {
-    form.setValue('paymentStatus', wMode === 'credit' ? 'unpaid' : 'paid');
+    if (!editTarget) form.setValue('paymentStatus', wMode === 'credit' ? 'unpaid' : 'paid');
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [wMode]);
+  }, [wMode, editTarget]);
 
   const openAdd = () => {
+    setEditTarget(null);
     form.reset({
       assetName: '', categoryId: 0, purchaseDate: todayIso(), invoiceNumber: '',
       vendorId: '0', location: locations.defaultValue, quantity: 1, acquisitionCost: 0,
@@ -163,7 +168,52 @@ export default function AssetPurchases() {
     setIsOpen(true);
   };
 
+  const openEdit = (purchase: AssetPurchase) => {
+    setEditTarget(purchase);
+    form.reset({
+      assetName: purchase.assetName,
+      categoryId: purchase.categoryId ?? 0,
+      purchaseDate: purchase.purchaseDate?.slice(0, 10) ?? '',
+      invoiceNumber: purchase.invoiceNumber ?? '',
+      vendorId: purchase.vendorId ? String(purchase.vendorId) : '0',
+      location: `${purchase.locationType}:${purchase.locationId}`,
+      quantity: Number(purchase.quantity),
+      acquisitionCost: Number(purchase.acquisitionCost),
+      gstRate: Number(purchase.gstRate),
+      gstAmount: Number(purchase.gstAmount),
+      paymentMode: purchase.paymentMode,
+      paymentStatus: purchase.paymentStatus,
+      warrantyStart: purchase.warrantyStart?.slice(0, 10) ?? '',
+      warrantyEnd: purchase.warrantyEnd?.slice(0, 10) ?? '',
+      serialNumber: purchase.serialNumber ?? '',
+      assetTag: purchase.assetTag ?? '',
+      usefulLifeMonths: purchase.usefulLifeMonths == null ? '' : String(purchase.usefulLifeMonths),
+      notes: purchase.notes ?? '',
+    });
+    setAttachmentPath(purchase.attachmentPath);
+    setIsOpen(true);
+  };
+
   const onSubmit = (data: FormValues) => {
+    if (editTarget) {
+      updatePurchase.mutate({
+        id: editTarget.id,
+        categoryId: data.categoryId,
+        invoiceNumber: data.invoiceNumber?.trim() || undefined,
+        paymentStatus: data.paymentStatus as AssetPaymentStatus,
+        warrantyStart: data.warrantyStart || null,
+        warrantyEnd: data.warrantyEnd || null,
+        serialNumber: data.serialNumber?.trim() || null,
+        assetTag: data.assetTag?.trim() || null,
+        usefulLifeMonths: data.usefulLifeMonths?.trim() ? Number(data.usefulLifeMonths) : null,
+        notes: data.notes?.trim() || null,
+        attachmentPath,
+      }, {
+        onSuccess: () => { toast.success('Asset purchase updated'); setIsOpen(false); setEditTarget(null); },
+        onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed to update purchase'),
+      });
+      return;
+    }
     const { locationType, locationId } = decodeLocation(data.location);
     createPurchase.mutate({
       assetName: data.assetName.trim(),
@@ -304,6 +354,11 @@ export default function AssetPurchases() {
                   </TableCell>
                   <TableCell className="font-mono text-xs text-muted-foreground whitespace-nowrap">{p.voucherNumber || '—'}</TableCell>
                   <TableCell className="text-right">
+                    {perm.canEdit && p.status === 'active' && (
+                      <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" title="Edit purchase" onClick={() => openEdit(p)}>
+                        <Edit2 className="w-4 h-4" />
+                      </Button>
+                    )}
                     {perm.canDelete && p.status === 'active' && (
                       <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-destructive" onClick={() => setDeleteTarget(p)}><Trash2 className="w-4 h-4" /></Button>
                     )}
@@ -319,30 +374,34 @@ export default function AssetPurchases() {
         </div>
       </div>
 
-      {/* New purchase dialog */}
+      {/* New/edit purchase dialog */}
       <TransactionDialog open={isOpen} dirty={form.formState.isDirty} onOpenChange={setIsOpen}>
         <TransactionDialogContent className="sm:max-w-3xl">
           <DialogHeader>
-            <DialogTitle>New Asset Purchase</DialogTitle>
-            <DialogDescription>Posts Dr Fixed Assets / Cr {wMode === 'credit' ? "vendor's ledger" : wMode === 'cash' ? 'Cash' : 'Bank'} — no stock movement.</DialogDescription>
+            <DialogTitle>{editTarget ? 'Edit Asset Purchase' : 'New Asset Purchase'}</DialogTitle>
+            <DialogDescription>
+              {editTarget
+                ? 'Update purchase details without changing the posted accounting voucher.'
+                : <>Posts Dr Fixed Assets / Cr {wMode === 'credit' ? "vendor's ledger" : wMode === 'cash' ? 'Cash' : 'Bank'} — no stock movement.</>}
+            </DialogDescription>
           </DialogHeader>
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4 pt-2">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <FormField control={form.control} name="assetName" render={({ field }) => (
                   <FormItem><FormLabel>Asset Name <span className="text-destructive">*</span></FormLabel>
-                    <FormControl><Input placeholder="e.g. Blast Freezer 500L" {...field} /></FormControl><FormMessage /></FormItem>
+                    <FormControl><Input placeholder="e.g. Blast Freezer 500L" disabled={!!editTarget} {...field} /></FormControl><FormMessage /></FormItem>
                 )} />
                 <FormField control={form.control} name="categoryId" render={({ field }) => (
                   <FormItem><FormLabel>Category <span className="text-destructive">*</span></FormLabel>
-                    <Select onValueChange={v => field.onChange(Number(v))} value={field.value ? String(field.value) : ''}>
+                    <Select onValueChange={v => field.onChange(Number(v))} value={field.value ? String(field.value) : ''} disabled={false}>
                       <FormControl><SelectTrigger><SelectValue placeholder="Select category" /></SelectTrigger></FormControl>
-                      <SelectContent>{activeCategories.map(c => <SelectItem key={c.id} value={String(c.id)}>{c.name}</SelectItem>)}</SelectContent>
+                      <SelectContent>{availableCategories.map(c => <SelectItem key={c.id} value={String(c.id)}>{c.name}{c.status === 'inactive' ? ' (inactive)' : ''}</SelectItem>)}</SelectContent>
                     </Select><FormMessage /></FormItem>
                 )} />
                 <FormField control={form.control} name="purchaseDate" render={({ field }) => (
                   <FormItem><FormLabel>Purchase Date <span className="text-destructive">*</span></FormLabel>
-                    <FormControl><Input type="date" {...field} /></FormControl><FormMessage /></FormItem>
+                    <FormControl><Input type="date" disabled={!!editTarget} {...field} /></FormControl><FormMessage /></FormItem>
                 )} />
                 <FormField control={form.control} name="invoiceNumber" render={({ field }) => (
                   <FormItem><FormLabel>Invoice No.</FormLabel>
@@ -359,13 +418,14 @@ export default function AssetPurchases() {
                         searchPlaceholder="Search vendors…"
                         emptyLabel="No vendors found."
                         clearable
+                        disabled={!!editTarget}
                       />
                     </FormControl><FormMessage /></FormItem>
                 )} />
                 <FormField control={form.control} name="location" render={({ field }) => (
                   <FormItem><FormLabel>Warehouse / Location <span className="text-destructive">*</span></FormLabel>
                     {locations.canChoose ? (
-                      <Select onValueChange={field.onChange} value={field.value}>
+                      <Select onValueChange={field.onChange} value={field.value} disabled={!!editTarget}>
                         <FormControl><SelectTrigger><SelectValue /></SelectTrigger></FormControl>
                         <SelectContent>{locations.options.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}</SelectContent>
                       </Select>
@@ -376,26 +436,26 @@ export default function AssetPurchases() {
                 )} />
                 <FormField control={form.control} name="quantity" render={({ field }) => (
                   <FormItem><FormLabel>Quantity <span className="text-destructive">*</span></FormLabel>
-                    <FormControl><Input type="number" min={0} step="1" className="font-mono" {...field} /></FormControl><FormMessage /></FormItem>
+                    <FormControl><Input type="number" min={0} step="1" className="font-mono" disabled={!!editTarget} {...field} /></FormControl><FormMessage /></FormItem>
                 )} />
                 <FormField control={form.control} name="acquisitionCost" render={({ field }) => (
                   <FormItem><FormLabel>Unit Cost (₹) <span className="text-destructive">*</span></FormLabel>
-                    <FormControl><Input type="number" min={0} step="0.01" className="font-mono" {...field} /></FormControl><FormMessage /></FormItem>
+                    <FormControl><Input type="number" min={0} step="0.01" className="font-mono" disabled={!!editTarget} {...field} /></FormControl><FormMessage /></FormItem>
                 )} />
                 <FormField control={form.control} name="gstRate" render={({ field }) => (
                   <FormItem><FormLabel>GST %</FormLabel>
-                    <Select onValueChange={v => field.onChange(Number(v))} value={String(field.value ?? 18)}>
+                    <Select onValueChange={v => field.onChange(Number(v))} value={String(field.value ?? 18)} disabled={!!editTarget}>
                       <FormControl><SelectTrigger><SelectValue /></SelectTrigger></FormControl>
                       <SelectContent>{[0, 5, 12, 18, 28].map(r => <SelectItem key={r} value={String(r)}>{r}%</SelectItem>)}</SelectContent>
                     </Select><FormMessage /></FormItem>
                 )} />
                 <FormField control={form.control} name="gstAmount" render={({ field }) => (
                   <FormItem><FormLabel>GST Amount (₹) <span className="text-[10px] font-normal text-muted-foreground">adjust to match invoice</span></FormLabel>
-                    <FormControl><Input type="number" min={0} step="0.01" className="font-mono" {...field} /></FormControl><FormMessage /></FormItem>
+                    <FormControl><Input type="number" min={0} step="0.01" className="font-mono" disabled={!!editTarget} {...field} /></FormControl><FormMessage /></FormItem>
                 )} />
                 <FormField control={form.control} name="paymentMode" render={({ field }) => (
                   <FormItem><FormLabel>Payment Mode</FormLabel>
-                    <Select onValueChange={field.onChange} value={field.value}>
+                    <Select onValueChange={field.onChange} value={field.value} disabled={!!editTarget}>
                       <FormControl><SelectTrigger><SelectValue /></SelectTrigger></FormControl>
                       <SelectContent>
                         <SelectItem value="cash">Cash</SelectItem>
@@ -456,7 +516,7 @@ export default function AssetPurchases() {
 
               <DialogFooter>
                 <DialogClose asChild><Button variant="outline" type="button">Cancel</Button></DialogClose>
-                <Button type="submit" disabled={createPurchase.isPending}>{createPurchase.isPending ? 'Recording…' : 'Record Purchase'}</Button>
+                 <Button type="submit" disabled={createPurchase.isPending || updatePurchase.isPending}>{editTarget ? (updatePurchase.isPending ? 'Saving…' : 'Save Changes') : (createPurchase.isPending ? 'Recording…' : 'Record Purchase')}</Button>
               </DialogFooter>
             </form>
           </Form>
