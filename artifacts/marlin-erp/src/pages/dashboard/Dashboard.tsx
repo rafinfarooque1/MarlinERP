@@ -224,6 +224,7 @@ export default function Dashboard() {
   const range = useDateRange('today');
   // Location comes from the shared header GlobalLocationSelector — no local picker.
   const { locationState } = useLocationContext();
+  const [reportMode, setReportMode] = useState<'details' | 'consolidated'>('details');
 
   const filters = useMemo<DashboardBiFilters>(() => {
     const f: DashboardBiFilters = {};
@@ -240,6 +241,7 @@ export default function Dashboard() {
   const { data: bi, isLoading, isError } = useGetDashboardBi(filters);
 
   const pLabel = periodLabel(range.from || undefined, range.to || undefined);
+  const reportLocationLabel = bi?.scope.label === 'All locations' ? 'All Locations' : bi?.scope.label;
 
   // Permission gate
   if (!dashPerm.isLoading && !dashPerm.canView) {
@@ -297,11 +299,6 @@ export default function Dashboard() {
         </div>
       )
       : fallback;
-  const locationHintText = (metric: BreakdownMetric, fallback?: string) =>
-    showLocationBreakdown
-      ? locationBreakdown.map((l) => `${l.name} ${fmt(l[metric] as number | null)}`).join(' · ')
-      : fallback;
-
   const [, navigate] = useLocation();
   // Every KPI card drills into its source report carrying the dashboard's own
   // date range (?view= picks the sub-report, ?range=/from/to seed useDateRange
@@ -545,7 +542,10 @@ export default function Dashboard() {
       label: out,
       value: typeof c.value === 'string' ? c.value : '—',
       tone: c.tone,
-      hint: locationHintText(metric, fallbackHint),
+      hint: showLocationBreakdown ? undefined : fallbackHint,
+      locationLines: showLocationBreakdown
+        ? locationBreakdown.map((l) => ({ label: l.name, value: fmt(l[metric] as number | null) }))
+        : undefined,
     }];
   });
 
@@ -687,12 +687,35 @@ export default function Dashboard() {
                 {sharing ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Share2 className="w-4 h-4 mr-1.5" />}
                 Share
               </Button>
+              <div
+                role="group"
+                aria-label="Share report mode"
+                className="flex items-center rounded-md border border-border bg-muted/30 p-0.5"
+                data-testid="dashboard-report-mode"
+              >
+                <button
+                  type="button"
+                  aria-pressed={reportMode === 'details'}
+                  onClick={() => setReportMode('details')}
+                  className={`rounded px-2.5 py-1 text-xs font-medium transition-colors ${reportMode === 'details' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground'}`}
+                >
+                  Details
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={reportMode === 'consolidated'}
+                  onClick={() => setReportMode('consolidated')}
+                  className={`rounded px-2.5 py-1 text-xs font-medium transition-colors ${reportMode === 'consolidated' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground'}`}
+                >
+                  Consolidated
+                </button>
+              </div>
             </div>
           }
         >
           <p className="text-muted-foreground flex items-center gap-1.5 text-sm">
             <MapPin className="w-3.5 h-3.5" />
-            {bi?.scope.label ?? '…'} · {pLabel}
+             {reportLocationLabel ?? '…'} · {pLabel}
           </p>
           {/* ── Controls: date range (location comes from the header selector) ─ */}
           <div className="flex flex-wrap items-center gap-3">
@@ -962,13 +985,14 @@ export default function Dashboard() {
         <div aria-hidden className="fixed top-0 -left-[10000px] pointer-events-none" style={{ zIndex: -1 }}>
           <DashboardShareReport
             ref={shareRef}
-            locationLabel={bi.scope.label}
+            locationLabel={reportLocationLabel ?? 'All Locations'}
             periodLabel={pLabel}
             presetLabel={PRESET_LABEL[range.preset] ?? 'Custom range'}
             generatedAt={new Date().toLocaleString('en-IN', {
               day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit',
             })}
             cards={shareCards}
+            reportMode={reportMode}
           />
         </div>
       )}
