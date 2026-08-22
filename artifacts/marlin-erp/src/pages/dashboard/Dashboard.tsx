@@ -277,6 +277,30 @@ export default function Dashboard() {
   // Payments/Receipts tiles always agree with the books for the range and
   // location. Null exactly when the balance tiles are null.
   const mf = bi?.moneyFlows;
+  const showLocationBreakdown = !!bi?.scope.isAllLocations;
+  const locationBreakdown = bi?.locationBreakdown ?? [];
+  type BreakdownMetric = keyof Omit<typeof locationBreakdown[number], 'locationType' | 'locationId' | 'name'>;
+  const locationLines = (metric: BreakdownMetric) =>
+    showLocationBreakdown
+      ? locationBreakdown.map((l) => ({ label: l.name, value: fmt(l[metric] as number | null) }))
+      : undefined;
+  const locationHint = (metric: BreakdownMetric, fallback?: React.ReactNode): React.ReactNode =>
+    showLocationBreakdown
+      ? (
+        <div className="space-y-0.5 text-left">
+          {locationBreakdown.map((l) => (
+            <div key={`${l.locationType}:${l.locationId}`} className="flex items-center justify-between gap-2">
+              <span className="truncate">{l.name}</span>
+              <span className="font-mono shrink-0">{fmt(l[metric] as number | null)}</span>
+            </div>
+          ))}
+        </div>
+      )
+      : fallback;
+  const locationHintText = (metric: BreakdownMetric, fallback?: string) =>
+    showLocationBreakdown
+      ? locationBreakdown.map((l) => `${l.name} ${fmt(l[metric] as number | null)}`).join(' · ')
+      : fallback;
 
   const [, navigate] = useLocation();
   // Every KPI card drills into its source report carrying the dashboard's own
@@ -377,11 +401,11 @@ export default function Dashboard() {
 
   const summaryCards: SummaryCard[] = [
     // ── Row 1: Sales · Purchases ────────────────────────────────────────────
-    { label: 'Sales', value: fmt(s?.total ?? 0), tone: 'pos', onClick: drillTo('/reports/sales', 'register') },
-    { label: 'Purchases', value: fmt(bi?.purchases.total ?? 0), onClick: drillTo('/reports/purchases', 'register') },
+    { label: 'Sales', value: fmt(s?.total ?? 0), tone: 'pos', hint: locationHint('sales'), onClick: drillTo('/reports/sales', 'register') },
+    { label: 'Purchases', value: fmt(bi?.purchases.total ?? 0), hint: locationHint('purchases'), onClick: drillTo('/reports/purchases', 'register') },
     // ── Row 2: Inventory · Expenses ─────────────────────────────────────────
     ...(hasInventory
-      ? [{ label: 'Inventory Value', value: fmt(bi!.inventory.valuation ?? 0), tone: 'info' as CardTone, onClick: drillTo('/reports/inventory', 'valuation') }]
+      ? [{ label: 'Inventory Value', value: fmt(bi!.inventory.valuation ?? 0), tone: 'info' as CardTone, hint: locationHint('inventoryValue'), onClick: drillTo('/reports/inventory', 'valuation') }]
       : []),
     // Expenses and the balance tiles come from the accounting postings, which
     // carry no location. The API returns null for a single-location login
@@ -395,9 +419,12 @@ export default function Dashboard() {
       // are read off the same P&L build as the total and Other is the exact
       // remainder, so the line always sums to the figure above it for every
       // date range. Hidden (like the total) for single-location logins.
-      hint: bi?.expenses?.total != null && bi.expenses.salary != null
-        ? `Salary ${fmt(bi.expenses.salary)} · Rent ${fmt(bi.expenses.rent ?? 0)} · Other ${fmt(bi.expenses.other ?? 0)}`
-        : undefined,
+      hint: locationHint(
+        'expense',
+        bi?.expenses?.total != null && bi.expenses.salary != null
+          ? `Salary ${fmt(bi.expenses.salary)} · Rent ${fmt(bi.expenses.rent ?? 0)} · Other ${fmt(bi.expenses.other ?? 0)}`
+          : undefined,
+      ),
       // When Inventory is permission-hidden, Expenses takes the whole row so
       // the later pairs (Payables|Receivables etc.) stay aligned.
       className: hasInventory ? undefined : 'md:col-span-2',
@@ -420,9 +447,12 @@ export default function Dashboard() {
       // salary and accrued rent — the same three figures allPayables sums, so
       // the hint always reconciles with the number above it. Rendered whenever
       // the ledger figures are available (they are null for non-HO scopes).
-      hint: (bi?.payables as any)?.salaryPayable != null
-        ? `Suppliers ${fmt(bi!.payables.total ?? 0)} · Salary ${fmt((bi!.payables as any).salaryPayable)} · Rent ${fmt((bi!.payables as any).rentPayable ?? 0)}`
-        : undefined,
+      hint: locationHint(
+        'payables',
+        (bi?.payables as any)?.salaryPayable != null
+          ? `Suppliers ${fmt(bi!.payables.total ?? 0)} · Salary ${fmt((bi!.payables as any).salaryPayable)} · Rent ${fmt((bi!.payables as any).rentPayable ?? 0)}`
+          : undefined,
+      ),
       // allPayables spans trade creditors + accrued salary + accrued rent, so
       // the Balance Sheet liabilities table (which shows all three lines) is
       // the report that equals it — vendor-only Payables Ageing matches just
@@ -433,6 +463,7 @@ export default function Dashboard() {
       label: 'Receivables',
       value: bi?.receivables?.total == null ? '—' : fmt(bi.receivables.total),
       tone: bi?.receivables?.total == null ? 'default' : (bi?.receivables?.overdue ?? 0) > 0 ? 'warn' : 'info',
+      hint: locationHint('receivables'),
       onClick: drillTo('/reports/parties', 'receivables'),
     },
     // ── Row 4: Payments · Receipts ──────────────────────────────────────────
@@ -444,14 +475,14 @@ export default function Dashboard() {
       label: 'Payments',
       value: mf == null ? '—' : fmt(mf.totalOut),
       tone: mf == null ? 'default' : mf.totalOut > 0 ? 'neg' : 'default',
-      hint: mf == null ? undefined : `Cash ${fmt(mf.cashOut)} · Bank ${fmt(mf.bankOut)}`,
+      hint: locationHint('payments', mf == null ? undefined : `Cash ${fmt(mf.cashOut)} · Bank ${fmt(mf.bankOut)}`),
       onClick: drillTo('/reports/financial', 'cashBank'),
     },
     {
       label: 'Receipts',
       value: mf == null ? '—' : fmt(mf.totalIn),
       tone: mf == null ? 'default' : mf.totalIn > 0 ? 'pos' : 'default',
-      hint: mf == null ? undefined : `Cash ${fmt(mf.cashIn)} · Bank ${fmt(mf.bankIn)}`,
+      hint: locationHint('receipts', mf == null ? undefined : `Cash ${fmt(mf.cashIn)} · Bank ${fmt(mf.bankIn)}`),
       onClick: drillTo('/reports/financial', 'cashBank'),
     },
     // ── Row 5: Cash · Bank ──────────────────────────────────────────────────
@@ -459,12 +490,14 @@ export default function Dashboard() {
       label: 'Cash Balance',
       value: bi?.cash?.balance == null ? '—' : fmt(bi.cash.balance),
       tone: bi?.cash?.balance == null ? 'default' : bi.cash.balance >= 0 ? 'pos' : 'neg',
+      hint: locationHint('cash'),
       onClick: drillTo('/reports/financial', 'cash'),
     },
     {
       label: 'Bank Balance',
       value: bi?.bank?.balance == null ? '—' : fmt(bi.bank.balance),
       tone: bi?.bank?.balance == null ? 'default' : bi.bank.balance >= 0 ? 'pos' : 'neg',
+      hint: locationHint('bank'),
       onClick: drillTo('/reports/financial', 'bank'),
     },
     // ── Row 6: GP · NP — both read the P&L's own summary, never a re-sum ──
@@ -473,14 +506,14 @@ export default function Dashboard() {
       label: 'GP',
       value: pf?.gross == null ? '—' : fmt(pf.gross),
       tone: pf?.gross == null ? 'default' : pf.gross >= 0 ? 'pos' : 'neg',
-      hint: 'Gross Profit · tap for P&L',
+      hint: locationHint('grossProfit', 'Gross Profit · tap for P&L'),
       onClick: drill('pl-gross-profit'),
     },
     {
       label: 'NP',
       value: pf?.net == null ? '—' : fmt(pf.net),
       tone: pf?.net == null ? 'default' : pf.net >= 0 ? 'pos' : 'neg',
-      hint: 'Net Profit · tap for P&L',
+      hint: locationHint('netProfit', 'Net Profit · tap for P&L'),
       onClick: drill('pl-net-profit'),
     },
   ];
@@ -491,28 +524,28 @@ export default function Dashboard() {
   // Inventory drops out when the valuation permission hides it on screen too. Reconciling breakdown hints ride along
   // only where they are pure figures ("tap for P&L" hints make no sense in a
   // static image).
-  const SHARE_PICKS: { src: string; out: string; withHint?: boolean }[] = [
-    { src: 'Sales', out: 'Sales' },
-    { src: 'Purchases', out: 'Purchases' },
-    { src: 'Inventory Value', out: 'Inventory' },
-    { src: 'Expenses', out: 'Expenses', withHint: true },
-    { src: 'Payables', out: 'Payables', withHint: true },
-    { src: 'Receivables', out: 'Receivables' },
-    { src: 'Payments', out: 'Payments', withHint: true },
-    { src: 'Receipts', out: 'Receipts', withHint: true },
-    { src: 'Cash Balance', out: 'Cash' },
-    { src: 'Bank Balance', out: 'Bank' },
-    { src: 'GP', out: 'GP · Gross Profit' },
-    { src: 'NP', out: 'NP · Net Profit' },
+  const SHARE_PICKS: { src: string; out: string; metric: BreakdownMetric; fallbackHint?: string }[] = [
+    { src: 'Sales', out: 'Sales', metric: 'sales' },
+    { src: 'Purchases', out: 'Purchases', metric: 'purchases' },
+    { src: 'Inventory Value', out: 'Inventory', metric: 'inventoryValue' },
+    { src: 'Expenses', out: 'Expenses', metric: 'expense', fallbackHint: 'tap for P&L' },
+    { src: 'Payables', out: 'Payables', metric: 'payables', fallbackHint: 'tap for Balance Sheet' },
+    { src: 'Receivables', out: 'Receivables', metric: 'receivables' },
+    { src: 'Payments', out: 'Payments', metric: 'payments' },
+    { src: 'Receipts', out: 'Receipts', metric: 'receipts' },
+    { src: 'Cash Balance', out: 'Cash', metric: 'cash' },
+    { src: 'Bank Balance', out: 'Bank', metric: 'bank' },
+    { src: 'GP', out: 'GP · Gross Profit', metric: 'grossProfit', fallbackHint: 'tap for P&L' },
+    { src: 'NP', out: 'NP · Net Profit', metric: 'netProfit', fallbackHint: 'tap for P&L' },
   ];
-  const shareCards: ShareKpi[] = SHARE_PICKS.flatMap(({ src, out, withHint }) => {
+  const shareCards: ShareKpi[] = SHARE_PICKS.flatMap(({ src, out, metric, fallbackHint }) => {
     const c = summaryCards.find((x) => x.label === src);
     if (!c) return []; // permission-hidden (Inventory) — omitted, like on screen
     return [{
       label: out,
       value: typeof c.value === 'string' ? c.value : '—',
       tone: c.tone,
-      hint: withHint && typeof c.hint === 'string' ? c.hint : undefined,
+      hint: locationHintText(metric, fallbackHint),
     }];
   });
 
@@ -523,23 +556,25 @@ export default function Dashboard() {
   // Payments|Receipts, Cash|Bank, GP|NP; when Inventory is permission-hidden,
   // Expenses spans its full row so every later semantic pair stays intact.
   const mobileCards: MobileKpi[] = [
-    { label: 'Sales', icon: TrendingUp, value: fmt(s?.total ?? 0), tone: 'pos', onClick: drillTo('/reports/sales', 'register') },
-    { label: 'Purchases', icon: ShoppingCart, value: fmt(bi?.purchases.total ?? 0), onClick: drillTo('/reports/purchases', 'register') },
+    { label: 'Sales', icon: TrendingUp, value: fmt(s?.total ?? 0), tone: 'pos', lines: locationLines('sales'), onClick: drillTo('/reports/sales', 'register') },
+    { label: 'Purchases', icon: ShoppingCart, value: fmt(bi?.purchases.total ?? 0), lines: locationLines('purchases'), onClick: drillTo('/reports/purchases', 'register') },
     ...(hasInventory
-      ? [{ label: 'Inventory', icon: Boxes, value: fmt(bi!.inventory.valuation ?? 0), tone: 'info' as CardTone, onClick: drillTo('/reports/inventory', 'valuation') }]
+       ? [{ label: 'Inventory', icon: Boxes, value: fmt(bi!.inventory.valuation ?? 0), tone: 'info' as CardTone, lines: locationLines('inventoryValue'), onClick: drillTo('/reports/inventory', 'valuation') }]
       : []),
     {
       label: 'Expenses',
       icon: Receipt,
       value: bi?.expenses?.total == null ? '—' : fmt(bi.expenses.total),
       tone: (bi?.expenses?.total ?? 0) > 0 ? 'neg' : 'default',
-      lines: bi?.expenses?.total != null && bi.expenses.salary != null
-        ? [
-            { label: 'Salary', value: rup(bi.expenses.salary) },
-            { label: 'Rent', value: rup(bi.expenses.rent) },
-            { label: 'Other', value: rup(bi.expenses.other) },
-          ]
-        : undefined,
+      lines: showLocationBreakdown
+        ? locationLines('expense')
+        : bi?.expenses?.total != null && bi.expenses.salary != null
+          ? [
+              { label: 'Salary', value: rup(bi.expenses.salary) },
+              { label: 'Rent', value: rup(bi.expenses.rent) },
+              { label: 'Other', value: rup(bi.expenses.other) },
+            ]
+          : undefined,
       spanTwo: !hasInventory,
       onClick: drillTo('/reports/financial', 'pnl', 'pl-expenses'),
     },
@@ -548,13 +583,15 @@ export default function Dashboard() {
       icon: ArrowUpRight,
       value: (bi?.payables as any)?.allPayables == null ? '—' : fmt((bi!.payables as any).allPayables),
       tone: (bi?.payables as any)?.allPayables == null ? 'default' : 'neg',
-      lines: (bi?.payables as any)?.salaryPayable != null
-        ? [
-            { label: 'Suppliers', value: rup(bi!.payables.total) },
-            { label: 'Salary', value: rup((bi!.payables as any).salaryPayable) },
-            { label: 'Rent', value: rup((bi!.payables as any).rentPayable) },
-          ]
-        : undefined,
+      lines: showLocationBreakdown
+        ? locationLines('payables')
+        : (bi?.payables as any)?.salaryPayable != null
+          ? [
+              { label: 'Suppliers', value: rup(bi!.payables.total) },
+              { label: 'Salary', value: rup((bi!.payables as any).salaryPayable) },
+              { label: 'Rent', value: rup((bi!.payables as any).rentPayable) },
+            ]
+          : undefined,
       onClick: drillTo('/reports/financial', 'balanceSheet', 'bs-liabilities'),
     },
     {
@@ -562,6 +599,7 @@ export default function Dashboard() {
       icon: ArrowDownRight,
       value: bi?.receivables?.total == null ? '—' : fmt(bi.receivables.total),
       tone: bi?.receivables?.total == null ? 'default' : (bi?.receivables?.overdue ?? 0) > 0 ? 'warn' : 'info',
+      lines: locationLines('receivables'),
       onClick: drillTo('/reports/parties', 'receivables'),
     },
     {
@@ -569,12 +607,14 @@ export default function Dashboard() {
       icon: Banknote,
       value: mf == null ? '—' : fmt(mf.totalOut),
       tone: mf == null ? 'default' : mf.totalOut > 0 ? 'neg' : 'default',
-      lines: mf == null
-        ? undefined
-        : [
-            { label: 'Cash', value: rup(mf.cashOut) },
-            { label: 'Bank', value: rup(mf.bankOut) },
-          ],
+      lines: showLocationBreakdown
+        ? locationLines('payments')
+        : mf == null
+          ? undefined
+          : [
+              { label: 'Cash', value: rup(mf.cashOut) },
+              { label: 'Bank', value: rup(mf.bankOut) },
+            ],
       onClick: drillTo('/reports/financial', 'cashBank'),
     },
     {
@@ -582,12 +622,14 @@ export default function Dashboard() {
       icon: HandCoins,
       value: mf == null ? '—' : fmt(mf.totalIn),
       tone: mf == null ? 'default' : mf.totalIn > 0 ? 'pos' : 'default',
-      lines: mf == null
-        ? undefined
-        : [
-            { label: 'Cash', value: rup(mf.cashIn) },
-            { label: 'Bank', value: rup(mf.bankIn) },
-          ],
+      lines: showLocationBreakdown
+        ? locationLines('receipts')
+        : mf == null
+          ? undefined
+          : [
+              { label: 'Cash', value: rup(mf.cashIn) },
+              { label: 'Bank', value: rup(mf.bankIn) },
+            ],
       onClick: drillTo('/reports/financial', 'cashBank'),
     },
     {
@@ -595,6 +637,7 @@ export default function Dashboard() {
       icon: Wallet,
       value: bi?.cash?.balance == null ? '—' : fmt(bi.cash.balance),
       tone: bi?.cash?.balance == null ? 'default' : bi.cash.balance >= 0 ? 'pos' : 'neg',
+      lines: locationLines('cash'),
       onClick: drillTo('/reports/financial', 'cash'),
     },
     {
@@ -602,6 +645,7 @@ export default function Dashboard() {
       icon: Landmark,
       value: bi?.bank?.balance == null ? '—' : fmt(bi.bank.balance),
       tone: bi?.bank?.balance == null ? 'default' : bi.bank.balance >= 0 ? 'pos' : 'neg',
+      lines: locationLines('bank'),
       onClick: drillTo('/reports/financial', 'bank'),
     },
     {
@@ -609,7 +653,8 @@ export default function Dashboard() {
       icon: PieChart,
       value: pf?.gross == null ? '—' : fmt(pf.gross),
       tone: pf?.gross == null ? 'default' : pf.gross >= 0 ? 'pos' : 'neg',
-      desc: 'Gross Profit',
+      lines: locationLines('grossProfit'),
+      desc: showLocationBreakdown ? undefined : 'Gross Profit',
       onClick: drill('pl-gross-profit'),
     },
     {
@@ -617,7 +662,8 @@ export default function Dashboard() {
       icon: BarChart3,
       value: pf?.net == null ? '—' : fmt(pf.net),
       tone: pf?.net == null ? 'default' : pf.net >= 0 ? 'pos' : 'neg',
-      desc: 'Net Profit',
+      lines: locationLines('netProfit'),
+      desc: showLocationBreakdown ? undefined : 'Net Profit',
       onClick: drill('pl-net-profit'),
       spanTwo: true,
     },

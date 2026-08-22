@@ -23,6 +23,23 @@ export interface BiProductionDay { date: string; qty: number }
 export interface BiPurchaseDay { date: string; total: number }
 export interface BiTopItem { itemId: number; name: string; qty: number; revenue: number }
 export interface BiTopCustomer { customerId: number; name: string; revenue: number; count: number }
+export interface BiLocationMetric {
+  locationType: string;
+  locationId: number;
+  name: string;
+  sales: number;
+  purchases: number;
+  inventoryValue: number;
+  expense: number | null;
+  payables: number | null;
+  receivables: number | null;
+  payments: number | null;
+  receipts: number | null;
+  cash: number | null;
+  bank: number | null;
+  grossProfit: number | null;
+  netProfit: number | null;
+}
 
 export interface DashboardBi {
   /**
@@ -31,7 +48,7 @@ export interface DashboardBi {
    */
   canViewValuation: boolean;
   period: { fromDate: string | null; toDate: string | null };
-  scope: { locationType: string | null; locationId: number | null; label: string; isHeadOffice: boolean };
+  scope: { locationType: string | null; locationId: number | null; label: string; isHeadOffice: boolean; isAllLocations: boolean };
   sales: {
     total: number;
     count: number;
@@ -108,6 +125,8 @@ export interface DashboardBi {
     bankIn: number; bankOut: number;
     totalIn: number; totalOut: number;
   } | null;
+  /** Populated only for an explicit All Locations view. */
+  locationBreakdown: BiLocationMetric[];
   topItems: BiTopItem[];
   topCustomers: BiTopCustomer[];
 }
