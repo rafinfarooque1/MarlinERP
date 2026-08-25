@@ -94,12 +94,10 @@ export const DashboardShareReport = forwardRef<HTMLDivElement, DashboardShareRep
               </p>
               {reportMode === 'details' && c.locationLines && c.locationLines.length > 0 ? (
                 <div className="mt-2 space-y-1 border-t border-slate-200 pt-2">
-                  {c.locationLines.map((line) => (
                   <DashboardLocationBreakdown
                     lines={c.locationLines}
                     className="text-[11px] text-slate-600"
                   />
-                  ))}
                 </div>
               ) : c.hint ? (
                 <p className="mt-1 text-[11px] leading-tight text-slate-500">{c.hint}</p>
