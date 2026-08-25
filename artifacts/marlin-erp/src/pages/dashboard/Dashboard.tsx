@@ -719,10 +719,7 @@ export default function Dashboard() {
             </div>
           }
         >
-          <p className="text-muted-foreground flex items-center gap-1.5 text-sm">
-            <MapPin className="w-3.5 h-3.5" />
-             {reportLocationLabel ?? '…'} · {pLabel}
-          </p>
+          <p className="text-muted-foreground text-sm">{pLabel}</p>
           {/* ── Controls: date range (location comes from the header selector) ─ */}
           <div className="flex flex-wrap items-center gap-3">
             <RangeBar range={range} />
