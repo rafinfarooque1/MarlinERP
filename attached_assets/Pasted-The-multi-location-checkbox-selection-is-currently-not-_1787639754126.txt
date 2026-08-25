@@ -1,0 +1,70 @@
+The multi-location checkbox selection is currently not working correctly. Please fix the Location filter functionality.
+
+### Current Issue
+
+When selecting multiple locations using the checkboxes, the selections are not being properly maintained/applied. The report does not reliably filter and combine data based on all selected locations.
+
+### Required Behavior
+
+1. Clicking a location checkbox must toggle only that specific location.
+2. Multiple locations must be selectable simultaneously.
+3. Selecting one location must not automatically deselect another location.
+4. Checked locations must remain checked until the user manually unchecks them, clicks Clear All, or changes the selection.
+5. The selected location IDs must be stored correctly in the filter state as an array/list.
+
+Example:
+
+* ☑ Kochi
+* ☑ Calicut
+* ☐ Kannur
+* ☐ Raguda
+
+The selected value should contain both Kochi and Calicut location IDs.
+
+### Apply Button
+
+The selection should only update the report when the user clicks **Apply**, unless the existing intended behavior is instant filtering.
+
+After clicking Apply:
+
+* Close the location dropdown.
+* Keep the selected locations displayed in the Location filter.
+* Refresh the report using all selected locations.
+* Do not reset the checkbox selections.
+
+### Select All / Clear All
+
+* **Select All** must check every available location.
+* **Clear All** must uncheck every location.
+* Both actions must immediately update the temporary selection state in the dropdown.
+* The report should update after Apply.
+
+### Data Filtering
+
+The location filter must be passed correctly to the backend/API as multiple location IDs.
+
+For example:
+
+`locationIds: [locationId1, locationId2, locationId3]`
+
+Do not use only the last clicked location.
+
+All report calculations must filter using the complete selected location array.
+
+### Important
+
+Please check both the frontend state handling and the backend/API query logic. The problem should not be fixed only visually.
+
+Ensure that the following all use the exact same selected location IDs:
+
+* Dashboard report
+* Details view
+* Consolidated view
+* Sales
+* Purchases
+* Expenses
+* All totals and calculations
+* Share report
+* Export/report generation
+
+Also verify that selecting multiple locations actually produces the combined report data from those selected locations only.
