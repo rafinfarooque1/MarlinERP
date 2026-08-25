@@ -1,0 +1,89 @@
+Remove the currently selected area/location display from the report and add a proper **multi-location selection filter**.
+
+### Location Selection Requirements
+
+1. Add a **Location** filter at the top of the report page.
+2. The filter must support selecting **multiple locations simultaneously**.
+3. Use a dropdown with:
+
+   * Search locations
+   * Checkbox for each location
+   * Select All option
+   * Clear All option
+   * Apply button
+4. Display the currently selected locations clearly in the filter. For example:
+   `Locations: Kochi, Calicut, Kannur`
+5. If no specific location is selected, the report should automatically show **All Locations / Consolidated data**.
+
+### Report Filtering
+
+When one or more locations are selected, filter **all report calculations and data** based only on those selected locations.
+
+This must apply to:
+
+* Sales
+* Purchases
+* Expenses
+* Income
+* Stock / Inventory, where applicable
+* Profit & Loss
+* Outstanding amounts
+* All summary cards
+* All detailed transactions
+* Charts and analytics
+* Any other report data
+
+### Details and Consolidated Views
+
+Both existing views must work with the selected locations:
+
+**Details View**
+
+* Show detailed, location-wise transaction/report data only for the selected locations.
+
+**Consolidated View**
+
+* Combine and calculate the total data from all selected locations.
+* Do not include data from unselected locations.
+
+Example:
+
+If the user selects:
+
+☑ Kochi
+☑ Calicut
+☐ Kannur
+☐ Raguda
+
+The consolidated report must show the combined totals of **Kochi + Calicut only**.
+
+### Share Report
+
+The **Share** functionality is very important.
+
+When the user clicks Share:
+
+* Generate/share the report using the **currently selected locations only**.
+
+* The shared report must display the selected location names.
+
+* Example:
+
+  **Report Period:** 01-08-2026 to 31-08-2026
+  **Locations:** Kochi, Calicut
+
+* All figures in the shared report must exactly match the filtered report currently visible on the dashboard.
+
+* Do not share data from any unselected location.
+
+### Data Handling
+
+Ensure location filtering is applied at the **data/query level**, not only visually on the frontend. All calculations, totals, APIs, exports, shared reports, and consolidated reports must use the selected location IDs.
+
+The selection should remain active when switching between:
+
+* Details
+* Consolidated
+* Different report sections
+
+Do not change the existing report design unnecessarily. Integrate the multi-location filter cleanly into the current UI and maintain the existing design style.

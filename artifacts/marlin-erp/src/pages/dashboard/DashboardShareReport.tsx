@@ -62,7 +62,7 @@ export const DashboardShareReport = forwardRef<HTMLDivElement, DashboardShareRep
         <div className="flex items-start justify-between gap-4">
           <div>
             <h1 className="text-2xl font-bold tracking-tight text-slate-900">Business Dashboard</h1>
-            <p className="mt-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Location</p>
+            <p className="mt-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Locations</p>
             <p className="text-sm text-slate-700">{locationLabel}</p>
           </div>
           <div className="text-right shrink-0">
