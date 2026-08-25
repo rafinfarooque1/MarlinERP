@@ -15,7 +15,7 @@
  * request. Head Office users' selection is also persisted server-side (a
  * display preference), so it follows them across browsers.
  */
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useGetMe, useListWarehouses, useListOutlets, customFetch } from '@workspace/api-client-react';
 import { useLocationContext, ALL_LOCATIONS, type LocationState } from '@/lib/locationContext';
 import { useOutletsEnabled } from '@/lib/useFeatureFlags';
@@ -46,6 +46,8 @@ export function GlobalLocationSelector({ collapsed = false }: { collapsed?: bool
   const { outletsEnabled } = useOutletsEnabled();
   const { data: warehouses = [] } = useListWarehouses();
   const { data: outlets = [] } = useListOutlets();
+  const [multiOpen, setMultiOpen] = useState(false);
+  const [draftMultiKeys, setDraftMultiKeys] = useState<string[]>([]);
 
   const branchType = (user as any)?.branchType as 'headoffice' | 'warehouse' | 'outlet' | undefined;
   const isLocked = branchType === 'warehouse' || branchType === 'outlet';
@@ -179,20 +181,48 @@ export function GlobalLocationSelector({ collapsed = false }: { collapsed?: bool
     ...(warehouses as any[]).map((w) => ({ key: `warehouse:${w.id}`, name: w.name })),
     ...(outletsEnabled ? (outlets as any[]).map((o) => ({ key: `outlet:${o.id}`, name: o.name })) : []),
   ];
-  const multiKeys = locationState.locationKeys ?? [];
+  const appliedMultiKeys = locationState.locationKeys ?? [];
+  const appliedSingleKey =
+    locationState.locationType === 'headoffice'
+      ? 'headoffice'
+      : locationState.locationType === 'warehouse' || locationState.locationType === 'outlet'
+      ? `${locationState.locationType}:${locationState.locationId}`
+      : null;
+  const multiKeys = multiOpen ? draftMultiKeys : appliedMultiKeys;
+  const openMultiSelector = () => {
+    setDraftMultiKeys(
+      appliedMultiKeys.length > 0
+        ? [...appliedMultiKeys]
+        : appliedSingleKey
+        ? [appliedSingleKey]
+        : [],
+    );
+    setMultiOpen(true);
+  };
   const toggleMulti = (key: string) => {
-    const keys = multiKeys.includes(key) ? multiKeys.filter((k) => k !== key) : [...multiKeys, key];
-    if (keys.length < 2) {
-      const one = locationOptions.find((o) => o.key === keys[0]);
-      if (one?.key === 'headoffice') handleChange('headoffice:1');
-      else if (one) handleChange(one.key);
-      else handleChange('all');
-      return;
+    setDraftMultiKeys((current) =>
+      current.includes(key) ? current.filter((k) => k !== key) : [...current, key],
+    );
+  };
+  const applyMulti = () => {
+    const keys = draftMultiKeys;
+    if (keys.length === 0) {
+      handleChange('all');
+    } else if (keys.length === 1) {
+      handleChange(keys[0] === 'headoffice' ? 'headoffice:1' : keys[0]);
+    } else {
+      const names = keys.map((k) => locationOptions.find((o) => o.key === k)?.name ?? k);
+      const next: LocationState = {
+        locationType: 'all',
+        locationId: null,
+        locationName: `${keys.length} locations`,
+        locationKeys: keys,
+        locationNames: names,
+      };
+      setLocation(next);
+      persistPref(next);
     }
-    const names = keys.map((k) => locationOptions.find((o) => o.key === k)?.name ?? k);
-    const next: LocationState = { locationType: 'all', locationId: null, locationName: `${keys.length} locations`, locationKeys: keys, locationNames: names };
-    setLocation(next);
-    persistPref(next);
+    setMultiOpen(false);
   };
 
   return (
@@ -241,20 +271,37 @@ export function GlobalLocationSelector({ collapsed = false }: { collapsed?: bool
         </SelectContent>
       </Select>
       {!isLocked && locationOptions.length > 1 && (
-        <Popover>
+        <Popover open={multiOpen} onOpenChange={(open) => open ? openMultiSelector() : setMultiOpen(false)}>
           <PopoverTrigger asChild>
             <button type="button" className="mt-2 w-full rounded-md border border-border px-2 py-1.5 text-left text-xs text-muted-foreground hover:bg-muted/50">
-              {multiKeys.length > 1 ? `${multiKeys.length} locations selected` : 'Select multiple locations'}
+              {appliedMultiKeys.length > 1
+                ? `${appliedMultiKeys.length} locations selected`
+                : appliedSingleKey
+                ? '1 location selected'
+                : 'Select multiple locations'}
             </button>
           </PopoverTrigger>
           <PopoverContent align="start" className="w-64 p-2">
-            <p className="px-2 pb-2 text-xs font-semibold">Dashboard locations</p>
+            <div className="flex items-center justify-between px-2 pb-2">
+              <p className="text-xs font-semibold">Dashboard locations</p>
+              <div className="flex gap-2 text-[11px]">
+                <button type="button" className="text-primary hover:underline" onClick={() => setDraftMultiKeys(locationOptions.map((o) => o.key))}>
+                  Select All
+                </button>
+                <button type="button" className="text-muted-foreground hover:underline" onClick={() => setDraftMultiKeys([])}>
+                  Clear All
+                </button>
+              </div>
+            </div>
             {locationOptions.map((option) => (
               <label key={option.key} className="flex cursor-pointer items-center gap-2 rounded px-2 py-2 text-sm hover:bg-muted">
                 <Checkbox checked={multiKeys.includes(option.key)} onCheckedChange={() => toggleMulti(option.key)} />
                 <span className="truncate">{option.name}</span>
               </label>
             ))}
+            <button type="button" className="mt-2 w-full rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90" onClick={applyMulti}>
+              Apply
+            </button>
           </PopoverContent>
         </Popover>
       )}
