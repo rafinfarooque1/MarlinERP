@@ -15,6 +15,7 @@
  */
 import { forwardRef } from 'react';
 import type { CardTone } from '@/pages/reports/shared';
+import { DashboardLocationBreakdown } from './DashboardLocationBreakdown';
 
 export interface ShareKpi {
   label: string;
@@ -94,10 +95,10 @@ export const DashboardShareReport = forwardRef<HTMLDivElement, DashboardShareRep
               {reportMode === 'details' && c.locationLines && c.locationLines.length > 0 ? (
                 <div className="mt-2 space-y-1 border-t border-slate-200 pt-2">
                   {c.locationLines.map((line) => (
-                    <div key={line.label} className="flex items-start justify-between gap-3 text-[11px] leading-tight">
-                      <span className="min-w-0 break-words text-slate-600">{line.label}</span>
-                      <span className="shrink-0 font-medium tabular-nums text-slate-700">{line.value}</span>
-                    </div>
+                  <DashboardLocationBreakdown
+                    lines={c.locationLines}
+                    className="text-[11px] text-slate-600"
+                  />
                   ))}
                 </div>
               ) : c.hint ? (

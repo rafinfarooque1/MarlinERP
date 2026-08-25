@@ -34,6 +34,7 @@ import {
   type CardTone, type SummaryCard,
 } from '@/pages/reports/shared';
 import { DashboardShareReport, type ShareKpi } from './DashboardShareReport';
+import { DashboardLocationBreakdown } from './DashboardLocationBreakdown';
 
 // ── Small helpers ───────────────────────────────────────────────────────────
 
@@ -283,7 +284,8 @@ export default function Dashboard() {
   // Payments/Receipts tiles always agree with the books for the range and
   // location. Null exactly when the balance tiles are null.
   const mf = bi?.moneyFlows;
-  const showLocationBreakdown = !!bi?.scope.isAllLocations || (locationState.locationKeys?.length ?? 0) > 0;
+  const showLocationBreakdown = reportMode === 'details' &&
+    (!!bi?.scope.isAllLocations || (locationState.locationKeys?.length ?? 0) > 0);
   const locationBreakdown = bi?.locationBreakdown ?? [];
   const selectedMetric = (metric: keyof typeof locationBreakdown[number]) =>
     locationState.locationKeys?.length
@@ -298,16 +300,10 @@ export default function Dashboard() {
       : undefined;
   const locationHint = (metric: BreakdownMetric, fallback?: React.ReactNode): React.ReactNode =>
     showLocationBreakdown
-      ? (
-        <div className="space-y-0.5 text-left">
-          {locationBreakdown.map((l) => (
-            <div key={`${l.locationType}:${l.locationId}`} className="flex items-center justify-between gap-2">
-              <span className="truncate">{l.name}</span>
-              <span className="font-mono shrink-0">{fmt(l[metric] as number | null)}</span>
-            </div>
-          ))}
-        </div>
-      )
+      ? <DashboardLocationBreakdown lines={locationBreakdown.map((l) => ({
+          label: l.name,
+          value: fmt(l[metric] as number | null),
+        }))} />
       : fallback;
   const [, navigate] = useLocation();
   // Every KPI card drills into its source report carrying the dashboard's own

@@ -1,0 +1,347 @@
+Fix the Business Dashboard and Share Report so that both use the same location-selection logic and the same KPI presentation.
+
+CURRENT ISSUE
+
+The website dashboard and the generated/shared report are receiving the same location-wise KPI data, but they render it differently.
+
+On the website dashboard, each KPI shows locations line by line, for example:
+
+Sales
+₹47,748.50
+
+Head Office                 ₹0.00
+Frozen Hub - Rajaguda       ₹44,308.50
+Frozen Hub - Calicut        ₹3,440.00
+Tropicane - Kochi           ₹0.00
+Tropicane - Ecity           ₹0.00
+
+However, in the shared/generated report, the same data is compressed into one paragraph, for example:
+
+Head Office ₹0.00 · Frozen Hub - Rajaguda ₹44,308.50 · Frozen Hub - Calicut ₹3,440.00 · Tropicane - Kochi ₹0.00 ...
+
+This must be fixed.
+
+REQUIRED BEHAVIOR
+
+1. WEBSITE DASHBOARD AND SHARE REPORT MUST USE THE SAME DATA
+
+The dashboard screen and the generated/shared report must use the same canonical dashboard API response and the same location filtering logic.
+
+Do not calculate totals differently in the share report.
+
+For every KPI, the following values must match exactly between:
+
+- Dashboard
+- Shared report
+- Print/export view
+- Mobile view
+
+KPIs:
+
+- Sales
+- Purchases
+- Inventory Value
+- Expenses
+- Payables
+- Receivables
+- Payments
+- Receipts
+- Cash Balance
+- Bank Balance
+- Gross Profit
+- Net Profit
+
+2. DETAILS MODE
+
+When "Details" is selected, show the location-wise breakdown.
+
+Each location must appear on its own row.
+
+Example:
+
+Sales
+₹47,748.50
+
+Head Office                 ₹0.00
+Frozen Hub - Rajaguda       ₹44,308.50
+Frozen Hub - Calicut        ₹3,440.00
+Tropicane - Kochi           ₹0.00
+Tropicane - Ecity           ₹0.00
+
+The layout must use:
+
+- Location name aligned left
+- Amount aligned right
+- One location per line
+- No inline paragraph
+- No dot-separated compressed text
+- Proper spacing on desktop and mobile
+
+The Share Report must use the same line-by-line layout.
+
+3. CONSOLIDATED MODE
+
+When "Consolidated" is selected, show ONLY the total.
+
+Example:
+
+Sales
+₹47,748.50
+
+Do not show:
+
+- Head Office
+- Warehouse/location names
+- Location-wise amounts
+- Breakdown rows
+
+This applies to every KPI.
+
+4. ALL LOCATIONS SELECTION
+
+When "All Locations" is selected:
+
+DETAILS MODE:
+Show the consolidated total plus the breakdown for every available location.
+
+Example:
+
+Sales
+₹47,748.50
+
+Head Office                 ₹0.00
+Frozen Hub - Rajaguda       ₹44,308.50
+Frozen Hub - Calicut        ₹3,440.00
+Tropicane - Kochi           ₹0.00
+Tropicane - Ecity           ₹0.00
+
+CONSOLIDATED MODE:
+Show only:
+
+Sales
+₹47,748.50
+
+No location breakdown.
+
+5. MULTIPLE LOCATION SELECTION
+
+The location selector must support:
+
+- Head Office
+- Individual warehouses/branches
+- Multiple selected locations
+- All Locations
+- Search
+- Select All
+- Clear All
+
+When multiple locations are selected, calculate the KPI using ONLY the selected locations.
+
+Example selected locations:
+
+- Head Office
+- Frozen Hub - Rajaguda
+- Tropicane - Kochi
+
+Then:
+
+DETAILS MODE:
+
+Sales
+₹X
+
+Head Office                 ₹X
+Frozen Hub - Rajaguda       ₹X
+Tropicane - Kochi           ₹X
+
+Only selected locations should appear.
+
+CONSOLIDATED MODE:
+
+Sales
+₹X
+
+Only the combined total of the selected locations.
+
+Do not show unselected locations.
+
+6. HEAD OFFICE MUST BE A NORMAL LOCATION
+
+Head Office must behave exactly like a warehouse/location for filtering and reporting.
+
+Rules:
+
+- Selecting Head Office shows only Head Office data.
+- Selecting one warehouse shows only that warehouse's data.
+- Selecting multiple locations shows the combined data for those locations.
+- Details mode shows only the selected locations individually.
+- Consolidated mode shows only the combined total.
+- All Locations includes Head Office plus all active locations.
+
+Do not treat Head Office as automatically included when another warehouse is selected.
+
+Do not show All Locations data when Head Office alone is selected.
+
+7. SHARE REPORT MUST MATCH THE DASHBOARD
+
+The Share button/report must preserve:
+
+- Current date range
+- Current location selection
+- Multiple selected locations
+- Details/Consolidated mode
+- All Locations mode
+
+Examples:
+
+If the dashboard is:
+
+Selected:
+Frozen Hub - Rajaguda
+Frozen Hub - Calicut
+
+Mode:
+Details
+
+The shared report must show:
+
+Sales
+₹X
+
+Frozen Hub - Rajaguda       ₹X
+Frozen Hub - Calicut        ₹X
+
+If mode is changed to Consolidated, the shared report must show:
+
+Sales
+₹X
+
+Nothing else.
+
+The share report must never revert to All Locations unless All Locations is actually selected.
+
+8. FIX THE CURRENT SHARE REPORT RENDERING
+
+The current generated report uses inline text like:
+
+Head Office ₹0.00 · Frozen Hub - Rajaguda ₹44,308.50 · Frozen Hub - Calicut ₹3,440.00
+
+Replace this rendering completely.
+
+Create a reusable location breakdown component/layout that is used by BOTH:
+
+- Website dashboard
+- Shared report/print view
+
+Use the same component or shared rendering structure wherever possible so the UI cannot drift.
+
+Suggested structure:
+
+KPI Card
+  KPI title
+  Total
+  if mode === "details":
+      Location Breakdown
+          Location Row
+              Location Name
+              Amount
+          Location Row
+              Location Name
+              Amount
+
+Do not maintain separate formatting logic that produces different layouts for dashboard and share report.
+
+9. MOBILE RESPONSIVENESS
+
+The shared report must remain readable on mobile.
+
+Requirements:
+
+- One location per row
+- Location names may truncate gracefully if necessary
+- Amount must remain visible
+- Do not wrap all location data into one paragraph
+- Do not overlap text
+- Do not allow the amount to be cut off
+- Keep consistent spacing between KPI cards
+
+10. DATA CONSISTENCY
+
+For every KPI:
+
+sum(location breakdown values) = displayed total
+
+For multiple selected locations:
+
+sum(selected location values) = displayed total
+
+For All Locations:
+
+sum(all location values including Head Office) = displayed total
+
+Do not double-count shared Cash or Bank accounts.
+
+Cash and Bank must respect the account-location membership and selected location scope.
+
+11. ACCEPTANCE TESTS
+
+Test all of the following:
+
+A. Head Office selected
+- Dashboard shows Head Office data only
+- Share report shows Head Office data only
+
+B. One warehouse selected
+- Dashboard shows that warehouse only
+- Share report shows that warehouse only
+
+C. Multiple locations selected
+- Only selected locations contribute to totals
+- Details shows only selected locations
+- Consolidated shows only the combined total
+
+D. All Locations + Details
+- Show every location on a separate line
+- Include Head Office
+- Total reconciles with all location rows
+
+E. All Locations + Consolidated
+- Show only totals
+- No location rows
+
+F. Share report
+- Must exactly respect current location selection
+- Must exactly respect Details/Consolidated mode
+- Must not convert rows into inline dot-separated text
+
+12. DO NOT BREAK EXISTING ACCOUNTING LOGIC
+
+Do not change:
+
+- Voucher calculations
+- Journal entries
+- Ledger balances
+- Existing transaction data
+
+This task is primarily:
+
+1. Correct location filtering/state propagation.
+2. Ensure Head Office behaves as a selectable location.
+3. Support multiple location selection.
+4. Make Details and Consolidated modes work consistently.
+5. Make the dashboard and shared report use the same data and line-by-line rendering.
+6. Ensure all KPI totals reconcile with their selected location breakdown.
+
+After implementation:
+
+- Run API/build/type checks.
+- Verify dashboard rendering.
+- Verify mobile rendering.
+- Verify share report rendering.
+- Verify single location.
+- Verify multiple locations.
+- Verify Head Office.
+- Verify All Locations.
+- Verify Details mode.
+- Verify Consolidated mode.
+- Confirm that the dashboard and share report display identical data for the same filters.
