@@ -1,0 +1,306 @@
+Remove the multiple-location assignment feature from the Cash & Bank module completely.
+
+CURRENT ISSUE
+
+In Cash & Bank → Add Account / Edit Account, the form currently shows:
+
+- Available at
+- Multiple location checkboxes
+- Select All
+- Clear All
+- Multiple selected locations summary
+
+This is no longer required.
+
+NEW REQUIRED BEHAVIOR
+
+1. ONE CASH/BANK ACCOUNT = ONE LOCATION
+
+Every Cash or Bank account must be assigned to exactly ONE location.
+
+Replace the current multi-location checkbox selector with a simple single-location selector/dropdown.
+
+Example:
+
+Location *
+
+[ Head Office ▼ ]
+
+Available options:
+
+- Head Office
+- Frozen Hub - Rajaguda
+- Frozen Hub - Calicut
+- Tropicane - Kochi
+- Tropicane - Ecity
+
+Only one location can be selected.
+
+Remove:
+
+- Multiple checkboxes
+- Select All
+- Clear All
+- "X locations selected"
+- Multi-location search/selection UI
+- Junction-table-based multi-location assignment from the Cash & Bank UI
+
+2. HEAD OFFICE MUST WORK LIKE A NORMAL LOCATION
+
+Head Office must be available as a single selectable location, exactly like a warehouse.
+
+Examples:
+
+Cash Account A → Head Office
+
+Bank Account B → Frozen Hub - Rajaguda
+
+Cash Account C → Frozen Hub - Calicut
+
+Each account belongs to only one location.
+
+3. LOCATION FILTERING
+
+When a location is selected in the application:
+
+- Show Cash & Bank accounts assigned to that location only.
+- Head Office selection shows Head Office Cash & Bank accounts only.
+- Warehouse selection shows that warehouse's Cash & Bank accounts only.
+
+When multiple locations are selected at the GLOBAL dashboard/report level:
+
+- Combine the Cash/Bank balances of accounts belonging to the selected locations.
+- Do not allow one Cash/Bank account itself to belong to multiple locations.
+
+Example:
+
+Selected locations:
+
+- Head Office
+- Frozen Hub - Rajaguda
+
+Dashboard Cash/Bank totals should include accounts from both locations.
+
+But every individual Cash/Bank account must still have only one owner location.
+
+4. ALL LOCATIONS
+
+When "All Locations" is selected globally:
+
+- Include Cash/Bank accounts from all locations.
+- Head Office is included.
+- Each account must be counted only once.
+- No duplicate balances.
+
+5. EXISTING DATA MIGRATION
+
+There is already multi-location account data from the previous implementation.
+
+Safely migrate existing accounts to single-location ownership.
+
+Migration rules:
+
+A. If an account has only one assigned location:
+   - Keep that location.
+
+B. If an account has multiple assigned locations:
+   - Preserve one canonical location.
+   - Prefer the account's existing original location/branch/location_id if available.
+   - Otherwise use the earliest/original assignment.
+   - Do NOT duplicate the account.
+   - Do NOT duplicate balances.
+   - Do NOT duplicate ledger entries.
+   - Do NOT delete historical transactions.
+
+C. Existing transactions must retain their original transaction/journal location.
+
+Do not rewrite accounting history unnecessarily.
+
+6. DATABASE AND BACKEND CLEANUP
+
+Refactor the Cash & Bank account ownership model so the canonical model is:
+
+cash_bank_account
+  → location_type
+  → location_id
+
+or the project's existing equivalent single-location fields.
+
+The API should return one location for each account, for example:
+
+{
+  id: "...",
+  name: "HDFC Bank",
+  type: "BANK",
+  location: {
+    type: "HEAD_OFFICE",
+    id: "..."
+  }
+}
+
+Do not return an array of locations for Cash/Bank account ownership.
+
+Remove or stop using the multi-location assignment relationship for Cash/Bank account availability.
+
+Important:
+
+If the previous junction table is used elsewhere, do not blindly delete it. First verify its usage. Remove only the Cash & Bank dependency on multi-location membership.
+
+7. ADD ACCOUNT UI
+
+Change this:
+
+Available at *
+☐ Select All
+☑ Head Office
+☐ Frozen Hub - Rajaguda
+☐ Frozen Hub - Calicut
+...
+Clear All
+
+To this:
+
+Location *
+
+[ Select Location ▼ ]
+
+The location field is required.
+
+8. EDIT ACCOUNT UI
+
+The Edit Cash/Bank Account form must also use the same single-location dropdown.
+
+Changing the location must be handled safely.
+
+Do not silently move existing historical transactions.
+
+Existing transactions and journal entries must retain their recorded location.
+
+The account's location change should only affect future account availability/filtering unless the existing accounting model safely supports a controlled migration.
+
+9. REMOVE OLD MULTI-LOCATION UI COMPLETELY
+
+Search the entire Cash & Bank module and remove:
+
+- Multi-select location components
+- Select All
+- Clear All
+- Checkbox location assignment
+- Selected location count
+- "Available at" multi-location wording
+- Any UI that allows one Cash/Bank account to be assigned to multiple locations
+
+Replace terminology with:
+
+Location
+
+or:
+
+Assigned Location
+
+10. KEEP GLOBAL MULTI-LOCATION FILTERING
+
+IMPORTANT:
+
+Do NOT remove multiple location selection from:
+
+- Business Dashboard
+- Reports
+- Ledger filtering
+- Global location selector
+- Shared dashboard reports
+
+Users must still be able to select multiple locations globally.
+
+The change applies ONLY to assigning locations to an individual Cash/Bank account.
+
+Correct architecture:
+
+GLOBAL FILTER:
+Can select one, multiple, or All Locations.
+
+CASH/BANK ACCOUNT:
+Can belong to exactly one location.
+
+Example:
+
+Account 1 → Head Office
+Account 2 → Rajaguda
+Account 3 → Calicut
+
+Global filter selected:
+Head Office + Rajaguda
+
+Result:
+Account 1 + Account 2 balances are included.
+
+11. VERIFY ACCOUNTING
+
+After the change, verify:
+
+- No Cash balance is duplicated.
+- No Bank balance is duplicated.
+- All Locations total equals the sum of all single-location accounts.
+- Multiple global location selection correctly combines selected accounts.
+- A specific location shows only its accounts.
+- Head Office shows only Head Office accounts.
+- No account appears twice because of old multi-location assignments.
+
+12. TEST SCENARIOS
+
+Test:
+
+A. Create Cash account
+Location: Head Office
+
+B. Create Bank account
+Location: Frozen Hub - Rajaguda
+
+C. Select Head Office globally
+Only Head Office accounts appear.
+
+D. Select Rajaguda globally
+Only Rajaguda accounts appear.
+
+E. Select Head Office + Rajaguda
+Both locations' accounts are included once each.
+
+F. Select All Locations
+All accounts are included once each.
+
+G. Check existing accounts that previously had multiple locations
+Ensure:
+- No duplicate balances
+- No duplicate accounts
+- Historical transactions remain intact
+- One canonical location is assigned
+
+13. DO NOT BREAK
+
+Do not break:
+
+- Cash Book
+- Bank Book
+- Ledger Statement
+- Voucher creation
+- Payment
+- Receipt
+- Contra entries
+- Bank reconciliation
+- Dashboard Cash Balance
+- Dashboard Bank Balance
+- Existing accounting history
+
+IMPLEMENTATION GOAL
+
+Cash & Bank account assignment must be simple:
+
+ONE ACCOUNT → ONE LOCATION
+
+But global dashboard and report filters must continue supporting:
+
+ONE LOCATION
+MULTIPLE LOCATIONS
+ALL LOCATIONS
+
+Run build, typecheck, migration checks, and accounting regression checks after implementation.
