@@ -131,6 +131,27 @@ function computeLineGst(
 // server rejects the same case with the same message.
 const MRP_FLOOR_MESSAGE = 'MRP cannot be lower than the Item Master MRP. Use Discount if you want to reduce the selling price.';
 
+// Sales list responses are normally mapped to camelCase by the API, but some
+// historical/list-shaped responses can still expose the raw database keys.
+// Keep one accessor for every display surface so a charge cannot disappear
+// merely because the response shape changed.
+const saleOtherCharges = (sale: any): any[] => {
+  const rows = sale?.otherCharges ?? sale?.other_charges;
+  return Array.isArray(rows) ? rows : [];
+};
+
+const saleOtherChargesTotal = (sale: any): number => {
+  const stored = sale?.otherChargesTotal ?? sale?.other_charges_total;
+  if (stored !== undefined && stored !== null && stored !== '') {
+    const total = Number(stored);
+    if (Number.isFinite(total)) return total;
+  }
+  return Math.round(saleOtherCharges(sale).reduce(
+    (sum, charge) => sum + (Number(charge?.amount) || 0),
+    0,
+  ) * 100) / 100;
+};
+
 // ── Form Schema ─────────────────────────────────────────────────────────────────
 
 const saleLineSchema = z.object({
@@ -1468,6 +1489,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
         ...s,
         _discountTotal: Number((s as any).discountTotal ?? 0)
           + (((s as any).lineItems as any[]) ?? []).reduce((acc: number, li: any) => acc + Number(li?.discount ?? 0), 0),
+        _otherChargesTotal: saleOtherChargesTotal(s),
       })),
     [sales, statusFilter],
   );
@@ -1480,6 +1502,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
     status: s => (s as any).paymentStatus ?? 'paid',
     tax: s => Number((s as any).taxTotal) || null,
     discount: s => (s as any)._discountTotal || null,
+    charges: s => (s as any)._otherChargesTotal,
     total: s => Number((s as any).totalAmount) || null,
   });
 
@@ -1515,6 +1538,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                   Subtotal: s.subtotal, Tax: s.taxTotal,
                   Discount: (Number((s as any).discountTotal ?? 0)
                     + (((s as any).lineItems as any[]) ?? []).reduce((acc: number, li: any) => acc + Number(li?.discount ?? 0), 0)).toFixed(2),
+                  Charges: saleOtherChargesTotal(s).toFixed(2),
                   Total: s.totalAmount,
                 })))}>
                   <Download className="w-4 h-4 mr-2" /> Export
