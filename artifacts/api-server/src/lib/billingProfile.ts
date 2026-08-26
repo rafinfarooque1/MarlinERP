@@ -279,6 +279,12 @@ function companyBank(c: CompanyRow | null): IssuerBank | null {
   };
 }
 
+/** Resolution callers may opt out of the company bank fallback for documents
+ * that must print only the selected location's own account. */
+export interface IssuerResolutionOptions {
+  allowCompanyBankFallback?: boolean;
+}
+
 /**
  * Gaps worth telling the user about, in the order they matter for a tax
  * invoice — judged against the identity that will actually print.
@@ -305,7 +311,12 @@ function sealed(i: Omit<InvoiceIssuer, "incomplete">): InvoiceIssuer {
   return { ...i, incomplete: gapsForIssuer(i) };
 }
 
-function fromWarehouse(w: WarehouseRow, company: CompanyRow | null): InvoiceIssuer {
+function fromWarehouse(
+  w: WarehouseRow,
+  company: CompanyRow | null,
+  options: IssuerResolutionOptions = {},
+): InvoiceIssuer {
+  const allowCompanyBankFallback = options.allowCompanyBankFallback !== false;
   return sealed({
     source: "warehouse",
     locationId: w.id,
@@ -319,7 +330,7 @@ function fromWarehouse(w: WarehouseRow, company: CompanyRow | null): InvoiceIssu
     state: s(w.state),
     stateCode: s(w.state_code) || stateCodeFromGstin(w.gst_number),
     pincode: s(w.pincode),
-    bank: warehouseBank(w) ?? companyBank(company),
+    bank: warehouseBank(w) ?? (allowCompanyBankFallback ? companyBank(company) : null),
     upiId: s(w.upi_id) || s(company?.upi_id),
     invoiceFooter: s(w.invoice_footer) || s(company?.invoice_footer),
     signatory: s(w.authorized_signatory),
@@ -327,7 +338,11 @@ function fromWarehouse(w: WarehouseRow, company: CompanyRow | null): InvoiceIssu
   });
 }
 
-function fromCompany(company: CompanyRow | null): InvoiceIssuer {
+function fromCompany(
+  company: CompanyRow | null,
+  options: IssuerResolutionOptions = {},
+): InvoiceIssuer {
+  const allowCompanyBankFallback = options.allowCompanyBankFallback !== false;
   const c = company;
   return sealed({
     source: "company",
@@ -344,7 +359,7 @@ function fromCompany(company: CompanyRow | null): InvoiceIssuer {
     state: s(c?.state),
     stateCode: stateCodeFromGstin(c?.gst_number),
     pincode: s(c?.pincode),
-    bank: companyBank(c ?? null),
+    bank: allowCompanyBankFallback ? companyBank(c ?? null) : null,
     upiId: s(c?.upi_id),
     invoiceFooter: s(c?.invoice_footer),
     signatory: "",
@@ -375,12 +390,16 @@ function missingLocationIssuer(source: "warehouse" | "outlet", id: number): Invo
 }
 
 /** Load one warehouse's billing profile by id. Null when it no longer exists. */
-export async function loadWarehouseIssuer(pool: Pool, warehouseId: number): Promise<InvoiceIssuer | null> {
+export async function loadWarehouseIssuer(
+  pool: Pool,
+  warehouseId: number,
+  options: IssuerResolutionOptions = {},
+): Promise<InvoiceIssuer | null> {
   const { rows: [w] } = await pool.query<WarehouseRow>(
     `SELECT ${WAREHOUSE_COLS} FROM warehouses WHERE id = $1`, [warehouseId],
   );
   if (!w) return null;
-  return fromWarehouse(w, await loadCompany(pool));
+  return fromWarehouse(w, await loadCompany(pool), options);
 }
 
 /**
@@ -441,15 +460,16 @@ export async function resolveLocationIssuer(
   pool: Pool,
   locationType: "warehouse" | "outlet" | null,
   locationId: number | null,
+  options: IssuerResolutionOptions = {},
 ): Promise<InvoiceIssuer> {
   if (locationType === "warehouse" && locationId) {
-    const issuer = await loadWarehouseIssuer(pool, locationId);
+    const issuer = await loadWarehouseIssuer(pool, locationId, options);
     return issuer ?? missingLocationIssuer("warehouse", locationId);
   }
 
   const outletId = locationType === "outlet" && locationId ? locationId : null;
   const company = await loadCompany(pool);
-  if (!outletId) return fromCompany(company);
+  if (!outletId) return fromCompany(company, options);
 
   const { rows: [o] } = await pool.query<OutletRow>(
     `SELECT id, name, warehouse_id, address, phone, upi_id, gstin, state, state_code,
@@ -461,7 +481,7 @@ export async function resolveLocationIssuer(
   const parent = o.warehouse_id
     ? (await pool.query<WarehouseRow>(`SELECT ${WAREHOUSE_COLS} FROM warehouses WHERE id = $1`, [o.warehouse_id])).rows[0]
     : undefined;
-  const base = parent ? fromWarehouse(parent, company) : fromCompany(company);
+  const base = parent ? fromWarehouse(parent, company, options) : fromCompany(company, options);
 
   const ownAddress = addressBlock({ address: o.address, state: o.state });
   const resolved = {

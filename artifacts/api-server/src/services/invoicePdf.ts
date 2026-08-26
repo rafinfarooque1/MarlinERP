@@ -17,7 +17,7 @@
  *
  * The seller identity on this document comes from the *warehouse the sale was
  * raised at* — see lib/billingProfile.ts. The company profile only supplies the
- * logo, the payment terms and a bank/UPI fallback; it never supplies the name,
+ * logo, the payment terms and a bank/UPI fallback for invoices; it never supplies the name,
  * address, GSTIN or FSSAI licence, because those must name the registration
  * that actually issued the invoice.
  *
@@ -137,7 +137,7 @@ export interface InvoiceData {
    * must not ask for money (settled, cancelled, UPI off, or no UPI ID).
    */
   upiRequest: { uri: string; amount: number; upiId: string; payeeName: string } | null;
-  /** Whether the bank block may be printed (company setting). */
+   /** Whether the invoice bank block may be printed (company setting). */
   showBankDetails: boolean;
 }
 
@@ -266,7 +266,7 @@ export async function assembleInvoiceData(saleId: number): Promise<InvoiceData |
 /**
  * Assemble the quotation variant of InvoiceData. Same shape, same renderer —
  * but every payment concern is absent by construction: position is null,
- * there are no recorded payments, no UPI request and no bank block.
+ * there are no recorded payments, no UPI request and no payment bank block.
  *
  * The quotations table is a raw-migration table, so everything here is raw SQL.
  */
@@ -285,6 +285,9 @@ export async function assembleQuotationData(quotationId: number): Promise<Invoic
     pool,
     q.location_type === "warehouse" ? "warehouse" : "outlet",
     Number(q.location_id),
+    // Quotations print only the bank account configured for their selected
+    // location. Invoice rendering keeps its established company fallback.
+    { allowCompanyBankFallback: false },
   );
 
   const customerRow = q.customer_id
@@ -456,9 +459,9 @@ export async function renderInvoicePdf(data: InvoiceData): Promise<{ buffer: Buf
   const {
     sale, issuer, customer, cs, logoDataUrl, position, recordedPayments, upiRequest, showBankDetails,
   } = data;
-  // Quotation variant: same layout, but every payment surface is OMITTED —
-  // the status strip, amount payable, bank details, QR and payment mode all
-  // presuppose a receivable, and a quotation has none.
+  // Quotation variant: same layout, but invoice payment surfaces are OMITTED —
+  // the status strip, amount payable, QR and payment mode all presuppose a
+  // receivable. Quotations have their own informational bank block below.
   const isQuotation = data.docType === "quotation";
   const q = data.quotation;
   const doc = new jsPDF({ unit: "mm", format: "a4", compress: true });
@@ -537,6 +540,16 @@ export async function renderInvoicePdf(data: InvoiceData): Promise<{ buffer: Buf
     txt(f.text, x, y, { ...opts, size: f.size });
   };
 
+  const quotationBankRows: [string, string][] = [];
+  if (isQuotation && issuer.bank) {
+    const bank = issuer.bank;
+    if (bank.holder)        quotationBankRows.push(["Account Name", bank.holder]);
+    if (bank.name)          quotationBankRows.push(["Bank Name", bank.name]);
+    if (bank.accountNumber) quotationBankRows.push(["Account Number", bank.accountNumber]);
+    if (bank.ifsc)          quotationBankRows.push(["IFSC Code", bank.ifsc]);
+    if (bank.branch)        quotationBankRows.push(["Branch", bank.branch]);
+  }
+
   // ── Tiny vector icons, per the reference visual language ───────────────────
   // Simple geometry only — a hand-drawn glyph that reads at 3 mm. Anything more
   // ornate turns to mud at print resolution.
@@ -614,6 +627,9 @@ export async function renderInvoicePdf(data: InvoiceData): Promise<{ buffer: Buf
   const placeOfSupply = customer?.state || issuer.state;
 
   let y = M + 2;
+  let quotationContentBottom = y;
+  let quotationPageHeight = PH;
+  let quotationPageShiftMm = 0;
 
   // ══════════════════════════════════════════════════════════════════════════
   // 1. HEADER — logo + seller identity left | TAX INVOICE + meta right
@@ -1056,6 +1072,36 @@ export async function renderInvoicePdf(data: InvoiceData): Promise<{ buffer: Buf
 
   y += WORDS_H + 3.5;
 
+  // Quotations are offers, not payment requests, but the customer still needs
+  // the issuing location's account details when the location has them. This
+  // is deliberately separate from the invoice payment panels so adding it
+  // cannot change invoice output or imply that the quotation is payable.
+  if (isQuotation && quotationBankRows.length > 0) {
+    const BANK_HEAD_H = 9;
+    const BANK_ROW_H = 5.2;
+    const bankGridRows = Math.ceil(quotationBankRows.length / 2);
+    const BANK_H = BANK_HEAD_H + bankGridRows * BANK_ROW_H + 3;
+    // Keep the sign-off with the bank block where possible. If the remaining
+    // page cannot hold both, start a clean continuation page instead of
+    // splitting the compact bank panel or colliding with the footer.
+    if (y + BANK_H > BOT - 30) { doc.addPage(); y = M; }
+
+    bx(M, y, CW, BANK_H, BORDER, 1.2);
+    icoBank(M + 4.5, y + 2.8, 4.6);
+    txt("BANK DETAILS", M + 11.5, y + 7, { bold: true, size: 7.6, color: NAVY });
+
+    const bankColW = (CW - GAP) / 2;
+    quotationBankRows.forEach(([label, value], i) => {
+      const col = i % 2;
+      const row = Math.floor(i / 2);
+      const bx0 = M + col * (bankColW + GAP);
+      const by = y + BANK_HEAD_H + row * BANK_ROW_H + 3.5;
+      txt(label, bx0 + 4.5, by, { size: 6.6, color: MUT });
+      cell(value, bx0 + 34, by, bankColW - 39, { size: 7, color: INK, bold: true });
+    });
+    y += BANK_H + 3.5;
+  }
+
   // ══════════════════════════════════════════════════════════════════════════
   // 5. PAYMENT POSITION — status strip, then either a request or a receipt
   //    (invoices only — a quotation OMITS every payment surface entirely)
@@ -1259,9 +1305,8 @@ export async function renderInvoicePdf(data: InvoiceData): Promise<{ buffer: Buf
   // decorative sign-off, no "computer-generated" note, and no floor-anchored
   // reserve (owner request, Aug 2026). Only the user-configured footer text
   // from Company Settings still prints, flowing directly after the content.
-  // Quotations keep the full floor-anchored signature + sign-off — the
-  // removal was asked for invoices only, and the validity line is part of a
-  // quotation's meaning.
+  // Quotations keep the full signature + sign-off, but it flows directly after
+  // the last content panel rather than being pinned to the A4 floor.
   // ══════════════════════════════════════════════════════════════════════════
   const footerLines = issuer.invoiceFooter ? wrap(issuer.invoiceFooter, CW - 10, 6.6) : [];
   if (!isQuotation) {
@@ -1276,36 +1321,23 @@ export async function renderInvoicePdf(data: InvoiceData): Promise<{ buffer: Buf
     }
   } else {
   const SIGN_H = 11;
-  const FOOT_H = 10.2 + footerLines.length * 3.4;
-  if (y + SIGN_H + FOOT_H > PH - 3) { doc.addPage(); y = M; }
+  const QUOTE_FOOTER_H = SIGN_H + 4.2 + 6.2 + footerLines.length * 3.4
+    + (q?.validTill ? 3.6 : 0) + 3.6;
+  if (y + QUOTE_FOOTER_H > BOT) { doc.addPage(); y = M; }
 
   // Signed for the location that issued the document, not the company as a whole.
-  // Compact and borderless so the page closes like the reference does.
-  const signY = Math.max(y, PH - 6 - FOOT_H - SIGN_H);
+  // Compact and borderless so the page closes immediately after the content.
+  const signY = y;
   const signX = M + CW - 58;
   txt(`For ${issuer.tradeName}`, signX + 27.5, signY + 2.8, { bold: true, size: 7.6, color: NAVY, align: "center" });
   if (issuer.signatory) txt(issuer.signatory, signX + 27.5, signY + 7.2, { size: 7, color: INK, align: "center" });
   ln(signX, signY + SIGN_H - 3.6, signX + 55, signY + SIGN_H - 3.6, BORDER, 0.3);
   txt("Authorised Signatory", signX + 27.5, signY + SIGN_H - 0.6, { size: 6.2, color: MUT, align: "center" });
 
-  // Decorative rules with diamond tips flanking a script sign-off.
+  // Keep the sign-off text, but not the unwanted horizontal rules that used to
+  // span the lower page and visually competed with the signature underline.
   const fy = signY + SIGN_H + 4.2;
-  const diamond = (dx: number, dy: number, r = 1.1) => {
-    doc.setFillColor(NAVY[0], NAVY[1], NAVY[2]);
-    doc.triangle(dx - r, dy, dx, dy - r, dx + r, dy, "F");
-    doc.triangle(dx - r, dy, dx, dy + r, dx + r, dy, "F");
-  };
   const thanks = "Thank You For Your Business!";
-  let halfGap = 44;
-  if (scriptOk) {
-    doc.setFont(SCRIPT_FONT, "normal");
-    doc.setFontSize(16);
-    halfGap = doc.getTextWidth(thanks) / 2 + 6;
-  }
-  ln(M + 2, fy, PW / 2 - halfGap - 3, fy, NAVY, 0.4);
-  diamond(PW / 2 - halfGap, fy);
-  diamond(PW / 2 + halfGap, fy);
-  ln(PW / 2 + halfGap + 3, fy, M + CW - 2, fy, NAVY, 0.4);
   if (scriptOk) {
     doc.setFont(SCRIPT_FONT, "normal");
     doc.setFontSize(16);
@@ -1328,7 +1360,18 @@ export async function renderInvoicePdf(data: InvoiceData): Promise<{ buffer: Buf
     noteY += 3.6;
   }
   txt("This is a computer-generated quotation, not a tax invoice.", PW / 2, noteY, { size: 6.6, color: MUT, align: "center" });
+  quotationContentBottom = noteY + 3;
   } // end quotation-only signature + footer
+
+  // Short quotations should be short PDFs. Keep the familiar A4 width, but
+  // shrink a single-page quotation to its measured content plus a bottom
+  // margin. Multi-page documents retain A4 pages so their page breaks remain
+  // stable and printable.
+  if (isQuotation && doc.getNumberOfPages() === 1) {
+    quotationPageHeight = Math.min(PH, Math.max(180, quotationContentBottom + M));
+    quotationPageShiftMm = PH - quotationPageHeight;
+    try { (doc.internal.pageSize as any).setHeight(quotationPageHeight); } catch { /* keep A4 if unsupported */ }
+  }
 
   // ── Quotation watermark — light diagonal text on every page ────────────────
   // Drawn last so it sits over the content. Opacity via GState when the jsPDF
@@ -1346,11 +1389,28 @@ export async function renderInvoicePdf(data: InvoiceData): Promise<{ buffer: Buf
           doc.setFont(FONT, "bold");
           doc.setFontSize(88);
           doc.setTextColor(NAVY[0], NAVY[1], NAVY[2]);
-          doc.text("QUOTATION", PW / 2, PH / 2, { align: "center", angle: 40 });
+           // Earlier content was drawn against A4 coordinates and is shifted
+           // when the single-page canvas is shortened. Offset the watermark's
+           // input coordinate so it remains centered after that translation.
+           doc.text("QUOTATION", PW / 2, quotationPageHeight / 2 - quotationPageShiftMm, { align: "center", angle: 40 });
           anyDoc.restoreGraphicsState?.();
         }
       }
     } catch { /* watermark is optional — never fail the document over it */ }
+  }
+
+  if (isQuotation && doc.getNumberOfPages() === 1 && quotationPageShiftMm > 0) {
+    // jsPDF has already encoded the earlier drawing commands using the A4
+    // bottom-origin coordinate system. Translate that finished content upward
+    // in PDF coordinates before emitting the shortened media box; otherwise
+    // the header would be clipped above the new page.
+    const pages = (doc.internal as any).pages as string[][];
+    const page = pages?.[1];
+    const shiftPt = quotationPageShiftMm * ((doc.internal as any).scaleFactor ?? 72 / 25.4);
+    if (page && shiftPt > 0) {
+      page.unshift("q", `1 0 0 1 0 ${-shiftPt.toFixed(3)} cm`);
+      page.push("Q");
+    }
   }
 
   const buffer = Buffer.from(doc.output("arraybuffer"));

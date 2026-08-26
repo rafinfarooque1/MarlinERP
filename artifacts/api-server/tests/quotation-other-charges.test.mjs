@@ -9,6 +9,10 @@
  */
 import pg from 'pg';
 import bcrypt from 'bcryptjs';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 const BASE = process.env.API_URL || 'http://localhost:8080/api';
 const TAG = `ZZTEST Quotation Charges ${Date.now()}`;
@@ -19,6 +23,8 @@ const failures = [];
 const createdQuotes = [];
 const createdSales = [];
 const createdLedgers = [];
+const pdfDir = mkdtempSync(join(tmpdir(), 'quotation-pdf-'));
+let pdfSeq = 0;
 
 const assert = (label, condition, detail = '') => {
   if (condition) { console.log(`  ✓ ${label}`); passed++; }
@@ -37,6 +43,19 @@ async function api(method, path, body) {
 const get = path => api('GET', path);
 const post = (path, body) => api('POST', path, body);
 const put = (path, body) => api('PUT', path, body);
+
+async function fetchPdfText(path) {
+  const response = await fetch(`${BASE}${path}`);
+  const file = join(pdfDir, `q${++pdfSeq}.pdf`);
+  writeFileSync(file, Buffer.from(await response.arrayBuffer()));
+  const text = response.status === 200
+    ? execFileSync('pdftotext', [file, '-']).toString()
+    : '';
+  const pages = response.status === 200
+    ? Number(/Pages:\s+(\d+)/.exec(execFileSync('pdfinfo', [file]).toString())?.[1] ?? 0)
+    : 0;
+  return { status: response.status, text, pages };
+}
 
 const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
 const PROBE_USER = 'quotation_charges_probe';
@@ -163,6 +182,59 @@ try {
     : { status: 0, data: null };
   assert('Quotation PDF endpoint still renders with charges', pdf.status === 200 && typeof pdf.data !== 'object');
 
+  const quotePdf = share.data?.token
+    ? await fetchPdfText(`/public/quotations/${encodeURIComponent(share.data.token)}.pdf`)
+    : { status: 0, text: '', pages: 0 };
+  assert('Quotation PDF is a one-page document for one item', quotePdf.status === 200 && quotePdf.pages === 1);
+  const { rows: [locationBank] } = await pool.query(
+    `SELECT bank_account_holder, bank_name, bank_account_number, ifsc_code, bank_branch
+       FROM warehouses WHERE id = $1`,
+    [location.id],
+  );
+  const locationBankValues = [
+    locationBank?.bank_account_holder, locationBank?.bank_name,
+    locationBank?.bank_account_number, locationBank?.ifsc_code, locationBank?.bank_branch,
+  ].filter(value => String(value ?? '').trim());
+  if (locationBankValues.length > 0) {
+    assert('Quotation shows the selected warehouse bank section', quotePdf.text.includes('BANK DETAILS'));
+    for (const value of locationBankValues) {
+      assert(`Quotation prints selected bank value ${value}`, quotePdf.text.includes(String(value)));
+    }
+  } else {
+    assert('Quotation omits the bank section when selected warehouse has no bank', !quotePdf.text.includes('BANK DETAILS'));
+  }
+  const { rows: unrelatedBanks } = await pool.query(
+    `SELECT bank_account_number FROM warehouses
+      WHERE id <> $1 AND NULLIF(TRIM(bank_account_number), '') IS NOT NULL
+      ORDER BY id LIMIT 3`,
+    [location.id],
+  );
+  for (const row of unrelatedBanks) {
+    if (!locationBankValues.includes(row.bank_account_number)) {
+      assert(`Quotation does not leak unrelated account ${row.bank_account_number}`,
+        !quotePdf.text.includes(row.bank_account_number));
+    }
+  }
+
+  const longQuote = await post('/quotations', {
+    ...base,
+    lineItems: Array.from({ length: 36 }, () => ({
+      itemId: Number(item.id), quantity: 1, unitPrice, taxAmount: 0,
+    })),
+  });
+  const longQuoteId = Number(longQuote.data?.id);
+  if (longQuoteId) createdQuotes.push(longQuoteId);
+  const longShare = longQuoteId
+    ? await post(`/quotations/${longQuoteId}/share-token`, {})
+    : { data: null };
+  const longPdf = longShare.data?.token
+    ? await fetchPdfText(`/public/quotations/${encodeURIComponent(longShare.data.token)}.pdf`)
+    : { status: 0, text: '', pages: 0 };
+  assert('Multi-page quotation PDF renders without losing the footer',
+    longPdf.status === 200 && longPdf.pages >= 2
+      && longPdf.text.includes('Thank You For Your Business!')
+      && longPdf.text.includes('Authorised Signatory'));
+
   console.log('\n[2] Invalid ledger rejection and edit replacement/clear');
   const { rows: [salesLedger] } = await pool.query(
     `SELECT id FROM account_ledgers
@@ -212,6 +284,7 @@ try {
   failures.push(error.message);
 } finally {
   await cleanup();
+  rmSync(pdfDir, { recursive: true, force: true });
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);
