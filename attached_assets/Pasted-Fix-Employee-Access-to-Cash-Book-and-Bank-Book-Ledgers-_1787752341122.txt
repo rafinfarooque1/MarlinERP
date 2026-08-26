@@ -1,0 +1,295 @@
+Fix Employee Access to Cash Book and Bank Book Ledgers
+
+There is a permission/data-access issue in the Cash Book and Bank Book modules.
+
+Current Problem
+
+The screenshots show that:
+
+
+
+Admin users can see the Cash Book and Bank Book ledger dropdowns and data.
+
+Employee users can access the Cash Book/Bank Book modules when permission is granted.
+
+However, for employees, the Select Ledger dropdown shows “No results found” or no ledgers at all.
+
+Therefore, the module is visible, but the employee cannot actually use it.
+
+
+
+This is incorrect.
+
+Required Behavior
+
+If an employee has permission to access:
+
+
+
+Cash Book
+
+Bank Book
+
+
+
+then the employee must also be able to view and select the relevant ledgers and view the corresponding data.
+
+Cash Book
+
+When an employee has Cash Book permission:
+
+
+
+Show all cash ledgers/accounts that the employee is authorized to access.
+
+Populate the Select Ledger dropdown.
+
+Allow the employee to select a cash ledger.
+
+Show the opening balance.
+
+Show cash transactions.
+
+Show the running balance.
+
+Apply the same location/data scope rules used elsewhere in the application.
+
+Bank Book
+
+When an employee has Bank Book permission:
+
+
+
+Show all bank ledgers/accounts that the employee is authorized to access.
+
+Populate the Select Ledger dropdown.
+
+Allow the employee to select a bank ledger.
+
+Show the opening balance.
+
+Show bank transactions.
+
+Show the running balance.
+
+Apply the same location/data scope rules used elsewhere in the application.
+
+Important: Fix Both UI and API Permission Filtering
+
+Please trace the complete data flow:
+
+
+
+Employee Login → Permission Check → Cash/Bank Book Page → Ledger API → Ledger Filtering → Transaction API → Display
+
+
+
+Identify why the employee receives no ledgers while the admin receives them.
+
+
+
+Possible areas to check:
+
+
+
+Role-based filtering
+
+Employee permission middleware
+
+Ledger API authorization
+
+Cash/Bank account filtering
+
+SYS-CASH and SYS-BANK group access, or the project's equivalent ledger-group rules
+
+Location restrictions
+
+Company/branch restrictions
+
+Employee-to-location assignment
+
+Frontend filtering that may incorrectly hide ledgers for non-admin users
+
+
+
+Do not fix this by simply making all accounting data public to every employee.
+
+
+
+The authorization must work according to the employee's assigned permissions and allowed location/data scope.
+
+Permission Rule
+
+Use this behavior:
+
+Admin
+
+Existing unrestricted behavior remains unchanged.
+
+Employee without Cash Book permission
+
+Cannot access Cash Book.
+
+Cannot retrieve Cash Book ledger data.
+
+Employee with Cash Book permission
+
+Can access Cash Book.
+
+Can retrieve the permitted cash ledgers.
+
+Can view data for those permitted ledgers.
+
+Employee without Bank Book permission
+
+Cannot access Bank Book.
+
+Cannot retrieve Bank Book ledger data.
+
+Employee with Bank Book permission
+
+Can access Bank Book.
+
+Can retrieve the permitted bank ledgers.
+
+Can view data for those permitted ledgers.
+
+Location Scope
+
+The employee must only see data allowed by their assigned location scope.
+
+
+
+For example:
+
+
+
+If the employee is assigned to Frozen Hub – Rajiguda, show the permitted Cash/Bank ledgers and transactions for that location.
+
+If the employee has access to multiple locations, show the ledgers and data according to those allowed locations.
+
+If the employee has All Locations access, follow the existing All Locations permission rules.
+
+
+
+Do not allow an employee to bypass location restrictions simply because Cash Book or Bank Book permission is enabled.
+
+Important: Ledger Dropdown Must Not Be Empty
+
+The Select Ledger dropdown must not show:
+
+No results found
+
+when the employee has the relevant module permission and there are authorized cash/bank ledgers available.
+
+
+
+Ensure the API actually returns the permitted ledgers to the employee and that the frontend does not filter them out incorrectly.
+
+Do Not Break Admin Behavior
+
+The existing Admin behavior is working.
+
+
+
+Do not change:
+
+
+
+Admin ledger visibility
+
+Existing accounting calculations
+
+Opening balance calculations
+
+Running balance calculations
+
+Cash/Bank posting logic
+
+Voucher posting logic
+
+Location stamping
+
+Existing role and permission architecture
+
+
+
+Only fix the incorrect employee authorization/filtering path.
+
+Verification Required
+
+Test with at least these scenarios:
+
+Scenario 1 — Admin
+
+Login as Admin.
+
+Open Cash Book.
+
+Confirm cash ledgers are visible.
+
+Open Bank Book.
+
+Confirm bank ledgers are visible.
+
+Confirm existing behavior remains unchanged.
+
+Scenario 2 — Employee Without Permission
+
+Login as an employee without Cash Book/Bank Book permission.
+
+Confirm access is denied or the module is hidden according to the existing permission design.
+
+Scenario 3 — Employee With Cash Book Permission
+
+Grant only Cash Book permission.
+
+Login again as the employee.
+
+Confirm cash ledgers appear in Select Ledger.
+
+Select a ledger.
+
+Confirm opening balance, transactions, and running balance are visible.
+
+Confirm Bank Book remains restricted.
+
+Scenario 4 — Employee With Bank Book Permission
+
+Grant only Bank Book permission.
+
+Login again as the employee.
+
+Confirm bank ledgers appear in Select Ledger.
+
+Select a ledger.
+
+Confirm opening balance, transactions, and running balance are visible.
+
+Scenario 5 — Location-Restricted Employee
+
+Assign an employee to one location.
+
+Confirm only authorized Cash/Bank ledger data is visible.
+
+Confirm data from other locations is not exposed.
+
+Scenario 6 — Multi-Location Employee
+
+Assign multiple permitted locations.
+
+Confirm the ledger/data results correctly include all permitted locations according to the application's existing scope rules.
+
+Final Expected Result
+
+Giving an employee Cash Book or Bank Book permission must grant both:
+
+
+
+Module visibility/access
+
+Access to the authorized ledger list and corresponding book data
+
+
+
+The employee should never see an empty Select Ledger dropdown when authorized ledgers exist within their permitted scope.
