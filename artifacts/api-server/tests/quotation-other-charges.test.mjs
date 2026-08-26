@@ -326,7 +326,7 @@ try {
   const upiOnlyPdf = await stateQuotePdf();
   assert('UPI-only quotation shows the UPI ID and QR without bank labels',
     upiOnlyPdf.status === 200
-      && upiOnlyPdf.text.includes('PAYMENT DETAILS')
+      && upiOnlyPdf.text.includes('SCAN TO PAY')
       && upiOnlyPdf.text.includes('quotation-state@upi')
       && !upiOnlyPdf.text.includes('BANK DETAILS')
       && upiOnlyPdf.qrImageCount >= 1);
