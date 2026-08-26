@@ -1,0 +1,343 @@
+Quotation PDF – Add Warehouse Bank Details, UPI QR Code and Fix Layout
+
+Please update the Quotation PDF only. Do not change Sales, POS, Purchase, accounting, or unrelated modules unless required for shared PDF infrastructure.
+
+1. Use Bank and UPI Details From the Selected Warehouse
+
+The quotation PDF must dynamically collect payment details from the warehouse/location selected in the quotation.
+
+
+
+For each quotation:
+
+
+
+Read the selected Selling Location / Warehouse.
+
+Load that warehouse's configured:
+
+Bank Account Name
+
+Bank Name
+
+Account Number
+
+IFSC Code
+
+Branch, if available
+
+UPI ID
+
+Do not hard-code any bank account or UPI details.
+
+Do not use Head Office details when another warehouse is selected.
+
+Never show payment details belonging to another warehouse.
+
+
+
+Example:
+
+
+
+Tropicane – Ecity quotation → Tropicane – Ecity bank and UPI details.
+
+Frozen Hub – Rajiguda quotation → Frozen Hub – Rajiguda bank and UPI details.
+
+2. Add UPI QR Code to the Quotation PDF
+
+Generate and display a dynamic UPI QR code using the UPI ID configured for the selected warehouse.
+
+
+
+The QR code should be generated from the selected warehouse's payment details.
+
+
+
+Use the appropriate UPI payment data so that scanning the QR code opens a payment request for the correct UPI ID.
+
+
+
+Where supported, include:
+
+
+
+Payee UPI ID
+
+Payee/Business name
+
+Payment currency: INR
+
+
+
+Do not hard-code the QR image or UPI ID.
+
+
+
+The QR code must automatically change when the quotation location changes.
+
+3. QR Code and Bank Details Layout
+
+Create a clean Payment Details section near the bottom of the quotation.
+
+
+
+Suggested layout:
+
+
+
+Left side:
+
+
+
+Bank Account Name
+
+Bank Name
+
+Account Number
+
+IFSC Code
+
+Branch, if available
+
+UPI ID
+
+
+
+Right side:
+
+
+
+UPI QR Code
+
+Small label: Scan to Pay
+
+
+
+Keep the QR code reasonably sized, sharp, and scannable in:
+
+
+
+PDF preview
+
+Downloaded PDF
+
+Printed quotation
+
+Mobile viewing
+
+
+
+The QR code must not overlap totals, signature, footer, or other content.
+
+4. Missing Payment Details Handling
+
+If the selected warehouse has:
+
+
+
+Bank details but no UPI ID → show bank details only.
+
+UPI ID but no complete bank details → show the QR code/UPI details only.
+
+Neither bank details nor UPI ID → hide the entire payment section.
+
+
+
+Do not display:
+
+
+
+Empty labels
+
+undefined
+
+null
+
+Broken QR images
+
+Blank bordered boxes
+
+Large empty areas
+
+5. Remove the Large Blank Space
+
+The current quotation PDF has a large unused blank section near the bottom.
+
+
+
+Fix the layout so:
+
+
+
+Content uses the page efficiently.
+
+The Payment Details section can use the available lower-page space.
+
+There are no fixed-height empty containers creating unnecessary whitespace.
+
+The footer remains correctly positioned.
+
+Content does not unnecessarily spill onto another page.
+
+
+
+The layout should adapt dynamically depending on whether bank details and/or UPI details exist.
+
+6. Remove the Unwanted Bottom Horizontal Line
+
+Remove the unnecessary horizontal line currently appearing in the bottom section of the quotation PDF.
+
+
+
+Important:
+
+
+
+Remove only the unwanted line.
+
+Keep necessary table borders.
+
+Preserve the authorized signatory line if intentionally required.
+
+Avoid duplicate or overlapping footer/signature lines.
+
+7. Preserve Existing Quotation Features
+
+Do not break or remove:
+
+
+
+Company logo and details
+
+Warehouse/location details
+
+Quotation number
+
+Dates and validity
+
+Customer billing details
+
+Shipping details
+
+Item table
+
+GST
+
+Discounts
+
+Charges
+
+Grand total
+
+Amount in words
+
+Authorized signatory
+
+Existing quotation PDF generation
+
+8. Dynamic Location Verification
+
+Test quotations for multiple locations, including:
+
+
+
+Head Office
+
+Frozen Hub – Rajiguda
+
+Frozen Hub – Calicut
+
+Tropicane – Kochi
+
+Tropicane – Ecity
+
+
+
+Verify for each location:
+
+
+
+The correct warehouse is identified.
+
+The correct bank details are loaded.
+
+The correct UPI ID is loaded.
+
+The generated QR code contains the correct UPI payment information.
+
+No payment details leak from another warehouse.
+
+The layout remains compact and professional.
+
+Missing UPI/bank details do not create blank space.
+
+9. Data Source Requirement
+
+First inspect the existing Warehouse/Location master and payment configuration.
+
+
+
+Use the existing warehouse-level fields if available. If a warehouse-level UPI ID field does not currently exist, add it to the Warehouse/Location configuration and make it editable there.
+
+
+
+The field should be conceptually:
+
+
+
+Warehouse / Location → Payment Details → UPI ID
+
+
+
+Do not use a global company UPI ID for all warehouses.
+
+10. Final Expected PDF Layout
+
+The quotation should have a clean flow similar to:
+
+
+
+Company / Warehouse Details
+↓
+Customer + Quotation Information
+↓
+Quoted Items
+↓
+Tax / Discount / Charges / Grand Total
+↓
+Payment Details
+
+
+
+Bank information
+
+UPI ID
+
+Dynamic QR Code
+↓
+Amount in Words / Authorized Signatory / Footer
+
+
+
+The final result must have:
+
+
+
+Correct warehouse-specific bank details.
+
+Correct warehouse-specific UPI ID.
+
+Dynamic and scannable QR code.
+
+No large blank space.
+
+No unwanted bottom horizontal line.
+
+No hard-coded payment information.
+
+Clean behavior for every warehouse/location.
+
+
+
+Important: Make the implementation data-driven from the selected quotation warehouse. Do not manually configure payment details inside the PDF template.
