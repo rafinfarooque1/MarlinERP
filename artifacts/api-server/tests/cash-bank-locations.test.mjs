@@ -2,7 +2,7 @@
  * Cash/Bank account availability regression.
  *
  * Read-only: this suite creates, edits and deletes no business data. It proves
- * that an account is emitted once, carries relational availability, and that a
+ * that an account is emitted once with one scalar owner, and that a
  * one-or-more-location filter narrows accounts without duplicating them.
  *
  * Required environment: TEST_USERNAME and TEST_PASSWORD.
@@ -41,8 +41,8 @@ async function request(path) {
   return { status: response.status, data };
 }
 
-function keyOf(location) {
-  return `${location.locationType}:${location.locationId}`;
+function keyOf(account) {
+  return `${account.locationType}:${account.locationType === "headoffice" ? 0 : account.locationId}`;
 }
 
 async function login() {
@@ -67,23 +67,23 @@ async function run() {
     const id = Number(account.id);
     assert(`account ${id} appears once`, !accountIds.has(id));
     accountIds.add(id);
-    assert(`account ${id} includes non-empty availability`, Array.isArray(account.locations) && account.locations.length > 0);
-    const locationKeys = (account.locations ?? []).map(keyOf);
-    assert(`account ${id} has no duplicate availability`, new Set(locationKeys).size === locationKeys.length);
+    assert(`account ${id} has one canonical location`, ["headoffice", "warehouse", "outlet"].includes(account.locationType));
+    assert(`account ${id} has a canonical location id`, Number.isInteger(Number(account.locationId)));
+    assert(`account ${id} does not expose multi-location availability`, account.locations === undefined);
     assert(`account ${id} has numeric ledger balance`, Number.isFinite(Number(account.balance)));
   }
 
-  const mapped = (all.data ?? []).find((account) => Array.isArray(account.locations) && account.locations.length > 0);
+  const mapped = (all.data ?? []).find((account) => ["headoffice", "warehouse", "outlet"].includes(account.locationType));
   if (!mapped) {
     console.log("  • No Cash/Bank account is available to exercise the location filter.");
   } else {
-    const selected = mapped.locations.slice(0, 2).map(keyOf).join(",");
+    const selected = keyOf(mapped);
     const narrowed = await request(`/accounts/cash-bank?locationKeys=${encodeURIComponent(selected)}`);
     assert("location-filtered Cash/Bank list responds", narrowed.status === 200);
     assert("location-filtered response is an array", Array.isArray(narrowed.data));
     const selectedKeys = new Set(selected.split(","));
     for (const account of narrowed.data ?? []) {
-      const matches = (account.locations ?? []).some((location) => selectedKeys.has(keyOf(location)));
+      const matches = selectedKeys.has(keyOf(account));
       assert(`filtered account ${account.id} is available at a selected location`, matches);
       assert(`filtered account ${account.id} remains unique`, !accountIds.has(`filtered:${account.id}`));
       accountIds.add(`filtered:${account.id}`);

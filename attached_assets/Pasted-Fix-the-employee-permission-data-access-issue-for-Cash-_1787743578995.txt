@@ -1,0 +1,100 @@
+Fix the employee permission/data-access issue for Cash Book, Day Book, and Bank Book.
+
+Current problem:
+The employee has permission to access these modules, and the menu/modules are visible:
+
+- Cash Book
+- Day Book
+- Bank Book
+
+However, when the employee opens these modules, the data is missing, empty, or restricted even though the employee has been granted permission.
+
+Required behavior:
+
+1. Permission must control BOTH:
+   - Module visibility/access
+   - Ability to view the authorized data inside that module
+
+2. If an employee is granted permission for:
+   - Cash Book → they must be able to view the relevant Cash Book transactions and balances.
+   - Day Book → they must be able to view the relevant Day Book entries.
+   - Bank Book → they must be able to view the relevant Bank Book transactions and balances.
+
+3. Do not only fix the frontend/menu visibility.
+   Inspect and fix the backend authorization, API queries, service-layer filters, and location/branch scope that may be preventing employee data from being returned.
+
+4. Preserve proper security:
+   - Employees must only see data they are authorized to access.
+   - Respect their assigned location/branch scope.
+   - Head Office users should see Head Office data according to their permissions.
+   - Branch/warehouse employees should see data for their authorized warehouse/location.
+   - If the employee is authorized for multiple locations, return data only from those authorized locations.
+   - Do not expose unauthorized locations or company-wide data unless the employee has explicit permission.
+
+5. The same permission rule must be applied consistently to:
+   - Page/module access
+   - API endpoint authorization
+   - Database query filtering
+   - Transaction lists
+   - Opening balances
+   - Closing/current balances
+   - Ledger-derived calculations
+
+6. Investigate the exact reason why an employee can see the module but receives no data. Check for:
+   - Role permission middleware
+   - API authorization guards
+   - Employee-to-location mapping
+   - Head Office vs warehouse location handling
+   - Incorrect owner/admin-only query filters
+   - User ID vs employee ID mismatches
+   - Location type/location ID filters
+   - Cash/Bank account availability rules
+   - Journal/voucher location filtering
+
+7. Do not weaken authorization globally or simply remove location filters. Fix the permission and scope logic correctly.
+
+Acceptance criteria:
+
+A. Cash Book
+- Employee with Cash Book permission can open the module.
+- Relevant authorized cash transactions are visible.
+- Correct opening/current/closing balances are visible.
+- Unauthorized location data remains hidden.
+
+B. Day Book
+- Employee with Day Book permission can view authorized journal/voucher/day transactions.
+- Location filtering works correctly.
+- No unrelated locations are exposed.
+
+C. Bank Book
+- Employee with Bank Book permission can view authorized bank accounts and transactions.
+- Relevant balances and entries are visible.
+- Unauthorized bank/location data remains hidden.
+
+D. Regression
+- Admin behavior must remain unchanged.
+- Head Office behavior must remain correct.
+- Warehouse/branch behavior must remain correct.
+- Existing accounting calculations must not change.
+- Do not modify accounting history or transaction amounts just to make data appear.
+
+Testing required:
+
+1. Test with an admin user.
+2. Test with an employee who has the permissions.
+3. Test with an employee without the permissions.
+4. Test at least one Head Office user/scope.
+5. Test at least one warehouse/branch user/scope.
+6. Verify both:
+   - Module/page access
+   - Actual API response and displayed data
+
+Before marking complete, report:
+
+- Root cause of why employees could access the modules but not see data.
+- Exact backend/frontend/authorization changes made.
+- Which location and permission rules are now applied.
+- Verification results for Cash Book, Day Book, and Bank Book.
+- Any remaining credential-gated test limitations.
+
+Do not mark the task complete until an employee with the required permissions can actually view the authorized data in all three modules.

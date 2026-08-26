@@ -139,18 +139,16 @@ export async function warehouseDeleteSummary(c: Queryable, id: number): Promise<
     one(`SELECT COUNT(*) AS count FROM journal_voucher_lines l
           WHERE l.voucher_id IN (SELECT id FROM journal_vouchers WHERE location_type = 'warehouse' AND location_id = $1)`),
     one(`SELECT COUNT(*) AS count FROM stock_entries WHERE branch_type = 'warehouse' AND branch_id = $1 AND quantity::numeric <> 0`),
-    one(`SELECT COUNT(*) FILTER (WHERE cba.account_type = 'cash') AS count
+     one(`SELECT COUNT(*) FILTER (WHERE cba.account_type = 'cash') AS count
            FROM cash_bank_accounts cba
-           JOIN cash_bank_account_locations cbal ON cbal.account_id = cba.id
-          WHERE cbal.location_type = 'warehouse' AND cbal.location_id = $1`),
+          WHERE cba.location_type = 'warehouse' AND cba.location_id = $1`),
     one(`SELECT (SELECT COUNT(*) FROM rent_accruals WHERE warehouse_id = $1)
              + (SELECT COUNT(*) FROM rent_payments WHERE warehouse_id = $1) AS count`),
   ]);
   const bankAccounts = await one(
     `SELECT COUNT(*) FILTER (WHERE cba.account_type <> 'cash') AS count
        FROM cash_bank_accounts cba
-       JOIN cash_bank_account_locations cbal ON cbal.account_id = cba.id
-      WHERE cbal.location_type = 'warehouse' AND cbal.location_id = $1`);
+      WHERE cba.location_type = 'warehouse' AND cba.location_id = $1`);
 
   // Money documents derive two postings each; JV lines are stored directly.
   const ledgerEntries = jvLines + 2 * (sales + purchases + receipts + payments + expenses);
@@ -249,13 +247,12 @@ export async function permanentlyDeleteWarehouse(
     )).rows.map((r: { id: number }) => Number(r.id));
 
     // Ledgers owned by this warehouse: its own three, rent ledgers, and every
-    // Cash/Bank account available here (including secondary memberships).
+    // Cash/Bank account whose canonical owner is this warehouse.
     const rentLedgers = await rentLedgerIdsFor(client as any, id);
     const cbaLedgers = (await client.query<{ ledger_id: number | null }>(
       `SELECT cba.ledger_id
          FROM cash_bank_accounts cba
-         JOIN cash_bank_account_locations cbal ON cbal.account_id = cba.id
-        WHERE cbal.location_type = 'warehouse' AND cbal.location_id = $1`, [id],
+        WHERE cba.location_type = 'warehouse' AND cba.location_id = $1`, [id],
     )).rows.map((r: { ledger_id: number | null }) => r.ledger_id).filter((x: number | null): x is number => x != null);
     const ownLedgerIds = [wh.cash_ledger_id, wh.sales_ledger_id, wh.purchase_ledger_id, ...rentLedgers, ...cbaLedgers]
       .filter((x): x is number => x != null);
@@ -318,14 +315,6 @@ export async function permanentlyDeleteWarehouse(
       await del(t, `DELETE FROM ${t} WHERE branch_type = 'warehouse' AND branch_id = $1`, [id]);
     }
 
-    // Remove this location's availability first. A shared account survives
-    // with its other memberships; only an account with no availability left is
-    // removed (and the FK cascade clears its now-empty mapping).
-    await del("cashBankAccountLocations",
-      `DELETE FROM cash_bank_account_locations WHERE location_type = 'warehouse' AND location_id = $1`, [id]);
-    await del("orphanedCashBankAccounts",
-      `DELETE FROM cash_bank_accounts cba
-        WHERE NOT EXISTS (SELECT 1 FROM cash_bank_account_locations cbal WHERE cbal.account_id = cba.id)`, []);
     await del("locationMigrationMap",
       `DELETE FROM location_migration_map WHERE new_type = 'warehouse' AND new_id = $1`, [id]);
 
@@ -375,14 +364,14 @@ export async function permanentlyDeleteWarehouse(
     try { await sweepOrphanPartyLedgers(client as any); } catch { /* boot sweep re-heals */ }
 
     // ── The warehouse's own ledgers ────────────────────────────────────────
-    // A shared Cash/Bank account remains a live account at its other mapped
-    // locations. Its ledger and opening balance must survive this location's
-    // deletion even though it was part of the pre-delete ledger set.
+    // Managed Cash/Bank accounts have one owner. The blocker above prevents
+    // deleting a warehouse that still owns one, so there are no shared account
+    // memberships to preserve here.
     const { rows: survivingShared } = await client.query<{ ledger_id: number }>(
       `SELECT DISTINCT cba.ledger_id
          FROM cash_bank_accounts cba
-         JOIN cash_bank_account_locations cbal ON cbal.account_id = cba.id
-        WHERE cba.ledger_id = ANY($1::int[])`, [ownLedgerIds]);
+        WHERE cba.ledger_id = ANY($1::int[])
+          AND (cba.location_type <> 'warehouse' OR cba.location_id <> $2)`, [ownLedgerIds, id]);
     const survivingSharedIds = new Set(survivingShared.map((row) => Number(row.ledger_id)));
     const removableOwnLedgerIds = ownLedgerIds.filter((ledgerId) => !survivingSharedIds.has(Number(ledgerId)));
     await del("openingBalances",

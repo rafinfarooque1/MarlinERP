@@ -1,0 +1,70 @@
+Add a Charges feature to the relevant transaction/form, following the same user experience and behavior already used in the Quotation module.
+
+Requirement:
+
+1. Add a **Charges** section similar to the existing Quotation Charges feature.
+
+2. In the Charge Ledger selection:
+   - Show **ONLY ledgers under the Direct Income group**.
+   - Do not show Direct Expense, Indirect Income, Indirect Expense, Sales, Purchase, Assets, Liabilities, Cash/Bank, or any other ledger groups.
+   - The ledger dropdown/search must be filtered at both frontend and backend/API level.
+
+3. The user should be able to:
+   - Add a charge row.
+   - Select a Direct Income ledger.
+   - Enter the charge amount.
+   - Add multiple charge rows if required.
+   - Remove a charge row before saving.
+   - See the charges included correctly in the transaction total, following the same calculation logic as Quotation.
+
+4. Reuse the existing Quotation implementation wherever possible instead of creating a separate inconsistent system:
+   - Same UI pattern.
+   - Same validation behavior.
+   - Same calculation approach.
+   - Same charge row structure where applicable.
+
+5. Accounting:
+   - Each charge must post to the selected **Direct Income ledger**.
+   - Validate that the selected ledger genuinely belongs to the Direct Income group before saving/posting.
+   - Do not trust only the frontend filter.
+   - Reject invalid ledger IDs from the API/backend.
+   - Preserve double-entry accounting and existing voucher/journal integrity.
+
+6. Editing:
+   - Existing transactions with charges must display their saved charges correctly.
+   - Charges must be editable where the transaction itself is editable.
+   - Updating charges must correctly update the accounting impact without creating duplicate postings.
+
+7. Location/branch handling:
+   - Charges and their accounting entries must follow the transaction's selected location.
+   - Respect Head Office, warehouse/branch, and authorized location scope.
+   - Do not expose Direct Income ledgers that the current user/location is not authorized to use.
+
+8. Do not change the existing Quotation Charges behavior.
+   Use it as the reference implementation and avoid breaking current quotation calculations or accounting.
+
+Acceptance criteria:
+
+- A Charges section is available in the target form.
+- The UI behaves like the existing Quotation Charges section.
+- Only Direct Income group ledgers are available for selection.
+- Search and dropdown results contain no other ledger groups.
+- Backend validates the Direct Income group independently.
+- Multiple charges work correctly.
+- Charges are included correctly in totals.
+- Saved charges display correctly when reopening/editing.
+- Accounting entries are posted to the selected Direct Income ledger correctly.
+- No duplicate journal/voucher entries are created.
+- Location and branch scope are preserved.
+- Existing Quotation functionality remains unchanged.
+
+Before marking complete, verify:
+1. Add one charge using a Direct Income ledger.
+2. Add multiple charges using different Direct Income ledgers.
+3. Attempt to submit a ledger outside Direct Income and confirm the backend rejects it.
+4. Verify totals.
+5. Verify the resulting voucher/journal/ledger posting.
+6. Edit an existing transaction with charges and confirm no duplicate accounting entries are created.
+7. Verify behavior for Head Office and at least one warehouse/branch location.
+
+Report the exact files/components/API routes changed and the final accounting posting behavior.

@@ -2367,14 +2367,9 @@ export const ListCashBankAccountsResponseItem = zod.object({
   "currentBalance": zod.number().nullish().describe('Reconciled balance from the posting stream, or null when no ledger backs this account. Null renders as an explicit gap rather than a confident number.'),
   "balanceSource": zod.enum(['unlinked', 'ledger']).optional(),
   "ledgerId": zod.number().nullish(),
-  "locationType": zod.string().nullish().describe('Legacy\/default location retained for compatibility; account availability is in locations.'),
+  "locationType": zod.union([zod.literal('headoffice'),zod.literal('warehouse'),zod.literal('outlet'),zod.literal(null)]).nullable().describe('The one location that owns this account. Head Office uses locationId 0.'),
   "locationId": zod.number().nullish(),
   "locationName": zod.string().nullish(),
-  "locations": zod.array(zod.object({
-  "locationType": zod.enum(['headoffice', 'warehouse', 'outlet']),
-  "locationId": zod.number().describe('0 for Head Office; the warehouse\/outlet id otherwise.'),
-  "locationName": zod.string()
-})).optional().describe('Locations where this account may be selected for a new money transaction.'),
   "source": zod.enum(['module', 'location', 'system', 'ledger']).optional().describe('module = managed on this screen; location = a branch till owned by the Locations module (read-only here); system = the Cash \/ Bank Accounts head itself; ledger = another ledger in the subtree.'),
   "readOnly": zod.boolean().optional(),
   "requiresReconciliation": zod.boolean().optional().describe('Bank\/UPI accounts only. When true, collections routed into this account land in Electronic Clearing first and reach the bank balance through Reconciliation; when false, they post straight into the account\'s ledger.')
@@ -2385,21 +2380,14 @@ export const ListCashBankAccountsResponse = zod.array(ListCashBankAccountsRespon
 /**
  * @summary Create cash or bank account (provisions its ledger under Cash / Bank Accounts)
  */
-
-
-
 export const CreateCashBankAccountBody = zod.object({
   "name": zod.string(),
   "accountType": zod.enum(['cash', 'bank', 'upi', 'other']),
   "bankName": zod.string().optional(),
   "accountNumber": zod.string().optional(),
   "ifscCode": zod.string().optional(),
-  "locationType": zod.enum(['headoffice', 'warehouse', 'outlet']).optional().describe('Defaults to headoffice.'),
+  "locationType": zod.enum(['headoffice', 'warehouse', 'outlet']).describe('The one location that owns this account. Head Office uses locationId 0.'),
   "locationId": zod.number().optional().describe('Required when locationType is warehouse or outlet.'),
-  "locations": zod.array(zod.object({
-  "locationType": zod.enum(['headoffice', 'warehouse', 'outlet']),
-  "locationId": zod.number().optional().describe('Required for warehouse\/outlet; ignored for Head Office.')
-})).min(1).optional().describe('Optional multi-location availability. When omitted, legacy locationType\/locationId is used.'),
   "openingBalance": zod.number().optional().describe('Recorded as the backing ledger\'s opening balance (debit) through the opening-balances store — never a stored column. Absent or blank means 0.'),
   "requiresReconciliation": zod.boolean().optional().describe('Bank\/UPI accounts only — whether collections into this account must pass through Reconciliation before hitting the bank balance. Defaults to true for bank\/UPI\/other, ignored for cash.')
 })
@@ -2416,14 +2404,9 @@ export const CreateCashBankAccountResponse = zod.object({
   "currentBalance": zod.number().nullish().describe('Reconciled balance from the posting stream, or null when no ledger backs this account. Null renders as an explicit gap rather than a confident number.'),
   "balanceSource": zod.enum(['unlinked', 'ledger']).optional(),
   "ledgerId": zod.number().nullish(),
-  "locationType": zod.string().nullish().describe('Legacy\/default location retained for compatibility; account availability is in locations.'),
+  "locationType": zod.union([zod.literal('headoffice'),zod.literal('warehouse'),zod.literal('outlet'),zod.literal(null)]).nullable().describe('The one location that owns this account. Head Office uses locationId 0.'),
   "locationId": zod.number().nullish(),
   "locationName": zod.string().nullish(),
-  "locations": zod.array(zod.object({
-  "locationType": zod.enum(['headoffice', 'warehouse', 'outlet']),
-  "locationId": zod.number().describe('0 for Head Office; the warehouse\/outlet id otherwise.'),
-  "locationName": zod.string()
-})).optional().describe('Locations where this account may be selected for a new money transaction.'),
   "source": zod.enum(['module', 'location', 'system', 'ledger']).optional().describe('module = managed on this screen; location = a branch till owned by the Locations module (read-only here); system = the Cash \/ Bank Accounts head itself; ledger = another ledger in the subtree.'),
   "readOnly": zod.boolean().optional(),
   "requiresReconciliation": zod.boolean().optional().describe('Bank\/UPI accounts only. When true, collections routed into this account land in Electronic Clearing first and reach the bank balance through Reconciliation; when false, they post straight into the account\'s ledger.')
@@ -2437,9 +2420,6 @@ export const UpdateCashBankAccountParams = zod.object({
   "id": zod.coerce.number()
 })
 
-
-
-
 export const UpdateCashBankAccountBody = zod.object({
   "name": zod.string().optional(),
   "bankName": zod.string().optional(),
@@ -2447,10 +2427,6 @@ export const UpdateCashBankAccountBody = zod.object({
   "ifscCode": zod.string().optional(),
   "locationType": zod.enum(['headoffice', 'warehouse', 'outlet']).optional(),
   "locationId": zod.number().optional(),
-  "locations": zod.array(zod.object({
-  "locationType": zod.enum(['headoffice', 'warehouse', 'outlet']),
-  "locationId": zod.number().optional().describe('Required for warehouse\/outlet; ignored for Head Office.')
-})).min(1).optional().describe('Replaces the account\'s available locations. Omit to leave availability unchanged.'),
   "openingBalance": zod.number().optional().describe('Replaces the ledger\'s opening balance for the current financial year.'),
   "requiresReconciliation": zod.boolean().optional().describe('Bank\/UPI accounts only — toggle the reconciliation requirement.')
 })
@@ -2467,14 +2443,9 @@ export const UpdateCashBankAccountResponse = zod.object({
   "currentBalance": zod.number().nullish().describe('Reconciled balance from the posting stream, or null when no ledger backs this account. Null renders as an explicit gap rather than a confident number.'),
   "balanceSource": zod.enum(['unlinked', 'ledger']).optional(),
   "ledgerId": zod.number().nullish(),
-  "locationType": zod.string().nullish().describe('Legacy\/default location retained for compatibility; account availability is in locations.'),
+  "locationType": zod.union([zod.literal('headoffice'),zod.literal('warehouse'),zod.literal('outlet'),zod.literal(null)]).nullable().describe('The one location that owns this account. Head Office uses locationId 0.'),
   "locationId": zod.number().nullish(),
   "locationName": zod.string().nullish(),
-  "locations": zod.array(zod.object({
-  "locationType": zod.enum(['headoffice', 'warehouse', 'outlet']),
-  "locationId": zod.number().describe('0 for Head Office; the warehouse\/outlet id otherwise.'),
-  "locationName": zod.string()
-})).optional().describe('Locations where this account may be selected for a new money transaction.'),
   "source": zod.enum(['module', 'location', 'system', 'ledger']).optional().describe('module = managed on this screen; location = a branch till owned by the Locations module (read-only here); system = the Cash \/ Bank Accounts head itself; ledger = another ledger in the subtree.'),
   "readOnly": zod.boolean().optional(),
   "requiresReconciliation": zod.boolean().optional().describe('Bank\/UPI accounts only. When true, collections routed into this account land in Electronic Clearing first and reach the bank balance through Reconciliation; when false, they post straight into the account\'s ledger.')

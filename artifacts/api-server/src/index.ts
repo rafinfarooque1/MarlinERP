@@ -4601,6 +4601,77 @@ await pool.query(`
   }
 }
 
+// Cash & Bank ownership is now one account → one location. Canonicalize old
+// multi-location availability without touching any transaction or journal
+// stamps. The scalar owner is preferred when it still points at a real
+// location; otherwise the oldest legacy membership is retained.
+{
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows: [done] } = await client.query(
+      `SELECT 1 FROM migration_log WHERE name = 'cash_bank_single_location_v2' FOR UPDATE`,
+    );
+    if (!done) {
+      const { rows: accounts } = await client.query(`
+        SELECT id, location_type, location_id
+          FROM cash_bank_accounts
+         FOR UPDATE
+      `);
+      for (const account of accounts) {
+        const scalarType = account.location_type == null ? null : String(account.location_type);
+        const scalarId = account.location_id == null ? null : Number(account.location_id);
+        let validScalar = scalarType === "headoffice";
+        if (scalarType === "warehouse" || scalarType === "outlet") {
+          const table = scalarType === "warehouse" ? "warehouses" : "outlets";
+          const { rows } = await client.query(`SELECT 1 FROM ${table} WHERE id = $1`, [scalarId]);
+          validScalar = Number.isInteger(scalarId) && rows.length > 0;
+        }
+        let locationType = validScalar ? scalarType! : "headoffice";
+        let locationId = validScalar && scalarType !== "headoffice" ? scalarId : 0;
+        if (!validScalar) {
+          const { rows: [legacy] } = await client.query(
+            `SELECT location_type, location_id
+               FROM cash_bank_account_locations
+              WHERE account_id = $1
+                AND (
+                  location_type = 'headoffice'
+                  OR (location_type = 'warehouse' AND EXISTS (SELECT 1 FROM warehouses WHERE id = location_id))
+                  OR (location_type = 'outlet' AND EXISTS (SELECT 1 FROM outlets WHERE id = location_id))
+                )
+              ORDER BY id
+              LIMIT 1`,
+            [Number(account.id)],
+          );
+          if (legacy) {
+            locationType = String(legacy.location_type);
+            locationId = locationType === "headoffice" ? 0 : Number(legacy.location_id);
+          }
+        }
+        await client.query(
+          `UPDATE cash_bank_accounts SET location_type = $1, location_id = $2 WHERE id = $3`,
+          [locationType, locationId, Number(account.id)],
+        );
+        // Keep the old table as a compatibility shadow with one row only;
+        // application ownership reads use the scalar columns.
+        await client.query(`DELETE FROM cash_bank_account_locations WHERE account_id = $1`, [Number(account.id)]);
+        await client.query(
+          `INSERT INTO cash_bank_account_locations (account_id, location_type, location_id)
+           VALUES ($1, $2, $3)`,
+          [Number(account.id), locationType, locationId],
+        );
+      }
+      await client.query(`INSERT INTO migration_log (name) VALUES ('cash_bank_single_location_v2')`);
+    }
+    await client.query("COMMIT");
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
 // One-time: seed a ready-to-use "Packing & Delivery Recovery" ledger under
 // Direct Income so the Sale Other Charges picker (Direct-Income-only) has a
 // sensible default on day one. Guarded by migration_log, NOT by data shape:

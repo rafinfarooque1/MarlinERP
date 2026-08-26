@@ -8,11 +8,12 @@
 
 /**
  * The one location that owns this account. Head Office uses locationId 0.
+ * @nullable
  */
-export type CashBankInputLocationType = typeof CashBankInputLocationType[keyof typeof CashBankInputLocationType];
+export type CashBankAccountLocationType = typeof CashBankAccountLocationType[keyof typeof CashBankAccountLocationType] | null;
 
 
-export const CashBankInputLocationType = {
+export const CashBankAccountLocationType = {
   headoffice: 'headoffice',
   warehouse: 'warehouse',
   outlet: 'outlet',

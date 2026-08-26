@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { Link } from 'wouter';
 import {
   useListCashBankAccounts, useCreateCashBankAccount, useUpdateCashBankAccount, useDeleteCashBankAccount,
@@ -34,9 +34,7 @@ const BAD_BALANCE = 'Please enter a valid opening balance.';
 const schema = z.object({
   name: z.string().min(2, 'Name required (at least 2 characters)'),
   accountType: z.enum(['cash', 'bank', 'upi', 'other']),
-  // One account may be available at several locations. This governs future
-  // selection only; every payment/receipt still stores one chosen location.
-  locations: z.array(z.string()).min(1, 'Select at least one available location.'),
+  locationKey: z.string().min(1, 'Select a location.'),
   // Never parsed as numbers: leading zeros are significant and real account
   // numbers exceed the safe integer range.
   accountNumber: z.string().optional(),
@@ -59,8 +57,8 @@ const schema = z.object({
 type FormValues = z.infer<typeof schema>;
 
 type LocationType = 'headoffice' | 'warehouse' | 'outlet';
-function splitLocation(v: string): { locationType: LocationType; locationId?: number } {
-  if (v === 'headoffice' || v === 'headoffice:0') return { locationType: 'headoffice', locationId: 0 };
+function splitLocationKey(v: string): { locationType: LocationType; locationId: number } {
+  if (v === 'headoffice:0') return { locationType: 'headoffice', locationId: 0 };
   const [locationType, id] = v.split(':');
   return { locationType: locationType as LocationType, locationId: Number(id) };
 }
@@ -73,7 +71,6 @@ export default function CashBank() {
   const { data: me } = useGetMe();
   const isHOUser = !(me as any)?.branchType || (me as any)?.branchType === 'headoffice';
   const [availabilityFilter, setAvailabilityFilter] = useState<string[]>([]);
-  const [locationSearch, setLocationSearch] = useState('');
   const { data: accounts = [], isLoading } = useListCashBankAccounts(
     { locationKeys: availabilityFilter.join(',') },
     { query: { enabled: true } } as any,
@@ -92,7 +89,7 @@ export default function CashBank() {
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
-    defaultValues: { name: '', accountType: 'bank', locations: ['headoffice:0'], accountNumber: '', bankName: '', ifscCode: '', openingBalance: 0, requiresReconciliation: true },
+    defaultValues: { name: '', accountType: 'bank', locationKey: 'headoffice:0', accountNumber: '', bankName: '', ifscCode: '', openingBalance: 0, requiresReconciliation: true },
   });
 
   const watchType = form.watch('accountType');
@@ -100,7 +97,7 @@ export default function CashBank() {
 
   const openAdd = () => {
     setEditing(null);
-    form.reset({ name: '', accountType: 'bank', locations: ['headoffice:0'], accountNumber: '', bankName: '', ifscCode: '', openingBalance: 0, requiresReconciliation: true });
+    form.reset({ name: '', accountType: 'bank', locationKey: 'headoffice:0', accountNumber: '', bankName: '', ifscCode: '', openingBalance: 0, requiresReconciliation: true });
     setIsOpen(true);
   };
   const openEdit = (a: any) => {
@@ -108,8 +105,7 @@ export default function CashBank() {
     form.reset({
       name: a.name ?? '',
       accountType: a.accountType,
-      locations: ((a.locations as any[] | undefined)?.map((l: any) => `${l.locationType}:${l.locationId}`)
-        ?? [`${a.locationType ?? 'headoffice'}:${a.locationId ?? 0}`]),
+      locationKey: `${a.locationType ?? 'headoffice'}:${a.locationId ?? 0}`,
       accountNumber: a.accountNumber ?? '',
       bankName: a.bankName ?? '',
       ifscCode: a.ifscCode ?? '',
@@ -120,7 +116,7 @@ export default function CashBank() {
   };
 
   const onSubmit = (data: FormValues) => {
-    const locations = data.locations.map(splitLocation);
+    const location = splitLocationKey(data.locationKey);
     if (isEdit) {
       // Opening balance is only sent when the user typed one — 0 would
       // otherwise silently wipe an existing opening figure on every rename.
@@ -129,7 +125,7 @@ export default function CashBank() {
         id: editing.id,
         data: {
           name: data.name, bankName: data.bankName, accountNumber: data.accountNumber, ifscCode: data.ifscCode,
-          locations,
+           locationType: location.locationType, locationId: location.locationId,
           ...(dirty.openingBalance ? { openingBalance: data.openingBalance } : {}),
           // Cash accounts never send the flag — the server rejects it for them.
           ...(data.accountType !== 'cash' ? { requiresReconciliation: data.requiresReconciliation } : {}),
@@ -139,8 +135,8 @@ export default function CashBank() {
         onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
       });
     } else {
-      const { locations: _locations, ...rest } = data;
-      createMutation.mutate({ data: { ...rest, locations } as any }, {
+      const { locationKey: _locationKey, ...rest } = data;
+      createMutation.mutate({ data: { ...rest, ...location } as any }, {
         onSuccess: () => { toast.success('Account added — its ledger now appears under Chart of Accounts'); refresh(); setIsOpen(false); form.reset(); },
         onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
       });
@@ -168,13 +164,13 @@ export default function CashBank() {
   const locationOptions = ownLocationKey
     ? allLocationOptions.filter((location) => location.key === ownLocationKey)
     : allLocationOptions;
-  const visibleLocationOptions = useMemo(
-    () => locationOptions.filter((location) => location.name.toLowerCase().includes(locationSearch.toLowerCase())),
-    [locationOptions, locationSearch],
+  const locationText = (a: any) => a.locationName ?? (
+    a.locationType === 'warehouse'
+      ? warehouses.find((w: any) => Number(w.id) === Number(a.locationId))?.name ?? 'Warehouse'
+      : a.locationType === 'outlet'
+        ? outlets.find((o: any) => Number(o.id) === Number(a.locationId))?.name ?? 'Outlet'
+        : 'Head Office'
   );
-  const rowLocations = (a: any) => (a.locations as any[] | undefined)
-    ?? [{ locationType: a.locationType ?? 'headoffice', locationId: a.locationId ?? 0, locationName: a.locationName ?? 'Head Office' }];
-  const locationText = (a: any) => rowLocations(a).map((l: any) => l.locationName).join(', ');
   const filtered = accounts.filter(a => {
     const matchesSearch =
       a.name?.toLowerCase().includes(search.toLowerCase()) ||
@@ -409,38 +405,23 @@ export default function CashBank() {
                     {isEdit && <p className="text-xs text-muted-foreground">Type decides the ledger's group and cannot change.</p>}
                     <FormMessage /></FormItem>
                 )} />
-                <FormField control={form.control} name="locations" render={({ field }) => (
+                <FormField control={form.control} name="locationKey" render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Available at <span className="text-destructive">*</span></FormLabel>
-                    <div className="flex gap-2">
-                      <Input placeholder="Search locations..." value={locationSearch} onChange={(event) => setLocationSearch(event.target.value)} />
-                      <Button type="button" variant="outline" size="sm" onClick={() => field.onChange(locationOptions.map((location) => location.key))}>Select All</Button>
-                      <Button type="button" variant="ghost" size="sm" onClick={() => field.onChange([])}>Clear All</Button>
-                    </div>
-                    <div className="max-h-32 overflow-y-auto rounded-md border border-input p-2 space-y-1">
-                      {visibleLocationOptions.map((location) => {
-                        const checked = field.value.includes(location.key);
-                        return (
-                          <label key={location.key} className="flex items-center gap-2 rounded px-1 py-1 text-sm cursor-pointer hover:bg-muted/50">
-                            <Checkbox
-                              checked={checked}
-                              onCheckedChange={(next) => field.onChange(
-                                next ? [...field.value, location.key] : field.value.filter((key) => key !== location.key),
-                              )}
-                            />
+                    <FormLabel>Location <span className="text-destructive">*</span></FormLabel>
+                    <Select onValueChange={field.onChange} value={field.value}>
+                      <FormControl><SelectTrigger><SelectValue placeholder="Select location" /></SelectTrigger></FormControl>
+                      <SelectContent>
+                        {locationOptions.map((location) => (
+                          <SelectItem key={location.key} value={location.key}>
                             {location.name}
-                          </label>
-                        );
-                      })}
-                    </div>
-                    <p className="text-xs text-muted-foreground">
-                      {field.value.length} location{field.value.length === 1 ? '' : 's'} selected
-                      {field.value.length > 0 && `: ${locationOptions.filter((location) => field.value.includes(location.key)).map((location) => location.name).join(', ')}`}
-                    </p>
-                    <p className="text-xs text-muted-foreground">Controls where this account can be chosen for future transactions. Existing transactions keep their original location.</p>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                     <FormMessage />
                   </FormItem>
                 )} />
+                <p className="text-xs text-muted-foreground sm:col-span-2">Existing transactions keep their original location.</p>
               </div>
               {(watchType === 'bank' || watchType === 'upi' || watchType === 'other') && (
                 <FormField control={form.control} name="requiresReconciliation" render={({ field }) => (
