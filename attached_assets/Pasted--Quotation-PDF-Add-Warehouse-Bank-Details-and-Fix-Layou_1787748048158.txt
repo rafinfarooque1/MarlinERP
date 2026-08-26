@@ -1,0 +1,211 @@
+
+
+Quotation PDF – Add Warehouse Bank Details and Fix Layout
+
+Please update the Quotation PDF only. Do not change Sales, POS, Purchase, accounting, or other PDF formats unless required for shared PDF infrastructure.
+
+1. Add Bank Details Based on Selected Warehouse / Selling Location
+
+The quotation PDF must display the bank details assigned to the selected warehouse/location.
+
+
+
+For example:
+
+
+
+If quotation location is Tropicane – Ecity, show the bank account details configured for Tropicane – Ecity.
+
+If quotation location is Frozen Hub – Rajiguda, show that location's configured bank details.
+
+If a quotation is created for another warehouse, automatically use that warehouse's bank details.
+
+
+
+Display only the relevant bank details for the quotation's selected location.
+
+
+
+The bank section should include, where available:
+
+
+
+Account Name
+
+Bank Name
+
+Account Number
+
+IFSC Code
+
+Branch, if configured
+
+
+
+Do not show bank details from unrelated locations.
+
+
+
+If the selected warehouse/location has no configured bank account, handle it gracefully without showing broken labels, empty boxes, or unnecessary blank space.
+
+2. Place Bank Details Properly in the Quotation PDF
+
+Add the bank details in a compact, professional section near the bottom of the quotation, preferably using the currently unused space.
+
+
+
+The layout should remain balanced and should not create an additional page unnecessarily.
+
+
+
+Do not hard-code bank information. The PDF must dynamically fetch the correct bank/account details based on the quotation's selected warehouse/location.
+
+3. Remove the Large Blank Space
+
+The current quotation PDF contains a large unused blank area in the lower section of the page.
+
+
+
+Fix the PDF layout so that:
+
+
+
+Content flows naturally.
+
+The unused blank space is removed.
+
+The PDF height/layout is calculated based on actual content.
+
+Bank details and existing footer content use the available space efficiently.
+
+Do not add artificial fixed-height empty sections.
+
+Avoid pushing content unnecessarily toward the top and leaving a large blank area below.
+
+
+
+The final PDF should look compact and professionally balanced.
+
+4. Remove the Unwanted Bottom Line
+
+Remove the unnecessary horizontal line at the bottom of the quotation PDF currently appearing above/near the footer/signature area.
+
+
+
+Important:
+
+
+
+Remove only the unwanted bottom horizontal line.
+
+Preserve intentional borders and table lines.
+
+Do not remove the signature line if it is required for the authorized signatory section.
+
+Do not leave duplicate or overlapping lines.
+
+5. Preserve Existing Quotation Content
+
+Do not break or remove:
+
+
+
+Company logo and company details
+
+Quotation number and dates
+
+Customer billing details
+
+Shipping details
+
+Quoted item table
+
+GST calculations
+
+Discounts
+
+Charges, if configured
+
+Grand total
+
+Amount in words
+
+Authorized signatory
+
+Existing quotation functionality
+
+
+
+The quotation should continue to work correctly for all locations.
+
+6. Dynamic Location Behavior
+
+The PDF must always use the quotation's actual selected location.
+
+
+
+Test at least:
+
+
+
+Head Office
+
+Frozen Hub – Rajiguda
+
+Frozen Hub – Calicut
+
+Tropicane – Kochi
+
+Tropicane – Ecity
+
+
+
+For each location:
+
+
+
+Correct warehouse/company details should appear.
+
+Correct bank details should appear for that location.
+
+No bank details from another warehouse should leak into the PDF.
+
+Layout should remain clean even when bank details are missing.
+
+7. Verification Required
+
+After implementation:
+
+
+
+Generate quotations for multiple locations.
+
+Verify that the correct bank details change according to the selected location.
+
+Verify that the large blank area is removed.
+
+Verify that the unwanted bottom line is removed.
+
+Check one-page and multi-page quotations.
+
+Ensure page breaks do not overlap the footer, totals, bank details, or signature.
+
+Verify desktop print/download and PDF preview.
+
+Run TypeScript/build checks and relevant PDF/quotation tests.
+
+Expected Result
+
+The final quotation PDF should have a clean, compact professional layout with:
+
+
+
+Location-specific quotation details → item table → totals → bank details → amount in words / signature / footer
+
+
+
+There should be no large unused blank space, no unnecessary bottom horizontal line, and the bank details must automatically match the warehouse/location selected in the quotation.
+
+
+
+Do not modify unrelated modules.
