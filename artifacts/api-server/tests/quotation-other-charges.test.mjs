@@ -25,6 +25,7 @@ const createdSales = [];
 const createdLedgers = [];
 const pdfDir = mkdtempSync(join(tmpdir(), 'quotation-pdf-'));
 let pdfSeq = 0;
+let originalLocationPayment = null;
 
 const assert = (label, condition, detail = '') => {
   if (condition) { console.log(`  ✓ ${label}`); passed++; }
@@ -54,7 +55,17 @@ async function fetchPdfText(path) {
   const pages = response.status === 200
     ? Number(/Pages:\s+(\d+)/.exec(execFileSync('pdfinfo', [file]).toString())?.[1] ?? 0)
     : 0;
-  return { status: response.status, text, pages };
+  const imageCount = response.status === 200
+    ? Math.max(0, execFileSync('pdfimages', ['-list', file]).toString().trim().split('\n').length - 2)
+    : 0;
+  const imageList = response.status === 200
+    ? execFileSync('pdfimages', ['-list', file]).toString().trim().split('\n').slice(2)
+    : [];
+  const qrImageCount = imageList.filter(line => {
+    const fields = line.trim().split(/\s+/);
+    return fields[2] === 'image' && Number(fields[3]) === Number(fields[4]) && Number(fields[3]) >= 200;
+  }).length;
+  return { status: response.status, text, pages, imageCount, qrImageCount };
 }
 
 const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
@@ -102,6 +113,18 @@ async function cleanup() {
   if (createdLedgers.length) {
     await pool.query('DELETE FROM account_ledgers WHERE id = ANY($1::int[])', [createdLedgers]).catch(() => {});
   }
+  if (originalLocationPayment) {
+    await pool.query(
+      `UPDATE warehouses
+          SET bank_account_holder = $2, bank_name = $3, bank_account_number = $4,
+              ifsc_code = $5, bank_branch = $6, upi_id = $7
+        WHERE id = $1`,
+      [originalLocationPayment.id, originalLocationPayment.bank_account_holder,
+       originalLocationPayment.bank_name, originalLocationPayment.bank_account_number,
+       originalLocationPayment.ifsc_code, originalLocationPayment.bank_branch,
+       originalLocationPayment.upi_id],
+    ).catch(() => {});
+  }
   if (!process.env.TEST_USERNAME) await teardownProbeUser();
   await pool.end();
 }
@@ -128,6 +151,12 @@ try {
   }
   assert('Found a usable warehouse/item fixture', !!(location && item));
   if (!location || !item) throw new Error('No warehouse item fixture');
+  originalLocationPayment = (await pool.query(
+    `SELECT id, bank_account_holder, bank_name, bank_account_number,
+            ifsc_code, bank_branch, upi_id
+       FROM warehouses WHERE id = $1`,
+    [location.id],
+  )).rows[0] ?? null;
 
   const { rows: [parent] } = await pool.query(
     `SELECT id FROM account_ledgers WHERE code = 'SYS-DIRINC' LIMIT 1`,
@@ -187,7 +216,7 @@ try {
     : { status: 0, text: '', pages: 0 };
   assert('Quotation PDF is a one-page document for one item', quotePdf.status === 200 && quotePdf.pages === 1);
   const { rows: [locationBank] } = await pool.query(
-    `SELECT bank_account_holder, bank_name, bank_account_number, ifsc_code, bank_branch
+    `SELECT bank_account_holder, bank_name, bank_account_number, ifsc_code, bank_branch, upi_id
        FROM warehouses WHERE id = $1`,
     [location.id],
   );
@@ -203,8 +232,21 @@ try {
   } else {
     assert('Quotation omits the bank section when selected warehouse has no bank', !quotePdf.text.includes('BANK DETAILS'));
   }
+  const locationUpiId = String(locationBank?.upi_id ?? '').trim();
+  if (locationUpiId) {
+    assert('Quotation prints the selected warehouse UPI ID', quotePdf.text.includes(locationUpiId));
+    assert('Quotation embeds a QR image when the selected warehouse has UPI', quotePdf.qrImageCount >= 1);
+  } else {
+    assert('Quotation omits UPI details when selected warehouse has no UPI', !quotePdf.text.includes('UPI ID:'));
+  }
+  const { rows: [companyPayment] } = await pool.query(
+    `SELECT upi_id FROM company_settings ORDER BY id LIMIT 1`,
+  );
+  if (!locationUpiId && String(companyPayment?.upi_id ?? '').trim()) {
+    assert('Quotation does not fall back to company UPI', !quotePdf.text.includes(String(companyPayment.upi_id).trim()));
+  }
   const { rows: unrelatedBanks } = await pool.query(
-    `SELECT bank_account_number FROM warehouses
+    `SELECT bank_account_number, upi_id FROM warehouses
       WHERE id <> $1 AND NULLIF(TRIM(bank_account_number), '') IS NOT NULL
       ORDER BY id LIMIT 3`,
     [location.id],
@@ -213,6 +255,18 @@ try {
     if (!locationBankValues.includes(row.bank_account_number)) {
       assert(`Quotation does not leak unrelated account ${row.bank_account_number}`,
         !quotePdf.text.includes(row.bank_account_number));
+    }
+  }
+  const { rows: unrelatedUpis } = await pool.query(
+    `SELECT upi_id FROM warehouses
+      WHERE id <> $1 AND NULLIF(TRIM(upi_id), '') IS NOT NULL
+      ORDER BY id LIMIT 3`,
+    [location.id],
+  );
+  for (const row of unrelatedUpis) {
+    if (row.upi_id !== locationUpiId) {
+      assert(`Quotation does not leak unrelated UPI ${row.upi_id}`,
+        !quotePdf.text.includes(row.upi_id));
     }
   }
 
@@ -234,6 +288,62 @@ try {
     longPdf.status === 200 && longPdf.pages >= 2
       && longPdf.text.includes('Thank You For Your Business!')
       && longPdf.text.includes('Authorised Signatory'));
+
+  async function stateQuotePdf() {
+    const stateQuote = await post('/quotations', base);
+    const stateQuoteId = Number(stateQuote.data?.id);
+    if (stateQuoteId) createdQuotes.push(stateQuoteId);
+    const stateShare = stateQuoteId
+      ? await post(`/quotations/${stateQuoteId}/share-token`, {})
+      : { data: null };
+    return stateShare.data?.token
+      ? fetchPdfText(`/public/quotations/${encodeURIComponent(stateShare.data.token)}.pdf`)
+      : { status: 0, text: '', pages: 0, imageCount: 0 };
+  }
+
+  await pool.query(
+    `UPDATE warehouses
+        SET bank_account_holder = 'Quotation State Account', bank_name = 'Quotation State Bank',
+            bank_account_number = '123456789012', ifsc_code = 'QSTB0000001',
+            bank_branch = 'State Branch', upi_id = ''
+      WHERE id = $1`,
+    [location.id],
+  );
+  const bankOnlyPdf = await stateQuotePdf();
+  assert('Bank-only quotation omits UPI details and QR',
+    bankOnlyPdf.status === 200
+      && bankOnlyPdf.text.includes('BANK DETAILS')
+      && !bankOnlyPdf.text.includes('UPI ID:')
+      && bankOnlyPdf.qrImageCount === 0);
+
+  await pool.query(
+    `UPDATE warehouses
+        SET bank_account_holder = '', bank_name = '', bank_account_number = '',
+            ifsc_code = '', bank_branch = '', upi_id = 'quotation-state@upi'
+      WHERE id = $1`,
+    [location.id],
+  );
+  const upiOnlyPdf = await stateQuotePdf();
+  assert('UPI-only quotation shows the UPI ID and QR without bank labels',
+    upiOnlyPdf.status === 200
+      && upiOnlyPdf.text.includes('PAYMENT DETAILS')
+      && upiOnlyPdf.text.includes('quotation-state@upi')
+      && !upiOnlyPdf.text.includes('BANK DETAILS')
+      && upiOnlyPdf.qrImageCount >= 1);
+
+  await pool.query(
+    `UPDATE warehouses
+        SET bank_account_holder = '', bank_name = '', bank_account_number = '',
+            ifsc_code = '', bank_branch = '', upi_id = ''
+      WHERE id = $1`,
+    [location.id],
+  );
+  const noPaymentPdf = await stateQuotePdf();
+  assert('Quotation hides the entire payment section when bank and UPI are absent',
+    noPaymentPdf.status === 200
+      && !noPaymentPdf.text.includes('BANK DETAILS')
+      && !noPaymentPdf.text.includes('PAYMENT DETAILS')
+      && !noPaymentPdf.text.includes('UPI ID:'));
 
   console.log('\n[2] Invalid ledger rejection and edit replacement/clear');
   const { rows: [salesLedger] } = await pool.query(
