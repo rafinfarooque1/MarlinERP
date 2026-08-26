@@ -1507,6 +1507,8 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   });
 
   const itemsMap = new Map(items.map(i => [i.id, i]));
+  const viewedCharges = saleOtherCharges(viewItem);
+  const viewedChargesTotal = saleOtherChargesTotal(viewItem);
 
   if (!perm.isLoading && !perm.canView) {
     return (
@@ -1628,15 +1630,16 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                 <SortableHead k="status" sort={sort}>Status</SortableHead>
                 <SortableHead k="tax" sort={sort} className="text-right">Tax</SortableHead>
                 <SortableHead k="discount" sort={sort} className="text-right">Discount</SortableHead>
+                <SortableHead k="charges" sort={sort} className="text-right">Charges</SortableHead>
                 <SortableHead k="total" sort={sort} className="text-right">Total</SortableHead>
                 <TableHead />
               </TableRow>
             </TableHeader>
             <TableBody>
               {isLoading ? (
-                <TableRow><TableCell colSpan={9} className="p-0"><TableSkeleton rows={6} cols={9} /></TableCell></TableRow>
+                <TableRow><TableCell colSpan={10} className="p-0"><TableSkeleton rows={6} cols={10} /></TableCell></TableRow>
               ) : filtered.length === 0 ? (
-                <TableRow><TableCell colSpan={9} className="p-0">
+                <TableRow><TableCell colSpan={10} className="p-0">
                   <EmptyState icon={Receipt} title="No sales recorded yet" hint="Record your first retail transaction to see it here." compact />
                 </TableCell></TableRow>
               ) : sorted.map(sale => (
@@ -1661,6 +1664,11 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                         ? <span className="text-amber-600">{inr(d)}</span>
                         : <span className="text-muted-foreground">—</span>;
                     })()}
+                  </TableCell>
+                  <TableCell className="text-right font-mono text-xs">
+                    {Number((sale as any)._otherChargesTotal ?? 0) > 0
+                      ? <span className="text-amber-600">{inr(Number((sale as any)._otherChargesTotal))}</span>
+                      : <span className="text-muted-foreground">{inr(0)}</span>}
                   </TableCell>
                   <TableCell className="text-right">
                     <p className="font-mono font-bold text-emerald-500">{inr(Number(sale.totalAmount))}</p>
@@ -1719,6 +1727,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                       <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
                         <p className="text-muted-foreground">Location: <span className="text-foreground">{sale.outletName}</span></p>
                         <p className="text-muted-foreground">Customer: <span className="text-foreground">{sale.customerName || 'Walk-in'}</span></p>
+                        <p className="text-muted-foreground">Charges: <span className={cn('font-mono', saleOtherChargesTotal(sale) > 0 ? 'text-amber-600' : 'text-foreground')}>{inr(saleOtherChargesTotal(sale))}</span></p>
                       </div>
                       <div className="flex items-end justify-between gap-2 pt-1">
                         <div>
@@ -2716,13 +2725,19 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                 )}
                 {/* Other Charges — stored { ledgerId, amount } rows; names come
                     from the chart of accounts already loaded for the form. */}
-                {((((viewItem.otherCharges ?? viewItem.other_charges) ?? []) as any[]).length > 0) && (
-                  (((viewItem.otherCharges ?? viewItem.other_charges) ?? []) as any[]).map((c: any, i: number) => (
+                {viewedCharges.length > 0 && (
+                  viewedCharges.map((c: any, i: number) => (
                     <div key={i} className="flex justify-between text-muted-foreground">
                       <span>{ledgerNameById.get(Number(c?.ledgerId)) ?? 'Other Charge'}</span>
                       <span className="font-mono">+{inr(Number(c?.amount ?? 0))}</span>
                     </div>
                   ))
+                )}
+                {viewedCharges.length > 0 && (
+                  <div className="flex justify-between font-medium text-amber-600">
+                    <span>Charges Total</span>
+                    <span className="font-mono">+{inr(viewedChargesTotal)}</span>
+                  </div>
                 )}
                 <Separator />
                 <div className="flex justify-between font-bold text-base">
