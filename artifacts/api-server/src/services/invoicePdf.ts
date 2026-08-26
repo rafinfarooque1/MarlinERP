@@ -281,13 +281,20 @@ export async function assembleQuotationData(quotationId: number): Promise<Invoic
   );
   if (!q) return null;
 
+  const quotationLocationType = q.location_type === "warehouse"
+    ? "warehouse"
+    : q.location_type === "headoffice" ? "headoffice" : "outlet";
+  const quotationIsHeadOffice = quotationLocationType === "headoffice";
   const issuer = await resolveLocationIssuer(
     pool,
-    q.location_type === "warehouse" ? "warehouse" : "outlet",
-    Number(q.location_id),
-    // Quotations print only the bank account configured for their selected
-    // location. Invoice rendering keeps its established company fallback.
-    { allowCompanyBankFallback: false },
+    quotationLocationType,
+    quotationIsHeadOffice ? null : Number(q.location_id),
+    // Branch quotations print only their selected location's payment details.
+    // A genuine Head Office quotation may use the company profile itself.
+    {
+      allowCompanyBankFallback: quotationIsHeadOffice,
+      allowCompanyUpiFallback: quotationIsHeadOffice,
+    },
   );
 
   const customerRow = q.customer_id
@@ -393,6 +400,19 @@ export function quotationFileName(quotationNumber: string | null, quotationId: n
 
 function esc(s: unknown): string { return String(s ?? ""); }
 
+function buildQuotationUpiUri(upiId: string, payeeName: string, reference: string): string | null {
+  const pa = upiId.trim();
+  if (!pa) return null;
+  const params = new URLSearchParams({
+    pa,
+    pn: payeeName.trim() || pa,
+    cu: "INR",
+    tn: reference.trim() ? `Quotation ${reference.trim()}` : "Quotation payment",
+  });
+  if (reference.trim()) params.set("tr", reference.trim().replace(/[^A-Za-z0-9]/g, ""));
+  return `upi://pay?${params.toString()}`;
+}
+
 /** Bare grouped number for table cells, which carry their unit in the header. */
 function money(n: number): string {
   return n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -479,6 +499,17 @@ export async function renderInvoicePdf(data: InvoiceData): Promise<{ buffer: Buf
     try {
       qrDataUrl = await QRCode.toDataURL(upiRequest.uri, { width: 300, margin: 1, color: { dark: "#000000", light: "#FFFFFF" } });
     } catch { /* render without QR */ }
+  }
+  let quotationQrDataUrl: string | undefined;
+  if (isQuotation) {
+    const quotationQrUri = buildQuotationUpiUri(issuer.upiId, issuer.tradeName, sale.invoiceNumber ?? "");
+    if (quotationQrUri) {
+      try {
+        quotationQrDataUrl = await QRCode.toDataURL(quotationQrUri, {
+          width: 300, margin: 1, color: { dark: "#000000", light: "#FFFFFF" },
+        });
+      } catch { /* omit a broken QR, but retain the readable UPI ID */ }
+    }
   }
 
   // ── Drawing helpers ─────────────────────────────────────────────────────────
