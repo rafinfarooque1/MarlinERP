@@ -1,0 +1,431 @@
+
+
+Add “Other Charges” to Quotation Module
+
+The Point of Sale / Sales module already has a working “Other Charges” section. I need the same feature and UI behavior added to the Quotation module.
+
+Reference
+
+Use the existing POS Other Charges implementation as the source of truth.
+
+
+
+In POS, below the Cart Items / Quoted Items section, there is:
+
+
+
+Other Charges
+Example: Packing / Delivery / Recovery, etc.
+
+
+
+Each charge row contains:
+
+
+
+Direct Income Ledger dropdown
+
+Amount
+
+Delete/remove button
+
+Add Charge button for multiple charge rows
+
+
+
+The exact same section should be added to the Quotation create and edit form, positioned below the Quoted Items section and before the Quotation Summary.
+
+Functional Requirements
+
+1. Add Other Charges section to Quotation
+
+Add a section like:
+
+
+
+Other Charges
+Packing / Delivery / Recovery ... added to the quotation total
+
+
+
+Each row must have:
+
+
+
+Direct Income ledger selector
+
+Amount input
+
+Remove/delete button
+
+Add Charge button to add multiple charges
+
+2. Ledger restriction
+
+For new quotation charges:
+
+
+
+Show only active, postable Direct Income group ledgers
+
+Do not show Expense, Sales, Asset, Liability, or other ledger groups
+
+Follow the same validation rules already implemented in POS/Sales
+
+
+
+Historical/legacy quotation charges, if any, should remain visible when editing without breaking old records.
+
+3. Multiple Charges
+
+The user must be able to add multiple charge rows.
+
+
+
+Example:
+
+Direct Income LedgerAmount
+
+Packing Charges
+
+₹100
+
+Delivery Charges
+
+₹200
+
+Other Recovery
+
+₹50
+
+Total Charges = ₹350
+
+
+
+Each row should be independently removable.
+
+4. Quotation Total Calculation
+
+Charges must be added to the quotation total.
+
+
+
+Formula:
+
+Item Taxable Amount
+- Bill Discount
++ CGST
++ SGST / IGST
++ Other Charges
+= Quoted Total
+
+Example:
+
+Taxable Amount:      ₹1,000
+GST:                   ₹180
+Other Charges:        ₹100
+--------------------------------
+Quoted Total:       ₹1,280
+
+The Quotation Summary must clearly display:
+
+
+
+Taxable Amount
+
+GST
+
+Other Charges
+
+Quoted Total
+
+
+
+If there are multiple charges, optionally show:
+
+Other Charges
+  Packing Charges       ₹100
+  Delivery Charges      ₹200
+  --------------------------
+  Total Charges         ₹300
+
+5. No GST on Charges
+
+Follow the existing POS charge behavior:
+
+
+
+Other Charges are post-tax
+
+Charges should not have GST calculated separately
+
+GST calculation applies only to the quoted items according to existing quotation rules
+
+
+
+So:
+
+Items + GST + Charges = Quotation Total
+
+Do not alter the GST calculation of existing quotation items.
+
+6. Save and Edit
+
+Quotation charges must be fully persisted.
+
+
+
+When creating a quotation:
+
+
+
+Save all charge rows
+
+Save selected ledger ID
+
+Save ledger name/reference as required by the existing architecture
+
+Save amount
+
+Save total charges
+
+
+
+When editing a quotation:
+
+
+
+Existing charges must load correctly
+
+Multiple charges must be editable
+
+Users can add new charges
+
+Users can remove charges
+
+Changing charges must correctly recalculate the quotation total
+
+Avoid duplicate charge rows after repeated edits
+
+7. Quotation List and View
+
+Add charge information where appropriate.
+
+Quotation View / Details
+
+Show:
+
+Items Total
+GST
+Other Charges
+   Packing Charges       ₹100
+   Delivery Charges      ₹200
+
+Total Charges            ₹300
+--------------------------------
+Quoted Total           ₹1,280
+
+Quotation list
+
+If practical and consistent with the current UI, add a Charges column showing:
+
+₹300.00
+
+Quotations without charges should show:
+
+₹0.00
+
+8. Conversion to Sales/POS
+
+This is critical.
+
+
+
+When a quotation containing Other Charges is converted into:
+
+
+
+Sales
+
+POS
+
+Invoice
+
+
+
+the quotation charges must transfer correctly.
+
+
+
+The resulting Sales/POS transaction must preserve:
+
+
+
+Charge ledger
+
+Charge amount
+
+Multiple charge rows
+
+Total charges
+
+
+
+Do not require the user to enter the same charges again after converting the quotation.
+
+
+
+The final invoice total must reconcile:
+
+Quotation Total
+=
+Sales / POS Total
+
+unless the user intentionally edits the transaction afterward.
+
+9. Accounting Behavior
+
+A quotation itself should remain non-accounting, following the existing quotation behavior.
+
+
+
+Do not create accounting journal entries merely from saving a quotation.
+
+
+
+Accounting entries should occur only when the quotation is converted into an actual Sales/POS transaction, following the existing Sales/POS charge logic.
+
+
+
+For the final sale:
+
+Dr Cash / Bank / Customer Receivable
+   Full invoice total including charges
+
+Cr Sales Revenue
+   Goods value excluding GST and charges
+
+Cr Output GST
+   GST on goods
+
+Cr Selected Direct Income Ledger
+   Each Other Charge amount
+
+10. PDF / Print / Share
+
+Quotation output must also include Other Charges.
+
+
+
+The Quotation:
+
+
+
+PDF
+
+Print view
+
+Share output
+
+
+
+should display:
+
+Packing Charges          ₹100
+Delivery Charges         ₹200
+--------------------------------
+Other Charges Total      ₹300
+
+and the Quoted Total must include the charges.
+
+11. Do Not Break Existing Features
+
+Do not modify or break:
+
+
+
+Existing quotation item calculations
+
+Discounts
+
+GST calculations
+
+Inventory reservation/reference behavior
+
+Sales/POS charges
+
+Purchase charges
+
+Existing quotations without charges
+
+Existing quotation-to-sale conversion
+
+
+
+Reuse the existing POS/Sales charge architecture wherever possible instead of creating a separate incompatible implementation.
+
+12. Verification Required
+
+After implementation, verify all of the following:
+
+Create
+
+Single charge
+
+Multiple charges
+
+No charge
+
+Invalid/non-Direct-Income ledger rejection
+
+Calculation
+
+Charges included in Quoted Total
+
+GST not applied to charges
+
+Discount calculation remains correct
+
+Edit
+
+Charges load correctly
+
+Add/remove/edit works
+
+No duplicate charges after save
+
+Conversion
+
+Quotation → Sales
+
+Quotation → POS
+
+All charges transfer correctly
+
+Final totals reconcile
+
+Output
+
+Quotation view
+
+PDF
+
+Print
+
+Share output
+
+Regression
+
+Existing quotations without charges still work
+
+Existing POS/Sales charge functionality remains unchanged
+
+Purchase functionality is not affected
+
+
+
+Run typecheck, production build, relevant API/integration tests, and verify the actual Quotation UI after restarting the required services.
+
+
+
+Important: Do not only update API contracts or backend support. The actual “Other Charges” section with Direct Income Ledger + Amount + Add Charge button must visibly appear in the Quotation create/edit screen, exactly similar to the existing POS screenshot.
