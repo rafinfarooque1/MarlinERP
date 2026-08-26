@@ -1,0 +1,83 @@
+The Charges functionality and accounting are working, but the **Charge column is not appearing in the Sales/POS UI where it is expected**.
+
+Fix the UI display issue.
+
+Requirements:
+
+1. Identify the exact Sales/POS screen/table/summary where the Charge column should appear.
+
+2. Add a visible **Charges** or **Charge Amount** column in the appropriate transaction display.
+
+3. The column must show the actual total charge amount for each sale.
+
+Example:
+
+| Invoice | Customer | Goods Total | GST | Charges | Grand Total |
+|---------|----------|-------------|-----|---------|-------------|
+| INV-001 | Customer A | ₹1,000 | ₹180 | ₹50 | ₹1,230 |
+
+Where:
+- Goods Total = product value
+- GST = GST amount
+- Charges = sum of all `otherCharges`
+- Grand Total = Goods Total + GST + Charges
+
+4. If there are multiple charges on one sale:
+   - The list/table column should show the combined total.
+   - The sale details/edit/view screen should show the individual charge rows and selected Direct Income ledgers.
+
+Example:
+
+Charges Total: ₹300
+
+- Delivery Charge — ₹100
+- Service Charge — ₹200
+
+5. Check why the column is currently missing even though:
+   - `otherCharges`
+   - `otherChargesTotal`
+   - `SaleOtherCharge`
+   - API contract
+   - generated React/API types
+
+have already been implemented.
+
+Trace the full data flow:
+
+Database/API → Sale response → API client → React query/hook → Sales/POS component → table columns/mobile cards.
+
+Do not assume the backend is the problem. Confirm whether `otherChargesTotal` is actually returned to the UI.
+
+6. Update all relevant views consistently:
+   - Desktop Sales/POS list
+   - Mobile Sales/POS list/card if applicable
+   - Sale details/view dialog
+   - Edit dialog where appropriate
+   - Invoice/PDF only if the existing charge implementation does not already show charges
+
+7. Handle old sales correctly:
+   - Sales without charges should show `₹0.00` or the project's existing empty-value convention.
+   - Do not break historical sales.
+
+8. Do not change the accounting implementation, charge validation, Direct Income filtering, quotation behavior, or purchase behavior unless required to fix the display/data contract.
+
+Verification required:
+
+- Create or use a sale with no charges → column displays ₹0.00.
+- Create a sale with one charge → correct amount appears.
+- Create a sale with multiple charges → column shows the sum.
+- Open the sale details → individual charge rows are visible.
+- Edit the sale → charges remain visible.
+- Refresh/reload → charge values remain visible.
+- Verify both desktop and mobile layouts if both exist.
+- Confirm the API response contains `otherCharges` and `otherChargesTotal`.
+- Run typecheck and production build.
+
+Before completing, report:
+1. Why the Charge column was missing.
+2. Which component(s) and API data mapping were fixed.
+3. Where the Charge column now appears.
+4. How multiple charges are calculated and displayed.
+5. Verification results.
+
+Do not mark the task complete until the Charge column is visibly rendered in the actual Sales/POS UI, not only present in the backend/API contract.
