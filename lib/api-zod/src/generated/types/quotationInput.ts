@@ -7,6 +7,7 @@
  */
 import type { QuotationInputLocationType } from './quotationInputLocationType';
 import type { SaleLineItem } from './saleLineItem';
+import type { SaleOtherCharge } from './saleOtherCharge';
 
 export interface QuotationInput {
   locationType: QuotationInputLocationType;
@@ -22,6 +23,8 @@ export interface QuotationInput {
   billDiscount?: number;
   /** Post-tax coupon deduction off the grand total. */
   discountTotal?: number;
+  /** Customer recoveries added after goods and GST; charges carry no GST. */
+  otherCharges?: SaleOtherCharge[];
   billingAddress?: string;
   shippingAddress?: string;
   paymentTerms?: string;

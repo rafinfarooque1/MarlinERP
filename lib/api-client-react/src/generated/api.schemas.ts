@@ -776,6 +776,9 @@ export interface Quotation {
   /** Pre-tax bill-level discount, allocated across lines. */
   billDiscount?: number;
   totalAmount: number;
+  /** Customer recoveries added after goods and GST; charges carry no GST. */
+  otherCharges?: SaleOtherCharge[];
+  otherChargesTotal?: number;
   /** @nullable */
   couponCode?: string | null;
   /** @nullable */
@@ -831,6 +834,8 @@ export interface QuotationInput {
   billDiscount?: number;
   /** Post-tax coupon deduction off the grand total. */
   discountTotal?: number;
+  /** Customer recoveries added after goods and GST; charges carry no GST. */
+  otherCharges?: SaleOtherCharge[];
   billingAddress?: string;
   shippingAddress?: string;
   paymentTerms?: string;

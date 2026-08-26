@@ -37,6 +37,8 @@ export interface QuotationListRow {
   discountTotal: number;
   billDiscount: number;
   totalAmount: number;
+  otherCharges: Array<{ ledgerId: number; ledgerName?: string; amount: number }>;
+  otherChargesTotal: number;
   couponCode: string | null;
   billingAddress: string | null;
   shippingAddress: string | null;

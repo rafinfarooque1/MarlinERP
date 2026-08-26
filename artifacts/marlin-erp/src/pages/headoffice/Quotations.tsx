@@ -15,7 +15,7 @@ import { entryScopeKeyDown, autoFocusFirst, focusAndOpen, useEntryShortcuts } fr
 import { Checkbox } from '@/components/ui/checkbox';
 import {
   usePaginatedQuotations, fetchAllQuotations, useCreateQuotation, useUpdateQuotation, useDeleteQuotation,
-  useSetQuotationStatus, useListItems, useListStock,
+  useSetQuotationStatus, useListItems, useListStock, useListAccountsFlat,
   useGetCompanySettings, useListCoupons, customFetch, useGetMe,
   useListQuotationSalespeople, useListQuotationPaymentTerms,
   ensureQuotationShareLink, absoluteShareUrl, checkQuotationStock, requestQuotationPdfUrl,
@@ -84,6 +84,7 @@ import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
 import { EmptyState } from '@/components/app/empty-state';
 import { TablePager } from '@/components/ui/table-pager';
 import { inr } from '@/lib/currency';
+import { isSystemLedger } from '@/lib/systemLedgers';
 
 // ── GST math (mirror of Sales.tsx / server buildSaleLines) ────────────────────
 
@@ -138,6 +139,11 @@ const quoteLineSchema = z.object({
   path: ['unitDiscount'],
 });
 
+const quoteChargeSchema = z.object({
+  ledgerId: z.coerce.number().min(1, 'Direct Income ledger required'),
+  amount: z.coerce.number().positive('Amount must be above zero'),
+});
+
 const schema = z.object({
   locationType: z.enum(['outlet', 'warehouse']).default('outlet'),
   locationId: z.coerce.number().min(1, 'Location required'),
@@ -157,6 +163,7 @@ const schema = z.object({
   salesperson: z.string().optional(),
   notes: z.string().optional(),
   termsConditions: z.string().optional(),
+  otherCharges: z.array(quoteChargeSchema).default([]),
   lineItems: z.array(quoteLineSchema).min(1, 'Add at least one item'),
 });
 type FormValues = z.infer<typeof schema>;
@@ -185,6 +192,7 @@ const defaultFormValues: FormValues = {
   salesperson: '',
   notes: '',
   termsConditions: '',
+  otherCharges: [],
   lineItems: [{ itemId: 0, quantity: 1, unitPrice: 0, unitDiscount: 0, taxable: false, taxableTouched: false }],
 };
 
@@ -260,6 +268,7 @@ export default function Quotations() {
     location: q => q.locationName,
     status: q => q.status,
     total: q => Number(q.totalAmount) || null,
+    charges: q => Number(q.otherChargesTotal) || 0,
     validTill: q => q.validTill,
     salesperson: q => q.salesperson,
   });
@@ -320,6 +329,7 @@ export default function Quotations() {
 
   const form = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: effectiveDefaults });
   const { fields, append, remove } = useFieldArray({ control: form.control, name: 'lineItems' });
+  const { fields: chargeFields, append: appendCharge, remove: removeCharge } = useFieldArray({ control: form.control, name: 'otherCharges' });
 
   // Cold-load guard: a create form opened before /api/me resolved still holds
   // the module defaults — pin the location once the session arrives. CREATE
@@ -427,6 +437,10 @@ export default function Quotations() {
       salesperson: q.salesperson ?? '',
       notes: q.notes ?? '',
       termsConditions: q.termsConditions ?? '',
+      otherCharges: (q.otherCharges ?? []).map((c: any) => ({
+        ledgerId: Number(c.ledgerId),
+        amount: Number(c.amount),
+      })),
       lineItems: (q.lineItems ?? []).map((li: any) => ({
         itemId: li.itemId,
         quantity: li.quantity,
@@ -454,6 +468,29 @@ export default function Quotations() {
   const stockMap = useMemo(
     () => new Map<number, number>(locationStock.map(s => [s.itemId!, Number(s.quantity ?? 0)])),
     [locationStock],
+  );
+  const { data: allAccounts = [] } = useListAccountsFlat();
+  const chargeLedgers = useMemo(() => {
+    const byId = new Map((allAccounts as any[]).map((a: any) => [Number(a.id), a]));
+    const underDirectIncome = (account: any) => {
+      const seen = new Set<number>();
+      for (let parent = account.parentId != null ? byId.get(Number(account.parentId)) : undefined;
+           parent && !seen.has(Number(parent.id));
+           parent = parent.parentId != null ? byId.get(Number(parent.parentId)) : undefined) {
+        seen.add(Number(parent.id));
+        if (String(parent.code ?? '').toUpperCase() === 'SYS-DIRINC') return true;
+      }
+      return false;
+    };
+    return (allAccounts as any[])
+      .filter((a: any) => a.type === 'income' && a.isActive !== false && !a.isGroup &&
+        !a.isSystemGroup && !isSystemLedger(a.code) && underDirectIncome(a))
+      .sort((a: any, b: any) => String(a.name).localeCompare(String(b.name)))
+      .map((a: any) => ({ id: Number(a.id), name: String(a.name) }));
+  }, [allAccounts]);
+  const chargeLedgerNames = useMemo(
+    () => new Map((allAccounts as any[]).map((a: any) => [Number(a.id), String(a.name)])),
+    [allAccounts],
   );
   const activeItems = useMemo(() => items.filter(it => isActiveProduct(it)), [items]);
   const toItemOption = (it: any): ItemOption => ({
@@ -595,7 +632,13 @@ export default function Quotations() {
           ? Math.round(grandTotal * Number(appliedCoupon.discountValue) / 100 * 100) / 100
           : Math.min(Number(appliedCoupon.discountValue), grandTotal)
         : 0;
-    return { grossItemValue, grossTotal, subtotal, cgstTotal, sgstTotal, igstTotal, taxTotal, itemDiscountTotal, billDiscount, grandTotal, discountAmount, finalAmount: grandTotal - discountAmount };
+    const otherTotal = Math.round(((form.watch('otherCharges') ?? []) as any[])
+      .reduce((sum, charge) => sum + (Number(charge?.amount) || 0), 0) * 100) / 100;
+    return {
+      grossItemValue, grossTotal, subtotal, cgstTotal, sgstTotal, igstTotal,
+      taxTotal, itemDiscountTotal, billDiscount, grandTotal, discountAmount,
+      otherTotal, finalAmount: Math.round((grandTotal - discountAmount + otherTotal) * 100) / 100,
+    };
   };
 
   const totals = computeCartTotals();
@@ -646,6 +689,12 @@ export default function Quotations() {
       salesperson: data.salespersonEmployeeId ? undefined : (data.salesperson || undefined),
       notes: data.notes || undefined,
       termsConditions: data.termsConditions || undefined,
+      // Always send the full list: on edit it replaces the stored list, so
+      // removing the last row genuinely clears old charges.
+      otherCharges: (data.otherCharges ?? []).map(c => ({
+        ledgerId: Number(c.ledgerId),
+        amount: Number(c.amount),
+      })),
     };
 
     if (editItem) {
@@ -925,6 +974,7 @@ export default function Quotations() {
                 <SortableHead k="location" sort={sort}>Location</SortableHead>
                 <SortableHead k="status" sort={sort}>Status</SortableHead>
                 <SortableHead k="total" sort={sort} className="text-right">Total</SortableHead>
+                <SortableHead k="charges" sort={sort} className="text-right">Other Charges</SortableHead>
                 <SortableHead k="validTill" sort={sort}>Valid Till</SortableHead>
                 <SortableHead k="salesperson" sort={sort}>Salesperson</SortableHead>
                 <TableHead />
@@ -932,9 +982,9 @@ export default function Quotations() {
             </TableHeader>
             <TableBody>
               {isLoading ? [...Array(4)].map((_, i) => (
-                <TableRow key={i}><TableCell colSpan={9}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
+                <TableRow key={i}><TableCell colSpan={10}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
               )) : quotes.length === 0 ? (
-                <TableRow><TableCell colSpan={9} className="p-0">
+                <TableRow><TableCell colSpan={10} className="p-0">
                   <EmptyState icon={FileText} title="No quotations yet" compact />
                 </TableCell></TableRow>
               ) : sorted.map(q => (
@@ -953,6 +1003,11 @@ export default function Quotations() {
                   <TableCell><StatusBadge status={q.status} /></TableCell>
                   <TableCell className="text-right">
                     <p className="font-mono font-bold text-primary">{inr(Number(q.totalAmount))}</p>
+                  </TableCell>
+                  <TableCell className="text-right text-sm">
+                    {Number(q.otherChargesTotal ?? 0) > 0
+                      ? <span className="font-mono text-sky-600">{inr(Number(q.otherChargesTotal))}</span>
+                      : <span className="text-muted-foreground">—</span>}
                   </TableCell>
                   <TableCell className={cn('text-sm', q.status === 'expired' ? 'text-amber-600' : 'text-muted-foreground')}>{fmtDay(q.validTill)}</TableCell>
                   <TableCell className="text-sm text-muted-foreground">{q.salesperson || '—'}</TableCell>
@@ -1515,6 +1570,103 @@ export default function Quotations() {
                 )}
               </div>
 
+              {/* Other Charges are customer recoveries added after goods and
+                  GST. They are persisted with the quote and deliberately do
+                  not change any item GST figure. */}
+              <div className={TXN_CARD} data-testid="section-other-charges">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h3 className="text-sm font-semibold">Other Charges</h3>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      Packing / delivery recovery — added after GST, no GST on the charge.
+                    </p>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="border-dashed shrink-0"
+                    data-testid="button-add-other-charge"
+                    onClick={() => appendCharge({ ledgerId: 0, amount: 0 })}
+                  >
+                    <Plus className="w-3.5 h-3.5 mr-1" /> Add Charge
+                  </Button>
+                </div>
+                {chargeFields.length > 0 && (
+                  <div className="space-y-2">
+                    {chargeFields.map((cf, ci) => (
+                      <div key={cf.id} className="grid grid-cols-[minmax(0,1fr)_130px_32px] gap-2 items-start">
+                        <FormField
+                          control={form.control}
+                          name={`otherCharges.${ci}.ledgerId`}
+                          render={({ field: f }) => (
+                            <FormItem>
+                              <FormLabel className="text-xs">Direct Income Ledger</FormLabel>
+                              <Select value={f.value ? String(f.value) : ''} onValueChange={v => f.onChange(Number(v))}>
+                                <FormControl>
+                                  <SelectTrigger className="h-9 text-xs" data-testid={`select-other-charge-ledger-${ci}`}>
+                                    <SelectValue placeholder="Select ledger" />
+                                  </SelectTrigger>
+                                </FormControl>
+                                <SelectContent>
+                                  {Number(f.value) > 0 && !chargeLedgers.some(l => l.id === Number(f.value)) && (
+                                    <SelectItem value={String(f.value)}>
+                                      {chargeLedgerNames.get(Number(f.value)) ?? `Ledger #${f.value}`} (legacy saved)
+                                    </SelectItem>
+                                  )}
+                                  {chargeLedgers.map(l => <SelectItem key={l.id} value={String(l.id)}>{l.name}</SelectItem>)}
+                                  {chargeLedgers.length === 0 && (
+                                    <div className="px-3 py-2 text-xs text-muted-foreground">
+                                      No Direct Income ledgers available.
+                                    </div>
+                                  )}
+                                </SelectContent>
+                              </Select>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+                        <FormField
+                          control={form.control}
+                          name={`otherCharges.${ci}.amount`}
+                          render={({ field: f }) => (
+                            <FormItem>
+                              <FormLabel className="text-xs">Amount ₹</FormLabel>
+                              <FormControl>
+                                <Input
+                                  type="number"
+                                  min={0.01}
+                                  step="0.01"
+                                  className="h-9 text-xs text-right font-mono"
+                                  data-testid={`input-other-charge-amount-${ci}`}
+                                  {...f}
+                                  value={(f.value as any) ?? ''}
+                                />
+                              </FormControl>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-9 w-8 mt-6 text-muted-foreground hover:text-destructive"
+                          data-testid={`button-remove-other-charge-${ci}`}
+                          onClick={() => removeCharge(ci)}
+                          aria-label={`Remove other charge ${ci + 1}`}
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
+                      </div>
+                    ))}
+                    <div className="flex justify-end text-sm font-semibold">
+                      Charges total: <span className="font-mono ml-2">{inr(totals.otherTotal)}</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+
               {/* ── Quotation Summary (identical arithmetic to Sales) —
                   bottom-right card, the exact position and styling of the
                   master's bill summary. ── */}
@@ -1603,6 +1755,12 @@ export default function Quotations() {
                             {!appliedCoupon && preservedBillDiscount !== null && preservedBillDiscount > 0 && <span className="text-xs text-muted-foreground ml-1">(original)</span>}
                           </span>
                           <span className="font-mono">−{inr(totals.discountAmount)}</span>
+                        </div>
+                      )}
+                      {totals.otherTotal > 0 && (
+                        <div className="flex justify-between text-sky-600 font-medium">
+                          <span>Other Charges (no GST)</span>
+                          <span className="font-mono">+{inr(totals.otherTotal)}</span>
                         </div>
                       )}
 
@@ -1808,6 +1966,12 @@ export default function Quotations() {
                     <span className="font-mono">−{inr(Number(viewItem.discountTotal))}</span>
                   </div>
                 )}
+                {(viewItem.otherCharges ?? []).map((charge: any, i: number) => (
+                  <div key={`${charge.ledgerId}-${i}`} className="flex justify-between text-sky-600">
+                    <span>{charge.ledgerName || `Ledger #${charge.ledgerId}`}</span>
+                    <span className="font-mono">+{inr(Number(charge.amount))}</span>
+                  </div>
+                ))}
                 <Separator />
                 <div className="flex justify-between font-bold text-base">
                   <span>Quoted Total</span>

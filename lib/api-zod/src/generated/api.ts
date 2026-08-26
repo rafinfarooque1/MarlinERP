@@ -1256,6 +1256,12 @@ export const ListQuotationsResponseItem = zod.object({
   "discountTotal": zod.number().optional().describe('Post-tax coupon deduction, same semantics as on a sale.'),
   "billDiscount": zod.number().optional().describe('Pre-tax bill-level discount, allocated across lines.'),
   "totalAmount": zod.number(),
+  "otherCharges": zod.array(zod.object({
+  "ledgerId": zod.number().describe('A postable income ledger under the Direct Income group.'),
+  "ledgerName": zod.string().optional().describe('Server-enriched on reads; ignored on writes.'),
+  "amount": zod.number().describe('Positive amount in rupees, to paise precision.')
+})).optional().describe('Customer recoveries added after goods and GST; charges carry no GST.'),
+  "otherChargesTotal": zod.number().optional(),
   "couponCode": zod.string().nullish(),
   "billingAddress": zod.string().nullish(),
   "shippingAddress": zod.string().nullish(),
@@ -1294,6 +1300,11 @@ export const CreateQuotationBody = zod.object({
   "couponCode": zod.string().optional(),
   "billDiscount": zod.number().optional().describe('Pre-tax bill-level discount, allocated across lines.'),
   "discountTotal": zod.number().optional().describe('Post-tax coupon deduction off the grand total.'),
+  "otherCharges": zod.array(zod.object({
+  "ledgerId": zod.number().describe('A postable income ledger under the Direct Income group.'),
+  "ledgerName": zod.string().optional().describe('Server-enriched on reads; ignored on writes.'),
+  "amount": zod.number().describe('Positive amount in rupees, to paise precision.')
+})).optional().describe('Customer recoveries added after goods and GST; charges carry no GST.'),
   "billingAddress": zod.string().optional(),
   "shippingAddress": zod.string().optional(),
   "paymentTerms": zod.string().optional(),
@@ -1333,6 +1344,12 @@ export const CreateQuotationResponse = zod.object({
   "discountTotal": zod.number().optional().describe('Post-tax coupon deduction, same semantics as on a sale.'),
   "billDiscount": zod.number().optional().describe('Pre-tax bill-level discount, allocated across lines.'),
   "totalAmount": zod.number(),
+  "otherCharges": zod.array(zod.object({
+  "ledgerId": zod.number().describe('A postable income ledger under the Direct Income group.'),
+  "ledgerName": zod.string().optional().describe('Server-enriched on reads; ignored on writes.'),
+  "amount": zod.number().describe('Positive amount in rupees, to paise precision.')
+})).optional().describe('Customer recoveries added after goods and GST; charges carry no GST.'),
+  "otherChargesTotal": zod.number().optional(),
   "couponCode": zod.string().nullish(),
   "billingAddress": zod.string().nullish(),
   "shippingAddress": zod.string().nullish(),
@@ -1382,6 +1399,12 @@ export const GetQuotationResponse = zod.object({
   "discountTotal": zod.number().optional().describe('Post-tax coupon deduction, same semantics as on a sale.'),
   "billDiscount": zod.number().optional().describe('Pre-tax bill-level discount, allocated across lines.'),
   "totalAmount": zod.number(),
+  "otherCharges": zod.array(zod.object({
+  "ledgerId": zod.number().describe('A postable income ledger under the Direct Income group.'),
+  "ledgerName": zod.string().optional().describe('Server-enriched on reads; ignored on writes.'),
+  "amount": zod.number().describe('Positive amount in rupees, to paise precision.')
+})).optional().describe('Customer recoveries added after goods and GST; charges carry no GST.'),
+  "otherChargesTotal": zod.number().optional(),
   "couponCode": zod.string().nullish(),
   "billingAddress": zod.string().nullish(),
   "shippingAddress": zod.string().nullish(),
@@ -1423,6 +1446,11 @@ export const UpdateQuotationBody = zod.object({
   "couponCode": zod.string().optional(),
   "billDiscount": zod.number().optional().describe('Pre-tax bill-level discount, allocated across lines.'),
   "discountTotal": zod.number().optional().describe('Post-tax coupon deduction off the grand total.'),
+  "otherCharges": zod.array(zod.object({
+  "ledgerId": zod.number().describe('A postable income ledger under the Direct Income group.'),
+  "ledgerName": zod.string().optional().describe('Server-enriched on reads; ignored on writes.'),
+  "amount": zod.number().describe('Positive amount in rupees, to paise precision.')
+})).optional().describe('Customer recoveries added after goods and GST; charges carry no GST.'),
   "billingAddress": zod.string().optional(),
   "shippingAddress": zod.string().optional(),
   "paymentTerms": zod.string().optional(),
@@ -1462,6 +1490,12 @@ export const UpdateQuotationResponse = zod.object({
   "discountTotal": zod.number().optional().describe('Post-tax coupon deduction, same semantics as on a sale.'),
   "billDiscount": zod.number().optional().describe('Pre-tax bill-level discount, allocated across lines.'),
   "totalAmount": zod.number(),
+  "otherCharges": zod.array(zod.object({
+  "ledgerId": zod.number().describe('A postable income ledger under the Direct Income group.'),
+  "ledgerName": zod.string().optional().describe('Server-enriched on reads; ignored on writes.'),
+  "amount": zod.number().describe('Positive amount in rupees, to paise precision.')
+})).optional().describe('Customer recoveries added after goods and GST; charges carry no GST.'),
+  "otherChargesTotal": zod.number().optional(),
   "couponCode": zod.string().nullish(),
   "billingAddress": zod.string().nullish(),
   "shippingAddress": zod.string().nullish(),
@@ -1527,6 +1561,12 @@ export const SetQuotationStatusResponse = zod.object({
   "discountTotal": zod.number().optional().describe('Post-tax coupon deduction, same semantics as on a sale.'),
   "billDiscount": zod.number().optional().describe('Pre-tax bill-level discount, allocated across lines.'),
   "totalAmount": zod.number(),
+  "otherCharges": zod.array(zod.object({
+  "ledgerId": zod.number().describe('A postable income ledger under the Direct Income group.'),
+  "ledgerName": zod.string().optional().describe('Server-enriched on reads; ignored on writes.'),
+  "amount": zod.number().describe('Positive amount in rupees, to paise precision.')
+})).optional().describe('Customer recoveries added after goods and GST; charges carry no GST.'),
+  "otherChargesTotal": zod.number().optional(),
   "couponCode": zod.string().nullish(),
   "billingAddress": zod.string().nullish(),
   "shippingAddress": zod.string().nullish(),

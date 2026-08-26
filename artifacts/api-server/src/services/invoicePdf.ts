@@ -274,7 +274,8 @@ export async function assembleQuotationData(quotationId: number): Promise<Invoic
   const { rows: [q] } = await pool.query<any>(
     `SELECT q.*,
             to_char(q.quote_date, 'YYYY-MM-DD') AS quote_date_s,
-            to_char(q.valid_till, 'YYYY-MM-DD') AS valid_till_s
+            to_char(q.valid_till, 'YYYY-MM-DD') AS valid_till_s,
+            q.other_charges
        FROM quotations q WHERE q.id = $1`,
     [quotationId],
   );
@@ -295,6 +296,19 @@ export async function assembleQuotationData(quotationId: number): Promise<Invoic
   const logoDataUrl = issuer.logoUrl && /^data:image\//i.test(issuer.logoUrl) ? issuer.logoUrl : null;
 
   const lineItems: InvoiceLineItem[] = Array.isArray(q.line_items) ? (q.line_items as InvoiceLineItem[]) : [];
+  const storedCharges = parseStoredOtherCharges(q.other_charges);
+  let otherCharges: Array<{ name: string; amount: number }> = [];
+  if (storedCharges.length > 0) {
+    const { rows: ocLedgers } = await pool.query<{ id: number; name: string }>(
+      `SELECT id, name FROM account_ledgers WHERE id = ANY($1::int[])`,
+      [[...new Set(storedCharges.map((c) => c.ledgerId))]],
+    );
+    const ocNames = new Map(ocLedgers.map((l) => [Number(l.id), l.name]));
+    otherCharges = storedCharges.map((c) => ({
+      name: ocNames.get(c.ledgerId) ?? "Other Charge",
+      amount: c.amount,
+    }));
+  }
   const missingIds = [...new Set(
     lineItems.filter((li) => !li.itemName || !li.hsnCode || !li.unit).map((li) => li.itemId),
   )];
@@ -330,6 +344,7 @@ export async function assembleQuotationData(quotationId: number): Promise<Invoic
       totalAmount: Number(q.total_amount),
       lineItems,
       cancelledAt: null,
+      otherCharges,
     },
     quotation: {
       validTill: q.valid_till_s ?? null,
