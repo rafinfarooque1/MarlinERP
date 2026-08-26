@@ -87,9 +87,9 @@ export interface InvoiceData {
   };
   /**
    * Which document this is. The ONE renderer draws both: 'quotation' swaps the
-   * badge, drops every payment surface (status strip, amount payable, bank,
-   * QR, payment mode — omitted entirely, never zeroed), adds validity and a
-   * light watermark. Absent means 'invoice'.
+    * badge, drops invoice payment surfaces (status strip, amount payable,
+    * payment mode), adds quotation-only bank/UPI details, validity and a light
+    * watermark. Absent means 'invoice'.
    */
   docType?: "invoice" | "quotation";
   /** Quotation-only fields; present exactly when docType === 'quotation'. */
@@ -265,8 +265,9 @@ export async function assembleInvoiceData(saleId: number): Promise<InvoiceData |
 
 /**
  * Assemble the quotation variant of InvoiceData. Same shape, same renderer —
- * but every payment concern is absent by construction: position is null,
- * there are no recorded payments, no UPI request and no payment bank block.
+ * but invoice payment concerns are absent by construction: position is null,
+ * there are no recorded payments or invoice UPI request. A quotation-only
+ * bank/UPI panel is resolved later from the selected issuer location.
  *
  * The quotations table is a raw-migration table, so everything here is raw SQL.
  */
@@ -368,7 +369,8 @@ export async function assembleQuotationData(quotationId: number): Promise<Invoic
     shippingAddress: s(q.shipping_address),
     issuer,
     outletName: issuer.locationName,
-    outletUpiId: "",
+     // Legacy field retained for shared callers; quotation UPI comes from issuer.
+     outletUpiId: "",
     customer: customerRow ? {
       name: customerRow.name,
       // The quotation's own billing address wins over the customer master's.
@@ -580,6 +582,7 @@ export async function renderInvoicePdf(data: InvoiceData): Promise<{ buffer: Buf
     if (bank.ifsc)          quotationBankRows.push(["IFSC Code", bank.ifsc]);
     if (bank.branch)        quotationBankRows.push(["Branch", bank.branch]);
   }
+  const quotationUpiId = isQuotation ? issuer.upiId.trim() : "";
 
   // ── Tiny vector icons, per the reference visual language ───────────────────
   // Simple geometry only — a hand-drawn glyph that reads at 3 mm. Anything more
@@ -1103,34 +1106,59 @@ export async function renderInvoicePdf(data: InvoiceData): Promise<{ buffer: Buf
 
   y += WORDS_H + 3.5;
 
-  // Quotations are offers, not payment requests, but the customer still needs
-  // the issuing location's account details when the location has them. This
-  // is deliberately separate from the invoice payment panels so adding it
-  // cannot change invoice output or imply that the quotation is payable.
-  if (isQuotation && quotationBankRows.length > 0) {
+  // Quotations are offers rather than payment requests, but can still provide
+  // the selected location's bank account and a payee-only UPI QR. This panel is
+  // intentionally quotation-only; invoice payment panels remain unchanged.
+  if (isQuotation && (quotationBankRows.length > 0 || quotationUpiId)) {
     const BANK_HEAD_H = 9;
     const BANK_ROW_H = 5.2;
-    const bankGridRows = Math.ceil(quotationBankRows.length / 2);
-    const BANK_H = BANK_HEAD_H + bankGridRows * BANK_ROW_H + 3;
-    // Keep the sign-off with the bank block where possible. If the remaining
+    const QR_W = 57;
+    const hasBank = quotationBankRows.length > 0;
+    const hasUpi = Boolean(quotationUpiId);
+    const hasQr = Boolean(quotationQrDataUrl);
+    const infoW = hasBank && hasUpi ? CW - QR_W - GAP : CW;
+    const bankGridRows = hasBank ? Math.ceil(quotationBankRows.length / 2) : 0;
+    const bankH = hasBank ? BANK_HEAD_H + bankGridRows * BANK_ROW_H + 3 : 0;
+    const qrH = hasUpi ? (hasQr ? 54 : 25) : 0;
+    const PAYMENT_H = Math.max(44, bankH, qrH);
+    // Keep the sign-off with the payment block where possible. If the remaining
     // page cannot hold both, start a clean continuation page instead of
-    // splitting the compact bank panel or colliding with the footer.
-    if (y + BANK_H > BOT - 30) { doc.addPage(); y = M; }
+    // splitting the panel or colliding with the footer.
+    if (y + PAYMENT_H > BOT - 30) { doc.addPage(); y = M; }
 
-    bx(M, y, CW, BANK_H, BORDER, 1.2);
-    icoBank(M + 4.5, y + 2.8, 4.6);
-    txt("BANK DETAILS", M + 11.5, y + 7, { bold: true, size: 7.6, color: NAVY });
+    bx(M, y, CW, PAYMENT_H, BORDER, 1.2);
+    if (hasBank) {
+      icoBank(M + 4.5, y + 2.8, 4.6);
+      txt("BANK DETAILS", M + 11.5, y + 7, { bold: true, size: 7.6, color: NAVY });
 
-    const bankColW = (CW - GAP) / 2;
-    quotationBankRows.forEach(([label, value], i) => {
-      const col = i % 2;
-      const row = Math.floor(i / 2);
-      const bx0 = M + col * (bankColW + GAP);
-      const by = y + BANK_HEAD_H + row * BANK_ROW_H + 3.5;
-      txt(label, bx0 + 4.5, by, { size: 6.6, color: MUT });
-      cell(value, bx0 + 34, by, bankColW - 39, { size: 7, color: INK, bold: true });
-    });
-    y += BANK_H + 3.5;
+      const bankColW = (infoW - GAP) / 2;
+      quotationBankRows.forEach(([label, value], i) => {
+        const col = i % 2;
+        const row = Math.floor(i / 2);
+        const bx0 = M + col * (bankColW + GAP);
+        const by = y + BANK_HEAD_H + row * BANK_ROW_H + 3.5;
+        txt(label, bx0 + 4.5, by, { size: 6.6, color: MUT });
+        cell(value, bx0 + 34, by, bankColW - 39, { size: 7, color: INK, bold: true });
+      });
+    }
+    if (hasUpi) {
+      const qrX = hasBank ? M + infoW + GAP : M;
+      const qrW = hasBank ? QR_W : CW;
+      if (hasBank) {
+        bx(qrX, y, qrW, PAYMENT_H, BORDER, 1.2);
+        txt("SCAN TO PAY", qrX + qrW / 2, y + 7, { bold: true, size: 7.4, color: NAVY, align: "center" });
+      } else {
+        icoBank(M + 4.5, y + 2.8, 4.6);
+        txt("PAYMENT DETAILS", M + 11.5, y + 7, { bold: true, size: 7.6, color: NAVY });
+      }
+      if (quotationQrDataUrl) {
+        const qrSize = 31;
+        doc.addImage(quotationQrDataUrl, "PNG", qrX + (qrW - qrSize) / 2, y + 10.5, qrSize, qrSize);
+      }
+      cell(`UPI ID: ${quotationUpiId}`, qrX + 4.5, y + PAYMENT_H - 4, qrW - 9,
+        { size: 6.3, color: INK, bold: true, align: "center" });
+    }
+    y += PAYMENT_H + 3.5;
   }
 
   // ══════════════════════════════════════════════════════════════════════════

@@ -33,3 +33,11 @@ When shortening a single-page quotation below A4 height, resizing jsPDF's page b
 **Why:** A direct page-height change made the header disappear above the new media box even though the PDF text stream still contained the document.
 
 **How to apply:** Keep multi-page output on stable A4 pages; for a shortened single page, translate the finished stream before output and visually raster-check the header, bank block, signature and bottom margin.
+
+## Quotation payment details
+
+Quotation payment panels must resolve bank and UPI values from the quotation's issuing location only; company payment fallback is allowed only for an explicitly stored Head Office quotation.
+
+**Why:** A quotation rendered with a global fallback can show a sibling warehouse's account, and the customer has no reliable way to detect that mismatch.
+
+**How to apply:** Keep bank-only, UPI-only, and no-payment states conditional and compact. Add any new payment field to the same issuer resolver rather than reading company settings directly from the renderer.
