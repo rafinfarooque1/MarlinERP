@@ -157,10 +157,10 @@ const SALE_GRID_LG = 'lg:grid-cols-[minmax(200px,1fr)_88px_72px_88px_96px_88px_6
 
 /** Other Charges on the invoice — Packing & Transport, freight, hamali,
  *  courier… Flat post-tax amounts the customer owes on top of the goods
- *  (no GST on them). Posted Cr <chosen expense ledger> in the books; the
- *  server validates the ledger with the same rules as purchase-bill charges. */
+ *  (no GST on them). New charges post Cr to a Direct Income ledger; the
+ *  server preserves already-stored legacy charge ledgers on edit. */
 const saleOtherChargeSchema = z.object({
-  ledgerId: z.coerce.number().min(1, 'Pick an expense ledger'),
+  ledgerId: z.coerce.number().min(1, 'Pick a Direct Income ledger'),
   amount: z.coerce.number().gt(0, 'Amount must be above zero'),
 });
 
@@ -639,11 +639,8 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
 
   // Direct Income ledgers offered for Sale Other Charges — a charge is a
   // recovery the customer pays on top of the goods (Packing & Delivery
-  // Recovery…), so a NEW pick must be a postable income ledger under Direct
-  // Income (SYS-DIRINC), mirroring the server's validation. Historical sales
-  // could charge income-or-expense ledgers: when EDITING such a sale its
-  // stored ledgers stay selectable (the server grandfathers them), labelled
-  // "(legacy)" so the mixed-legacy state is visible, never silently rewritten.
+  // Recovery…), so a NEW pick must be a postable, active income ledger under
+  // Direct Income (SYS-DIRINC), mirroring the server's validation.
   const { data: allAccounts = [] } = useListAccountsFlat();
   const chargeLedgers = useMemo(() => {
     const byId = new Map((allAccounts as any[]).map((a: any) => [Number(a.id), a]));
@@ -658,20 +655,11 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
       return false;
     };
     const direct = (allAccounts as any[])
-      .filter((a: any) => a.type === 'income' && !a.isGroup && !a.isSystemGroup && !isSystemLedger(a.code) && underGroupCode(a, 'SYS-DIRINC'))
+      .filter((a: any) => a.type === 'income' && a.isActive !== false && !a.isGroup && !a.isSystemGroup && !isSystemLedger(a.code) && underGroupCode(a, 'SYS-DIRINC'))
       .sort((x: any, y: any) => String(x.name).localeCompare(String(y.name)))
-      .map((a: any) => ({ id: Number(a.id), name: String(a.name), legacy: false }));
-    const inList = new Set(direct.map(d => d.id));
-    const storedIds = new Set(
-      (((editItem?.otherCharges ?? editItem?.other_charges) ?? []) as any[])
-        .map((c: any) => Number(c?.ledgerId))
-        .filter((n: number) => Number.isInteger(n) && n > 0),
-    );
-    const legacy = (allAccounts as any[])
-      .filter((a: any) => storedIds.has(Number(a.id)) && !inList.has(Number(a.id)))
-      .map((a: any) => ({ id: Number(a.id), name: String(a.name), legacy: true }));
-    return [...direct, ...legacy];
-  }, [allAccounts, editItem]);
+      .map((a: any) => ({ id: Number(a.id), name: String(a.name) }));
+    return direct;
+  }, [allAccounts]);
   // Resolve a charge's ledger name for the view sheet — stored rows carry only
   // the ledger id.
   const ledgerNameById = useMemo(
@@ -2330,18 +2318,37 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                   <div className="space-y-2">
                     {chargeFields.map((cf, ci) => (
                       <div key={cf.id} className="grid grid-cols-[minmax(0,1fr)_130px_32px] gap-2 items-start">
-                        <FormField control={form.control} name={`otherCharges.${ci}.ledgerId`} render={({ field }) => (
-                          <FormItem>
-                            <Select value={field.value ? String(field.value) : ''} onValueChange={v => field.onChange(Number(v))}>
-                              <FormControl><SelectTrigger className="h-9 text-xs" data-testid={`select-other-charge-ledger-${ci}`}><SelectValue placeholder="Income ledger" /></SelectTrigger></FormControl>
-                              <SelectContent>
-                                {chargeLedgers.length === 0 && <div className="px-3 py-2 text-xs text-muted-foreground">No Direct Income ledgers — create one under Accounts → Chart of Accounts (e.g. Packing &amp; Delivery Recovery)</div>}
-                                {chargeLedgers.map((l) => <SelectItem key={l.id} value={String(l.id)}>{l.name}{l.legacy ? ' (legacy)' : ''}</SelectItem>)}
-                              </SelectContent>
-                            </Select>
-                            <FormMessage />
-                          </FormItem>
-                        )} />
+                        <FormField control={form.control} name={`otherCharges.${ci}.ledgerId`} render={({ field }) => {
+                          const selectedId = Number(field.value ?? 0);
+                          const selectedIsDirect = chargeLedgers.some((l) => l.id === selectedId);
+                          return (
+                            <FormItem>
+                              {selectedId > 0 && !selectedIsDirect ? (
+                                <div className="space-y-1.5">
+                                  <div className="h-9 rounded-md border bg-muted/40 px-3 flex items-center text-xs text-muted-foreground">
+                                    {ledgerNameById.get(selectedId) ?? `Ledger #${selectedId}`} <span className="ml-1">(legacy saved)</span>
+                                  </div>
+                                  <Select value="" onValueChange={v => field.onChange(Number(v))}>
+                                    <FormControl><SelectTrigger className="h-8 text-[11px]" data-testid={`select-replace-other-charge-ledger-${ci}`}><SelectValue placeholder="Replace with Direct Income ledger" /></SelectTrigger></FormControl>
+                                    <SelectContent>
+                                      {chargeLedgers.length === 0 && <div className="px-3 py-2 text-xs text-muted-foreground">No Direct Income ledgers — create one under Accounts → Chart of Accounts (e.g. Packing &amp; Delivery Recovery)</div>}
+                                      {chargeLedgers.map((l) => <SelectItem key={l.id} value={String(l.id)}>{l.name}</SelectItem>)}
+                                    </SelectContent>
+                                  </Select>
+                                </div>
+                              ) : (
+                                <Select value={selectedId > 0 ? String(selectedId) : ''} onValueChange={v => field.onChange(Number(v))}>
+                                  <FormControl><SelectTrigger className="h-9 text-xs" data-testid={`select-other-charge-ledger-${ci}`}><SelectValue placeholder="Direct Income ledger" /></SelectTrigger></FormControl>
+                                  <SelectContent>
+                                    {chargeLedgers.length === 0 && <div className="px-3 py-2 text-xs text-muted-foreground">No Direct Income ledgers — create one under Accounts → Chart of Accounts (e.g. Packing &amp; Delivery Recovery)</div>}
+                                    {chargeLedgers.map((l) => <SelectItem key={l.id} value={String(l.id)}>{l.name}</SelectItem>)}
+                                  </SelectContent>
+                                </Select>
+                              )}
+                              <FormMessage />
+                            </FormItem>
+                          );
+                        }} />
                         <FormField control={form.control} name={`otherCharges.${ci}.amount`} render={({ field }) => (
                           <FormItem>
                             <FormControl><Input className="h-9 text-xs text-right font-mono" type="number" step="0.01" min="0" placeholder="Amount" data-testid={`input-other-charge-amount-${ci}`} {...field} value={(field.value as any) === 0 ? '' : (field.value as any) ?? ''} /></FormControl>

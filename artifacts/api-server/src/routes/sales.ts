@@ -810,10 +810,10 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
   // grand total that dues, receipts, credit checks and the customer Dr leg all
   // key off) but never into subtotal/tax_total — charges carry no GST, so the
   // GSTR-1 taxable value stays goods-only. Validated on the EFFECTIVE ledgers
-  // server-side: a sale charge may credit an income OR expense ledger (a real
-  // recovery), but never the Sales (SYS-SAL) or Purchase (SYS-PUR) subtree, nor
-  // an internal system ledger. CreateSaleBody strips unknown keys, so read the
-  // raw body — the same pattern as discountTotal above.
+  // server-side: a NEW sale charge must credit a Direct Income ledger. Existing
+  // historical expense-ledger charges are handled only by the edit
+  // grandfathering path, so their stored meaning is not rewritten. CreateSaleBody
+  // strips unknown keys, so read the raw body — the same pattern as discountTotal.
   const ocParsed = await validateSaleOtherCharges(pgPool, rawBody.otherCharges);
   if ('error' in ocParsed) { res.status(400).json({ error: ocParsed.error }); return; }
   const otherCharges = ocParsed.charges;

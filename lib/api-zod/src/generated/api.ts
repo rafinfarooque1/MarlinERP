@@ -1073,6 +1073,12 @@ export const ListSalesResponseItem = zod.object({
   "discountTotal": zod.number().optional(),
   "billDiscount": zod.number().optional().describe('Invoice-level discount in rupees, applied BEFORE tax: allocated proportionally across lines, reducing each line\'s taxable value and GST. Distinct from discountTotal (the post-tax coupon deduction).\n'),
   "totalAmount": zod.number(),
+  "otherCharges": zod.array(zod.object({
+  "ledgerId": zod.number().describe('A postable income ledger under the Direct Income group.'),
+  "ledgerName": zod.string().optional().describe('Server-enriched on reads; ignored on writes.'),
+  "amount": zod.number().describe('Positive amount in rupees, to paise precision.')
+})).optional().describe('Customer recoveries added after goods and GST. Each charge is posted to its selected Direct Income ledger and carries no GST.'),
+  "otherChargesTotal": zod.number().optional().describe('Sum of the saved customer recovery charges.'),
   "paymentMode": zod.string().optional(),
   "couponCode": zod.string().nullish(),
   "createdAt": zod.string(),
@@ -1103,6 +1109,11 @@ export const CreateSaleBody = zod.object({
   "paymentMode": zod.string(),
   "couponCode": zod.string().optional(),
   "billDiscount": zod.number().optional().describe('Pre-tax invoice-level discount, allocated across lines.'),
+  "otherCharges": zod.array(zod.object({
+  "ledgerId": zod.number().describe('A postable income ledger under the Direct Income group.'),
+  "ledgerName": zod.string().optional().describe('Server-enriched on reads; ignored on writes.'),
+  "amount": zod.number().describe('Positive amount in rupees, to paise precision.')
+})).optional().describe('Customer recoveries added after goods and GST. Every ledger must be a postable Direct Income ledger; charges carry no GST.'),
   "quotationId": zod.number().optional().describe('When present, completing this sale converts the quotation: inside the sale transaction the quotation row is locked, a second conversion is refused, and the two documents are stamped with each other\'s numbers. Exactly one sale can ever result from a quotation.\n')
 })
 
@@ -1130,6 +1141,12 @@ export const CreateSaleResponse = zod.object({
   "discountTotal": zod.number().optional(),
   "billDiscount": zod.number().optional().describe('Invoice-level discount in rupees, applied BEFORE tax: allocated proportionally across lines, reducing each line\'s taxable value and GST. Distinct from discountTotal (the post-tax coupon deduction).\n'),
   "totalAmount": zod.number(),
+  "otherCharges": zod.array(zod.object({
+  "ledgerId": zod.number().describe('A postable income ledger under the Direct Income group.'),
+  "ledgerName": zod.string().optional().describe('Server-enriched on reads; ignored on writes.'),
+  "amount": zod.number().describe('Positive amount in rupees, to paise precision.')
+})).optional().describe('Customer recoveries added after goods and GST. Each charge is posted to its selected Direct Income ledger and carries no GST.'),
+  "otherChargesTotal": zod.number().optional().describe('Sum of the saved customer recovery charges.'),
   "paymentMode": zod.string().optional(),
   "couponCode": zod.string().nullish(),
   "createdAt": zod.string(),
@@ -1166,6 +1183,12 @@ export const GetSaleResponse = zod.object({
   "discountTotal": zod.number().optional(),
   "billDiscount": zod.number().optional().describe('Invoice-level discount in rupees, applied BEFORE tax: allocated proportionally across lines, reducing each line\'s taxable value and GST. Distinct from discountTotal (the post-tax coupon deduction).\n'),
   "totalAmount": zod.number(),
+  "otherCharges": zod.array(zod.object({
+  "ledgerId": zod.number().describe('A postable income ledger under the Direct Income group.'),
+  "ledgerName": zod.string().optional().describe('Server-enriched on reads; ignored on writes.'),
+  "amount": zod.number().describe('Positive amount in rupees, to paise precision.')
+})).optional().describe('Customer recoveries added after goods and GST. Each charge is posted to its selected Direct Income ledger and carries no GST.'),
+  "otherChargesTotal": zod.number().optional().describe('Sum of the saved customer recovery charges.'),
   "paymentMode": zod.string().optional(),
   "couponCode": zod.string().nullish(),
   "createdAt": zod.string(),

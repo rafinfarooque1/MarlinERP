@@ -674,6 +674,15 @@ export interface SaleLineItem {
   masterMrp?: number;
 }
 
+export interface SaleOtherCharge {
+  /** A postable income ledger under the Direct Income group. */
+  ledgerId: number;
+  /** Server-enriched on reads; ignored on writes. */
+  ledgerName?: string;
+  /** Positive amount in rupees, to paise precision. */
+  amount: number;
+}
+
 export interface Sale {
   id: number;
   invoiceNumber?: string;
@@ -691,6 +700,10 @@ export interface Sale {
   /** Invoice-level discount in rupees, applied BEFORE tax: allocated proportionally across lines, reducing each line's taxable value and GST. Distinct from discountTotal (the post-tax coupon deduction). */
   billDiscount?: number;
   totalAmount: number;
+  /** Customer recoveries added after goods and GST. Each charge is posted to its selected Direct Income ledger and carries no GST. */
+  otherCharges?: SaleOtherCharge[];
+  /** Sum of the saved customer recovery charges. */
+  otherChargesTotal?: number;
   paymentMode?: string;
   /** @nullable */
   couponCode?: string | null;
@@ -716,6 +729,8 @@ export interface SaleInput {
   couponCode?: string;
   /** Pre-tax invoice-level discount, allocated across lines. */
   billDiscount?: number;
+  /** Customer recoveries added after goods and GST. Every ledger must be a postable Direct Income ledger; charges carry no GST. */
+  otherCharges?: SaleOtherCharge[];
   /** When present, completing this sale converts the quotation: inside the sale transaction the quotation row is locked, a second conversion is refused, and the two documents are stamped with each other's numbers. Exactly one sale can ever result from a quotation. */
   quotationId?: number;
 }

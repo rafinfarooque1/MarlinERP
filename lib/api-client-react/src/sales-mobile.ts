@@ -11,6 +11,7 @@
  */
 import { useQuery } from '@tanstack/react-query';
 import { customFetch } from './custom-fetch';
+import type { SaleOtherCharge } from './generated/api.schemas';
 
 // ── Sale detail (GET /sales/:id) ─────────────────────────────────────────────
 
@@ -31,12 +32,6 @@ export interface SaleDetailLine {
   priceMode?: 'inclusive' | 'exclusive';
   /** Stored final line value where present — display it, never recompute. */
   lineTotal?: number;
-}
-
-export interface SaleOtherCharge {
-  ledgerId: number;
-  amount: number;
-  ledgerName?: string;
 }
 
 export interface SaleDetail {
@@ -164,7 +159,7 @@ export interface CreateSalePayload {
   /** Post-tax coupon deduction (₹) — 0/absent when no coupon. */
   discountTotal?: number;
   couponCode?: string;
-  otherCharges?: { ledgerId: number; amount: number }[];
+  otherCharges?: SaleOtherCharge[];
   /** Cash & Bank ledger the money went into (non-credit sales). */
   receivedInLedgerId?: number;
   /** Money received at billing; absent = full amount. Max 2 decimals. */

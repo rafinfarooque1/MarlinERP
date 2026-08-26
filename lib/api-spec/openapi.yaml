@@ -2661,6 +2661,16 @@ components:
             GST. Distinct from discountTotal (the post-tax coupon deduction).
         totalAmount:
           type: number
+        otherCharges:
+          type: array
+          description: >-
+            Customer recoveries added after goods and GST. Each charge is
+            posted to its selected Direct Income ledger and carries no GST.
+          items:
+            $ref: "#/components/schemas/SaleOtherCharge"
+        otherChargesTotal:
+          type: number
+          description: Sum of the saved customer recovery charges.
         paymentMode:
           type: string
         couponCode:
@@ -2695,6 +2705,13 @@ components:
         billDiscount:
           type: number
           description: Pre-tax invoice-level discount, allocated across lines.
+        otherCharges:
+          type: array
+          description: >-
+            Customer recoveries added after goods and GST. Every ledger must be
+            a postable Direct Income ledger; charges carry no GST.
+          items:
+            $ref: "#/components/schemas/SaleOtherCharge"
         quotationId:
           type: integer
           description: >
@@ -2702,6 +2719,20 @@ components:
             the sale transaction the quotation row is locked, a second
             conversion is refused, and the two documents are stamped with each
             other's numbers. Exactly one sale can ever result from a quotation.
+
+    SaleOtherCharge:
+      type: object
+      required: [ledgerId, amount]
+      properties:
+        ledgerId:
+          type: integer
+          description: A postable income ledger under the Direct Income group.
+        ledgerName:
+          type: string
+          description: Server-enriched on reads; ignored on writes.
+        amount:
+          type: number
+          description: Positive amount in rupees, to paise precision.
 
     SalesSummary:
       type: object
