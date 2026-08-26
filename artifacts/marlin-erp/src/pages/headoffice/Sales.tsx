@@ -768,6 +768,10 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
         // default payment mode (already in effectiveDefaultValues) like any other.
         couponCode: q.couponCode ?? '',
         billDiscount: Number(q.billDiscount ?? 0),
+        otherCharges: (Array.isArray(q.otherCharges) ? q.otherCharges : []).map((c: any) => ({
+          ledgerId: Number(c.ledgerId),
+          amount: Number(c.amount),
+        })),
         lineItems: (Array.isArray(q.lineItems) && q.lineItems.length > 0 ? q.lineItems : []).map((li: any) => ({
           itemId: Number(li.itemId),
           quantity: Number(li.quantity),

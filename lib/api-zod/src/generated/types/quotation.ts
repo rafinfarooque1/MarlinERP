@@ -6,6 +6,7 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { SaleLineItem } from './saleLineItem';
+import type { SaleOtherCharge } from './saleOtherCharge';
 
 export interface Quotation {
   id: number;
@@ -34,6 +35,9 @@ export interface Quotation {
   /** Pre-tax bill-level discount, allocated across lines. */
   billDiscount?: number;
   totalAmount: number;
+  /** Customer recoveries added after goods and GST; charges carry no GST. */
+  otherCharges?: SaleOtherCharge[];
+  otherChargesTotal?: number;
   /** @nullable */
   couponCode?: string | null;
   /** @nullable */

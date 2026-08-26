@@ -2802,6 +2802,13 @@ components:
           description: Pre-tax bill-level discount, allocated across lines.
         totalAmount:
           type: number
+        otherCharges:
+          type: array
+          description: Customer recoveries added after goods and GST; charges carry no GST.
+          items:
+            $ref: "#/components/schemas/SaleOtherCharge"
+        otherChargesTotal:
+          type: number
         couponCode:
           type: ["string", "null"]
         billingAddress:
@@ -2867,6 +2874,11 @@ components:
         discountTotal:
           type: number
           description: Post-tax coupon deduction off the grand total.
+        otherCharges:
+          type: array
+          description: Customer recoveries added after goods and GST; charges carry no GST.
+          items:
+            $ref: "#/components/schemas/SaleOtherCharge"
         billingAddress:
           type: string
         shippingAddress:

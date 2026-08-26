@@ -34,6 +34,7 @@ export async function addQuotations(pool: Pool): Promise<void> {
       discount_total           NUMERIC(14,2) NOT NULL DEFAULT 0,
       bill_discount            NUMERIC(14,2) NOT NULL DEFAULT 0,
       total_amount             NUMERIC(14,2) NOT NULL DEFAULT 0,
+      other_charges            JSONB       NOT NULL DEFAULT '[]'::jsonb,
       coupon_code              TEXT,
       billing_address          TEXT,
       shipping_address         TEXT,
@@ -49,6 +50,13 @@ export async function addQuotations(pool: Pool): Promise<void> {
       updated_at               TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+
+  // Additive storage for quotation customer recoveries. Keep this outside the
+  // CREATE so existing databases receive the column too.
+  await pool.query(
+    `ALTER TABLE quotations
+       ADD COLUMN IF NOT EXISTS other_charges JSONB NOT NULL DEFAULT '[]'::jsonb`,
+  );
 
   // Constraints OUTSIDE the CREATE — constraints written inside CREATE TABLE
   // IF NOT EXISTS never reach a database where the table already exists.

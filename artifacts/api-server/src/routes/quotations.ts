@@ -35,6 +35,7 @@ import { createQuotationShareToken } from "../lib/shareToken";
 import { buildSaleLines, checkMrpFloor, computeInvoiceNumber } from "./sales";
 import { resolveLocationGst, isInterStateSupply } from "../lib/gstTransfer";
 import { blockedByInactiveProducts } from "../lib/productIdentity";
+import { parseStoredOtherCharges, validateSaleOtherCharges } from "../lib/otherCharges";
 
 const router = Router();
 
@@ -124,10 +125,28 @@ async function locationNameMaps(): Promise<{ w: Map<number, string>; o: Map<numb
   };
 }
 
-function mapQuotation(r: any, names?: { w: Map<number, string>; o: Map<number, string> }) {
+async function otherChargeLedgerNames(rows: any[]): Promise<Map<number, string>> {
+  const ids = [...new Set(rows.flatMap((r) => parseStoredOtherCharges(r?.other_charges).map((c) => c.ledgerId)))];
+  if (ids.length === 0) return new Map();
+  const { rows: ledgers } = await pool.query<{ id: number; name: string }>(
+    `SELECT id, name FROM account_ledgers WHERE id = ANY($1::int[])`, [ids],
+  );
+  return new Map(ledgers.map((l) => [Number(l.id), l.name]));
+}
+
+function mapQuotation(
+  r: any,
+  names?: { w: Map<number, string>; o: Map<number, string> },
+  chargeNames?: Map<number, string>,
+) {
   const locationName = names
     ? (r.location_type === "warehouse" ? names.w.get(r.location_id) : names.o.get(r.location_id)) ?? ""
     : (r._location_name ?? "");
+  const otherCharges = parseStoredOtherCharges(r.other_charges).map((c) => ({
+    ledgerId: c.ledgerId,
+    ledgerName: chargeNames?.get(c.ledgerId) ?? `Ledger #${c.ledgerId}`,
+    amount: c.amount,
+  }));
   return {
     id: r.id,
     quotationNumber: r.quotation_number,
@@ -147,6 +166,8 @@ function mapQuotation(r: any, names?: { w: Map<number, string>; o: Map<number, s
     discountTotal: Number(r.discount_total),
     billDiscount: Number(r.bill_discount ?? 0),
     totalAmount: Number(r.total_amount),
+    otherCharges,
+    otherChargesTotal: Math.round(otherCharges.reduce((sum, c) => sum + c.amount, 0) * 100) / 100,
     couponCode: r.coupon_code,
     billingAddress: r.billing_address,
     shippingAddress: r.shipping_address,
@@ -170,6 +191,7 @@ type BuiltQuotation =
       ok: true;
       lineItems: any[]; billDiscount: number;
       subtotal: number; taxTotal: number; discountTotal: number; totalAmount: number;
+      otherCharges: { ledgerId: number; amount: number }[]; otherChargesTotal: number;
     }
   | { ok: false; error: string; code?: string };
 
@@ -185,6 +207,8 @@ async function buildQuotationFigures(data: {
   lineItems: any[];
   billDiscount?: number | null;
   discountTotal?: number | null;
+  otherCharges?: unknown;
+  grandfatheredOtherChargeLedgerIds?: ReadonlySet<number>;
   // Edit only: itemId → lowest previously SAVED line price for that item in
   // THIS quotation. Grandfathers old quotes across a later master-MRP rise —
   // same rule as sale edits (floor = min(master, saved), never the request).
@@ -276,12 +300,18 @@ async function buildQuotationFigures(data: {
     return { ok: false, error: "Coupon discount cannot exceed the quotation amount" };
   }
   const discountTotal = Math.round(rawDiscountTotal * 100) / 100;
-  const totalAmount = subtotal + taxTotal - discountTotal;
+  const chargeResult = await validateSaleOtherCharges(pool, data.otherCharges, {
+    grandfatheredLedgerIds: data.grandfatheredOtherChargeLedgerIds,
+  });
+  if ("error" in chargeResult) return { ok: false, error: chargeResult.error };
+  const totalAmount = Math.round((subtotal + taxTotal - discountTotal + chargeResult.total) * 100) / 100;
 
   return {
     ok: true,
     lineItems: built.lineItems, billDiscount: built.billDiscount,
     subtotal, taxTotal, discountTotal, totalAmount,
+    otherCharges: chargeResult.charges,
+    otherChargesTotal: chargeResult.total,
   };
 }
 
@@ -609,7 +639,8 @@ router.get("/quotations", requireModuleView(QUOTE_PAGES), async (req, res): Prom
   );
 
   const names = await locationNameMaps();
-  const mapped = rows.map((r: any) => mapQuotation(r, names));
+  const chargeNames = await otherChargeLedgerNames(rows);
+  const mapped = rows.map((r: any) => mapQuotation(r, names, chargeNames));
   if (paginated) {
     res.json({ total, page, limit, rows: mapped });
   } else {
@@ -685,16 +716,16 @@ router.post("/quotations", requireModuleAction(QUOTE_PAGES, "add"), async (req, 
     ({ rows: [row] } = await client.query(
       `INSERT INTO quotations
          (quotation_number, location_type, location_id, customer_id, quote_date, valid_till,
-          status, line_items, subtotal, tax_total, discount_total, bill_discount, total_amount,
+         status, line_items, subtotal, tax_total, discount_total, bill_discount, total_amount, other_charges,
           coupon_code, billing_address, shipping_address, payment_terms, place_of_supply,
           salesperson, salesperson_employee_id, notes, terms_conditions, created_by)
-       VALUES ($1,$2,$3,$4,$5::date,$6::date,$7,$8::jsonb,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
+       VALUES ($1,$2,$3,$4,$5::date,$6::date,$7,$8::jsonb,$9,$10,$11,$12,$13,$14::jsonb,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)
        RETURNING id`,
       [
         quotationNumber, body.locationType, body.locationId, body.customerId ?? null,
         body.quoteDate, s(body.validTill), initialStatus, JSON.stringify(figures.lineItems),
         figures.subtotal, figures.taxTotal, figures.discountTotal, figures.billDiscount,
-        figures.totalAmount, s(body.couponCode), s(body.billingAddress), s(body.shippingAddress),
+        figures.totalAmount, JSON.stringify(figures.otherCharges), s(body.couponCode), s(body.billingAddress), s(body.shippingAddress),
         s(body.paymentTerms), s(body.placeOfSupply), sp.name, sp.employeeId, s(body.notes),
         s(body.termsConditions), employee?.id ?? null,
       ],
@@ -709,7 +740,7 @@ router.post("/quotations", requireModuleAction(QUOTE_PAGES, "add"), async (req, 
 
   const full = await quotationInScope(req, Number(row.id));
   const names = await locationNameMaps();
-  const mapped = mapQuotation(full, names);
+  const mapped = mapQuotation(full, names, await otherChargeLedgerNames([full]));
 
   const mrpOverrides = quoteMrpOverrides(figures.lineItems);
   logActivity({
@@ -735,7 +766,7 @@ router.get("/quotations/:id", requireModuleView(QUOTE_PAGES), async (req, res): 
   const row = await quotationInScope(req, id);
   if (!row) { res.status(404).json({ error: "Not found" }); return; }
   const names = await locationNameMaps();
-  res.json(mapQuotation(row, names));
+  res.json(mapQuotation(row, names, await otherChargeLedgerNames([row])));
 });
 
 // ── Update ────────────────────────────────────────────────────────────────────
@@ -788,7 +819,12 @@ router.put("/quotations/:id", requireModuleAction(QUOTE_PAGES, "edit"), async (r
   // Grandfather floor from the STORED lines (never the request): a quote
   // saved before a later master-MRP rise stays editable, but no line may be
   // priced below what it already carried.
-  const figures = await buildQuotationFigures({ ...body, savedFloors: storedLineFloors(existing.line_items) });
+  const existingCharges = parseStoredOtherCharges(existing.other_charges);
+  const figures = await buildQuotationFigures({
+    ...body,
+    savedFloors: storedLineFloors(existing.line_items),
+    grandfatheredOtherChargeLedgerIds: new Set(existingCharges.map((c) => c.ledgerId)),
+  });
   if (!figures.ok) {
     res.status(400).json({ error: figures.error, ...(figures.code ? { code: figures.code } : {}) });
     return;
@@ -805,18 +841,18 @@ router.put("/quotations/:id", requireModuleAction(QUOTE_PAGES, "edit"), async (r
         location_type = $1, location_id = $2, customer_id = $3,
         quote_date = $4::date, valid_till = $5::date, status = $6,
         line_items = $7::jsonb, subtotal = $8, tax_total = $9, discount_total = $10,
-        bill_discount = $11, total_amount = $12, coupon_code = $13,
-        billing_address = $14, shipping_address = $15, payment_terms = $16,
-        place_of_supply = $17, salesperson = $18, salesperson_employee_id = $19,
-        notes = $20, terms_conditions = $21,
+        bill_discount = $11, total_amount = $12, other_charges = $13::jsonb, coupon_code = $14,
+        billing_address = $15, shipping_address = $16, payment_terms = $17,
+        place_of_supply = $18, salesperson = $19, salesperson_employee_id = $20,
+        notes = $21, terms_conditions = $22,
         updated_at = now()
-      WHERE id = $22 AND converted_sale_id IS NULL
+      WHERE id = $23 AND converted_sale_id IS NULL
       RETURNING id`,
     [
       body.locationType, body.locationId, body.customerId ?? null,
       body.quoteDate, s(body.validTill), nextStatus,
       JSON.stringify(figures.lineItems), figures.subtotal, figures.taxTotal, figures.discountTotal,
-      figures.billDiscount, figures.totalAmount, s(body.couponCode),
+      figures.billDiscount, figures.totalAmount, JSON.stringify(figures.otherCharges), s(body.couponCode),
       s(body.billingAddress), s(body.shippingAddress), s(body.paymentTerms),
       s(body.placeOfSupply), sp.name, sp.employeeId, s(body.notes), s(body.termsConditions),
       id,
@@ -829,7 +865,7 @@ router.put("/quotations/:id", requireModuleAction(QUOTE_PAGES, "edit"), async (r
 
   const full = await quotationInScope(req, id);
   const names = await locationNameMaps();
-  const mapped = mapQuotation(full, names);
+  const mapped = mapQuotation(full, names, await otherChargeLedgerNames([full]));
 
   const employee = (req as any).employee;
   const mrpOverrides = quoteMrpOverrides(figures.lineItems);
@@ -874,7 +910,7 @@ router.post("/quotations/:id/status", requireModuleAction(QUOTE_PAGES, "edit"), 
 
   const full = await quotationInScope(req, id);
   const names = await locationNameMaps();
-  res.json(mapQuotation(full, names));
+  res.json(mapQuotation(full, names, await otherChargeLedgerNames([full])));
 });
 
 // ── Delete ────────────────────────────────────────────────────────────────────
