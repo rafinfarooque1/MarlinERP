@@ -241,9 +241,24 @@ export async function generateMoneyVoucherPdf(data: MoneyVoucherPdfInput): Promi
     txt(label, x + sigW / 2, y + 16, { size: 7, align: "center", color: MUT });
   });
 
-  // Footer rule + computer-generated note, per the invoice.
-  line(M, 285, M + CW, 285, BORDER, 0.3);
-  txt("This is a computer-generated voucher.", PW / 2, 289, { size: 6.6, align: "center", color: MUT });
+  // Vouchers end immediately after the signature row. Keep a compact bottom
+  // margin on ordinary one-page vouchers instead of leaving the old fixed A4
+  // footer area behind. The finished stream must be translated before changing
+  // the media box, otherwise jsPDF's A4-origin coordinates clip the header.
+  if (doc.getNumberOfPages() === 1) {
+    const contentBottom = y + 18;
+    const pageHeight = Math.min(PH, Math.max(150, contentBottom + M));
+    const pageShift = PH - pageHeight;
+    try { (doc.internal.pageSize as any).setHeight(pageHeight); } catch { /* keep A4 if unsupported */ }
+    const pages = (doc.internal as any).pages as string[][];
+    const page = pages?.[1];
+    const scaleFactor = (doc.internal as any).scaleFactor ?? (72 / 25.4);
+    const shiftPt = pageShift * scaleFactor;
+    if (page && shiftPt > 0) {
+      page.unshift("q", `1 0 0 1 0 ${-shiftPt.toFixed(3)} cm`);
+      page.push("Q");
+    }
+  }
 
   return Buffer.from(doc.output("arraybuffer"));
 }

@@ -22,6 +22,10 @@
 
 import pg from 'pg';
 import bcrypt from 'bcryptjs';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 const BASE = process.env.API_URL || 'http://localhost:8080/api';
 const TAG = 'ZZVP';
@@ -50,6 +54,8 @@ const del = (p, t) => apiReq('DELETE', p, undefined, t);
 
 const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
 const sql = (text, params) => pool.query(text, params);
+const pdfDir = mkdtempSync(join(tmpdir(), 'voucher-pdf-'));
+let pdfSeq = 0;
 
 const F = { hierId: 0, clerkEmpId: 0, rootId: 0, empIds: [], ledgerIds: [], paymentIds: [], receiptIds: [], jvIds: [] };
 
@@ -67,6 +73,21 @@ async function cleanup() {
 }
 
 const today = new Date().toISOString().slice(0, 10);
+
+async function fetchVoucherPdf(kind, id) {
+  const response = await fetch(`${BASE}/pdf/money-voucher`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+    body: JSON.stringify({ kind, id }),
+  });
+  const file = join(pdfDir, `voucher-${++pdfSeq}.pdf`);
+  writeFileSync(file, Buffer.from(await response.arrayBuffer()));
+  if (response.status !== 200) return { status: response.status, text: '', pageHeight: 0 };
+  const text = execFileSync('pdftotext', [file, '-']).toString();
+  const pageInfo = execFileSync('pdfinfo', [file]).toString();
+  const pageHeight = Number(/Page size:\s+[\d.]+\s+x\s+([\d.]+)/.exec(pageInfo)?.[1] ?? 0);
+  return { status: response.status, text, pageHeight };
+}
 
 try {
 
@@ -204,6 +225,26 @@ let keepPaymentId = 0, keepReceiptId = 0;
   assert('Receipt from own-location employee accepted (201)', res.status === 201 && res.data?.id, `status=${res.status} ${JSON.stringify(res.data).slice(0, 120)}`);
   keepReceiptId = res.data?.id;
   if (keepReceiptId) F.receiptIds.push(keepReceiptId);
+
+  const paymentPdf = await fetchVoucherPdf('payment', keepPaymentId);
+  assert('Payment Voucher PDF renders without the computer-generated note',
+    paymentPdf.status === 200 && !paymentPdf.text.includes('This is a computer-generated voucher.'));
+  assert('Payment Voucher PDF keeps its signature labels',
+    paymentPdf.text.includes('Prepared By')
+      && paymentPdf.text.includes('Authorized Signatory')
+      && paymentPdf.text.includes('Received By'));
+  assert('Payment Voucher PDF flows to the signature content',
+    paymentPdf.pageHeight > 0 && paymentPdf.pageHeight < 800);
+
+  const receiptPdf = await fetchVoucherPdf('receipt', keepReceiptId);
+  assert('Receipt Voucher PDF renders without the computer-generated note',
+    receiptPdf.status === 200 && !receiptPdf.text.includes('This is a computer-generated voucher.'));
+  assert('Receipt Voucher PDF keeps its signature labels',
+    receiptPdf.text.includes('Received By')
+      && receiptPdf.text.includes('Authorized Signatory')
+      && receiptPdf.text.includes("Payer's Signature"));
+  assert('Receipt Voucher PDF flows to the signature content',
+    receiptPdf.pageHeight > 0 && receiptPdf.pageHeight < 800);
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -278,6 +319,7 @@ console.log('\n[E] Journal balance validation');
   failures.push(`uncaught: ${e?.message}`);
 } finally {
   try { await cleanup(); } catch (e) { console.error('cleanup failed:', e?.message); }
+  rmSync(pdfDir, { recursive: true, force: true });
   await pool.end();
 }
 
