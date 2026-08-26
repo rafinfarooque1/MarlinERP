@@ -283,6 +283,7 @@ function companyBank(c: CompanyRow | null): IssuerBank | null {
  * that must print only the selected location's own account. */
 export interface IssuerResolutionOptions {
   allowCompanyBankFallback?: boolean;
+  allowCompanyUpiFallback?: boolean;
 }
 
 /**
@@ -317,6 +318,7 @@ function fromWarehouse(
   options: IssuerResolutionOptions = {},
 ): InvoiceIssuer {
   const allowCompanyBankFallback = options.allowCompanyBankFallback !== false;
+  const allowCompanyUpiFallback = options.allowCompanyUpiFallback !== false;
   return sealed({
     source: "warehouse",
     locationId: w.id,
@@ -331,7 +333,7 @@ function fromWarehouse(
     stateCode: s(w.state_code) || stateCodeFromGstin(w.gst_number),
     pincode: s(w.pincode),
     bank: warehouseBank(w) ?? (allowCompanyBankFallback ? companyBank(company) : null),
-    upiId: s(w.upi_id) || s(company?.upi_id),
+    upiId: s(w.upi_id) || (allowCompanyUpiFallback ? s(company?.upi_id) : ""),
     invoiceFooter: s(w.invoice_footer) || s(company?.invoice_footer),
     signatory: s(w.authorized_signatory),
     logoUrl: s(w.logo_url) || s(company?.logo_url) || null,
@@ -343,6 +345,7 @@ function fromCompany(
   options: IssuerResolutionOptions = {},
 ): InvoiceIssuer {
   const allowCompanyBankFallback = options.allowCompanyBankFallback !== false;
+  const allowCompanyUpiFallback = options.allowCompanyUpiFallback !== false;
   const c = company;
   return sealed({
     source: "company",
@@ -360,7 +363,7 @@ function fromCompany(
     stateCode: stateCodeFromGstin(c?.gst_number),
     pincode: s(c?.pincode),
     bank: allowCompanyBankFallback ? companyBank(c ?? null) : null,
-    upiId: s(c?.upi_id),
+    upiId: allowCompanyUpiFallback ? s(c?.upi_id) : "",
     invoiceFooter: s(c?.invoice_footer),
     signatory: "",
     logoUrl: s(c?.logo_url) || null,
@@ -458,7 +461,7 @@ export async function resolveInvoiceIssuer(pool: Pool, saleId: number): Promise<
  */
 export async function resolveLocationIssuer(
   pool: Pool,
-  locationType: "warehouse" | "outlet" | null,
+  locationType: "warehouse" | "outlet" | "headoffice" | null,
   locationId: number | null,
   options: IssuerResolutionOptions = {},
 ): Promise<InvoiceIssuer> {
@@ -467,8 +470,10 @@ export async function resolveLocationIssuer(
     return issuer ?? missingLocationIssuer("warehouse", locationId);
   }
 
-  const outletId = locationType === "outlet" && locationId ? locationId : null;
   const company = await loadCompany(pool);
+  if (locationType === "headoffice") return fromCompany(company, options);
+
+  const outletId = locationType === "outlet" && locationId ? locationId : null;
   if (!outletId) return fromCompany(company, options);
 
   const { rows: [o] } = await pool.query<OutletRow>(
