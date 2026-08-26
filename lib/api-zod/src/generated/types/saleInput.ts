@@ -6,6 +6,7 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { SaleLineItem } from './saleLineItem';
+import type { SaleOtherCharge } from './saleOtherCharge';
 
 export interface SaleInput {
   outletId: number;
@@ -16,6 +17,8 @@ export interface SaleInput {
   couponCode?: string;
   /** Pre-tax invoice-level discount, allocated across lines. */
   billDiscount?: number;
+  /** Customer recoveries added after goods and GST. Every ledger must be a postable Direct Income ledger; charges carry no GST. */
+  otherCharges?: SaleOtherCharge[];
   /** When present, completing this sale converts the quotation: inside the sale transaction the quotation row is locked, a second conversion is refused, and the two documents are stamped with each other's numbers. Exactly one sale can ever result from a quotation. */
   quotationId?: number;
 }

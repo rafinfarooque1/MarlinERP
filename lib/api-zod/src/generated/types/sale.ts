@@ -6,6 +6,7 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { SaleLineItem } from './saleLineItem';
+import type { SaleOtherCharge } from './saleOtherCharge';
 
 export interface Sale {
   id: number;
@@ -24,6 +25,10 @@ export interface Sale {
   /** Invoice-level discount in rupees, applied BEFORE tax: allocated proportionally across lines, reducing each line's taxable value and GST. Distinct from discountTotal (the post-tax coupon deduction). */
   billDiscount?: number;
   totalAmount: number;
+  /** Customer recoveries added after goods and GST. Each charge is posted to its selected Direct Income ledger and carries no GST. */
+  otherCharges?: SaleOtherCharge[];
+  /** Sum of the saved customer recovery charges. */
+  otherChargesTotal?: number;
   paymentMode?: string;
   /** @nullable */
   couponCode?: string | null;

@@ -124,6 +124,7 @@ export * from './sale';
 export * from './saleInput';
 export * from './saleLineItem';
 export * from './saleLineItemPriceMode';
+export * from './saleOtherCharge';
 export * from './salesSummary';
 export * from './salesSummaryByOutletItem';
 export * from './stockAlert';

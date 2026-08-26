@@ -7,7 +7,7 @@
  *     tax_total stay goods-only (charges carry NO GST — taxable value is
  *     unchanged by a charge).
  *   · Books: revenue = total − tax − charges; each charge posts Cr to its own
- *     expense ledger; the Dr side (cash/clearing/customer) carries the FULL
+ *     Direct Income ledger; the Dr side (cash/clearing/customer) carries the FULL
  *     total. Trial balance stays balanced.
  *   · Validation on the EFFECTIVE ledger (NEW sales): postable, active,
  *     INCOME-type, strictly under Direct Income (SYS-DIRINC), not a system
