@@ -1111,15 +1111,16 @@ export async function renderInvoicePdf(data: InvoiceData): Promise<{ buffer: Buf
   // intentionally quotation-only; invoice payment panels remain unchanged.
   if (isQuotation && (quotationBankRows.length > 0 || quotationUpiId)) {
     const BANK_HEAD_H = 9;
-    const BANK_ROW_H = 5.2;
+    const BANK_ROW_H = 8.2;
     const QR_W = 57;
+    const QR_SIZE = 29;
     const hasBank = quotationBankRows.length > 0;
     const hasUpi = Boolean(quotationUpiId);
     const hasQr = Boolean(quotationQrDataUrl);
     const infoW = hasBank && hasUpi ? CW - QR_W - GAP : CW;
     const bankGridRows = hasBank ? Math.ceil(quotationBankRows.length / 2) : 0;
     const bankH = hasBank ? BANK_HEAD_H + bankGridRows * BANK_ROW_H + 3 : 0;
-    const qrH = hasUpi ? (hasQr ? 54 : 25) : 0;
+    const qrH = hasUpi ? (hasQr ? 56 : 31) : 0;
     const PAYMENT_H = Math.max(44, bankH, qrH);
     // Keep the sign-off with the payment block where possible. If the remaining
     // page cannot hold both, start a clean continuation page instead of
@@ -1132,13 +1133,14 @@ export async function renderInvoicePdf(data: InvoiceData): Promise<{ buffer: Buf
       txt("BANK DETAILS", M + 11.5, y + 7, { bold: true, size: 7.6, color: NAVY });
 
       const bankColW = (infoW - GAP) / 2;
+      const bankGridY = y + Math.max(BANK_HEAD_H + 4, (PAYMENT_H - bankGridRows * BANK_ROW_H) / 2 + 2.6);
       quotationBankRows.forEach(([label, value], i) => {
         const col = i % 2;
         const row = Math.floor(i / 2);
         const bx0 = M + col * (bankColW + GAP);
-        const by = y + BANK_HEAD_H + row * BANK_ROW_H + 3.5;
-        txt(label, bx0 + 4.5, by, { size: 6.6, color: MUT });
-        cell(value, bx0 + 34, by, bankColW - 39, { size: 7, color: INK, bold: true });
+        const by = bankGridY + row * BANK_ROW_H;
+        txt(label, bx0 + 4.5, by, { size: 6.8, color: MUT });
+        cell(value, bx0 + 34, by, bankColW - 39, { size: 7.3, color: INK, bold: true });
       });
     }
     if (hasUpi) {
@@ -1148,15 +1150,16 @@ export async function renderInvoicePdf(data: InvoiceData): Promise<{ buffer: Buf
         bx(qrX, y, qrW, PAYMENT_H, BORDER, 1.2);
         txt("SCAN TO PAY", qrX + qrW / 2, y + 7, { bold: true, size: 7.4, color: NAVY, align: "center" });
       } else {
-        icoBank(M + 4.5, y + 2.8, 4.6);
-        txt("PAYMENT DETAILS", M + 11.5, y + 7, { bold: true, size: 7.6, color: NAVY });
+        txt("SCAN TO PAY", qrX + qrW / 2, y + 7, { bold: true, size: 7.6, color: NAVY, align: "center" });
       }
       if (quotationQrDataUrl) {
-        const qrSize = 31;
-        doc.addImage(quotationQrDataUrl, "PNG", qrX + (qrW - qrSize) / 2, y + 10.5, qrSize, qrSize);
+        doc.addImage(quotationQrDataUrl, "PNG", qrX + (qrW - QR_SIZE) / 2, y + 11.5, QR_SIZE, QR_SIZE);
       }
-      cell(`UPI ID: ${quotationUpiId}`, qrX + 4.5, y + PAYMENT_H - 4, qrW - 9,
-        { size: 6.3, color: INK, bold: true, align: "center" });
+      const upiLabelY = hasQr ? y + PAYMENT_H - 11 : y + PAYMENT_H - 10;
+      const upiValueY = hasQr ? y + PAYMENT_H - 4.2 : y + PAYMENT_H - 4;
+      txt("UPI ID", qrX + qrW / 2, upiLabelY, { size: 6.8, color: MUT, align: "center" });
+      cell(quotationUpiId, qrX + qrW / 2, upiValueY, qrW - 9,
+        { size: 7, color: INK, bold: true, align: "center" });
     }
     y += PAYMENT_H + 3.5;
   }
@@ -1379,8 +1382,8 @@ export async function renderInvoicePdf(data: InvoiceData): Promise<{ buffer: Buf
       }
     }
   } else {
-  const SIGN_H = 11;
-  const QUOTE_FOOTER_H = SIGN_H + 4.2 + 6.2 + footerLines.length * 3.4
+  const SIGN_H = 15;
+  const QUOTE_FOOTER_H = SIGN_H + 2.6 + 6.2 + footerLines.length * 3.4
     + (q?.validTill ? 3.6 : 0) + 3.6;
   if (y + QUOTE_FOOTER_H > BOT) { doc.addPage(); y = M; }
 
@@ -1390,12 +1393,12 @@ export async function renderInvoicePdf(data: InvoiceData): Promise<{ buffer: Buf
   const signX = M + CW - 58;
   txt(`For ${issuer.tradeName}`, signX + 27.5, signY + 2.8, { bold: true, size: 7.6, color: NAVY, align: "center" });
   if (issuer.signatory) txt(issuer.signatory, signX + 27.5, signY + 7.2, { size: 7, color: INK, align: "center" });
-  ln(signX, signY + SIGN_H - 3.6, signX + 55, signY + SIGN_H - 3.6, BORDER, 0.3);
-  txt("Authorised Signatory", signX + 27.5, signY + SIGN_H - 0.6, { size: 6.2, color: MUT, align: "center" });
+  ln(signX, signY + 10.2, signX + 55, signY + 10.2, BORDER, 0.3);
+  txt("Authorised Signatory", signX + 27.5, signY + 14.1, { size: 6.5, color: MUT, align: "center" });
 
   // Keep the sign-off text, but not the unwanted horizontal rules that used to
   // span the lower page and visually competed with the signature underline.
-  const fy = signY + SIGN_H + 4.2;
+  const fy = signY + 2.6;
   const thanks = "Thank You For Your Business!";
   if (scriptOk) {
     doc.setFont(SCRIPT_FONT, "normal");
@@ -1419,7 +1422,7 @@ export async function renderInvoicePdf(data: InvoiceData): Promise<{ buffer: Buf
     noteY += 3.6;
   }
   txt("This is a computer-generated quotation, not a tax invoice.", PW / 2, noteY, { size: 6.6, color: MUT, align: "center" });
-  quotationContentBottom = noteY + 3;
+  quotationContentBottom = Math.max(noteY + 3, signY + SIGN_H + 2);
   } // end quotation-only signature + footer
 
   // Short quotations should be short PDFs. Keep the familiar A4 width, but
