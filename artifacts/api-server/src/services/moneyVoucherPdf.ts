@@ -80,7 +80,7 @@ export async function generateMoneyVoucherPdf(data: MoneyVoucherPdfInput): Promi
   const doc = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait", compress: true });
   await registerFonts(doc);
 
-  const PW = 210, M = 12, CW = PW - M * 2;
+  const PW = 210, PH = 297, M = 12, CW = PW - M * 2;
   const isReceipt = data.kind === "receipt";
   // Receipt green / payment navy — matched to the invoice's tonal system.
   const ACCENT: RGB = isReceipt ? [22, 101, 52] : [23, 42, 92];
