@@ -25,3 +25,11 @@ Belt-and-braces on purpose: partial unique indexes on BOTH sides of the link, pl
 - Item "inactive" is `items.status` owned by `blockedByInactiveProducts()` — there is no `is_active` column; hand-rolled checks 500.
 - Explicit JSX type arguments (`<Comp<T> …>`) pass tsc but break the Vite build — the cartographer babel plugin injects attributes between tag and generic. Rely on inference in JSX.
 - Generated PDFs embed a subsetted font, so grepping raw PDF bytes for ASCII always fails — use `pdftotext` (in the runtime PATH) to verify PDF content.
+
+## Compact quotation pages
+
+When shortening a single-page quotation below A4 height, resizing jsPDF's page box alone clips content because drawing coordinates were encoded against the original A4 bottom-origin system. The existing page stream must be translated with the page-box change, and overlays such as watermarks must compensate for that translation.
+
+**Why:** A direct page-height change made the header disappear above the new media box even though the PDF text stream still contained the document.
+
+**How to apply:** Keep multi-page output on stable A4 pages; for a shortened single page, translate the finished stream before output and visually raster-check the header, bank block, signature and bottom margin.
