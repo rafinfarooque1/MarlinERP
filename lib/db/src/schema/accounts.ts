@@ -26,10 +26,9 @@ export const cashBankAccountsTable = pgTable("cash_bank_accounts", {
 });
 
 /**
- * Places where a managed Cash/Bank account may be used. An account can be
- * available at several locations, while every money document still records
- * one location stamp of its own. The raw legacy location columns remain on
- * cash_bank_accounts as the compatibility/default owner snapshot.
+ * Legacy compatibility shadow for Cash/Bank ownership. New application code
+ * uses the scalar location_type/location_id columns on cash_bank_accounts;
+ * migration keeps at most one row here for older consumers.
  */
 export const cashBankAccountLocationsTable = pgTable("cash_bank_account_locations", {
   id: serial("id").primaryKey(),

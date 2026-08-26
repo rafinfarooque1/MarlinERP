@@ -37,7 +37,6 @@ import { parsePostingLocationFilter, companyLevelSummary, filterPostingsByLocati
 import { resolveGstScope, salesScopeCond, purchaseScopeCond } from "../lib/gstinScope";
 import { openingBalancePostings } from "../lib/openingBalances";
 import { isLevelOneAdmin, ADMIN_DELETE_ERROR } from "../lib/adminGate";
-import { cashBankLocationsByAccount, replaceCashBankLocations } from "../lib/cashBankLocations";
 
 /**
  * Location condition on a SOURCE DOCUMENT row, mirroring how the derived
@@ -2294,8 +2293,6 @@ router.get("/accounts/cash-bank", requireModuleView("page:/accounts/cash-bank"),
       ) SELECT * FROM tree ORDER BY id
     `),
   ]);
-  const accountLocations = await cashBankLocationsByAccount(accounts.map((a: any) => Number(a.id)));
-
   const locName = (lt: string | null, lid: number | null): string => {
     if (lt === "warehouse") return whs.find((w: any) => Number(w.id) === lid)?.name ?? "Warehouse";
     if (lt === "outlet") return outs.find((o: any) => Number(o.id) === lid)?.name ?? "Outlet";
@@ -2312,18 +2309,13 @@ router.get("/accounts/cash-bank", requireModuleView("page:/accounts/cash-bank"),
     const bal = lid ? idx.net(lid) : null;
     const lt = c.location_type ?? "headoffice";
     const locId = c.location_id != null ? Number(c.location_id) : null;
-    const locations = accountLocations.get(Number(c.id)) ?? [{
-      locationType: lt, locationId: locId ?? 0, locationName: locName(lt, locId),
-    }];
-    if (selectedKeys.size > 0 && !locations.some((location) =>
-      selectedKeys.has(`${location.locationType}:${location.locationId}`))) continue;
-    // LBAC allows a branch to see an account available at its own place, not
-    // the account's other memberships or their location names.
-    const visibleLocations = scope.isHeadOffice
-      ? locations
-      : locations.filter((location) => allowedKeys?.has(`${location.locationType}:${location.locationId}`));
-    if (visibleLocations.length === 0) continue;
-    const primaryLocation = visibleLocations[0];
+    const accountLocation = {
+      locationType: String(lt),
+      locationId: lt === "headoffice" ? 0 : (locId ?? 0),
+      locationName: locName(String(lt), locId),
+    };
+    if (selectedKeys.size > 0 && !selectedKeys.has(`${accountLocation.locationType}:${accountLocation.locationId}`)) continue;
+    if (!scope.isHeadOffice && !allowedKeys?.has(`${accountLocation.locationType}:${accountLocation.locationId}`)) continue;
     const balance = lid ? (selectedNet?.get(lid) ?? 0) : null;
     out.push({
       id: Number(c.id), name: c.name, accountType: c.account_type,
@@ -2331,10 +2323,9 @@ router.get("/accounts/cash-bank", requireModuleView("page:/accounts/cash-bank"),
       balance: balance ?? bal ?? Number(c.balance), storedBalance: Number(c.balance),
       currentBalance: balance ?? bal, balanceSource: lid ? ("ledger" as const) : ("unlinked" as const),
       ledgerId: lid,
-      locationType: primaryLocation.locationType,
-      locationId: primaryLocation.locationId,
-      locationName: primaryLocation.locationName,
-      locations: visibleLocations,
+      locationType: accountLocation.locationType,
+      locationId: accountLocation.locationId,
+      locationName: accountLocation.locationName,
       source: "module", readOnly: false,
       requiresReconciliation: c.account_type !== "cash" && c.requires_reconciliation === true,
     });
@@ -2360,7 +2351,6 @@ router.get("/accounts/cash-bank", requireModuleView("page:/accounts/cash-bank"),
       balance: selectedNet?.get(t.lid) ?? idx.net(t.lid), storedBalance: 0,
       currentBalance: selectedNet?.get(t.lid) ?? idx.net(t.lid), balanceSource: "ledger" as const,
       ledgerId: t.lid, locationType: t.lt, locationId: t.locId, locationName: t.locNm,
-      locations: [{ locationType: t.lt, locationId: t.locId, locationName: t.locNm }],
       source: "location", readOnly: true,
     });
   }
@@ -2378,8 +2368,7 @@ router.get("/accounts/cash-bank", requireModuleView("page:/accounts/cash-bank"),
       bankName: null, accountNumber: null, ifscCode: null,
       balance: selectedNet?.get(lid) ?? idx.net(lid), storedBalance: 0,
       currentBalance: selectedNet?.get(lid) ?? idx.net(lid), balanceSource: "ledger" as const,
-      ledgerId: lid, locationType: "headoffice", locationId: null, locationName: "Head Office",
-      locations: [{ locationType: "headoffice", locationId: 0, locationName: "Head Office" }],
+      ledgerId: lid, locationType: "headoffice", locationId: 0, locationName: "Head Office",
       source: isRoot ? "system" : "ledger", readOnly: true,
     });
   }
@@ -2411,34 +2400,11 @@ async function resolveCashBankLocation(body: any): Promise<
       if (locationType === "outlet" && await outletWritesBlocked(pool)) {
         return { ok: false, status: 409, error: OUTLETS_DISABLED_MESSAGE, code: OUTLETS_DISABLED_CODE };
       }
+    } else {
+      locationId = 0;
     }
   }
   return { ok: true, locationType, locationId };
-}
-
-/** Resolve a complete availability set, validating every selected place before
- * any account or ledger write runs. The legacy single-location body remains a
- * supported shorthand for integrations and older clients. */
-async function resolveCashBankLocations(body: any): Promise<
-  { ok: true; locations: Array<{ locationType: string; locationId: number | null }> }
-  | { ok: false; status: number; error: string; code?: string }
-> {
-  if (body?.locations !== undefined) {
-    if (!Array.isArray(body.locations) || body.locations.length === 0) {
-      return { ok: false, status: 400, error: "Select at least one location where this account can be used." };
-    }
-    const locations: Array<{ locationType: string; locationId: number | null }> = [];
-    const seen = new Set<string>();
-    for (const input of body.locations) {
-      const resolved = await resolveCashBankLocation(input);
-      if (!resolved.ok) return resolved;
-      const key = `${resolved.locationType}:${resolved.locationId ?? 0}`;
-      if (!seen.has(key)) { seen.add(key); locations.push(resolved); }
-    }
-    return { ok: true, locations };
-  }
-  const location = await resolveCashBankLocation(body);
-  return location.ok ? { ok: true, locations: [location] } : location;
 }
 
 /** Form wording for validation messages, so a 400 names the field the user
@@ -2480,12 +2446,13 @@ router.post("/accounts/cash-bank", requireModuleAction("page:/accounts/cash-bank
     return;
   }
 
-  const resolvedLocations = await resolveCashBankLocations(req.body);
-  if (!resolvedLocations.ok) { res.status(resolvedLocations.status).json({ error: resolvedLocations.error, ...(resolvedLocations.code ? { code: resolvedLocations.code } : {}) }); return; }
-  // Keep a deterministic compatibility/default owner on the account row. This
-  // only supports older readers; transaction stamps are always chosen per
-  // voucher and are never changed by availability edits.
-  const loc = resolvedLocations.locations[0];
+  if (req.body?.locations !== undefined) {
+    res.status(400).json({ error: "Cash & Bank accounts can have only one location." });
+    return;
+  }
+  const resolvedLocation = await resolveCashBankLocation(req.body);
+  if (!resolvedLocation.ok) { res.status(resolvedLocation.status).json({ error: resolvedLocation.error, ...(resolvedLocation.code ? { code: resolvedLocation.code } : {}) }); return; }
+  const loc = resolvedLocation;
 
   // One name per account, checked against both the module and the subtree the
   // ledger will join — a duplicate ledger name under the same head would make
@@ -2520,10 +2487,13 @@ router.post("/accounts/cash-bank", requireModuleAction("page:/accounts/cash-bank
     accountId = Number(row.id);
     ledgerId = await provisionCashBankLedger(client, { accountId, name, accountType: parsed.data.accountType });
     await client.query(`UPDATE cash_bank_accounts SET ledger_id = $1 WHERE id = $2`, [ledgerId, accountId]);
-    await replaceCashBankLocations(client, accountId, resolvedLocations.locations.map((l) => ({
-      locationType: l.locationType as "headoffice" | "warehouse" | "outlet",
-      locationId: l.locationId ?? 0,
-    })));
+    // Keep the legacy junction as a single-row compatibility shadow. It is not
+    // consulted for ownership by the application.
+    await client.query(
+      `INSERT INTO cash_bank_account_locations (account_id, location_type, location_id)
+       VALUES ($1, $2, $3)`,
+      [accountId, loc.locationType, loc.locationId ?? 0],
+    );
     await client.query("COMMIT");
   } catch (e) {
     await client.query("ROLLBACK");
@@ -2560,7 +2530,6 @@ router.post("/accounts/cash-bank", requireModuleAction("page:/accounts/cash-bank
     balance: money.value, storedBalance: 0,
     currentBalance: money.value, balanceSource: "ledger" as const, ledgerId,
     locationType: loc.locationType, locationId: loc.locationId,
-    locations: (await cashBankLocationsByAccount([accountId])).get(accountId) ?? [],
     source: "module", readOnly: false,
     requiresReconciliation: requiresRecon,
   });
@@ -2612,23 +2581,21 @@ router.patch("/accounts/cash-bank/:id", requireModuleAction("page:/accounts/cash
     push("requires_reconciliation", body.requiresReconciliation === true);
   }
 
-  let locationsToReplace: Array<{ locationType: string; locationId: number | null }> | null = null;
+  let locationToSet: { locationType: string; locationId: number | null } | null = null;
   if (body.locations !== undefined) {
-    const resolved = await resolveCashBankLocations({ locations: body.locations });
-    if (!resolved.ok) { res.status(resolved.status).json({ error: resolved.error, ...(resolved.code ? { code: resolved.code } : {}) }); return; }
-    locationsToReplace = resolved.locations;
+    res.status(400).json({ error: "Cash & Bank accounts can have only one location." });
+    return;
   } else if (body.locationType !== undefined || body.locationId !== undefined) {
-    const resolved = await resolveCashBankLocations({
+    const resolved = await resolveCashBankLocation({
       locationType: body.locationType ?? acc.location_type ?? "headoffice",
       locationId: body.locationId ?? acc.location_id,
     });
     if (!resolved.ok) { res.status(resolved.status).json({ error: resolved.error, ...(resolved.code ? { code: resolved.code } : {}) }); return; }
-    locationsToReplace = resolved.locations;
+    locationToSet = resolved;
   }
-  if (locationsToReplace) {
-    const primary = locationsToReplace[0];
-    push("location_type", primary.locationType);
-    push("location_id", primary.locationId);
+  if (locationToSet) {
+    push("location_type", locationToSet.locationType);
+    push("location_id", locationToSet.locationId);
   }
 
   // Scalar account data, the mirrored ledger name and future availability move
@@ -2644,11 +2611,13 @@ router.patch("/accounts/cash-bank/:id", requireModuleAction("page:/accounts/cash
     if (newName !== undefined && acc.ledger_id != null) {
       await write.query(`UPDATE account_ledgers SET name = $1 WHERE id = $2`, [newName, Number(acc.ledger_id)]);
     }
-    if (locationsToReplace) {
-      await replaceCashBankLocations(write, id, locationsToReplace.map((l) => ({
-        locationType: l.locationType as "headoffice" | "warehouse" | "outlet",
-        locationId: l.locationId ?? 0,
-      })));
+    if (locationToSet) {
+      await write.query(`DELETE FROM cash_bank_account_locations WHERE account_id = $1`, [id]);
+      await write.query(
+        `INSERT INTO cash_bank_account_locations (account_id, location_type, location_id)
+         VALUES ($1, $2, $3)`,
+        [id, locationToSet.locationType, locationToSet.locationId ?? 0],
+      );
     }
     await write.query("COMMIT");
   } catch (e) {
@@ -2696,8 +2665,7 @@ router.patch("/accounts/cash-bank/:id", requireModuleAction("page:/accounts/cash
     currentBalance: derived, balanceSource: fresh.ledger_id ? ("ledger" as const) : ("unlinked" as const),
     ledgerId: fresh.ledger_id != null ? Number(fresh.ledger_id) : null,
     locationType: fresh.location_type ?? "headoffice",
-    locationId: fresh.location_id != null ? Number(fresh.location_id) : null,
-    locations: (await cashBankLocationsByAccount([id])).get(id) ?? [],
+    locationId: fresh.location_id != null ? Number(fresh.location_id) : 0,
     source: "module", readOnly: false,
     requiresReconciliation: fresh.account_type !== "cash" && fresh.requires_reconciliation === true,
   });

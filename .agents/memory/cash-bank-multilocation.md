@@ -1,22 +1,19 @@
 ---
-name: Shared Cash/Bank availability
-description: Rules for accounts that are available at more than one business location.
+name: Cash/Bank single-location ownership
+description: Rules for Cash/Bank account ownership after removing multi-location assignment.
 ---
 
-Cash/Bank account availability is a many-to-many selection rule, while every
-posted business document retains one immutable effective location. Head Office
-is an explicit `headoffice:0` availability membership, not the absence of a
-branch membership.
+Each managed Cash/Bank account has one canonical owner in its scalar
+`location_type`/`location_id` fields. Head Office uses `headoffice:0`. The
+legacy junction table may remain as a one-row compatibility shadow, but
+application ownership reads must use the scalar owner.
 
-**Why:** A shared account otherwise gets treated as branch-owned by legacy
-location resolvers, causing either a branch user to stamp a transaction to a
-different location or Head Office to be unable to use an explicitly shared
-account. Removing one location can also accidentally erase the shared
-account's backing ledger and opening balance.
+**Why:** Account-level multi-location assignment made ownership ambiguous and
+could duplicate account rows or balances in location views. Historical
+payments, receipts, vouchers, and journal entries still retain their original
+location stamps and are not rewritten during canonicalization.
 
-**How to apply:** Any account picker, automatic payment routing, voucher guard,
-or location cleanup must query the availability relation. Branch callers may
-only see/use their own membership. An ambiguous Head Office write needs an
-explicit location. Availability changes never update historic document stamps,
-and location deletion must retain the account, ledger, and opening balance if
-another membership remains.
+**How to apply:** Account pickers, automatic payment routing, voucher guards,
+and location cleanup must resolve the scalar owner. Global location filters
+remain multi-select for reports and dashboards, but a Cash/Bank form accepts
+one required location only. Never rewrite historical document stamps.

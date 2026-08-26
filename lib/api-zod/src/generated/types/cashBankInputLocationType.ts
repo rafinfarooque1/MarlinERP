@@ -7,7 +7,7 @@
  */
 
 /**
- * Defaults to headoffice.
+ * The one location that owns this account. Head Office uses locationId 0.
  */
 export type CashBankInputLocationType = typeof CashBankInputLocationType[keyof typeof CashBankInputLocationType];
 
