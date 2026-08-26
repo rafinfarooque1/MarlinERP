@@ -1,0 +1,276 @@
+
+
+Fix Quotation PDF Payment Section Alignment
+
+Please improve the alignment and spacing of the Bank Details + Scan to Pay / UPI QR section in the Quotation PDF. The functionality is correct, but the current visual layout is not properly aligned.
+
+1. Fix Bank Details Alignment
+
+The Bank Details section should use a clean and consistent grid.
+
+
+
+Current fields include:
+
+
+
+Account Name
+
+Account Number
+
+Bank Name
+
+IFSC Code
+
+Branch
+
+
+
+Make sure:
+
+
+
+All labels align vertically.
+
+All corresponding values start at the same consistent position.
+
+Column spacing is uniform.
+
+Labels and values do not appear scattered.
+
+Account Name and Account Number should align properly with Bank Name and IFSC Code.
+
+Branch should align with the same grid structure.
+
+Use consistent font size and line height.
+
+
+
+Recommended structure:
+
+LabelValueLabelValue
+
+Account Name
+
+Frozen Hub
+
+Bank Name
+
+HDFC Bank
+
+Account Number
+
+502008588204
+
+IFSC Code
+
+HDFC0000076
+
+Branch
+
+MG Road, Bengaluru
+
+
+
+
+
+The PDF layout should look balanced and professional.
+
+2. Fix UPI ID Alignment
+
+The current UPI ID below the QR code is too small and appears poorly positioned.
+
+
+
+Move the UPI information into a properly aligned payment section below the QR code.
+
+
+
+Recommended layout:
+
+
+
+SCAN TO PAY
+
+
+
+[ QR CODE ]
+
+
+
+UPI ID
+8089430780@hdfc
+
+
+
+Requirements:
+
+
+
+Center-align the QR code.
+
+Center-align the UPI ID with the QR code.
+
+Keep the UPI ID directly below the QR code.
+
+Add sufficient spacing between the QR code and UPI ID.
+
+Make the UPI ID font clearly readable.
+
+Do not let the UPI ID touch the border or overlap other content.
+
+If the UPI ID is long, ensure it wraps or scales cleanly without breaking the layout.
+
+Use the actual UPI ID from the selected warehouse dynamically.
+
+
+
+The format should be clean, for example:
+
+
+
+UPI ID: 8089430780@hdfc
+
+3. Align Both Payment Panels
+
+The Bank Details panel and Scan to Pay panel should have:
+
+
+
+Equal or visually balanced heights.
+
+Consistent top and bottom padding.
+
+Proper vertical alignment.
+
+Consistent border radius and border styling.
+
+A properly aligned divider between both sections.
+
+
+
+The QR code should be vertically centered within its section, and the Bank Details content should also be vertically balanced rather than sitting unevenly.
+
+4. Fix Bottom Section Alignment
+
+The bottom part currently contains:
+
+
+
+Thank You For Your Business!
+
+Computer-generated quotation text
+
+Authorized Signatory section
+
+
+
+These elements should not look disconnected.
+
+
+
+Improve the layout so that:
+
+
+
+Left / Center area:
+
+
+
+Thank You For Your Business!
+
+Computer-generated quotation note
+
+
+
+Right area:
+
+
+
+For [Warehouse Name]
+
+Authorized Signatory
+
+Signature line
+
+
+
+Make sure:
+
+
+
+The signature line is correctly positioned above the authorized signatory text where appropriate.
+
+Warehouse name and signature labels are aligned consistently.
+
+No text overlaps or sits too close to horizontal lines.
+
+The footer has balanced spacing from the payment section above.
+
+5. Dynamic Warehouse Data
+
+Do not hard-code:
+
+
+
+Account Name
+
+Account Number
+
+Bank Name
+
+IFSC Code
+
+Branch
+
+UPI ID
+
+Warehouse Name
+
+
+
+All values must come dynamically from the warehouse/location selected in the quotation.
+
+
+
+When a different warehouse is selected:
+
+
+
+Bank details must update.
+
+UPI ID must update.
+
+QR code must regenerate/update.
+
+Signature warehouse name must update.
+
+Alignment must remain correct even if text lengths differ.
+
+Expected Final Layout
+
+The final payment section should visually look like this:
+
+┌───────────────────────────────────────┬───────────────────────┐
+│ 🏦 BANK DETAILS                       │      SCAN TO PAY      │
+│                                       │                       │
+│ Account Name     Frozen Hub           │       [ QR CODE ]     │
+│ Account Number   502008588204         │                       │
+│ Bank Name        HDFC Bank            │ UPI ID:               │
+│ IFSC Code        HDFC0000076          │ 8089430780@hdfc       │
+│ Branch           MG Road, Bengaluru   │                       │
+└───────────────────────────────────────┴───────────────────────┘
+
+Below that:
+
+Thank You For Your Business!                 For Frozen Hub
+This is a computer-generated quotation.      ───────────────
+                                             Authorised Signatory
+
+Important
+
+Do not change the existing payment functionality, QR generation logic, warehouse selection logic, quotation totals, items, GST, or accounting behavior.
+
+
+
+This task is specifically to improve the PDF alignment, spacing, typography, UPI ID visibility, and overall professional appearance, while keeping all payment data dynamically linked to the selected warehouse.
