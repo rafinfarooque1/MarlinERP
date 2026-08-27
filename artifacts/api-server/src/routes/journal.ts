@@ -1,6 +1,6 @@
 import { disabledWarehouseError, WAREHOUSE_DISABLED_CODE } from "../lib/warehouseLifecycle";
 import { Router } from "express";
-import { requireModuleAction, requireModuleView } from "../middleware/permissions";
+import { hasModuleAction, requireModuleAction, requireModuleView } from "../middleware/permissions";
 import { pool } from "@workspace/db";
 import { nextVoucherNumber, VOUCHER_TYPE_LABELS, financialYearLabel } from "../lib/voucherNumber";
 import { createJournalVoucherCore } from "../lib/journalCreate";
@@ -8,7 +8,8 @@ import { logActivity } from "../lib/audit";
 import { lineTaxHeads } from "../lib/gst";
 import { clearsThroughBank } from "../lib/paymentModes";
 import { isIsoDate } from "../lib/dateInput";
-import { callerLocation, ownLocationScope, foreignPartyLedgerIds, locationOwnedLedgerMap } from "../lib/moneyScope";
+import { callerLocation, ownLocationScope, foreignPartyLedgerIds, locationOwnedLedgerMap, scopeLedgerIds } from "../lib/moneyScope";
+import { getUserDataScope, isLocationInScope, type DataScope } from "../lib/dataScope";
 import { outletWritesBlocked } from "../lib/featureFlags";
 import { respondIfMonthLocked, isMonthLocked, ymOfDate, monthLockedBody } from "../lib/periodLock";
 import { isLevelOneAdmin, ADMIN_DELETE_ERROR } from "../lib/adminGate";
@@ -52,6 +53,72 @@ async function ledgerSubtreeIds(rootId: number, q: Q = pool): Promise<Set<number
     for (const r of rows) if (r.parent_id && ids.has(r.parent_id)) ids.add(r.id);
   }
   return ids;
+}
+
+type BookKind = "cash" | "bank";
+
+const bookPageKey = (kind: BookKind) =>
+  kind === "cash" ? "page:/accounts/cash-book" : "page:/accounts/bank-book";
+
+/**
+ * The ledger selector endpoint is shared by both book pages, so its route-level
+ * any-of permission guard cannot tell which page is asking. The book kind must
+ * be checked again inside the handler; otherwise Cash Book permission would
+ * also authorize a direct Bank Book API call.
+ */
+async function requireBookKindView(req: any, res: any, kind: BookKind): Promise<boolean> {
+  const allowed = await hasModuleAction(req.employee?.hierarchyId, bookPageKey(kind), "view");
+  if (allowed) return true;
+  res.status(403).json({
+    error: `You don't have permission to view the ${kind === "cash" ? "Cash" : "Bank"} Book`,
+  });
+  return false;
+}
+
+async function ledgerBookKind(ledgerId: number, q: Q = pool): Promise<BookKind | null> {
+  const { rows: [row] } = await q.query(`
+    WITH RECURSIVE ancestors AS (
+      SELECT id, parent_id, code
+      FROM account_ledgers
+      WHERE id = $1
+      UNION ALL
+      SELECT l.id, l.parent_id, l.code
+      FROM account_ledgers l
+      JOIN ancestors a ON a.parent_id = l.id
+    )
+    SELECT code
+    FROM ancestors
+    WHERE code IN ('STD-CASH', 'STD-BANK')
+    LIMIT 1
+  `, [ledgerId]);
+  if (row?.code === "STD-CASH") return "cash";
+  if (row?.code === "STD-BANK") return "bank";
+  return null;
+}
+
+/**
+ * Resolve the authenticated employee's immutable book scope. Head Office keeps
+ * the existing unrestricted path; every other employee gets only ledger ids
+ * owned by the locations returned by the shared data-scope helper.
+ */
+async function bookAccessScope(employee: {
+  branchType?: string;
+  branchId?: number;
+}): Promise<{ dataScope: DataScope; ledgerIds: Set<number> | null }> {
+  if (!employee.branchType || employee.branchType === "headoffice") {
+    return {
+      dataScope: { isHeadOffice: true, warehouseIds: [], outletIds: [] },
+      ledgerIds: null,
+    };
+  }
+  const dataScope = await getUserDataScope({
+    branchType: employee.branchType,
+    branchId: Number(employee.branchId ?? 0),
+  });
+  return {
+    dataScope,
+    ledgerIds: new Set(await scopeLedgerIds(dataScope)),
+  };
 }
 
 async function fetchVoucher(id: number): Promise<any | null> {
@@ -1691,10 +1758,16 @@ router.get("/accounts/day-book", requireModuleView("page:/accounts/day-book"), a
 
 // Ledger options for the book selector (cash or bank subtree)
 router.get("/accounts/cash-bank-book/ledgers", requireModuleView(["page:/accounts/cash-book", "page:/accounts/bank-book", "page:/accounts/cash-bank"]), async (req, res): Promise<void> => {
-  // LBAC: full cash-bank ledger list is Head Office only
-  if ((req as any).employee?.branchType !== 'headoffice') { res.json([]); return; }
-  const kind = (req.query as any).kind === "bank" ? "bank" : "cash";
+  const kind: BookKind = (req.query as any).kind === "bank" ? "bank" : "cash";
+  if (!(await requireBookKindView(req, res, kind))) return;
+
   const ids = await ledgerIdsUnderCodes([kind === "bank" ? "STD-BANK" : "STD-CASH"]);
+  const access = await bookAccessScope((req as any).employee ?? {});
+  if (access.ledgerIds) {
+    for (const id of ids) {
+      if (!access.ledgerIds.has(id)) ids.delete(id);
+    }
+  }
   if (ids.size === 0) { res.json([]); return; }
   const { rows } = await pool.query(
     `SELECT id, name, code, is_group FROM account_ledgers WHERE id = ANY($1) ORDER BY name`,
@@ -1718,6 +1791,8 @@ export async function computeCashBankBook(opts: {
   fromDate?: string;
   toDate?: string;
   locFilter?: PostingLocationFilter | null;
+  dataScope?: DataScope;
+  accessibleLedgerIds?: number[];
 }): Promise<Record<string, any> | null> {
   const q = opts.q ?? pool;
   const { ledgerId, fromDate, toDate } = opts;
@@ -1739,7 +1814,28 @@ export async function computeCashBankBook(opts: {
   const subtreePostings = (await buildDerivedPostings({ toDate: isDate(toDate) ? toDate : undefined, q }))
     .concat(await openingBalancePostings({ toDate: isDate(toDate) ? toDate : undefined }) as Posting[])
     .filter(p => subtree.has(p.ledgerId));
-  const postings = filterPostingsByLocation(subtreePostings, locFilter);
+  const accessible = new Set(opts.accessibleLedgerIds ?? []);
+  const scopedPostings = opts.dataScope && !opts.dataScope.isHeadOffice
+    ? subtreePostings.filter(p =>
+        accessible.has(p.ledgerId) ||
+        isLocationInScope(opts.dataScope!, p.locationType, p.locationId),
+      )
+    : subtreePostings;
+
+  // Opening balances are company-level by design, but an employee who is
+  // authorized for the ledger must still see that ledger's opening balance when
+  // the global location selector narrows the displayed movements.
+  const locationPostings = filterPostingsByLocation(scopedPostings, locFilter);
+  const openingPostings = locFilter && locFilter.type !== "company" && opts.dataScope && !opts.dataScope.isHeadOffice
+    ? scopedPostings.filter(p =>
+        p.source === "opening_balance" &&
+        accessible.has(p.ledgerId) &&
+        !postingMatchesLocation(p, locFilter),
+      )
+    : [];
+  const postings = openingPostings.length > 0
+    ? [...locationPostings, ...openingPostings]
+    : locationPostings;
   postings.sort((a, b) => a.date.localeCompare(b.date) || a.source.localeCompare(b.source));
 
   const from = isDate(fromDate) ? fromDate : null;
@@ -1768,20 +1864,43 @@ export async function computeCashBankBook(opts: {
     closingBalance: balance,
     ...(locFilter ? {
       location: { type: locFilter.type, id: locFilter.id },
-      companyLevel: locFilter.type !== "company" ? companyLevelSummary(subtreePostings) : null,
+      companyLevel: locFilter.type !== "company" ? companyLevelSummary(scopedPostings) : null,
     } : {}),
   };
 }
 
 router.get("/accounts/cash-bank-book", requireModuleView(["page:/accounts/cash-book", "page:/accounts/bank-book"]), async (req, res): Promise<void> => {
-  // LBAC: full cash-bank book is Head Office only
-  if ((req as any).employee?.branchType !== 'headoffice') { res.json({ ledger: null, entries: [], openingBalance: 0, closingBalance: 0 }); return; }
   const ledgerId = Number((req.query as any).ledgerId);
   const { fromDate, toDate } = req.query as { fromDate?: string; toDate?: string };
   if (!ledgerId) { res.status(400).json({ error: "ledgerId is required" }); return; }
 
+  const requestedKind = (req.query as any).kind === "cash" || (req.query as any).kind === "bank"
+    ? (req.query as any).kind as BookKind
+    : null;
+  if (requestedKind && !(await requireBookKindView(req, res, requestedKind))) return;
+
+  const actualKind = await ledgerBookKind(ledgerId);
+  if (!actualKind || (requestedKind && requestedKind !== actualKind)) {
+    res.status(404).json({ error: "Ledger not found" });
+    return;
+  }
+  if (!requestedKind && !(await requireBookKindView(req, res, actualKind))) return;
+
+  const access = await bookAccessScope((req as any).employee ?? {});
+  if (access.ledgerIds && !access.ledgerIds.has(ledgerId)) {
+    res.status(404).json({ error: "Ledger not found" });
+    return;
+  }
+
   const locFilter = getPostingLocationFilter(req);
-  const result = await computeCashBankBook({ ledgerId, fromDate, toDate, locFilter });
+  const result = await computeCashBankBook({
+    ledgerId,
+    fromDate,
+    toDate,
+    locFilter,
+    dataScope: access.dataScope,
+    accessibleLedgerIds: access.ledgerIds ? [...access.ledgerIds] : undefined,
+  });
   if (!result) { res.status(404).json({ error: "Ledger not found" }); return; }
   res.json(result);
 });
