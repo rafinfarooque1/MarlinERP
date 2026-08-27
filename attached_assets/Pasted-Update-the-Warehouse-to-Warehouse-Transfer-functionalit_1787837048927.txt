@@ -1,0 +1,80 @@
+Update the **Warehouse-to-Warehouse Transfer** functionality and its reports.
+
+### Required Accounting and GST Treatment
+
+A warehouse-to-warehouse transfer should be treated as a **Sale transaction from the source warehouse** and a corresponding **Purchase transaction for the destination warehouse**, wherever GST and inter-warehouse taxable supply rules are applicable.
+
+#### 1. Source Warehouse — Sale
+
+When stock is transferred:
+
+* The **From Warehouse** must record the transaction as a **Sale/Outward Supply**.
+* Stock should be reduced from the source warehouse.
+* The transaction must appear in the relevant **Sales Reports**.
+* GST, taxable value, CGST/SGST/IGST, and total invoice value should be calculated and recorded according to the applicable transaction configuration.
+* The accounting and GST reports should treat this as a sale/outward supply.
+
+#### 2. Destination Warehouse — Purchase
+
+For the receiving warehouse:
+
+* The **To Warehouse** must record the transaction as a **Purchase/Inward Supply**.
+* Stock should be added to the destination warehouse.
+* The transaction should appear in the relevant **Purchase Reports**.
+* Applicable GST/input tax details should be recorded appropriately.
+
+### Report Changes
+
+The current Warehouse Transfer report should clearly reflect the transaction as:
+
+* **Sale / Outward Supply** for the From Warehouse
+* **Purchase / Inward Supply** for the To Warehouse
+
+The reports should show all relevant details, including:
+
+* Transfer/Invoice Number
+* Date
+* From Warehouse
+* To Warehouse
+* Customer/Branch or receiving entity details, as applicable
+* Item details
+* Quantity
+* Rate
+* Taxable Value
+* GST details
+* Total Invoice Value
+
+### PDF / Print Format
+
+The PDF generated for a Warehouse-to-Warehouse Transfer should **not appear as a simple stock transfer document**.
+
+Instead, it should be formatted and presented like a proper **GST Sales Invoice / Sale Bill** for the source warehouse.
+
+The PDF should include the standard sale invoice details, such as:
+
+* **TAX INVOICE / SALES INVOICE**
+* Invoice Number
+* Invoice Date
+* Seller / Source Warehouse details
+* Buyer / Destination Warehouse details
+* GSTIN details, wherever applicable
+* Billing and shipping details, if required
+* Item-wise quantity, rate and taxable value
+* CGST + SGST or IGST, as applicable
+* Total taxable amount
+* Total GST amount
+* Grand Total
+* Amount in words
+* Authorized signatory section
+
+### Important
+
+The system should maintain the relationship between both sides of the same transaction. A single Warehouse-to-Warehouse Transfer should create or represent:
+
+**Source Warehouse → Sale / Outward Supply**
+
+**Destination Warehouse → Purchase / Inward Supply**
+
+Both records must remain linked to the same transfer/invoice transaction for reporting, tracking, stock reconciliation, accounting, and GST purposes.
+
+The existing stock movement functionality should continue to work correctly, but the **financial, reporting, GST, and PDF presentation must reflect the transaction as a Sale from the source and a Purchase at the destination**.
