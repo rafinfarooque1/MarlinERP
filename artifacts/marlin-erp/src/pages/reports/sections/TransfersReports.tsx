@@ -4,12 +4,10 @@
  * Read-only, one row per transfer LINE, so item, batch and quantity mean
  * something instead of a challan-level lump.
  *
- * Terminology: the sending side is "Transfer Out", the receiving side is
- * "Transfer In". A transfer behaves operationally like a sale out of one
- * location and a purchase into another, but it is neither — no revenue is
- * earned, nothing is bought, and an internal movement never carries an invoice
- * number. Those figures are deliberately kept out of every sales and purchase
- * total in the Reports Center.
+ * Terminology: same-registration movements remain "Transfer Out" and
+ * "Transfer In" challans. Cross-registration taxable movements also show the
+ * linked Sale / Outward Supply and Purchase / Inward Supply documents. Those
+ * linked documents are kept out of ordinary customer sales and purchase totals.
  *
  * Location scope is enforced by the server: the filters below can only narrow
  * what the caller is already entitled to see, never widen it.
@@ -114,7 +112,7 @@ function BranchTransferReport({ canDownload }: { canDownload: boolean }) {
 
   const doc = (): ReportDoc => ({
     title: 'Branch Transfer Report',
-    subtitle: `Period: ${periodLabel(range.from, range.to)} — internal stock movement, not a sale or a purchase`,
+    subtitle: `Period: ${periodLabel(range.from, range.to)} — internal movements and linked inter-registration supplies`,
     orientation: 'landscape',
     metaRows: [
       ['Period', periodLabel(range.from, range.to)],
@@ -129,8 +127,13 @@ function BranchTransferReport({ canDownload }: { canDownload: boolean }) {
       columns: [
         { label: 'Challan', width: 1.3 }, { label: 'Date' },
         { label: 'From', width: 1.4 }, { label: 'To', width: 1.4 },
-        { label: 'Item', width: 1.8 }, { label: 'Batch', width: 1.2 },
-        { label: 'Qty', align: 'right' as const }, { label: 'Unit' },
+         { label: 'Treatment', width: 1.8 }, { label: 'Invoice', width: 1.3 },
+         { label: 'Item', width: 1.8 }, { label: 'Batch', width: 1.2 },
+         { label: 'Qty', align: 'right' as const }, { label: 'Unit' },
+         { label: 'Rate', align: 'right' as const }, { label: 'Taxable', align: 'right' as const },
+         { label: 'CGST', align: 'right' as const }, { label: 'SGST', align: 'right' as const },
+         { label: 'IGST', align: 'right' as const }, { label: 'GST', align: 'right' as const },
+         { label: 'Total', align: 'right' as const },
         ...(canSeeValue
           ? [{ label: 'Unit Cost', align: 'right' as const, width: 1.1 }, { label: 'Value', align: 'right' as const, width: 1.2 }]
           : []),
@@ -138,14 +141,21 @@ function BranchTransferReport({ canDownload }: { canDownload: boolean }) {
       ],
       rows: rows.map((r) => [
         r.challanNumber, fmtDate(r.transferDate), r.sourceName, r.destName,
-        r.itemName, batchLabel(r) || '-', num(r.quantity), r.unit,
+         `${r.outwardDocument}${r.documentTreatment === 'internal' ? '' : ` → ${r.inwardDocument}`}`,
+         r.invoiceNumber ?? '-', r.itemName, batchLabel(r) || '-', num(r.quantity), r.unit,
+         r.invoiceRate == null ? '-' : pdfMoney(r.invoiceRate),
+         r.taxableValue == null ? '-' : pdfMoney(r.taxableValue),
+         r.taxAmount > 0 ? pdfMoney(r.cgst) : '-', r.taxAmount > 0 ? pdfMoney(r.sgst) : '-',
+         r.taxAmount > 0 ? pdfMoney(r.igst) : '-', r.taxAmount > 0 ? pdfMoney(r.taxAmount) : '-',
+         r.documentTotal == null ? '-' : pdfMoney(r.documentTotal),
         ...(canSeeValue ? [pdfMoney(r.unitCost), pdfMoney(r.lineValue)] : []),
         titleCase(r.status),
         r.dispatchDate ? fmtDate(r.dispatchDate) : '-',
         r.receivedDate ? fmtDate(r.receivedDate) : '-',
         r.handledBy ?? '-',
       ]),
-      totalsRow: ['TOTAL', '', '', '', '', '', num(totals?.qty), '',
+       totalsRow: ['TOTAL', '', '', '', '', '', '', '', num(totals?.qty), '',
+         '', '', '', '', '', '', '',
         ...(canSeeValue ? ['', pdfMoney(totals?.value)] : []),
         '', '', '', ''],
     }],
@@ -184,8 +194,13 @@ function BranchTransferReport({ canDownload }: { canDownload: boolean }) {
             'Transfer Date': r.transferDate,
             'Source Type': titleCase(r.sourceType), Source: r.sourceName,
             'Destination Type': titleCase(r.destType), Destination: r.destName,
-            'Product Type': r.materialTypeLabel, Item: r.itemName, Batch: batchLabel(r),
-            Qty: r.quantity, 'Qty Basis': r.quantityBasis, Unit: r.unit,
+             Treatment: r.documentTreatment === 'internal' ? r.outwardDocument : `${r.outwardDocument} → ${r.inwardDocument}`,
+             'Product Type': r.materialTypeLabel, Item: r.itemName, Batch: batchLabel(r),
+             Qty: r.quantity, 'Qty Basis': r.quantityBasis, Unit: r.unit,
+             'Invoice Qty': r.invoiceQuantity ?? '', 'Invoice Rate (₹)': r.invoiceRate ?? '',
+             'Taxable Value (₹)': r.taxableValue ?? '', 'CGST (₹)': r.cgst,
+             'SGST (₹)': r.sgst, 'IGST (₹)': r.igst, 'GST (₹)': r.taxAmount,
+             'Document Total (₹)': r.documentTotal ?? '',
             ...(canSeeValue
               ? { 'Unit Cost (₹)': (r.unitCost ?? 0).toFixed(2), 'Line Value (₹)': (r.lineValue ?? 0).toFixed(2) }
               : {}),
@@ -204,9 +219,10 @@ function BranchTransferReport({ canDownload }: { canDownload: boolean }) {
       ]} />
 
       <p className="text-xs text-muted-foreground bg-muted/20 border border-border rounded-lg p-3">
-        A branch transfer moves the company's own stock between its own locations. Transfer Out behaves like a
-        sale out of the source and Transfer In like a purchase into the destination, but a transfer is
-        <b> neither revenue nor a purchase</b> and an internal movement carries no invoice number — only a challan.
+         A same-registration transfer moves the company's own stock between its own locations and carries only a challan.
+         When source and destination have different GST registrations, the movement is a linked
+         <b> Sale / Outward Supply</b> from the source and <b>Purchase / Inward Supply</b> at the destination.
+         The linked documents and GST values are shown here but remain excluded from ordinary customer sales and purchase totals.
         Transfer Out and Transfer In count <b>completed</b> transfers only; goods still on the road are reported
         separately as In Transit. Completed lines show the quantity the receiver actually recorded where they
         entered one.
@@ -222,7 +238,16 @@ function BranchTransferReport({ canDownload }: { canDownload: boolean }) {
           { key: 'destName', label: 'Transfer In (To)', render: (r) => (
             <span className="flex items-center gap-1.5"><LocationBadge type={r.destType} /><span className="font-medium">{r.destName}</span></span>
           ) },
-          { key: 'itemName', label: 'Item', render: (r) => (
+           { key: 'outwardDocument', label: 'Treatment', render: (r) => (
+             <span className={r.documentTreatment === 'internal' ? 'text-muted-foreground' : 'font-semibold text-primary'}>
+               {r.outwardDocument}
+               {r.documentTreatment !== 'internal' && <><br /><span className="text-[10px] font-normal text-muted-foreground">{r.inwardDocument}</span></>}
+             </span>
+           ) },
+           { key: 'invoiceNumber', label: 'Invoice', render: (r) => r.invoiceNumber
+             ? <span className="font-mono text-xs font-bold">{r.invoiceNumber}</span>
+             : <span className="text-muted-foreground">—</span> },
+           { key: 'itemName', label: 'Item', render: (r) => (
             <span className="flex items-center gap-1.5">
               <Badge variant="outline" className="text-[10px]">{r.materialTypeLabel}</Badge>
               <span className="font-medium">{r.itemName}</span>
@@ -238,6 +263,13 @@ function BranchTransferReport({ canDownload }: { canDownload: boolean }) {
             </span>
           ) },
           { key: 'unit', label: 'Unit', render: (r) => r.unit || <span className="text-muted-foreground">—</span> },
+           { key: 'invoiceRate', label: 'Rate', align: 'right', render: (r) => r.invoiceRate == null ? <span className="text-muted-foreground">—</span> : fmt(r.invoiceRate) },
+           { key: 'taxableValue', label: 'Taxable', align: 'right', render: (r) => r.taxableValue == null ? <span className="text-muted-foreground">—</span> : fmt(r.taxableValue) },
+           { key: 'cgst', label: 'CGST', align: 'right', render: (r) => r.cgst > 0 ? fmt(r.cgst) : <span className="text-muted-foreground">—</span> },
+           { key: 'sgst', label: 'SGST', align: 'right', render: (r) => r.sgst > 0 ? fmt(r.sgst) : <span className="text-muted-foreground">—</span> },
+           { key: 'igst', label: 'IGST', align: 'right', render: (r) => r.igst > 0 ? fmt(r.igst) : <span className="text-muted-foreground">—</span> },
+           { key: 'taxAmount', label: 'GST', align: 'right', render: (r) => r.taxAmount > 0 ? fmt(r.taxAmount) : <span className="text-muted-foreground">—</span> },
+           { key: 'documentTotal', label: 'Total', align: 'right', render: (r) => r.documentTotal == null ? <span className="text-muted-foreground">—</span> : <b>{fmt(r.documentTotal)}</b> },
           ...(canSeeValue ? [
             { key: 'unitCost', label: 'Unit Cost', align: 'right' as const, render: (r: BranchTransferReportRow) => fmt(r.unitCost) },
             { key: 'lineValue', label: 'Value', align: 'right' as const, render: (r: BranchTransferReportRow) => <b>{fmt(r.lineValue)}</b> },
@@ -253,7 +285,8 @@ function BranchTransferReport({ canDownload }: { canDownload: boolean }) {
         rows={rows} loading={isLoading}
         rowKey={(r, i) => `${r.transferId}:${r.materialType}:${r.itemId}:${i}`}
         empty="No branch transfers for the selected filters"
-        footer={['TOTAL', '', '', '', '', '', num(totals?.qty), '',
+         footer={['TOTAL', '', '', '', '', '', '', '', num(totals?.qty), '',
+           '', '', '', '', '', '', '',
           ...(canSeeValue ? ['', fmt(totals?.value)] : []),
           '', '', '', '', '']}
       />

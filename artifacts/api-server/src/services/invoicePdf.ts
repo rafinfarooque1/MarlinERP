@@ -151,8 +151,22 @@ export async function assembleInvoiceData(saleId: number): Promise<InvoiceData |
 
   // cancelled_at and quotation_number are raw-migration columns: drizzle's
   // select() silently drops them, so they are read with raw SQL.
-  const { rows: [locRow] } = await pool.query<{ cancelled_at: Date | null; quotation_number: string | null; other_charges: unknown }>(
-    `SELECT cancelled_at, quotation_number, other_charges FROM sales WHERE id = $1`, [saleId],
+  const { rows: [locRow] } = await pool.query<{
+    cancelled_at: Date | null;
+    quotation_number: string | null;
+    other_charges: unknown;
+    party_name: string | null;
+    party_gstin: string | null;
+    party_state: string | null;
+    transfer_to_type: string | null;
+    transfer_to_id: number | null;
+  }>(
+    `SELECT s.cancelled_at, s.quotation_number, s.other_charges,
+            s.party_name, s.party_gstin, s.party_state,
+            t.to_type AS transfer_to_type, t.to_id AS transfer_to_id
+       FROM sales s
+       LEFT JOIN stock_transfers t ON t.id = s.branch_transfer_id
+      WHERE s.id = $1`, [saleId],
   );
 
   // Other Charges — stored as { ledgerId, amount } rows; the document shows
@@ -228,6 +242,39 @@ export async function assembleInvoiceData(saleId: number): Promise<InvoiceData |
     }
   }
 
+  // Transfer sales intentionally do not create a customer master row. The
+  // receiving warehouse is still the buyer on the statutory invoice, so use
+  // the stored party_* identity and resolve the destination profile for its
+  // address/contact details. Ordinary sales continue to use the customer row.
+  const transferBuyer = !customerRow && locRow?.party_name
+    ? await (async () => {
+        if ((locRow.transfer_to_type === "warehouse" ||
+             locRow.transfer_to_type === "outlet" ||
+             locRow.transfer_to_type === "headoffice") &&
+            locRow.transfer_to_id != null) {
+          return resolveLocationIssuer(pool, locRow.transfer_to_type, Number(locRow.transfer_to_id));
+        }
+        return null;
+      })()
+    : null;
+  const invoiceCustomer = customerRow
+    ? {
+        name: customerRow.name,
+        phone: customerRow.phone ?? "",
+        address: customerRow.address ?? "",
+        state: customerRow.state ?? "",
+        gstNumber: customerRow.gstNumber ?? "",
+      }
+    : locRow?.party_name
+      ? {
+          name: locRow.party_name,
+          phone: transferBuyer?.phone ?? "",
+          address: transferBuyer?.addressLines.join(", ") ?? "",
+          state: locRow.party_state ?? transferBuyer?.state ?? "",
+          gstNumber: locRow.party_gstin ?? transferBuyer?.gstin ?? "",
+        }
+      : null;
+
   return {
     sale: {
       id: sale.id,
@@ -247,13 +294,7 @@ export async function assembleInvoiceData(saleId: number): Promise<InvoiceData |
     issuer,
     outletName: issuer.locationName,
     outletUpiId: issuer.upiId,
-    customer: customerRow ? {
-      name: customerRow.name,
-      phone: customerRow.phone ?? "",
-      address: customerRow.address ?? "",
-      state: customerRow.state ?? "",
-      gstNumber: customerRow.gstNumber ?? "",
-    } : null,
+    customer: invoiceCustomer,
     cs: { ...(cs ?? {}), paymentTerms } as Record<string, unknown>,
     logoDataUrl,
     position,

@@ -20,6 +20,11 @@
  *    production because it never touches the production connection.
  */
 
+import { execFileSync } from 'node:child_process';
+import { readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+
 const BASE = process.env.API_URL || 'http://localhost:8080/api';
 
 let authToken = '';
@@ -526,6 +531,44 @@ if (!srcLoc || !dstLoc) {
           assert(`Invoice mode: sale total = taxable + GST (≈ ₹${expectedTotal.toFixed(2)})`,
             Math.abs(saleTotal - expectedTotal) < 0.05,
             `saleTotal=${saleTotal} expected=${expectedTotal}`);
+        }
+      }
+
+      const reportRes = await get(`/reports/branch-transfers?fromDate=${new Date().toISOString().slice(0, 10)}&toDate=${new Date().toISOString().slice(0, 10)}`);
+      const reportRow = (reportRes.data?.rows ?? []).find(r => Number(r.transferId) === Number(createdId));
+      assert('Branch transfer report exposes Sale / Outward treatment', reportRow?.outwardDocument === 'Sale / Outward Supply',
+        JSON.stringify(reportRow).slice(0, 250));
+      assert('Branch transfer report exposes Purchase / Inward treatment', reportRow?.inwardDocument === 'Purchase / Inward Supply',
+        JSON.stringify(reportRow).slice(0, 250));
+      assert('Branch transfer report exposes linked invoice values',
+        reportRow?.invoiceNumber === invNo && Number(reportRow?.taxAmount ?? 0) > 0 &&
+          Number(reportRow?.documentTotal ?? 0) > 0,
+        JSON.stringify(reportRow).slice(0, 300));
+
+      const pdfRes = await fetch(`${BASE}/pdf/transfer-invoice`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({ id: createdId }),
+      });
+      const pdfBytes = Buffer.from(await pdfRes.arrayBuffer());
+      assert('Taxable transfer invoice PDF route returns a PDF', pdfRes.status === 200 &&
+        pdfRes.headers.get('content-type')?.includes('application/pdf') &&
+        pdfBytes.subarray(0, 5).toString() === '%PDF-',
+        `status=${pdfRes.status} bytes=${pdfBytes.length}`);
+      if (pdfRes.status === 200) {
+        const pdfPath = join(tmpdir(), `zz-transfer-${createdId}.pdf`);
+        const txtPath = `${pdfPath}.txt`;
+        try {
+          writeFileSync(pdfPath, pdfBytes);
+          execFileSync('pdftotext', [pdfPath, txtPath]);
+          const pdfText = readFileSync(txtPath, 'utf8');
+          assert('Transfer invoice PDF names the destination buyer', pdfText.includes(dstLoc.name),
+            pdfText.slice(0, 350));
+          assert('Transfer invoice PDF carries the transfer invoice number', pdfText.includes(invNo),
+            pdfText.slice(0, 350));
+        } finally {
+          try { unlinkSync(pdfPath); } catch {}
+          try { unlinkSync(txtPath); } catch {}
         }
       }
 

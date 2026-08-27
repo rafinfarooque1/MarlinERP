@@ -17,6 +17,7 @@ import { generateJournalVoucherPdf, type JournalVoucherKind } from "../services/
 import { generateReturnNotePdf } from "../services/returnNotePdf";
 import { generatePurchaseBillPdf } from "../services/purchaseBillPdf";
 import { loadPurchaseBillDoc } from "./purchases";
+import { assembleInvoiceData, renderInvoicePdf } from "../services/invoicePdf";
 import { getUserDataScope } from "../lib/dataScope";
 import { ownLocationScope, scopeLedgerIds, scopeMoneyWhere, callerLocation } from "../lib/moneyScope";
 import { resolveLocationIssuer, type InvoiceIssuer } from "../lib/billingProfile";
@@ -24,6 +25,46 @@ import { getLocationFilter } from "../lib/requestLocation";
 import { pool } from "@workspace/db";
 
 const router = Router();
+
+// ── Tax invoice for a taxable warehouse transfer ─────────────────────────────
+// Taxable transfers already have a canonical source-side sales row. Reuse the
+// normal invoice assembler/renderer so the PDF carries the source warehouse
+// letterhead, the receiving warehouse as buyer, stored line GST, amount in
+// words, payment state and signatory exactly like every other invoice.
+router.post("/pdf/transfer-invoice", requireModuleAction("page:/transfers", "download"), async (req, res) => {
+  try {
+    const id = Number(req.body?.id);
+    if (!Number.isInteger(id) || id <= 0) { res.status(400).json({ error: "id is required" }); return; }
+
+    const params: unknown[] = [id];
+    const emp = (req as any).employee as { branchType: string; branchId: number } | undefined;
+    const scope = await getUserDataScope(emp ?? { branchType: "headoffice", branchId: 0 });
+    const { scopeTransferWhere } = await import("../lib/dataScope");
+    const scopeCond = scopeTransferWhere(scope, params, "t");
+    const { rows: [t] } = await pool.query<any>(
+      `SELECT t.id, t.sale_id, t.transfer_type, t.transfer_invoice_number
+         FROM stock_transfers t
+        WHERE t.id = $1
+          AND t.transfer_type <> 'internal'
+          AND t.sale_id IS NOT NULL
+          AND ${scopeCond}`,
+      params,
+    );
+    if (!t) { res.status(404).json({ error: "Tax invoice not found" }); return; }
+
+    const data = await assembleInvoiceData(Number(t.sale_id));
+    if (!data) { res.status(404).json({ error: "Tax invoice not found" }); return; }
+    const { buffer, fileName } = await renderInvoicePdf(data);
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="${fileName}"`);
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("Content-Length", buffer.length);
+    res.end(buffer);
+  } catch (err) {
+    console.error("[pdfGen] transfer invoice error:", err);
+    res.status(500).json({ error: "PDF generation failed" });
+  }
+});
 
 // ── Delivery Challan ──────────────────────────────────────────────────────────
 // The caller sends only the transfer id — the challan is assembled from the

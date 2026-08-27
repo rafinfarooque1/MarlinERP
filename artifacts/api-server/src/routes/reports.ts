@@ -975,10 +975,10 @@ router.get("/reports/gst-transfers", requireModuleView("page:/reports/sales"), a
 // Read-only. One row per transfer LINE, so item / batch / quantity are
 // meaningful instead of a challan-level lump.
 //
-// Terminology: the sending side is "Transfer Out", the receiving side is
-// "Transfer In". Operationally they behave like a sale and a purchase, but a
-// transfer is neither: no revenue is earned and nothing is bought, so the
-// figures here never join the sales or purchase totals.
+// Same-registration movements remain Transfer Out / Transfer In challans.
+// Cross-registration taxable movements also expose the linked Sale / Outward
+// Supply and Purchase / Inward Supply values. Those linked documents are not
+// included in ordinary customer sales or purchase totals.
 //
 // Location scope is enforced in SQL by scopeTransferWhere — a transfer is
 // visible only when one of the caller's own locations is its source and/or its
@@ -1061,6 +1061,9 @@ router.get("/reports/branch-transfers", requireModuleView("page:/reports/sales")
             to_char(t.transfer_date,'YYYY-MM-DD')        AS transfer_date,
             t.from_type, t.from_id, t.to_type, t.to_id,
             t.line_items, t.received_line_items, t.status,
+            t.transfer_type, t.tax_type, t.transfer_value, t.gst_amount,
+            t.document_mode, t.transfer_invoice_number, t.sale_id, t.purchase_id,
+            t.credit_note_voucher_id, s.line_items AS invoice_line_items,
             -- There is no dispatch timestamp column: the row is written at
             -- dispatch, so created_at IS the dispatch moment. Receipt is
             -- stamped by the approve transition.
@@ -1068,6 +1071,7 @@ router.get("/reports/branch-transfers", requireModuleView("page:/reports/sales")
             to_char(t.approved_at,'YYYY-MM-DD')          AS received_date,
             t.approved_by, e.name                        AS handled_by_name
        FROM stock_transfers t
+       LEFT JOIN sales s ON s.id = t.sale_id
        LEFT JOIN LATERAL (
          SELECT emp.name FROM employees emp
           WHERE t.approved_by IS NOT NULL
@@ -1115,12 +1119,27 @@ router.get("/reports/branch-transfers", requireModuleView("page:/reports/sales")
     status: string; quantityBasis: "received" | "dispatched";
     dispatchDate: string | null; receivedDate: string | null;
     handledBy: string | null;
+    documentTreatment: "internal" | "sale_outward_purchase_inward";
+    outwardDocument: string;
+    inwardDocument: string;
+    invoiceNumber: string | null;
+    invoiceQuantity: number | null;
+    invoiceRate: number | null;
+    taxableValue: number | null;
+    cgst: number;
+    sgst: number;
+    igst: number;
+    taxAmount: number;
+    documentTotal: number | null;
     /** No dispatcher is recorded anywhere on the transfer — there is no column
      *  for it. Reported as null rather than guessed from approved_by. */
     dispatchedBy: null;
   }
 
   const rows: Row[] = [];
+  const documentTotals = {
+    taxable: 0, cgst: 0, sgst: 0, igst: 0, tax: 0, total: 0,
+  };
   const summary = {
     transferOut: { qty: 0, value: 0, transfers: 0 },
     transferIn: { qty: 0, value: 0, transfers: 0 },
@@ -1133,6 +1152,14 @@ router.get("/reports/branch-transfers", requireModuleView("page:/reports/sales")
     const isInTransit = statusRaw === "in_transit" || statusRaw === "pending";
     const dispatched: any[] = Array.isArray(t.line_items) ? t.line_items : [];
     const received: any[] = Array.isArray(t.received_line_items) ? t.received_line_items : [];
+    const invoiceLines: any[] = Array.isArray(t.invoice_line_items) ? t.invoice_line_items : [];
+    const invoiceLinePools = new Map<string, any[]>();
+    for (const il of invoiceLines) {
+      const k = `${String(il?.materialType ?? "item")}:${Number(il?.itemId ?? il?.materialId)}`;
+      const list = invoiceLinePools.get(k) ?? [];
+      list.push(il);
+      invoiceLinePools.set(k, list);
+    }
 
     // A completed transfer is reported at what actually ARRIVED. Received lines
     // are keyed on (materialType, itemId) because the three id spaces overlap.
@@ -1177,6 +1204,18 @@ router.get("/reports/branch-transfers", requireModuleView("page:/reports/sales")
       const unitCost = r2(Number((useReceived ? (rpool!.costPrice ?? li?.costPrice) : li?.costPrice) ?? 0));
       const info = resolve(materialType, lineItemId);
       const bb: any[] = Array.isArray(li?.batchBreakdown) ? li.batchBreakdown : [];
+      const invoiceLine = (invoiceLinePools.get(poolKey) ?? []).shift() ?? null;
+      const isTaxableSupply = String(t.transfer_type ?? "internal") !== "internal";
+      const invoiceQuantity = invoiceLine ? r3(Number(invoiceLine.quantity ?? dispatchedQty)) : null;
+      const invoiceRate = invoiceLine ? r2(Number(invoiceLine.unitPrice ?? invoiceLine.unitCost ?? 0)) : null;
+      const taxableValue = invoiceLine
+        ? r2(Number(invoiceLine.taxableValue ?? invoiceLine.lineSubtotal ?? invoiceLine.taxableAmount ?? 0))
+        : null;
+      const cgst = isTaxableSupply && invoiceLine ? r2(Number(invoiceLine.cgst ?? 0)) : 0;
+      const sgst = isTaxableSupply && invoiceLine ? r2(Number(invoiceLine.sgst ?? 0)) : 0;
+      const igst = isTaxableSupply && invoiceLine ? r2(Number(invoiceLine.igst ?? 0)) : 0;
+      const taxAmount = r2(cgst + sgst + igst);
+      const documentTotal = taxableValue == null ? null : r2(taxableValue + taxAmount);
 
       const lineValue = r2(quantity * unitCost);
       tQty += quantity;
@@ -1207,8 +1246,28 @@ router.get("/reports/branch-transfers", requireModuleView("page:/reports/sales")
         dispatchDate: t.dispatch_date ?? null,
         receivedDate: t.received_date ?? null,
         handledBy: t.handled_by_name ?? t.approved_by ?? null,
+        documentTreatment: isTaxableSupply ? "sale_outward_purchase_inward" : "internal",
+        outwardDocument: isTaxableSupply ? "Sale / Outward Supply" : "Transfer Out",
+        inwardDocument: isTaxableSupply ? "Purchase / Inward Supply" : "Transfer In",
+        invoiceNumber: isTaxableSupply ? (t.transfer_invoice_number ?? null) : null,
+        invoiceQuantity,
+        invoiceRate,
+        taxableValue,
+        cgst,
+        sgst,
+        igst,
+        taxAmount,
+        documentTotal,
         dispatchedBy: null,
       });
+      if (isTaxableSupply && taxableValue != null) {
+        documentTotals.taxable = r2(documentTotals.taxable + taxableValue);
+        documentTotals.cgst = r2(documentTotals.cgst + cgst);
+        documentTotals.sgst = r2(documentTotals.sgst + sgst);
+        documentTotals.igst = r2(documentTotals.igst + igst);
+        documentTotals.tax = r2(documentTotals.tax + taxAmount);
+        documentTotals.total = r2(documentTotals.total + documentTotal!);
+      }
     }
 
     // If MORE arrived than was dispatched, the surplus is still sitting in the
@@ -1274,10 +1333,14 @@ router.get("/reports/branch-transfers", requireModuleView("page:/reports/sales")
     rows: outRows,
     totals: outTotals,
     summary: outSummary,
+    documentTotals: {
+      outward: { ...documentTotals },
+      inward: { ...documentTotals },
+    },
     canViewValuation: showValuation,
     scope: { isHeadOffice: scope.isHeadOffice },
     basisNote:
-      "Completed transfers are reported at received quantities where the receiver recorded them, otherwise at dispatched quantities; in-transit transfers are always at dispatched quantities. Transfer Out and Transfer In count completed transfers only — goods still in transit are reported separately and never folded into either total.",
+      "Completed transfers are reported at received quantities where the receiver recorded them, otherwise at dispatched quantities; in-transit transfers are always at dispatched quantities. Taxable cross-registration transfers show the linked Sale / Outward Supply and Purchase / Inward Supply values from the stored tax invoice. Same-registration movements remain internal challan transfers. Transfer Out and Transfer In count completed transfers only — goods still in transit are reported separately and never folded into either total.",
   });
 });
 
