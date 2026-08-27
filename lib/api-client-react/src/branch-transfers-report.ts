@@ -47,6 +47,18 @@ export interface BranchTransferReportRow {
   dispatchDate: string | null;
   receivedDate: string | null;
   handledBy: string | null;
+  documentTreatment: 'internal' | 'sale_outward_purchase_inward';
+  outwardDocument: string;
+  inwardDocument: string;
+  invoiceNumber: string | null;
+  invoiceQuantity: number | null;
+  invoiceRate: number | null;
+  taxableValue: number | null;
+  cgst: number;
+  sgst: number;
+  igst: number;
+  taxAmount: number;
+  documentTotal: number | null;
   /** No dispatcher is recorded on a transfer yet — always null. */
   dispatchedBy: null;
 }
@@ -66,6 +78,10 @@ export interface BranchTransfersReportResponse {
     transferOut: BranchTransferSummaryBucket;
     transferIn: BranchTransferSummaryBucket;
     inTransit: BranchTransferSummaryBucket;
+  };
+  documentTotals?: {
+    outward: { taxable: number; cgst: number; sgst: number; igst: number; tax: number; total: number };
+    inward: { taxable: number; cgst: number; sgst: number; igst: number; tax: number; total: number };
   };
   /** Server's verdict on whether this caller may see transfer cost/value. */
   canViewValuation?: boolean;

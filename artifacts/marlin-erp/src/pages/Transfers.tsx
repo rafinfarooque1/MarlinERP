@@ -681,7 +681,12 @@ export default function Transfers() {
   // letterhead — the client sends only the id.
   const handleDownloadPDF = async (t: any) => {
     try {
-      await downloadPDFFromEndpoint('/api/pdf/challan', { id: t.id }, `${t.challanNumber || 'Challan'}.pdf`);
+      const taxable = t.transferType === 'intrastate' || t.transferType === 'interstate';
+      const endpoint = taxable && t.saleId ? '/api/pdf/transfer-invoice' : '/api/pdf/challan';
+      const filename = taxable && t.transferInvoiceNumber
+        ? `${String(t.transferInvoiceNumber).replace(/[\\/]/g, '-')}.pdf`
+        : `${t.challanNumber || 'Challan'}.pdf`;
+      await downloadPDFFromEndpoint(endpoint, { id: t.id }, filename);
     } catch (e: any) { toast.error(e?.message || 'Failed to generate PDF'); }
   };
 
@@ -798,6 +803,7 @@ export default function Transfers() {
                 <SortableHead k="date" sort={sort}>Date</SortableHead>
                 <SortableHead k="from" sort={sort}>From</SortableHead>
                 <SortableHead k="to" sort={sort}>To</SortableHead>
+                 <TableHead>Treatment</TableHead>
                 <SortableHead k="items" sort={sort}>Items</SortableHead>
                 <SortableHead k="status" sort={sort}>Status</SortableHead>
                 <TableHead className="text-right">Actions</TableHead>
@@ -807,12 +813,12 @@ export default function Transfers() {
               {isLoading ? (
                 [...Array(4)].map((_, i) => (
                   <TableRow key={i}>
-                    <TableCell colSpan={7}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell>
+                   <TableCell colSpan={8}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell>
                   </TableRow>
                 ))
               ) : filtered.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={7} className="p-0">
+                   <TableCell colSpan={8} className="p-0">
                     <EmptyState
                       icon={ArrowRightLeft}
                       title={tab === 'in_transit' ? 'No pending approvals' : 'No transfers found'}
@@ -836,6 +842,15 @@ export default function Transfers() {
                     <div className="text-sm font-medium">{t.toName}</div>
                     <Badge variant="outline" className="text-[10px] capitalize">{t.toType}</Badge>
                   </TableCell>
+                   <TableCell>
+                     {(t.transferType === 'intrastate' || t.transferType === 'interstate') && t.saleId
+                       ? <div className="space-y-0.5">
+                           <div className="text-xs font-semibold text-primary">Sale / Outward</div>
+                           <div className="text-[10px] text-muted-foreground">Purchase / Inward</div>
+                           {t.transferInvoiceNumber && <div className="font-mono text-[10px]">{t.transferInvoiceNumber}</div>}
+                         </div>
+                       : <span className="text-xs text-muted-foreground">Internal challan</span>}
+                   </TableCell>
                   <TableCell>
                     <Badge variant="secondary">{t.lineItems?.length || 0} item{t.lineItems?.length !== 1 ? 's' : ''}</Badge>
                   </TableCell>
@@ -897,6 +912,12 @@ export default function Transfers() {
                   ['From',  `${viewItem.fromName} (${viewItem.fromType})`],
                   ['To',    `${viewItem.toName} (${viewItem.toType})`],
                   ['Type',  viewItem.transferType === 'interstate' ? 'Interstate (IGST)' : viewItem.transferType === 'intrastate' ? 'Intrastate (CGST+SGST)' : 'Internal'],
+                   ['Treatment', (viewItem.transferType === 'intrastate' || viewItem.transferType === 'interstate') && viewItem.saleId
+                     ? 'Sale / Outward Supply → Purchase / Inward Supply' : 'Internal Stock Transfer'],
+                   ...(viewItem.transferInvoiceNumber ? [['Transfer Invoice', viewItem.transferInvoiceNumber]] : []),
+                   ...(viewItem.saleId ? [['Linked Sale', String(viewItem.saleId)]] : []),
+                   ...(viewItem.purchaseId ? [['Linked Purchase', String(viewItem.purchaseId)]] : []),
+                   ...((viewItem.gstAmount ?? 0) > 0 ? [['GST / Total', `₹${Number(viewItem.gstAmount).toFixed(2)} GST · ₹${(Number(viewItem.transferValue ?? 0) + Number(viewItem.gstAmount)).toFixed(2)} total`]] : []),
                 ].map(([k, v]) => (
                   <div key={String(k)} className="flex flex-col gap-1 border-b border-border pb-3">
                     <span className="text-xs text-muted-foreground uppercase tracking-wider">{k}</span>

@@ -470,7 +470,8 @@ router.get("/stock/transfers", requireModuleView("page:/transfers"), async (req,
              line_items, is_interstate, status, notes, created_at,
              approved_by, approved_at, received_line_items, rejection_reason,
              transfer_type, from_gstin, to_gstin, tax_type,
-             transfer_value, gst_amount
+              transfer_value, gst_amount, document_mode, transfer_invoice_number,
+              sale_id, purchase_id, credit_note_voucher_id
       FROM stock_transfers ${where} ORDER BY id DESC ${limit ? `LIMIT ${limit}` : ""}
     `, params),
     buildBranchMaps(),
@@ -500,6 +501,11 @@ router.get("/stock/transfers", requireModuleView("page:/transfers"), async (req,
     taxType: r.tax_type ?? 'none',
     transferValue: r.transfer_value != null ? Number(r.transfer_value) : null,
     gstAmount: r.gst_amount != null ? Number(r.gst_amount) : null,
+     documentMode: r.document_mode ?? 'voucher',
+     transferInvoiceNumber: r.transfer_invoice_number ?? null,
+     saleId: r.sale_id ?? null,
+     purchaseId: r.purchase_id ?? null,
+     creditNoteVoucherId: r.credit_note_voucher_id ?? null,
     fromName: branchName(r.from_type, r.from_id),
     toName: branchName(r.to_type, r.to_id),
   }));

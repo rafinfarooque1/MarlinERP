@@ -408,6 +408,17 @@ export interface StockTransfer {
   lineItems: StockTransferLine[];
   isInterstate?: boolean;
   status?: StockTransferStatus;
+  transferType?: 'internal' | 'intrastate' | 'interstate';
+  fromGstin?: string | null;
+  toGstin?: string | null;
+  taxType?: 'none' | 'cgst_sgst' | 'igst';
+  transferValue?: number | null;
+  gstAmount?: number | null;
+  documentMode?: 'voucher' | 'invoice';
+  transferInvoiceNumber?: string | null;
+  saleId?: number | null;
+  purchaseId?: number | null;
+  creditNoteVoucherId?: number | null;
   createdAt: string;
 }
 
