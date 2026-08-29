@@ -1,5 +1,5 @@
 /**
- * Journal-family voucher PDF — jsPDF, A4 portrait.
+ * Journal-family voucher PDF — jsPDF, A5 portrait.
  *
  * The formal print of a journal voucher, contra voucher, credit note or debit
  * note: every ledger leg with its debit/credit, the balanced totals, the
@@ -15,7 +15,7 @@
  */
 import { jsPDF } from "jspdf";
 import {
-  FONT, registerFonts, drawLetterhead, drawSignatureRow, drawGeneratedNote,
+  FONT, registerFonts, drawLetterhead, drawSignatureRow,
   amountInWords,
 } from "@workspace/pdf-kit";
 import type { InvoiceIssuer } from "../lib/billingProfile";
@@ -81,10 +81,10 @@ function fmtDate(v: string | null | undefined): string {
 }
 
 export async function generateJournalVoucherPdf(data: JournalVoucherPdfInput): Promise<Buffer> {
-  const doc = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait", compress: true });
+  const doc = new jsPDF({ unit: "mm", format: "a5", orientation: "portrait", compress: true });
   await registerFonts(doc);
 
-  const PW = 210, PH = 297, M = 12, CW = PW - M * 2;
+  const PW = 148, PH = 210, M = 9, CW = PW - M * 2;
   const ACCENT = ACCENTS[data.kind];
   const SOFT = SOFTS[data.kind];
   const INK: RGB = [32, 44, 74];
@@ -171,7 +171,6 @@ export async function generateJournalVoucherPdf(data: JournalVoucherPdfInput): P
   legs.forEach((l, i) => {
     // Room for the row + totals + words + signatures; spill to a fresh page.
     if (y > PH - 60) {
-      drawGeneratedNote(doc, `This is a computer-generated ${TITLES[data.kind].toLowerCase()}.`, M);
       doc.addPage();
       y = M + 4;
       drawTableHead();
@@ -236,8 +235,6 @@ export async function generateJournalVoucherPdf(data: JournalVoucherPdfInput): P
   y += 4;
   if (y > PH - 30) { doc.addPage(); y = 24; }
   drawSignatureRow(doc, ["Prepared By", "Checked By", "Authorized Signatory"], y, M, CW);
-
-  drawGeneratedNote(doc, `This is a computer-generated ${TITLES[data.kind].toLowerCase()}.`, M);
 
   return Buffer.from(doc.output("arraybuffer"));
 }

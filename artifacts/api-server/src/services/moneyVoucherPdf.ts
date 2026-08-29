@@ -1,5 +1,5 @@
 /**
- * Receipt / Payment voucher PDF — jsPDF, A4 portrait.
+ * Receipt / Payment voucher PDF — jsPDF, A5 portrait.
  *
  * The formal instrument for money received or paid outside the sale/purchase
  * documents: who the money came from or went to, which cash box or bank it
@@ -77,10 +77,10 @@ function fmtDate(v: string | null | undefined): string {
 }
 
 export async function generateMoneyVoucherPdf(data: MoneyVoucherPdfInput): Promise<Buffer> {
-  const doc = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait", compress: true });
+  const doc = new jsPDF({ unit: "mm", format: "a5", orientation: "portrait", compress: true });
   await registerFonts(doc);
 
-  const PW = 210, PH = 297, M = 12, CW = PW - M * 2;
+  const PW = 148, PH = 210, M = 9, CW = PW - M * 2;
   const isReceipt = data.kind === "receipt";
   // Receipt green / payment navy — matched to the invoice's tonal system.
   const ACCENT: RGB = isReceipt ? [22, 101, 52] : [23, 42, 92];
@@ -240,25 +240,6 @@ export async function generateMoneyVoucherPdf(data: MoneyVoucherPdfInput): Promi
     line(x + 6, y + 12, x + sigW - 6, y + 12, [120, 130, 150], 0.25);
     txt(label, x + sigW / 2, y + 16, { size: 7, align: "center", color: MUT });
   });
-
-  // Vouchers end immediately after the signature row. Keep a compact bottom
-  // margin on ordinary one-page vouchers instead of leaving the old fixed A4
-  // footer area behind. The finished stream must be translated before changing
-  // the media box, otherwise jsPDF's A4-origin coordinates clip the header.
-  if (doc.getNumberOfPages() === 1) {
-    const contentBottom = y + 18;
-    const pageHeight = Math.min(PH, Math.max(150, contentBottom + M));
-    const pageShift = PH - pageHeight;
-    try { (doc.internal.pageSize as any).setHeight(pageHeight); } catch { /* keep A4 if unsupported */ }
-    const pages = (doc.internal as any).pages as string[][];
-    const page = pages?.[1];
-    const scaleFactor = (doc.internal as any).scaleFactor ?? (72 / 25.4);
-    const shiftPt = pageShift * scaleFactor;
-    if (page && shiftPt > 0) {
-      page.unshift("q", `1 0 0 1 0 ${-shiftPt.toFixed(3)} cm`);
-      page.push("Q");
-    }
-  }
 
   return Buffer.from(doc.output("arraybuffer"));
 }
