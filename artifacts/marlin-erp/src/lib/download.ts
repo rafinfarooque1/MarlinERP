@@ -42,11 +42,14 @@ export function printHTML(
   options: { pageSize?: 'A4' | 'A5' } = {},
 ) {
   const pageSize = options.pageSize ?? 'A4';
+  const pageRule = pageSize === 'A5'
+    ? '@page { size: A5 portrait; margin: 0; }'
+    : '@page { size: A4 portrait; margin: 0; }';
   const w = window.open('', '_blank', 'width=960,height=800');
   if (!w) return;
   w.document.write(`<!DOCTYPE html><html><head><title>${title}</title>
     <style>
-      @page { size: ${pageSize} portrait; margin: 0; }
+      ${pageRule}
       * { box-sizing: border-box; }
       body { font-family: Arial, sans-serif; font-size: 11px; color: #111; padding: 18px 24px; margin: 0; }
       table { border-collapse: collapse; width: 100%; }
