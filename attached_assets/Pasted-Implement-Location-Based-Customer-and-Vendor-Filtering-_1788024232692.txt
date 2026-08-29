@@ -1,0 +1,363 @@
+Implement Location-Based Customer and Vendor Filtering for Receipt Voucher and Payment Voucher
+
+CURRENT PROBLEM
+
+When an employee/user is working under a specific warehouse/location, the Customer and Vendor dropdowns currently show customers/vendors from ALL locations.
+
+This is incorrect.
+
+A warehouse employee must see only the Customers and Vendors that belong to their current location.
+
+REQUIRED LOCATION LOGIC
+
+Locations currently include:
+
+- Head Office
+- Frozen Hub - Rajaguda
+- Frozen Hub - Calicut
+- Tropicane - Kochi
+- Tropicane - Ecity
+
+Each Customer and Vendor must have a location association.
+
+When the user selects a specific location/current location:
+
+Example:
+
+Current Location = Frozen Hub - Calicut
+
+Then:
+
+CUSTOMER DROPDOWN
+→ Show ONLY customers assigned/available to Frozen Hub - Calicut.
+
+VENDOR DROPDOWN
+→ Show ONLY vendors assigned/available to Frozen Hub - Calicut.
+
+Do NOT show customers or vendors belonging only to:
+
+- Head Office
+- Frozen Hub - Rajaguda
+- Tropicane - Kochi
+- Tropicane - Ecity
+
+unless they are explicitly assigned/shared with Frozen Hub - Calicut according to the existing location-assignment rules.
+
+RECEIPT VOUCHER
+
+In Receipt Voucher:
+
+Customer selection must be location-aware.
+
+If current location is:
+
+Frozen Hub - Calicut
+
+the Customer dropdown/search must return only Calicut customers.
+
+The voucher itself must also be stamped with:
+
+location_type
+location_id
+
+using the current selected location.
+
+When the receipt is saved, the selected customer and receipt transaction remain associated with that location.
+
+PAYMENT VOUCHER
+
+In Payment Voucher:
+
+Vendor selection must be location-aware.
+
+If current location is:
+
+Frozen Hub - Calicut
+
+the Vendor dropdown/search must return only Calicut vendors.
+
+The voucher must also be stamped with:
+
+location_type
+location_id
+
+using the current selected location.
+
+When the payment is saved, the selected vendor and payment transaction remain associated with that location.
+
+IMPORTANT
+
+Do NOT simply filter the frontend dropdown.
+
+The location restriction must be enforced at the API/backend level as well.
+
+Frontend filtering alone is NOT sufficient.
+
+BACKEND REQUIREMENT
+
+All Customer/Vendor picker APIs used by:
+
+- Receipt Voucher
+- Payment Voucher
+- Any related voucher forms
+
+must accept/use the current location context and return only valid customers/vendors for that location.
+
+The backend must reject an attempt to create a voucher using a Customer/Vendor that is not available to the user's current location.
+
+Do not rely only on the UI to prevent this.
+
+LOCATION ASSIGNMENT RULE
+
+Use the existing location-assignment/membership architecture already implemented in the ERP.
+
+Do NOT create a second unrelated location system.
+
+If the existing Customer/Vendor records already contain location information, use that existing relationship.
+
+If the system uses a location-membership/junction table, use that table.
+
+The same location-availability rules already used elsewhere in the application should be reused here.
+
+HEAD OFFICE
+
+Head Office must behave like a normal location.
+
+If:
+
+Current Location = Head Office
+
+then Receipt Voucher Customer and Payment Voucher Vendor lists should show only the customers/vendors available to Head Office.
+
+Do NOT automatically show all customers/vendors merely because the user is in Head Office.
+
+ALL LOCATIONS
+
+If the user has permission to select:
+
+All Locations
+
+then the Customer/Vendor picker may show customers/vendors from all accessible locations.
+
+However, the results must still respect the user's permission/access scope.
+
+Do not expose customers/vendors belonging to locations the user is not authorized to access.
+
+IMPORTANT EXISTING DATA
+
+Do NOT modify existing customer/vendor records unnecessarily.
+
+Do NOT change existing voucher history.
+
+Do NOT change old voucher locations.
+
+Do NOT change accounting entries.
+
+This change is primarily for:
+
+1. Correct location-aware customer/vendor selection.
+2. Correct validation when creating new vouchers.
+3. Correct location stamping for new vouchers.
+
+EXISTING VOUCHERS
+
+Existing Receipt and Payment Vouchers must remain unchanged.
+
+If an old voucher already has:
+
+Customer = X
+Location = Frozen Hub - Calicut
+
+it must continue to display correctly.
+
+Do not rewrite historical transactions.
+
+EDIT VOUCHERS
+
+When editing an existing Receipt Voucher:
+
+- Keep the existing customer if it belongs to the voucher's original location.
+- Show only valid customers for the relevant location when changing the customer.
+
+When editing an existing Payment Voucher:
+
+- Keep the existing vendor if it belongs to the voucher's original location.
+- Show only valid vendors for the relevant location when changing the vendor.
+
+Do not allow changing to an unauthorized customer/vendor.
+
+SEARCH
+
+The Customer and Vendor dropdowns must also apply the location filter during search.
+
+For example:
+
+Current Location = Frozen Hub - Calicut
+
+Search "ABC"
+
+→ Return only matching Calicut customers/vendors.
+
+Do NOT first load all customers/vendors and merely hide them visually.
+
+The API query itself should be location-filtered.
+
+DROPDOWN BEHAVIOR
+
+For Customer:
+
+Customer dropdown
+→ Search customers
+→ Filter by current location
+→ Show only accessible customers.
+
+For Vendor:
+
+Vendor dropdown
+→ Search vendors
+→ Filter by current location
+→ Show only accessible vendors.
+
+If there are no matching records:
+
+Show:
+
+"No customers found for this location"
+
+or
+
+"No vendors found for this location"
+
+PERMISSIONS
+
+The following must work together:
+
+USER PERMISSION
++
+LOCATION ACCESS
++
+CUSTOMER/VENDOR LOCATION
+
+A user should see a Customer/Vendor only when all applicable access rules allow it.
+
+Do NOT weaken existing role permissions.
+
+Do NOT allow a warehouse employee to access another warehouse's customer/vendor merely by manipulating the request.
+
+SECURITY / API VALIDATION
+
+Test direct API requests as well.
+
+Example:
+
+User belongs to Frozen Hub - Calicut.
+
+Attempt to create a Receipt Voucher using a customer available only in Frozen Hub - Rajaguda.
+
+→ API must reject the request.
+
+Attempt to create a Payment Voucher using a vendor available only in Frozen Hub - Rajaguda.
+
+→ API must reject the request.
+
+The server must never trust the customer/vendor ID supplied by the browser without validating location availability.
+
+DASHBOARD / OTHER MODULES
+
+Do NOT change dashboard calculations.
+
+Do NOT change sales calculations.
+
+Do NOT change purchase calculations.
+
+Do NOT change ledger calculations.
+
+Do NOT change accounting formulas.
+
+Do NOT change existing location-aware accounting behavior.
+
+This task is specifically about Customer/Vendor visibility and validation in Receipt Voucher and Payment Voucher.
+
+REGRESSION TESTS
+
+Test all locations:
+
+1. Head Office
+2. Frozen Hub - Rajaguda
+3. Frozen Hub - Calicut
+4. Tropicane - Kochi
+5. Tropicane - Ecity
+6. All Locations, where permitted
+
+For each location verify:
+
+Receipt Voucher:
+- Customer picker shows only valid customers.
+- Search is location-filtered.
+- New receipt saves successfully.
+- Receipt gets correct location.
+- Unauthorized customer is rejected.
+
+Payment Voucher:
+- Vendor picker shows only valid vendors.
+- Search is location-filtered.
+- New payment saves successfully.
+- Payment gets correct location.
+- Unauthorized vendor is rejected.
+
+ALSO TEST:
+
+- Existing vouchers still display correctly.
+- Editing existing vouchers works.
+- Existing customer/vendor records are not damaged.
+- No cross-location data leakage.
+- Admin permissions continue to work.
+- All Locations mode continues to work for authorized users.
+
+IMPORTANT IMPLEMENTATION RULE
+
+Do not solve this by hardcoding warehouse names.
+
+Use the existing location IDs/membership relationships dynamically.
+
+Do not duplicate the location-filtering logic in multiple routes if there is already a shared location-access helper.
+
+Reuse the existing location-aware accounting architecture.
+
+FINAL ACCEPTANCE CRITERIA
+
+For a warehouse employee:
+
+Current Location = Frozen Hub - Calicut
+
+Receipt Voucher Customer dropdown:
+ONLY Calicut customers.
+
+Payment Voucher Vendor dropdown:
+ONLY Calicut vendors.
+
+Current Location = Frozen Hub - Rajaguda
+
+Receipt Voucher Customer dropdown:
+ONLY Rajaguda customers.
+
+Payment Voucher Vendor dropdown:
+ONLY Rajaguda vendors.
+
+Current Location = Head Office
+
+Receipt Voucher Customer dropdown:
+ONLY Head Office customers.
+
+Payment Voucher Vendor dropdown:
+ONLY Head Office vendors.
+
+Current Location = All Locations:
+
+Show customers/vendors from all locations the user is authorized to access.
+
+Most importantly:
+
+A warehouse employee must NEVER see or select customers/vendors belonging exclusively to another warehouse.
+
+Implement this end-to-end at both frontend and backend level, run the relevant typecheck/build/tests, and verify the actual running application after restarting the affected workflows.
