@@ -3363,6 +3363,46 @@ await pool.query(`ALTER TABLE stock_ledger ADD COLUMN IF NOT EXISTS txn_date DAT
 await pool.query(`UPDATE stock_ledger SET txn_date = created_at::date WHERE txn_date IS NULL`);
 await pool.query(`CREATE INDEX IF NOT EXISTS idx_stock_ledger_txn_date ON stock_ledger (txn_date)`);
 
+// ── One-time: date legacy stock-transfer ledger rows from their document ─────
+// Transfer ledger rows were originally written without txn_date, so the
+// generic backfill above assigned them their insertion day. The transfer's
+// stored transfer_date is the authoritative business date for both dispatch
+// and receipt. Restate only the ledger rows; completed transfers already
+// changed stock_entries when they were received and must never be credited a
+// second time. Claim the marker inside the same transaction as the update so a
+// failed boot retries cleanly.
+{
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows: claimed } = await client.query(
+      `INSERT INTO migration_log (name) VALUES ('stock_transfer_ledger_dates_v1')
+       ON CONFLICT (name) DO NOTHING
+       RETURNING name`,
+    );
+    if (claimed.length > 0) {
+      const { rowCount } = await client.query(
+        `UPDATE stock_ledger sl
+            SET txn_date = t.transfer_date::date
+           FROM stock_transfers t
+          WHERE sl.doc_type = 'stock_transfer'
+            AND sl.doc_id = t.id
+            AND t.transfer_date IS NOT NULL
+            AND sl.txn_date IS DISTINCT FROM t.transfer_date::date`,
+      );
+      await client.query("COMMIT");
+      console.log(`[migration] stock_transfer_ledger_dates_v1 — dated ${rowCount ?? 0} legacy ledger row(s) from transfer_date`);
+    } else {
+      await client.query("ROLLBACK");
+    }
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    console.error(`[migration] stock_transfer_ledger_dates_v1 FAILED: ${(e as Error).message} — will retry next boot`);
+  } finally {
+    client.release();
+  }
+}
+
 // ── stock_reservations table ──────────────────────────────────────────────────
 // One row per commitment against stock, so the same physical goods can never be
 // promised twice. `hold` rows reduce available quantity (goods still on hand);

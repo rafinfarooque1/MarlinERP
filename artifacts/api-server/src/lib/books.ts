@@ -282,7 +282,7 @@ export async function stockAsOf(asOf: string | null | undefined, scope?: StockBr
   // only means "nothing held" once the log is proven to explain today's
   // quantity, which is checked below.
   const [{ rows: [bounds] }, inception] = await Promise.all([
-    q.query(`SELECT MIN(created_at)::date::text AS first_move FROM stock_ledger`),
+    q.query(`SELECT MIN(COALESCE(txn_date, created_at::date))::text AS first_move FROM stock_ledger`),
     inceptionDate(q),
   ]);
   const firstMove: string | null = bounds?.first_move ?? null;
