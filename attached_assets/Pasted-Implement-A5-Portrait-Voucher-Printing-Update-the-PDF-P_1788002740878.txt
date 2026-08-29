@@ -1,0 +1,156 @@
+Implement A5 Portrait Voucher Printing
+
+Update the PDF/Print layout for the following vouchers:
+
+1. Payment Voucher
+2. Receipt Voucher
+3. Journal Voucher
+
+REQUIRED PAPER SIZE:
+
+- Paper size: A5
+- Orientation: Portrait
+- Print-ready layout
+- Exact A5 dimensions: 148 × 210 mm
+- Do not use A4 and scale it down.
+- The generated PDF itself must be A5 Portrait.
+
+PRINT REQUIREMENT:
+
+When the user clicks:
+
+Print
+or
+PDF / Download PDF
+
+the voucher must generate in A5 Portrait format.
+
+The browser print dialog should also correctly identify the document as A5 Portrait.
+
+LAYOUT:
+
+Design the voucher specifically for the smaller A5 page.
+
+Keep all important information within the printable area.
+
+Use:
+
+- Proper margins
+- Compact but readable typography
+- Clear section spacing
+- Proper table widths
+- No horizontal overflow
+- No content cut-off
+- No unnecessary blank space
+
+VOUCHER CONTENT:
+
+Keep all existing voucher information:
+
+- Company / warehouse details
+- Voucher title
+- Voucher number
+- Voucher date
+- Location
+- Account/Ledger
+- Party/description
+- Narration
+- Debit
+- Credit
+- Amount
+- Amount in words
+- Prepared By
+- Authorized Signatory
+- Received By, where applicable
+
+Do not remove any existing accounting information.
+
+LOCATION:
+
+The voucher must continue using the correct location/company details according to the existing location-aware system.
+
+For example:
+
+Head Office
+→ Head Office details
+
+Frozen Hub - Calicut
+→ Frozen Hub - Calicut details
+
+Frozen Hub - Rajaguda
+→ Frozen Hub - Rajaguda details
+
+Tropicane - Kochi
+→ Tropicane - Kochi details
+
+Tropicane - Ecity
+→ Tropicane - Ecity details
+
+Do not hard-code one warehouse.
+
+SIGNATURE SECTION:
+
+Keep:
+
+Prepared By | Authorized Signatory | Received By
+
+properly aligned at the bottom of the A5 page.
+
+Do not push the signature section onto a second page.
+
+FOOTER:
+
+Do NOT show:
+
+"This is a computer-generated voucher."
+
+Also remove any unnecessary separator/footer line associated with that text.
+
+Do not leave a large blank area at the bottom after removing it.
+
+PRINT CSS:
+
+Create/use a dedicated print stylesheet or print-specific styles.
+
+Use the equivalent of:
+
+@page {
+  size: A5 portrait;
+  margin: appropriate printable margins;
+}
+
+Ensure:
+
+- Screen layout is not negatively affected.
+- Print layout is optimized specifically for A5.
+- PDF generation and browser printing use the same A5 Portrait proportions.
+
+IMPORTANT:
+
+Do not simply use an A4 PDF and visually scale it down.
+
+The PDF page itself must be:
+
+A5 Portrait.
+
+VERIFY:
+
+Test all three:
+
+1. Payment Voucher → Print/PDF → A5 Portrait
+2. Receipt Voucher → Print/PDF → A5 Portrait
+3. Journal Voucher → Print/PDF → A5 Portrait
+
+Check that:
+
+- One voucher fits properly on one A5 page.
+- No second blank page is generated.
+- No content is clipped.
+- No table is cut off.
+- Signature section stays on the same page.
+- Company/location details are correct.
+- Footer computer-generated text is absent.
+- PDF page dimensions are actually A5 Portrait.
+- Browser Print preview also shows the correct A5 Portrait layout.
+
+Do not change the accounting logic, voucher posting logic, permissions, or transaction data. This is a PDF/print-layout change only.
