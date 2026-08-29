@@ -17,3 +17,7 @@ description: Durable rules for the shared list-filter layer (from/to + location 
 **Guard partial dates client-side, including date-SHAPED ones.** A date input mid-edit emits values like `0002-07-01` while the year is being typed — full `YYYY-MM-DD` shape, yet rejected server-side because `Date.UTC` maps years <100 to 19xx, failing round-trip calendar validation. A shape regex alone still ships transient 400s; also require a plausible year (≥1000). Server validation stays — the client guard only suppresses keystroke noise.
 
 **Filtered-view query keys must extend the base list key** so existing prefix invalidations from mutations refresh filtered views for free; an exact-key invalidation silently misses them and looks like a backend staleness bug.
+
+**Voucher party pickers use the selected concrete voucher location, not only the global view filter.** Keep party-master availability separate from caller LBAC: customers match their assigned location, while Head-Office vendors remain shared at branches; validate the effective party leg again on every create/edit path.
+**Why:** the voucher form's location is independent form state, so filtering only `/customers` or `/vendors` by global headers leaves the account-ledger picker unrestricted and allows forged party legs.
+**How to apply:** key the picker query by kind + selected location, keep the LBAC predicate unconditional on the server, and treat Head Office as a type-only concrete location.

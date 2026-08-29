@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect } from 'react';
-import { useListReceipts, useCreateReceipt, useDeleteReceipt, useListAccountsFlat, useCashBankLedgersFlat } from '@workspace/api-client-react';
+import { useListReceipts, useCreateReceipt, useDeleteReceipt, useListAccountsFlat, useCashBankLedgersFlat, useVoucherPartyLedgers } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -59,12 +59,23 @@ export default function ReceiptPage() {
   // on behalf of a branch produces a branch voucher. Defaults to the global
   // location selector; the pickers narrow to that location's own accounts.
   const { locations, locKey, setLocKey, selLoc, foreignLedgerIds } = useVoucherLocationChoice();
+  const selectedPartyLocation = selLoc
+    ? { locationType: selLoc.locationType, locationId: Number(selLoc.locationId) }
+    : undefined;
+  const { data: customerPartyLedgers = [] } = useVoucherPartyLedgers('customer', selectedPartyLocation);
+  const { data: vendorPartyLedgers = [] } = useVoucherPartyLedgers('vendor', selectedPartyLocation);
+  const allowedPartyLedgerIds = useMemo(() => new Set<number>([
+    ...(customerPartyLedgers as any[]).map(p => Number(p.ledgerId)),
+    ...(vendorPartyLedgers as any[]).map(p => Number(p.ledgerId)),
+  ]), [customerPartyLedgers, vendorPartyLedgers]);
 
   // "Received From" — all non-system ledgers minus other locations' accounts.
   // Payroll/GST/internal ledgers stay module-owned (advances are recovered
   // through payroll, not receipts).
   const fromOptions = (allAccounts as any[]).filter(a =>
-    !a.isSystemGroup && !a.isGroup && !isSystemLedger(a.code) && !foreignLedgerIds.has(a.id));
+    !a.isSystemGroup && !a.isGroup && !isSystemLedger(a.code) && !foreignLedgerIds.has(a.id)
+      && (!String(a.code ?? '').startsWith('CUST-') && !String(a.code ?? '').startsWith('VEND-')
+        || allowedPartyLedgerIds.has(Number(a.id))));
   // "Received In" — only the selected location's Bank / Cash accounts
   const inOptions = (cashBankAccounts as any[]).filter(a =>
     !selLoc || selLoc.cashBankLedgerIds.includes(a.id));
@@ -81,7 +92,7 @@ export default function ReceiptPage() {
     if (inId && !inOptions.some((a: any) => Number(a.id) === inId)) form.setValue('receivedInLedgerId', 0);
     const fromId = Number(form.getValues('receivedFromLedgerId'));
     if (fromId && foreignLedgerIds.has(fromId)) form.setValue('receivedFromLedgerId', 0);
-  }, [locKey, inOptions, foreignLedgerIds]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [locKey, inOptions, foreignLedgerIds, allowedPartyLedgerIds]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const onSubmit = (data: FormValues) => {
     const loc = parseLocKey(locKey);

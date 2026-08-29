@@ -22,6 +22,7 @@
 
 import { pool } from "@workspace/db";
 import type { DataScope } from "./dataScope.js";
+import type { ParsedLocationFilter } from "./queryFilters.js";
 
 export interface CallerLocation {
   locationType: string;
@@ -272,6 +273,84 @@ export async function foreignPartyLedgerIds(scope: DataScope): Promise<number[]>
     [scope.warehouseIds, scope.outletIds],
   );
   return rows.map((r) => Number(r.id));
+}
+
+export type VoucherPartyKind = "customer" | "vendor";
+
+/**
+ * Location predicate for the party ledgers used by receipt/payment vouchers.
+ *
+ * This is deliberately the same ownership convention as the party master
+ * lists: customers are assigned to one concrete location, while a
+ * Head-Office-created vendor is a shared vendor master and remains available
+ * at branch locations. Head Office itself is still a concrete location for
+ * this picker — it does not mean "all parties".
+ */
+export function voucherPartyLocationWhere(
+  kind: VoucherPartyKind,
+  location: ParsedLocationFilter,
+  params: unknown[],
+  alias = "p",
+): string {
+  const sharedVendor =
+    kind === "vendor"
+      ? ` OR ${alias}.location_type IS NULL OR ${alias}.location_type = 'headoffice'`
+      : "";
+
+  if (location.locationType === "headoffice") {
+    return `(${alias}.location_type IS NULL OR ${alias}.location_type = 'headoffice')`;
+  }
+
+  params.push(location.locationType, location.locationId);
+  const typeParam = `$${params.length - 1}`;
+  const idParam = `$${params.length}`;
+  return `(${alias}.location_type = ${typeParam} AND ${alias}.location_id = ${idParam}${sharedVendor})`;
+}
+
+/**
+ * Check the party represented by a voucher ledger against the voucher's
+ * effective location. The ledger code is the only supported master linkage
+ * (CUST-<id> / VEND-<id>), so an arbitrary ledger never becomes a party by
+ * accident.
+ */
+export async function checkVoucherPartyLocation(
+  ledgerId: number,
+  kind: VoucherPartyKind,
+  location: { locationType: string; locationId: number },
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const table = kind === "customer" ? "customers" : "vendors";
+  const prefix = kind === "customer" ? "CUST-" : "VEND-";
+  const { rows: [party] } = await pool.query<{
+    name: string;
+    location_type: string | null;
+    location_id: number | null;
+  }>(
+    `SELECT p.name, p.location_type, p.location_id
+       FROM account_ledgers al
+       JOIN ${table} p ON al.code = $2 || p.id::text
+      WHERE al.id = $1`,
+    [Number(ledgerId), prefix],
+  );
+
+  if (!party) {
+    return { ok: false, error: `That ${kind} account no longer exists.` };
+  }
+
+  const actualType = party.location_type ?? "headoffice";
+  const actualId = Number(party.location_id ?? 0);
+  const isSharedVendor = kind === "vendor" && actualType === "headoffice";
+  const matches = location.locationType === "headoffice"
+    ? actualType === "headoffice"
+    : isSharedVendor
+      || (actualType === location.locationType && actualId === Number(location.locationId));
+
+  if (!matches) {
+    return {
+      ok: false,
+      error: `${party.name} is assigned to another location and is not available here.`,
+    };
+  }
+  return { ok: true };
 }
 
 /**

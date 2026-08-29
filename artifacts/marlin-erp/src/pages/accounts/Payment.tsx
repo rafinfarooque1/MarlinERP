@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect } from 'react';
-import { useListPayments, useCreatePayment, useDeletePayment, useListAccountsFlat, useCashBankLedgersFlat } from '@workspace/api-client-react';
+import { useListPayments, useCreatePayment, useDeletePayment, useListAccountsFlat, useCashBankLedgersFlat, useVoucherPartyLedgers } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -59,6 +59,15 @@ export default function Payment() {
   // on behalf of a branch produces a branch voucher. Defaults to the global
   // location selector; the pickers narrow to that location's own accounts.
   const { locations, locKey, setLocKey, selLoc, foreignLedgerIds } = useVoucherLocationChoice();
+  const selectedPartyLocation = selLoc
+    ? { locationType: selLoc.locationType, locationId: Number(selLoc.locationId) }
+    : undefined;
+  const { data: customerPartyLedgers = [] } = useVoucherPartyLedgers('customer', selectedPartyLocation);
+  const { data: vendorPartyLedgers = [] } = useVoucherPartyLedgers('vendor', selectedPartyLocation);
+  const allowedPartyLedgerIds = useMemo(() => new Set<number>([
+    ...(customerPartyLedgers as any[]).map(p => Number(p.ledgerId)),
+    ...(vendorPartyLedgers as any[]).map(p => Number(p.ledgerId)),
+  ]), [customerPartyLedgers, vendorPartyLedgers]);
 
   // "Paid From" — only the selected location's Bank / Cash accounts
   const fromOptions = (cashBankAccounts as any[]).filter(a =>
@@ -67,7 +76,9 @@ export default function Payment() {
   // other locations' accounts. Payroll/GST/internal ledgers stay module-owned
   // — salary is paid from the Payroll screen, which can also pay from any till.
   const toOptions = (allAccounts as any[]).filter(a =>
-    !a.isSystemGroup && !a.isGroup && !isSystemLedger(a.code) && !foreignLedgerIds.has(a.id));
+    !a.isSystemGroup && !a.isGroup && !isSystemLedger(a.code) && !foreignLedgerIds.has(a.id)
+      && (!String(a.code ?? '').startsWith('CUST-') && !String(a.code ?? '').startsWith('VEND-')
+        || allowedPartyLedgerIds.has(Number(a.id))));
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
@@ -81,7 +92,7 @@ export default function Payment() {
     if (fromId && !fromOptions.some((a: any) => Number(a.id) === fromId)) form.setValue('paidFromLedgerId', 0);
     const toId = Number(form.getValues('paidToLedgerId'));
     if (toId && foreignLedgerIds.has(toId)) form.setValue('paidToLedgerId', 0);
-  }, [locKey, fromOptions, foreignLedgerIds]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [locKey, fromOptions, foreignLedgerIds, allowedPartyLedgerIds]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const onSubmit = (data: FormValues) => {
     const loc = parseLocKey(locKey);

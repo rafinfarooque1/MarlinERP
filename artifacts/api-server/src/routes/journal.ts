@@ -8,11 +8,12 @@ import { logActivity } from "../lib/audit";
 import { lineTaxHeads } from "../lib/gst";
 import { clearsThroughBank } from "../lib/paymentModes";
 import { isIsoDate } from "../lib/dateInput";
-import { callerLocation, ownLocationScope, foreignPartyLedgerIds, locationOwnedLedgerMap, scopeLedgerIds } from "../lib/moneyScope";
+import { callerLocation, ownLocationScope, foreignPartyLedgerIds, locationOwnedLedgerMap, scopeLedgerIds, checkVoucherPartyLocation } from "../lib/moneyScope";
 import { getUserDataScope, isLocationInScope, type DataScope } from "../lib/dataScope";
 import { outletWritesBlocked } from "../lib/featureFlags";
 import { respondIfMonthLocked, isMonthLocked, ymOfDate, monthLockedBody } from "../lib/periodLock";
 import { isLevelOneAdmin, ADMIN_DELETE_ERROR } from "../lib/adminGate";
+import { parsePartyLedgerCode } from "../lib/advanceLedgers";
 
 const router = Router();
 
@@ -658,6 +659,18 @@ router.post("/accounts/journal-vouchers", requireModuleAction("page:/accounts/vo
   const locRes = await resolveVoucherLocation((req as any).employee, body, null);
   if (!locRes.ok) { res.status(locRes.status).json({ error: locRes.error }); return; }
   const { locationType, locationId } = locRes.loc;
+  if (partyLedgerId && (voucherType === "credit_note" || voucherType === "debit_note")) {
+    const { rows: [partyLedger] } = await pool.query(
+      `SELECT code FROM account_ledgers WHERE id = $1`, [partyLedgerId],
+    );
+    const party = parsePartyLedgerCode(partyLedger?.code);
+    if (party) {
+      const partyCheck = await checkVoucherPartyLocation(
+        partyLedgerId, party.kind, { locationType, locationId },
+      );
+      if (!partyCheck.ok) { res.status(403).json({ error: partyCheck.error }); return; }
+    }
+  }
   {
     const disabledMsg = await disabledWarehouseError(pool, [{ type: locationType, id: locationId }]);
     if (disabledMsg) { res.status(409).json({ error: disabledMsg, code: WAREHOUSE_DISABLED_CODE }); return; }
@@ -811,6 +824,18 @@ router.patch("/accounts/journal-vouchers/:id", requireModuleAction("page:/accoun
     : null;
   const locRes = await resolveVoucherLocation(employee, body, currentLoc);
   if (!locRes.ok) { res.status(locRes.status).json({ error: locRes.error }); return; }
+  if (partyLedgerId && (voucherType === "credit_note" || voucherType === "debit_note")) {
+    const { rows: [partyLedger] } = await pool.query(
+      `SELECT code FROM account_ledgers WHERE id = $1`, [partyLedgerId],
+    );
+    const party = parsePartyLedgerCode(partyLedger?.code);
+    if (party) {
+      const partyCheck = await checkVoucherPartyLocation(
+        partyLedgerId, party.kind, { locationType: locRes.loc.locationType, locationId: locRes.loc.locationId },
+      );
+      if (!partyCheck.ok) { res.status(403).json({ error: partyCheck.error }); return; }
+    }
+  }
   {
     const disabledMsg = await disabledWarehouseError(pool, [{ type: locRes.loc.locationType, id: locRes.loc.locationId }]);
     if (disabledMsg) { res.status(409).json({ error: disabledMsg, code: WAREHOUSE_DISABLED_CODE }); return; }
