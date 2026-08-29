@@ -86,7 +86,7 @@ export async function generateJournalVoucherPdf(data: JournalVoucherPdfInput): P
   await registerFonts(doc);
 
   const PAGE_W = 297, PAGE_H = 210, HALF_W = PAGE_W / 2;
-  const M = 9, CW = HALF_W - M * 2;
+  const M = 9, X = HALF_W + M, CW = HALF_W - M * 2;
   const ACCENT = ACCENTS[data.kind];
   const SOFT = SOFTS[data.kind];
   const INK: RGB = [32, 44, 74];
@@ -132,8 +132,8 @@ export async function generateJournalVoucherPdf(data: JournalVoucherPdfInput): P
   const money = (n: number) =>
     `\u20B9${Math.abs(n).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-  // The right half is intentionally unused so the printed sheet can be cut
-  // vertically and the spare half retained for a later voucher.
+  // The left half is intentionally unused so the printed sheet can be cut
+  // vertically and the voucher retained on the right half.
   doc.setDrawColor(190, 199, 214);
   doc.setLineWidth(0.25);
   (doc as any).setLineDashPattern?.([2, 2], 0);
@@ -157,6 +157,7 @@ export async function generateJournalVoucherPdf(data: JournalVoucherPdfInput): P
     accent: ACCENT,
     metaRows,
     margin: M,
+    xOffset: HALF_W,
     width: CW,
   });
 
@@ -164,10 +165,10 @@ export async function generateJournalVoucherPdf(data: JournalVoucherPdfInput): P
   const AMT_W = 34;                 // each amount column
   const nameW = CW - AMT_W * 2;
   const drawTableHead = () => {
-    fillRect(M, y, CW, 8, ACCENT);
-    txt("PARTICULARS", M + 3, y + 5.4, { size: 8, bold: true, color: WHITE });
-    txt("DEBIT", M + nameW + AMT_W - 3, y + 5.4, { size: 8, bold: true, align: "right", color: WHITE });
-    txt("CREDIT", M + CW - 3, y + 5.4, { size: 8, bold: true, align: "right", color: WHITE });
+    fillRect(X, y, CW, 8, ACCENT);
+    txt("PARTICULARS", X + 3, y + 5.4, { size: 8, bold: true, color: WHITE });
+    txt("DEBIT", X + nameW + AMT_W - 3, y + 5.4, { size: 8, bold: true, align: "right", color: WHITE });
+    txt("CREDIT", X + CW - 3, y + 5.4, { size: 8, bold: true, align: "right", color: WHITE });
     y += 8;
   };
   drawTableHead();
@@ -181,32 +182,32 @@ export async function generateJournalVoucherPdf(data: JournalVoucherPdfInput): P
   let totalDr = 0, totalCr = 0;
   legs.forEach((l, i) => {
     const isCredit = l.credit > 0;
-    if (i % 2 === 1) fillRect(M, y, CW, 8, SOFT);
-    doc.setDrawColor(BORDER[0], BORDER[1], BORDER[2]); doc.setLineWidth(0.2); doc.rect(M, y, CW, 8);
+    if (i % 2 === 1) fillRect(X, y, CW, 8, SOFT);
+    doc.setDrawColor(BORDER[0], BORDER[1], BORDER[2]); doc.setLineWidth(0.2); doc.rect(X, y, CW, 8);
     const name = isCredit ? `To  ${l.ledgerName}` : l.ledgerName;
-    cell(name, M + (isCredit ? 9 : 3), y + 5.3, nameW - (isCredit ? 13 : 7), { size: 8.4, bold: !isCredit, color: INK });
-    if (l.debit > 0) txt(money(l.debit), M + nameW + AMT_W - 3, y + 5.3, { size: 8.4, align: "right", color: INK });
-    if (l.credit > 0) txt(money(l.credit), M + CW - 3, y + 5.3, { size: 8.4, align: "right", color: INK });
+    cell(name, X + (isCredit ? 9 : 3), y + 5.3, nameW - (isCredit ? 13 : 7), { size: 8.4, bold: !isCredit, color: INK });
+    if (l.debit > 0) txt(money(l.debit), X + nameW + AMT_W - 3, y + 5.3, { size: 8.4, align: "right", color: INK });
+    if (l.credit > 0) txt(money(l.credit), X + CW - 3, y + 5.3, { size: 8.4, align: "right", color: INK });
     totalDr += l.debit;
     totalCr += l.credit;
     y += 8;
   });
 
   // ── Totals band ───────────────────────────────────────────────────────────
-  fillRect(M, y, CW, 11, ACCENT);
-  txt("TOTAL", M + 4, y + 7.4, { size: 10, bold: true, color: WHITE });
-  txt(money(totalDr), M + nameW + AMT_W - 3, y + 7.4, { size: 10.5, bold: true, align: "right", color: WHITE });
-  txt(money(totalCr), M + CW - 3, y + 7.4, { size: 10.5, bold: true, align: "right", color: WHITE });
+  fillRect(X, y, CW, 11, ACCENT);
+  txt("TOTAL", X + 4, y + 7.4, { size: 10, bold: true, color: WHITE });
+  txt(money(totalDr), X + nameW + AMT_W - 3, y + 7.4, { size: 10.5, bold: true, align: "right", color: WHITE });
+  txt(money(totalCr), X + CW - 3, y + 7.4, { size: 10.5, bold: true, align: "right", color: WHITE });
   y += 14;
 
   // Amount in words — on the debit total (equal to the credit total by
   // construction; the books refuse an unbalanced voucher).
   const wordLines = wrap(amountInWords(totalDr), CW - 40, 7.8, true).slice(0, 3);
   const wh = Math.max(9, wordLines.length * 3.9 + 4.5);
-  fillRect(M, y, CW, wh, SOFT);
-  doc.setDrawColor(BORDER[0], BORDER[1], BORDER[2]); doc.setLineWidth(0.2); doc.rect(M, y, CW, wh);
-  txt("Amount in Words", M + 3, y + 5.8, { size: 7.2, color: MUT });
-  wordLines.forEach((l, i) => txt(l, M + 36, y + 5.8 + i * 3.9, { size: 7.8, bold: true, color: INK }));
+  fillRect(X, y, CW, wh, SOFT);
+  doc.setDrawColor(BORDER[0], BORDER[1], BORDER[2]); doc.setLineWidth(0.2); doc.rect(X, y, CW, wh);
+  txt("Amount in Words", X + 3, y + 5.8, { size: 7.2, color: MUT });
+  wordLines.forEach((l, i) => txt(l, X + 36, y + 5.8 + i * 3.9, { size: 7.8, bold: true, color: INK }));
   y += wh;
 
   // Reason (credit/debit notes) and narration — wrapped, capped so the
@@ -219,9 +220,9 @@ export async function generateJournalVoucherPdf(data: JournalVoucherPdfInput): P
     const rows = all.slice(0, 8);
     if (all.length > 8) rows[7] = `${rows[7]}\u2026`;
     const nh = Math.max(9, rows.length * 3.8 + 4.5);
-    doc.setDrawColor(BORDER[0], BORDER[1], BORDER[2]); doc.setLineWidth(0.2); doc.rect(M, y, CW, nh);
-    txt(label, M + 3, y + 5.8, { size: 7.6, color: MUT });
-    rows.forEach((l, i) => txt(l, M + 58, y + 5.8 + i * 3.8, { size: 7.6, color: INK }));
+    doc.setDrawColor(BORDER[0], BORDER[1], BORDER[2]); doc.setLineWidth(0.2); doc.rect(X, y, CW, nh);
+    txt(label, X + 3, y + 5.8, { size: 7.6, color: MUT });
+    rows.forEach((l, i) => txt(l, X + 58, y + 5.8 + i * 3.8, { size: 7.6, color: INK }));
     y += nh;
   }
   y += 6;
@@ -231,14 +232,14 @@ export async function generateJournalVoucherPdf(data: JournalVoucherPdfInput): P
     data.recordedBy ? `Recorded by: ${data.recordedBy}` : "",
     data.recordedAt ? `Recorded on: ${fmtDate(data.recordedAt)}` : "",
   ].filter(Boolean).join("      ");
-  if (trail) { txt(trail, M, y, { size: 7, color: MUT }); y += 8; }
+  if (trail) { txt(trail, X, y, { size: 7, color: MUT }); y += 8; }
 
   // ── Signatures ────────────────────────────────────────────────────────────
   // Content-driven (no fixed 235mm anchor): sits below the last printed line,
   // capped so it never collides with the fixed footer or creates a second page.
   y += 4;
   if (y > PAGE_H - 30) y = PAGE_H - 30;
-  drawSignatureRow(doc, ["Prepared By", "Checked By", "Authorized Signatory"], y, M, CW);
+  drawSignatureRow(doc, ["Prepared By", "Checked By", "Authorized Signatory"], y, M, CW, HALF_W);
 
   return Buffer.from(doc.output("arraybuffer"));
 }

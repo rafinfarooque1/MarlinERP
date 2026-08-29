@@ -47,6 +47,8 @@ export interface LetterheadOpts {
   margin?: number;
   /** Content width in mm. Default A4 width minus both margins. */
   width?: number;
+  /** Horizontal offset in mm for half-sheet layouts. */
+  xOffset?: number;
   /** Top of the header. Default margin + 2. */
   y?: number;
 }
@@ -59,10 +61,11 @@ const WHITE: RGB = [255, 255, 255];
 /** Draw the letterhead; returns the y where document content should begin. */
 export function drawLetterhead(doc: jsPDF, o: LetterheadOpts): number {
   const PAGE_W = doc.internal.pageSize.getWidth();
-  const M = o.margin ?? 12;
-  const CW = o.width ?? PAGE_W - M * 2;
+  const margin = o.margin ?? 12;
+  const M = (o.xOffset ?? 0) + margin;
+  const CW = o.width ?? PAGE_W - margin * 2;
   const ACCENT = o.accent;
-  let y = o.y ?? M + 2;
+  let y = o.y ?? margin + 2;
 
   const txt = (
     s: string, x: number, ty: number,
@@ -178,13 +181,13 @@ export function drawLetterhead(doc: jsPDF, o: LetterheadOpts): number {
  * baseline the lines sit on; returns the y below the captions.
  */
 export function drawSignatureRow(
-  doc: jsPDF, labels: string[], y: number, margin = 12, width?: number,
+  doc: jsPDF, labels: string[], y: number, margin = 12, width?: number, xOffset = 0,
 ): number {
   const PAGE_W = doc.internal.pageSize.getWidth();
   const CW = width ?? PAGE_W - margin * 2;
   const sigW = CW / labels.length;
   labels.forEach((label, i) => {
-    const x = margin + sigW * i;
+    const x = xOffset + margin + sigW * i;
     doc.setDrawColor(120, 130, 150); doc.setLineWidth(0.25);
     doc.line(x + 6, y + 12, x + sigW - 6, y + 12);
     doc.setFont(FONT, "normal"); doc.setFontSize(7);

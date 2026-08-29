@@ -50,8 +50,8 @@ export function printHTML(
   const halfPagePrintCss = pageSize === 'A4-landscape'
     ? `
       @media print {
-        html, body { width: 148.5mm; min-height: 210mm; }
-        body { padding: 8mm; border-right: 0.25mm dashed #bec7d6; }
+        html, body { width: 297mm; min-height: 210mm; }
+        body { width: 148.5mm; margin-left: 148.5mm; padding: 8mm; border-left: 0.25mm dashed #bec7d6; }
       }
     `
     : '';
