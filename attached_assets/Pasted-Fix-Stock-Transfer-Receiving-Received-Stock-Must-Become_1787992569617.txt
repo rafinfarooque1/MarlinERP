@@ -1,0 +1,259 @@
+Fix Stock Transfer Receiving: Received Stock Must Become Opening Stock
+
+Implement the stock-transfer inventory flow correctly.
+
+CURRENT REQUIREMENT:
+
+When stock is transferred from one warehouse/location to another:
+
+Example:
+
+Frozen Hub - Calicut
+→ transfers 100 KG Mango
+
+Frozen Hub - Rajaguda
+→ receives 100 KG Mango
+
+Once the transfer is marked as RECEIVED at the destination warehouse, the received quantity must automatically be reflected in the destination warehouse's stock as OPENING STOCK for the applicable stock period/date.
+
+IMPORTANT:
+The received stock must NOT require the user to manually enter it again as opening stock.
+
+STOCK FLOW:
+
+Source Location:
+Opening Stock
++ Purchases
++ Other Stock In
+- Sales
+- Stock Transfers Out
+= Closing Stock
+
+Destination Location:
+Opening Stock
++ Stock Transfers Received
++ Purchases
++ Other Stock In
+- Sales
+- Stock Transfers Out
+= Closing Stock
+
+For the receiving warehouse, a received Stock Transfer must automatically contribute to the stock available at that location.
+
+Example:
+
+Frozen Hub - Rajaguda
+
+Opening Stock before transfer = 500 KG
+
+Transfer received = 100 KG
+
+New available/opening stock basis = 600 KG
+
+Then:
+
+Opening/Available Stock = 600 KG
++ Purchases
++ Other Stock In
+- Sales
+- Transfers Out
+= Closing Stock
+
+DO NOT DOUBLE COUNT:
+
+The received transfer must be represented through the existing stock-transfer transaction/history and must not be counted twice.
+
+Do NOT:
+
+- Create a second manual stock entry.
+- Duplicate the received quantity.
+- Add the same transfer to both opening stock and another stock-in calculation if the existing architecture already includes it.
+- Change the source warehouse's historical stock incorrectly.
+
+SOURCE LOCATION:
+
+When the transfer is dispatched/issued:
+
+Source warehouse stock must decrease by the transferred quantity according to the existing transfer workflow.
+
+DESTINATION LOCATION:
+
+When the transfer is received:
+
+Destination warehouse stock must increase by the received quantity.
+
+The receiving quantity must be included automatically in the destination warehouse's stock calculation.
+
+RECEIVED STATUS:
+
+Only a transfer that is actually marked:
+
+RECEIVED / COMPLETED
+
+should affect the destination warehouse stock.
+
+A transfer that is:
+
+- Draft
+- Pending
+- Cancelled
+- Rejected
+
+must NOT increase destination stock.
+
+DATE HANDLING:
+
+Use the actual Stock Transfer received/effective date according to the existing stock-transfer design.
+
+The receiving stock must appear in the correct stock period.
+
+If the system uses daily/monthly opening and closing stock:
+
+- The received quantity becomes part of the stock carried into the next applicable period.
+- Closing stock of the previous period should correctly flow into the next period's opening stock.
+- The received transfer should be included according to its effective date.
+- Do not manually overwrite existing opening-stock records.
+
+LOCATION FILTERING:
+
+This must work correctly with the existing location-aware system.
+
+If:
+
+All Locations
+→ show consolidated stock correctly.
+
+If:
+Frozen Hub - Calicut
+→ show only Calicut stock.
+
+If:
+Frozen Hub - Rajaguda
+→ show only Rajaguda stock, including stock transfers received by Rajaguda.
+
+The transfer must not appear as received stock in unrelated locations.
+
+STOCK LEDGER:
+
+The Stock Ledger for the receiving location must show the received Stock Transfer as a stock-in/transfer-received transaction.
+
+Example:
+
+Date | Type | Reference | Stock In | Stock Out | Balance
+
+29-08-2026 | Stock Transfer Received | ST-0001 | 100 KG | - | 600 KG
+
+The source location should show the corresponding transfer-out transaction.
+
+STOCK SUMMARY:
+
+For the destination location, ensure:
+
+Opening Stock
++ Transfer Received
++ Purchase
++ Other Stock In
+- Sales
+- Transfer Out
+= Closing Stock
+
+The displayed Closing Stock must reconcile with the Stock Ledger.
+
+IMPORTANT ACCOUNTING/INVENTORY CONSISTENCY:
+
+Do not modify unrelated:
+
+- Sales
+- Purchases
+- Asset Purchases
+- Cash/Bank
+- Accounting vouchers
+- Customer balances
+- Vendor balances
+- GST
+- Location permissions
+
+Only modify the stock-transfer/stock-balance calculation required for this behavior.
+
+EXISTING DATA:
+
+This fix must also correctly handle Stock Transfers that have ALREADY been received.
+
+Do not require users to delete and recreate old transfers.
+
+Recalculate the receiving location's stock from the existing received Stock Transfer records.
+
+Do not create duplicate transactions while backfilling/recalculating.
+
+IMPORTANT:
+
+Do not simply change the displayed opening-stock number in the UI.
+
+Fix the underlying stock calculation/data flow so that:
+
+Stock Transfer Created
+→ Source Stock Transfer Out
+→ Transfer Received
+→ Destination Stock In
+→ Destination Opening/Carried Stock
+→ Closing Stock
+
+all remain consistent.
+
+VERIFY WITH A REAL EXAMPLE:
+
+Create/identify a test transfer:
+
+Source:
+Frozen Hub - Calicut
+
+Destination:
+Frozen Hub - Rajaguda
+
+Item:
+Mango / any existing stock item
+
+Quantity:
+100 KG
+
+Before receiving:
+Rajaguda stock must NOT include the 100 KG.
+
+After receiving:
+Rajaguda stock must increase by exactly 100 KG.
+
+Then verify:
+
+1. Stock Transfer shows RECEIVED.
+2. Rajaguda Stock Ledger shows +100 KG.
+3. Rajaguda opening/available stock includes the 100 KG.
+4. Rajaguda closing stock increases by exactly 100 KG.
+5. Calicut stock decreases by exactly 100 KG.
+6. All Locations consolidated stock remains unchanged overall.
+7. No duplicate 100 KG entry is created.
+8. Historical stock calculations remain correct.
+9. Location filters work correctly.
+10. Existing received transfers are included correctly.
+
+REGRESSION TESTS:
+
+Add automated tests for:
+
+1. Transfer created but not received → destination stock unchanged.
+2. Transfer received → destination stock increases.
+3. Source stock decreases correctly.
+4. Received quantity becomes part of destination opening/carried stock.
+5. Closing stock calculation reconciles.
+6. Cancelled transfer → destination stock does not increase.
+7. Multiple transfers received → all quantities accumulate correctly.
+8. Multiple locations → only destination receives the stock.
+9. All Locations → consolidated stock is correct.
+10. Existing historical received transfers are included.
+11. No duplicate stock entries after recalculation.
+12. Editing/cancelling a transfer does not corrupt opening or closing stock.
+
+FINAL REQUIREMENT:
+
+The user should never need to manually enter received Stock Transfer quantity as Opening Stock.
+
+Once a warehouse receives a Stock Transfer, the system must automatically carry that received stock into its stock calculation and correctly calculate Opening Stock and Closing Stock.
