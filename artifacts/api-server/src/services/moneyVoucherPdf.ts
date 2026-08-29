@@ -1,5 +1,6 @@
 /**
- * Receipt / Payment voucher PDF — jsPDF, A5 portrait.
+ * Receipt / Payment voucher PDF — jsPDF, A4 landscape with one voucher on the
+ * left A5-sized half.
  *
  * The formal instrument for money received or paid outside the sale/purchase
  * documents: who the money came from or went to, which cash box or bank it
@@ -77,10 +78,11 @@ function fmtDate(v: string | null | undefined): string {
 }
 
 export async function generateMoneyVoucherPdf(data: MoneyVoucherPdfInput): Promise<Buffer> {
-  const doc = new jsPDF({ unit: "mm", format: "a5", orientation: "portrait", compress: true });
+  const doc = new jsPDF({ unit: "mm", format: "a4", orientation: "landscape", compress: true });
   await registerFonts(doc);
 
-  const PW = 148, PH = 210, M = 9, CW = PW - M * 2;
+  const PAGE_W = 297, PAGE_H = 210, HALF_W = PAGE_W / 2;
+  const M = 9, CW = HALF_W - M * 2;
   const isReceipt = data.kind === "receipt";
   // Receipt green / payment navy — matched to the invoice's tonal system.
   const ACCENT: RGB = isReceipt ? [22, 101, 52] : [23, 42, 92];
@@ -137,6 +139,14 @@ export async function generateMoneyVoucherPdf(data: MoneyVoucherPdfInput): Promi
   const issuer = data.issuer;
   let y = M + 2;
 
+  // The right half is intentionally unused so the printed sheet can be cut
+  // vertically and the spare half retained for a later voucher.
+  doc.setDrawColor(190, 199, 214);
+  doc.setLineWidth(0.25);
+  (doc as any).setLineDashPattern?.([2, 2], 0);
+  doc.line(HALF_W, 6, HALF_W, PAGE_H - 6);
+  (doc as any).setLineDashPattern?.([], 0);
+
   // ══════════════════════════════════════════════════════════════════════════
   // 1. HEADER — the shared letterhead (logo + issuing-location identity left,
   //    badge + meta right), so every document prints the same masthead.
@@ -159,6 +169,7 @@ export async function generateMoneyVoucherPdf(data: MoneyVoucherPdfInput): Promi
     accent: ACCENT,
     metaRows,
     margin: M,
+    width: CW,
   });
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -230,7 +241,7 @@ export async function generateMoneyVoucherPdf(data: MoneyVoucherPdfInput): Promi
   // If the body already ran past the safe band (very long narrations), the row
   // moves to a fresh page instead of being stamped over the content.
   y += 4;
-  if (y > 255) { doc.addPage(); y = 24; }
+  if (y > PAGE_H - 30) y = PAGE_H - 30;
   const sigW = CW / 3;
   const sigs = isReceipt
     ? ["Received By", "Authorized Signatory", "Payer's Signature"]

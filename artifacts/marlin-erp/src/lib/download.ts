@@ -39,11 +39,13 @@ export function downloadCSV(filename: string, rows: Record<string, unknown>[]) {
 export function printHTML(
   html: string,
   title = 'Print',
-  options: { pageSize?: 'A4' | 'A5' } = {},
+  options: { pageSize?: 'A4' | 'A5' | 'A4-landscape' } = {},
 ) {
   const pageSize = options.pageSize ?? 'A4';
   const pageRule = pageSize === 'A5'
     ? '@page { size: A5 portrait; margin: 0; }'
+    : pageSize === 'A4-landscape'
+      ? '@page { size: A4 landscape; margin: 0; }'
     : '@page { size: A4 portrait; margin: 0; }';
   const w = window.open('', '_blank', 'width=960,height=800');
   if (!w) return;

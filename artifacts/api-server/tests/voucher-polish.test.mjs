@@ -89,7 +89,9 @@ async function fetchVoucherPdf(kind, id) {
   const pageWidth = Number(size?.[1] ?? 0);
   const pageHeight = Number(size?.[2] ?? 0);
   const pages = Number(/Pages:\s+(\d+)/.exec(pageInfo)?.[1] ?? 0);
-  return { status: response.status, text, pageWidth, pageHeight, pages };
+  const bbox = execFileSync('pdftotext', ['-bbox', file, '-']).toString();
+  const xMaxes = [...bbox.matchAll(/\bxMax="([\d.]+)"/g)].map(m => Number(m[1]));
+  return { status: response.status, text, pageWidth, pageHeight, pages, maxTextX: Math.max(0, ...xMaxes) };
 }
 
 async function fetchJournalVoucherPdf(id) {
@@ -110,6 +112,7 @@ async function fetchJournalVoucherPdf(id) {
     pageWidth: Number(size?.[1] ?? 0),
     pageHeight: Number(size?.[2] ?? 0),
     pages: Number(/Pages:\s+(\d+)/.exec(pageInfo)?.[1] ?? 0),
+    maxTextX: Math.max(0, ...[...execFileSync('pdftotext', ['-bbox', file, '-']).toString().matchAll(/\bxMax="([\d.]+)"/g)].map(m => Number(m[1]))),
   };
 }
 
@@ -258,10 +261,12 @@ let keepPaymentId = 0, keepReceiptId = 0;
     paymentPdf.text.includes('Prepared By')
       && paymentPdf.text.includes('Authorized Signatory')
       && paymentPdf.text.includes('Received By'));
-  assert('Payment Voucher PDF uses exact A5 portrait dimensions and one page',
-    Math.abs(paymentPdf.pageWidth - 419.53) < 0.5
-      && Math.abs(paymentPdf.pageHeight - 595.28) < 0.5
+   assert('Payment Voucher PDF uses exact A4 landscape dimensions and one page',
+     Math.abs(paymentPdf.pageWidth - 841.89) < 0.5
+       && Math.abs(paymentPdf.pageHeight - 595.28) < 0.5
       && paymentPdf.pages === 1);
+   assert('Payment Voucher PDF keeps the right half blank',
+     paymentPdf.maxTextX < 420.95);
   assert('Payment Voucher PDF uses the issuing warehouse letterhead',
     paymentPdf.text.includes(whAName));
 
@@ -272,10 +277,12 @@ let keepPaymentId = 0, keepReceiptId = 0;
     receiptPdf.text.includes('Received By')
       && receiptPdf.text.includes('Authorized Signatory')
       && receiptPdf.text.includes("Payer's Signature"));
-  assert('Receipt Voucher PDF uses exact A5 portrait dimensions and one page',
-    Math.abs(receiptPdf.pageWidth - 419.53) < 0.5
-      && Math.abs(receiptPdf.pageHeight - 595.28) < 0.5
+   assert('Receipt Voucher PDF uses exact A4 landscape dimensions and one page',
+     Math.abs(receiptPdf.pageWidth - 841.89) < 0.5
+       && Math.abs(receiptPdf.pageHeight - 595.28) < 0.5
       && receiptPdf.pages === 1);
+   assert('Receipt Voucher PDF keeps the right half blank',
+     receiptPdf.maxTextX < 420.95);
   assert('Receipt Voucher PDF uses the issuing warehouse letterhead',
     receiptPdf.text.includes(whAName));
 }
@@ -304,10 +311,12 @@ let jvId = 0;
     journalPdf.text.includes('Prepared By')
       && journalPdf.text.includes('Checked By')
       && journalPdf.text.includes('Authorized Signatory'));
-  assert('Journal Voucher PDF uses exact A5 portrait dimensions and one page',
-    Math.abs(journalPdf.pageWidth - 419.53) < 0.5
-      && Math.abs(journalPdf.pageHeight - 595.28) < 0.5
+   assert('Journal Voucher PDF uses exact A4 landscape dimensions and one page',
+     Math.abs(journalPdf.pageWidth - 841.89) < 0.5
+       && Math.abs(journalPdf.pageHeight - 595.28) < 0.5
       && journalPdf.pages === 1);
+   assert('Journal Voucher PDF keeps the right half blank',
+     journalPdf.maxTextX < 420.95);
   assert('Journal Voucher PDF uses the issuing warehouse letterhead',
     journalPdf.text.includes(whAName));
 

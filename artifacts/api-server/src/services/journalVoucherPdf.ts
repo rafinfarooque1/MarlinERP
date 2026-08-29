@@ -1,5 +1,6 @@
 /**
- * Journal-family voucher PDF — jsPDF, A5 portrait.
+ * Journal-family voucher PDF — jsPDF, A4 landscape with one voucher on the
+ * left A5-sized half.
  *
  * The formal print of a journal voucher, contra voucher, credit note or debit
  * note: every ledger leg with its debit/credit, the balanced totals, the
@@ -81,10 +82,11 @@ function fmtDate(v: string | null | undefined): string {
 }
 
 export async function generateJournalVoucherPdf(data: JournalVoucherPdfInput): Promise<Buffer> {
-  const doc = new jsPDF({ unit: "mm", format: "a5", orientation: "portrait", compress: true });
+  const doc = new jsPDF({ unit: "mm", format: "a4", orientation: "landscape", compress: true });
   await registerFonts(doc);
 
-  const PW = 148, PH = 210, M = 9, CW = PW - M * 2;
+  const PAGE_W = 297, PAGE_H = 210, HALF_W = PAGE_W / 2;
+  const M = 9, CW = HALF_W - M * 2;
   const ACCENT = ACCENTS[data.kind];
   const SOFT = SOFTS[data.kind];
   const INK: RGB = [32, 44, 74];
@@ -130,6 +132,14 @@ export async function generateJournalVoucherPdf(data: JournalVoucherPdfInput): P
   const money = (n: number) =>
     `\u20B9${Math.abs(n).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
+  // The right half is intentionally unused so the printed sheet can be cut
+  // vertically and the spare half retained for a later voucher.
+  doc.setDrawColor(190, 199, 214);
+  doc.setLineWidth(0.25);
+  (doc as any).setLineDashPattern?.([2, 2], 0);
+  doc.line(HALF_W, 6, HALF_W, PAGE_H - 6);
+  (doc as any).setLineDashPattern?.([], 0);
+
   // ── Header ────────────────────────────────────────────────────────────────
   const metaRows: Array<[string, string]> = [
     ["Voucher No.", data.voucherNumber || "—"],
@@ -147,6 +157,7 @@ export async function generateJournalVoucherPdf(data: JournalVoucherPdfInput): P
     accent: ACCENT,
     metaRows,
     margin: M,
+    width: CW,
   });
 
   // ── Ledger legs — Particulars | Debit | Credit ────────────────────────────
@@ -169,12 +180,6 @@ export async function generateJournalVoucherPdf(data: JournalVoucherPdfInput): P
   ];
   let totalDr = 0, totalCr = 0;
   legs.forEach((l, i) => {
-    // Room for the row + totals + words + signatures; spill to a fresh page.
-    if (y > PH - 60) {
-      doc.addPage();
-      y = M + 4;
-      drawTableHead();
-    }
     const isCredit = l.credit > 0;
     if (i % 2 === 1) fillRect(M, y, CW, 8, SOFT);
     doc.setDrawColor(BORDER[0], BORDER[1], BORDER[2]); doc.setLineWidth(0.2); doc.rect(M, y, CW, 8);
@@ -233,7 +238,7 @@ export async function generateJournalVoucherPdf(data: JournalVoucherPdfInput): P
   // capped so it never collides with the fixed footer.
   // Overflowing bodies push the row to a fresh page rather than overprinting.
   y += 4;
-  if (y > PH - 30) { doc.addPage(); y = 24; }
+  if (y > PAGE_H - 30) y = PAGE_H - 30;
   drawSignatureRow(doc, ["Prepared By", "Checked By", "Authorized Signatory"], y, M, CW);
 
   return Buffer.from(doc.output("arraybuffer"));
