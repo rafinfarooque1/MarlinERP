@@ -82,7 +82,7 @@ export async function generateMoneyVoucherPdf(data: MoneyVoucherPdfInput): Promi
   await registerFonts(doc);
 
   const PAGE_W = 297, PAGE_H = 210, HALF_W = PAGE_W / 2;
-  const M = 9, CW = HALF_W - M * 2;
+  const M = 9, X = HALF_W + M, CW = HALF_W - M * 2;
   const isReceipt = data.kind === "receipt";
   // Receipt green / payment navy — matched to the invoice's tonal system.
   const ACCENT: RGB = isReceipt ? [22, 101, 52] : [23, 42, 92];
@@ -139,8 +139,8 @@ export async function generateMoneyVoucherPdf(data: MoneyVoucherPdfInput): Promi
   const issuer = data.issuer;
   let y = M + 2;
 
-  // The right half is intentionally unused so the printed sheet can be cut
-  // vertically and the spare half retained for a later voucher.
+  // The left half is intentionally unused so the printed sheet can be cut
+  // vertically and the voucher retained on the right half.
   doc.setDrawColor(190, 199, 214);
   doc.setLineWidth(0.25);
   (doc as any).setLineDashPattern?.([2, 2], 0);
@@ -149,7 +149,7 @@ export async function generateMoneyVoucherPdf(data: MoneyVoucherPdfInput): Promi
 
   // ══════════════════════════════════════════════════════════════════════════
   // 1. HEADER — the shared letterhead (logo + issuing-location identity left,
-  //    badge + meta right), so every document prints the same masthead.
+  //    badge + meta right), translated into the right half as one block.
   // ══════════════════════════════════════════════════════════════════════════
   const metaRows: Array<[string, string]> = [
     ["Voucher No.", data.voucherNumber || "—"],
@@ -169,6 +169,7 @@ export async function generateMoneyVoucherPdf(data: MoneyVoucherPdfInput): Promi
     accent: ACCENT,
     metaRows,
     margin: M,
+    xOffset: HALF_W,
     width: CW,
   });
 
@@ -176,9 +177,9 @@ export async function generateMoneyVoucherPdf(data: MoneyVoucherPdfInput): Promi
   // 2. PARTICULARS — Dr first, Cr second: the double-entry order an auditor
   //    expects. The amount rides the first (Dr) row.
   // ══════════════════════════════════════════════════════════════════════════
-  fillRect(M, y, CW, 8, ACCENT);
-  txt("PARTICULARS", M + 3, y + 5.4, { size: 8, bold: true, color: WHITE });
-  txt("AMOUNT", M + CW - 3, y + 5.4, { size: 8, bold: true, align: "right", color: WHITE });
+  fillRect(X, y, CW, 8, ACCENT);
+  txt("PARTICULARS", X + 3, y + 5.4, { size: 8, bold: true, color: WHITE });
+  txt("AMOUNT", X + CW - 3, y + 5.4, { size: 8, bold: true, align: "right", color: WHITE });
   y += 8;
 
   const rows: Array<[string, string]> = isReceipt
@@ -191,11 +192,11 @@ export async function generateMoneyVoucherPdf(data: MoneyVoucherPdfInput): Promi
         ["Paid From (Credit)", data.cashBankName || "—"],
       ];
   rows.forEach(([label, value], i) => {
-    if (i % 2 === 1) fillRect(M, y, CW, 9, SOFT);
-    doc.setDrawColor(BORDER[0], BORDER[1], BORDER[2]); doc.setLineWidth(0.2); doc.rect(M, y, CW, 9);
-    txt(label, M + 3, y + 5.8, { size: 7.6, color: MUT });
-    cell(value, M + 58, y + 5.8, CW - 100, { size: 8.6, bold: true, color: INK });
-    if (i === 0) txt(money(data.amount), M + CW - 3, y + 5.8, { size: 8.6, bold: true, align: "right", color: INK });
+    if (i % 2 === 1) fillRect(X, y, CW, 9, SOFT);
+    doc.setDrawColor(BORDER[0], BORDER[1], BORDER[2]); doc.setLineWidth(0.2); doc.rect(X, y, CW, 9);
+    txt(label, X + 3, y + 5.8, { size: 7.6, color: MUT });
+    cell(value, X + 58, y + 5.8, CW - 100, { size: 8.6, bold: true, color: INK });
+    if (i === 0) txt(money(data.amount), X + CW - 3, y + 5.8, { size: 8.6, bold: true, align: "right", color: INK });
     y += 9;
   });
 
@@ -207,25 +208,25 @@ export async function generateMoneyVoucherPdf(data: MoneyVoucherPdfInput): Promi
   const nLines = allNLines.slice(0, 10);
   if (allNLines.length > 10) nLines[9] = `${nLines[9]}\u2026`;
   const nh = Math.max(9, nLines.length * 3.8 + 4.5);
-  doc.setDrawColor(BORDER[0], BORDER[1], BORDER[2]); doc.setLineWidth(0.2); doc.rect(M, y, CW, nh);
-  txt("Narration", M + 3, y + 5.8, { size: 7.6, color: MUT });
-  nLines.forEach((l, i) => txt(l, M + 58, y + 5.8 + i * 3.8, { size: 7.6, color: INK }));
+  doc.setDrawColor(BORDER[0], BORDER[1], BORDER[2]); doc.setLineWidth(0.2); doc.rect(X, y, CW, nh);
+  txt("Narration", X + 3, y + 5.8, { size: 7.6, color: MUT });
+  nLines.forEach((l, i) => txt(l, X + 58, y + 5.8 + i * 3.8, { size: 7.6, color: INK }));
   y += nh;
 
   // ── Total band ────────────────────────────────────────────────────────────
-  fillRect(M, y, CW, 12, ACCENT);
-  txt("TOTAL", M + 4, y + 8, { size: 10, bold: true, color: WHITE });
-  txt(money(data.amount), M + CW - 4, y + 8, { size: 12.5, bold: true, align: "right", color: WHITE });
+  fillRect(X, y, CW, 12, ACCENT);
+  txt("TOTAL", X + 4, y + 8, { size: 10, bold: true, color: WHITE });
+  txt(money(data.amount), X + CW - 4, y + 8, { size: 12.5, bold: true, align: "right", color: WHITE });
   y += 15;
 
   // Amount in words — boxed like the invoice's words strip. Three lines holds
   // any representable amount; the cap only guards the fixed layout below.
   const wordLines = wrap(amountInWords(data.amount), CW - 40, 7.8, true).slice(0, 3);
   const wh = Math.max(9, wordLines.length * 3.9 + 4.5);
-  fillRect(M, y, CW, wh, SOFT);
-  doc.setDrawColor(BORDER[0], BORDER[1], BORDER[2]); doc.setLineWidth(0.2); doc.rect(M, y, CW, wh);
-  txt("Amount in Words", M + 3, y + 5.8, { size: 7.2, color: MUT });
-  wordLines.forEach((l, i) => txt(l, M + 36, y + 5.8 + i * 3.9, { size: 7.8, bold: true, color: INK }));
+  fillRect(X, y, CW, wh, SOFT);
+  doc.setDrawColor(BORDER[0], BORDER[1], BORDER[2]); doc.setLineWidth(0.2); doc.rect(X, y, CW, wh);
+  txt("Amount in Words", X + 3, y + 5.8, { size: 7.2, color: MUT });
+  wordLines.forEach((l, i) => txt(l, X + 36, y + 5.8 + i * 3.9, { size: 7.8, bold: true, color: INK }));
   y += wh + 6;
 
   // ── Audit trail ───────────────────────────────────────────────────────────
@@ -233,7 +234,7 @@ export async function generateMoneyVoucherPdf(data: MoneyVoucherPdfInput): Promi
     data.recordedBy ? `Recorded by: ${data.recordedBy}` : "",
     data.recordedAt ? `Recorded on: ${fmtDate(data.recordedAt)}` : "",
   ].filter(Boolean).join("      ");
-  if (trail) { txt(trail, M, y, { size: 7, color: MUT }); y += 8; }
+  if (trail) { txt(trail, X, y, { size: 7, color: MUT }); y += 8; }
 
   // ── Signatures ────────────────────────────────────────────────────────────
   // Content-driven: the row sits just below the last printed line rather than
@@ -247,7 +248,7 @@ export async function generateMoneyVoucherPdf(data: MoneyVoucherPdfInput): Promi
     ? ["Received By", "Authorized Signatory", "Payer's Signature"]
     : ["Prepared By", "Authorized Signatory", "Received By"];
   sigs.forEach((label, i) => {
-    const x = M + sigW * i;
+    const x = X + sigW * i;
     line(x + 6, y + 12, x + sigW - 6, y + 12, [120, 130, 150], 0.25);
     txt(label, x + sigW / 2, y + 16, { size: 7, align: "center", color: MUT });
   });

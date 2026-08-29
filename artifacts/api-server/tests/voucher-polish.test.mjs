@@ -90,8 +90,13 @@ async function fetchVoucherPdf(kind, id) {
   const pageHeight = Number(size?.[2] ?? 0);
   const pages = Number(/Pages:\s+(\d+)/.exec(pageInfo)?.[1] ?? 0);
   const bbox = execFileSync('pdftotext', ['-bbox', file, '-']).toString();
+  const xMins = [...bbox.matchAll(/\bxMin="([\d.]+)"/g)].map(m => Number(m[1]));
   const xMaxes = [...bbox.matchAll(/\bxMax="([\d.]+)"/g)].map(m => Number(m[1]));
-  return { status: response.status, text, pageWidth, pageHeight, pages, maxTextX: Math.max(0, ...xMaxes) };
+  return {
+    status: response.status, text, pageWidth, pageHeight, pages,
+    minTextX: xMins.length ? Math.min(...xMins) : 0,
+    maxTextX: Math.max(0, ...xMaxes),
+  };
 }
 
 async function fetchJournalVoucherPdf(id) {
@@ -112,6 +117,7 @@ async function fetchJournalVoucherPdf(id) {
     pageWidth: Number(size?.[1] ?? 0),
     pageHeight: Number(size?.[2] ?? 0),
     pages: Number(/Pages:\s+(\d+)/.exec(pageInfo)?.[1] ?? 0),
+    minTextX: Math.min(...[...execFileSync('pdftotext', ['-bbox', file, '-']).toString().matchAll(/\bxMin="([\d.]+)"/g)].map(m => Number(m[1]))),
     maxTextX: Math.max(0, ...[...execFileSync('pdftotext', ['-bbox', file, '-']).toString().matchAll(/\bxMax="([\d.]+)"/g)].map(m => Number(m[1]))),
   };
 }
@@ -265,8 +271,8 @@ let keepPaymentId = 0, keepReceiptId = 0;
      Math.abs(paymentPdf.pageWidth - 841.89) < 0.5
        && Math.abs(paymentPdf.pageHeight - 595.28) < 0.5
       && paymentPdf.pages === 1);
-   assert('Payment Voucher PDF keeps the right half blank',
-     paymentPdf.maxTextX < 420.95);
+   assert('Payment Voucher PDF keeps the left half blank and stays on the right',
+     paymentPdf.minTextX > 420.95);
   assert('Payment Voucher PDF uses the issuing warehouse letterhead',
     paymentPdf.text.includes(whAName));
 
@@ -281,8 +287,8 @@ let keepPaymentId = 0, keepReceiptId = 0;
      Math.abs(receiptPdf.pageWidth - 841.89) < 0.5
        && Math.abs(receiptPdf.pageHeight - 595.28) < 0.5
       && receiptPdf.pages === 1);
-   assert('Receipt Voucher PDF keeps the right half blank',
-     receiptPdf.maxTextX < 420.95);
+   assert('Receipt Voucher PDF keeps the left half blank and stays on the right',
+     receiptPdf.minTextX > 420.95);
   assert('Receipt Voucher PDF uses the issuing warehouse letterhead',
     receiptPdf.text.includes(whAName));
 }
@@ -315,8 +321,8 @@ let jvId = 0;
      Math.abs(journalPdf.pageWidth - 841.89) < 0.5
        && Math.abs(journalPdf.pageHeight - 595.28) < 0.5
       && journalPdf.pages === 1);
-   assert('Journal Voucher PDF keeps the right half blank',
-     journalPdf.maxTextX < 420.95);
+   assert('Journal Voucher PDF keeps the left half blank and stays on the right',
+     journalPdf.minTextX > 420.95);
   assert('Journal Voucher PDF uses the issuing warehouse letterhead',
     journalPdf.text.includes(whAName));
 

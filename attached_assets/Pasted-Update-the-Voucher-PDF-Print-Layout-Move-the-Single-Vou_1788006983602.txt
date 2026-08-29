@@ -1,0 +1,178 @@
+Update the Voucher PDF/Print Layout — Move the Single Voucher to the RIGHT HALF of A4 Landscape
+
+The current implementation correctly generates an A4 Landscape page with a center cutting line, but the voucher is currently positioned on the LEFT half.
+
+I need the voucher moved completely to the RIGHT half.
+
+REQUIRED FINAL LAYOUT
+
+A4 LANDSCAPE:
+
+┌───────────────────────────────┬───────────────────────────────┐
+│                               │                               │
+│                               │       RECEIPT VOUCHER         │
+│                               │                               │
+│                               │       Company Details         │
+│                               │       Voucher Details         │
+│                               │                               │
+│        COMPLETELY             │       Particulars             │
+│          BLANK                │       Amount                  │
+│                               │       Total                   │
+│                               │       Amount in Words        │
+│                               │                               │
+│                               │       Received By             │
+│                               │       Authorized Signatory     │
+│                               │       Payer's Signature        │
+│                               │                               │
+└───────────────────────────────┴───────────────────────────────┘
+                                ↑
+                           CUT HERE
+
+IMPORTANT:
+
+1. A4 paper size must remain:
+   - Width: 297 mm
+   - Height: 210 mm
+   - Orientation: Landscape
+
+2. Divide the A4 page vertically into two equal halves.
+
+3. The LEFT HALF must be completely blank.
+
+4. The RIGHT HALF must contain the complete voucher.
+
+5. Move the entire voucher container/content from the current LEFT half to the RIGHT half.
+
+6. Do NOT simply mirror the voucher or change the text alignment.
+   The complete voucher block itself must move to the right half.
+
+7. The voucher should be centered within the RIGHT half with proper margins.
+
+8. The voucher must not cross the center cutting line.
+
+9. The center cutting line must remain exactly between the two halves.
+
+10. Do not place any voucher content on the left side.
+
+PRINT/PDF BEHAVIOR
+
+When printing ONE voucher:
+
+- Generate exactly ONE A4 Landscape page.
+- LEFT half = blank.
+- RIGHT half = voucher.
+- Do not duplicate the voucher.
+- Do not create an additional blank page.
+
+The purpose is that I can print the voucher on the RIGHT HALF of the A4 sheet, cut the sheet vertically at the center, and obtain the voucher.
+
+IMPORTANT PHYSICAL PRINTING USE CASE
+
+The right-half placement is intentional.
+
+I want the printed result to be:
+
+LEFT HALF → BLANK
+RIGHT HALF → VOUCHER
+
+After cutting:
+
+LEFT half can remain unused/available.
+RIGHT half contains the complete printed voucher.
+
+VOUCHER CONTENT
+
+Keep all existing voucher information and design unchanged:
+
+- Company/warehouse logo
+- Company/warehouse name
+- Address
+- GSTIN/FSSAI details
+- Voucher title
+- Voucher number
+- Voucher date
+- Location
+- Particulars
+- Amount
+- Total
+- Amount in Words
+- Narration
+- Recorded information
+- Prepared By
+- Authorized Signatory
+- Received By / Payer's Signature
+
+Do not change accounting data or voucher information.
+
+APPLY TO ALL VOUCHER TYPES
+
+The same right-half A4 landscape layout must be used for:
+
+1. Payment Voucher
+2. Receipt Voucher
+3. Journal Voucher
+
+CSS / PRINT REQUIREMENT
+
+Ensure the print stylesheet explicitly uses:
+
+@page {
+  size: A4 landscape;
+}
+
+The page/container should use the full A4 landscape width.
+
+Conceptually:
+
+A4 width = 297mm
+
+Left half:
+0mm → 148.5mm
+COMPLETELY BLANK
+
+Right half:
+148.5mm → 297mm
+VOUCHER
+
+Position the voucher using a right-half container rather than relying on arbitrary margins.
+
+Do not use a full-page centered layout.
+
+FINAL VERIFICATION
+
+After implementing:
+
+1. Open a Receipt Voucher.
+2. Click Print/PDF.
+3. Confirm the preview is A4 Landscape.
+4. Confirm the voucher appears ONLY on the RIGHT half.
+5. Confirm the LEFT half is completely blank.
+6. Confirm the vertical cutting line is in the exact center.
+7. Confirm no content crosses the cutting line.
+8. Confirm there is exactly one PDF page.
+9. Confirm Payment Voucher and Journal Voucher use the same layout.
+10. Confirm browser printing and downloaded PDF produce the same positioning.
+
+DO NOT CHANGE:
+
+- Voucher accounting logic
+- Voucher numbering
+- Ledger postings
+- Location logic
+- Permissions
+- Payment calculations
+- Receipt calculations
+- Journal calculations
+- Existing voucher content
+
+This is ONLY a PDF/print positioning and layout correction.
+
+The current problem is specifically:
+
+CURRENT:
+LEFT = VOUCHER
+RIGHT = BLANK
+
+REQUIRED:
+LEFT = BLANK
+RIGHT = VOUCHER
