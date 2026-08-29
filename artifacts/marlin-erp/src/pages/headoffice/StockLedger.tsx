@@ -20,6 +20,11 @@ const dtIN = (s: string) => {
   const d = new Date(s);
   return d.toLocaleDateString('en-IN') + ' ' + d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
 };
+const dateIN = (s: string | null | undefined) => {
+  if (!s) return '—';
+  const [year, month, day] = s.slice(0, 10).split('-');
+  return year && month && day ? `${day}/${month}/${year}` : s;
+};
 
 const TXN_LABELS: Record<string, string> = {
   purchase:               'Purchase',
@@ -91,7 +96,7 @@ export default function StockLedger() {
   useEffect(() => { if (page > totalPages) setPage(totalPages); }, [page, totalPages]);
 
   const { sorted, sort } = useTableSort(rows, {
-    createdAt:      r => r.createdAt,
+    txnDate:        r => r.txnDate,
     txnType:        r => TXN_LABELS[r.txnType] ?? r.txnType,
     itemName:       r => r.itemName,
     materialType:   r => MAT_LABELS[r.materialType] ?? r.materialType,
@@ -127,7 +132,7 @@ export default function StockLedger() {
           icon={BookOpen}
           actions={perm.canDownload && (
           <Button variant="outline" size="sm" onClick={() => downloadCSV('stock-ledger.csv', rows.map(r => ({
-            Date: dtIN(r.createdAt),
+             Date: dateIN(r.txnDate),
             'Transaction Type': TXN_LABELS[r.txnType] ?? r.txnType,
             Item: r.itemName,
             'Item Type': MAT_LABELS[r.materialType] ?? r.materialType,
@@ -195,7 +200,7 @@ export default function StockLedger() {
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
-                <SortableHead k="createdAt" sort={sort}>Date &amp; Time</SortableHead>
+                <SortableHead k="txnDate" sort={sort}>Business Date</SortableHead>
                 <SortableHead k="txnType" sort={sort}>Transaction</SortableHead>
                 <SortableHead k="itemName" sort={sort}>Item</SortableHead>
                 <SortableHead k="materialType" sort={sort}>Type</SortableHead>
@@ -228,7 +233,7 @@ export default function StockLedger() {
                 const isIn = r.qtyChange > 0;
                 return (
                   <TableRow key={r.id} className="hover:bg-muted/10">
-                    <TableCell className="text-xs text-muted-foreground whitespace-nowrap">{dtIN(r.createdAt)}</TableCell>
+                    <TableCell className="text-xs text-muted-foreground whitespace-nowrap" title={`Recorded ${dtIN(r.createdAt)}`}>{dateIN(r.txnDate)}</TableCell>
                     <TableCell><TxnBadge type={r.txnType} /></TableCell>
                     <TableCell className="font-medium max-w-[180px] truncate" title={r.itemName}>{r.itemName}</TableCell>
                     <TableCell>

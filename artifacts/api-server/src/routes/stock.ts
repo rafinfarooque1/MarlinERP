@@ -7,7 +7,7 @@ import { CreateStockTransferBody, ListStockQueryParams } from "@workspace/api-zo
 import { logActivity } from "../lib/audit";
 import { pool } from "@workspace/db";
 import { consumeBatches, restoreBatches, creditBatch, updateAvgCostOnInbound, validateBatchOverride, type BatchBreakdownEntry } from "../lib/batches";
-import { writeStockLedger, batchResolveMeta } from "../lib/stockLedger";
+import { writeStockLedger, batchResolveMeta, toTxnDate } from "../lib/stockLedger";
 import { isIsoDate } from "../lib/dateInput";
 import { isMonthLocked, ymOfDate, monthLockedBody, respondIfMonthLocked } from "../lib/periodLock";
 import {
@@ -322,10 +322,14 @@ router.get("/stock/ledger", requireModuleView(["page:/headoffice/stock-ledger", 
   // table, so they must be qualified with `ranked` — `sl` only exists inside
   // the CTE and any `sl.`-qualified filter here fails with 42P01.
   if (q)            { params.push(`%${q}%`);    conds.push(`ranked.item_name ILIKE ${p()}`); }
-  if (from)         { params.push(from);          conds.push(`ranked.created_at::date >= ${p()}::date`); }
-  if (to)           { params.push(to);            conds.push(`ranked.created_at::date <= ${p()}::date`); }
+  if (from)         { params.push(from);          conds.push(`COALESCE(ranked.txn_date, ranked.created_at::date) >= ${p()}::date`); }
+  if (to)           { params.push(to);            conds.push(`COALESCE(ranked.txn_date, ranked.created_at::date) <= ${p()}::date`); }
   if (materialType) { params.push(materialType);  conds.push(`ranked.material_type = ${p()}`); }
   if (txnType)      { params.push(txnType);       conds.push(`ranked.txn_type = ${p()}`); }
+  if (typeof req.query.branchType === 'string' && req.query.branchType) {
+    params.push(req.query.branchType);
+    conds.push(`ranked.branch_type = ${p()}`);
+  }
 
   // Global location context — narrows the movement history to one branch.
   // View request only; HO matches on type alone.
@@ -339,7 +343,10 @@ router.get("/stock/ledger", requireModuleView(["page:/headoffice/stock-ledger", 
 
   const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
 
-  // Running balance computed over ALL history for each item/branch via window function.
+  // Running balance computed over ALL history for each item/branch via window
+  // function. Business date is the primary order so a backdated movement is
+  // placed in the same sequence used by historical stock calculations;
+  // created_at/id make same-day ordering deterministic and preserve audit order.
   // The outer WHERE then filters to the requested criteria.
   const baseQuery = `
     WITH ranked AS (
@@ -347,7 +354,7 @@ router.get("/stock/ledger", requireModuleView(["page:/headoffice/stock-ledger", 
         sl.*,
         SUM(sl.qty_change) OVER (
           PARTITION BY sl.material_type, sl.ref_id, sl.branch_type, sl.branch_id
-          ORDER BY sl.created_at, sl.id
+           ORDER BY COALESCE(sl.txn_date, sl.created_at::date), sl.created_at, sl.id
           ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
         ) AS running_balance
       FROM stock_ledger sl
@@ -358,7 +365,7 @@ router.get("/stock/ledger", requireModuleView(["page:/headoffice/stock-ledger", 
 
   const [countRes, rowsRes] = await Promise.all([
     pool.query(`SELECT COUNT(*) AS total FROM (${baseQuery}) AS c`, params),
-    pool.query(`${baseQuery} ORDER BY created_at DESC, id DESC LIMIT ${limit} OFFSET ${offset}`, params),
+    pool.query(`${baseQuery} ORDER BY COALESCE(txn_date, created_at::date) DESC, created_at DESC, id DESC LIMIT ${limit} OFFSET ${offset}`, params),
   ]);
 
   const total = parseInt(countRes.rows[0]?.total ?? '0', 10);
@@ -382,7 +389,8 @@ router.get("/stock/ledger", requireModuleView(["page:/headoffice/stock-ledger", 
       docType:        r.doc_type,
       docId:          r.doc_id ? Number(r.doc_id) : null,
       notes:          r.notes ?? null,
-      createdAt:      r.created_at,
+       createdAt:      r.created_at,
+       txnDate:        toTxnDate(r.txn_date),
     };
     if (showValuation) row.unitCost = Number(r.unit_cost);
     return row;
@@ -706,7 +714,7 @@ router.post("/stock/transfers", requireModuleAction("page:/transfers", "add"), a
           quantity: Number(li.quantity), breakdown: matBreakdown, fallbackCost: Number(li.costPrice ?? 0),
         });
         enrichedLines.push({ ...li, materialType, batchBreakdown: matBreakdown });
-        dispatchLedgerEntries.push({ txnType: 'transfer_out', materialType: 'material', refId: li.itemId, itemName: mat.name ?? '', unit: mat.unit ?? '', branchType: row.from_type, branchId: row.from_id, branchName: branchFn(row.from_type, row.from_id), qtyChange: -Number(li.quantity), unitCost: Number(li.costPrice ?? 0), docType: 'stock_transfer', docId: row.id });
+        dispatchLedgerEntries.push({ txnType: 'transfer_out', materialType: 'material', refId: li.itemId, itemName: mat.name ?? '', unit: mat.unit ?? '', branchType: row.from_type, branchId: row.from_id, branchName: branchFn(row.from_type, row.from_id), qtyChange: -Number(li.quantity), unitCost: Number(li.costPrice ?? 0), docType: 'stock_transfer', docId: row.id, txnDate: toTxnDate(row.transfer_date) });
       } else if (materialType === 'raw_material') {
         // Packing Material: availability is now per location, not a global counter.
         const { rows: [rm] } = await client.query(
@@ -759,7 +767,7 @@ router.post("/stock/transfers", requireModuleAction("page:/transfers", "add"), a
           quantity: Number(li.quantity), breakdown: rmBreakdown, fallbackCost: Number(li.costPrice ?? 0),
         });
         enrichedLines.push({ ...li, materialType, batchBreakdown: rmBreakdown });
-        dispatchLedgerEntries.push({ txnType: 'transfer_out', materialType: 'raw_material', refId: li.itemId, itemName: rm.name ?? '', unit: rm.unit ?? '', branchType: row.from_type, branchId: row.from_id, branchName: branchFn(row.from_type, row.from_id), qtyChange: -Number(li.quantity), unitCost: Number(li.costPrice ?? 0), docType: 'stock_transfer', docId: row.id });
+        dispatchLedgerEntries.push({ txnType: 'transfer_out', materialType: 'raw_material', refId: li.itemId, itemName: rm.name ?? '', unit: rm.unit ?? '', branchType: row.from_type, branchId: row.from_id, branchName: branchFn(row.from_type, row.from_id), qtyChange: -Number(li.quantity), unitCost: Number(li.costPrice ?? 0), docType: 'stock_transfer', docId: row.id, txnDate: toTxnDate(row.transfer_date) });
       } else {
         // Item (SKU): deduct from stock_entries. The row is locked and the check
         // is against available, so a concurrent dispatch or sale of the same
@@ -800,7 +808,7 @@ router.post("/stock/transfers", requireModuleAction("page:/transfers", "add"), a
         });
         enrichedLines.push({ ...li, materialType: 'item', batchBreakdown });
         const { rows: [itemMeta] } = await pool.query(`SELECT name, unit FROM items WHERE id = $1`, [li.itemId]);
-        dispatchLedgerEntries.push({ txnType: 'transfer_out', materialType: 'item', refId: li.itemId, itemName: itemMeta?.name ?? '', unit: itemMeta?.unit ?? '', branchType: row.from_type, branchId: row.from_id, branchName: branchFn(row.from_type, row.from_id), qtyChange: -Number(li.quantity), unitCost: Number(li.costPrice ?? 0), docType: 'stock_transfer', docId: row.id });
+        dispatchLedgerEntries.push({ txnType: 'transfer_out', materialType: 'item', refId: li.itemId, itemName: itemMeta?.name ?? '', unit: itemMeta?.unit ?? '', branchType: row.from_type, branchId: row.from_id, branchName: branchFn(row.from_type, row.from_id), qtyChange: -Number(li.quantity), unitCost: Number(li.costPrice ?? 0), docType: 'stock_transfer', docId: row.id, txnDate: toTxnDate(row.transfer_date) });
       }
     }
     await writeStockLedger(client, dispatchLedgerEntries);
@@ -1244,7 +1252,7 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction("page:/transfer
       await writeStockLedger(client, approveLedgerLines.map((l: any) => {
         const mt   = l.materialType ?? 'item';
         const info = approveMeta.get(`${mt}:${l.itemId}`) ?? { name: '', unit: '' };
-        return { txnType: 'transfer_in', materialType: mt, refId: Number(l.itemId), itemName: info.name, unit: info.unit, branchType: approveDestType, branchId: approveDestId, branchName: approveBm(row.to_type, Number(row.to_id)), qtyChange: Number(l.quantity), unitCost: Number(l.costPrice ?? 0), docType: 'stock_transfer', docId: id };
+        return { txnType: 'transfer_in', materialType: mt, refId: Number(l.itemId), itemName: info.name, unit: info.unit, branchType: approveDestType, branchId: approveDestId, branchName: approveBm(row.to_type, Number(row.to_id)), qtyChange: Number(l.quantity), unitCost: Number(l.costPrice ?? 0), docType: 'stock_transfer', docId: id, txnDate: toTxnDate(row.transfer_date) };
       }));
     }
 
@@ -1382,7 +1390,7 @@ router.patch("/stock/transfers/:id/reject", requireModuleAction("page:/transfers
     await writeStockLedger(client, lineItems.map(l => {
       const mt   = (l.materialType ?? 'item') as string;
       const info = rejectMeta.get(`${mt}:${l.itemId}`) ?? { name: '', unit: '' };
-      return { txnType: 'transfer_in', materialType: mt, refId: Number(l.itemId), itemName: info.name, unit: info.unit, branchType: row.from_type, branchId: Number(row.from_id), branchName: fromName, qtyChange: Number(l.quantity), unitCost: Number(l.costPrice ?? 0), docType: 'stock_transfer', docId: id, notes: 'Transfer rejected — stock returned to source' };
+       return { txnType: 'transfer_in', materialType: mt, refId: Number(l.itemId), itemName: info.name, unit: info.unit, branchType: row.from_type, branchId: Number(row.from_id), branchName: fromName, qtyChange: Number(l.quantity), unitCost: Number(l.costPrice ?? 0), docType: 'stock_transfer', docId: id, notes: 'Transfer rejected — stock returned to source', txnDate: toTxnDate(row.transfer_date) };
     }));
 
     // ── Rejected after a tax invoice was raised → credit note ────────────────

@@ -23,6 +23,8 @@ export interface StockLedgerRow {
   docId: number | null;
   notes: string | null;
   createdAt: string;
+  /** Business date of the movement; insertion time remains available as createdAt. */
+  txnDate: string | null;
 }
 
 /** Envelope carries the server's verdict on whether this caller may see cost. */
