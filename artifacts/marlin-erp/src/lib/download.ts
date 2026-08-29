@@ -47,6 +47,14 @@ export function printHTML(
     : pageSize === 'A4-landscape'
       ? '@page { size: A4 landscape; margin: 0; }'
     : '@page { size: A4 portrait; margin: 0; }';
+  const halfPagePrintCss = pageSize === 'A4-landscape'
+    ? `
+      @media print {
+        html, body { width: 148.5mm; min-height: 210mm; }
+        body { padding: 8mm; border-right: 0.25mm dashed #bec7d6; }
+      }
+    `
+    : '';
   const w = window.open('', '_blank', 'width=960,height=800');
   if (!w) return;
   w.document.write(`<!DOCTYPE html><html><head><title>${title}</title>
@@ -67,6 +75,7 @@ export function printHTML(
       .small { font-size: 10px; }
       .label { color: #555; font-size: 10px; }
       @media print { body { padding: ${pageSize === 'A5' ? '8mm' : '8px'}; } }
+      ${halfPagePrintCss}
     </style>
     </head><body>${html}<script>window.onload=()=>window.print()</script></body></html>`);
   w.document.close();

@@ -150,3 +150,4 @@
 - [Route-guard audit CI](route-guard-audit.md) — audit-route-guards.ts fails CI on unguarded writes (exemptions stay exact) + check-permissions #6 pins App.tsx guard keys; a comment claiming a fix ≠ the fix.
 - [Mobile app distribution](mobile-app-distribution.md) — no app stores BY CHOICE: Android ships ONLY via the automated EAS pipeline → storage manifest (atomic swap + grace copy; upload UI/URL proxy REMOVED); raw .ipa always rejected.
 - [HR employee lifecycle](hr-employee-lifecycle.md) — app-created employees carry a pay_components row (delete removes it, history blocks with 400); leave cancel = status flip; POS cash sale payments are receipt-backed → system-delete the receipt before cancel.
+- [Voucher print verification](voucher-print-verification.md) — validate physical page geometry with pdfinfo, left-half text bounds with pdftotext -bbox, and clipping visually with a raster render

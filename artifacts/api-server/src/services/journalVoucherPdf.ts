@@ -235,8 +235,7 @@ export async function generateJournalVoucherPdf(data: JournalVoucherPdfInput): P
 
   // ── Signatures ────────────────────────────────────────────────────────────
   // Content-driven (no fixed 235mm anchor): sits below the last printed line,
-  // capped so it never collides with the fixed footer.
-  // Overflowing bodies push the row to a fresh page rather than overprinting.
+  // capped so it never collides with the fixed footer or creates a second page.
   y += 4;
   if (y > PAGE_H - 30) y = PAGE_H - 30;
   drawSignatureRow(doc, ["Prepared By", "Checked By", "Authorized Signatory"], y, M, CW);

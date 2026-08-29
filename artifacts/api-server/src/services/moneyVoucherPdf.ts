@@ -238,8 +238,8 @@ export async function generateMoneyVoucherPdf(data: MoneyVoucherPdfInput): Promi
   // ── Signatures ────────────────────────────────────────────────────────────
   // Content-driven: the row sits just below the last printed line rather than
   // at a fixed page anchor (which left a large blank band on short vouchers).
-  // If the body already ran past the safe band (very long narrations), the row
-  // moves to a fresh page instead of being stamped over the content.
+  // If the body already ran past the safe band (very long narrations), keep the
+  // signature row on this single physical sheet rather than adding a page.
   y += 4;
   if (y > PAGE_H - 30) y = PAGE_H - 30;
   const sigW = CW / 3;
