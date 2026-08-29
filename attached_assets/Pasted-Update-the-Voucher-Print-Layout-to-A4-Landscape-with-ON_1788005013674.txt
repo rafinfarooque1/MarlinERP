@@ -1,0 +1,188 @@
+Update the Voucher Print Layout to A4 Landscape with ONE Voucher Per Half-Page
+
+I need the Payment Voucher, Receipt Voucher, and Journal Voucher printing to work like a physical A4 sheet that can be cut in half.
+
+PAPER FORMAT
+
+- Paper size: A4
+- Orientation: Landscape
+- A4 dimensions: 297 × 210 mm
+- Divide the A4 landscape page vertically into TWO equal A5-size areas.
+- Each half should be approximately 148.5 × 210 mm.
+- The voucher must be designed to fit completely inside ONE half of the A4 page.
+
+IMPORTANT PRINTING BEHAVIOR
+
+I do NOT want two vouchers automatically printed on one A4 page.
+
+I want:
+
+CASE 1 — PRINT ONE VOUCHER
+
+When the user prints/downloads ONE voucher:
+
+- Generate an A4 Landscape page.
+- Place the voucher ONLY on the LEFT HALF of the A4 page.
+- Keep the RIGHT HALF completely blank.
+- Add a clear vertical cutting/divider line between the two halves if appropriate.
+- The voucher must occupy only one half of the A4 page.
+- Do NOT duplicate the same voucher on the right side.
+
+After printing:
+
+I should be able to cut the A4 sheet vertically in the middle and get one complete voucher.
+
+CASE 2 — PRINT ANOTHER VOUCHER LATER
+
+If I print another single voucher separately:
+
+- Again generate a fresh A4 Landscape page.
+- Place that voucher ONLY on the LEFT HALF.
+- Keep the RIGHT HALF blank.
+
+This allows me to:
+
+1. Print Voucher A.
+2. Cut the A4 sheet in half.
+3. Keep the unused half.
+4. Later use that remaining half separately if needed.
+
+DO NOT automatically place two vouchers side-by-side.
+
+VOUCHER SIZE AND POSITION
+
+The voucher should use the same visual design/content as the current voucher, but resize/reflow it to fit inside one half of an A4 landscape page.
+
+Each voucher area should have:
+
+- Proper margins
+- Company/warehouse logo
+- Company/warehouse name and address
+- Voucher title
+- Voucher number
+- Voucher date
+- Location
+- Particulars
+- Amount
+- Total
+- Amount in Words
+- Narration
+- Prepared By
+- Authorized Signatory
+- Received By
+
+Do not remove existing voucher information.
+
+ALIGNMENT
+
+The single voucher should be centered vertically within the LEFT HALF of the A4 landscape page.
+
+Do not stretch the voucher across the full A4 width.
+
+Do not place any voucher content in the right half.
+
+The right half must remain completely blank except for the optional center cutting line.
+
+CUTTING LINE
+
+Place a subtle vertical dashed cutting line exactly at the center of the A4 page:
+
+LEFT VOUCHER | CUT LINE | BLANK RIGHT HALF
+
+The cutting line must not overlap the voucher content.
+
+Do not add unnecessary borders or large empty areas inside the voucher itself.
+
+PDF REQUIREMENT
+
+The downloaded PDF must itself be:
+
+- A4
+- Landscape
+- One page
+- One voucher only
+- Voucher positioned on the left half
+- Right half blank
+
+Do NOT generate an A5 PDF.
+
+Do NOT generate an A4 portrait PDF.
+
+Do NOT generate two copies of the voucher.
+
+BROWSER PRINT REQUIREMENT
+
+Browser Print must also use:
+
+@page {
+  size: A4 landscape;
+}
+
+The print preview must show one voucher on the left half and a blank right half.
+
+The physical printed result must match the PDF.
+
+MULTIPLE VOUCHERS
+
+If the user selects/prints multiple vouchers together, then each voucher should occupy one half-page slot.
+
+For example:
+
+Voucher 1 → A4 page 1 LEFT half
+Voucher 2 → A4 page 2 LEFT half
+
+Do NOT put Voucher 1 and Voucher 2 on the same page automatically.
+
+The default print action is always ONE voucher per A4 page, positioned on ONE HALF.
+
+IMPORTANT:
+
+The purpose is to physically cut the A4 sheet in half and obtain one voucher-sized sheet.
+
+Do not change:
+
+- Accounting logic
+- Voucher numbering
+- Voucher data
+- Ledger postings
+- Location logic
+- Permissions
+- Payment/receipt calculations
+
+This is strictly a PDF/print-layout change.
+
+Apply the same print behavior consistently to:
+
+1. Payment Voucher
+2. Receipt Voucher
+3. Journal Voucher
+
+FINAL VERIFICATION
+
+Print/download a sample Payment Voucher and confirm visually:
+
+A4 LANDSCAPE
+
+┌───────────────────────────────┬───────────────────────────────┐
+│                               │                               │
+│       PAYMENT VOUCHER         │                               │
+│                               │                               │
+│       Company Details         │                               │
+│       Voucher Details         │                               │
+│                               │                               │
+│       Particulars             │        COMPLETELY             │
+│       Amount                  │           BLANK               │
+│       Total                   │                               │
+│       Amount in Words        │                               │
+│                               │                               │
+│       Prepared By             │                               │
+│       Authorised Signatory    │                               │
+│       Received By             │                               │
+│                               │                               │
+└───────────────────────────────┴───────────────────────────────┘
+                                ↑
+                           CUT HERE
+
+The right half must contain NO duplicated voucher content.
+
+Also ensure there is no second blank PDF page.
