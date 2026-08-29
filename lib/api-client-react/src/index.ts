@@ -42,5 +42,6 @@ export * from "./imports";
 export * from "./accounting-periods";
 export * from "./storage-locations";
 export * from "./item-tracking";
+export * from "./voucher-parties";
 export * from './generated/api';
 export * from './generated/api.schemas';

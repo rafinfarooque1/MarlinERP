@@ -16,6 +16,7 @@ import {
   useListPayments, useCreatePayment, useUpdatePayment, useDeletePayment,
   useListReceipts, useCreateReceipt, useUpdateReceipt, useDeleteReceipt,
   useListAccountsFlat, useCashBankLedgersFlat, useGetMe, useVoucherEmployees,
+  useVoucherPartyLedgers,
 } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
@@ -188,6 +189,20 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
   // on behalf of a branch produces a branch voucher. Defaults to the global
   // location selector; the pickers narrow to that location's own accounts.
   const { locations, locKey, setLocKey, selLoc, foreignLedgerIds } = useVoucherLocationChoice();
+  const selectedPartyLocation = selLoc
+    ? {
+        locationType: selLoc.locationType,
+        locationId: Number(selLoc.locationId),
+      }
+    : undefined;
+  const { data: customerPartyLedgers = [] } = useVoucherPartyLedgers('customer', selectedPartyLocation);
+  const { data: vendorPartyLedgers = [] } = useVoucherPartyLedgers('vendor', selectedPartyLocation);
+  const customerPartyLedgerIds = useMemo(() => new Set<number>(
+    (customerPartyLedgers as any[]).map(p => Number(p.ledgerId)),
+  ), [customerPartyLedgers]);
+  const vendorPartyLedgerIds = useMemo(() => new Set<number>(
+    (vendorPartyLedgers as any[]).map(p => Number(p.ledgerId)),
+  ), [vendorPartyLedgers]);
 
   const codeOf = (id: number) => (allAccounts as any[]).find(a => a.id === id)?.code ?? '';
   const partyTypeDef = PARTY_TYPES.find(t => t.value === partyType) ?? PARTY_TYPES[3];
@@ -219,9 +234,13 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
         const m = /^(?:SAL-EMP|SAL-PAY)-(\d+)$/.exec(a.code ?? '');
         return !!m && eligibleEmployeeIds.has(Number(m[1]));
       }
+      if (partyTypeDef.value === 'customer' || partyTypeDef.value === 'vendor') {
+        return (partyTypeDef.value === 'customer' ? customerPartyLedgerIds : vendorPartyLedgerIds)
+          .has(Number(a.id));
+      }
       return !isSystemLedger(a.code);
     }),
-    [allAccounts, partyTypeDef, foreignLedgerIds, eligibleEmployeeIds],
+    [allAccounts, partyTypeDef, foreignLedgerIds, eligibleEmployeeIds, customerPartyLedgerIds, vendorPartyLedgerIds],
   );
 
   // Till picker — only the selected location's own cash/bank accounts.
@@ -252,7 +271,7 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
     if (partyId && foreignLedgerIds.has(partyId)) form.setValue('partyLedgerId', 0);
     // An employee that just became ineligible (location switch) must not ride
     // along hidden in the form — same rule as foreign ledgers.
-    if (partyId && partyTypeDef.value === 'employee' && !editing
+    if (partyId && (partyTypeDef.value === 'employee' || partyTypeDef.value === 'customer' || partyTypeDef.value === 'vendor') && !editing
       && !partyOptions.some((a: any) => Number(a.id) === partyId)) {
       form.setValue('partyLedgerId', 0);
     }
@@ -510,7 +529,13 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
                     <FormItem className="lg:col-span-2">
                       <FormLabel>{C.partyLabel} <span className="text-destructive">*</span></FormLabel>
                       <AccountCombobox options={partyOptions} value={field.value}
-                        onChange={field.onChange} placeholder={`Select ${partyTypeDef.label.toLowerCase()} account`} advanceOnSelect data-field="partyLedgerId" />
+                        onChange={field.onChange} placeholder={`Select ${partyTypeDef.label.toLowerCase()} account`}
+                        emptyMessage={partyTypeDef.value === 'customer'
+                          ? 'No customers found for this location'
+                          : partyTypeDef.value === 'vendor'
+                            ? 'No vendors found for this location'
+                            : undefined}
+                        advanceOnSelect data-field="partyLedgerId" />
                       <FormMessage />
                     </FormItem>
                   )} />

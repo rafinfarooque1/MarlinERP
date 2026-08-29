@@ -19,14 +19,15 @@ import { buildBooks } from "../lib/books";
 import { buildPeriodicBuckets } from "../lib/periodicSummary";
 import { buildDerivedPostings } from "./journal";
 import { outletWritesBlocked, OUTLETS_DISABLED_MESSAGE, OUTLETS_DISABLED_CODE } from "../lib/featureFlags";
-import { getUserDataScope, scopeSalesWhere, scopeBranchWhere } from "../lib/dataScope";
+import { getUserDataScope, scopeSalesWhere, scopeBranchWhere, scopeLocationTypeWhere } from "../lib/dataScope";
 import { parseDateRange, pushDateRange, pushLocationFilter } from "../lib/queryFilters";
 import { getLocationFilter, getPostingLocationFilter } from "../lib/requestLocation";
 import { parsePaging, setPagingHeaders, applyPaging } from "../lib/paging";
 import {
   callerLocation, ownLocationScope, scopeLedgerIds, scopeCashLedgerIds, scopeMoneyWhere,
   checkVoucherLegs, foreignLocationLedgerIds, foreignPartyLedgerIds, headOfficeCashBankLedgerIds,
-  resolveMoneyVoucherLocation,
+  resolveMoneyVoucherLocation, voucherPartyLocationWhere, checkVoucherPartyLocation,
+  type VoucherPartyKind,
 } from "../lib/moneyScope";
 import { loadLedgerUsage, deleteBlockReason } from "../lib/chartGroups";
 import { respondIfMonthLocked, isMonthLocked, ymOfDate, monthLockedBody } from "../lib/periodLock";
@@ -242,6 +243,67 @@ router.get("/accounts/chart/flat", requireModuleView(["page:/accounts/vouchers",
     isGroup: r.is_group ?? false,
     bankDetails: r.bank_details ?? null,
     balance: 0,
+  })));
+});
+
+/**
+ * Party-ledger picker for receipt/payment vouchers.
+ *
+ * Unlike the general chart endpoint, this endpoint accepts the voucher form's
+ * selected location and returns only CUST-/VEND- ledgers whose master record
+ * is available at that location. The caller's LBAC scope remains an
+ * unconditional outer condition, so a forged location query can only narrow
+ * the result.
+ */
+router.get("/accounts/voucher-parties", requireModuleView(["page:/accounts/vouchers", "page:/operations/receipt-voucher", "page:/operations/payment-voucher"]), async (req, res): Promise<void> => {
+  const kind = String(req.query.kind ?? "") as VoucherPartyKind;
+  if (kind !== "customer" && kind !== "vendor") {
+    res.status(400).json({ error: "kind must be customer or vendor" });
+    return;
+  }
+  const employee = (req as any).employee as { branchType: string; branchId: number } | undefined;
+  if (!employee) {
+    res.status(401).json({ error: "Authentication required" });
+    return;
+  }
+
+  const scope = await getUserDataScope(employee);
+  const params: unknown[] = [];
+  const table = kind === "customer" ? "customers" : "vendors";
+  const prefix = kind === "customer" ? "CUST-" : "VEND-";
+  const conds = [
+    `al.code = $1 || p.id::text`,
+    `COALESCE(al.is_active, true)`,
+  ];
+  params.push(prefix);
+
+  // The existing vendor list treats HO vendors as shared master records; the
+  // customer list remains location-owned. Keep that convention here.
+  conds.push(scopeLocationTypeWhere(scope, params, "p", kind === "vendor"));
+
+  const location = getLocationFilter(req);
+  if (location) {
+    conds.push(voucherPartyLocationWhere(kind, location, params, "p"));
+  }
+
+  const { rows } = await pool.query(
+    `SELECT al.id AS "ledgerId", al.name, al.code,
+            p.id AS "partyId",
+            p.location_type AS "locationType",
+            p.location_id AS "locationId"
+       FROM account_ledgers al
+       JOIN ${table} p ON al.code = $1 || p.id::text
+      WHERE ${conds.join(" AND ")}
+      ORDER BY al.name, al.id`,
+    params,
+  );
+  res.json(rows.map((r: any) => ({
+    ledgerId: Number(r.ledgerId),
+    partyId: Number(r.partyId),
+    name: r.name,
+    code: r.code,
+    locationType: r.locationType ?? null,
+    locationId: r.locationId == null ? null : Number(r.locationId),
   })));
 });
 
@@ -998,6 +1060,18 @@ router.post("/accounts/payments", requireModuleAction(["page:/accounts/vouchers"
   if (!payLocRes.ok) { res.status(payLocRes.status).json({ error: payLocRes.error }); return; }
   const { locationType, locationId } = payLocRes.loc;
   {
+    const { rows: [toLedger] } = await pool.query(
+      `SELECT code FROM account_ledgers WHERE id = $1`, [Number(paidToLedgerId)],
+    );
+    const party = parsePartyLedgerCode(toLedger?.code);
+    if (party) {
+      const partyCheck = await checkVoucherPartyLocation(
+        Number(paidToLedgerId), party.kind, { locationType, locationId },
+      );
+      if (!partyCheck.ok) { res.status(403).json({ error: partyCheck.error }); return; }
+    }
+  }
+  {
     const disabledMsg = await disabledWarehouseError(pool, [{ type: locationType, id: locationId }]);
     if (disabledMsg) { res.status(409).json({ error: disabledMsg, code: WAREHOUSE_DISABLED_CODE }); return; }
   }
@@ -1250,6 +1324,20 @@ router.patch("/accounts/payments/:id", requireModuleAction(["page:/accounts/vouc
     const locRes = await resolveMoneyVoucherLocation((req as any).employee, b, newFrom,
       { locationType: (row.location_type ?? 'headoffice') as any, locationId: Number(row.location_id ?? 0) });
     if (!locRes.ok) { await client.query("ROLLBACK"); res.status(locRes.status).json({ error: locRes.error }); return; }
+    {
+      const { rows: [toLedger] } = await client.query(
+        `SELECT code FROM account_ledgers WHERE id = $1`, [newTo],
+      );
+      const party = parsePartyLedgerCode(toLedger?.code);
+      if (party) {
+        const partyCheck = await checkVoucherPartyLocation(newTo, party.kind, locRes.loc);
+        if (!partyCheck.ok) {
+          await client.query("ROLLBACK");
+          res.status(403).json({ error: partyCheck.error });
+          return;
+        }
+      }
+    }
 
     // Employee legs on the EFFECTIVE values — unchanged legacy legs stay
     // editable, but a changed leg or location must obey the salary-ledger
@@ -1504,6 +1592,18 @@ router.post("/accounts/receipts", requireModuleAction(["page:/accounts/vouchers"
   if (!rcptLocRes.ok) { res.status(rcptLocRes.status).json({ error: rcptLocRes.error }); return; }
   const { locationType, locationId } = rcptLocRes.loc;
   {
+    const { rows: [fromLedger] } = await pool.query(
+      `SELECT code FROM account_ledgers WHERE id = $1`, [Number(receivedFromLedgerId)],
+    );
+    const party = parsePartyLedgerCode(fromLedger?.code);
+    if (party) {
+      const partyCheck = await checkVoucherPartyLocation(
+        Number(receivedFromLedgerId), party.kind, { locationType, locationId },
+      );
+      if (!partyCheck.ok) { res.status(403).json({ error: partyCheck.error }); return; }
+    }
+  }
+  {
     const disabledMsg = await disabledWarehouseError(pool, [{ type: locationType, id: locationId }]);
     if (disabledMsg) { res.status(409).json({ error: disabledMsg, code: WAREHOUSE_DISABLED_CODE }); return; }
   }
@@ -1755,6 +1855,20 @@ router.patch("/accounts/receipts/:id", requireModuleAction(["page:/accounts/vouc
     const locRes = await resolveMoneyVoucherLocation((req as any).employee, b, newIn,
       { locationType: (row.location_type ?? 'headoffice') as any, locationId: Number(row.location_id ?? 0) });
     if (!locRes.ok) { await client.query("ROLLBACK"); res.status(locRes.status).json({ error: locRes.error }); return; }
+    {
+      const { rows: [fromLedger] } = await client.query(
+        `SELECT code FROM account_ledgers WHERE id = $1`, [newFrom],
+      );
+      const party = parsePartyLedgerCode(fromLedger?.code);
+      if (party) {
+        const partyCheck = await checkVoucherPartyLocation(newFrom, party.kind, locRes.loc);
+        if (!partyCheck.ok) {
+          await client.query("ROLLBACK");
+          res.status(403).json({ error: partyCheck.error });
+          return;
+        }
+      }
+    }
 
     // Employee legs on the EFFECTIVE values, unchanged legacy legs grandfathered.
     for (const [legId, storedId] of [[newFrom, row.received_from_ledger_id], [newIn, row.received_in_ledger_id]] as const) {

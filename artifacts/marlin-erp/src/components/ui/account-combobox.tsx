@@ -30,6 +30,8 @@ interface Props {
   'data-testid'?: string;
   /** Enables focusField('<name>') to land here on validation errors. */
   'data-field'?: string;
+  /** Optional empty-state copy for a context-specific picker. */
+  emptyMessage?: string;
 }
 
 export function AccountCombobox({
@@ -37,6 +39,7 @@ export function AccountCombobox({
   advanceOnSelect,
   'data-testid': testId,
   'data-field': dataField,
+  emptyMessage = 'No accounts found.',
 }: Props) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -98,7 +101,7 @@ export function AccountCombobox({
           {/* cmdk v1 keyboard navigation (arrows/Enter) only sees items inside
               CommandList — without it, nothing highlights and Enter is a no-op. */}
           <CommandList className="max-h-56">
-            <CommandEmpty>No accounts found.</CommandEmpty>
+            <CommandEmpty>{emptyMessage}</CommandEmpty>
             <CommandGroup>
               {filtered.map(opt => (
                 <CommandItem

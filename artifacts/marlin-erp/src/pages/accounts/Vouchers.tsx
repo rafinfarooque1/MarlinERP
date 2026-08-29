@@ -4,7 +4,7 @@ import {
   useListReceipts, useCreateReceipt, useDeleteReceipt, useUpdateReceipt,
   useListJournalVouchers, useCreateJournalVoucher, useDeleteJournalVoucher, useUpdateJournalVoucher,
   useListAccountsFlat, useCashBankLedgersFlat,
-  useListCustomers, useListVendors,
+  useVoucherPartyLedgers,
 } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
@@ -134,15 +134,27 @@ function NewVoucherDialog({ onClose, defaultType }: { onClose: () => void; defau
 
   const { data: allAccounts = [] } = useListAccountsFlat();
   const { data: cashBank = [] }    = useCashBankLedgersFlat();
-  const { data: customers = [] }   = useListCustomers();
-  const { data: vendors = [] }     = useListVendors();
 
   // Mandatory location for the voucher; also narrows the account pickers to
   // ledgers the selected location may post through.
   const { locations, locKey, setLocKey, selLoc, foreignLedgerIds } = useVoucherLocationChoice();
+  const selectedPartyLocation = selLoc
+    ? { locationType: selLoc.locationType, locationId: Number(selLoc.locationId) }
+    : undefined;
+  const { data: customers = [] } = useVoucherPartyLedgers('customer', selectedPartyLocation);
+  const { data: vendors = [] } = useVoucherPartyLedgers('vendor', selectedPartyLocation);
 
   const allLedgers  = (allAccounts as any[]).filter(a =>
     !a.isGroup && !a.isSystemGroup && !isSystemLedger(a.code) && !foreignLedgerIds.has(a.id));
+  const allowedPartyLedgerIds = new Set<number>([
+    ...(customers as any[]).map(p => Number(p.ledgerId)),
+    ...(vendors as any[]).map(p => Number(p.ledgerId)),
+  ]);
+  const locationAwareLedgers = allLedgers.filter(a => {
+    const code = String(a.code ?? '');
+    return (!code.startsWith('CUST-') && !code.startsWith('VEND-'))
+      || allowedPartyLedgerIds.has(Number(a.id));
+  });
   const cashLedgers = (cashBank as any[]).filter(a =>
     !a.isGroup && !a.isSystemGroup && !isSystemLedger(a.code)
     && (!selLoc || selLoc.cashBankLedgerIds.includes(a.id)));
@@ -307,7 +319,7 @@ function NewVoucherDialog({ onClose, defaultType }: { onClose: () => void; defau
             </div>
             <div className="space-y-1">
               <Label>Paid To</Label>
-              <AccountCombobox options={allLedgers} value={toId} onChange={setToId} placeholder="Select ledger" />
+              <AccountCombobox options={locationAwareLedgers} value={toId} onChange={setToId} placeholder="Select ledger" />
             </div>
             <div className="space-y-1">
               <Label>Amount (₹)</Label>
@@ -321,7 +333,7 @@ function NewVoucherDialog({ onClose, defaultType }: { onClose: () => void; defau
           <>
             <div className="space-y-1">
               <Label>Received From</Label>
-              <AccountCombobox options={allLedgers} value={fromId} onChange={setFromId} placeholder="Select ledger" />
+              <AccountCombobox options={locationAwareLedgers} value={fromId} onChange={setFromId} placeholder="Select ledger" />
             </div>
             <div className="space-y-1">
               <Label>Received In (Cash / Bank)</Label>
@@ -384,8 +396,15 @@ function NewVoucherDialog({ onClose, defaultType }: { onClose: () => void; defau
                 <SelectTrigger><SelectValue placeholder="Select party" /></SelectTrigger>
                 <SelectContent>
                   {((type === 'credit_note' ? customers : vendors) as any[]).map((p: any) => (
-                    <SelectItem key={p.id} value={String(p.id)}>{p.name}</SelectItem>
+                    <SelectItem key={p.partyId} value={String(p.partyId)}>{p.name}</SelectItem>
                   ))}
+                  {((type === 'credit_note' ? customers : vendors) as any[]).length === 0 && (
+                    <SelectItem disabled value="__no-voucher-parties">
+                      {type === 'credit_note'
+                        ? 'No customers found for this location'
+                        : 'No vendors found for this location'}
+                    </SelectItem>
+                  )}
                 </SelectContent>
               </Select>
             </div>
@@ -444,15 +463,17 @@ function EditVoucherDialog({ row, onClose }: { row: UnifiedRow; onClose: () => v
 
   const { data: allAccounts = [] } = useListAccountsFlat();
   const { data: cashBank = [] }    = useCashBankLedgersFlat();
-  const { data: customers = [] }   = useListCustomers();
-  const { data: vendors = [] }     = useListVendors();
 
   // Prefilled with the voucher's stored location; changing it moves the
   // entry (and all its postings) between location books.
   const { locations, locKey, setLocKey, selLoc, foreignLedgerIds } = useVoucherLocationChoice({
     locationType: v.locationType, locationId: v.locationId,
   });
-
+  const selectedPartyLocation = selLoc
+    ? { locationType: selLoc.locationType, locationId: Number(selLoc.locationId) }
+    : undefined;
+  const { data: customers = [] } = useVoucherPartyLedgers('customer', selectedPartyLocation);
+  const { data: vendors = [] } = useVoucherPartyLedgers('vendor', selectedPartyLocation);
   const allLedgers  = (allAccounts as any[]).filter(a =>
     !a.isGroup && !a.isSystemGroup && !isSystemLedger(a.code) && !foreignLedgerIds.has(a.id));
   const cashLedgers = (cashBank as any[]).filter(a =>
@@ -642,8 +663,15 @@ function EditVoucherDialog({ row, onClose }: { row: UnifiedRow; onClose: () => v
                 <SelectTrigger><SelectValue placeholder="Select party" /></SelectTrigger>
                 <SelectContent>
                   {((type === 'credit_note' ? customers : vendors) as any[]).map((p: any) => (
-                    <SelectItem key={p.id} value={String(p.id)}>{p.name}</SelectItem>
+                    <SelectItem key={p.partyId} value={String(p.partyId)}>{p.name}</SelectItem>
                   ))}
+                  {((type === 'credit_note' ? customers : vendors) as any[]).length === 0 && (
+                    <SelectItem disabled value="__no-voucher-parties">
+                      {type === 'credit_note'
+                        ? 'No customers found for this location'
+                        : 'No vendors found for this location'}
+                    </SelectItem>
+                  )}
                 </SelectContent>
               </Select>
             </div>
@@ -702,9 +730,23 @@ function EditMoneyVoucherDialog({ row, onClose }: { row: UnifiedRow; onClose: ()
   const { locations, locKey, setLocKey, selLoc, foreignLedgerIds } = useVoucherLocationChoice({
     locationType: v.locationType, locationId: v.locationId,
   });
+  const selectedPartyLocation = selLoc
+    ? { locationType: selLoc.locationType, locationId: Number(selLoc.locationId) }
+    : undefined;
+  const { data: customerPartyLedgers = [] } = useVoucherPartyLedgers('customer', selectedPartyLocation);
+  const { data: vendorPartyLedgers = [] } = useVoucherPartyLedgers('vendor', selectedPartyLocation);
+  const allowedPartyLedgerIds = useMemo(() => new Set<number>([
+    ...(customerPartyLedgers as any[]).map(p => Number(p.ledgerId)),
+    ...(vendorPartyLedgers as any[]).map(p => Number(p.ledgerId)),
+  ]), [customerPartyLedgers, vendorPartyLedgers]);
 
   const allLedgers  = (allAccounts as any[]).filter(a =>
     !a.isGroup && !a.isSystemGroup && !isSystemLedger(a.code) && !foreignLedgerIds.has(a.id));
+  const locationAwareLedgers = allLedgers.filter(a => {
+    const code = String(a.code ?? '');
+    return (!code.startsWith('CUST-') && !code.startsWith('VEND-'))
+      || allowedPartyLedgerIds.has(Number(a.id));
+  });
   const cashLedgers = (cashBank as any[]).filter(a =>
     !a.isGroup && !a.isSystemGroup && !isSystemLedger(a.code)
     && (!selLoc || selLoc.cashBankLedgerIds.includes(a.id)));
@@ -790,7 +832,7 @@ function EditMoneyVoucherDialog({ row, onClose }: { row: UnifiedRow; onClose: ()
         <div className="space-y-1">
           <Label>{isPayment ? 'Paid From (Cash / Bank)' : 'Received From'}</Label>
           <AccountCombobox
-            options={isPayment ? cashLedgers : allLedgers}
+            options={isPayment ? cashLedgers : locationAwareLedgers}
             value={fromId} onChange={setFromId}
             placeholder={isPayment ? 'Select cash/bank account' : 'Select ledger'}
           />
@@ -798,7 +840,7 @@ function EditMoneyVoucherDialog({ row, onClose }: { row: UnifiedRow; onClose: ()
         <div className="space-y-1">
           <Label>{isPayment ? 'Paid To' : 'Received In (Cash / Bank)'}</Label>
           <AccountCombobox
-            options={isPayment ? allLedgers : cashLedgers}
+            options={isPayment ? locationAwareLedgers : cashLedgers}
             value={toId} onChange={setToId}
             placeholder={isPayment ? 'Select ledger' : 'Select cash/bank account'}
           />
