@@ -36,11 +36,17 @@ export function downloadCSV(filename: string, rows: Record<string, unknown>[]) {
 }
 
 /** Open a print window with HTML content (for PDF-like output). */
-export function printHTML(html: string, title = 'Print') {
+export function printHTML(
+  html: string,
+  title = 'Print',
+  options: { pageSize?: 'A4' | 'A5' } = {},
+) {
+  const pageSize = options.pageSize ?? 'A4';
   const w = window.open('', '_blank', 'width=960,height=800');
   if (!w) return;
   w.document.write(`<!DOCTYPE html><html><head><title>${title}</title>
     <style>
+      @page { size: ${pageSize} portrait; margin: 0; }
       * { box-sizing: border-box; }
       body { font-family: Arial, sans-serif; font-size: 11px; color: #111; padding: 18px 24px; margin: 0; }
       table { border-collapse: collapse; width: 100%; }
@@ -55,7 +61,7 @@ export function printHTML(html: string, title = 'Print') {
       .bold { font-weight: bold; }
       .small { font-size: 10px; }
       .label { color: #555; font-size: 10px; }
-      @media print { body { padding: 8px; } }
+      @media print { body { padding: ${pageSize === 'A5' ? '8mm' : '8px'}; } }
     </style>
     </head><body>${html}<script>window.onload=()=>window.print()</script></body></html>`);
   w.document.close();

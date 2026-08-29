@@ -82,11 +82,35 @@ async function fetchVoucherPdf(kind, id) {
   });
   const file = join(pdfDir, `voucher-${++pdfSeq}.pdf`);
   writeFileSync(file, Buffer.from(await response.arrayBuffer()));
-  if (response.status !== 200) return { status: response.status, text: '', pageHeight: 0 };
+  if (response.status !== 200) return { status: response.status, text: '', pageWidth: 0, pageHeight: 0, pages: 0 };
   const text = execFileSync('pdftotext', [file, '-']).toString();
   const pageInfo = execFileSync('pdfinfo', [file]).toString();
-  const pageHeight = Number(/Page size:\s+[\d.]+\s+x\s+([\d.]+)/.exec(pageInfo)?.[1] ?? 0);
-  return { status: response.status, text, pageHeight };
+  const size = /Page size:\s+([\d.]+)\s+x\s+([\d.]+)/.exec(pageInfo);
+  const pageWidth = Number(size?.[1] ?? 0);
+  const pageHeight = Number(size?.[2] ?? 0);
+  const pages = Number(/Pages:\s+(\d+)/.exec(pageInfo)?.[1] ?? 0);
+  return { status: response.status, text, pageWidth, pageHeight, pages };
+}
+
+async function fetchJournalVoucherPdf(id) {
+  const response = await fetch(`${BASE}/pdf/journal-voucher`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+    body: JSON.stringify({ id }),
+  });
+  const file = join(pdfDir, `voucher-${++pdfSeq}.pdf`);
+  writeFileSync(file, Buffer.from(await response.arrayBuffer()));
+  if (response.status !== 200) return { status: response.status, text: '', pageWidth: 0, pageHeight: 0, pages: 0 };
+  const text = execFileSync('pdftotext', [file, '-']).toString();
+  const pageInfo = execFileSync('pdfinfo', [file]).toString();
+  const size = /Page size:\s+([\d.]+)\s+x\s+([\d.]+)/.exec(pageInfo);
+  return {
+    status: response.status,
+    text,
+    pageWidth: Number(size?.[1] ?? 0),
+    pageHeight: Number(size?.[2] ?? 0),
+    pages: Number(/Pages:\s+(\d+)/.exec(pageInfo)?.[1] ?? 0),
+  };
 }
 
 try {
@@ -109,9 +133,10 @@ if (!authToken) { console.error('FATAL: no token'); await cleanup(); await pool.
 
 // Derive two live warehouses (A hosts the vouchers; B provides the "other
 // branch" employee). Dev DB holds real data — derive, never hardcode.
-const whs = (await sql(`SELECT id, cash_ledger_id FROM warehouses WHERE cash_ledger_id IS NOT NULL AND disabled_at IS NULL ORDER BY id`)).rows;
+const whs = (await sql(`SELECT id, name, cash_ledger_id FROM warehouses WHERE cash_ledger_id IS NOT NULL AND disabled_at IS NULL ORDER BY id`)).rows;
 assert('At least two live warehouses with tills to derive fixtures from', whs.length >= 2);
 const whA = Number(whs[0].id), tillA = Number(whs[0].cash_ledger_id);
+const whAName = String(whs[0].name);
 const whB = Number(whs[1].id);
 
 // Non-admin role (level 2, under root) + clerk with FULL voucher page rights —
@@ -233,8 +258,12 @@ let keepPaymentId = 0, keepReceiptId = 0;
     paymentPdf.text.includes('Prepared By')
       && paymentPdf.text.includes('Authorized Signatory')
       && paymentPdf.text.includes('Received By'));
-  assert('Payment Voucher PDF flows to the signature content',
-    paymentPdf.pageHeight > 0 && paymentPdf.pageHeight < 800);
+  assert('Payment Voucher PDF uses exact A5 portrait dimensions and one page',
+    Math.abs(paymentPdf.pageWidth - 419.53) < 0.5
+      && Math.abs(paymentPdf.pageHeight - 595.28) < 0.5
+      && paymentPdf.pages === 1);
+  assert('Payment Voucher PDF uses the issuing warehouse letterhead',
+    paymentPdf.text.includes(whAName));
 
   const receiptPdf = await fetchVoucherPdf('receipt', keepReceiptId);
   assert('Receipt Voucher PDF renders without the computer-generated note',
@@ -243,8 +272,12 @@ let keepPaymentId = 0, keepReceiptId = 0;
     receiptPdf.text.includes('Received By')
       && receiptPdf.text.includes('Authorized Signatory')
       && receiptPdf.text.includes("Payer's Signature"));
-  assert('Receipt Voucher PDF flows to the signature content',
-    receiptPdf.pageHeight > 0 && receiptPdf.pageHeight < 800);
+  assert('Receipt Voucher PDF uses exact A5 portrait dimensions and one page',
+    Math.abs(receiptPdf.pageWidth - 419.53) < 0.5
+      && Math.abs(receiptPdf.pageHeight - 595.28) < 0.5
+      && receiptPdf.pages === 1);
+  assert('Receipt Voucher PDF uses the issuing warehouse letterhead',
+    receiptPdf.text.includes(whAName));
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -254,7 +287,7 @@ let jvId = 0;
   // A balanced journal fixture to delete (also exercises [E]'s happy path).
   const jvRes = await post('/accounts/journal-vouchers', {
     voucherType: 'journal', voucherDate: today, narration: `${TAG} journal fixture`,
-    locationType: 'headoffice',
+    locationType: 'warehouse', locationId: whA,
     lines: [
       { ledgerId: salPayA, debit: 50, credit: 0 },
       { ledgerId: salPayHO, debit: 0, credit: 50 },
@@ -263,6 +296,20 @@ let jvId = 0;
   assert('Balanced journal voucher accepted (201)', jvRes.status === 201 && jvRes.data?.id, `status=${jvRes.status} ${JSON.stringify(jvRes.data).slice(0, 150)}`);
   jvId = jvRes.data?.id;
   if (jvId) F.jvIds.push(jvId);
+
+  const journalPdf = await fetchJournalVoucherPdf(jvId);
+  assert('Journal Voucher PDF renders without the computer-generated note',
+    journalPdf.status === 200 && !journalPdf.text.includes('This is a computer-generated'));
+  assert('Journal Voucher PDF keeps its signature labels',
+    journalPdf.text.includes('Prepared By')
+      && journalPdf.text.includes('Checked By')
+      && journalPdf.text.includes('Authorized Signatory'));
+  assert('Journal Voucher PDF uses exact A5 portrait dimensions and one page',
+    Math.abs(journalPdf.pageWidth - 419.53) < 0.5
+      && Math.abs(journalPdf.pageHeight - 595.28) < 0.5
+      && journalPdf.pages === 1);
+  assert('Journal Voucher PDF uses the issuing warehouse letterhead',
+    journalPdf.text.includes(whAName));
 
   // The clerk HOLDS the page delete right — the refusal must come from the
   // hierarchy level, with the row intact afterwards.

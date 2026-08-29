@@ -1,5 +1,5 @@
 /**
- * Shared document letterhead — the ONE header every A4 business document
+ * Shared document letterhead — the ONE header every business document
  * (vouchers, returns, expense vouchers, challans…) draws, so a stack of
  * printouts from different modules reads as one company's paperwork.
  *
