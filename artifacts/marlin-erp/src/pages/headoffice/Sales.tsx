@@ -2184,7 +2184,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                               <FormField control={form.control} name={`lineItems.${index}.quantity`} render={({ field: f }) => (
                                 <FormItem className="space-y-1">
                                   <CellLabel>Qty</CellLabel>
-                                  <FormControl><Input type="number" min={1} max={itemId > 0 ? maxQty : undefined} className="h-9 text-xs text-right" {...f} /></FormControl>
+                                  <FormControl><Input type="number" min={1} max={itemId > 0 ? maxQty : undefined} step="any" className="h-9 text-xs text-right" {...f} /></FormControl>
                                 </FormItem>
                               )} />
                               {itemId > 0 && <p className="text-[10px] text-muted-foreground text-right">max {maxQty}</p>}
