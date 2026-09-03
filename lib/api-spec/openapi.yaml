@@ -1156,6 +1156,42 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/AttendanceRecord"
+    put:
+      operationId: correctAttendance
+      tags: [attendance]
+      summary: Correct one employee's attendance
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AttendanceCorrection"
+      responses:
+        "200":
+          description: Corrected attendance
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AttendanceRecord"
+
+  /hr/attendance/bulk:
+    put:
+      operationId: bulkCorrectAttendance
+      tags: [attendance]
+      summary: Correct attendance for multiple employees atomically
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BulkAttendanceCorrection"
+      responses:
+        "200":
+          description: Corrected attendance rows
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BulkAttendanceCorrectionResult"
 
   /hr/attendance/check-in:
     post:
@@ -3131,6 +3167,67 @@ components:
           type: number
         notes:
           type: string
+
+    AttendanceCorrection:
+      type: object
+      required: [employeeId, date, status]
+      properties:
+        employeeId:
+          type: integer
+        date:
+          type: string
+        status:
+          type: string
+          enum: [present, half_day, absent, leave, company_holiday, weekly_off]
+        leaveType:
+          type: ["string", "null"]
+          enum: [casual, sick, null]
+        force:
+          type: boolean
+        checkIn:
+          type: ["string", "null"]
+        checkOut:
+          type: ["string", "null"]
+
+    BulkAttendanceCorrection:
+      type: object
+      required: [employeeIds, date, status]
+      properties:
+        employeeIds:
+          type: array
+          minItems: 1
+          maxItems: 500
+          items:
+            type: integer
+        date:
+          type: string
+        status:
+          type: string
+          enum: [present, half_day, absent, leave, company_holiday, weekly_off]
+        leaveType:
+          type: ["string", "null"]
+          enum: [casual, sick, null]
+        force:
+          type: boolean
+        checkIn:
+          type: ["string", "null"]
+        checkOut:
+          type: ["string", "null"]
+
+    BulkAttendanceCorrectionResult:
+      type: object
+      required: [count, date, status, updated]
+      properties:
+        count:
+          type: integer
+        date:
+          type: string
+        status:
+          type: string
+        updated:
+          type: array
+          items:
+            $ref: "#/components/schemas/AttendanceRecord"
 
     LeaveApplication:
       type: object

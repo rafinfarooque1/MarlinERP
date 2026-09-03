@@ -518,7 +518,7 @@ function ClassifyAbsencesDialog({ emp, year, month, onClose }: {
       // attendance lock, and the casual-leave allowance check depends on the
       // days already saved.
       for (const [date, choice] of chosen) {
-        await correct.mutateAsync({ employeeId: emp.employeeId, date, ...classificationBody(choice) });
+        await correct.mutateAsync({ data: { employeeId: emp.employeeId, date, ...classificationBody(choice) } as any });
         done += 1;
       }
       toast.success(`Classified ${done} day(s) for ${emp.employeeName}`);

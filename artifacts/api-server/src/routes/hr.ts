@@ -357,6 +357,174 @@ function sendAttendanceWriteError(res: Response, e: any, context: string): void 
   res.status(500).json({ error: e?.message ?? "Attendance could not be saved" });
 }
 
+const ATTENDANCE_CORRECTION_STATUSES = [
+  "present", "half_day", "absent", "leave", "company_holiday", "weekly_off",
+] as const;
+type AttendanceCorrectionStatus = (typeof ATTENDANCE_CORRECTION_STATUSES)[number];
+
+type AttendanceCorrectionDraft = {
+  employeeId: number;
+  date: string;
+  status: AttendanceCorrectionStatus;
+  leaveType: "casual" | "sick" | null;
+  force: boolean;
+  hasCheckIn: boolean;
+  hasCheckOut: boolean;
+  checkIn: Date | null;
+  checkOut: Date | null;
+};
+
+type AttendanceCorrectionResult = {
+  row: any;
+  effectiveStatus: AttendanceCorrectionStatus;
+  leaveType: "casual" | "sick" | null;
+};
+
+/**
+ * Resolve the policy-dependent part of Fix Attendance. This is deliberately
+ * shared by the single-row and bulk routes: a bulk request must not get a
+ * second, subtly different interpretation of an exhausted weekly-off allowance.
+ *
+ * The caller holds the employee accrual lock. Attendance rows are read through
+ * that same transaction client so the validation and write have one ordering.
+ */
+async function resolveAttendanceCorrection(
+  q: Querier,
+  draft: AttendanceCorrectionDraft,
+  employeeName: string,
+): Promise<{ effectiveStatus: AttendanceCorrectionStatus; leaveType: "casual" | "sick" | null }> {
+  let effectiveStatus = draft.status;
+  if (draft.status !== "weekly_off") {
+    return { effectiveStatus, leaveType: draft.leaveType };
+  }
+
+  const { policy, thresholds } = await loadPayrollSettings(pool);
+  const rule = calendarDayInfo(draft.date, policy, new Set()).weeklyOff;
+  const gateApplies = rule?.policy === "casual_leave"
+    && (policy.weeklyOffExhaustedAction === "absent" || !draft.force);
+  if (!gateApplies) {
+    return { effectiveStatus, leaveType: null };
+  }
+
+  const [yy, mm] = draft.date.split("-").map(Number);
+  const mFirst = `${yy}-${String(mm).padStart(2, "0")}-01`;
+  const mLast = `${yy}-${String(mm).padStart(2, "0")}-${String(new Date(yy, mm, 0).getDate()).padStart(2, "0")}`;
+  const { rows: monthRows } = await q.query(
+    `SELECT a.date, a.status, a.leave_type AS "leaveType",
+            a.check_in AS "checkIn", a.check_out AS "checkOut",
+            ap.punched_hours AS "punchedHours"
+       FROM attendance a
+       ${PUNCHED_HOURS_JOIN("a")}
+      WHERE a.employee_id = $1 AND a.date >= $2 AND a.date <= $3 AND a.date <> $4`,
+    [draft.employeeId, mFirst, mLast, draft.date],
+  );
+  const proposed = [...monthRows, { date: draft.date, status: "weekly_off" }];
+  const summary = monthLeaveSummary(proposed, policy, thresholds, {
+    year: yy, month: mm, holidays: await loadHolidaySet(pool, mFirst, mLast),
+  });
+  if (summary.leaveTaken <= policy.paidCasualLeavesPerMonth) {
+    return { effectiveStatus, leaveType: null };
+  }
+  if (policy.weeklyOffExhaustedAction === "absent") {
+    effectiveStatus = "absent";
+    return { effectiveStatus, leaveType: null };
+  }
+  throw Object.assign(new Error(
+    `${employeeName} has no casual leave left this month — this weekly off will be unpaid (loss of pay). Save anyway to confirm.`,
+  ), { conflict: true, code: "CASUAL_LEAVE_EXHAUSTED" });
+}
+
+/**
+ * Apply the database portion of Fix Attendance. The surrounding transaction
+ * supplies the employee accrual lock and month-lock check; this function only
+ * changes the attendance row and its punch representation.
+ */
+async function writeAttendanceCorrection(
+  q: Querier,
+  draft: AttendanceCorrectionDraft,
+  resolved: { effectiveStatus: AttendanceCorrectionStatus; leaveType: "casual" | "sick" | null },
+): Promise<any> {
+  const { rows: [r] } = await q.query(
+    `INSERT INTO attendance (employee_id, date, status, leave_type, check_in, check_out)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     ON CONFLICT (employee_id, date) DO UPDATE
+        SET status     = EXCLUDED.status,
+            leave_type = EXCLUDED.leave_type,
+            check_in   = CASE WHEN $7 THEN EXCLUDED.check_in  ELSE attendance.check_in  END,
+            check_out  = CASE WHEN $8 THEN EXCLUDED.check_out ELSE attendance.check_out END
+     RETURNING id, employee_id, date, status, leave_type, check_in, check_out`,
+    [
+      draft.employeeId, draft.date, resolved.effectiveStatus, resolved.leaveType,
+      draft.checkIn, draft.checkOut, draft.hasCheckIn, draft.hasCheckOut,
+    ],
+  );
+
+  // Explicit times are the new source of truth, so old multi-punch detail must
+  // not survive and outvote the manager's correction. Status-only fixes leave
+  // the existing punch sessions intact.
+  if (draft.hasCheckIn || draft.hasCheckOut) {
+    await q.query(
+      `DELETE FROM attendance_punches WHERE employee_id = $1 AND date = $2`,
+      [draft.employeeId, draft.date],
+    );
+    if (r?.check_in && r?.check_out) {
+      await q.query(
+        `INSERT INTO attendance_punches (employee_id, date, punch_in, punch_out)
+         VALUES ($1, $2, $3, $4)`,
+        [draft.employeeId, draft.date, r.check_in, r.check_out],
+      );
+    }
+  }
+  return r;
+}
+
+/**
+ * A single transaction for a multi-employee correction. Locks are acquired in
+ * employee-id order so two concurrent bulk fixes cannot deadlock each other.
+ * Every signed-off month is checked before the callback can write anything.
+ */
+async function withBulkAttendanceWrite<T>(
+  employeeIds: number[],
+  dates: string[],
+  write: (q: Querier) => Promise<T>,
+): Promise<T> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const q = client as unknown as Querier;
+    for (const employeeId of [...employeeIds].sort((a, b) => a - b)) {
+      await lockSalaryAccrual(q, employeeId);
+      const months = new Map<string, [number, number]>();
+      for (const d of dates) {
+        const [y, m] = d.split("-").map(Number);
+        months.set(`${y}-${m}`, [y, m]);
+      }
+      for (const [y, m] of months.values()) {
+        const { rows: [locked] } = await q.query(
+          `SELECT status FROM payroll
+            WHERE employee_id = $1 AND year = $2 AND month = $3
+              AND status IN ('approved','paid') LIMIT 1`,
+          [employeeId, y, m],
+        );
+        if (locked) {
+          throw Object.assign(new Error(
+            `Payroll for ${String(m).padStart(2, "0")}/${y} is already ${locked.status}. `
+            + `Attendance for a signed-off month cannot be changed — post a journal adjustment instead.`,
+          ), { conflict: true });
+        }
+      }
+    }
+    const out = await write(q);
+    await client.query("COMMIT");
+    return out;
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
 async function getBranchName(branchType: string, branchId: number): Promise<string> {
   if (branchType === "headoffice") return "Head Office";
   if (branchType === "warehouse") {
@@ -4000,128 +4168,60 @@ router.put("/hr/attendance", requireModuleAction("page:/hr/attendance", "edit"),
     return;
   }
 
-  const employeeId = Number((req.body as any)?.employeeId);
-  const date = String((req.body as any)?.date ?? "").slice(0, 10);
-  const status = String((req.body as any)?.status ?? "");
-  const VALID = ["present", "half_day", "absent", "leave", "company_holiday", "weekly_off"];
+  const body = req.body as any;
+  const employeeId = Number(body?.employeeId);
+  const date = String(body?.date ?? "").slice(0, 10);
+  const status = String(body?.status ?? "");
   if (!Number.isInteger(employeeId) || employeeId <= 0) {
     res.status(400).json({ error: "employeeId is required" }); return;
   }
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-    res.status(400).json({ error: "date must be YYYY-MM-DD" }); return;
+  if (!isIsoDate(date)) {
+    res.status(400).json({ error: "date must be a real calendar date in YYYY-MM-DD form" }); return;
   }
-  if (!VALID.includes(status)) {
-    res.status(400).json({ error: `status must be one of ${VALID.join(", ")}` }); return;
+  if (!ATTENDANCE_CORRECTION_STATUSES.includes(status as AttendanceCorrectionStatus)) {
+    res.status(400).json({ error: `status must be one of ${ATTENDANCE_CORRECTION_STATUSES.join(", ")}` }); return;
   }
   // Leave now has a type — sick draws on the sick allowance, casual on the
   // casual one. Only meaningful with status 'leave'; stored NULL otherwise.
-  const leaveTypeRaw = (req.body as any)?.leaveType;
+  const leaveTypeRaw = body?.leaveType;
   const leaveType = status === "leave"
     ? (leaveTypeRaw === "sick" ? "sick" : "casual")
     : null;
-  const force = (req.body as any)?.force === true;
+  const force = body?.force === true;
 
   const [emp] = await db.select().from(employeesTable).where(eq(employeesTable.id, employeeId)).limit(1);
   if (!emp) { res.status(404).json({ error: "Employee not found" }); return; }
 
-  // Month lock: a correction re-prices the salary accrual for `date`, so it may
-  // not touch a locked accounting period.
-  if (await respondIfMonthLocked(res, pool, [date], "attendance correction")) return;
-
-  // Casual-leave-deducting weekly off with the month's casual allowance already
-  // exhausted: what happens is the company's choice. 'ask' makes the manager
-  // confirm the unpaid day (409, resubmit with force); 'absent' converts the
-  // day outright — the setting IS the answer, so force does not bypass it.
-  // The check guards the EFFECTIVE stored status, and it is advisory for pay
-  // (raced saves are still priced correctly), so it sits outside the write lock.
-  let effectiveStatus = status;
-  if (status === "weekly_off") {
-    const { policy, thresholds } = await loadPayrollSettings(pool);
-    const rule = calendarDayInfo(date, policy, new Set()).weeklyOff;
-    const gateApplies = rule?.policy === "casual_leave"
-      && (policy.weeklyOffExhaustedAction === "absent" || !force);
-    if (gateApplies) {
-      const [yy, mm] = date.split("-").map(Number);
-      const mFirst = `${yy}-${String(mm).padStart(2, "0")}-01`;
-      const mLast = `${yy}-${String(mm).padStart(2, "0")}-${String(new Date(yy, mm, 0).getDate()).padStart(2, "0")}`;
-      const { rows: monthRows } = await pool.query(
-        `SELECT a.date, a.status, a.leave_type AS "leaveType",
-                a.check_in AS "checkIn", a.check_out AS "checkOut",
-                ap.punched_hours AS "punchedHours"
-           FROM attendance a
-           ${PUNCHED_HOURS_JOIN("a")}
-          WHERE a.employee_id = $1 AND a.date >= $2 AND a.date <= $3 AND a.date <> $4`,
-        [employeeId, mFirst, mLast, date],
-      );
-      const proposed = [...monthRows, { date, status: "weekly_off" }];
-      const summary = monthLeaveSummary(proposed, policy, thresholds, {
-        year: yy, month: mm, holidays: await loadHolidaySet(pool, mFirst, mLast),
-      });
-      if (summary.leaveTaken > policy.paidCasualLeavesPerMonth) {
-        if (policy.weeklyOffExhaustedAction === "absent") {
-          effectiveStatus = "absent";
-        } else {
-          res.status(409).json({
-            code: "CASUAL_LEAVE_EXHAUSTED",
-            error: `${emp.name} has no casual leave left this month — this weekly off will be unpaid (loss of pay). Save anyway to confirm.`,
-          });
-          return;
-        }
-      }
-    }
-  }
-
   // Explicit hours win over the status label when supplied, because that is what
   // the day is priced on. Clearing them (null) drops the day back to being
   // judged on its status alone.
-  const hasCheckIn = "checkIn" in (req.body as any);
-  const hasCheckOut = "checkOut" in (req.body as any);
-  const checkIn = hasCheckIn && (req.body as any).checkIn ? new Date((req.body as any).checkIn) : null;
-  const checkOut = hasCheckOut && (req.body as any).checkOut ? new Date((req.body as any).checkOut) : null;
+  const hasCheckIn = "checkIn" in body;
+  const hasCheckOut = "checkOut" in body;
+  const checkIn = hasCheckIn && body.checkIn ? new Date(body.checkIn) : null;
+  const checkOut = hasCheckOut && body.checkOut ? new Date(body.checkOut) : null;
   if ((checkIn && isNaN(checkIn.getTime())) || (checkOut && isNaN(checkOut.getTime()))) {
     res.status(400).json({ error: "checkIn/checkOut must be valid timestamps" }); return;
   }
+  const draft: AttendanceCorrectionDraft = {
+    employeeId, date, status: status as AttendanceCorrectionStatus, leaveType,
+    force, hasCheckIn, hasCheckOut, checkIn, checkOut,
+  };
 
   // The signed-off-month check lives inside the lock, not before it: an approval
   // committing between check and write would otherwise leave this correction
   // stranded in a month that is now closed.
-  let saved: any;
+  let correction: AttendanceCorrectionResult;
   try {
-    saved = await withAttendanceWrite(employeeId, [date], async (q) => {
-      const { rows: [r] } = await q.query(
-        `INSERT INTO attendance (employee_id, date, status, leave_type, check_in, check_out)
-         VALUES ($1, $2, $3, $4, $5, $6)
-         ON CONFLICT (employee_id, date) DO UPDATE
-            SET status     = EXCLUDED.status,
-                leave_type = EXCLUDED.leave_type,
-                check_in   = CASE WHEN $7 THEN EXCLUDED.check_in  ELSE attendance.check_in  END,
-                check_out  = CASE WHEN $8 THEN EXCLUDED.check_out ELSE attendance.check_out END
-         RETURNING id, employee_id, date, status, leave_type, check_in, check_out`,
-        [employeeId, date, effectiveStatus, leaveType, checkIn, checkOut, hasCheckIn, hasCheckOut],
-      );
-      // A correction that sets the day's times explicitly is the new truth for
-      // its hours, so the punch detail must follow: multi-punch days are priced
-      // on total punched hours, and leaving old punches behind would silently
-      // outvote the times the manager just set. The corrected day becomes one
-      // session — or none, when the times were cleared. Status-only corrections
-      // leave punches alone (recorded hours keep winning over the label, which
-      // is this endpoint's long-standing contract).
-      if (hasCheckIn || hasCheckOut) {
-        await q.query(
-          `DELETE FROM attendance_punches WHERE employee_id = $1 AND date = $2`,
-          [employeeId, date],
-        );
-        if (r?.check_in && r?.check_out) {
-          await q.query(
-            `INSERT INTO attendance_punches (employee_id, date, punch_in, punch_out)
-             VALUES ($1, $2, $3, $4)`,
-            [employeeId, date, r.check_in, r.check_out],
-          );
-        }
-      }
-      return r;
+    correction = await withAttendanceWrite(employeeId, [date], async (q) => {
+      const resolved = await resolveAttendanceCorrection(q, draft, emp.name);
+      const row = await writeAttendanceCorrection(q, draft, resolved);
+      return { row, ...resolved };
     });
   } catch (e: any) {
+    if (e?.code === "CASUAL_LEAVE_EXHAUSTED") {
+      res.status(409).json({ code: e.code, error: e.message });
+      return;
+    }
     sendAttendanceWriteError(res, e, "attendance correction");
     return;
   }
@@ -4129,21 +4229,192 @@ router.put("/hr/attendance", requireModuleAction("page:/hr/attendance", "edit"),
   await reaccrue(employeeId, "attendance correction");
 
   logActivity({
-    action: "UPDATE", module: "hr", entityType: "attendance", entityId: Number(saved?.id ?? 0),
+    action: "UPDATE", module: "hr", entityType: "attendance", entityId: Number(correction.row?.id ?? 0),
     user: (req as any).employee?.username ?? "system",
-    description: `Attendance corrected for ${emp.name} on ${date} → ${effectiveStatus}${leaveType ? ` (${leaveType})` : ""}${effectiveStatus !== status ? ` (requested ${status}; converted — casual leave exhausted)` : ""}`,
-    metadata: { employeeId, date, status: effectiveStatus, requestedStatus: status, leaveType, checkIn, checkOut },
+    description: `Attendance corrected for ${emp.name} on ${date} → ${correction.effectiveStatus}${correction.leaveType ? ` (${correction.leaveType})` : ""}${correction.effectiveStatus !== status ? ` (requested ${status}; converted — casual leave exhausted)` : ""}`,
+    metadata: { employeeId, date, status: correction.effectiveStatus, requestedStatus: status, leaveType: correction.leaveType, checkIn, checkOut },
   }).catch(() => {});
 
   res.json({
-    ...saved,
-    employeeId: Number(saved?.employee_id),
+    ...correction.row,
+    employeeId: Number(correction.row?.employee_id),
     employeeName: emp.name,
     date,
-    leaveType: saved?.leave_type ?? null,
-    checkIn: saved?.check_in ? new Date(saved.check_in).toISOString() : null,
-    checkOut: saved?.check_out ? new Date(saved.check_out).toISOString() : null,
+    status: correction.effectiveStatus,
+    leaveType: correction.row?.leave_type ?? null,
+    checkIn: correction.row?.check_in ? new Date(correction.row.check_in).toISOString() : null,
+    checkOut: correction.row?.check_out ? new Date(correction.row.check_out).toISOString() : null,
   });
+});
+
+// Bulk Fix Attendance intentionally uses one request and one database
+// transaction. The client only sends ids currently visible to the Head Office
+// user, but the server still treats the list as untrusted and validates every
+// employee before writing any row.
+router.put("/hr/attendance/bulk", requireModuleAction("page:/hr/attendance", "edit"), async (req, res): Promise<void> => {
+  if ((req as any).employee?.branchType !== "headoffice") {
+    res.status(403).json({ error: "Only Head Office can correct attendance." });
+    return;
+  }
+
+  const body = req.body as any;
+  const rawIds = body?.employeeIds;
+  if (!Array.isArray(rawIds) || rawIds.length === 0 || rawIds.length > 500) {
+    res.status(400).json({ error: "employeeIds must contain between 1 and 500 employees" });
+    return;
+  }
+  const employeeIds = rawIds.map(Number);
+  if (employeeIds.some((id) => !Number.isInteger(id) || id <= 0)
+      || new Set(employeeIds).size !== employeeIds.length) {
+    res.status(400).json({ error: "employeeIds must contain unique positive integers" });
+    return;
+  }
+
+  const date = String(body?.date ?? "").slice(0, 10);
+  const status = String(body?.status ?? "");
+  if (!isIsoDate(date)) {
+    res.status(400).json({ error: "date must be a real calendar date in YYYY-MM-DD form" });
+    return;
+  }
+  if (!ATTENDANCE_CORRECTION_STATUSES.includes(status as AttendanceCorrectionStatus)) {
+    res.status(400).json({ error: `status must be one of ${ATTENDANCE_CORRECTION_STATUSES.join(", ")}` });
+    return;
+  }
+  const leaveType = status === "leave"
+    ? (body?.leaveType === "sick" ? "sick" : "casual")
+    : null;
+  const force = body?.force === true;
+  const hasCheckIn = "checkIn" in body;
+  const hasCheckOut = "checkOut" in body;
+  const checkIn = hasCheckIn && body.checkIn ? new Date(body.checkIn) : null;
+  const checkOut = hasCheckOut && body.checkOut ? new Date(body.checkOut) : null;
+  if ((checkIn && isNaN(checkIn.getTime())) || (checkOut && isNaN(checkOut.getTime()))) {
+    res.status(400).json({ error: "checkIn/checkOut must be valid timestamps" });
+    return;
+  }
+
+  try {
+    const result = await withBulkAttendanceWrite(employeeIds, [date], async (q) => {
+      const { rows: employees } = await q.query(
+        `SELECT id, name, branch_type AS "branchType", branch_id AS "branchId"
+           FROM employees WHERE id = ANY($1::int[])`,
+        [employeeIds],
+      );
+      const employeeById = new Map(employees.map((employee: any) => [Number(employee.id), employee]));
+      const missingId = employeeIds.find((id) => !employeeById.has(id));
+      if (missingId !== undefined) {
+        throw Object.assign(new Error(`Employee ${missingId} was not found`), {
+          httpStatus: 404,
+        });
+      }
+
+      // Capture every previous value and resolve every policy-dependent status
+      // before the first upsert. If any employee is invalid or exhausted, the
+      // transaction exits here with no attendance row changed.
+      const beforeByEmployee = new Map<number, any>();
+      const resolvedByEmployee = new Map<number, { effectiveStatus: AttendanceCorrectionStatus; leaveType: "casual" | "sick" | null }>();
+      for (const employeeId of employeeIds) {
+        const { rows: [before] } = await q.query(
+          `SELECT id, employee_id, date, status, leave_type, check_in, check_out
+             FROM attendance WHERE employee_id = $1 AND date = $2 FOR UPDATE`,
+          [employeeId, date],
+        );
+        beforeByEmployee.set(employeeId, before ?? null);
+        const draft: AttendanceCorrectionDraft = {
+          employeeId, date, status: status as AttendanceCorrectionStatus, leaveType,
+          force, hasCheckIn, hasCheckOut, checkIn, checkOut,
+        };
+        resolvedByEmployee.set(
+          employeeId,
+          await resolveAttendanceCorrection(q, draft, employeeById.get(employeeId).name),
+        );
+      }
+
+      const updated: any[] = [];
+      const auditRows: any[] = [];
+      for (const employeeId of employeeIds) {
+        const employee = employeeById.get(employeeId);
+        const draft: AttendanceCorrectionDraft = {
+          employeeId, date, status: status as AttendanceCorrectionStatus, leaveType,
+          force, hasCheckIn, hasCheckOut, checkIn, checkOut,
+        };
+        const resolved = resolvedByEmployee.get(employeeId)!;
+        const row = await writeAttendanceCorrection(q, draft, resolved);
+        updated.push({
+          ...row,
+          employeeId: Number(row?.employee_id),
+          employeeName: employee.name,
+          date,
+          status: resolved.effectiveStatus,
+          leaveType: row?.leave_type ?? null,
+          checkIn: row?.check_in ? new Date(row.check_in).toISOString() : null,
+          checkOut: row?.check_out ? new Date(row.check_out).toISOString() : null,
+        });
+        auditRows.push({
+          employeeId,
+          employeeName: employee.name,
+          branchType: employee.branchType,
+          branchId: employee.branchId,
+          before: beforeByEmployee.get(employeeId)
+            ? {
+                status: beforeByEmployee.get(employeeId).status,
+                leaveType: beforeByEmployee.get(employeeId).leave_type ?? null,
+                checkIn: beforeByEmployee.get(employeeId).check_in
+                  ? new Date(beforeByEmployee.get(employeeId).check_in).toISOString() : null,
+                checkOut: beforeByEmployee.get(employeeId).check_out
+                  ? new Date(beforeByEmployee.get(employeeId).check_out).toISOString() : null,
+              }
+            : null,
+          after: {
+            status: resolved.effectiveStatus,
+            leaveType: row?.leave_type ?? null,
+            checkIn: row?.check_in ? new Date(row.check_in).toISOString() : null,
+            checkOut: row?.check_out ? new Date(row.check_out).toISOString() : null,
+          },
+        });
+      }
+      return { updated, auditRows };
+    });
+
+    // Re-accrual is the same post-write operation as individual Fix. It has its
+    // own employee locks and is deliberately not interleaved with the atomic
+    // attendance transaction above.
+    await Promise.all(employeeIds.map((employeeId) => reaccrue(employeeId, "bulk attendance correction")));
+
+    logActivity({
+      action: "UPDATE",
+      module: "hr",
+      entityType: "attendance_bulk",
+      user: (req as any).employee?.username ?? "system",
+      description: `Bulk Attendance Fix for ${employeeIds.length} employees on ${date}`,
+      metadata: {
+        action: "Bulk Attendance Fix",
+        date,
+        employeeIds,
+        requestedStatus: status,
+        requestedLeaveType: leaveType,
+        force,
+        employees: result.auditRows,
+      },
+    }).catch(() => {});
+
+    res.json({ count: result.updated.length, date, status, updated: result.updated });
+  } catch (e: any) {
+    if (e?.httpStatus === 404) {
+      res.status(404).json({ error: e.message });
+      return;
+    }
+    if (e?.code === "CASUAL_LEAVE_EXHAUSTED") {
+      res.status(409).json({ code: e.code, error: e.message });
+      return;
+    }
+    if (e?.conflict) {
+      res.status(409).json({ error: e.message });
+      return;
+    }
+    console.error("[hr] bulk attendance correction failed:", e);
+    res.status(500).json({ error: e?.message ?? "Attendance could not be saved" });
+  }
 });
 
 // ── Password Reset (admin action) ─────────────────────────────────────────────

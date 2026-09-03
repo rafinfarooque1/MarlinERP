@@ -24,9 +24,12 @@ import type {
   AccountLedgerInput,
   AccountLedgerUpdate,
   ActivityItem,
+  AttendanceCorrection,
   AttendanceInput,
   AttendanceRecord,
   AuthResponse,
+  BulkAttendanceCorrection,
+  BulkAttendanceCorrectionResult,
   CashBankAccount,
   CashBankInput,
   CashBankUpdate,
@@ -5333,6 +5336,148 @@ export function useListAttendance<TData = Awaited<ReturnType<typeof listAttendan
 
 
 
+
+export const getCorrectAttendanceUrl = () => {
+
+
+
+
+  return `/api/hr/attendance`
+}
+
+/**
+ * @summary Correct one employee's attendance
+ */
+export const correctAttendance = async (attendanceCorrection: AttendanceCorrection, options?: RequestInit): Promise<AttendanceRecord> => {
+
+  return customFetch<AttendanceRecord>(getCorrectAttendanceUrl(),
+  {
+    ...options,
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(attendanceCorrection)
+  }
+);}
+
+
+
+
+
+export const getCorrectAttendanceMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof correctAttendance>>, TError,{data: BodyType<AttendanceCorrection>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof correctAttendance>>, TError,{data: BodyType<AttendanceCorrection>}, TContext> => {
+
+const mutationKey = ['correctAttendance'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof correctAttendance>>, {data: BodyType<AttendanceCorrection>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  correctAttendance(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type CorrectAttendanceMutationResult = NonNullable<Awaited<ReturnType<typeof correctAttendance>>>
+    export type CorrectAttendanceMutationBody = BodyType<AttendanceCorrection>
+    export type CorrectAttendanceMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Correct one employee's attendance
+ */
+export const useCorrectAttendance = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof correctAttendance>>, TError,{data: BodyType<AttendanceCorrection>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof correctAttendance>>,
+        TError,
+        {data: BodyType<AttendanceCorrection>},
+        TContext
+      > => {
+      return useMutation(getCorrectAttendanceMutationOptions(options));
+    }
+
+export const getBulkCorrectAttendanceUrl = () => {
+
+
+
+
+  return `/api/hr/attendance/bulk`
+}
+
+/**
+ * @summary Correct attendance for multiple employees atomically
+ */
+export const bulkCorrectAttendance = async (bulkAttendanceCorrection: BulkAttendanceCorrection, options?: RequestInit): Promise<BulkAttendanceCorrectionResult> => {
+
+  return customFetch<BulkAttendanceCorrectionResult>(getBulkCorrectAttendanceUrl(),
+  {
+    ...options,
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(bulkAttendanceCorrection)
+  }
+);}
+
+
+
+
+
+export const getBulkCorrectAttendanceMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof bulkCorrectAttendance>>, TError,{data: BodyType<BulkAttendanceCorrection>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof bulkCorrectAttendance>>, TError,{data: BodyType<BulkAttendanceCorrection>}, TContext> => {
+
+const mutationKey = ['bulkCorrectAttendance'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof bulkCorrectAttendance>>, {data: BodyType<BulkAttendanceCorrection>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  bulkCorrectAttendance(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type BulkCorrectAttendanceMutationResult = NonNullable<Awaited<ReturnType<typeof bulkCorrectAttendance>>>
+    export type BulkCorrectAttendanceMutationBody = BodyType<BulkAttendanceCorrection>
+    export type BulkCorrectAttendanceMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Correct attendance for multiple employees atomically
+ */
+export const useBulkCorrectAttendance = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof bulkCorrectAttendance>>, TError,{data: BodyType<BulkAttendanceCorrection>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof bulkCorrectAttendance>>,
+        TError,
+        {data: BodyType<BulkAttendanceCorrection>},
+        TContext
+      > => {
+      return useMutation(getBulkCorrectAttendanceMutationOptions(options));
+    }
 
 export const getCheckInUrl = () => {
 
