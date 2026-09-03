@@ -156,7 +156,7 @@ const saleOtherChargesTotal = (sale: any): number => {
 
 const saleLineSchema = z.object({
   itemId:    z.coerce.number().min(1, 'Item required'),
-  quantity:  z.coerce.number().min(1, 'Qty ≥ 1'),
+  quantity:  z.coerce.number().gt(0, 'Qty > 0'),
   unitPrice: z.coerce.number().min(0, 'Price required'),
   // Discount per UNIT off the MRP — ₹10 here on qty 10 means ₹100 off the
   // line ((MRP − 10) × 10), never ₹10 off the line total.
@@ -2184,7 +2184,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                               <FormField control={form.control} name={`lineItems.${index}.quantity`} render={({ field: f }) => (
                                 <FormItem className="space-y-1">
                                   <CellLabel>Qty</CellLabel>
-                                  <FormControl><Input type="number" min={1} max={itemId > 0 ? maxQty : undefined} step="any" className="h-9 text-xs text-right" {...f} /></FormControl>
+                                  <FormControl><Input type="number" min="0.001" max={itemId > 0 ? maxQty : undefined} step="0.001" className="h-9 text-xs text-right" {...f} /></FormControl>
                                 </FormItem>
                               )} />
                               {itemId > 0 && <p className="text-[10px] text-muted-foreground text-right">max {maxQty}</p>}
