@@ -1894,6 +1894,71 @@ export const ListAttendanceResponse = zod.array(ListAttendanceResponseItem)
 
 
 /**
+ * @summary Correct one employee's attendance
+ */
+export const CorrectAttendanceBody = zod.object({
+  "employeeId": zod.number(),
+  "date": zod.string(),
+  "status": zod.enum(['present', 'half_day', 'absent', 'leave', 'company_holiday', 'weekly_off']),
+  "leaveType": zod.union([zod.literal('casual'),zod.literal('sick'),zod.literal(null)]).nullish(),
+  "force": zod.boolean().optional(),
+  "checkIn": zod.string().nullish(),
+  "checkOut": zod.string().nullish()
+})
+
+export const CorrectAttendanceResponse = zod.object({
+  "id": zod.number(),
+  "employeeId": zod.number(),
+  "employeeName": zod.string().optional(),
+  "date": zod.string(),
+  "checkIn": zod.string().nullish(),
+  "checkOut": zod.string().nullish(),
+  "checkInLat": zod.number().nullish(),
+  "checkInLng": zod.number().nullish(),
+  "checkOutLat": zod.number().nullish(),
+  "checkOutLng": zod.number().nullish(),
+  "status": zod.enum(['present', 'absent', 'half_day', 'leave']).optional()
+})
+
+
+/**
+ * @summary Correct attendance for multiple employees atomically
+ */
+export const bulkCorrectAttendanceBodyEmployeeIdsMax = 500;
+
+
+
+export const BulkCorrectAttendanceBody = zod.object({
+  "employeeIds": zod.array(zod.number()).min(1).max(bulkCorrectAttendanceBodyEmployeeIdsMax),
+  "date": zod.string(),
+  "status": zod.enum(['present', 'half_day', 'absent', 'leave', 'company_holiday', 'weekly_off']),
+  "leaveType": zod.union([zod.literal('casual'),zod.literal('sick'),zod.literal(null)]).nullish(),
+  "force": zod.boolean().optional(),
+  "checkIn": zod.string().nullish(),
+  "checkOut": zod.string().nullish()
+})
+
+export const BulkCorrectAttendanceResponse = zod.object({
+  "count": zod.number(),
+  "date": zod.string(),
+  "status": zod.string(),
+  "updated": zod.array(zod.object({
+  "id": zod.number(),
+  "employeeId": zod.number(),
+  "employeeName": zod.string().optional(),
+  "date": zod.string(),
+  "checkIn": zod.string().nullish(),
+  "checkOut": zod.string().nullish(),
+  "checkInLat": zod.number().nullish(),
+  "checkInLng": zod.number().nullish(),
+  "checkOutLat": zod.number().nullish(),
+  "checkOutLng": zod.number().nullish(),
+  "status": zod.enum(['present', 'absent', 'half_day', 'leave']).optional()
+}))
+})
+
+
+/**
  * @summary Employee check-in with location
  */
 export const CheckInBody = zod.object({

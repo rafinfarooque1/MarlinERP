@@ -408,17 +408,6 @@ export interface StockTransfer {
   lineItems: StockTransferLine[];
   isInterstate?: boolean;
   status?: StockTransferStatus;
-  transferType?: 'internal' | 'intrastate' | 'interstate';
-  fromGstin?: string | null;
-  toGstin?: string | null;
-  taxType?: 'none' | 'cgst_sgst' | 'igst';
-  transferValue?: number | null;
-  gstAmount?: number | null;
-  documentMode?: 'voucher' | 'invoice';
-  transferInvoiceNumber?: string | null;
-  saleId?: number | null;
-  purchaseId?: number | null;
-  creditNoteVoucherId?: number | null;
   createdAt: string;
 }
 
@@ -1011,6 +1000,89 @@ export interface AttendanceInput {
   lat: number;
   lng: number;
   notes?: string;
+}
+
+export type AttendanceCorrectionStatus = typeof AttendanceCorrectionStatus[keyof typeof AttendanceCorrectionStatus];
+
+
+export const AttendanceCorrectionStatus = {
+  present: 'present',
+  half_day: 'half_day',
+  absent: 'absent',
+  leave: 'leave',
+  company_holiday: 'company_holiday',
+  weekly_off: 'weekly_off',
+} as const;
+
+/**
+ * @nullable
+ */
+export type AttendanceCorrectionLeaveType = typeof AttendanceCorrectionLeaveType[keyof typeof AttendanceCorrectionLeaveType] | null;
+
+
+export const AttendanceCorrectionLeaveType = {
+  casual: 'casual',
+  sick: 'sick',
+} as const;
+
+export interface AttendanceCorrection {
+  employeeId: number;
+  date: string;
+  status: AttendanceCorrectionStatus;
+  /** @nullable */
+  leaveType?: AttendanceCorrectionLeaveType;
+  force?: boolean;
+  /** @nullable */
+  checkIn?: string | null;
+  /** @nullable */
+  checkOut?: string | null;
+}
+
+export type BulkAttendanceCorrectionStatus = typeof BulkAttendanceCorrectionStatus[keyof typeof BulkAttendanceCorrectionStatus];
+
+
+export const BulkAttendanceCorrectionStatus = {
+  present: 'present',
+  half_day: 'half_day',
+  absent: 'absent',
+  leave: 'leave',
+  company_holiday: 'company_holiday',
+  weekly_off: 'weekly_off',
+} as const;
+
+/**
+ * @nullable
+ */
+export type BulkAttendanceCorrectionLeaveType = typeof BulkAttendanceCorrectionLeaveType[keyof typeof BulkAttendanceCorrectionLeaveType] | null;
+
+
+export const BulkAttendanceCorrectionLeaveType = {
+  casual: 'casual',
+  sick: 'sick',
+} as const;
+
+export interface BulkAttendanceCorrection {
+  /**
+     * @minItems 1
+     * @maxItems 500
+     */
+  employeeIds: number[];
+  date: string;
+  status: BulkAttendanceCorrectionStatus;
+  /** @nullable */
+  leaveType?: BulkAttendanceCorrectionLeaveType;
+  force?: boolean;
+  /** @nullable */
+  checkIn?: string | null;
+  /** @nullable */
+  checkOut?: string | null;
+}
+
+export interface BulkAttendanceCorrectionResult {
+  count: number;
+  date: string;
+  status: string;
+  updated: AttendanceRecord[];
 }
 
 export type LeaveApplicationLeaveType = typeof LeaveApplicationLeaveType[keyof typeof LeaveApplicationLeaveType];

@@ -11,6 +11,7 @@
 - [Inventory batch layer](inventory-batches.md) — additive lot layer over stock_entries (qty truth); FEFO clamped consumption, shortfall = "Untracked"; zod strips unknown keys so optional passthrough fields read from raw body.
 - [pg query gotchas](pg-gotchas.md) — date columns return JS Date; creates return 201; check-then-insert needs one txn + advisory lock; a backtick in a SQL template comment breaks the build.
 - [Codegen staleness trap](codegen-staleness.md) — the spec GATES writes (a field absent from Create/Update body is stripped silently despite a real column); also flips optional→required, and under-declares responses.
+- [Generated mutation ownership](generated-mutation-ownership.md) — when an endpoint enters OpenAPI, use its generated hook and `{data}` contract; custom same-name exports collide and break the client barrel.
 - [Migration DDL drift / 42P10](migration-ddl-drift.md) — two causes: constraints inside CREATE TABLE IF NOT EXISTS never reach live DBs, and widening a natural key strands every older ON CONFLICT target.
 - [Boot migration observability](boot-migration-observability.md) — prod discards stdout until the port opens, so a swallowed mid-migration throw silently skips everything after it; one-time conversions need their own top-level step + boot_status row.
 - [Sales settlement](sales-settlement.md) + [Sale discount model](sale-discount-model.md) — only 'credit' is credit-controlled, dues = total−paid; per-unit item + pre-tax bill (paise-exact) + post-tax coupon; legacy lines keep line-total semantics.

@@ -3,7 +3,7 @@ import {
   useListAttendance, useCheckIn, useCheckOut, getListAttendanceQueryKey,
   useListEmployees, useListWarehouses, useListOutlets,
   useListLeaves, useApplyLeave, useCancelLeave, getListLeavesQueryKey,
-  useGetMe, useCorrectAttendance, useAttendanceRange,
+  useGetMe, useCorrectAttendance, useBulkCorrectAttendance, useAttendanceRange,
   useAttendanceMonth, useAttendanceConfig, type AttendancePunch,
   useCompanyHolidays, useCreateCompanyHoliday, useDeleteCompanyHoliday, useLeaveBalance,
 } from '@workspace/api-client-react';
@@ -11,6 +11,7 @@ import { useDateRange, RangeBar } from '@/pages/reports/shared';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
@@ -198,6 +199,10 @@ export default function Attendance() {
   // on submit.
   const [correcting, setCorrecting] = useState<any>(null);
   const [correctStatus, setCorrectStatus] = useState<string>('present');
+  const [selectedEmployeeIds, setSelectedEmployeeIds] = useState<Set<number>>(new Set());
+  const [bulkCorrectionOpen, setBulkCorrectionOpen] = useState(false);
+  const [bulkCorrectStatus, setBulkCorrectStatus] = useState<string>('present');
+  const [bulkExhaustedWarning, setBulkExhaustedWarning] = useState<string | null>(null);
   // Server said the month's casual leave is used up (409) — the save needs an
   // explicit "save anyway" confirmation, which resubmits with force.
   const [exhaustedWarning, setExhaustedWarning] = useState<string | null>(null);
@@ -221,11 +226,20 @@ export default function Attendance() {
   const { data: outlets = [] } = useListOutlets();
   const { outletsEnabled } = useOutletsEnabled();
   const queryClient = useQueryClient();
+  const refreshAfterAttendance = () => {
+    queryClient.invalidateQueries({ queryKey: getListAttendanceQueryKey() });
+    queryClient.invalidateQueries({ predicate: (query) => {
+      const head = String((query.queryKey as readonly unknown[])[0] ?? '');
+      return ['/api/hr/salary-accruals', '/api/hr/payroll', '/api/dashboard']
+        .some((prefix) => head.startsWith(prefix));
+    }});
+  };
   const checkInMutation  = useCheckIn();
   const checkOutMutation = useCheckOut();
   const applyMutation    = useApplyLeave();
   const cancelMutation   = useCancelLeave();
   const correctMutation  = useCorrectAttendance();
+  const bulkCorrectMutation = useBulkCorrectAttendance();
   const { data: holidays = [] } = useCompanyHolidays();
   const createHoliday = useCreateCompanyHoliday();
   const deleteHoliday = useDeleteCompanyHoliday();
@@ -340,15 +354,18 @@ export default function Attendance() {
     // sessions) outvote the status label unless they are cleared with it.
     correctMutation.mutate(
       {
-        employeeId: correcting.employeeId, date,
-        status: (isLeave ? 'leave' : correctStatus) as any,
-        ...(isLeave ? { leaveType: (correctStatus === 'leave_sick' ? 'sick' : 'casual') as any } : {}),
-        ...(force ? { force: true } : {}),
-        checkIn: null, checkOut: null,
+        data: {
+          employeeId: correcting.employeeId, date,
+          status: (isLeave ? 'leave' : correctStatus) as any,
+          ...(isLeave ? { leaveType: (correctStatus === 'leave_sick' ? 'sick' : 'casual') as any } : {}),
+          ...(force ? { force: true } : {}),
+          checkIn: null, checkOut: null,
+        } as any,
       },
       {
         onSuccess: () => {
           toast.success(`Attendance corrected — salary for ${date} has been re-calculated`);
+          refreshAfterAttendance();
           setCorrecting(null);
           setExhaustedWarning(null);
         },
@@ -375,6 +392,87 @@ export default function Attendance() {
     const matchBranchLoc = branchLocId === 'all' || String(branch?.branchId) === branchLocId;
     return matchSearch && matchBranchType && matchBranchLoc;
   });
+
+  // Selection is always derived from the current day-register view. Changing a
+  // date, search, or branch filter removes rows that are no longer visible so a
+  // bulk action can never silently reach beyond the user's current selection.
+  const visibleEmployeeIds = filtered.map((a: any) => Number(a.employeeId));
+  const visibleEmployeeKey = visibleEmployeeIds.join(',');
+  useEffect(() => {
+    setSelectedEmployeeIds((previous) => {
+      const visible = new Set(visibleEmployeeIds);
+      const next = new Set([...previous].filter((id) => visible.has(id)));
+      if (next.size === previous.size && [...next].every((id) => previous.has(id))) return previous;
+      return next;
+    });
+  }, [visibleEmployeeKey]);
+
+  const allVisibleSelected = visibleEmployeeIds.length > 0
+    && visibleEmployeeIds.every((id) => selectedEmployeeIds.has(id));
+  const someVisibleSelected = visibleEmployeeIds.some((id) => selectedEmployeeIds.has(id))
+    && !allVisibleSelected;
+
+  const toggleEmployeeSelection = (employeeId: number) => {
+    setSelectedEmployeeIds((previous) => {
+      const next = new Set(previous);
+      if (next.has(employeeId)) next.delete(employeeId);
+      else next.add(employeeId);
+      return next;
+    });
+  };
+
+  const toggleVisibleSelection = (checked: boolean) => {
+    setSelectedEmployeeIds((previous) => {
+      const next = new Set(previous);
+      for (const employeeId of visibleEmployeeIds) {
+        if (checked) next.add(employeeId);
+        else next.delete(employeeId);
+      }
+      return next;
+    });
+  };
+
+  const openBulkCorrection = () => {
+    setBulkCorrectStatus('present');
+    setBulkExhaustedWarning(null);
+    setBulkCorrectionOpen(true);
+  };
+
+  const submitBulkCorrection = (force = false) => {
+    if (selectedEmployeeIds.size === 0) return;
+    const isLeave = bulkCorrectStatus === 'leave_casual' || bulkCorrectStatus === 'leave_sick';
+    bulkCorrectMutation.mutate(
+      {
+        data: {
+          employeeIds: [...selectedEmployeeIds],
+          date,
+          status: (isLeave ? 'leave' : bulkCorrectStatus) as any,
+          ...(isLeave ? { leaveType: bulkCorrectStatus === 'leave_sick' ? 'sick' : 'casual' } : {}),
+          ...(force ? { force: true } : {}),
+          // Match individual Fix: an explicit null clears old sessions so the
+          // selected status, rather than stale punch data, determines pay.
+          checkIn: null,
+          checkOut: null,
+        } as any,
+      },
+      {
+        onSuccess: (result) => {
+          toast.success(`Attendance fixed for ${result.count} employees — salary for ${date} has been re-calculated`);
+          refreshAfterAttendance();
+          setBulkCorrectionOpen(false);
+          setBulkExhaustedWarning(null);
+          setSelectedEmployeeIds(new Set());
+        },
+        onError: (e: any) => {
+          if (e?.data?.code === 'CASUAL_LEAVE_EXHAUSTED') {
+            setBulkExhaustedWarning(e.data.error);
+            return;
+          }
+          toast.error(e?.data?.error || e.message || 'Bulk attendance correction failed');
+        },
+      },
+    );
+  };
 
   // Range rows carry only employeeId — resolve names from the employee master.
   const empNameMap = useMemo(() => {
@@ -592,6 +690,60 @@ export default function Attendance() {
     </Dialog>
   );
 
+  const bulkCorrectionDialog = (
+    <Dialog open={bulkCorrectionOpen} onOpenChange={v => !v && setBulkCorrectionOpen(false)}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader><DialogTitle>Fix Attendance for {selectedEmployeeIds.size} Employees</DialogTitle></DialogHeader>
+        <div className="space-y-4 pt-2">
+          <div className="rounded-lg border border-border bg-muted/30 p-3 text-sm">
+            <p className="font-medium">{selectedEmployeeIds.size} visible employees selected</p>
+            <p className="text-xs text-muted-foreground mt-1">
+              All selected employees will be corrected for <span className="font-mono">{date}</span>.
+              The operation validates everyone before changing any attendance.
+            </p>
+          </div>
+          <div>
+            <p className="text-sm font-medium mb-1.5">Status</p>
+            <Select value={bulkCorrectStatus} onValueChange={(v) => { setBulkCorrectStatus(v); setBulkExhaustedWarning(null); }}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="present">Present — earns a full day</SelectItem>
+                <SelectItem value="half_day">Half Day — earns half a day</SelectItem>
+                <SelectItem value="leave_casual">Casual Leave — paid while casual leaves last</SelectItem>
+                <SelectItem value="leave_sick">Sick Leave — paid while sick leaves last</SelectItem>
+                <SelectItem value="company_holiday">Company Holiday — paid, no leave used</SelectItem>
+                <SelectItem value="weekly_off">Weekly Off — per the weekly-off policy</SelectItem>
+                <SelectItem value="absent">Absent — earns nothing</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          {bulkExhaustedWarning && (
+            <p className="text-xs text-amber-700 bg-amber-500/10 border border-amber-500/30 rounded-lg p-3">
+              {bulkExhaustedWarning} No attendance rows were changed.
+            </p>
+          )}
+          <p className="text-xs text-muted-foreground bg-muted/40 border border-border rounded-lg p-3">
+            Saving replaces the selected employees' recorded check-in/out sessions
+            with this status and re-calculates open salary accruals. Approved or paid
+            payroll months cannot be changed.
+          </p>
+          <DialogFooter className="flex-col-reverse sm:flex-row">
+            <Button variant="outline" type="button" onClick={() => setBulkCorrectionOpen(false)}>Cancel</Button>
+            {bulkExhaustedWarning ? (
+              <Button type="button" variant="destructive" onClick={() => submitBulkCorrection(true)} disabled={bulkCorrectMutation.isPending}>
+                {bulkCorrectMutation.isPending ? 'Saving…' : 'Save Anyway (Unpaid)'}
+              </Button>
+            ) : (
+              <Button type="button" onClick={() => submitBulkCorrection()} disabled={bulkCorrectMutation.isPending}>
+                {bulkCorrectMutation.isPending ? 'Saving…' : 'Fix Selected Attendance'}
+              </Button>
+            )}
+          </DialogFooter>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+
   // ── Leave detail sheet ──────────────────────────────────────────────────────
   const leaveSheet = (
     <Sheet open={!!viewLeave} onOpenChange={v => !v && setViewLeave(null)}>
@@ -769,6 +921,23 @@ export default function Attendance() {
           </div>
           )}
 
+          {viewMode === 'day' && perm.canEdit && selectedEmployeeIds.size > 0 && (
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between rounded-lg border border-primary/20 bg-primary/5 px-3 py-2.5">
+              <div className="flex items-center gap-2 text-sm">
+                <span className="font-semibold">{selectedEmployeeIds.size} selected</span>
+                <span className="text-muted-foreground">visible employees</span>
+              </div>
+              <div className="flex gap-2">
+                <Button size="sm" onClick={openBulkCorrection}>
+                  <Pencil className="w-4 h-4 mr-1.5" /> Fix Attendance
+                </Button>
+                <Button size="sm" variant="outline" onClick={() => setSelectedEmployeeIds(new Set())}>
+                  Clear
+                </Button>
+              </div>
+            </div>
+          )}
+
           {/* Calendar — month at a glance; click a day to open its register */}
           {viewMode === 'calendar' && (
             <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
@@ -901,6 +1070,13 @@ export default function Attendance() {
             <Table>
               <TableHeader>
                 <TableRow className="bg-muted/10">
+                  <TableHead className="w-10">
+                    <Checkbox
+                      checked={someVisibleSelected ? 'indeterminate' : allVisibleSelected}
+                      onCheckedChange={(value) => toggleVisibleSelection(value === true || value === 'indeterminate')}
+                      aria-label="Select all visible employees"
+                    />
+                  </TableHead>
                   <SortableHead k="employee" sort={daySort.sort}>Employee</SortableHead>
                   <TableHead>Sessions</TableHead>
                   <SortableHead k="firstIn" sort={daySort.sort}>First In</SortableHead>
@@ -915,15 +1091,22 @@ export default function Attendance() {
               </TableHeader>
               <TableBody>
                 {isLoading ? (
-                  <TableRow><TableCell colSpan={10} className="p-0"><TableSkeleton rows={4} cols={10} /></TableCell></TableRow>
+                  <TableRow><TableCell colSpan={11} className="p-0"><TableSkeleton rows={4} cols={11} /></TableCell></TableRow>
                 ) : filtered.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={10} className="p-0">
+                    <TableCell colSpan={11} className="p-0">
                       <EmptyState icon={Clock} title={`No attendance records for ${date}`} compact />
                     </TableCell>
                   </TableRow>
                 ) : daySort.sorted.map((a: any) => (
-                  <TableRow key={a.employeeId} className="hover:bg-muted/10">
+                  <TableRow key={a.employeeId} className={`hover:bg-muted/10 ${selectedEmployeeIds.has(a.employeeId) ? 'bg-primary/5' : ''}`}>
+                    <TableCell>
+                      <Checkbox
+                        checked={selectedEmployeeIds.has(a.employeeId)}
+                        onCheckedChange={() => toggleEmployeeSelection(a.employeeId)}
+                        aria-label={`Select ${a.employeeName}`}
+                      />
+                    </TableCell>
                     <TableCell className="font-semibold">{a.employeeName}</TableCell>
                     <TableCell><SessionsCell punches={a.punches} /></TableCell>
                     <TableCell className="text-sm font-mono">
@@ -982,6 +1165,7 @@ export default function Attendance() {
         {applyLeaveDialog}
         {leaveSheet}
         {correctionDialog}
+        {bulkCorrectionDialog}
 
         {/* ── Company holidays management (Head Office) ─────────────────── */}
         <Sheet open={holidaysOpen} onOpenChange={setHolidaysOpen}>
