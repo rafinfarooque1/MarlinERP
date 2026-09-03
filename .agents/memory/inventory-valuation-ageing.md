@@ -13,6 +13,16 @@ Every roll-up (per location, per kind, per product, grand total) is derived from
 set, so a drill-down always sums to the headline. A new `SUM(quantity * cost)` anywhere is a
 defect, not an optimisation.
 
+Transfer line and batch costs remain the traceable inventory cost, but an active in-transit
+reservation must use the product weighted-average valuation cost used for on-hand stock.
+Otherwise dispatch temporarily changes closing stock and P&L until receipt.
+
+**Why:** a FEFO lot can cost differently from the product-wide average; mixing those bases makes
+an otherwise neutral transfer appear to create or destroy inventory while it is in transit.
+
+**How to apply:** preserve lot cost/date/batch identity on the transfer and destination rows, but
+pass the product valuation cost to in-transit reservation valuation.
+
 **Valued at cost, never MRP.** Closing stock used to be MRP-priced and read from a retired
 counter.
 

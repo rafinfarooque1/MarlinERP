@@ -6,7 +6,10 @@ import { eq, and, sql } from "drizzle-orm";
 import { CreateStockTransferBody, ListStockQueryParams } from "@workspace/api-zod";
 import { logActivity } from "../lib/audit";
 import { pool } from "@workspace/db";
-import { consumeBatches, restoreBatches, creditBatch, updateAvgCostOnInbound, validateBatchOverride, type BatchBreakdownEntry } from "../lib/batches";
+import {
+  consumeBatches, restoreBatches, creditBatch, inboundCostForItem, inboundCostForMaterial,
+  validateBatchOverride, type BatchBreakdownEntry,
+} from "../lib/batches";
 import { writeStockLedger, batchResolveMeta, toTxnDate } from "../lib/stockLedger";
 import { isIsoDate } from "../lib/dateInput";
 import { isMonthLocked, ymOfDate, monthLockedBody, respondIfMonthLocked } from "../lib/periodLock";
@@ -29,6 +32,33 @@ import {
 const router = Router();
 
 const r3 = (n: number) => Math.round(n * 1000) / 1000;
+const r2 = (n: number) => Math.round(n * 100) / 100;
+
+/**
+ * A transfer is a relocation, not a purchase. Its cost must therefore come
+ * from the source inventory, never from the request body. Tracked quantities
+ * use their FEFO lot costs; any untracked remainder uses the server-side
+ * product average/manual cost used by the valuation engine.
+ */
+function transferUnitCost(
+  quantity: number,
+  breakdown: BatchBreakdownEntry[] | null | undefined,
+  fallbackCost: number,
+): number {
+  const qty = Number(quantity);
+  if (!(qty > 0)) return 0;
+  let trackedQty = 0;
+  let trackedValue = 0;
+  for (const batch of breakdown ?? []) {
+    const batchQty = Math.max(0, Number(batch?.quantity ?? 0));
+    if (!(batchQty > 0)) continue;
+    const batchCost = Number(batch?.unitCost ?? 0);
+    trackedQty += batchQty;
+    trackedValue += batchQty * (batchCost > 0 ? batchCost : fallbackCost);
+  }
+  const remainder = Math.max(0, qty - trackedQty);
+  return r2((trackedValue + remainder * Math.max(0, fallbackCost)) / qty);
+}
 
 // ── Branch-name lookup with preloaded maps (no per-row DB hits) ────────────────
 export async function buildBranchMaps() {
@@ -75,7 +105,11 @@ async function reserveDispatchedInTransit(
       batchId: (b as any).batchId ?? null,
       batchNumber: b.batchNumber ?? null,
       quantity: Number(b.quantity),
-      unitCost: Number((b as any).unitCost ?? 0) > 0 ? Number((b as any).unitCost) : args.fallbackCost,
+      // The shared valuation engine prices on-hand stock at the product's
+      // weighted-average cost. Keep the FEFO lot cost in the transfer line
+      // for traceability, but use the same valuation cost for the in-transit
+      // reservation or dispatch would temporarily create a P&L stock delta.
+      unitCost: args.fallbackCost,
     }));
   const tracked = lines.reduce((s, l) => s + l.quantity, 0);
   const remainder = r3(args.quantity - tracked);
@@ -708,13 +742,19 @@ router.post("/stock/transfers", requireModuleAction("page:/transfers", "add"), a
           quantity: Number(li.quantity),
           override: rawLines[i]?.batchOverride,
         });
+        const matValuationCost = await inboundCostForMaterial(client, 'material', li.itemId);
+        const matCost = transferUnitCost(
+          Number(li.quantity),
+          matBreakdown,
+          matValuationCost,
+        );
         await reserveDispatchedInTransit(client, {
           transferId: row.id, challanNumber, refId: li.itemId, materialType: 'material',
           branchType: row.from_type, branchId: row.from_id,
-          quantity: Number(li.quantity), breakdown: matBreakdown, fallbackCost: Number(li.costPrice ?? 0),
+          quantity: Number(li.quantity), breakdown: matBreakdown, fallbackCost: matValuationCost,
         });
-        enrichedLines.push({ ...li, materialType, batchBreakdown: matBreakdown });
-        dispatchLedgerEntries.push({ txnType: 'transfer_out', materialType: 'material', refId: li.itemId, itemName: mat.name ?? '', unit: mat.unit ?? '', branchType: row.from_type, branchId: row.from_id, branchName: branchFn(row.from_type, row.from_id), qtyChange: -Number(li.quantity), unitCost: Number(li.costPrice ?? 0), docType: 'stock_transfer', docId: row.id, txnDate: toTxnDate(row.transfer_date) });
+        enrichedLines.push({ ...li, costPrice: matCost, materialType, batchBreakdown: matBreakdown });
+        dispatchLedgerEntries.push({ txnType: 'transfer_out', materialType: 'material', refId: li.itemId, itemName: mat.name ?? '', unit: mat.unit ?? '', branchType: row.from_type, branchId: row.from_id, branchName: branchFn(row.from_type, row.from_id), qtyChange: -Number(li.quantity), unitCost: matCost, docType: 'stock_transfer', docId: row.id, txnDate: toTxnDate(row.transfer_date) });
       } else if (materialType === 'raw_material') {
         // Packing Material: availability is now per location, not a global counter.
         const { rows: [rm] } = await client.query(
@@ -761,13 +801,19 @@ router.post("/stock/transfers", requireModuleAction("page:/transfers", "add"), a
           quantity: Number(li.quantity),
           override: rawLines[i]?.batchOverride,
         });
+        const rmValuationCost = await inboundCostForMaterial(client, 'raw_material', li.itemId);
+        const rmCost = transferUnitCost(
+          Number(li.quantity),
+          rmBreakdown,
+          rmValuationCost,
+        );
         await reserveDispatchedInTransit(client, {
           transferId: row.id, challanNumber, refId: li.itemId, materialType: 'raw_material',
           branchType: row.from_type, branchId: row.from_id,
-          quantity: Number(li.quantity), breakdown: rmBreakdown, fallbackCost: Number(li.costPrice ?? 0),
+          quantity: Number(li.quantity), breakdown: rmBreakdown, fallbackCost: rmValuationCost,
         });
-        enrichedLines.push({ ...li, materialType, batchBreakdown: rmBreakdown });
-        dispatchLedgerEntries.push({ txnType: 'transfer_out', materialType: 'raw_material', refId: li.itemId, itemName: rm.name ?? '', unit: rm.unit ?? '', branchType: row.from_type, branchId: row.from_id, branchName: branchFn(row.from_type, row.from_id), qtyChange: -Number(li.quantity), unitCost: Number(li.costPrice ?? 0), docType: 'stock_transfer', docId: row.id, txnDate: toTxnDate(row.transfer_date) });
+        enrichedLines.push({ ...li, costPrice: rmCost, materialType, batchBreakdown: rmBreakdown });
+        dispatchLedgerEntries.push({ txnType: 'transfer_out', materialType: 'raw_material', refId: li.itemId, itemName: rm.name ?? '', unit: rm.unit ?? '', branchType: row.from_type, branchId: row.from_id, branchName: branchFn(row.from_type, row.from_id), qtyChange: -Number(li.quantity), unitCost: rmCost, docType: 'stock_transfer', docId: row.id, txnDate: toTxnDate(row.transfer_date) });
       } else {
         // Item (SKU): deduct from stock_entries. The row is locked and the check
         // is against available, so a concurrent dispatch or sale of the same
@@ -801,14 +847,20 @@ router.post("/stock/transfers", requireModuleAction("page:/transfers", "add"), a
           quantity: li.quantity,
           override: rawLines[i]?.batchOverride,
         });
+        const itemValuationCost = await inboundCostForItem(client, li.itemId);
+        const itemCost = transferUnitCost(
+          Number(li.quantity),
+          batchBreakdown,
+          itemValuationCost,
+        );
         await reserveDispatchedInTransit(client, {
           transferId: row.id, challanNumber, refId: li.itemId, materialType: 'item',
           branchType: row.from_type, branchId: row.from_id,
-          quantity: Number(li.quantity), breakdown: batchBreakdown, fallbackCost: Number(li.costPrice ?? 0),
+          quantity: Number(li.quantity), breakdown: batchBreakdown, fallbackCost: itemValuationCost,
         });
-        enrichedLines.push({ ...li, materialType: 'item', batchBreakdown });
+        enrichedLines.push({ ...li, costPrice: itemCost, materialType: 'item', batchBreakdown });
         const { rows: [itemMeta] } = await pool.query(`SELECT name, unit FROM items WHERE id = $1`, [li.itemId]);
-        dispatchLedgerEntries.push({ txnType: 'transfer_out', materialType: 'item', refId: li.itemId, itemName: itemMeta?.name ?? '', unit: itemMeta?.unit ?? '', branchType: row.from_type, branchId: row.from_id, branchName: branchFn(row.from_type, row.from_id), qtyChange: -Number(li.quantity), unitCost: Number(li.costPrice ?? 0), docType: 'stock_transfer', docId: row.id, txnDate: toTxnDate(row.transfer_date) });
+        dispatchLedgerEntries.push({ txnType: 'transfer_out', materialType: 'item', refId: li.itemId, itemName: itemMeta?.name ?? '', unit: itemMeta?.unit ?? '', branchType: row.from_type, branchId: row.from_id, branchName: branchFn(row.from_type, row.from_id), qtyChange: -Number(li.quantity), unitCost: itemCost, docType: 'stock_transfer', docId: row.id, txnDate: toTxnDate(row.transfer_date) });
       }
     }
     await writeStockLedger(client, dispatchLedgerEntries);
@@ -1097,14 +1149,25 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction("page:/transfer
       } else {
         // Item (SKU): credit stock_entries + batches
         const { rows: [dstExisting] } = await client.query(
-          `SELECT id FROM stock_entries
-            WHERE item_id = $1 AND material_type = 'item' AND branch_type = $2 AND branch_id = $3 LIMIT 1 FOR UPDATE`,
+          `SELECT id, quantity::numeric AS quantity, cost_price::numeric AS cost_price
+             FROM stock_entries
+            WHERE item_id = $1 AND material_type = 'item' AND branch_type = $2 AND branch_id = $3
+            LIMIT 1 FOR UPDATE`,
           [li.itemId, destType, destId]
         );
         if (dstExisting) {
+          const existingQty = Number(dstExisting.quantity ?? 0);
+          const inboundQty = Number(li.quantity);
+          const existingCost = Number(dstExisting.cost_price ?? 0);
+          const inboundCost = Number(li.costPrice ?? 0);
+          const combinedCost = existingQty + inboundQty > 0
+            ? r2((existingQty * existingCost + inboundQty * inboundCost) / (existingQty + inboundQty))
+            : inboundCost;
           await client.query(
-            `UPDATE stock_entries SET quantity = quantity::numeric + $1, cost_price = $2, updated_at = now() WHERE id = $3`,
-            [li.quantity, String(li.costPrice ?? 0), dstExisting.id]
+            `UPDATE stock_entries
+                SET quantity = quantity::numeric + $1, cost_price = $2, updated_at = now()
+              WHERE id = $3`,
+            [li.quantity, String(combinedCost), dstExisting.id]
           );
         } else {
           await client.query(
@@ -1137,8 +1200,8 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction("page:/transfer
             ...(await productBatchIdentity(client, "item", Number(li.itemId))),
           });
         }
-        // Update destination average cost (same formula as a regular inbound purchase)
-        await updateAvgCostOnInbound(client, li.itemId, Number(li.quantity), Number(li.costPrice ?? 0));
+        // A transfer is a relocation, not a new inbound purchase. Do not roll
+        // the product's company-wide average cost when the goods land.
       }
     }
 

@@ -1352,8 +1352,11 @@ export async function buildDerivedPostings(opts: { toDate?: string; q?: Q } = {}
     // a sales ledger. It replaces the dispatch journal voucher that used to be
     // raised for the same transfer — both would double the revenue and the tax.
     const isBranchTransfer = s.branch_transfer_id != null;
+    if (isBranchTransfer && !branchTrf) {
+      throw new Error(`Branch-transfer sale ${s.id} cannot be posted: STD-BRANCH-TRF is missing`);
+    }
     const salesLedger = isBranchTransfer
-      ? (branchTrf || stdSales)
+      ? branchTrf!
       : (loc?.sales_ledger_id ?? stdSales);
     const cashLedger = loc?.cash_ledger_id ?? stdCash;
     const eid = `sale:${s.id}`;
@@ -1519,6 +1522,9 @@ export async function buildDerivedPostings(opts: { toDate?: string; q?: Q } = {}
     // it offsets the outward leg instead of inflating cost of goods. Replaces
     // the receive journal voucher for the same transfer.
     const isBranchTransfer = p.branch_transfer_id != null;
+    if (isBranchTransfer && !branchTrf) {
+      throw new Error(`Branch-transfer purchase ${p.id} cannot be posted: STD-BRANCH-TRF is missing`);
+    }
     const vendLedger = isBranchTransfer
       ? (branchCreditor || creditors)
       : (byCode.get(`VEND-${p.vendor_id}`)?.id ?? creditors);
@@ -1526,7 +1532,7 @@ export async function buildDerivedPostings(opts: { toDate?: string; q?: Q } = {}
     // Office bills (and anything without a location) keep the standard one.
     const pLoc = locMap.get(`${p.location_type}:${p.location_id}`);
     const purLedger = isBranchTransfer
-      ? (branchTrf || stdPur)
+      ? branchTrf!
       : ((p.location_type && p.location_type !== 'headoffice' && pLoc?.purchase_ledger_id)
         ? Number(pLoc.purchase_ledger_id) : stdPur);
     const pLines = (p.line_items ?? []) as any[];
