@@ -305,6 +305,21 @@ console.log('\n[9] Odd-paise tax: CGST + SGST must sum EXACTLY to the line tax')
   if (!done) console.log(`  (no odd-paise candidate at rate ${RATE}% — skipped)`);
 }
 
+console.log('\n[10] Fractional quantities are billable');
+{
+  const r = await post('/sales', { ...saleBase, lineItems: [mkLine({ quantity: 0.5 })] });
+  assert('Half-unit sale created', r.status < 300 && !r.data?.error,
+    JSON.stringify(r.data).slice(0, 200));
+  if (r.data?.id) {
+    createdSales.push(r.data.id);
+    assert('Half-unit quantity is stored', close(r.data.lineItems?.[0]?.quantity, 0.5),
+      `got ${r.data.lineItems?.[0]?.quantity}`);
+    const exp = expectInclusive(0.5, 200, RATE);
+    assert('Half-unit total is calculated correctly', close(r.data.totalAmount, exp.total),
+      `got ${r.data.totalAmount}, want ${exp.total}`);
+  }
+}
+
 // ── Cleanup + summary ────────────────────────────────────────────────────────
 console.log('\n[cleanup] cancelling test sales…');
 await cleanup();
