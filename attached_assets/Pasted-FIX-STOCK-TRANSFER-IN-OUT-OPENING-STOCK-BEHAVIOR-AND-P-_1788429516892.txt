@@ -1,0 +1,639 @@
+FIX STOCK TRANSFER IN/OUT – OPENING STOCK BEHAVIOR AND P&L EXCLUSION
+
+IMPORTANT:
+First inspect the existing stock transfer, opening stock, closing stock, stock ledger, inventory valuation and P&L calculation logic.
+
+Do NOT blindly rewrite existing accounting or historical data.
+
+BUSINESS REQUIREMENT
+
+Our ERP uses a monthly stock calculation.
+
+When stock is transferred from one warehouse to another warehouse:
+
+SOURCE WAREHOUSE:
+The transferred quantity must be reduced from the source warehouse's stock/opening stock calculation.
+
+DESTINATION WAREHOUSE:
+The transferred quantity must be added to the destination warehouse's stock/opening stock calculation.
+
+MOST IMPORTANT:
+
+Stock Transfer In and Stock Transfer Out are INTERNAL STOCK MOVEMENTS.
+
+They must NOT create income, expense, sales, COGS or profit.
+
+Therefore:
+
+Transfer In → increases receiving warehouse stock
+
+Transfer Out → decreases sending warehouse stock
+
+BUT:
+
+Transfer In/Out → MUST NOT affect P&L.
+
+--------------------------------------------------
+MONTH-WISE STOCK LOGIC
+--------------------------------------------------
+
+The ERP currently works with monthly Opening Stock and Closing Stock.
+
+For a selected month, calculate stock correctly using the existing ERP design.
+
+Example:
+
+April Opening Stock = 100 KG
+
+During April:
+
+Transfer Out = 20 KG
+
+Then April stock available from that opening quantity becomes:
+
+100 - 20 = 80 KG
+
+If another warehouse receives the 20 KG:
+
+Receiving warehouse stock:
+
+Opening Stock + 20 KG Transfer In
+
+Example:
+
+Receiving warehouse Opening Stock = 50 KG
+
+Transfer In = 20 KG
+
+Stock = 70 KG
+
+The transfer must not be treated as a purchase or income.
+
+--------------------------------------------------
+CRITICAL P&L RULE
+--------------------------------------------------
+
+Stock Transfer must NEVER affect:
+
+- Sales
+- Revenue
+- Purchase
+- Expense
+- COGS
+- Gross Profit
+- Net Profit
+- Direct Income
+- Indirect Income
+- Direct Expense
+- Indirect Expense
+
+A stock transfer is NOT a sale.
+
+A stock transfer is NOT a purchase.
+
+A stock transfer is NOT income.
+
+A stock transfer is NOT an expense.
+
+A stock transfer is only an INTERNAL INVENTORY MOVEMENT.
+
+--------------------------------------------------
+TRANSFER OUT
+--------------------------------------------------
+
+When Warehouse A transfers:
+
+Product X = 100 KG
+
+to Warehouse B:
+
+Warehouse A:
+
+Transfer Out = 100 KG
+
+The stock available in Warehouse A must reduce by 100 KG.
+
+The reduction must be reflected in its stock/opening-stock-based calculation according to the ERP's existing monthly stock architecture.
+
+Warehouse A must NOT get:
+
+- Expense
+- COGS
+- Loss
+- Negative P&L
+- Sales deduction
+- Purchase adjustment
+
+because of the transfer.
+
+--------------------------------------------------
+TRANSFER IN
+--------------------------------------------------
+
+Warehouse B receives:
+
+Product X = 100 KG
+
+Warehouse B:
+
+Transfer In = 100 KG
+
+The stock available in Warehouse B must increase by 100 KG.
+
+This must NOT be treated as:
+
+- Purchase
+- Sales
+- Income
+- Direct Income
+- Expense
+- COGS
+
+It is only inventory received from another internal location.
+
+--------------------------------------------------
+OPENING STOCK REQUIREMENT
+--------------------------------------------------
+
+IMPORTANT:
+
+The business requirement is that Transfer In/Transfer Out must be reflected through the Opening Stock / stock calculation mechanism currently used by this ERP.
+
+However, DO NOT duplicate the transfer.
+
+If a transfer is already represented in the opening-stock calculation, do not also add it again through Transfer In/Out.
+
+There must be ONE consistent stock movement.
+
+For every product/location/month:
+
+Opening Stock
++ Transfer In
+- Transfer Out
++ Purchases
++ Production
+- Sales
+± Adjustments
+= Closing Stock
+
+Use the ERP's existing stock calculation architecture and ensure Transfer In/Out is incorporated exactly once.
+
+NEXT MONTH:
+
+Next month's Opening Stock must be based on the previous month's final Closing Stock according to the ERP's monthly architecture.
+
+Do NOT repeatedly carry the same historical transfer into every future month.
+
+--------------------------------------------------
+IMPORTANT EXAMPLE
+--------------------------------------------------
+
+Warehouse A:
+
+Opening Stock = 1,000 KG
+
+Transfer Out = 200 KG
+
+Warehouse B:
+
+Opening Stock = 500 KG
+
+Transfer In = 200 KG
+
+Result:
+
+Warehouse A:
+1,000 - 200 = 800 KG
+
+Warehouse B:
+500 + 200 = 700 KG
+
+Company total:
+
+1,000 + 500 = 1,500 KG
+
+After transfer:
+
+800 + 700 = 1,500 KG
+
+Therefore:
+
+TOTAL COMPANY STOCK DOES NOT CHANGE.
+
+Only the LOCATION of the stock changes.
+
+--------------------------------------------------
+P&L EXAMPLE
+--------------------------------------------------
+
+Warehouse A:
+
+Opening Stock = ₹100,000
+
+Transfer Out = ₹20,000
+
+Warehouse B:
+
+Opening Stock = ₹50,000
+
+Transfer In = ₹20,000
+
+Company stock value remains:
+
+₹150,000
+
+Transfer does NOT create:
+
+₹20,000 expense
+
+and does NOT create:
+
+₹20,000 income.
+
+Gross Profit must remain unchanged purely because of this internal transfer.
+
+Net Profit must remain unchanged purely because of this internal transfer.
+
+--------------------------------------------------
+DAY-WISE P&L
+--------------------------------------------------
+
+This is especially important for Day-wise P&L.
+
+If a Transfer Out occurs on 10 September:
+
+The Day-wise P&L for 10 September must NOT show the transfer as:
+
+- Expense
+- COGS
+- Loss
+- Negative profit
+
+If a Transfer In occurs on 10 September:
+
+The Day-wise P&L must NOT show the transfer as:
+
+- Income
+- Sales
+- Profit
+
+The transfer should only affect inventory/location stock.
+
+--------------------------------------------------
+STOCK VALUATION
+--------------------------------------------------
+
+Transfer In/Out must preserve the correct inventory cost.
+
+If:
+
+Warehouse A transfers 100 KG at an existing inventory cost of ₹200/KG,
+
+then receiving Warehouse B receives the same inventory cost:
+
+100 × ₹200 = ₹20,000
+
+Do NOT create artificial profit or loss because of the transfer.
+
+If FIFO/FEFO/batch costing is already implemented:
+
+Preserve the existing batch/cost information during the transfer.
+
+The receiving warehouse must receive the correct:
+
+- Quantity
+- Batch
+- Expiry
+- Cost
+- Inventory value
+
+--------------------------------------------------
+STOCK LEDGER
+--------------------------------------------------
+
+Stock Ledger must clearly identify:
+
+TRANSFER OUT
+
+and
+
+TRANSFER IN
+
+Example:
+
+Date | Type | Warehouse | Product | Qty | Value
+
+10-Sep | Transfer Out | Warehouse A | Mango | -100 KG | -₹20,000
+
+10-Sep | Transfer In | Warehouse B | Mango | +100 KG | ₹20,000
+
+These are inventory movements only.
+
+--------------------------------------------------
+ACCOUNTING
+--------------------------------------------------
+
+Do NOT create normal P&L journal entries for internal stock transfers.
+
+If accounting entries are required by the existing design for inter-branch transfers/GST registrations, they must be handled separately from P&L and must not incorrectly create revenue/expense.
+
+For same-GST/internal inventory movement:
+
+No income/expense impact.
+
+For different GST registrations:
+
+Use the ERP's existing statutory branch-transfer/GST mechanism, but ensure the accounting design does not incorrectly inflate operational profit.
+
+--------------------------------------------------
+LOCATION FILTER
+--------------------------------------------------
+
+When selecting a specific warehouse:
+
+Show only that warehouse's stock movements.
+
+When selecting All Locations:
+
+Show consolidated company stock.
+
+For All Locations:
+
+Transfer Out from one location and Transfer In to another must NOT double-count company stock.
+
+Example:
+
+Warehouse A Transfer Out = -100
+
+Warehouse B Transfer In = +100
+
+Consolidated company stock effect = 0
+
+NOT:
+
+-100 + 100 as an additional 100 KG.
+
+--------------------------------------------------
+MONTHLY REPORTS
+--------------------------------------------------
+
+Verify:
+
+- Opening Stock
+- Purchases
+- Production
+- Transfer In
+- Transfer Out
+- Sales
+- Closing Stock
+- Inventory Value
+
+All must reconcile.
+
+Example:
+
+Opening = 1,000
+Purchases = 500
+Transfer In = 200
+Transfer Out = 100
+Sales = 400
+
+Closing:
+
+1,000 + 500 + 200 - 100 - 400
+= 1,200 KG
+
+Verify the ERP produces the same result.
+
+--------------------------------------------------
+P&L RECONCILIATION
+--------------------------------------------------
+
+P&L must be based only on genuine:
+
+Revenue
+- COGS
+- Expenses
+± other legitimate P&L items
+
+Internal Transfer In/Out must NOT be included as revenue or expense.
+
+Verify:
+
+P&L before transfer
+
+vs
+
+P&L after transfer
+
+The only difference should be legitimate sales/expenses/etc.
+
+An internal stock transfer alone must produce:
+
+P&L difference = ₹0
+
+--------------------------------------------------
+HISTORICAL DATA
+--------------------------------------------------
+
+IMPORTANT:
+
+There may already be historical stock transfers in the live database.
+
+First identify:
+
+- Existing Transfer In
+- Existing Transfer Out
+- Opening Stock generated from transfers
+- Closing Stock
+- P&L impact
+- Inventory valuation
+
+Do NOT immediately rewrite historical transactions.
+
+Produce a report showing:
+
+1. Affected transfer records
+2. Current stock impact
+3. Current P&L impact
+4. Correct expected stock
+5. Correct expected P&L
+6. Required reconciliation
+
+Only after review should historical data be corrected.
+
+--------------------------------------------------
+DUPLICATION PREVENTION
+--------------------------------------------------
+
+CRITICAL:
+
+Do not count the same transfer twice.
+
+A transfer must not simultaneously become:
+
+- Opening Stock
+- Transfer In
+- Purchase
+- Expense
+
+or:
+
+- Closing Stock reduction
+- Transfer Out
+- COGS
+
+in a way that double-counts the movement.
+
+The system must have one authoritative stock movement for each transfer.
+
+--------------------------------------------------
+EDIT / CANCEL TRANSFER
+--------------------------------------------------
+
+Test:
+
+Create Transfer
+→ Dispatch
+→ Receive
+
+Then:
+
+Edit Transfer
+→ Verify stock
+
+Cancel Transfer
+→ Verify stock reversal
+
+Ensure:
+
+- No duplicate stock entries
+- No duplicate opening stock
+- No duplicate closing stock
+- No P&L impact
+- No duplicate accounting entries
+- Correct batch/cost
+- Correct warehouse balances
+
+--------------------------------------------------
+FINAL ACCEPTANCE TEST
+
+Test this exact scenario:
+
+Warehouse A:
+
+Opening Stock = 1,000 KG
+
+Warehouse B:
+
+Opening Stock = 500 KG
+
+Transfer:
+
+100 KG from A → B
+
+Expected:
+
+Warehouse A = 900 KG
+
+Warehouse B = 600 KG
+
+Total company stock = 1,500 KG
+
+P&L impact = ₹0
+
+Revenue impact = ₹0
+
+Expense impact = ₹0
+
+COGS impact = ₹0
+
+Gross Profit impact = ₹0
+
+Net Profit impact = ₹0
+
+Then run the same test with:
+
+- Different product
+- Different batch
+- Different cost
+- Different date
+- Different month
+- Multiple transfers
+- Multiple warehouses
+
+--------------------------------------------------
+IMPORTANT IMPLEMENTATION INSTRUCTION
+--------------------------------------------------
+
+Before changing code:
+
+1. Trace the current stock transfer creation logic.
+2. Trace Transfer Out posting.
+3. Trace Transfer In posting.
+4. Trace Opening Stock calculation.
+5. Trace Closing Stock calculation.
+6. Trace Stock Ledger.
+7. Trace Inventory Valuation.
+8. Trace Day-wise P&L.
+9. Trace Monthly P&L.
+10. Trace COGS.
+11. Trace Gross Profit.
+12. Trace Net Profit.
+
+Identify exactly why Transfer Out is currently appearing as a negative amount in P&L.
+
+Fix the ROOT CAUSE.
+
+Do not simply hide Transfer Out from the P&L UI.
+
+The underlying P&L calculation must exclude internal stock transfers.
+
+Do not change unrelated modules.
+
+Do not modify production historical data automatically.
+
+First run the audit and show the current behavior versus expected behavior.
+
+Then implement the correction.
+
+After implementation run:
+
+- Typecheck
+- API tests
+- Stock transfer tests
+- Inventory reconciliation
+- P&L reconciliation
+- Day-wise P&L test
+- Monthly P&L test
+- Location-wise test
+- All Locations consolidated test
+- FIFO/FEFO test
+- Edit/cancel test
+- Regression tests
+
+Finally report:
+
+PASS / FAIL / WARNING
+
+and show exact before/after results for the test transfer.
+
+The final requirement is:
+
+TRANSFER IN → ADD TO RECEIVING LOCATION STOCK
+
+TRANSFER OUT → REMOVE FROM SOURCE LOCATION STOCK
+
+TRANSFER IN/OUT → MUST NOT AFFECT P&L
+
+TRANSFER IN/OUT → MUST NOT CREATE PROFIT OR LOSS
+
+TRANSFER IN/OUT → MUST NOT CHANGE TOTAL COMPANY STOCK
+
+TRANSFER COST → MUST MOVE WITH THE INVENTORY
+
+NEXT MONTH OPENING → MUST COME FROM PREVIOUS MONTH CLOSING ACCORDING TO THE EXISTING MONTHLY STOCK ARCHITECTURE
+
+NO DOUBLE COUNTING
+NO DUPLICATE POSTINGS
+NO ARTIFICIAL PROFIT/LOSS
