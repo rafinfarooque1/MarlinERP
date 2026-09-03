@@ -68,6 +68,32 @@ export interface StatementTarget { id: number; name: string; code: string | null
 export const fmt = (n: number) =>
   new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 2 }).format(n);
 
+/** Exact zero is the only value hidden by the valued-accounts presentation filter. */
+export const isNonZero = (value: number | null | undefined): boolean =>
+  Number.isFinite(Number(value)) && Number(value) !== 0;
+
+/** A month-wise row is valued if its total or any displayed month is non-zero. */
+export const hasDisplayedValue = (total: number | null | undefined, monthly?: number[]): boolean =>
+  isNonZero(total) || (monthly?.some(isNonZero) ?? false);
+
+/** Keep a zero-valued ancestor when it contains a valued descendant, so the
+ * existing expand/collapse hierarchy never hides a non-zero account. */
+export function ledgerTreeHasDisplayedValue(
+  node: LedgerNode,
+  valuesForNode?: (id: number) => number[] | undefined,
+): boolean {
+  return hasDisplayedValue(node.balance, valuesForNode?.(node.id))
+    || node.children.some(child => ledgerTreeHasDisplayedValue(child, valuesForNode));
+}
+
+export function groupTreeHasDisplayedValue(
+  group: GroupSummary,
+  valuesForNode?: (id: number) => number[] | undefined,
+): boolean {
+  return hasDisplayedValue(group.total, group.id == null ? undefined : valuesForNode?.(group.id))
+    || group.children.some(child => ledgerTreeHasDisplayedValue(child, valuesForNode));
+}
+
 /**
  * Which side an account normally sits on.
  *

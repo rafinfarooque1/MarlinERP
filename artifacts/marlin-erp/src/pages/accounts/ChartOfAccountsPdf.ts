@@ -16,7 +16,10 @@ import {
   type RGB, Painter, inr, stampFooters,
 } from '@workspace/pdf-kit';
 import { drawLetterhead, type LetterheadIssuer } from '@workspace/pdf-kit';
-import type { FinancialStatements, GroupSummary, LedgerNode } from './chartCommon';
+import {
+  hasDisplayedValue, ledgerTreeHasDisplayedValue, groupTreeHasDisplayedValue,
+  type FinancialStatements, type GroupSummary, type LedgerNode,
+} from './chartCommon';
 
 export type { LetterheadIssuer };
 
@@ -43,6 +46,8 @@ export interface CoaPdfOpts {
   locationLabel: string;
   /** "All Dates", "01-Apr-2026 – 18-Aug-2026", etc. */
   periodLabel: string;
+  /** Matches the on-screen valued-accounts presentation filter. */
+  showValuedOnly: boolean;
 }
 
 // ─── Internal row model ───────────────────────────────────────────────────────
@@ -57,6 +62,7 @@ interface Row {
   /** One value per month column (empty array for normal view). */
   months: number[];
   total: number;
+  visible?: boolean;
   /** For 'banner' rows: true = profit (green), false = loss (red). */
   profitPositive?: boolean;
 }
@@ -104,7 +110,10 @@ function ledgerRows(
   series: Record<string, number[]>,
   n: number,
   isOpen: (id: number) => boolean,
+  showValuedOnly: boolean,
 ): Row[] {
+  const valuesForNode = (id: number) => series[`n:${id}`];
+  if (showValuedOnly && !ledgerTreeHasDisplayedValue(node, valuesForNode)) return [];
   const out: Row[] = [];
   const mv = series[`n:${node.id}`] ?? zeroArr(n);
   const hasChildren = node.children.length > 0;
@@ -118,7 +127,7 @@ function ledgerRows(
   // Recurse only when this node is expanded on screen
   if (hasChildren && isOpen(node.id)) {
     for (const child of node.children) {
-      out.push(...ledgerRows(child, depth + 1, series, n, isOpen));
+      out.push(...ledgerRows(child, depth + 1, series, n, isOpen, showValuedOnly));
     }
   }
   return out;
@@ -134,14 +143,17 @@ function groupRows(
   series: Record<string, number[]>,
   n: number,
   isOpen: (id: number) => boolean,
+  showValuedOnly: boolean,
 ): Row[] {
+  const valuesForNode = (id: number) => series[`n:${id}`];
+  if (showValuedOnly && !groupTreeHasDisplayedValue(group, valuesForNode)) return [];
   const out: Row[] = [];
   const mv = series[seriesKey] ?? zeroArr(n);
   out.push({ kind: 'group', name: group.name, indent: 0, months: mv, total: group.total });
   // Expand children only when the group is open on screen
   if (group.id != null && isOpen(group.id)) {
     for (const child of group.children) {
-      out.push(...ledgerRows(child, 1, series, n, isOpen));
+      out.push(...ledgerRows(child, 1, series, n, isOpen, showValuedOnly));
     }
   }
   return out;
@@ -150,7 +162,7 @@ function groupRows(
 // ─── Main generator ───────────────────────────────────────────────────────────
 
 export async function generateChartOfAccountsPdf(opts: CoaPdfOpts): Promise<void> {
-  const { fs, statement, isOpen, mw, issuer, logoDataUrl, locationLabel, periodLabel } = opts;
+  const { fs, statement, isOpen, mw, issuer, logoDataUrl, locationLabel, periodLabel, showValuedOnly } = opts;
   const months  = mw ? mw.months : [];
   const series  = mw ? mw.series : {};
   const N       = months.length;
@@ -230,6 +242,7 @@ export async function generateChartOfAccountsPdf(opts: CoaPdfOpts): Promise<void
   const renderRows = (rows: Row[], startY: number): number => {
     let y = startY;
     for (const row of rows) {
+      if (row.visible === false) continue;
       const h = ROW_H[row.kind];
       if (row.kind !== 'spacer' && y + h > BOTTOM) {
         y = newPage();
@@ -306,7 +319,7 @@ export async function generateChartOfAccountsPdf(opts: CoaPdfOpts): Promise<void
   const neg = (a: number[])              => a.map(v => -v);
 
   const rowAuto  = (name: string, mv: number[], total: number): Row =>
-    ({ kind: 'auto',  name, indent: 2, months: mv, total });
+    ({ kind: 'auto',  name, indent: 2, months: mv, total, visible: !showValuedOnly || hasDisplayedValue(total, mv) });
   const rowTotal = (name: string, total: number, months?: number[]): Row =>
     ({ kind: 'total', name, indent: 0, months: months ?? zeroArr(N), total });
   const rowSect  = (name: string): Row =>
@@ -331,16 +344,16 @@ export async function generateChartOfAccountsPdf(opts: CoaPdfOpts): Promise<void
       rowSect('BALANCE SHEET'),
       rowSpacer(),
       rowPanel('LIABILITIES'),
-      ...groupRows(bs.liabilities.capitalAccount,     'grp:capital', series, N, isOpen),
-      ...groupRows(bs.liabilities.loans,              'grp:loans',   series, N, isOpen),
-      ...groupRows(bs.liabilities.currentLiabilities, 'grp:curliab', series, N, isOpen),
+       ...groupRows(bs.liabilities.capitalAccount,     'grp:capital', series, N, isOpen, showValuedOnly),
+       ...groupRows(bs.liabilities.loans,              'grp:loans',   series, N, isOpen, showValuedOnly),
+       ...groupRows(bs.liabilities.currentLiabilities, 'grp:curliab', series, N, isOpen, showValuedOnly),
       rowAuto('Reserves & Surplus (P&L)', sv('pandl'), bs.liabilities.pandlCarryForward),
       rowTotal('Total Liabilities', bs.liabilities.total, sv('liabTotal')),
       rowSpacer(),
       rowPanel('ASSETS'),
-      ...groupRows(bs.assets.fixedAssets,   'grp:fixed',     series, N, isOpen),
+       ...groupRows(bs.assets.fixedAssets,   'grp:fixed',     series, N, isOpen, showValuedOnly),
       rowAuto('Closing Stock', sv('bsClosingStock'), bs.assets.closingStock),
-      ...groupRows(bs.assets.currentAssets, 'grp:curassets', series, N, isOpen),
+       ...groupRows(bs.assets.currentAssets, 'grp:curassets', series, N, isOpen, showValuedOnly),
       rowTotal('Total Assets', bs.assets.total, sv('assetsTotal')),
     ];
 
@@ -394,7 +407,7 @@ export async function generateChartOfAccountsPdf(opts: CoaPdfOpts): Promise<void
             rowAuto('Net Purchases',          mwPur,                   exp.purchases),
           ]
         : [rowAuto('Purchase Account', mwPur, exp.purchases)]),
-      ...groupRows(exp.directExpenses, 'grp:direxp', series, N, isOpen),
+       ...groupRows(exp.directExpenses, 'grp:direxp', series, N, isOpen, showValuedOnly),
       ...(grossProfit > 0 ? [rowAuto('Gross Profit c/d', mwGpPos, grossProfit)] : []),
       rowTotal('Total', tradingExpTotal),
       rowSpacer(),
@@ -407,7 +420,7 @@ export async function generateChartOfAccountsPdf(opts: CoaPdfOpts): Promise<void
             rowAuto('Net Sales',           mwSales,                 inc.sales),
           ]
         : [rowAuto('Sales Account', mwSales, inc.sales)]),
-      ...groupRows(inc.directIncomes, 'grp:dirinc', series, N, isOpen),
+       ...groupRows(inc.directIncomes, 'grp:dirinc', series, N, isOpen, showValuedOnly),
       rowAuto('Closing Stock', sv('closingStock'), inc.closingStock),
       ...(grossProfit < 0 ? [rowAuto('Gross Loss c/d', mwGpNeg, -grossProfit)] : []),
       rowTotal('Total', tradingIncTotal),
@@ -427,13 +440,13 @@ export async function generateChartOfAccountsPdf(opts: CoaPdfOpts): Promise<void
       // ── P&L Account ──
       rowPanel('P&L ACCOUNT — EXPENSE (DEBIT)'),
       ...(grossProfit < 0 ? [rowAuto('Gross Loss b/d', mwGpNeg, -grossProfit)] : []),
-      ...groupRows(exp.indirectExpenses, 'grp:indexp', series, N, isOpen),
+       ...groupRows(exp.indirectExpenses, 'grp:indexp', series, N, isOpen, showValuedOnly),
       rowTotal('Total', plExpTotal),
       rowSpacer(),
 
       rowPanel('P&L ACCOUNT — INCOME (CREDIT)'),
       ...(grossProfit >= 0 ? [rowAuto('Gross Profit b/d', mwGpPos, grossProfit)] : []),
-      ...groupRows(inc.indirectIncomes, 'grp:indinc', series, N, isOpen),
+       ...groupRows(inc.indirectIncomes, 'grp:indinc', series, N, isOpen, showValuedOnly),
       rowTotal('Total', plIncTotal),
       rowSpacer(),
 

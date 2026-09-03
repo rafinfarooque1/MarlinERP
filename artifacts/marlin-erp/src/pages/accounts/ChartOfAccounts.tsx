@@ -1,9 +1,10 @@
-import { useState, useMemo } from 'react';
+import { createContext, useContext, useState, useMemo } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { customFetch } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Input } from '@/components/ui/input';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
@@ -20,11 +21,22 @@ import { useClearOutletSelection } from '@/lib/useFeatureFlags';
  * statement views cannot drift apart on formatting or payload shape ────────── */
 import {
   fmt, BalTag, naturalSide, useStatementExpansion, collectExpandableIds,
+  hasDisplayedValue, ledgerTreeHasDisplayedValue, groupTreeHasDisplayedValue,
   type ALType, type StockItem, type LedgerNode, type GroupSummary,
   type FinancialStatements, type StatementTarget, type StatementExpansion,
 } from './chartCommon';
 import { ChartHierarchy } from './ChartHierarchy';
 import { PageHeader } from '@/components/app/page-header';
+
+/* The checkbox is presentation-only. This context lets normal, month-wise and
+ * recursive rows apply the same filter without changing the books payload or
+ * duplicating the balance calculation. */
+interface ValueFilterContextValue {
+  enabled: boolean;
+  valuesForNode?: (id: number) => number[] | undefined;
+}
+const ValueFilterContext = createContext<ValueFilterContextValue>({ enabled: false });
+const useValueFilter = () => useContext(ValueFilterContext);
 
 /* ── helpers ─────────────────────────────────────────────────────────────────── */
 function computeDateRange(period: string, from: string, to: string) {
@@ -202,6 +214,7 @@ function LedgerLine({ node, depth, onCreated, expansion, onBankAdd, onDelete, on
   const balance = Math.abs(node.balance);
   const isSystem = node.code != null;
   const canDrag = !isSystem;
+  const { enabled: valuedOnly, valuesForNode } = useValueFilter();
 
   const [renaming, setRenaming] = useState(false);
   const [renameVal, setRenameVal] = useState('');
@@ -219,6 +232,7 @@ function LedgerLine({ node, depth, onCreated, expansion, onBankAdd, onDelete, on
 
   // Drag-to-move is an edit; disable dragging entirely without edit rights.
   const allowDrag = canDrag && !!canEdit;
+  if (valuedOnly && !ledgerTreeHasDisplayedValue(node, valuesForNode)) return null;
 
   /* ── sub-group rendering ────────────────────────────────────────────────── */
   if (node.isGroup) {
@@ -386,12 +400,13 @@ function GroupBlock({ group, onCreated, expansion, onBankAdd, onDelete, onRename
   canAdd?: boolean; canEdit?: boolean; canDelete?: boolean;
 }) {
   const [dropOver, setDropOver] = useState(false);
+  const { enabled: valuedOnly, valuesForNode } = useValueFilter();
   const groupId = group.id;
   const hasChildren = group.children.length > 0;
   // Group heads are top level, so they stay on screen by default; what is inside
   // them starts closed. The head keeps showing group.total either way.
   const open = hasChildren && groupId != null && expansion.isOpen(groupId);
-  if (!groupId) return null;
+  if (!groupId || (valuedOnly && !groupTreeHasDisplayedValue(group, valuesForNode))) return null;
 
   return (
     <div className="mb-3">
@@ -449,6 +464,8 @@ function GroupBlock({ group, onCreated, expansion, onBankAdd, onDelete, onRename
 function AutoRow({ label, amount, sub, accent, depth = 0 }: {
   label: string; amount: number; sub?: string; accent?: string; depth?: number;
 }) {
+  const { enabled: valuedOnly } = useValueFilter();
+  if (valuedOnly && !hasDisplayedValue(amount)) return null;
   const pl = `${8 + depth * 16}px`;
   return (
     <div className={`flex items-center gap-2 py-1.5 ${accent ?? ''}`} style={{ paddingLeft: pl }}>
@@ -462,6 +479,8 @@ function AutoRow({ label, amount, sub, accent, depth = 0 }: {
 /* ── stock breakdown ────────────────────────────────────────────────────────── */
 function StockBlock({ label, items, total }: { label: string; items: StockItem[]; total: number }) {
   const [open, setOpen] = useState(false);
+  const { enabled: valuedOnly } = useValueFilter();
+  if (valuedOnly && !hasDisplayedValue(total) && !items.some(item => hasDisplayedValue(item.total))) return null;
   return (
     <div className="mb-1">
       <button
@@ -659,6 +678,8 @@ function MwLedgerLine({ node, depth, monthly, expansion }: {
   const open = hasChildren && expansion.isOpen(node.id);
   const pl = `${8 + depth * 16}px`;
   const isLeaf = !hasChildren;
+  const { enabled: valuedOnly, valuesForNode } = useValueFilter();
+  if (valuedOnly && !ledgerTreeHasDisplayedValue(node, valuesForNode)) return null;
   return (
     <div>
       <div className="flex items-center w-max min-w-full">
@@ -709,6 +730,8 @@ function MwGroupBlock({ group, seriesKey, monthly, expansion }: {
   const groupId = group.id;
   const hasChildren = group.children.length > 0;
   const open = hasChildren && groupId != null && expansion.isOpen(groupId);
+  const { enabled: valuedOnly, valuesForNode } = useValueFilter();
+  if (valuedOnly && !groupTreeHasDisplayedValue(group, valuesForNode)) return null;
   return (
     <div className="mb-2">
       <div className="flex items-center w-max min-w-full">
@@ -744,6 +767,8 @@ function MwAutoRow({ label, values, total, monthly, accent, sub }: {
   label: string; values: number[]; total: number; monthly: MonthlyView;
   accent?: string; sub?: string;
 }) {
+  const { enabled: valuedOnly } = useValueFilter();
+  if (valuedOnly && !hasDisplayedValue(total, values)) return null;
   return (
     <div className="flex items-center w-max min-w-full">
       <div className={`${MW_NAME} flex items-center gap-2 py-1.5 pl-3 pr-2`}>
@@ -782,7 +807,7 @@ function MwBannerChips({ monthly, values, testPrefix }: { monthly: MonthlyView; 
  * between the name and the whole-range figure. Without `monthly` the render
  * is byte-for-byte what it always was.
  */
-function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, onRename, onMove, onViewStatement, onManage, canAdd, canEdit, canDelete, monthly, bsExpansion, plExpansion, activeTab, onTabChange }: {
+function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, onRename, onMove, onViewStatement, onManage, canAdd, canEdit, canDelete, monthly, bsExpansion, plExpansion, activeTab, onTabChange, showValuedOnly }: {
   fs: FinancialStatements | undefined;
   isLoading: boolean; isError: boolean; error: unknown;
   onCreated: () => void;
@@ -800,6 +825,7 @@ function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, on
   plExpansion: StatementExpansion;
   activeTab: 'balance_sheet' | 'profit_loss';
   onTabChange: (tab: 'balance_sheet' | 'profit_loss') => void;
+  showValuedOnly: boolean;
 }) {
 
   const bs  = fs?.balanceSheet;
@@ -869,7 +895,11 @@ function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, on
     );
   }
   return (
-    <>
+    <ValueFilterContext.Provider value={{
+      enabled: showValuedOnly,
+      valuesForNode: monthly ? (id: number) => monthly.series[`n:${id}`] : undefined,
+    }}>
+      <>
 
           {/* ── Integrity warning banner ──
               'difference' is no longer a plug figure — on healthy books it is ~0.
@@ -1279,7 +1309,8 @@ function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, on
               )}
             </TabsContent>
           </Tabs>
-    </>
+      </>
+    </ValueFilterContext.Provider>
   );
 }
 
@@ -1302,6 +1333,7 @@ export default function ChartOfAccounts() {
   // Month Wise is ONE toggle: ON folds month columns into the statements
   // below; OFF leaves the page exactly as it always was. No separate views.
   const [monthWise, setMonthWise] = useState(false);
+  const [showValuedOnly, setShowValuedOnly] = useState(false);
   // The sheet remembers WHICH period asked for it, so a ledger opened from
   // a month cell shows exactly that month's entries.
   const [selectedLedger, setSelectedLedger] = useState<{ node: StatementTarget; fromDate?: string; toDate?: string } | null>(null);
@@ -1445,6 +1477,7 @@ export default function ChartOfAccounts() {
         logoDataUrl,
         locationLabel,
         periodLabel,
+         showValuedOnly,
       });
     } catch (e: any) {
       toast.error(e?.message ?? 'Could not generate PDF');
@@ -1560,6 +1593,17 @@ export default function ChartOfAccounts() {
           >
             <BarChart3 className="w-3.5 h-3.5" /> Month Wise
           </button>
+          <label
+            className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs font-medium text-muted-foreground hover:text-foreground cursor-pointer"
+            data-testid="coa-valued-accounts-filter"
+          >
+            <Checkbox
+              checked={showValuedOnly}
+              onCheckedChange={value => setShowValuedOnly(value === true)}
+              aria-label="Show Valued Accounts Only"
+            />
+            <span>Show Valued Accounts Only</span>
+          </label>
           {period === 'custom' && (
             <div className="flex items-center gap-1.5">
               <Input type="date" value={customFrom} onChange={e => setFrom(e.target.value)} className="h-8 text-xs w-36" />
@@ -1613,6 +1657,7 @@ export default function ChartOfAccounts() {
           plExpansion={plExpansion}
           activeTab={activeTab}
           onTabChange={setActiveTab}
+           showValuedOnly={showValuedOnly}
           monthly={monthWise && mwData ? {
             months: mwData.months,
             series: mwData.series,
