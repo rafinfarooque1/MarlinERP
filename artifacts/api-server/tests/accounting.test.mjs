@@ -8,7 +8,7 @@
  *  1. Sale creation → derived postings balance (Dr Cash = Cr Sales + Cr Output GST)
  *  2. Purchase receipt → Dr Purchases + Dr Input GST / Cr Vendor (balanced)
  *  3. Payroll approval → Journal Voucher Dr SAL-EMP / Cr SAL-PAY
- *  4. Stock transfer with different GSTINs → Dispatch JV Dr BRANCH-DEBTOR / Cr Sales + Cr GST
+ *  4. Stock transfer with different GSTINs → Dispatch JV Dr BRANCH-DEBTOR / Cr transfer clearing + Cr GST
  *
  * Design notes:
  *  - Tests compare full-trial-balance totals before/after each operation. This
@@ -77,6 +77,22 @@ async function snapshotTB() {
     byCode: Object.fromEntries(rows.filter(r => r.code).map(r => [r.code, r])),
     rows,
   };
+}
+
+/** Snapshot the shared P&L figures, which all transfer modes must preserve. */
+async function snapshotPnL() {
+  const fs = await get('/accounts/financial-statements');
+  const summary = fs.data?.profitAndLoss?.summary ?? {};
+  const expenses = fs.data?.profitAndLoss?.expenses ?? {};
+  const incomes = fs.data?.profitAndLoss?.incomes ?? {};
+  return Object.fromEntries([
+    ['revenue', summary.revenue],
+    ['costOfGoodsSold', summary.costOfGoodsSold],
+    ['grossProfit', summary.grossProfit],
+    ['netProfit', summary.netProfit],
+    ['openingStock', expenses.openingStock],
+    ['closingStock', incomes.closingStock],
+  ].map(([key, value]) => [key, round2(Number(value ?? 0))]));
 }
 
 // ── Auth ───────────────────────────────────────────────────────────────────
@@ -420,10 +436,10 @@ if (!testHierarchy?.id) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TEST 4: Stock transfer with different GSTINs → Dispatch JV Dr BRANCH-DEBTOR / Cr Sales + Cr GST
+// TEST 4: Stock transfer with different GSTINs → Dispatch JV is P&L-neutral
 // ─────────────────────────────────────────────────────────────────────────────
 
-console.log('\n[4] Cross-GSTIN stock transfer → Dispatch JV with correct Dr/Cr split');
+console.log('\n[4] Cross-GSTIN stock transfer → Dispatch JV with P&L-neutral clearing');
 
 // Find a pair of locations with different, non-empty GSTINs.
 // Accept both intrastate (CGST+SGST) and interstate (IGST) pairs.
@@ -470,6 +486,7 @@ if (!srcLoc || !dstLoc) {
   const jvCountBefore = (jvBefore.data ?? []).length;
 
   const tbBefore = await snapshotTB();
+  const pnlBefore = await snapshotPnL();
 
   const transferRes = await post('/stock/transfers', {
     fromType:     srcLoc.type,
@@ -605,9 +622,10 @@ if (!srcLoc || !dstLoc) {
         // Dr line: STD-BRANCH-DEBTOR (total with GST)
         const drBranchDebtor = lines.find(l => l.ledgerCode === 'STD-BRANCH-DEBTOR' && Number(l.debit) > 0);
 
-        // Cr lines: Sales + Output GST heads
-        const crSales  = lines.find(l => Number(l.credit) > 0 && l.ledgerCode !== 'STD-BRANCH-DEBTOR'
-          && l.ledgerCode !== 'STD-OUT-CGST' && l.ledgerCode !== 'STD-OUT-SGST' && l.ledgerCode !== 'STD-OUT-IGST');
+        // Cr lines: transfer clearing + Output GST heads. The taxable value
+        // must never land on Sales in the legacy voucher path.
+        const crTransfer = lines.find(l => l.ledgerCode === 'STD-BRANCH-TRF' && Number(l.credit) > 0);
+        const crSales  = lines.find(l => l.ledgerCode === 'STD-SALES' && Number(l.credit) > 0);
         const crGstIg  = lines.find(l => l.ledgerCode === 'STD-OUT-IGST'  && Number(l.credit) > 0);
         const crGstCg  = lines.find(l => l.ledgerCode === 'STD-OUT-CGST'  && Number(l.credit) > 0);
         const crGstSg  = lines.find(l => l.ledgerCode === 'STD-OUT-SGST'  && Number(l.credit) > 0);
@@ -617,7 +635,8 @@ if (!srcLoc || !dstLoc) {
         );
 
         assert('Dispatch JV debits STD-BRANCH-DEBTOR', !!drBranchDebtor, `lines=${linesSummary}`);
-        assert('Dispatch JV has a Sales credit line', !!crSales, `lines=${linesSummary}`);
+        assert('Dispatch JV credits STD-BRANCH-TRF', !!crTransfer, `lines=${linesSummary}`);
+        assert('Dispatch JV has no Sales credit line', !crSales, `lines=${linesSummary}`);
 
         if (expectedTaxType === 'igst') {
           assert('Dispatch JV credits STD-OUT-IGST (interstate)', !!crGstIg, `lines=${linesSummary}`);
@@ -659,6 +678,29 @@ if (!srcLoc || !dstLoc) {
     const tbDiff  = Math.abs(round2(tbAfter.totalDr - tbAfter.totalCr));
     assert('Trial balance balanced after stock transfer', tbDiff < 0.01,
       `diff=${tbDiff}`);
+
+    const pnlAfter = await snapshotPnL();
+    for (const key of Object.keys(pnlBefore)) {
+      assert(`Transfer leaves P&L ${key} unchanged`,
+        Math.abs(Number(pnlAfter[key]) - Number(pnlBefore[key])) < 0.01,
+        `before=${pnlBefore[key]} after=${pnlAfter[key]}`);
+    }
+
+    // Receipt must be neutral too. This also exercises the matching
+    // branch-transfer purchase/receive leg for both document modes.
+    const approveRes = await patch(`/stock/transfers/${createdId}/approve`, {
+      approvedBy: 'Accounting Transfer Probe',
+    });
+    assert('Stock transfer received successfully', !approveRes.data?.error,
+      JSON.stringify(approveRes.data).slice(0, 300));
+    if (!approveRes.data?.error) {
+      const pnlAfterReceipt = await snapshotPnL();
+      for (const key of Object.keys(pnlBefore)) {
+        assert(`Transfer receipt leaves P&L ${key} unchanged`,
+          Math.abs(Number(pnlAfterReceipt[key]) - Number(pnlBefore[key])) < 0.01,
+          `before=${pnlBefore[key]} after=${pnlAfterReceipt[key]}`);
+      }
+    }
   }
 }
 
