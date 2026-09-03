@@ -1,0 +1,154 @@
+IMPLEMENT: “SHOW VALUED ACCOUNTS ONLY” CHECKBOX
+
+Add a checkbox to the existing Chart of Accounts / accounting report filter area:
+
+☐ Show Valued Accounts Only
+
+REQUIRED BEHAVIOR:
+
+1. CHECKBOX DEFAULT
+- Default state = UNCHECKED.
+- When unchecked, keep the existing behavior exactly as it is.
+- Show all applicable accounts, including accounts with zero balance/value.
+
+2. WHEN CHECKED
+When “Show Valued Accounts Only” is checked:
+- Display ONLY accounts whose calculated value/balance for the currently selected:
+  - Location
+  - Date/period
+  - Financial year
+  - Report type
+  - View mode
+  is NON-ZERO.
+- Hide accounts whose calculated value is exactly zero.
+- Do NOT delete, deactivate, archive, or modify any account in the database.
+- This is display/report filtering only.
+
+3. ACCOUNT VALUE CALCULATION
+Use the SAME accounting calculation already used by the current report.
+Do not create a separate or inconsistent balance calculation.
+
+Examples:
+- Sales = ₹5,000 → SHOW
+- Purchase = ₹0 → HIDE
+- Expense = ₹1,250 → SHOW
+- Cash = ₹0 → HIDE
+- Bank = ₹25,000 → SHOW
+- Ledger with debit/credit activity resulting in non-zero balance → SHOW
+- Ledger with transactions that net exactly to zero → HIDE
+
+4. PARENT / GROUP ACCOUNTS
+For parent/group accounts:
+- Calculate the value using the existing report/accounting hierarchy logic.
+- Show a parent/group account if its calculated displayed value is non-zero.
+- Hide it if its calculated value is zero.
+- Do not break the existing expand/collapse hierarchy.
+
+5. MONTH-WISE VIEW
+If the user selects Month Wise:
+- The checkbox must work with the existing month-wise Chart of Accounts display.
+- An account should be shown if it has a non-zero value in the applicable report calculation.
+- Do not create a separate table or separate report.
+- Keep the existing month columns and Chart of Accounts layout.
+
+6. LOCATION FILTER
+The checkbox must respect the currently selected location:
+- Specific warehouse/location → calculate only that location's values.
+- Head Office → calculate Head Office values according to existing location rules.
+- All Locations → calculate consolidated values according to existing All Locations logic.
+- Never use values from unauthorized locations merely to decide whether an account is visible.
+- Server-side location/security rules must remain unchanged.
+
+7. REAL-TIME UI
+When the checkbox is toggled:
+- Refresh/re-filter the displayed accounts immediately.
+- No page reload should be required unless the existing architecture requires it.
+- Ticking the checkbox = hide zero accounts.
+- Unticking the checkbox = restore all accounts.
+- Preserve the user's current:
+  - report selection
+  - location
+  - date range
+  - month-wise selection
+  - expanded/collapsed groups
+  wherever reasonably possible.
+
+8. PDF / PRINT / EXPORT
+The same checkbox state must control exported reports:
+- If checked → PDF/print/export should contain only valued/non-zero accounts.
+- If unchecked → PDF/print/export should contain all accounts as before.
+- Do not show hidden zero accounts in the PDF/print/export when the checkbox is checked.
+
+9. DO NOT CHANGE ACCOUNTING
+This feature must NOT:
+- create journal entries
+- modify balances
+- modify ledgers
+- modify transactions
+- delete accounts
+- deactivate accounts
+- alter opening balances
+- alter closing balances
+- alter P&L
+- alter Balance Sheet
+- alter GST
+- alter inventory
+- alter any accounting calculation
+
+It is strictly a presentation/report filtering feature.
+
+10. BACKEND
+If the report data is generated server-side:
+- Implement the filter server-side or ensure the server returns enough accurate calculated values to safely filter.
+- Do NOT rely only on frontend string formatting.
+- Do not introduce N+1 queries.
+- Reuse existing report/account balance queries wherever possible.
+
+11. UI DESIGN
+Place the checkbox alongside the existing report filters/options.
+Label exactly:
+
+“Show Valued Accounts Only”
+
+Use the existing checkbox component/style used elsewhere in the ERP.
+Do not create a visually inconsistent control.
+
+12. TEST CASES
+
+Test at minimum:
+
+A. Checkbox OFF
+- Zero accounts visible.
+- Non-zero accounts visible.
+- Existing report matches current behavior.
+
+B. Checkbox ON
+- Zero-value accounts hidden.
+- Non-zero accounts visible.
+- No account with a non-zero calculated value is accidentally hidden.
+
+C. Specific location
+- Only that location's values determine visibility.
+
+D. All Locations
+- Consolidated value determines visibility.
+
+E. Month Wise
+- Month-wise display remains intact.
+- Zero-value accounts are hidden when checked.
+
+F. PDF/Print
+- Checked → zero accounts excluded.
+- Unchecked → zero accounts included.
+
+G. Toggle
+- ON → filtered list.
+- OFF → full list restored.
+
+H. Accounting integrity
+- Confirm no database/accounting transaction is changed by toggling the checkbox.
+
+IMPORTANT:
+First inspect the existing Chart of Accounts/report implementation and reuse its existing balance/value calculation logic. Do not build a parallel accounting calculation.
+
+Implement this as a clean, production-safe enhancement without disturbing existing accounting, location isolation, report calculations, or PDF layouts.
