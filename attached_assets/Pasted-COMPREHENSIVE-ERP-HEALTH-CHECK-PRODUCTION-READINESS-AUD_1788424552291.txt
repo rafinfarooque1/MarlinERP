@@ -1,0 +1,1218 @@
+COMPREHENSIVE ERP HEALTH CHECK / PRODUCTION READINESS AUDIT
+
+IMPORTANT:
+Do NOT immediately modify, delete, migrate, or "fix" anything.
+
+First perform a complete health check of the ERP system and compare the actual running application, backend, database, accounting logic, permissions, and reports.
+
+The purpose is to determine whether the ERP is working correctly end-to-end in the LIVE/PUBLISHED environment.
+
+This is a READ-ONLY AUDIT FIRST.
+
+==================================================
+1. ENVIRONMENT & DEPLOYMENT HEALTH
+==================================================
+
+Check:
+
+- Development/preview environment
+- Published/live environment
+- API server
+- Web frontend
+- Database connection
+- Environment variables
+- API/client version compatibility
+- Build version
+- Running bundle/version
+- Database schema version
+- Pending migrations
+- Failed migrations
+- Runtime errors
+- API errors
+- Browser console errors
+- Server errors
+- Failed requests
+- 404/401/403/500 responses
+- Broken routes
+- Broken API endpoints
+
+Verify that the LIVE published application is actually running the latest intended code.
+
+IMPORTANT:
+Do not assume that a successful preview build means production is correct.
+
+Verify the actual published application.
+
+==================================================
+2. DATABASE HEALTH
+==================================================
+
+Inspect the complete PostgreSQL database.
+
+Check:
+
+- Tables
+- Columns
+- Primary keys
+- Foreign keys
+- Unique constraints
+- Check constraints
+- Indexes
+- Missing indexes where clearly required
+- Triggers
+- Functions
+- Sequences
+- Views
+- Materialized views if any
+- Orphan records
+- Duplicate records
+- NULL values in required fields
+- Invalid foreign-key references
+- Broken relationships
+- Migration inconsistencies
+- Schema differences between environments
+
+Check especially:
+
+- Employees
+- Locations
+- Warehouses
+- Outlets
+- Customers
+- Vendors
+- Products
+- Categories
+- Units
+- Batches
+- Expiry dates
+- Stock
+- Stock ledger
+- Purchases
+- Purchase lines
+- Sales
+- Sale lines
+- Quotations
+- Quotation lines
+- Asset purchases
+- Fixed assets
+- Expenses
+- Payments
+- Receipts
+- Cash accounts
+- Bank accounts
+- Journal vouchers
+- Journal lines
+- General ledger
+- Payroll
+- Attendance
+- Leave
+- Advances
+- PF
+- ESI
+- Rent
+- GST
+- E-way bill data
+- Backup records
+- Audit logs
+
+Do NOT alter production data during this audit.
+
+==================================================
+3. AUTHENTICATION & USER SECURITY
+==================================================
+
+Test:
+
+- Login
+- Logout
+- Session expiration
+- Invalid login
+- Password handling
+- Password reset if available
+- Session security
+- Unauthorized API access
+- Role-based access
+- Permission checks
+- Admin access
+- Employee access
+- Warehouse employee access
+- Head Office access
+
+Verify that frontend restrictions are NOT the only security layer.
+
+Every sensitive API endpoint must enforce authorization server-side.
+
+Check for:
+
+- IDOR vulnerabilities
+- Unauthorized location access
+- Unauthorized employee access
+- Unauthorized accounting access
+- Unauthorized customer/vendor access
+- Unauthorized financial data access
+
+==================================================
+4. LOCATION-BASED DATA ISOLATION
+==================================================
+
+This is CRITICAL.
+
+Verify the current location architecture.
+
+Warehouse employees should only see data belonging to their assigned warehouse/location.
+
+Head Office/authorized administrators should be able to see all authorized locations.
+
+Test:
+
+- Customers
+- Vendors
+- Sales
+- Purchases
+- Expenses
+- Payments
+- Receipts
+- Cash
+- Bank
+- Stock
+- Stock transfers
+- Production
+- Assets
+- Asset purchases
+- Attendance
+- Payroll
+- Reports
+- Ledgers
+- Dashboard
+- Quotations
+
+Test both:
+
+1. UI filtering
+2. Direct API access
+
+A warehouse employee must NOT be able to retrieve another warehouse's data by manipulating an ID or API request.
+
+==================================================
+5. MASTER DATA HEALTH
+==================================================
+
+Check:
+
+Products:
+- Duplicate SKU
+- Duplicate barcode
+- Missing unit
+- Missing category
+- Invalid GST rate
+- Invalid MRP
+- Invalid cost
+- Missing batch/expiry where required
+
+Customers:
+- Duplicate customers
+- Missing location
+- Invalid GSTIN
+- Missing required information
+
+Vendors:
+- Duplicate vendors
+- Missing location
+- Invalid GSTIN
+- Missing required information
+
+Employees:
+- Duplicate employees
+- Missing location
+- Invalid role
+- Invalid permissions
+
+Locations:
+- Duplicate locations
+- Incorrect type
+- Incorrect parent relationship
+- Disabled outlet references
+
+==================================================
+6. PURCHASE MODULE
+==================================================
+
+Test complete purchase lifecycle:
+
+Create Purchase
+→ Save
+→ Post
+→ Stock update
+→ Stock ledger
+→ Batch creation
+→ Inventory valuation
+→ Vendor ledger
+→ Accounts payable
+→ GST
+→ Cash/Bank/Payable posting
+→ Reports
+→ Dashboard
+
+Verify:
+
+- Purchase totals
+- GST
+- Discounts
+- Other charges
+- Vendor balance
+- Stock quantity
+- Stock value
+- Accounting entries
+- Location stamping
+- Edit behavior
+- Cancellation behavior
+
+Check for duplicate accounting entries.
+
+==================================================
+7. SALES / POS MODULE
+==================================================
+
+Test:
+
+- Cash sale
+- Credit sale
+- Partial payment if supported
+- Multiple payments if supported
+- Discounts
+- GST
+- Other charges
+- Returns
+- Cancellation
+- Editing
+- Cash → Credit conversion
+- Credit → Cash conversion
+
+CRITICAL:
+
+Verify that when a sale is edited from CASH to CREDIT:
+
+- Payment status changes correctly
+- Customer receivable is created correctly
+- Cash is reversed correctly
+- No duplicate payment remains
+- Customer outstanding is correct
+- Vendor/customer ledgers remain correct
+- Journal entries remain balanced
+
+Verify stock:
+
+Sale
+→ Stock deduction
+→ Stock ledger
+→ COGS
+→ Inventory value
+→ Gross profit
+
+Verify that every completed sale creates the correct stock ledger movement.
+
+==================================================
+8. QUOTATION MODULE
+==================================================
+
+Test:
+
+- Create quotation
+- Edit quotation
+- Multiple items
+- Discounts
+- GST
+- Other Charges
+- Direct Income charge ledger
+- Totals
+- PDF
+- Location
+- Customer
+- Expiry
+- Conversion to sale if supported
+
+Verify quotation charges are separate from product revenue.
+
+Quotation charge functionality should not accidentally modify purchase or sales accounting.
+
+==================================================
+9. OTHER CHARGES
+==================================================
+
+Verify:
+
+- Multiple charges
+- Charge amount
+- Direct Income ledger restriction
+- No GST on charge unless explicitly configured
+- Correct invoice total
+- Correct receivable/payment amount
+- Correct accounting posting
+- Correct location
+- Correct PDF display
+- Edit behavior
+- Delete/replace behavior
+- No duplicate postings
+
+Check both:
+
+Sales/POS
+Quotation
+
+==================================================
+10. ASSET PURCHASE MODULE
+==================================================
+
+Perform a specific deep audit.
+
+For every asset purchase verify:
+
+Asset Purchase
+→ Fixed Asset record
+→ Vendor ledger
+→ Fixed Asset ledger
+→ Journal voucher
+→ Journal lines
+→ Payment/Credit status
+→ Location
+→ Reports
+→ Balance Sheet
+
+CRITICAL REQUIREMENT:
+
+Every valid asset purchase must appear correctly in:
+
+1. Vendor Ledger
+2. Fixed Asset Ledger
+3. Journal Voucher
+4. Balance Sheet / Fixed Assets where applicable
+
+Check existing LIVE asset purchases.
+
+DO NOT only test newly created purchases.
+
+Identify historical/live asset purchases that already exist but are missing:
+
+- Vendor ledger entry
+- Fixed asset ledger entry
+- Journal voucher
+- Location stamp
+- Correct balance
+
+Report every affected live record.
+
+Do NOT modify those records during the audit.
+
+==================================================
+11. EXPENSES
+==================================================
+
+Test:
+
+- Expense creation
+- Category
+- Ledger
+- Location
+- Payment
+- Cash
+- Bank
+- Vendor if applicable
+- Attachment
+- Edit
+- Cancellation
+- Accounting
+- Reports
+
+Verify expenses correctly affect:
+
+- P&L
+- Cash/Bank
+- Payables where applicable
+- Location reports
+- Net profit
+
+==================================================
+12. CASH & BANK
+==================================================
+
+Test:
+
+- Cash accounts
+- Bank accounts
+- Cash Book
+- Bank Book
+- Day Book
+- Payments
+- Receipts
+- Opening balance
+- Closing balance
+- Running balance
+- Transfers
+- Reconciliation
+- Location access
+
+CRITICAL:
+
+If a user has permission to view:
+
+- Cash Book
+- Bank Book
+- Day Book
+
+the data must actually be visible to that user.
+
+Do not only show the module/menu.
+
+Verify backend permissions and location filtering.
+
+Also verify that cash/bank accounts cannot incorrectly be assigned to multiple locations if the current design requires one account per location.
+
+==================================================
+13. PAYMENTS & RECEIPTS
+==================================================
+
+Test:
+
+Payment:
+→ Voucher
+→ Ledger
+→ Cash/Bank
+→ Vendor/customer balance
+→ Location
+→ PDF
+
+Receipt:
+→ Voucher
+→ Ledger
+→ Cash/Bank
+→ Customer balance
+→ Location
+→ PDF
+
+Verify:
+
+- Correct debit/credit
+- Correct amount
+- Correct ledger
+- Correct location
+- Correct running balance
+- No duplicate posting
+- Edit/cancel behavior
+- Permission behavior
+
+==================================================
+14. VOUCHER PDF
+==================================================
+
+Test:
+
+- Payment Voucher
+- Receipt Voucher
+- Journal Voucher
+
+Verify:
+
+- A5 portrait
+- A4 landscape if configured
+- Correct placement
+- Correct location
+- Correct company/warehouse information
+- Correct voucher number
+- Correct date
+- Correct amount
+- Correct narration
+- Correct signatures
+- No unwanted blank space
+- No unwanted footer text
+
+IMPORTANT:
+
+Verify that the unwanted:
+
+"This is a computer-generated voucher."
+
+text has been removed from Payment Voucher and Receipt Voucher PDFs if that requirement is currently active.
+
+Do not accidentally remove required legal information from invoices.
+
+==================================================
+15. STOCK TRANSFER
+==================================================
+
+Test:
+
+Warehouse A
+→ Dispatch
+→ In Transit
+→ Warehouse B receives
+→ Stock increases
+
+Verify:
+
+- Source stock decreases
+- Destination stock increases
+- Stock ledger entries
+- Batch tracking
+- Expiry
+- FIFO/FEFO
+- Transfer status
+- Accounting
+- GST for different GST registrations
+- Same GST registration behavior
+- E-way bill where required
+- Location stamping
+
+CRITICAL:
+
+A received stock transfer must NOT be incorrectly treated as ordinary opening stock.
+
+It must remain traceable as transferred stock in the stock ledger while contributing correctly to the receiving warehouse's stock balance.
+
+==================================================
+16. INVENTORY & VALUATION
+==================================================
+
+Verify:
+
+- Current stock
+- Opening stock
+- Closing stock
+- Stock ledger
+- Batch stock
+- Expiry
+- FIFO
+- FEFO
+- Cost calculation
+- Inventory valuation
+- Negative stock
+- Reserved quantity
+- In-transit stock
+
+Reconcile:
+
+Opening Stock
++ Purchases
++ Production
++ Transfers In
+- Sales
+- Transfers Out
+- Adjustments
+= Closing Stock
+
+Investigate any mismatch.
+
+==================================================
+17. PRODUCTION
+==================================================
+
+Test:
+
+Raw Materials
++ Packaging
++ Labour
++ Overhead
+= Production Cost
+
+Verify:
+
+- BOM
+- Raw material consumption
+- Packaging consumption
+- Finished goods creation
+- Batch
+- Expiry
+- Cost
+- Stock ledger
+- Inventory valuation
+- Location
+- Accounting
+- Profitability
+
+Check for duplicate consumption or production entries.
+
+==================================================
+18. ACCOUNTING ENGINE
+==================================================
+
+Perform a complete accounting integrity test.
+
+For every operational transaction verify:
+
+Debit = Credit
+
+Test:
+
+- Purchases
+- Sales
+- Expenses
+- Payments
+- Receipts
+- Asset purchases
+- Production
+- Stock transfers where accounting applies
+- Rent
+- Payroll
+- GST
+
+Verify:
+
+- Journal
+- General Ledger
+- Trial Balance
+- Profit & Loss
+- Balance Sheet
+- Customer Ledger
+- Vendor Ledger
+- Cash Book
+- Bank Book
+
+CRITICAL:
+
+Trial Balance must balance.
+
+Identify any orphan journal entries.
+
+Identify any operational transaction without required accounting entries.
+
+Identify accounting entries without a valid source transaction.
+
+==================================================
+19. GST
+==================================================
+
+Check:
+
+- CGST
+- SGST
+- IGST
+- GSTIN
+- Place of supply
+- Intra-state
+- Inter-state
+- Branch transfers
+- Different GST registrations
+- Purchase GST
+- Sales GST
+- Credit notes
+- Returns
+
+Verify GST calculations against transaction totals.
+
+Verify branch transfers between different GST registrations are treated correctly.
+
+==================================================
+20. PAYROLL / HR
+==================================================
+
+Test:
+
+- Employee master
+- Attendance
+- Bulk attendance
+- Individual attendance Fix
+- Leave
+- Salary
+- Daily wages
+- Advances
+- PF
+- ESI
+- Payroll
+- Payslip
+- Salary expense
+- Location
+
+Verify attendance changes flow correctly into payroll.
+
+Verify bulk attendance Fix does not create duplicate records.
+
+==================================================
+21. RENT MANAGEMENT
+==================================================
+
+Verify:
+
+- Warehouse rent
+- Rent payable
+- Rent expense
+- Daily accrual
+- Monthly approval
+- Payment
+- Landlord
+- Security deposit
+- Location
+- Accounting
+- P&L
+- Balance Sheet
+- Reports
+- Audit log
+
+==================================================
+22. DASHBOARD
+==================================================
+
+Verify the dashboard for:
+
+- All Locations
+- Single Location
+- Multiple selected Locations
+
+Metrics:
+
+- Sales
+- Purchases
+- Inventory Value
+- Expenses
+- Payables
+- Receivables
+- Payments
+- Receipts
+- Cash
+- Bank
+- Gross Profit
+- Net Profit
+
+ALL LOCATIONS:
+
+Show consolidated total plus location-wise breakdown.
+
+Example:
+
+Sales
+Total: ₹10,00,000
+
+Head Office: ₹2,00,000
+Frozen Hub - Calicut: ₹4,00,000
+Frozen Hub - Rajaguda: ₹2,00,000
+Tropicane - Kochi: ₹1,00,000
+Tropicane - Ecity: ₹1,00,000
+
+DETAILS VIEW:
+Show warehouse/location-wise values line by line.
+
+CONSOLIDATED VIEW:
+Show ONLY the consolidated total.
+
+MULTIPLE LOCATION SELECTION:
+
+Example:
+
+Selected:
+Frozen Hub - Calicut
+Frozen Hub - Rajaguda
+
+The dashboard must calculate and show ONLY those two locations.
+
+Verify all metrics follow the same selection.
+
+Do not mix selected-location data with all-location data.
+
+Verify dashboard totals reconcile with underlying reports.
+
+==================================================
+23. REPORTS
+==================================================
+
+Test major reports:
+
+- Sales Register
+- Purchase Register
+- Stock Report
+- Stock Ledger
+- Inventory Valuation
+- Customer Ledger
+- Vendor Ledger
+- Cash Book
+- Bank Book
+- Day Book
+- Trial Balance
+- P&L
+- Balance Sheet
+- Expense Report
+- Payment Report
+- Receipt Report
+- Asset Register
+- Fixed Asset Ledger
+- Payroll Reports
+- GST Reports
+- Dashboard
+
+Cross-check totals between reports.
+
+If two reports represent the same accounting/business metric, they must reconcile unless there is a documented reason for the difference.
+
+==================================================
+24. EDIT / CANCEL / DELETE INTEGRITY
+==================================================
+
+This is CRITICAL.
+
+For every major transaction test:
+
+CREATE
+→ POST
+→ EDIT
+→ POST
+→ CANCEL
+
+Verify that editing does not create:
+
+- Duplicate journal entries
+- Duplicate stock entries
+- Duplicate payments
+- Duplicate receipts
+- Incorrect balances
+- Incorrect GST
+- Incorrect profit
+- Incorrect inventory
+
+Cancellation must reverse the correct effects without deleting required audit history.
+
+==================================================
+25. AUDIT LOGGING
+==================================================
+
+Verify audit logs for:
+
+- Login
+- Important master changes
+- Sales
+- Purchases
+- Payments
+- Receipts
+- Expenses
+- Asset purchases
+- Stock transfers
+- Attendance corrections
+- Payroll
+- Configuration changes
+- Backup/restore
+- Permission changes
+
+Verify:
+
+- User
+- Timestamp
+- Action
+- Record
+- Previous value where applicable
+- New value where applicable
+- Location
+
+==================================================
+26. BACKUP & DISASTER RECOVERY
+==================================================
+
+Test backup functionality WITHOUT restoring production.
+
+Verify:
+
+- Database backup
+- Complete ERP backup
+- Uploaded files
+- Attachments
+- Product images
+- Settings
+- Manifest
+- Backup version
+- Retention
+- Backup integrity
+- Restore validation workflow
+
+Do not perform a destructive production restore.
+
+Verify that a backup can theoretically recreate the ERP from:
+
+GitHub source code
++
+PostgreSQL backup
++
+uploaded files/settings
+
+==================================================
+27. PERFORMANCE
+==================================================
+
+Check:
+
+- Dashboard load time
+- Large sales list
+- Large purchase list
+- Large stock ledger
+- Large customer/vendor list
+- Accounting reports
+- Pagination
+- Search
+- Filters
+- API response time
+
+Identify obvious:
+
+- N+1 queries
+- Excessive API requests
+- Duplicate requests
+- Missing pagination
+- Slow SQL queries
+- Unnecessary full-table scans
+
+Do not optimize blindly.
+
+Report measurable issues first.
+
+==================================================
+28. FRONTEND UI / RESPONSIVE CHECK
+==================================================
+
+Check:
+
+- Desktop
+- Tablet
+- Mobile
+
+Verify:
+
+- Buttons
+- Forms
+- Tables
+- Dropdowns
+- Dialogs
+- Filters
+- Search
+- Pagination
+- PDF/share
+- Navigation
+- Empty states
+- Error states
+- Loading states
+
+Look for:
+
+- Hidden buttons
+- Broken dropdowns
+- Truncated values
+- Incorrect totals
+- UI showing permission but backend denying access
+- Backend allowing access when UI hides it
+
+==================================================
+29. PRODUCTION DATA ANOMALY SCAN
+==================================================
+
+Scan live database for suspicious records:
+
+- Duplicate transactions
+- Transactions without journal entries
+- Journal entries without source transactions
+- Sales without stock movement
+- Purchases without stock movement
+- Asset purchases without vendor ledger
+- Asset purchases without fixed asset ledger
+- Payments without cash/bank movement
+- Receipts without cash/bank movement
+- Customers with incorrect balances
+- Vendors with incorrect balances
+- Negative stock
+- Missing expiry dates
+- Missing locations
+- Missing GST
+- Unbalanced vouchers
+- Incorrect location stamps
+- Orphan records
+
+Produce a list of every anomaly found.
+
+DO NOT FIX AUTOMATICALLY.
+
+==================================================
+30. RECONCILIATION TEST
+==================================================
+
+Perform cross-module reconciliation.
+
+At minimum verify:
+
+Sales Register
+=
+Sales accounting revenue
+
+Purchase Register
+=
+Purchase accounting
+
+Customer outstanding
+=
+Receivables ledger
+
+Vendor outstanding
+=
+Payables ledger
+
+Cash Book
+=
+Cash ledger
+
+Bank Book
+=
+Bank ledger
+
+Stock Report
+=
+Stock Ledger closing balance
+
+Inventory valuation
+=
+Inventory accounting value
+
+Fixed Asset Register
+=
+Fixed Asset Ledger / Balance Sheet
+
+P&L
+=
+Revenue - COGS - Expenses
+
+Dashboard
+=
+Underlying reports
+
+Trial Balance:
+Total Debit = Total Credit
+
+==================================================
+31. LIVE VS PREVIEW COMPARISON
+==================================================
+
+Where safe and technically possible, compare:
+
+- Schema
+- API contract
+- Frontend bundle/version
+- Important routes
+- Database structure
+- Configuration
+
+Do NOT overwrite production.
+
+If preview works but live fails, identify whether the cause is:
+
+- Old deployment
+- Different environment variable
+- Different database
+- Migration issue
+- Cached bundle
+- API mismatch
+- Permission issue
+- Production-only data problem
+- Production-only configuration
+
+==================================================
+32. HEALTH CHECK RESULT FORMAT
+==================================================
+
+DO NOT simply say:
+
+"Everything looks good."
+
+Produce a detailed report.
+
+Use:
+
+PASS
+WARNING
+FAIL
+NOT TESTED
+
+For every module provide:
+
+Module:
+Status:
+What was checked:
+What passed:
+What failed:
+Data anomalies:
+Security issues:
+Accounting issues:
+Location issues:
+Production issues:
+Recommended fix:
+
+==================================================
+33. CRITICAL ISSUE PRIORITY
+==================================================
+
+Classify findings:
+
+P0 - CRITICAL
+Can corrupt financial data, security, database, stock, accounting or production operation.
+
+P1 - HIGH
+Important business function broken or materially incorrect.
+
+P2 - MEDIUM
+Function works but has meaningful issue.
+
+P3 - LOW
+UI, usability, minor reporting or cosmetic issue.
+
+==================================================
+34. FINAL PRODUCTION READINESS DECISION
+==================================================
+
+At the end provide exactly one:
+
+PRODUCTION READY
+
+or
+
+PRODUCTION READY WITH WARNINGS
+
+or
+
+NOT PRODUCTION READY
+
+Do NOT declare Production Ready if there is:
+
+- Unbalanced accounting
+- Incorrect stock
+- Broken vendor/customer ledger
+- Broken asset accounting
+- Incorrect dashboard totals
+- Unauthorized data access
+- Missing critical accounting entries
+- Duplicate financial postings
+- Broken live deployment
+- Critical database corruption
+
+==================================================
+35. VERY IMPORTANT — NO AUTOMATIC FIXES
+==================================================
+
+This first task is an AUDIT ONLY.
+
+Do NOT:
+
+- Delete data
+- Rewrite historical transactions
+- Recalculate production financial history
+- Modify accounting entries
+- Modify stock
+- Change permissions
+- Run destructive migrations
+- Change production configuration
+- Automatically repair anomalies
+
+First provide the complete health-check report.
+
+After the report, provide:
+
+1. Critical issues that MUST be fixed
+2. High-priority issues
+3. Medium/low issues
+4. Existing items that are already working correctly
+5. Exact recommended fix order
+6. Which fixes are safe to apply automatically
+7. Which fixes require explicit approval
+8. Which production historical records need controlled reconciliation
+
+ONLY AFTER I REVIEW THE HEALTH CHECK SHOULD ANY DATA-FIXING OR CODE-FIXING TASK BE STARTED.
+
+FINAL OUTPUT MUST BE A COMPLETE ERP HEALTH CHECK REPORT, NOT A SHORT SUMMARY.
