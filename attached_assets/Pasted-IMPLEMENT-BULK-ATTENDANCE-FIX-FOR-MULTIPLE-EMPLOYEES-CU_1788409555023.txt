@@ -1,0 +1,490 @@
+IMPLEMENT BULK ATTENDANCE FIX FOR MULTIPLE EMPLOYEES
+
+CURRENT PROBLEM
+
+In the Attendance module, each employee currently has an individual "Fix" button.
+
+Example:
+
+Employee | Status | Action
+Rafin    | Present | In / Out / Fix
+Faisal   | Absent  | In / Out / Fix
+Gaf o o r| Absent  | In / Out / Fix
+Majeed   | Absent  | In / Out / Fix
+
+Currently, if I need to fix attendance for multiple employees, I have to click "Fix" separately for every employee.
+
+I need a bulk/multiple employee attendance fix feature.
+
+REQUIRED FEATURE
+
+Add a checkbox to every employee row.
+
+Add a "Select All" checkbox in the table header.
+
+Allow selecting:
+
+- One employee
+- Multiple employees
+- All employees currently shown
+- All employees matching the current filters, where appropriate
+
+When one or more employees are selected, show a bulk action toolbar.
+
+Example:
+
+[✓] 5 employees selected
+
+[Bulk Fix Attendance]
+
+The existing individual "Fix" button must remain available.
+
+BULK FIX BUTTON
+
+Add:
+
+"Fix Attendance"
+
+as a bulk action.
+
+The button should appear only when at least one employee is selected.
+
+Example:
+
+☑ Rafin
+☑ Faisal
+☑ Gaf o o r
+☐ Majeed
+
+3 employees selected
+
+[Fix Attendance]
+
+BULK FIX DIALOG
+
+When clicking "Fix Attendance", open a confirmation/dialog.
+
+Show:
+
+Fix Attendance
+
+Selected Employees:
+3
+
+Date:
+[Current attendance date]
+
+Selected employees:
+- Rafin Farooque
+- Faisal
+- Gafoor
+
+Then provide the same attendance correction fields currently available in the individual "Fix" dialog.
+
+IMPORTANT:
+
+Do NOT create a separate attendance correction logic.
+
+Reuse the existing individual Fix Attendance functionality and validation.
+
+The bulk operation should apply the same rules to every selected employee.
+
+SUPPORT INDIVIDUAL ATTENDANCE VALUES
+
+The bulk Fix dialog should allow fixing the selected employees' attendance using the existing attendance model.
+
+If the current Fix dialog supports:
+
+- Status
+- In Time
+- Out Time
+- Break
+- Late
+- Overtime
+- Notes
+- Location
+- Attendance date
+
+reuse those existing fields and validation.
+
+Do not remove or change existing individual Fix functionality.
+
+BULK SAVE
+
+When the user confirms:
+
+Update attendance for all selected employees in one bulk operation.
+
+Example:
+
+Selected:
+Rafin
+Faisal
+Gafoor
+Majeed
+
+Action:
+Fix Attendance → Present
+
+Result:
+
+Rafin → Present
+Faisal → Present
+Gafoor → Present
+Majeed → Present
+
+If In/Out times are entered, apply the values according to the existing attendance rules.
+
+IMPORTANT DATABASE REQUIREMENT
+
+Do NOT make hundreds of unnecessary individual frontend requests.
+
+Implement a proper backend bulk endpoint/transaction where practical.
+
+Example concept:
+
+POST /attendance/bulk-fix
+
+with:
+
+{
+  employeeIds: [...],
+  attendanceDate: "...",
+  status: "...",
+  inTime: "...",
+  outTime: "...",
+  notes: "..."
+}
+
+The backend must validate every employee before applying the changes.
+
+Use a database transaction.
+
+Either:
+
+ALL selected attendance records succeed
+
+OR
+
+NONE of them are changed.
+
+Do not leave the database half-updated if one employee fails validation.
+
+PERMISSION SECURITY
+
+The bulk Fix action must use the SAME permission rules as the existing individual Fix action.
+
+If a user can individually Fix attendance for an employee, they may bulk Fix that employee.
+
+If a user is NOT authorized to Fix a particular employee:
+
+→ The backend must reject that employee.
+
+Do not rely only on frontend checkboxes.
+
+LOCATION SECURITY
+
+Respect the existing location-based employee access rules.
+
+For example:
+
+A warehouse employee who can manage attendance only for:
+
+Frozen Hub - Calicut
+
+must not be able to bulk-fix employees belonging to:
+
+- Frozen Hub - Rajaguda
+- Tropicane - Kochi
+- Tropicane - Ecity
+- Head Office
+
+The backend must validate employee location access.
+
+Admin/authorized Head Office users should continue to work according to their existing permissions.
+
+SELECT ALL
+
+Add a header checkbox:
+
+☐ Select All
+
+When clicked:
+
+→ Select all currently visible/filtered employees.
+
+When unchecked:
+
+→ Clear the selection.
+
+The header checkbox should correctly show:
+
+- Unchecked = none selected
+- Checked = all visible employees selected
+- Indeterminate = some but not all visible employees selected
+
+Do NOT accidentally select employees from another page if pagination is being used unless the user explicitly chooses "Select all matching employees."
+
+FILTER COMPATIBILITY
+
+Bulk selection must work correctly with existing Attendance filters such as:
+
+- Date
+- Location
+- Employee
+- Department
+- Status
+- Present
+- Absent
+- Late
+- etc.
+
+Example:
+
+Filter:
+
+Location = Frozen Hub - Calicut
+Status = Absent
+
+Then:
+
+Select All
+
+must select only the employees currently matching that filter.
+
+BULK FIX CONFIRMATION
+
+Before saving, show a clear confirmation:
+
+"You are about to fix attendance for 8 employees."
+
+Show:
+
+Date: 03-09-2026
+Employees: 8
+Status: Present
+
+[Cancel]
+[Confirm Fix]
+
+After successful completion:
+
+"Attendance fixed successfully for 8 employees."
+
+Refresh the attendance table automatically.
+
+CLEAR SELECTION
+
+After successful bulk Fix:
+
+→ Clear all selected checkboxes.
+
+→ Refresh attendance data.
+
+→ Show updated status/time values.
+
+ERROR HANDLING
+
+If the operation fails:
+
+Do not silently fail.
+
+Show a clear error message.
+
+If using an all-or-nothing database transaction:
+
+"Attendance update failed. No records were changed."
+
+If the architecture intentionally supports partial success, clearly show:
+
+Successful:
+7
+
+Failed:
+1
+
+and identify the failed employee and reason.
+
+However, prefer atomic transaction behavior for the bulk operation.
+
+AUDIT LOG
+
+Bulk Fix must be recorded in the existing attendance audit/history system.
+
+Record:
+
+- User who performed the bulk fix
+- Date/time
+- Attendance date
+- Employees affected
+- Previous attendance values
+- New attendance values
+- Location
+- Action = Bulk Attendance Fix
+
+Do not bypass the existing audit mechanism.
+
+INDIVIDUAL FIX MUST CONTINUE TO WORK
+
+Do NOT remove the current individual:
+
+"Fix"
+
+button.
+
+Both must work:
+
+Individual:
+Employee → Fix
+
+Bulk:
+Select multiple employees → Fix Attendance
+
+They must use the same validation and business rules.
+
+ATTENDANCE CALCULATION
+
+Do not break existing:
+
+- Working hours
+- Late calculation
+- Overtime calculation
+- Present/Absent calculation
+- Leave interaction
+- Payroll calculation
+- Salary calculation
+- Attendance reports
+
+If fixing attendance changes working hours, late or overtime, the existing recalculation logic must run exactly as it does for an individual Fix.
+
+PAYROLL IMPACT
+
+If attendance correction affects payroll:
+
+Use the existing attendance → payroll calculation flow.
+
+Do NOT directly modify salary values.
+
+Do NOT create duplicate payroll entries.
+
+Do NOT create duplicate attendance records.
+
+DATABASE INTEGRITY
+
+Before implementation, inspect the current attendance schema and existing Fix endpoint.
+
+Do not create duplicate attendance records for the same:
+
+employee + attendance date
+
+Use the existing upsert/update behavior.
+
+Do not modify historical attendance unnecessarily.
+
+UI REQUIREMENTS
+
+Desktop:
+
+Add checkbox column at the left side of the employee table.
+
+Header:
+
+☐
+
+Rows:
+
+☐ Employee 1
+☐ Employee 2
+☐ Employee 3
+
+When selected:
+
+[3 selected] [Fix Attendance]
+
+Mobile:
+
+Provide an equivalent multi-select mechanism.
+
+Do not make the feature desktop-only.
+
+Keep the existing UI style and components.
+
+TEST CASES
+
+Test:
+
+1. Select one employee → Bulk Fix.
+2. Select two employees → Bulk Fix.
+3. Select 10 employees → Bulk Fix.
+4. Select All.
+5. Deselect one employee from Select All.
+6. Use Attendance filters → Select All.
+7. Change attendance status.
+8. Change In Time/Out Time if supported.
+9. Cancel bulk Fix.
+10. Confirm bulk Fix.
+11. Verify all selected employees updated.
+12. Verify unselected employees were NOT changed.
+13. Verify individual Fix still works.
+14. Verify location restrictions.
+15. Verify permission restrictions.
+16. Verify audit log.
+17. Verify payroll/attendance calculations.
+18. Verify no duplicate attendance records.
+19. Verify page refresh shows correct values.
+20. Verify mobile UI.
+
+CRITICAL SECURITY TEST
+
+Attempt a bulk API request containing:
+
+- authorized employee IDs
+- unauthorized employee IDs
+
+The backend must NOT allow unauthorized employees to be modified.
+
+Do not trust employee IDs supplied by the browser.
+
+FINAL ACCEPTANCE CRITERIA
+
+I should be able to open Attendance and see:
+
+☐ | Employee | Sessions | First In | Last Out | Location | Hours | Late | OT | Status | Action
+
+At the top:
+
+☐ Select All
+
+After selecting employees:
+
+"X employees selected"
+
+[Fix Attendance]
+
+Clicking "Fix Attendance" should allow me to apply the attendance correction to all selected employees in ONE operation.
+
+The existing individual "Fix" button must continue working.
+
+The bulk operation must respect:
+
+- Permissions
+- Location access
+- Existing attendance rules
+- Payroll calculations
+- Audit logs
+- Database integrity
+
+Implement end-to-end, including frontend, backend/API, database transaction handling, validation, permissions, audit logging, responsive UI, and regression tests.
+
+After implementation:
+
+1. Run TypeScript/typecheck.
+2. Run API tests.
+3. Run frontend build.
+4. Test individual Fix.
+5. Test bulk Fix.
+6. Test Select All.
+7. Test filtered selection.
+8. Test unauthorized/location-restricted employees.
+9. Restart affected workflows.
+10. Verify the actual running preview before marking the task complete.
