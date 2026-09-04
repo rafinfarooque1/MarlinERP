@@ -1,0 +1,335 @@
+IMPORTANT CORRECTION — STOCK TRANSFER IN/OUT MUST ADJUST OPENING STOCK, NOT CLOSING STOCK
+
+Fix the Stock Transfer accounting/inventory calculation according to this exact rule:
+
+1. STOCK TRANSFER OUT — SOURCE WAREHOUSE
+
+When stock is transferred OUT from Warehouse A to Warehouse B:
+
+Warehouse A:
+    Opening Stock
+    MINUS Transfer Out
+    = Adjusted Opening Stock
+
+The Transfer Out amount/quantity/value MUST be deducted from OPENING STOCK.
+
+IMPORTANT:
+- Do NOT deduct Transfer Out directly from Closing Stock.
+- Do NOT create a separate Closing Stock deduction for Transfer Out.
+- Transfer Out must not reduce Closing Stock a second time.
+- Avoid any double deduction.
+
+Example:
+
+Source Warehouse:
+Opening Stock = ₹100,000
+Transfer Out = ₹20,000
+
+Adjusted Opening Stock = ₹80,000
+
+The ₹20,000 Transfer Out must NOT then be deducted again from Closing Stock.
+
+--------------------------------------------------
+
+2. STOCK TRANSFER IN — DESTINATION WAREHOUSE
+
+When stock is transferred IN to Warehouse B:
+
+Warehouse B:
+    Opening Stock
+    PLUS Transfer In
+    = Adjusted Opening Stock
+
+Example:
+
+Destination Warehouse:
+Opening Stock = ₹50,000
+Transfer In = ₹20,000
+
+Adjusted Opening Stock = ₹70,000
+
+The Transfer In must NOT be added separately to Closing Stock again.
+
+--------------------------------------------------
+
+3. CRITICAL RULE
+
+Stock Transfer In/Out is an OPENING STOCK ADJUSTMENT.
+
+It is NOT a direct Closing Stock adjustment.
+
+Correct logic:
+
+SOURCE:
+Opening Stock - Transfer Out = Adjusted Opening Stock
+
+DESTINATION:
+Opening Stock + Transfer In = Adjusted Opening Stock
+
+Do NOT implement:
+
+Opening Stock - Transfer Out - Transfer Out again
+
+or
+
+Opening Stock + Transfer In + Transfer In again.
+
+There must be NO double counting.
+
+--------------------------------------------------
+
+4. MONTH-WISE STOCK
+
+Respect the existing monthly stock architecture.
+
+For each month:
+
+Adjusted Opening Stock
++
+Purchases
+-
+Sales/Consumption
+=
+Closing Stock
+
+Where the opening stock has already incorporated the applicable Transfer In/Transfer Out adjustment.
+
+At the next month's opening:
+Previous month's Closing Stock becomes the next month's normal Opening Stock according to the existing system.
+
+Do NOT repeatedly apply the same historical transfer every month.
+
+A transfer must be applied exactly once at the correct opening-stock point.
+
+--------------------------------------------------
+
+5. EXAMPLE
+
+Warehouse A:
+Opening Stock = ₹100,000
+Transfer Out = ₹20,000
+Purchases = ₹30,000
+Sales/Consumption = ₹40,000
+
+Adjusted Opening Stock:
+₹100,000 - ₹20,000 = ₹80,000
+
+Closing Stock:
+₹80,000 + ₹30,000 - ₹40,000
+= ₹70,000
+
+Warehouse B:
+Opening Stock = ₹50,000
+Transfer In = ₹20,000
+Purchases = ₹10,000
+Sales/Consumption = ₹30,000
+
+Adjusted Opening Stock:
+₹50,000 + ₹20,000 = ₹70,000
+
+Closing Stock:
+₹70,000 + ₹10,000 - ₹30,000
+= ₹50,000
+
+Do NOT add the ₹20,000 Transfer In again to Closing Stock.
+
+--------------------------------------------------
+
+6. COMPANY-WIDE STOCK
+
+Internal transfer must NOT change total company stock value.
+
+Example:
+
+Before transfer:
+Warehouse A = ₹100,000
+Warehouse B = ₹50,000
+Company total = ₹150,000
+
+Transfer ₹20,000 from A to B:
+
+Warehouse A = ₹80,000
+Warehouse B = ₹70,000
+Company total = ₹150,000
+
+Therefore:
+
+Transfer Out = reduction in source warehouse opening stock
+Transfer In = increase in destination warehouse opening stock
+Company total = unchanged
+
+--------------------------------------------------
+
+7. P&L — ABSOLUTELY NO IMPACT
+
+Stock Transfer In/Out must NOT create or affect:
+
+- Sales
+- Purchase
+- Income
+- Expense
+- COGS
+- Gross Profit
+- Net Profit
+- Revenue
+- Purchase Ledger
+- Sales Ledger
+
+Internal warehouse transfer is only an inventory movement/opening-stock adjustment.
+
+Do NOT post internal transfers as sales or purchases.
+
+--------------------------------------------------
+
+8. STOCK LEDGER
+
+Stock Ledger must still clearly record:
+
+TRANSFER OUT
+Source Warehouse:
+- Product
+- Batch
+- Quantity
+- Cost
+- Expiry
+- Transfer reference
+
+TRANSFER IN
+Destination Warehouse:
+- Product
+- Batch
+- Quantity
+- Cost
+- Expiry
+- Transfer reference
+
+The physical stock movement must remain fully traceable.
+
+--------------------------------------------------
+
+9. BATCH / COST / EXPIRY
+
+Transfer In must preserve the exact inventory identity:
+
+- Product
+- Batch number
+- Expiry date
+- Quantity
+- Unit cost
+- Stock valuation
+
+Do not create a new artificial purchase batch at the destination.
+
+Preserve FIFO/FEFO behavior after the transfer.
+
+--------------------------------------------------
+
+10. HISTORICAL DATA
+
+Before changing existing calculations:
+
+- Audit existing Stock Transfer In/Out records.
+- Identify whether any transfer is currently being deducted from Closing Stock.
+- Identify whether any transfer is being counted more than once.
+- Do NOT blindly rewrite historical transactions.
+- Do NOT delete stock transfers.
+- Do NOT modify accounting transactions destructively.
+
+If a migration/reconciliation is required, make it controlled and reversible.
+
+--------------------------------------------------
+
+11. ROOT-CAUSE FIX
+
+Do NOT simply hide Transfer Out from the UI.
+
+Find the actual stock calculation/query/service responsible for:
+
+- Opening Stock
+- Closing Stock
+- Stock valuation
+- Monthly stock
+- Warehouse stock
+- Transfer In
+- Transfer Out
+
+Then correct the underlying calculation.
+
+There must be one consistent source of truth.
+
+--------------------------------------------------
+
+12. REPORTS
+
+Verify that the corrected logic is reflected consistently in:
+
+- Stock Summary
+- Stock Ledger
+- Opening Stock
+- Closing Stock
+- Monthly Stock
+- Warehouse-wise Stock
+- All Locations Stock
+- Inventory Valuation
+- Dashboard Inventory Value
+- P&L
+- Balance Sheet where applicable
+
+Transfer In/Out must not create artificial profit/loss.
+
+--------------------------------------------------
+
+13. TEST CASES
+
+Create automated tests for at least:
+
+TEST 1:
+Opening = ₹100,000
+Transfer Out = ₹20,000
+Adjusted Opening = ₹80,000
+
+TEST 2:
+Opening = ₹50,000
+Transfer In = ₹20,000
+Adjusted Opening = ₹70,000
+
+TEST 3:
+Transfer Out must NOT be deducted again from Closing Stock.
+
+TEST 4:
+Transfer In must NOT be added again to Closing Stock.
+
+TEST 5:
+Source + Destination company stock total must remain unchanged after internal transfer.
+
+TEST 6:
+Transfer must have ZERO P&L impact.
+
+TEST 7:
+Next month's Opening must use the previous month's Closing according to the existing monthly architecture, without repeatedly applying the historical transfer.
+
+TEST 8:
+Batch, cost and expiry must remain correct after Transfer In.
+
+TEST 9:
+Location-specific reports must show the correct source and destination values.
+
+TEST 10:
+All Locations consolidated stock must remain unchanged by an internal transfer.
+
+IMPORTANT:
+The final implementation must follow this exact principle:
+
+TRANSFER OUT:
+Opening Stock → DEDUCT Transfer Out
+
+TRANSFER IN:
+Opening Stock → ADD Transfer In
+
+NOT:
+Closing Stock → DEDUCT Transfer Out
+
+NOT:
+Closing Stock → ADD Transfer In
+
+Implement the root-cause fix and verify the calculations with real database examples before marking the task complete.
