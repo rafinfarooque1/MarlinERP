@@ -182,6 +182,243 @@ export interface StockAtDate {
   note: string | null;
 }
 
+export interface StockTransferOpeningAdjustmentLine {
+  materialType: ValuedItem["materialType"];
+  refId: number;
+  qty: number;
+  value: number;
+  unitCost: number;
+  name: string;
+  unit: string;
+}
+
+export interface StockTransferOpeningAdjustment {
+  total: number;
+  lines: StockTransferOpeningAdjustmentLine[];
+}
+
+/**
+ * Transfer movements are part of physical stock, but they are not purchases or
+ * sales. The periodic P&L formula needs them in its opening-stock term so a
+ * transfer does not masquerade as COGS:
+ *
+ *   adjusted opening = normal opening + transfer-in value - transfer-out value
+ *
+ * This is deliberately period-scoped. A transfer is applied in the period
+ * containing its stock-ledger movement, and the next period starts from the
+ * previous period's closing position without applying it again.
+ */
+export async function stockTransferOpeningAdjustment(
+  fromDate: string | null,
+  toDate: string | null,
+  scope: StockBranchScope | null | undefined,
+  q: Q = pool,
+): Promise<StockTransferOpeningAdjustment> {
+  const params: unknown[] = [];
+  const conds = [`sl.txn_type IN ('transfer_out', 'transfer_in')`];
+
+  if (fromDate) {
+    params.push(fromDate);
+    conds.push(`COALESCE(sl.txn_date, sl.created_at::date) >= $${params.length}::date`);
+  }
+  if (toDate) {
+    params.push(toDate);
+    conds.push(`COALESCE(sl.txn_date, sl.created_at::date) <= $${params.length}::date`);
+  }
+
+  if (scope) {
+    if (scope.branchPairs?.length) {
+      const parts = scope.branchPairs.map((p) => {
+        params.push(p.type, p.id);
+        return `(sl.branch_type = $${params.length - 1} AND sl.branch_id = $${params.length})`;
+      });
+      conds.push(`(${parts.join(" OR ")})`);
+    } else {
+      params.push(scope.branchType);
+      conds.push(`sl.branch_type = $${params.length}`);
+      if (scope.branchId != null) {
+        params.push(scope.branchId);
+        conds.push(`sl.branch_id = $${params.length}`);
+      }
+    }
+  }
+
+  const { rows } = await q.query(
+    `WITH active_transit AS (
+       SELECT doc_type, doc_id, material_type, ref_id, branch_type, branch_id,
+              SUM(quantity::numeric) AS qty
+         FROM stock_reservations
+        WHERE status = 'active' AND kind = 'in_transit'
+        GROUP BY doc_type, doc_id, material_type, ref_id, branch_type, branch_id
+     )
+     SELECT sl.material_type, sl.ref_id::int AS ref_id,
+            sl.qty_change::numeric AS qty_change,
+            sl.unit_cost::numeric AS unit_cost,
+            COALESCE(at.qty, 0)::numeric AS active_transit_qty
+       FROM stock_ledger sl
+       LEFT JOIN active_transit at
+         ON sl.txn_type = 'transfer_out'
+        AND at.doc_type = sl.doc_type
+        AND at.doc_id = sl.doc_id
+        AND at.material_type = sl.material_type
+        AND at.ref_id = sl.ref_id
+        AND at.branch_type = sl.branch_type
+        AND at.branch_id = sl.branch_id
+      WHERE ${conds.join(" AND ")}
+      ORDER BY sl.id`,
+    params,
+  );
+  let priorTransitRows: any[] = [];
+  if (fromDate) {
+    const priorParams: unknown[] = [fromDate];
+    const priorConds = [
+      `sr.status = 'active'`,
+      `sr.kind = 'in_transit'`,
+      `sr.doc_type = 'stock_transfer'`,
+      `st.transfer_date < $1::date`,
+    ];
+    if (scope) {
+      if (scope.branchPairs?.length) {
+        const parts = scope.branchPairs.map((p) => {
+          priorParams.push(p.type, p.id);
+          return `(sr.branch_type = $${priorParams.length - 1} AND sr.branch_id = $${priorParams.length})`;
+        });
+        priorConds.push(`(${parts.join(" OR ")})`);
+      } else {
+        priorParams.push(scope.branchType);
+        priorConds.push(`sr.branch_type = $${priorParams.length}`);
+        if (scope.branchId != null) {
+          priorParams.push(scope.branchId);
+          priorConds.push(`sr.branch_id = $${priorParams.length}`);
+        }
+      }
+    }
+    const prior = await q.query(
+      `SELECT sr.material_type, sr.ref_id::int AS ref_id,
+              SUM(sr.quantity::numeric) AS qty_change,
+              SUM(sr.quantity::numeric * sr.unit_cost::numeric) AS transit_value,
+              NULL::numeric AS unit_cost
+         FROM stock_reservations sr
+         JOIN stock_transfers st ON st.id = sr.doc_id
+        WHERE ${priorConds.join(" AND ")}
+        GROUP BY sr.material_type, sr.ref_id`,
+      priorParams,
+    );
+    priorTransitRows = prior.rows;
+  }
+  if (rows.length === 0 && priorTransitRows.length === 0) return { total: 0, lines: [] };
+
+  const refs = [...rows, ...priorTransitRows].map((r: any) => ({
+    materialType: String(r.material_type) as ValuedItem["materialType"],
+    refId: Number(r.ref_id),
+  }));
+  const meta = await resolveProductNames(q as any, refs);
+  const byKey = new Map<string, StockTransferOpeningAdjustmentLine>();
+
+  const addLine = (
+    materialType: ValuedItem["materialType"],
+    refId: number,
+    qty: number,
+    value: number,
+    unitCost: number,
+  ) => {
+    const key = `${materialType}:${refId}`;
+    const info = meta.get(key);
+    const line = byKey.get(key) ?? {
+      materialType, refId, qty: 0, value: 0, unitCost,
+      name: info?.name ?? `${materialType} #${refId}`,
+      unit: info?.unit ?? "",
+    };
+    line.qty = Math.round((line.qty + qty) * 1000) / 1000;
+    line.value = r2(line.value + value);
+    line.unitCost = Math.abs(line.qty) > 0.001 ? r2(line.value / line.qty) : unitCost;
+    byKey.set(key, line);
+  };
+
+  for (const row of rows) {
+    const materialType = String(row.material_type) as ValuedItem["materialType"];
+    const refId = Number(row.ref_id);
+    const rawQty = Number(row.qty_change ?? 0);
+    const rawUnitCost = row.unit_cost == null
+      ? Number(meta.get(`${materialType}:${refId}`)?.unitCost ?? 0)
+      : Number(row.unit_cost);
+    // An active in-transit reservation is already included in the sender's
+    // closing valuation. Remove that part of transfer_out from the opening
+    // adjustment; otherwise an unreceived shipment creates artificial profit
+    // (or loss) even though it remains sender-owned.
+    const transitQty = Number(row.active_transit_qty ?? 0);
+    const qty = rawQty < 0 ? rawQty + transitQty : rawQty;
+    // Match the transfer ledger's own traceable cost basis. Reservations use
+    // the weighted-average cost needed by current in-transit valuation, which
+    // can differ from the FEFO/line cost recorded on this movement. Using that
+    // reservation value here would leave a false P&L delta on dispatch.
+    const value = r2(rawQty * rawUnitCost + (rawQty < 0 ? transitQty * rawUnitCost : 0));
+    const unitCost = Math.abs(qty) > 0.001 ? r2(value / qty) : rawUnitCost;
+    addLine(materialType, refId, qty, value, unitCost);
+  }
+
+  // A shipment that was already in flight at the start of this period is in
+  // the sender's current closing valuation but is absent from stockAsOf(),
+  // whose historical rewind has no receipt-date information. Carry that
+  // sender-owned value into the opening side so month rollover remains neutral.
+  for (const row of priorTransitRows) {
+    const materialType = String(row.material_type) as ValuedItem["materialType"];
+    const refId = Number(row.ref_id);
+    const qty = Number(row.qty_change ?? 0);
+    const value = Number(row.transit_value ?? 0);
+    addLine(materialType, refId, qty, r2(value), Math.abs(qty) > 0.001 ? r2(value / qty) : 0);
+  }
+
+  const lines = [...byKey.values()].filter((line) => Math.abs(line.value) > 0.005 || Math.abs(line.qty) > 0.001);
+  return {
+    total: r2(lines.reduce((sum, line) => sum + line.value, 0)),
+    lines,
+  };
+}
+
+/** Apply the period's transfer adjustment without changing the stock position. */
+export function applyStockTransferOpeningAdjustment(
+  opening: StockAtDate,
+  adjustment: StockTransferOpeningAdjustment,
+): StockAtDate {
+  if (adjustment.lines.length === 0) return opening;
+
+  const byKey = new Map<string, ValuedItem>(
+    opening.items.map((item) => [`${item.materialType}:${item.id}`, { ...item }]),
+  );
+  for (const line of adjustment.lines) {
+    const key = `${line.materialType}:${line.refId}`;
+    const existing = byKey.get(key);
+    if (existing) {
+      existing.stock = Math.round((existing.stock + line.qty) * 1000) / 1000;
+      existing.total = r2(existing.total + line.value);
+      existing.unitCost = Math.abs(existing.stock) > 0.001
+        ? r2(existing.total / existing.stock)
+        : line.unitCost;
+    } else {
+      byKey.set(key, {
+        id: line.refId,
+        name: line.name,
+        unit: line.unit,
+        stock: line.qty,
+        unitCost: line.unitCost,
+        total: line.value,
+        materialType: line.materialType,
+        typeLabel: line.materialType === "item" ? "Finished Good"
+          : line.materialType === "material" ? "Raw Material" : "Packing Material",
+      });
+    }
+  }
+
+  return {
+    ...opening,
+    total: r2(opening.total + adjustment.total),
+    items: [...byKey.values()]
+      .filter((item) => Math.abs(item.total) > 0.005 || Math.abs(item.stock) > 0.001)
+      .sort((a, b) => a.name.localeCompare(b.name)),
+  };
+}
+
 /** One branch's stock filter for the historic rewind and the current read. */
 export interface StockBranchScope {
   branchType: string;
@@ -232,6 +469,7 @@ async function inceptionDate(q: Q = pool): Promise<string | null> {
        UNION ALL SELECT MIN(verify_date::date)     FROM stock_verifications
        UNION ALL SELECT MIN(created_at)            FROM sales_returns
        UNION ALL SELECT MIN(created_at)            FROM purchase_returns
+       UNION ALL SELECT MIN(COALESCE(txn_date, created_at::date)) FROM stock_ledger
      ) x`,
   );
   return r?.first_doc ?? null;
@@ -698,8 +936,12 @@ export async function buildBooks(
   const historicalClose = toDate !== null && toDate < todayISO();
   const closing = skipStock ? emptyStock
     : historicalClose ? await stockAsOf(toDate, stockScope, q) : await closingStockAt(stockScope, q);
-  const opening = skipStock ? emptyStock
+  const normalOpening = skipStock ? emptyStock
     : fromDate ? await stockAsOf(previousDay(fromDate), stockScope, q) : await stockAsOf(null, undefined, q);
+  const transferOpeningAdjustment = skipStock
+    ? { total: 0, lines: [] }
+    : await stockTransferOpeningAdjustment(fromDate, toDate, stockScope, q);
+  const opening = applyStockTransferOpeningAdjustment(normalOpening, transferOpeningAdjustment);
 
   // ── Group builders ────────────────────────────────────────────────────────
 
