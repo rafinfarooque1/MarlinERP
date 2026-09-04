@@ -105,6 +105,12 @@ async function cleanup() {
   }
   if (materialId) {
     await sql(
+      `DELETE FROM stock_ledger
+        WHERE material_type = 'material' AND ref_id = $1
+          AND branch_type = 'warehouse' AND branch_id = ANY($2::int[])`,
+      [materialId, [sourceId, destinationId]],
+    );
+    await sql(
       `DELETE FROM stock_batches WHERE item_id = $1 AND material_type = 'material'
          AND branch_type = 'warehouse' AND branch_id = ANY($2::int[])`,
       [materialId, [sourceId, destinationId]],
@@ -175,6 +181,17 @@ try {
        (item_id, material_type, branch_type, branch_id, batch_number, quantity, unit_cost, source, source_id)
      VALUES ($1, 'material', 'warehouse', $2, $3, 12, 100, 'test', NULL)`,
     [materialId, sourceId, `${TAG}-LOT`],
+  );
+  // Give the historical stock reconstruction an explicit opening movement.
+  // The accounting assertions exercise the transfer adjustment, not the
+  // untracked-stock fallback.
+  await sql(
+    `INSERT INTO stock_ledger
+       (txn_type, material_type, ref_id, item_name, unit, branch_type, branch_id,
+        branch_name, qty_change, unit_cost, doc_type, doc_id, notes, txn_date)
+     VALUES ('opening_stock', 'material', $1, $2, 'KG', 'warehouse', $3,
+             $4, 12, 100, 'test_fixture', NULL, $5, $6::date)`,
+    [materialId, `${TAG} Material`, sourceId, `${TAG} Source`, `${TAG} opening`, '2026-08-18'],
   );
   assert('Created isolated source and destination fixtures', sourceId > 0 && destinationId > 0 && materialId > 0);
 
@@ -309,6 +326,46 @@ try {
   );
   assert('On-hand source plus destination equals 11 units', Number(onHand.quantity) === 11);
   assert('On-hand plus active in-transit equals original 12 units', Number(onHand.quantity) + Number(inTransit.quantity) === 12);
+
+  console.log('\n[6] Transfer values adjust opening stock, never closing stock');
+  const statement = async (from, to, locationId) => {
+    const result = await get(
+      `/accounts/financial-statements?fromDate=${from}&toDate=${to}&locationType=warehouse&locationId=${locationId}`,
+    );
+    return result.data;
+  };
+  const sourceDay = await statement(D0, D1, sourceId);
+  const destinationDay = await statement(D0, D1, destinationId);
+  assert('Source opening is reduced by dispatched transfer value',
+    Number(sourceDay?.profitAndLoss?.expenses?.openingStock) === 800,
+    JSON.stringify(sourceDay?.profitAndLoss?.expenses));
+  assert('Destination opening is increased by received transfer value',
+    Number(destinationDay?.profitAndLoss?.expenses?.openingStock) === 400,
+    JSON.stringify(destinationDay?.profitAndLoss?.expenses));
+  assert('Transfer does not get added to source closing stock',
+    Number(sourceDay?.profitAndLoss?.incomes?.closingStock) === 800,
+    JSON.stringify(sourceDay?.profitAndLoss?.incomes));
+  assert('Transfer does not get added to destination closing stock',
+    Number(destinationDay?.profitAndLoss?.incomes?.closingStock) === 400,
+    JSON.stringify(destinationDay?.profitAndLoss?.incomes));
+  assert('Completed transfer is P&L-neutral at both locations',
+    Number(sourceDay?.profitAndLoss?.summary?.costOfGoodsSold) === 0 &&
+    Number(destinationDay?.profitAndLoss?.summary?.costOfGoodsSold) === 0 &&
+    Number(sourceDay?.profitAndLoss?.netProfit) === 0 &&
+    Number(destinationDay?.profitAndLoss?.netProfit) === 0,
+    JSON.stringify({ source: sourceDay?.profitAndLoss?.summary, destination: destinationDay?.profitAndLoss?.summary }));
+
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Calcutta' });
+  const currentSource = await statement(D0, today, sourceId);
+  const currentDestination = await statement(D0, today, destinationId);
+  assert('Short receipt and active in-transit balance keep source P&L neutral',
+    Number(currentSource?.profitAndLoss?.summary?.costOfGoodsSold) === 0 &&
+    Number(currentSource?.profitAndLoss?.netProfit) === 0,
+    JSON.stringify(currentSource?.profitAndLoss?.summary));
+  assert('Short receipt keeps destination P&L neutral',
+    Number(currentDestination?.profitAndLoss?.summary?.costOfGoodsSold) === 0 &&
+    Number(currentDestination?.profitAndLoss?.netProfit) === 0,
+    JSON.stringify(currentDestination?.profitAndLoss?.summary));
 
 } catch (error) {
   console.error(`\nFATAL: ${error instanceof Error ? error.stack : String(error)}`);
