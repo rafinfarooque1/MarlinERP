@@ -24,6 +24,7 @@ import {
   type PostingLocationFilter,
 } from "../lib/postingLocation";
 import { getLocationFilter, getPostingLocationFilter } from "../lib/requestLocation";
+import { ymOfDate } from "../lib/periodLock";
 
 const router = Router();
 const REPORTS_KEY = "page:/reports/sales";
@@ -33,6 +34,10 @@ const REPORTS_KEY = "page:/reports/sales";
 const isDate = (v: unknown): v is string => isIsoDate(v);
 const r2 = (n: number) => Math.round(n * 100) / 100;
 const r3 = (n: number) => Math.round(n * 1000) / 1000;
+function monthKeyOf(value: unknown): string {
+  const ym = ymOfDate(value as string | Date | null | undefined);
+  return ym ? `${ym.year}-${String(ym.month).padStart(2, "0")}` : "";
+}
 
 function range(req: { query: Record<string, unknown> }): { from: string | null; to: string | null } {
   const from = req.query.from ?? req.query.fromDate;
@@ -379,7 +384,8 @@ router.get("/reports/fin/gst", requireModuleView(REPORTS_KEY), async (req, res):
   const allGstIds = new Set(Object.values(ids).filter((i) => i > 0));
   for (const p of inRange) {
     if (!allGstIds.has(p.ledgerId)) continue;
-    const m = String(p.date).slice(0, 7);
+    const m = monthKeyOf(p.date);
+    if (!m) continue;
     const row = months.get(m) ?? { output: 0, input: 0 };
     const isOutput = p.ledgerId === ids.outputCgst || p.ledgerId === ids.outputSgst || p.ledgerId === ids.outputIgst;
     if (isOutput) row.output = r2(row.output + p.credit - p.debit);

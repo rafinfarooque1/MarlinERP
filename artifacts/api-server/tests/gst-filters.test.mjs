@@ -215,6 +215,9 @@ console.log('\n[5] /gst/summary: GSTIN slices reconcile with the unfiltered tota
   assert('Unfiltered totals self-consistent (net = output − input)',
     r2(all.netGstLiability) === r2(all.totalTaxCollected - all.totalTaxPaid),
     `${all.netGstLiability} vs ${r2(all.totalTaxCollected - all.totalTaxPaid)}`);
+  assert('Month-wise GST keys are calendar-safe YYYY-MM values',
+    (all.monthWise ?? []).every(r => /^\d{4}-(0[1-9]|1[0-2])$/.test(String(r.month))),
+    JSON.stringify(all.monthWise?.slice(0, 3)));
 }
 
 // ── Done ────────────────────────────────────────────────────────────────────

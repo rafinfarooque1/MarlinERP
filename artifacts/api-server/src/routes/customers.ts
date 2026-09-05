@@ -300,6 +300,7 @@ router.post("/customers", requireModuleAction("page:/customers", "add"), async (
 router.get("/customers/:id", requireModuleView("page:/customers"), async (req, res): Promise<void> => {
   const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const id = parseInt(raw, 10);
+  if (await partyScopeCheck(req, "customer", id) !== "ok") { res.status(404).json({ error: "Not found" }); return; }
   const [row] = await db.select().from(customersTable).where(eq(customersTable.id, id)).limit(1);
   if (!row) { res.status(404).json({ error: "Not found" }); return; }
   const credit = await creditFieldsRow(id);
@@ -527,6 +528,7 @@ router.post("/vendors", requireModuleAction("page:/vendors", "add"), async (req,
 router.get("/vendors/:id", requireModuleView("page:/vendors"), async (req, res): Promise<void> => {
   const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const id = parseInt(raw, 10);
+  if (await partyScopeCheck(req, "vendor", id) !== "ok") { res.status(404).json({ error: "Not found" }); return; }
   const [row] = await db.select().from(vendorsTable).where(eq(vendorsTable.id, id)).limit(1);
   if (!row) { res.status(404).json({ error: "Not found" }); return; }
   res.json(row);
@@ -753,6 +755,12 @@ router.post("/vendors/:id/payment", requireModuleAction(["page:/vendors", "page:
   // payments.payment_date is a real DATE column.
   if (!isIsoDate(date)) {
     res.status(400).json({ error: "date must be a real calendar date in YYYY-MM-DD form" }); return;
+  }
+  // The paying account's location is not authority to act on the vendor. A
+  // caller must be able to see the vendor itself before a direct-ID payment
+  // can reach month locks, voucher numbering, or the INSERT below.
+  if (await partyScopeCheck(req, "vendor", vendorId) !== "ok") {
+    res.status(404).json({ error: "Not found" }); return;
   }
 
   // Month lock: a vendor payment may not be backdated into a locked month.
