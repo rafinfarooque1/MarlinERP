@@ -1,0 +1,164 @@
+PRODUCTION ERP FORENSIC AUDIT — READ ONLY
+
+The previous system audit was performed against the development workspace/database.
+
+Now perform the SAME audit against the CURRENT LIVE/PUBLISHED PRODUCTION ERP.
+
+IMPORTANT:
+- READ ONLY.
+- DO NOT MODIFY CODE.
+- DO NOT MODIFY PRODUCTION DATABASE.
+- DO NOT INSERT/UPDATE/DELETE ANY PRODUCTION DATA.
+- DO NOT RUN MIGRATIONS.
+- DO NOT REPAIR ANYTHING.
+- DO NOT RESTART production unless absolutely required and explicitly approved.
+- Do not expose credentials or secrets in the report.
+
+OBJECTIVE:
+
+Determine whether the LIVE PRODUCTION ERP is actually running the same code, database schema, accounting logic, inventory logic and security behavior that was audited in development.
+
+COMPARE:
+
+1. Production deployed commit/build
+2. Current workspace source
+3. Production API
+4. Production database schema
+5. Production migration state
+6. Production data integrity
+7. Production accounting
+8. Production inventory
+9. Production location isolation
+10. Production reports
+11. Production backups
+12. Production background jobs
+
+FIRST establish:
+
+LIVE URL
+LIVE deployment/version/commit
+API version/build identifier if available
+database type/version
+migration status
+latest migration
+application health
+schema health
+
+Then run READ-ONLY checks for:
+
+- unbalanced journal vouchers
+- orphan journal lines
+- orphan stock ledger rows
+- negative stock
+- negative batches
+- batch quantity vs stock quantity
+- sales without location
+- purchases without location
+- unstamped vouchers
+- duplicate transaction identifiers
+- stale stock reservations
+- in-transit transfers
+- customer/vendor location mismatches
+- ledger/account location mismatches
+- GST inconsistencies
+- customer outstanding reconciliation
+- vendor outstanding reconciliation
+- cash reconciliation
+- bank reconciliation
+- P&L vs accounting ledger
+- Balance Sheet integrity
+- opening/closing stock
+- transfer opening adjustment
+- historical stock reliability
+- fixed asset/vendor ledger consistency
+- payroll accounting consistency
+- audit-log completeness
+
+MOST IMPORTANT:
+
+Compare production behavior against the previous development audit.
+
+Specifically verify these previously identified risks:
+
+1. Customer/vendor detail GET location-scope vulnerability
+2. Historical stock valuation limitation
+3. Historical in-transit transfer limitation
+4. Best-effort audit logging
+5. Physical transaction deletion
+6. GST document-vs-posting divergence
+7. Missing return reversal/void
+8. Client-supplied generic report exports
+9. Bulk attendance re-accrual failure risk
+10. Startup migration/repair behavior
+11. In-process scheduler behavior
+12. Raw migration schema vs ORM schema differences
+13. Shared bootstrap/reset password risk
+14. Logout/token revocation behavior
+
+For every issue report:
+
+- PRODUCTION STATUS
+- CONFIRMED / NOT FOUND / NOT TESTABLE
+- SEVERITY
+- EXACT API/file/table involved
+- EVIDENCE
+- BUSINESS IMPACT
+- WHETHER IT ALSO EXISTS IN DEVELOPMENT
+- WHETHER PRODUCTION IS BETTER/WORSE/IDENTICAL
+
+Also verify the actual LIVE UI behavior for:
+
+- Login → Dashboard
+- Location selector
+- All Locations
+- Warehouse-specific view
+- Sales
+- Purchase
+- POS
+- Quotation
+- Other Charges
+- Stock Transfer
+- Cash
+- Bank
+- Payment
+- Receipt
+- Customer Ledger
+- Vendor Ledger
+- P&L
+- Balance Sheet
+- Chart of Accounts
+- “Show Valued Accounts Only”
+- Month Wise reports
+- PDFs
+- Backup
+- HR/Payroll
+
+DO NOT ALTER ANYTHING.
+
+FINAL REPORT:
+
+A. Production architecture
+B. Production vs development comparison
+C. Production database health
+D. Production accounting health
+E. Production inventory health
+F. Production GST health
+G. Production location/security health
+H. Production report/PDF health
+I. Production HR/payroll health
+J. Production backup/restore health
+K. Production scheduler/background-job health
+L. Confirmed critical issues
+M. Confirmed high issues
+N. Medium issues
+O. Low issues
+P. Issues that cannot be verified
+Q. Top 10 fixes required
+R. Overall production readiness rating
+
+IMPORTANT:
+
+Do not fix anything during this audit.
+
+I want the factual production condition first.
+After the report is complete, STOP and wait for approval before making any changes.
