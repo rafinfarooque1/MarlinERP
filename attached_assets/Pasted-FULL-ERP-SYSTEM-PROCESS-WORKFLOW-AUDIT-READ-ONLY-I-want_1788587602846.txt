@@ -1,0 +1,1013 @@
+FULL ERP SYSTEM PROCESS & WORKFLOW AUDIT — READ ONLY
+
+I want you to investigate the CURRENT RUNNING ERP SOFTWARE and explain exactly how the software is working internally.
+
+IMPORTANT:
+- DO NOT MODIFY ANY CODE.
+- DO NOT MODIFY THE DATABASE.
+- DO NOT CREATE, EDIT, DELETE, CANCEL, POST, OR ALTER ANY TRANSACTION.
+- DO NOT RUN destructive migrations.
+- DO NOT change production data.
+- DO NOT "fix" anything.
+- This is a READ-ONLY forensic/system audit.
+- Inspect the actual current implementation, APIs, database schema, calculations, workflows, background jobs, permissions, and frontend behavior.
+- Do not assume how something works. Trace the actual code and database logic.
+
+OBJECTIVE:
+
+Create a complete technical + business-process map of the current Frozen Fruits ERP.
+
+I need to understand:
+
+1. WHAT HAPPENS WHEN A USER DOES SOMETHING
+2. WHICH FRONTEND PAGE/CODE IS EXECUTED
+3. WHICH API ENDPOINT IS CALLED
+4. WHAT VALIDATIONS ARE PERFORMED
+5. WHAT DATABASE TABLES ARE READ
+6. WHAT DATABASE TABLES ARE WRITTEN
+7. WHAT ACCOUNTING ENTRIES ARE CREATED
+8. HOW STOCK IS UPDATED
+9. HOW LOCATION/Warehouse is applied
+10. HOW reports calculate their values
+11. HOW balances flow from one module to another
+12. WHETHER there are duplicate calculations or double counting
+13. WHETHER any process can create inconsistent accounting/inventory
+14. WHETHER historical transactions are handled differently from new transactions
+15. WHETHER there are hidden background processes/jobs affecting data
+
+==================================================
+A. SYSTEM ARCHITECTURE
+==================================================
+
+Inspect and document:
+
+- Frontend framework
+- Backend framework
+- Database technology
+- ORM/query layer
+- Authentication
+- Authorization
+- Session handling
+- API architecture
+- File/object storage
+- PDF generation
+- Excel/CSV exports
+- Background jobs
+- Scheduled jobs
+- Queues
+- Caching
+- Notifications
+- Audit logging
+- Backup/restore
+- Mobile app architecture
+- Production deployment architecture
+
+Show the actual important folders/files/modules responsible for each.
+
+==================================================
+B. LOGIN → DASHBOARD FLOW
+==================================================
+
+Trace the complete process:
+
+LOGIN
+↓
+Authentication
+↓
+Session/token creation
+↓
+User permissions
+↓
+Assigned Location/Warehouse
+↓
+Dashboard initialization
+↓
+API calls
+↓
+Database queries
+↓
+KPI calculations
+↓
+Dashboard rendering
+
+Explain exactly what happens after login.
+
+Identify:
+- APIs called
+- database queries/tables
+- permission checks
+- location filters
+- dashboard calculations
+- All Locations behavior
+- specific location behavior
+
+==================================================
+C. LOCATION / WAREHOUSE ISOLATION
+==================================================
+
+Audit every major module for location isolation.
+
+Determine exactly how the current software decides:
+
+- current location
+- assigned warehouse
+- Head Office
+- All Locations
+- accessible locations
+- transaction location
+- customer location
+- vendor location
+- ledger location
+- cash location
+- bank location
+- stock location
+
+Check BOTH:
+
+FRONTEND filtering
+AND
+BACKEND/server-side enforcement.
+
+Identify any place where the frontend hides data but backend may still allow access.
+
+Identify any place where a location filter is missing.
+
+==================================================
+D. MASTER DATA FLOW
+==================================================
+
+Trace:
+
+Customers
+Vendors
+Products
+Categories
+Units
+Warehouses
+Locations
+Employees
+Ledgers
+Chart of Accounts
+Bank Accounts
+Cash Accounts
+Tax/GST masters
+Expense masters
+Income masters
+Fixed Assets
+
+For each master explain:
+
+CREATE
+→ VALIDATION
+→ DATABASE
+→ LOCATION ASSOCIATION
+→ EDIT
+→ DELETE/DEACTIVATE
+→ HOW OTHER MODULES USE IT
+
+Identify foreign-key relationships and dependencies.
+
+==================================================
+E. PURCHASE PROCESS
+==================================================
+
+Trace a purchase from beginning to end.
+
+Example:
+
+Purchase Entry
+→ validation
+→ vendor
+→ location
+→ product
+→ batch
+→ expiry
+→ quantity
+→ rate
+→ GST
+→ total
+→ inventory update
+→ stock ledger
+→ accounting journal
+→ vendor payable
+→ reports
+→ P&L
+→ Balance Sheet
+
+Explain every step using actual code.
+
+Also investigate:
+
+- purchase editing
+- purchase cancellation
+- purchase return
+- historical purchase
+- asset purchase
+- expense purchase if applicable
+
+==================================================
+F. SALES / POS PROCESS
+==================================================
+
+Trace:
+
+Quotation
+→ Sale/POS
+→ customer
+→ location
+→ product
+→ batch
+→ stock validation
+→ quantity
+→ rate
+→ discount
+→ GST
+→ Other Charges
+→ invoice total
+→ stock deduction
+→ COGS
+→ accounting
+→ receivable
+→ cash/bank
+→ reports
+→ P&L
+
+Explain exactly when each accounting and inventory operation happens.
+
+==================================================
+G. QUOTATION PROCESS
+==================================================
+
+Trace:
+
+Quotation creation
+→ item selection
+→ Other Charges
+→ totals
+→ customer
+→ warehouse
+→ PDF
+→ print/share
+→ edit
+→ conversion to Sale/POS
+
+Confirm:
+
+- Does quotation create accounting entries?
+- Does quotation affect inventory?
+- How are charges stored?
+- How are charges transferred to a sale?
+- How are warehouse bank details obtained?
+- How is UPI QR generated?
+- Which company/location information is used?
+
+==================================================
+H. OTHER CHARGES
+==================================================
+
+Trace the complete Other Charges implementation.
+
+Determine:
+
+- where charges are stored
+- which ledger is selected
+- Direct Income validation
+- GST behavior
+- tax calculation
+- customer total
+- outstanding
+- accounting posting
+- PDF
+- print
+- CSV
+- quotation → sale transfer
+
+Confirm that Other Charges do not accidentally affect GST if configured as post-tax/no-GST.
+
+==================================================
+I. INVENTORY / STOCK ENGINE
+==================================================
+
+This is extremely important.
+
+Explain exactly how stock quantity is calculated.
+
+Identify:
+
+- opening stock
+- purchases
+- sales
+- purchase returns
+- sales returns
+- stock transfers
+- production
+- adjustments
+- damaged stock
+- wastage
+- closing stock
+
+Determine whether stock is:
+
+- stored as a running balance
+OR
+- calculated from transactions
+OR
+- combination of both.
+
+Explain the source of truth.
+
+Trace the exact calculation.
+
+==================================================
+J. STOCK TRANSFER
+==================================================
+
+Audit Stock Transfer In/Out completely.
+
+Trace:
+
+SOURCE WAREHOUSE
+→ Transfer Out
+→ source stock
+→ stock ledger
+→ accounting impact
+
+DESTINATION WAREHOUSE
+→ Transfer In
+→ destination stock
+→ stock ledger
+→ accounting impact
+
+Confirm whether internal transfers affect:
+
+- sales
+- purchase
+- income
+- expense
+- COGS
+- gross profit
+- net profit
+- inventory value
+- opening stock
+- closing stock
+- P&L
+
+Check specifically for double counting.
+
+Explain how the transfer is reflected in monthly opening/closing stock.
+
+Check whether a transferred batch retains:
+
+- batch number
+- cost
+- expiry
+- quantity
+- FIFO/FEFO position
+
+==================================================
+K. MONTHLY STOCK CALCULATION
+==================================================
+
+Trace the monthly stock architecture.
+
+Explain:
+
+Month N Opening Stock
++
+Purchases
+-
+Sales
+± Returns
+± Transfers
+± Adjustments
+=
+Month N Closing Stock
+
+Then explain:
+
+Month N Closing Stock
+→ Month N+1 Opening Stock
+
+Check for:
+
+- duplicate carry-forward
+- transfer double counting
+- opening stock duplication
+- historical transaction duplication
+- location mixing
+- incorrect month boundaries
+
+Give actual code/table references.
+
+==================================================
+L. FIFO / FEFO
+==================================================
+
+Determine exactly how FIFO/FEFO works.
+
+Explain:
+
+- batch selection
+- expiry selection
+- cost selection
+- stock deduction
+- partial batch consumption
+- transfer batch movement
+- returned stock
+- cancellation/edit behavior
+
+Check whether the algorithm is consistent across Purchase, Sales, POS, Transfer, Returns and Adjustments.
+
+==================================================
+M. ACCOUNTING ENGINE
+==================================================
+
+Map the entire accounting architecture.
+
+Identify:
+
+- Chart of Accounts
+- ledger accounts
+- journal vouchers
+- automatic journal creation
+- debit/credit logic
+- voucher types
+- location assignment
+- accounting periods
+- opening balances
+- closing balances
+
+For every operational transaction explain:
+
+Transaction
+→ Accounting rule
+→ Debit
+→ Credit
+→ Journal Voucher
+→ Ledger
+→ Trial Balance
+→ P&L / Balance Sheet
+
+==================================================
+N. VENDOR LEDGER
+==================================================
+
+Trace exactly how Vendor Ledger is calculated.
+
+Check:
+
+Purchase
+Payment
+Purchase Return
+Asset Purchase
+Other vendor transactions
+
+Confirm whether every relevant transaction reaches Vendor Ledger.
+
+Check location filtering.
+
+==================================================
+O. CUSTOMER LEDGER
+==================================================
+
+Trace:
+
+Sales
+Receipt
+Sales Return
+Credit/debit adjustments if applicable
+
+Determine exactly how customer outstanding is calculated.
+
+Check location isolation.
+
+==================================================
+P. CASH & BANK
+==================================================
+
+Trace:
+
+Receipt
+Payment
+Sales cash
+Purchase cash
+Bank transaction
+Cash transfer
+Bank transfer
+Opening balance
+Closing balance
+
+Confirm:
+
+- Cash Book calculation
+- Bank Book calculation
+- Day Book calculation
+- location assignment
+- account assignment
+- employee permissions
+
+IMPORTANT:
+Cash and Bank accounts should currently use SINGLE location assignment, not multiple-location assignment.
+
+Verify actual implementation.
+
+==================================================
+Q. EXPENSES
+==================================================
+
+Trace:
+
+Expense entry
+→ expense ledger
+→ payment method
+→ cash/bank
+→ journal
+→ P&L
+→ location
+→ reports
+
+Check whether expenses are duplicated anywhere.
+
+==================================================
+R. ASSET PURCHASE / FIXED ASSETS
+==================================================
+
+Audit Asset Purchase in detail.
+
+Trace:
+
+Asset Purchase
+→ Vendor
+→ Fixed Asset Ledger
+→ Vendor Ledger
+→ Journal Voucher
+→ Cash/Bank or Payable
+→ Balance Sheet
+→ depreciation if implemented
+→ location
+
+Check existing historical asset purchase records as well as new records.
+
+Identify any transactions where:
+- asset exists but vendor ledger missing
+- vendor exists but asset ledger missing
+- journal lacks location
+- accounting entry is incomplete
+
+DO NOT FIX THEM.
+Only report them.
+
+==================================================
+S. P&L
+==================================================
+
+Explain exactly how P&L is calculated.
+
+Map:
+
+Sales
+- COGS
+= Gross Profit
+
+Gross Profit
++ Other Income
+- Expenses
+= Net Profit
+
+Determine actual source tables/queries.
+
+Check:
+
+- day-wise
+- month-wise
+- financial-year
+- location-wise
+- All Locations
+- transfer exclusion
+- opening stock
+- closing stock
+
+==================================================
+T. BALANCE SHEET
+==================================================
+
+Trace how Balance Sheet values are generated.
+
+Explain:
+
+Assets
+Liabilities
+Capital
+Retained Earnings
+Profit/Loss
+Receivables
+Payables
+Cash
+Bank
+Fixed Assets
+Inventory
+
+Identify source accounts and calculations.
+
+==================================================
+U. CHART OF ACCOUNTS REPORT
+==================================================
+
+Audit current Chart of Accounts report.
+
+Explain:
+
+- account hierarchy
+- parent groups
+- ledger values
+- date filters
+- location filters
+- month-wise mode
+- zero accounts
+- valued accounts
+- expand/collapse
+- PDF generation
+
+Specifically verify the implementation of:
+
+“Show Valued Accounts Only”
+
+If checked:
+→ hide zero-value accounts.
+
+If unchecked:
+→ show all accounts.
+
+Determine whether this filtering happens frontend or backend.
+
+==================================================
+V. REPORT PDF ENGINE
+==================================================
+
+Trace how PDFs are generated.
+
+Check:
+
+- P&L
+- Balance Sheet
+- Chart of Accounts
+- Sales
+- Purchase
+- Quotation
+- Payment Voucher
+- Receipt Voucher
+- Journal Voucher
+- Stock reports
+
+Determine whether PDF data comes from:
+
+- same API as screen
+OR
+- separate calculation.
+
+Check for differences between screen and PDF.
+
+==================================================
+W. HR / PAYROLL
+==================================================
+
+Trace:
+
+Employee
+→ attendance
+→ payroll
+→ salary
+→ advances
+→ PF
+→ ESI
+→ deductions
+→ net salary
+→ accounting
+
+Also inspect bulk attendance Fix.
+
+Explain how bulk Fix is processed and whether it uses atomic transactions.
+
+==================================================
+X. RENT MANAGEMENT
+==================================================
+
+Trace rent setup and monthly rent processing.
+
+Identify:
+
+- warehouse/location
+- rent amount
+- due date
+- payment
+- accounting
+- expense
+- reports
+
+==================================================
+Y. AUDIT LOGGING
+==================================================
+
+Determine exactly what actions are audited.
+
+Check:
+
+- login
+- create
+- edit
+- delete
+- cancel
+- payment
+- receipt
+- stock transfer
+- accounting
+- master changes
+- permission changes
+
+Identify whether audit logs contain:
+
+user
+timestamp
+action
+record
+old value
+new value
+location
+
+==================================================
+Z. BACKGROUND / AUTOMATED PROCESSES
+==================================================
+
+Find ALL background processes.
+
+Examples:
+
+- scheduled jobs
+- cron jobs
+- automatic backups
+- payroll processing
+- stock recalculation
+- accounting synchronization
+- notifications
+- PDF generation queues
+- cleanup jobs
+- APK build/publication
+- database maintenance
+
+For each process provide:
+
+NAME
+TRIGGER
+FREQUENCY
+CODE LOCATION
+DATABASE TABLES AFFECTED
+FILES AFFECTED
+POSSIBLE SIDE EFFECTS
+
+==================================================
+AA. DATABASE MAP
+==================================================
+
+Create a database dependency map.
+
+For every major table show:
+
+TABLE
+PURPOSE
+PRIMARY KEY
+IMPORTANT FOREIGN KEYS
+LOCATION FIELD
+CREATED/UPDATED FIELDS
+IMPORTANT STATUS FIELDS
+WHO WRITES TO IT
+WHO READS FROM IT
+
+Identify tables involved in:
+
+Sales
+Purchase
+Inventory
+Stock Transfer
+Accounting
+Customers
+Vendors
+Cash
+Bank
+Expenses
+Assets
+Payroll
+Reports
+Audit
+Backup
+
+==================================================
+AB. TRANSACTION LIFECYCLE
+==================================================
+
+For at least these transactions create an exact lifecycle:
+
+1. Purchase
+2. Sale
+3. POS Sale
+4. Quotation
+5. Payment
+6. Receipt
+7. Expense
+8. Asset Purchase
+9. Stock Transfer
+10. Purchase Return
+11. Sales Return
+12. Payroll
+
+For each one show:
+
+USER ACTION
+↓
+FRONTEND
+↓
+API
+↓
+VALIDATION
+↓
+DATABASE
+↓
+INVENTORY
+↓
+ACCOUNTING
+↓
+LEDGER
+↓
+REPORT
+↓
+PDF
+
+==================================================
+AC. EDIT / CANCEL / DELETE BEHAVIOR
+==================================================
+
+This is critical.
+
+For every transaction type determine what happens when:
+
+CREATE
+EDIT
+CANCEL
+DELETE
+
+Explain whether the system:
+
+- reverses journal entries
+- rewrites journal entries
+- reverses stock
+- restores stock
+- changes ledger balances
+- changes reports
+- creates audit entries
+
+Check historical transaction safety.
+
+==================================================
+AD. DATA CONSISTENCY / RECONCILIATION
+==================================================
+
+Perform READ-ONLY reconciliation checks.
+
+Check for:
+
+Sales total ≠ sales ledger
+Purchase total ≠ purchase ledger
+Vendor balance mismatch
+Customer balance mismatch
+Stock quantity mismatch
+Stock value mismatch
+Cash mismatch
+Bank mismatch
+P&L mismatch
+Balance Sheet imbalance
+Journal debit ≠ credit
+Location mismatch
+Missing journal entries
+Duplicate journal entries
+Missing stock ledger entries
+Duplicate stock movements
+Orphan records
+
+Do not fix anything.
+
+Report the exact records/counts where possible.
+
+==================================================
+AE. PERFORMANCE
+==================================================
+
+Inspect for:
+
+- N+1 queries
+- unnecessary API calls
+- duplicate queries
+- slow report calculations
+- large table scans
+- missing indexes
+- repeated calculations
+- frontend rendering problems
+- unnecessary database requests
+
+Do not change anything.
+
+==================================================
+AF. SECURITY
+==================================================
+
+Audit:
+
+- authentication
+- authorization
+- role permissions
+- location isolation
+- API authorization
+- direct API access
+- IDOR risks
+- admin-only operations
+- sensitive data exposure
+- production secrets
+- hardcoded credentials
+- unsafe endpoints
+
+Do not exploit or modify anything.
+
+==================================================
+AG. LIVE SOFTWARE VS CODE
+==================================================
+
+Very important:
+
+Determine whether the CURRENT RUNNING/PUBLISHED ERP is actually running the same code currently present in the workspace.
+
+Compare:
+
+LIVE/PUBLISHED
+vs
+CURRENT SOURCE CODE
+vs
+DATABASE SCHEMA
+
+Report any differences.
+
+==================================================
+AH. FINAL OUTPUT
+==================================================
+
+Do NOT give me a generic summary.
+
+Produce a structured technical audit report with:
+
+1. SYSTEM ARCHITECTURE
+2. COMPLETE MODULE MAP
+3. DATABASE MAP
+4. API MAP
+5. TRANSACTION FLOW MAP
+6. ACCOUNTING FLOW
+7. INVENTORY FLOW
+8. LOCATION FLOW
+9. REPORT CALCULATION FLOW
+10. BACKGROUND PROCESS FLOW
+11. SECURITY FLOW
+12. EDIT/CANCEL FLOW
+13. DATA RECONCILIATION RESULTS
+14. PERFORMANCE FINDINGS
+15. SECURITY FINDINGS
+16. DATA INTEGRITY FINDINGS
+17. POSSIBLE DOUBLE-COUNTING AREAS
+18. POSSIBLE MISSING-ENTRY AREAS
+19. HISTORICAL-DATA RISKS
+20. LIVE VS SOURCE-CODE DIFFERENCES
+
+FOR EVERY FINDING PROVIDE:
+
+- Module
+- Current behavior
+- Expected behavior if clearly defined
+- Actual code/file/API involved
+- Database table(s)
+- Severity:
+  CRITICAL / HIGH / MEDIUM / LOW / INFO
+- Evidence
+- Potential impact
+- Whether it is confirmed or only a possible risk
+
+IMPORTANT:
+Do not silently fix anything during this audit.
+
+At the very end provide:
+
+A. WHAT IS WORKING CORRECTLY
+B. WHAT IS NOT WORKING
+C. WHAT IS RISKY
+D. WHAT NEEDS INVESTIGATION
+E. WHAT SHOULD BE FIXED FIRST
+F. TOP 10 MOST IMPORTANT ISSUES
+G. COMPLETE PROCESS FLOW DIAGRAMS IN TEXT FORMAT
+
+Use the ACTUAL CURRENT SOFTWARE implementation as the source of truth.
+
+I want to understand exactly how every important process is currently being processed before making any further changes.
