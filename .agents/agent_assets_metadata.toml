@@ -6,18 +6,21 @@ id = "bQ1j-oEOO-ni4rUDpRYU4"
 uri = "file://docs/ERP_STRUCTURE.md"
 type = "text"
 title = "Marlin ERP — Complete Structure Documentation"
+logical_id = "17da2a78-021c-49b6-b30a-0b7d195b4ba2"
 
 [[outputs]]
 id = "Xt2ukZumm4xO9KjvbupX_"
 uri = "file://ERP_SYSTEM_GUIDE.md"
 type = "text"
 title = "Marlin ERP — Full System Guide"
+logical_id = "94fbece9-218e-4375-ac16-a1f8990c5078"
 
 [[outputs]]
 id = "ckqeaA_BvcXlJOsjxyEGI"
 uri = "file://INTEGRATION_AUDIT.md"
 type = "text"
 title = "Marlin ERP — End-to-End Integration Audit"
+logical_id = "65799a95-8c45-4c9b-8beb-3c23ea6efe81"
 
 [[outputs]]
 id = "oAASb1OtLrgFWnbNexakE"
@@ -25,3 +28,18 @@ uri = "file://docs/ERP_SYSTEM_AUDIT.md"
 type = "text"
 title = "Marlin ERP — Complete System Audit"
 description = "Full 19-phase discovery & audit: architecture, all modules, 62-table DB catalog, inventory/accounting/GST/HR flows, permissions & location model, API analysis, bugs found, health & production-readiness scores, risks, and next steps."
+logical_id = "3e423b1c-eecb-4086-8979-4419251055d8"
+
+[[outputs]]
+id = "6YPpW8tijqMNxZNVCpf1c"
+uri = "file://docs/ERP_SYSTEM_PROCESS_AUDIT_2026-09-05.md"
+type = "text"
+title = "Frozen Fruits ERP System Process Audit"
+description = "Read-only forensic audit of the current ERP source, running development workflows, API health, database metadata, reconciliation results, transaction flows, accounting, inventory, location controls, security, performance, and historical risks."
+logical_id = "91096e54-d3eb-4384-bfe4-9c2945169d90"
+content_hash = "sha256:cd9ea62ca48099eae8b7137d29b980fff3f79e893d502d931dd38eabdaebf890"
+size = 47548
+mtime_ms = 1788588230218
+storage_uri = "gcs://replit-rams-assets-sisko/rams/assets/repl:bd7bcd33-774f-4b61-bf46-8afc6db19a81/91096e54-d3eb-4384-bfe4-9c2945169d90/3188f8bb-bacb-4d86-898d-91b4c4f573b4"
+storage_version_token = "1788588273828919"
+content_type = "text/markdown"
