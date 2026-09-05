@@ -68,7 +68,7 @@ export default function LoginScreen() {
           <View style={styles.logoCircle}>
             <Feather name="briefcase" size={36} color={colors.primaryForeground} />
           </View>
-          <Text style={styles.brandName}>Frozen Fruits</Text>
+          <Text style={styles.brandName}>Frozen Fruits ERP</Text>
           <Text style={styles.brandSub}>Employee Portal</Text>
         </View>
 
