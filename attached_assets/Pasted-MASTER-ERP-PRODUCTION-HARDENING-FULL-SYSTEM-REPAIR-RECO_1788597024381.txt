@@ -1,0 +1,1895 @@
+MASTER ERP PRODUCTION HARDENING + FULL SYSTEM REPAIR + RECONCILIATION PROMPT
+
+PROJECT:
+Frozen Fruits ERP
+
+OBJECTIVE:
+Take the CURRENT ERP codebase, database, frontend, backend, accounting engine, inventory engine, reports, PDFs, permissions, location isolation, HR/payroll, GST, backup/restore and production deployment and bring the entire system to a production-ready, internally consistent, auditable and reliable state.
+
+IMPORTANT:
+DO NOT treat this as a collection of separate small tasks.
+DO NOT wait for me to give one issue at a time.
+YOU are responsible for investigating the entire system, identifying all defects, fixing them systematically, testing them, and rechecking the whole ERP after every major repair.
+
+Do not simply hide problems in the UI.
+Fix root causes in backend/business logic/database/transactions wherever applicable.
+
+Do not destroy, rewrite, or delete valid historical business data just to make reports look correct.
+
+Do not hard-code credentials.
+Do not expose passwords, tokens, secrets or private information.
+Use the existing authenticated development/production mechanisms and environment secrets.
+
+==================================================
+1. FIRST: FULL SYSTEM DISCOVERY
+==================================================
+
+Before making changes, inspect the entire application.
+
+Understand:
+
+- React/Vite/TypeScript frontend
+- Express backend/API
+- PostgreSQL schema and migrations
+- Drizzle/raw pg usage
+- authentication
+- authorization
+- page permissions
+- action permissions
+- location permissions
+- warehouse/Head Office model
+- accounting engine
+- inventory engine
+- GST engine
+- payroll engine
+- rent engine
+- backup system
+- object storage
+- PDF generation
+- mobile application
+- background jobs
+- scheduled jobs
+- startup migrations/repairs
+- deployment configuration
+- production configuration
+- database configuration
+- API routes
+- frontend hooks
+- React Query usage
+- report calculations
+- export calculations
+- audit logging
+
+Build an internal dependency map before modifying critical logic.
+
+Identify:
+
+- source of truth for stock
+- source of truth for accounting
+- source of truth for customers/vendors
+- source of truth for locations
+- source of truth for GST
+- source of truth for payroll
+- source of truth for reports
+- source of truth for cash/bank
+- source of truth for fixed assets
+- source of truth for transfer status
+- source of truth for reservations
+
+Reuse existing calculation engines wherever possible.
+
+Do NOT create parallel calculation logic unless absolutely necessary.
+
+==================================================
+2. PRODUCTION VS DEVELOPMENT
+==================================================
+
+Compare development and production architecture/schema/code behavior where access is available.
+
+Verify:
+
+- database schema
+- migration state
+- table count
+- column definitions
+- indexes
+- constraints
+- foreign keys
+- enums
+- triggers
+- scheduled jobs
+- environment variables
+- storage configuration
+- PDF generation
+- backup configuration
+- deployment configuration
+
+Record deployment identity/version.
+
+Every production backup and health report should be able to identify:
+
+- ERP version
+- deployment/build identifier
+- git commit if available
+- database version
+- migration version
+
+Do not report production as fully healthy merely because healthz returns 200.
+
+==================================================
+3. AUTHENTICATION AND AUTHORIZATION
+==================================================
+
+Audit all protected routes.
+
+Verify:
+
+- authentication
+- session/token validation
+- logout
+- token invalidation/revocation
+- password handling
+- lockout
+- page permissions
+- action permissions
+- API authorization
+- location authorization
+
+Every protected API must enforce authorization server-side.
+
+Never rely only on hiding UI elements.
+
+Specifically verify customer/vendor detail routes.
+
+A user assigned to Warehouse A must NOT be able to access:
+
+- Warehouse B customers
+- Warehouse B vendors
+- Warehouse B transactions
+- Warehouse B financial information
+- Warehouse B stock
+- Warehouse B reports
+
+through direct API requests.
+
+Implement server-side partyScopeCheck or equivalent secure centralized scope enforcement.
+
+Test:
+
+- same-location access
+- different-location access
+- unauthorized access
+- Head Office access
+- All Locations access
+- direct URL/API access
+- manipulated IDs
+
+==================================================
+4. LOCATION ARCHITECTURE
+==================================================
+
+Locations consist of:
+
+- Head Office
+- Warehouses
+
+Outlets are not the operational model.
+
+Rules:
+
+HEAD OFFICE:
+- Company Profile belongs to Head Office.
+- Head Office selected specifically behaves as one normal location.
+- "All Locations" is a consolidated reporting/view option only for authorized users.
+
+WAREHOUSE:
+- Each warehouse has its own location identity.
+- Warehouse employees only see their assigned warehouse.
+- Warehouse profile/logo/details are used where warehouse documents require them.
+
+Verify location scoping for:
+
+- customers
+- vendors
+- sales
+- POS
+- quotations
+- purchases
+- purchase returns
+- sales returns
+- expenses
+- receipts
+- payments
+- cash
+- bank
+- stock
+- stock transfers
+- vouchers
+- journal vouchers
+- fixed assets
+- reports
+- dashboards
+- GST
+- payroll where applicable
+- rent
+- audit logs
+
+Do not allow location leakage through:
+
+- dropdown APIs
+- detail APIs
+- search endpoints
+- exports
+- reports
+- PDFs
+- direct IDs
+- URL parameters
+- React Query cache
+- server-generated documents
+
+==================================================
+5. CUSTOMERS AND VENDORS
+==================================================
+
+Customer dropdowns and vendor dropdowns must be location-safe.
+
+Receipt Voucher:
+- customer dropdown only shows customers accessible to current location.
+
+Payment Voucher:
+- vendor dropdown only shows vendors accessible to current location.
+
+Backend must enforce the same restriction.
+
+Head Office specifically selected:
+- only Head Office-associated records.
+
+All Locations:
+- only if user has permission, show all authorized accessible records.
+
+Never allow a frontend filter to be the only protection.
+
+Preserve existing historical customer/vendor records.
+
+==================================================
+6. INVENTORY ENGINE
+==================================================
+
+Establish the authoritative inventory model.
+
+Current intended architecture:
+
+stock_entries = current stock quantity
+stock_batches = lot/batch quantity
+stock_ledger = append-only dated movements
+reservations = temporary holds, NOT additional on-hand stock
+
+Available stock:
+
+available = on_hand - active_reservations
+
+Verify this consistently throughout:
+
+- purchase
+- sale
+- POS
+- transfer
+- quotation conversion
+- returns
+- stock adjustments
+- production
+- reports
+- dashboard
+- FIFO/FEFO
+- month closing
+
+Do not create duplicate stock movements.
+
+Do not double-count inventory.
+
+Do not allow negative stock unless explicitly supported by an existing controlled business rule.
+
+==================================================
+7. FIFO / FEFO / BATCH / EXPIRY
+==================================================
+
+Verify:
+
+- batch tracking
+- expiry
+- FIFO/FEFO selection
+- quantity consumption
+- cost movement
+- purchase receipt
+- sales consumption
+- returns
+- transfers
+- stock adjustments
+
+When inventory moves between warehouses:
+
+- quantity moves
+- batch identity moves
+- expiry moves
+- cost basis moves
+- FIFO/FEFO information remains valid
+
+No inventory movement should accidentally create revenue, expense or profit.
+
+==================================================
+8. STOCK TRANSFER
+==================================================
+
+Fully audit the complete transfer lifecycle.
+
+Transfer Out:
+
+- lock source stock
+- consume correct FIFO/FEFO lots
+- reduce source stock
+- write transfer_out ledger movement
+- create reservation/in-transit quantity if required
+
+Transfer In:
+
+- lock transfer
+- release corresponding reservation
+- increase destination stock
+- restore/transfer batch information
+- write transfer_in ledger movement
+- complete transfer
+
+Short receipt:
+
+- destination receives actual quantity
+- remaining quantity stays in transit
+
+Reject:
+
+- correctly restore source inventory
+- write proper return movement
+- maintain complete audit trail
+
+Internal transfer must NOT affect:
+
+- Sales
+- Purchase
+- Revenue
+- Expense
+- COGS
+- Gross Profit
+- Net Profit
+
+Internal transfer must not inflate company-wide inventory.
+
+Monthly stock:
+
+Source:
+Opening Stock - Transfer Out
+
+Destination:
+Opening Stock + Transfer In
+
+Company total:
+unchanged
+
+Next month's opening must correctly derive from previous closing according to existing architecture.
+
+Do not repeatedly add historical transfers every month.
+
+==================================================
+9. CRITICAL PRODUCTION RESERVATION ISSUE
+==================================================
+
+Investigate production reservation:
+
+Reservation ID 18
+Transfer ID 9
+Item ID 90
+Warehouse ID 5
+Quantity 5
+Status active
+Transfer status completed
+
+DO NOT blindly delete it.
+
+Trace:
+
+1. transfer creation
+2. transfer out
+3. stock deduction
+4. reservation creation
+5. transfer in
+6. destination stock credit
+7. reservation release
+8. transfer completion
+
+Inspect:
+
+- stock_transfers
+- stock_reservations
+- stock_entries
+- stock_batches
+- stock_ledger
+- audit records
+
+Determine:
+
+- source warehouse
+- destination warehouse
+- dispatched quantity
+- received quantity
+- reserved quantity
+- timestamps
+- whether the 5 units were physically received
+- whether the 5 units already exist in destination stock
+- whether reservation is reducing available stock
+- whether the reservation is causing incorrect available stock
+- whether other completed transfers have the same problem
+
+If the reservation is stale and the physical stock is already correctly present:
+
+- make the minimum safe corrective change
+- preserve audit history
+- never rewrite unrelated historical transactions
+
+Then fix the underlying code so completed transfers cannot retain active reservations.
+
+Add a database/application invariant:
+
+COMPLETED transfer -> no active reservation belonging to that completed transfer.
+
+Test partial receipt and rejected transfers too.
+
+==================================================
+10. HISTORICAL INVENTORY RELIABILITY
+==================================================
+
+The current system reconstructs historical inventory by rewinding current stock using dated stock ledger movements and current valuation logic.
+
+This can be unreliable if:
+
+- old movements are missing
+- masters were deleted
+- old batches were removed
+- historical transfer receipt state was not retained
+- current weighted average cost is used to reconstruct historical values
+
+Do NOT pretend historical reports are perfectly reliable if the underlying data model cannot prove them.
+
+Determine whether historical reports can be made deterministic without destructive rewriting.
+
+If schema enhancement is needed, implement forward-safe historical state tracking.
+
+Preserve existing data.
+
+Never fabricate historical quantities/costs.
+
+Create validation/reconciliation warnings where historical accuracy cannot be proven.
+
+==================================================
+11. ACCOUNTING ENGINE
+==================================================
+
+Accounting must be generated from operational transactions.
+
+Verify every accounting event:
+
+PURCHASE:
+Dr Inventory/Expense
+Cr Vendor/Payable
+
+SALE:
+Dr Customer/Cash/Bank
+Cr Sales
+plus GST where applicable
+plus correct COGS/inventory reduction
+
+EXPENSE:
+Dr Expense
+Cr Cash/Bank/Payable
+
+RECEIPT:
+Dr Cash/Bank
+Cr Customer
+
+PAYMENT:
+Dr Vendor/Expense/Payable
+Cr Cash/Bank
+
+ASSET PURCHASE:
+Dr Fixed Asset
+Cr Vendor/Cash/Bank
+
+STOCK TRANSFER:
+NO PROFIT/LOSS IMPACT
+
+RETURNS:
+correct reversal accounting
+
+All journal vouchers must balance:
+
+Total Debit = Total Credit
+
+Prevent unbalanced vouchers at transaction level.
+
+==================================================
+12. ASSET PURCHASE
+==================================================
+
+Fix asset purchase integration completely.
+
+Every valid asset purchase must correctly flow to:
+
+- Vendor Ledger
+- Fixed Asset Ledger
+- Journal Voucher
+- Balance Sheet
+- Accounts Payable where applicable
+- asset register
+- location
+- audit log
+
+Existing live asset purchases must be investigated.
+
+Do not simply fix future records and ignore existing records.
+
+Identify historical asset purchases with missing location or missing ledger integration.
+
+For each anomaly determine whether:
+
+- accounting exists
+- vendor balance exists
+- fixed asset exists
+- journal voucher exists
+- location is missing
+- duplicate accounting exists
+
+Repair only when the correct source transaction proves what the accounting should be.
+
+Never duplicate an existing valid accounting entry.
+
+==================================================
+13. JOURNAL VOUCHERS
+==================================================
+
+All journal vouchers must have correct:
+
+- location
+- date
+- voucher number
+- reference
+- debit
+- credit
+- audit trail
+
+Shared/global accounts must remain usable where appropriate.
+
+Location-specific accounts must not leak between locations.
+
+Verify location-aware account membership.
+
+Verify branch/location-safe voucher resolution.
+
+==================================================
+14. CASH AND BANK
+==================================================
+
+Cash and Bank account assignment must remain SINGLE LOCATION.
+
+Do NOT reintroduce multiple-location assignment.
+
+Verify:
+
+- Cash Book
+- Bank Book
+- Day Book
+- account dropdowns
+- account balances
+- account location
+- permissions
+- current warehouse filtering
+
+Permitted employees must see permitted cash/bank ledgers.
+
+Do not show "No results found" when valid permitted accounts exist.
+
+Backend must enforce location.
+
+Verify negative balances and flag them for reconciliation rather than silently changing them.
+
+==================================================
+15. PARTY LEDGERS
+==================================================
+
+Verify complete customer/vendor ledger lifecycle.
+
+Customer:
+
+Sales
+Receipts
+Credit notes
+Sales returns
+Opening balance
+Adjustments
+
+Vendor:
+
+Purchases
+Payments
+Debit notes
+Purchase returns
+Opening balance
+Adjustments
+
+Verify outstanding calculations.
+
+Verify ledger balance equals underlying transactions.
+
+No duplicate posting.
+
+No missing posting.
+
+==================================================
+16. GST
+==================================================
+
+There are currently two GST calculation/reporting streams.
+
+Unify them.
+
+GST should have ONE authoritative calculation source.
+
+Ensure consistency between:
+
+- sales GST
+- purchase GST
+- GST summary
+- Reports Center GST
+- GST ledgers
+- invoices
+- returns
+- tax reports
+- exports
+
+Do not allow document-level GST and posting-derived GST to silently disagree.
+
+Create reconciliation tests comparing both sources.
+
+Correct rounding consistently.
+
+Verify CGST/SGST/IGST rules.
+
+Verify intra-state/inter-state behavior based on GST registrations.
+
+==================================================
+17. OTHER CHARGES
+==================================================
+
+Other Charges are Direct Income charges.
+
+Rules:
+
+- multiple charge rows allowed
+- use active postable Direct Income ledgers
+- no GST
+- post-tax
+- included in customer total
+- included in outstanding
+- posted to selected Direct Income ledger
+- quotation charges persist
+- quotation -> sale/POS carries charges
+- sale/POS displays charges
+- PDF displays charges
+- print/share displays charges
+
+Quotation itself must not create accounting.
+
+Do not create revenue from quotation until converted to sale.
+
+==================================================
+18. QUOTATION
+==================================================
+
+Quotation must support:
+
+- items
+- quantities
+- prices
+- discounts
+- taxes
+- Other Charges
+- totals
+- customer
+- warehouse/location
+
+Other Charges UI must appear:
+
+Quoted Items
+Other Charges
+Summary
+
+Charges must persist during:
+
+- create
+- edit
+- save
+- reload
+- conversion to sale/POS
+
+Quotation PDF must display them correctly.
+
+==================================================
+19. SALES / POS
+==================================================
+
+Audit:
+
+- stock deduction
+- FIFO/FEFO
+- customer balance
+- cash/bank
+- GST
+- Other Charges
+- COGS
+- gross profit
+- invoice numbering
+- location
+- returns
+- cancellation/edit
+
+Ensure every sale is location stamped.
+
+Ensure no duplicate stock deduction.
+
+Ensure cancellation reverses all affected accounting/inventory correctly.
+
+==================================================
+20. PURCHASES
+==================================================
+
+Audit:
+
+- vendor
+- location
+- invoice number
+- invoice date
+- items
+- tax
+- stock receipt
+- batch
+- expiry
+- cost
+- accounting
+- vendor balance
+- payment
+- returns
+- cancellation
+
+Investigate purchases with blank vendor invoice numbers.
+
+Investigate repeated invoice numbers.
+
+Do not automatically merge/delete anything.
+
+Flag true duplicates and preserve legitimate same-number invoices from different vendors where appropriate.
+
+==================================================
+21. RETURNS / CANCELLATIONS / EDITS / DELETES
+==================================================
+
+This is critical.
+
+Do NOT physically delete accounting/business transactions where doing so destroys auditability.
+
+Replace unsafe physical deletes with:
+
+- cancellation
+- reversal
+- credit/debit adjustment
+- immutable audit history
+
+When reversing a transaction:
+
+Original transaction:
+- remains immutable
+
+Reversal:
+- creates compensating stock/accounting entries
+
+Audit:
+- records who
+- when
+- why
+- source transaction
+- reversal transaction
+
+Do not allow a reversal to itself be reversed incorrectly.
+
+Ensure stock, GST, party balance and accounting all reverse together atomically.
+
+Masters may be deleted only when safe and unused.
+
+Used historical masters should normally be deactivated/archived, not physically deleted.
+
+==================================================
+22. AUDIT LOGGING
+==================================================
+
+Current writeAudit is best-effort.
+
+This is unacceptable for critical financial mutations.
+
+Critical mutations must have durable audit logging.
+
+Audit logging should occur atomically with the business transaction where possible.
+
+If the audit write fails for a critical transaction:
+
+- transaction should fail/rollback where appropriate
+
+Never allow:
+
+financial mutation succeeds
++
+audit record silently disappears
+
+Record:
+
+- user
+- timestamp
+- action
+- module
+- entity
+- entity ID
+- location
+- before state where appropriate
+- after state where appropriate
+- reason/reference
+
+==================================================
+23. REPORTING ENGINE
+==================================================
+
+Reports must be calculated server-side from authoritative data.
+
+Do not trust client-prepared financial rows.
+
+Exports must not simply accept arbitrary client-generated report totals.
+
+Server should recalculate or validate:
+
+- P&L
+- Balance Sheet
+- Trial Balance
+- Day Book
+- Cash Book
+- Bank Book
+- ledgers
+- stock
+- GST
+- outstanding
+- inventory valuation
+
+Client should control presentation only.
+
+==================================================
+24. CHART OF ACCOUNTS
+==================================================
+
+Existing feature:
+
+"Show Valued Accounts Only"
+
+Unchecked:
+- show all accounts including zero-value accounts.
+
+Checked:
+- show only accounts with non-zero calculated value.
+- zero-value leaf accounts hidden.
+- required hierarchy ancestors remain visible where necessary.
+- do not delete/deactivate accounts.
+
+Use the existing accounting calculation engine.
+
+Must work with:
+
+- location
+- period
+- Month Wise
+- expanded/collapsed groups
+- PDF
+- print
+- export
+
+This is presentation-only.
+
+Never change accounting because of this checkbox.
+
+==================================================
+25. MONTH-WISE REPORTING
+==================================================
+
+Month Wise means:
+
+Existing Chart of Accounts/report structure remains.
+
+Months become columns.
+
+Example:
+
+Account | April | May | June | Total
+
+Do not create a disconnected second accounting table.
+
+Use authoritative monthly calculations.
+
+Do not mix day-wise reporting into this requirement.
+
+==================================================
+26. DASHBOARD
+==================================================
+
+All Locations:
+
+Show consolidated total PLUS location-by-location breakdown for:
+
+- Sales
+- Purchase
+- Inventory Value
+- Expense
+- Payables
+- Receivables
+- Payments
+- Receipts
+- Cash
+- Bank
+- Gross Profit
+- Net Profit
+
+Specific location:
+
+Show clean KPI total.
+
+Do NOT show unnecessary location breakdown when one location is selected.
+
+All dashboard figures must use the same calculation engine as reports.
+
+Dashboard must not disagree with PDF/report data.
+
+==================================================
+27. P&L AND BALANCE SHEET
+==================================================
+
+P&L must include only valid P&L transactions.
+
+Internal stock transfers must not affect:
+
+- revenue
+- expense
+- COGS
+- gross profit
+- net profit
+
+Balance Sheet must correctly reflect:
+
+- cash
+- bank
+- receivables
+- payables
+- inventory
+- fixed assets
+- liabilities
+- equity
+
+Trial Balance must balance.
+
+P&L and Balance Sheet must be internally consistent.
+
+==================================================
+28. PDF / PRINT / SHARE
+==================================================
+
+PDF must exactly match what the user selected on screen.
+
+If only P&L selected:
+- PDF only P&L
+
+If subgroup collapsed:
+- PDF collapsed
+
+If subgroup expanded:
+- PDF shows expansion
+
+If Month Wise:
+- PDF shows month columns
+
+If Show Valued Accounts Only:
+- PDF follows that filter
+
+Location header:
+
+All Locations / Head Office:
+- Company Profile
+
+Warehouse:
+- selected warehouse profile/logo/details
+
+Quotation:
+- selected warehouse bank details
+- selected warehouse UPI ID
+- selected warehouse UPI QR
+- compact layout
+- no unnecessary blank space
+- correct UPI alignment
+
+Vouchers:
+
+Receipt
+Payment
+Journal
+
+A4 landscape.
+
+One voucher occupies RIGHT HALF only.
+
+LEFT HALF:
+- blank
+
+CENTER:
+- vertical cutting line
+
+Do NOT duplicate the voucher.
+
+Remove:
+"This is a computer-generated voucher."
+
+Do not remove required signatures.
+
+==================================================
+29. BACKUP AND RESTORE
+==================================================
+
+Backup must cover:
+
+- complete PostgreSQL database
+- required uploaded files
+- object storage data required by ERP
+- configuration/metadata necessary for restoration
+- backup manifest
+- ERP version
+- deployment/git identity
+
+Verify:
+
+- backup creation
+- archive integrity
+- manifest
+- retention
+- scheduler
+- restore procedure
+
+Perform a NON-PRODUCTION restore rehearsal.
+
+Never experiment with production restore.
+
+A backup is not considered fully validated until a restore has been successfully tested in a safe environment.
+
+==================================================
+30. BACKGROUND JOBS
+==================================================
+
+Audit:
+
+- salary accrual
+- rent accrual
+- backup scheduler
+- startup migrations
+- repair jobs
+- scheduled jobs
+
+Make jobs:
+
+- idempotent
+- safe to rerun
+- transaction-safe
+
+Prevent duplicate accrual.
+
+Prevent duplicate accounting.
+
+Prevent overlapping scheduler execution where possible.
+
+Use appropriate locking/distributed coordination if production architecture requires multiple instances.
+
+Startup should not unexpectedly modify business data without controlled migration/repair semantics.
+
+Do not log normal no-op migrations as misleading errors.
+
+==================================================
+31. PAYROLL / HR
+==================================================
+
+Audit:
+
+- employees
+- attendance
+- bulk attendance Fix
+- Select All
+- bulk Fix
+- payroll
+- advances
+- PF
+- ESI
+- salary accrual
+- location
+- employee permissions
+
+Bulk attendance Fix must be:
+
+- permission-controlled
+- location-aware
+- atomic
+- auditable
+- payroll-safe
+
+Individual Fix must remain available.
+
+Ensure payroll accounting has correct location where applicable.
+
+Investigate existing unstamped legacy payroll migration vouchers.
+
+Do not rewrite them without determining intended location/accounting.
+
+==================================================
+32. RENT MANAGEMENT
+==================================================
+
+Audit:
+
+- rent records
+- monthly accrual
+- payment
+- accounting
+- location
+- duplicate prevention
+- scheduler
+- audit
+
+Rent must not accrue twice if the scheduler runs repeatedly.
+
+==================================================
+33. DATABASE INTEGRITY
+==================================================
+
+Run a comprehensive integrity audit.
+
+Check:
+
+- orphan records
+- orphan journal lines
+- orphan stock ledger rows
+- orphan batches
+- orphan reservations
+- invalid foreign references
+- invalid location references
+- invalid account references
+- negative stock
+- negative batches
+- duplicate transactional links
+- duplicate invoice numbers
+- duplicate voucher numbers
+- impossible status combinations
+- stale reservations
+- completed transfers with active reservations
+- cancelled transactions with active stock/accounting effects
+- reversed transactions without reversal links
+- unbalanced JVs
+- missing location stamps
+- impossible dates
+- invalid quantities
+- invalid totals
+
+Use constraints where practical.
+
+Do not rely only on application code for critical invariants.
+
+==================================================
+34. TRANSACTIONAL ATOMICITY
+==================================================
+
+Critical business operations must be atomic.
+
+Examples:
+
+SALE:
+stock + accounting + customer balance + audit
+
+PURCHASE:
+stock + accounting + vendor balance + audit
+
+PAYMENT:
+cash/bank + vendor balance + accounting + audit
+
+RECEIPT:
+cash/bank + customer balance + accounting + audit
+
+TRANSFER:
+source stock + reservation + transfer status + destination stock + ledger + audit
+
+RETURN:
+stock + accounting + party balance + GST + audit
+
+If one critical component fails:
+rollback the transaction.
+
+Prevent partial posting.
+
+==================================================
+35. UI / API CONSISTENCY
+==================================================
+
+For every important screen:
+
+- UI data
+- API data
+- database data
+- PDF data
+- CSV/export data
+
+must agree.
+
+Do not fix discrepancies by modifying only frontend display.
+
+Find the calculation source.
+
+==================================================
+36. ERROR HANDLING
+==================================================
+
+Improve error handling for:
+
+- invalid location
+- invalid account
+- invalid party
+- insufficient stock
+- duplicate invoice
+- invalid GST
+- failed journal
+- failed stock movement
+- failed PDF
+- failed backup
+- failed audit
+- failed background job
+
+Show useful user-facing errors.
+
+Do not expose stack traces/secrets.
+
+Log sufficient diagnostic information server-side.
+
+==================================================
+37. PERFORMANCE
+==================================================
+
+Audit expensive:
+
+- dashboard queries
+- stock calculations
+- ledger calculations
+- reports
+- monthly reports
+- location aggregation
+- PDF generation
+- exports
+
+Avoid N+1 queries.
+
+Use indexes where justified.
+
+Do not sacrifice accounting correctness for speed.
+
+Cache only data that is safe to cache and correctly invalidated.
+
+==================================================
+38. SECURITY
+==================================================
+
+Audit:
+
+- SQL injection
+- authorization bypass
+- IDOR
+- location leakage
+- insecure direct object access
+- sensitive API responses
+- token handling
+- password handling
+- secrets in source
+- excessive error information
+- unsafe file access
+- unsafe export access
+
+Especially test:
+
+GET /customers/:id
+GET /vendors/:id
+
+against another location.
+
+==================================================
+39. PRODUCTION DATA RECONCILIATION
+==================================================
+
+After code fixes, run a production-safe reconciliation.
+
+At minimum verify:
+
+ACCOUNTING:
+- Trial Balance balances exactly
+- no orphan JV lines
+- no unbalanced JVs
+
+INVENTORY:
+- stock_entries quantity = stock_batches quantity where expected
+- no negative stock
+- no negative batches
+- transfer quantities reconcile
+- no stale completed-transfer reservations
+
+PARTIES:
+- customer ledger vs outstanding
+- vendor ledger vs outstanding
+
+SALES:
+- sales totals
+- GST
+- customer balances
+- stock deduction
+- COGS
+
+PURCHASES:
+- purchase totals
+- GST
+- vendor balances
+- stock addition
+
+CASH/BANK:
+- ledger balances
+- transaction totals
+- location assignment
+
+FIXED ASSETS:
+- asset purchase
+- vendor payable
+- fixed asset ledger
+- Balance Sheet
+
+GST:
+- sales GST
+- purchase GST
+- GST summary
+- GST ledger/report
+
+DASHBOARD:
+- dashboard vs report
+
+P&L:
+- P&L vs underlying accounting
+
+BALANCE SHEET:
+- BS vs Trial Balance
+
+==================================================
+40. DO NOT FABRICATE RECONCILIATION
+==================================================
+
+If a historical number cannot be reliably reconstructed from existing source data:
+
+DO NOT invent it.
+
+Report:
+
+- what is known
+- what is unknown
+- why
+- which data is missing
+- what schema/process improvement is required
+
+Do not mark the ERP fully reconciled if it is not provably reconciled.
+
+==================================================
+41. SAFE DATA REPAIR POLICY
+==================================================
+
+For every existing anomaly:
+
+FIRST:
+- identify source
+- identify dependencies
+- determine intended state
+- calculate impact
+
+THEN:
+- create safe repair
+- preserve audit history
+- avoid destructive deletion
+- verify accounting
+- verify stock
+- verify party balances
+- verify reports
+
+Never mass-update historical data simply because it looks inconsistent.
+
+Never delete records to make reconciliation pass.
+
+Never modify valid historical financial transactions without evidence.
+
+==================================================
+42. TESTING
+==================================================
+
+Create/extend automated tests for all critical workflows.
+
+Minimum:
+
+AUTH
+- login
+- logout
+- authorization
+- location isolation
+
+CUSTOMER
+- location-safe list
+- location-safe detail
+
+VENDOR
+- location-safe list
+- location-safe detail
+
+SALES
+- stock
+- accounting
+- GST
+- COGS
+- customer balance
+
+PURCHASE
+- stock
+- accounting
+- GST
+- vendor balance
+
+TRANSFER
+- transfer out
+- transfer in
+- partial receipt
+- rejection
+- reservation release
+- completed transfer invariant
+
+RETURNS
+- sales return
+- purchase return
+- accounting reversal
+- stock reversal
+
+ASSET
+- asset purchase
+- vendor ledger
+- fixed asset ledger
+- Balance Sheet
+
+CASH/BANK
+- location
+- permissions
+- balances
+
+OTHER CHARGES
+- quotation
+- sale
+- POS
+- accounting
+- PDF
+
+REPORTS
+- P&L
+- Balance Sheet
+- Trial Balance
+- GST
+- stock
+- ledgers
+- Month Wise
+- valued-only
+
+PDF
+- screen/PDF parity
+- location header
+- bank
+- UPI
+- voucher layout
+
+BACKUP
+- backup
+- archive validation
+- restore rehearsal
+
+HR
+- attendance
+- bulk fix
+- payroll
+
+==================================================
+43. REGRESSION TESTING
+==================================================
+
+After fixing any critical subsystem, rerun related regression tests.
+
+At the end run the FULL test suite.
+
+Also perform:
+
+- TypeScript check
+- build
+- lint where configured
+- API tests
+- database integrity checks
+- accounting reconciliation
+- inventory reconciliation
+
+Do not stop after the first successful build.
+
+A successful build does NOT mean the ERP is correct.
+
+==================================================
+44. UI VERIFICATION
+==================================================
+
+Verify the actual running application.
+
+Do not only inspect source code.
+
+Check:
+
+- login -> Dashboard
+- logout -> Login
+- location selector
+- All Locations
+- warehouse selection
+- customer dropdown
+- vendor dropdown
+- Cash/Bank dropdown
+- Chart of Accounts
+- valued-only checkbox
+- Month Wise
+- Dashboard
+- P&L
+- Balance Sheet
+- Sales/POS
+- Purchase
+- Quotation
+- Other Charges
+- Stock Transfer
+- Inventory
+- HR
+- Payroll
+- Rent
+- Backup
+- PDFs
+- printing
+
+Fix obvious runtime/UI/API mismatches.
+
+==================================================
+45. MOBILE APP
+==================================================
+
+Verify Expo/React Native application remains compatible with backend.
+
+Verify:
+
+- API URL
+- authentication
+- permissions
+- location handling
+- core dashboard
+- sales/POS
+- purchase
+- stock
+- reports where supported
+
+Profile -> Download Mobile App should use the intended automatic APK publication mechanism.
+
+Do not reintroduce manual APK URL entry if automatic publication is already implemented.
+
+Do not expose EXPO_TOKEN.
+
+==================================================
+46. BRANDING
+==================================================
+
+The product name must be:
+
+Frozen Fruits ERP
+
+Remove old references such as:
+
+- Marlin Frozen Fruit ERP
+- Marlin Frozen Fruits ERP
+
+where they are product branding.
+
+Do not alter historical legal/company names where they are actual business records.
+
+==================================================
+47. COMPANY / WAREHOUSE PROFILE
+==================================================
+
+Company Profile:
+- Head Office only
+
+Warehouse:
+- own logo
+- own address/details
+- own bank details
+- own UPI details
+
+Documents must select the correct profile according to location.
+
+==================================================
+48. FINAL SYSTEM HEALTH CHECK
+==================================================
+
+After all fixes, perform another complete forensic audit.
+
+Compare:
+
+BEFORE
+vs
+AFTER
+
+Report:
+
+- issues found
+- issues fixed
+- issues intentionally not changed
+- data repaired
+- tests added
+- tests passed
+- tests failed
+- remaining risks
+- historical limitations
+- production risks
+- database integrity
+- accounting integrity
+- inventory integrity
+- GST integrity
+- location security
+- backup status
+- deployment identity
+
+==================================================
+49. ACCEPTANCE CRITERIA
+==================================================
+
+ERP can only be considered production-ready when:
+
+1. No unbalanced journal vouchers.
+
+2. No orphan journal lines.
+
+3. No orphan stock ledger references.
+
+4. No negative stock unless explicitly approved business behavior.
+
+5. No negative batches unless explicitly approved.
+
+6. Completed transfers cannot retain active reservations.
+
+7. Transfer stock is P&L neutral.
+
+8. Customer/vendor APIs enforce location scope.
+
+9. Cash/Bank accounts remain single-location.
+
+10. Accounting is location-safe.
+
+11. Sales/purchases/expenses/payments/receipts use correct accounting.
+
+12. Asset purchases flow into Vendor Ledger + Fixed Asset Ledger + Balance Sheet correctly.
+
+13. Returns create proper reversals instead of destructive deletion.
+
+14. Critical mutations have durable audit events.
+
+15. GST has one authoritative calculation source.
+
+16. Reports are server-calculated.
+
+17. Exports cannot fabricate financial totals.
+
+18. Dashboard matches reports.
+
+19. P&L matches underlying accounting.
+
+20. Balance Sheet is internally consistent.
+
+21. Chart of Accounts valued-only filter is presentation-only.
+
+22. Month Wise reporting is correct.
+
+23. PDFs match selected screen state.
+
+24. Warehouse-specific PDFs use warehouse profile/bank/UPI information.
+
+25. Voucher PDFs have the required A4 landscape half-page layout.
+
+26. Backup is working.
+
+27. Backup restore has been rehearsed safely outside production.
+
+28. Backup identifies deployment/version.
+
+29. Background jobs are idempotent.
+
+30. Payroll/rent do not duplicate accrual.
+
+31. Authentication and location authorization are enforced server-side.
+
+32. Production stale reservation issue is resolved safely.
+
+33. Historical limitations are explicitly identified rather than hidden.
+
+34. Full regression tests pass.
+
+35. Production health endpoints work.
+
+36. Build succeeds.
+
+37. No critical security issue remains.
+
+==================================================
+50. CRITICAL OPERATING RULE
+==================================================
+
+DO NOT ask me to give you the next issue.
+
+You must inspect the whole ERP and fix the complete system.
+
+However:
+
+- Do NOT make destructive historical changes merely to make tests pass.
+- Do NOT delete data to hide inconsistencies.
+- Do NOT invent accounting values.
+- Do NOT fabricate historical stock.
+- Do NOT bypass permissions.
+- Do NOT hard-code credentials.
+- Do NOT disable security checks.
+- Do NOT remove audit history.
+- Do NOT silently change business rules.
+
+For every potentially destructive or financially material repair:
+
+1. investigate
+2. determine intended state
+3. calculate impact
+4. make the minimum safe correction
+5. preserve audit history
+6. verify accounting
+7. verify inventory
+8. verify reports
+9. add regression protection
+
+==================================================
+51. EXECUTION STRATEGY
+==================================================
+
+Work in logical dependency order:
+
+PHASE A:
+Full discovery + baseline audit
+
+PHASE B:
+Security + authentication + location isolation
+
+PHASE C:
+Database integrity + transactional integrity
+
+PHASE D:
+Inventory + batches + FIFO/FEFO + reservations + transfers
+
+PHASE E:
+Accounting + journals + party ledgers + cash/bank + assets
+
+PHASE F:
+GST + returns + reversals + Other Charges
+
+PHASE G:
+Reports + Dashboard + Chart of Accounts + Month Wise
+
+PHASE H:
+PDF/print/export
+
+PHASE I:
+HR + payroll + rent
+
+PHASE J:
+Backup/restore + background jobs
+
+PHASE K:
+Frontend/runtime/mobile consistency
+
+PHASE L:
+Production reconciliation
+
+PHASE M:
+Full regression + final forensic audit
+
+Do not stop after one phase if another phase exposes a dependency.
+
+If a later phase reveals a defect in an earlier phase, return to that subsystem and fix it properly.
+
+==================================================
+52. FINAL REPORT
+==================================================
+
+At the end, provide a concise but complete final report containing:
+
+A. SYSTEM STATUS
+- Production Ready / Conditional / Not Ready
+
+B. CRITICAL ISSUES FOUND
+
+C. CRITICAL ISSUES FIXED
+
+D. DATA REPAIRS PERFORMED
+
+E. SECURITY FIXES
+
+F. ACCOUNTING RECONCILIATION
+
+G. INVENTORY RECONCILIATION
+
+H. GST RECONCILIATION
+
+I. LOCATION ISOLATION RESULT
+
+J. DASHBOARD/REPORT/PDF PARITY
+
+K. BACKUP/RESTORE RESULT
+
+L. TEST RESULTS
+
+M. BUILD RESULTS
+
+N. REMAINING LIMITATIONS
+
+O. REMAINING RISKS
+
+P. FILES/TABLES/ROUTES/MODULES CHANGED
+
+Q. EXACT PRODUCTION DEPLOYMENT VERSION/COMMIT
+
+Do not report "complete" merely because code compiles.
+
+Only report COMPLETE when the acceptance criteria above are actually verified.
+
+If something cannot be verified, explicitly say:
+
+NOT VERIFIED
+
+and explain why.
+
+==================================================
+FINAL INSTRUCTION
+==================================================
+
+Take ownership of the complete Frozen Fruits ERP.
+
+Do not give me a list of small prompts.
+
+Do not ask me to manually identify every problem.
+
+Investigate the entire system, repair all safely repairable issues, protect historical data, reconcile the accounting/inventory/reporting layers, harden security, test everything, and perform a final production-readiness audit.
+
+START NOW.
