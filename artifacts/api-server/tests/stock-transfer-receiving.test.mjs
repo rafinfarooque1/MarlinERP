@@ -222,6 +222,13 @@ try {
   });
   assert('Full receipt completes', full.status === 200 && full.data?.status === 'completed', JSON.stringify(full.data));
   assert('Destination stock increases by received quantity', (await locationQty(destinationId)) === 4);
+  const { rows: [fullReservation] } = await sql(
+    `SELECT COALESCE(SUM(quantity::numeric), 0) AS quantity
+       FROM stock_reservations
+      WHERE doc_type = 'stock_transfer' AND doc_id = $1
+        AND kind = 'in_transit' AND status = 'active'`, [firstId],
+  );
+  assert('Full receipt releases all in-transit reservations', Number(fullReservation.quantity) === 0);
   const firstRows = await transferLedger(firstId);
   assert('Exactly one destination transfer-in ledger row exists',
     firstRows.filter(r => r.txn_type === 'transfer_in' && Number(r.branch_id) === destinationId).length === 1,
@@ -315,6 +322,13 @@ try {
     JSON.stringify(thirdRows));
   const duplicateReject = await patch(`/stock/transfers/${thirdId}/reject`, { rejectionReason: 'duplicate' });
   assert('Second rejection is refused', duplicateReject.status === 400, JSON.stringify(duplicateReject.data));
+  const { rows: [rejectedReservation] } = await sql(
+    `SELECT COALESCE(SUM(quantity::numeric), 0) AS quantity
+       FROM stock_reservations
+      WHERE doc_type = 'stock_transfer' AND doc_id = $1
+        AND kind = 'in_transit' AND status = 'active'`, [thirdId],
+  );
+  assert('Rejected transfer releases all in-transit reservations', Number(rejectedReservation.quantity) === 0);
 
   console.log('\n[5] Consolidated stock remains reconciled with in-transit shortfall');
   const { rows: [onHand] } = await sql(

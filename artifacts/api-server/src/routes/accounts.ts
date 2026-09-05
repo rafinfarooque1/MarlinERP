@@ -39,6 +39,11 @@ import { resolveGstScope, salesScopeCond, purchaseScopeCond } from "../lib/gstin
 import { openingBalancePostings } from "../lib/openingBalances";
 import { isLevelOneAdmin, ADMIN_DELETE_ERROR } from "../lib/adminGate";
 
+function monthKeyOf(value: unknown): string {
+  const ym = ymOfDate(value as string | Date | null | undefined);
+  return ym ? `${ym.year}-${String(ym.month).padStart(2, "0")}` : "";
+}
+
 /**
  * Location condition on a SOURCE DOCUMENT row, mirroring how the derived
  * posting stream stamps that document's postings (lib/postingLocation.ts):
@@ -4010,7 +4015,8 @@ router.get("/gst/summary", requireModuleView(["page:/accounts/gst", "page:/accou
   // Month-wise breakdown (output vs input tax per calendar month)
   const monthMap = new Map<string, { outputTaxable: number; outputTax: number; inputTaxable: number; inputTax: number }>();
   for (const s of allSales) {
-    const k = String((s as any).saleDate).slice(0, 7);
+    const k = monthKeyOf((s as any).saleDate);
+    if (!k) continue;
     const e = monthMap.get(k) ?? { outputTaxable: 0, outputTax: 0, inputTaxable: 0, inputTax: 0 };
     const tax = docTax((s.lineItems ?? []) as any[], Number((s as any).taxTotal ?? 0));
     e.outputTax += tax;
@@ -4018,7 +4024,8 @@ router.get("/gst/summary", requireModuleView(["page:/accounts/gst", "page:/accou
     monthMap.set(k, e);
   }
   for (const p of allPurchases) {
-    const k = String((p as any).purchaseDate).slice(0, 7);
+    const k = monthKeyOf((p as any).purchaseDate);
+    if (!k) continue;
     const e = monthMap.get(k) ?? { outputTaxable: 0, outputTax: 0, inputTaxable: 0, inputTax: 0 };
     const tax = docTax((p.lineItems ?? []) as any[], Number((p as any).taxTotal ?? 0));
     e.inputTax += tax;

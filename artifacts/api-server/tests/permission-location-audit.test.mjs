@@ -117,7 +117,27 @@ try {
              OR ($1 = 'outlet' AND w.id = (SELECT warehouse_id FROM outlets WHERE id = $2::int)))
      ORDER BY w.id LIMIT 1`, [foreignSale.ltype, foreignSale.lid]);
   if (!ownWh) throw new Error('need a second warehouse to prove isolation');
-  const childOutlets = (await q(`SELECT id FROM outlets WHERE warehouse_id = $1`, [ownWh.id])).map(r => Number(r.id));
+  const childOutletIds = (await q(`SELECT id FROM outlets WHERE warehouse_id = $1`, [ownWh.id])).map(r => Number(r.id));
+  const [foreignCustomer] = await q(`
+    SELECT id
+      FROM customers
+     WHERE COALESCE(location_type, 'headoffice') <> 'headoffice'
+       AND NOT (
+         (location_type = 'warehouse' AND location_id = $1::int)
+         OR (location_type = 'outlet' AND location_id = ANY($2::int[]))
+       )
+     ORDER BY id DESC LIMIT 1`, [ownWh.id, childOutletIds]);
+  const [foreignVendor] = await q(`
+    SELECT id
+      FROM vendors
+     WHERE COALESCE(location_type, 'headoffice') <> 'headoffice'
+       AND NOT (
+         (location_type = 'warehouse' AND location_id = $1::int)
+         OR (location_type = 'outlet' AND location_id = ANY($2::int[]))
+       )
+     ORDER BY id DESC LIMIT 1`, [ownWh.id, childOutletIds]);
+  if (!foreignCustomer || !foreignVendor) throw new Error('dev DB needs customer and vendor fixtures outside the probe warehouse scope');
+  const childOutlets = childOutletIds;
   const inScope = (l) => l.type === 'warehouse' ? Number(l.id) === Number(ownWh.id)
                        : l.type === 'outlet' ? childOutlets.includes(Number(l.id))
                        : false;
@@ -188,12 +208,23 @@ try {
   // ── [E] Location isolation with full page rights ──────────────────────────
   console.log('\n[E] Full page rights, foreign location: 404 + scoped lists');
   await setPerm('page:/sales/pos', { ...NONE, canView: true });
+  await setPerm('page:/customers', { ...NONE, canView: true });
+  await setPerm('page:/vendors', { ...NONE, canView: true, canAdd: true });
   await setPerm('page:/operations/dispatch', { ...NONE, canView: true, canEdit: true });
   await setPerm('page:/accounts/vouchers', { ...NONE, canView: true });
   await setPerm('page:/hr/payroll', { ...NONE, canView: true });
   {
     const r = await apiReq('GET', `/sales/${foreignSale.id}`, undefined, tok);
     assert("another location's sale reads as 404 (indistinguishable from missing)", r.status === 404, `status=${r.status}`);
+
+    const customer = await apiReq('GET', `/customers/${foreignCustomer.id}`, undefined, tok);
+    assert("another location's customer detail reads as 404", customer.status === 404, `status=${customer.status}`);
+    const vendor = await apiReq('GET', `/vendors/${foreignVendor.id}`, undefined, tok);
+    assert("another location's vendor detail reads as 404", vendor.status === 404, `status=${vendor.status}`);
+    const vendorPayment = await apiReq('POST', `/vendors/${foreignVendor.id}/payment`, {
+      date: new Date().toISOString().slice(0, 10), amount: 1, cashBankLedgerId: 1,
+    }, tok);
+    assert("another location's vendor payment by ID reads as 404", vendorPayment.status === 404, `status=${vendorPayment.status}`);
 
     const before = await q(`SELECT status FROM sale_dispatch_status WHERE sale_id = $1`, [foreignSale.id]);
     const w = await apiReq('POST', `/dispatch/${foreignSale.id}/status`, { status: 'READY' }, tok);
