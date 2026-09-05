@@ -43,3 +43,17 @@ mtime_ms = 1788588230218
 storage_uri = "gcs://replit-rams-assets-sisko/rams/assets/repl:bd7bcd33-774f-4b61-bf46-8afc6db19a81/91096e54-d3eb-4384-bfe4-9c2945169d90/3188f8bb-bacb-4d86-898d-91b4c4f573b4"
 storage_version_token = "1788588273828919"
 content_type = "text/markdown"
+
+[[outputs]]
+id = "k1LZEDJhHUxApCSr2Jekr"
+uri = "file://docs/ERP_PRODUCTION_FORENSIC_AUDIT_2026-09-05.md"
+type = "text"
+title = "Frozen Fruits ERP Production Forensic Audit"
+description = "Read-only audit of the published production ERP, including deployment identity, production database/schema parity, integrity checks, accounting and inventory health, security comparisons, backup/scheduler evidence, untestable protected UI flows, and prioritized findings."
+logical_id = "0c8f8a24-b5cb-424b-a5d1-d091d5efb2bc"
+content_hash = "sha256:a7bb9aefd7015c1032835e71aee55ffabb4c7cf937ef9f91fe2ee82662d19141"
+size = 26353
+mtime_ms = 1788590368289
+storage_uri = "gcs://replit-rams-assets-sisko/rams/assets/repl:bd7bcd33-774f-4b61-bf46-8afc6db19a81/0c8f8a24-b5cb-424b-a5d1-d091d5efb2bc/b9f9f673-244a-4fc8-9a92-fbefa50754e0"
+storage_version_token = "1788590378490660"
+content_type = "text/markdown"
