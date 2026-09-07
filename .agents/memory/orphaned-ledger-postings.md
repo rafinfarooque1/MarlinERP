@@ -34,3 +34,17 @@ way, and those bite later, when something tries to post to the missing ledger.
   columns on master tables, not only transaction tables.
 - A one-time boot cleanup guarded by "does ledger X exist yet" is inert forever
   after its first run — check the guard before blaming it for fresh damage.
+
+For legacy money vouchers, an orphaned `paid_from` leg may be repaired
+automatically only when provenance and stamped location identify one
+unambiguous branch till (currently vendor/allocation payments); otherwise leave
+the row visible for manual business review. Head Office may settle a
+location-assigned party through a company-level bank/cash ledger, while branch
+callers remain blocked from Head Office instruments before party checks run.
+
+**Why:** A development audit found a ₹1 payment pointing to a deleted ledger;
+guessing or balancing it would have hidden the source defect, while the old
+Head Office party rule rejected a valid central-bank collection.
+
+**How to apply:** Keep the repair narrow, one-shot, transactional, and
+audit-logged. Add orphan-reference checks to every accounting integrity sweep.

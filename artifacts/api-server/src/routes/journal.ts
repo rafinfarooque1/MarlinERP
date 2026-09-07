@@ -1958,7 +1958,10 @@ export async function computeTrialBalance(opts: {
   // date, so the TB agrees with the Balance Sheet, the Cash/Bank Books and the
   // Cash & Bank screen — all of which already count them.
   const { openingBalancePostings } = await import("../lib/openingBalances");
-  postings = postings.concat(await openingBalancePostings({ toDate: isDate(toDate) ? toDate : undefined }) as Posting[]);
+  postings = postings.concat(await openingBalancePostings({
+    toDate: isDate(toDate) ? toDate : undefined,
+    q,
+  }) as Posting[]);
   if (isDate(fromDate)) postings = postings.filter(p => p.date >= fromDate);
   // Bucket totals are computed over the SAME window the rows use, so a
   // location's TB plus its siblings plus this bucket reproduces the
