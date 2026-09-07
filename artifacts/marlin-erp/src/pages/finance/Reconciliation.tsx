@@ -28,7 +28,10 @@ import { TableSkeleton } from '@/components/app/loading-skeletons';
 
 // ── Reconciled/Matched entry shape (raw customFetch) ─────────────────────────
 interface ReconciledEntry {
+  entryType: 'sale_payment' | 'bank_book';
   id: number;
+  entryId?: string;
+  ledgerId?: number;
   saleId: number;
   paymentDate: string;
   method: string;
@@ -41,6 +44,9 @@ interface ReconciledEntry {
   invoiceNumber: string;
   locationName: string;
   customerName: string | null;
+  source?: string;
+  bankLedgerName?: string;
+  description?: string;
 }
 
 // ── Payment method badge ─────────────────────────────────────────────────────
@@ -477,7 +483,11 @@ export default function Reconciliation() {
                         <TableCell className="text-sm">{e.customerName ?? <span className="text-muted-foreground italic text-xs">Walk-in</span>}</TableCell>
                         <TableCell className="text-sm">{e.locationName}</TableCell>
                         <TableCell className="text-xs text-muted-foreground">{e.paymentDate}</TableCell>
-                        <TableCell><MethodBadge method={e.method} /></TableCell>
+                          <TableCell>
+                            {e.entryType === 'bank_book'
+                              ? <span className="text-xs px-2 py-0.5 rounded border font-medium uppercase bg-slate-500/10 text-slate-600 border-slate-500/20">{e.source ?? e.method}</span>
+                              : <MethodBadge method={e.method} />}
+                          </TableCell>
                         <TableCell><StatusBadge status={e.reconciliationStatus} /></TableCell>
                         <TableCell className="text-xs">
                           {e.reconciliationStatus === 'matched' && e.matchedReference ? (
@@ -490,7 +500,11 @@ export default function Reconciliation() {
                         </TableCell>
                         <TableCell className="text-right font-mono font-semibold text-sm">{fmt(e.amount)}</TableCell>
                         <TableCell className="text-right">
-                          {e.reconciliationStatus === 'reconciled' ? (
+                          {e.entryType === 'bank_book' ? (
+                            <span className="text-xs text-muted-foreground" title={e.description}>
+                              Bank Book · {e.bankLedgerName ?? 'Bank'}
+                            </span>
+                          ) : e.reconciliationStatus === 'reconciled' ? (
                             <Button size="sm" variant="outline" disabled={!perm.canEdit}
                               onClick={() => { setMatchTarget(e); setMatchRef(''); }}>
                               <Link2 className="w-3.5 h-3.5 mr-1" /> Match

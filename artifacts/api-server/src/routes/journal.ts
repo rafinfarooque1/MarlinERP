@@ -76,7 +76,7 @@ async function requireBookKindView(req: any, res: any, kind: BookKind): Promise<
   return false;
 }
 
-async function ledgerBookKind(ledgerId: number, q: Q = pool): Promise<BookKind | null> {
+export async function ledgerBookKind(ledgerId: number, q: Q = pool): Promise<BookKind | null> {
   const { rows: [row] } = await q.query(`
     WITH RECURSIVE ancestors AS (
       SELECT id, parent_id, code
@@ -102,7 +102,7 @@ async function ledgerBookKind(ledgerId: number, q: Q = pool): Promise<BookKind |
  * the existing unrestricted path; every other employee gets only ledger ids
  * owned by the locations returned by the shared data-scope helper.
  */
-async function bookAccessScope(employee: {
+export async function bookAccessScope(employee: {
   branchType?: string;
   branchId?: number;
 }): Promise<{ dataScope: DataScope; ledgerIds: Set<number> | null }> {
@@ -1877,12 +1877,44 @@ export async function computeCashBankBook(opts: {
     else inRange.push(p);
   }
 
+  const postingLedgerIds = [...new Set(postings.map(p => p.ledgerId))];
+  const postingEntryIds = [...new Set(postings.map(p => p.entryId))];
+  const reconciliationByKey = new Map<string, any>();
+  if (postingLedgerIds.length > 0 && postingEntryIds.length > 0) {
+    const { rows: reconciliationRows } = await q.query(
+      `SELECT ledger_id, entry_id, status, reconciled_at, reconciled_by,
+              unreconciled_at, unreconciled_by, reconciliation_reference
+         FROM bank_reconciliation_entries
+        WHERE ledger_id = ANY($1::int[])
+          AND entry_id = ANY($2::text[])`,
+      [postingLedgerIds, postingEntryIds],
+    );
+    for (const r of reconciliationRows) {
+      reconciliationByKey.set(`${Number(r.ledger_id)}:${r.entry_id}`, r);
+    }
+  }
+
   let balance = opening;
   const entries = inRange.map(p => {
     balance = round2(balance + p.debit - p.credit);
+    const reconciliation = reconciliationByKey.get(`${p.ledgerId}:${p.entryId}`);
     return {
-      date: p.date, source: p.source, voucherNumber: p.voucherNumber,
-      description: p.description, debit: p.debit, credit: p.credit, balance,
+      entryId: p.entryId,
+      ledgerId: p.ledgerId,
+      date: p.date,
+      source: p.source,
+      voucherNumber: p.voucherNumber,
+      description: p.description,
+      debit: p.debit,
+      credit: p.credit,
+      balance,
+      locationType: p.locationType,
+      locationId: p.locationId,
+      reconciliationEligible: p.source !== "opening_balance",
+      reconciliationStatus: reconciliation?.status ?? "unreconciled",
+      reconciledAt: reconciliation?.reconciled_at ?? null,
+      reconciledBy: reconciliation?.reconciled_by ?? null,
+      reconciliationReference: reconciliation?.reconciliation_reference ?? null,
     };
   });
 

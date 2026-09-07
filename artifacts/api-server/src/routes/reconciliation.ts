@@ -9,7 +9,13 @@ import { getLocationFilter } from "../lib/requestLocation";
 import { resolveMoneyVoucherLocation } from "../lib/moneyScope";
 import { respondIfMonthLocked } from "../lib/periodLock";
 import { buildBooks } from "../lib/books";
-import { buildDerivedPostings, computeTrialBalance } from "./journal";
+import {
+  buildDerivedPostings,
+  computeTrialBalance,
+  computeCashBankBook,
+  ledgerBookKind,
+  bookAccessScope,
+} from "./journal";
 import { stockValuation } from "../lib/valuation";
 import { getPostingLocationFilter } from "../lib/requestLocation";
 
@@ -67,6 +73,39 @@ function applyLocationScope(
   params.push(type); const t = params.length;
   params.push(Number(id)); const i = params.length;
   conds.push(`(s.location_type = $${t} AND s.location_id = $${i})`);
+}
+
+function applyBankEntryLocationScope(
+  req: any,
+  params: any[],
+  conds: string[],
+  filter: { locationType?: string; locationId?: string },
+): void {
+  const emp = req.employee as { branchType?: string; branchId?: number } | undefined;
+  if (emp && emp.branchType && emp.branchType !== "headoffice" && emp.branchId != null) {
+    params.push(emp.branchType); const t = params.length;
+    params.push(emp.branchId); const i = params.length;
+    conds.push(`(bre.location_type = $${t} AND bre.location_id = $${i})`);
+    return;
+  }
+  const type = filter.locationType;
+  const id = filter.locationId;
+  if (type && id) {
+    params.push(type); const t = params.length;
+    params.push(Number(id)); const i = params.length;
+    conds.push(`(bre.location_type = $${t} AND bre.location_id = $${i})`);
+    return;
+  }
+  const viewLoc = getLocationFilter(req);
+  if (viewLoc) {
+    params.push(viewLoc.locationType); const t = params.length;
+    if (viewLoc.locationType === "headoffice") {
+      conds.push(`bre.location_type = $${t}`);
+    } else {
+      params.push(viewLoc.locationId); const i = params.length;
+      conds.push(`(bre.location_type = $${t} AND bre.location_id = $${i})`);
+    }
+  }
 }
 
 // ── GET /accounts/reconciliation/audit ───────────────────────────────────────
@@ -345,6 +384,165 @@ router.get("/reconciliation/bank-ledgers", requireModuleView(["page:/accounts/re
 
   res.json(bankLedgers);
 });
+
+// ── POST /reconciliation/bank-book/:entryId/reconcile ────────────────────────
+// One-step Bank Book status change. This never creates a voucher or posting:
+// the selected posting is re-read from the authoritative derived book inside
+// the transaction, and only its reconciliation metadata is changed.
+router.post(
+  "/reconciliation/bank-book/:entryId/reconcile",
+  requireModuleAction(["page:/accounts/bank-book", "page:/accounts/reconciliation"], "edit"),
+  async (req, res): Promise<void> => {
+    const entryId = decodeURIComponent(String(req.params.entryId ?? "")).trim();
+    const ledgerId = Number((req.body as any)?.ledgerId);
+    const reconciled = (req.body as any)?.reconciled;
+    const referenceRaw = (req.body as any)?.reference;
+    const reference = referenceRaw == null ? null : String(referenceRaw).trim().slice(0, 200) || null;
+
+    if (!entryId || entryId.length > 200 || !Number.isInteger(ledgerId) || ledgerId <= 0) {
+      res.status(400).json({ error: "entryId and a valid bank ledgerId are required." });
+      return;
+    }
+    if (typeof reconciled !== "boolean") {
+      res.status(400).json({ error: "reconciled must be true or false." });
+      return;
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      const kind = await ledgerBookKind(ledgerId, client);
+      if (kind !== "bank") {
+        await client.query("ROLLBACK");
+        res.status(404).json({ error: "Bank ledger not found." });
+        return;
+      }
+
+      const access = await bookAccessScope((req as any).employee ?? {});
+      if (access.ledgerIds && !access.ledgerIds.has(ledgerId)) {
+        await client.query("ROLLBACK");
+        res.status(404).json({ error: "Bank ledger not found." });
+        return;
+      }
+
+      const book = await computeCashBankBook({
+        q: client,
+        ledgerId,
+        dataScope: access.dataScope,
+        accessibleLedgerIds: access.ledgerIds ? [...access.ledgerIds] : undefined,
+      });
+      const entry = book?.entries.find((candidate: any) =>
+        candidate.entryId === entryId && Number(candidate.ledgerId) === ledgerId,
+      );
+      if (!entry) {
+        await client.query("ROLLBACK");
+        res.status(404).json({ error: "Bank transaction not found." });
+        return;
+      }
+      if (!entry.reconciliationEligible) {
+        await client.query("ROLLBACK");
+        res.status(409).json({ error: "Opening balances cannot be reconciled as bank transactions." });
+        return;
+      }
+
+      const { rows: [existing] } = await client.query(
+        `SELECT * FROM bank_reconciliation_entries
+          WHERE ledger_id = $1 AND entry_id = $2
+          FOR UPDATE`,
+        [ledgerId, entryId],
+      );
+      const previousStatus = existing?.status ?? "unreconciled";
+      const username = (req as any).employee?.username ?? "system";
+
+      if (!reconciled && previousStatus !== "reconciled") {
+        await client.query("ROLLBACK");
+        res.status(409).json({ error: "Transaction is already unreconciled." });
+        return;
+      }
+
+      let saved: any;
+      if (reconciled) {
+        const { rows: [row] } = await client.query(
+          `INSERT INTO bank_reconciliation_entries
+             (entry_id, ledger_id, source, transaction_date, debit, credit,
+              voucher_number, description, location_type, location_id, status,
+              reconciled_at, reconciled_by, reconciliation_reference)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'reconciled',
+                   now(), $11, $12)
+           ON CONFLICT (ledger_id, entry_id) DO UPDATE
+             SET source = EXCLUDED.source,
+                 transaction_date = EXCLUDED.transaction_date,
+                 debit = EXCLUDED.debit,
+                 credit = EXCLUDED.credit,
+                 voucher_number = EXCLUDED.voucher_number,
+                 description = EXCLUDED.description,
+                 location_type = EXCLUDED.location_type,
+                 location_id = EXCLUDED.location_id,
+                 status = 'reconciled',
+                 reconciled_at = now(),
+                 reconciled_by = EXCLUDED.reconciled_by,
+                 unreconciled_at = NULL,
+                 unreconciled_by = NULL,
+                 reconciliation_reference = EXCLUDED.reconciliation_reference
+           RETURNING *`,
+          [
+            entry.entryId, ledgerId, entry.source, entry.date, entry.debit, entry.credit,
+            entry.voucherNumber ?? null, entry.description, entry.locationType ?? null,
+            entry.locationId ?? null, username, reference,
+          ],
+        );
+        saved = row;
+      } else {
+        const { rows: [row] } = await client.query(
+          `UPDATE bank_reconciliation_entries
+              SET status = 'unreconciled',
+                  unreconciled_at = now(),
+                  unreconciled_by = $3,
+                  reconciliation_reference = NULL
+            WHERE ledger_id = $1 AND entry_id = $2
+            RETURNING *`,
+          [ledgerId, entryId, username],
+        );
+        saved = row;
+      }
+
+      await client.query("COMMIT");
+
+      const nextStatus = reconciled ? "reconciled" : "unreconciled";
+      logActivity({
+        action: "UPDATE",
+        module: "reconciliation",
+        entityType: "bank_reconciliation_entry",
+        entityId: saved.id,
+        description: `${reconciled ? "Reconciled" : "Unreconciled"} ${entry.source} ${entry.entryId}`,
+        metadata: {
+          before: { status: previousStatus },
+          after: {
+            status: nextStatus,
+            entryId: entry.entryId,
+            ledgerId,
+            source: entry.source,
+            reference: reconciled ? reference : null,
+          },
+        },
+      }).catch(() => {});
+
+      res.json({
+        ...entry,
+        reconciliationStatus: nextStatus,
+        reconciledAt: reconciled ? saved.reconciled_at : null,
+        reconciledBy: reconciled ? saved.reconciled_by : null,
+        reconciliationReference: reconciled ? saved.reconciliation_reference : null,
+      });
+    } catch (err: any) {
+      await client.query("ROLLBACK").catch(() => {});
+      res.status(500).json({ error: err.message ?? "Failed to update bank reconciliation status." });
+    } finally {
+      client.release();
+    }
+  },
+);
 
 // ── POST /reconciliation/bank-accounts ───────────────────────────────────────
 // A bank account is the one balance-sheet leaf with no master record of its own,
@@ -833,7 +1031,8 @@ router.get("/reconciliation/reconciled", requireModuleView("page:/accounts/recon
     params
   );
 
-  res.json(rows.map((r: any) => ({
+  const salePaymentRows = rows.map((r: any) => ({
+    entryType: "sale_payment",
     id: r.id,
     saleId: r.sale_id,
     paymentDate: r.payment_date,
@@ -850,7 +1049,71 @@ router.get("/reconciliation/reconciled", requireModuleView("page:/accounts/recon
     invoiceNumber: r.invoice_number,
     locationName: r.location_name ?? "—",
     customerName: r.customer_name ?? null,
-  })));
+  }));
+
+  // Bank Book reconciliation uses the same review surface, but its source is
+  // the generic posting identity rather than sale_payments. It is intentionally
+  // read-only here: status changes still go through the atomic Bank Book route.
+  const bankRows: any[] = [];
+  if (!method && status !== "matched") {
+    const bankParams: any[] = ["reconciled"];
+    const bankConds = ["bre.status = $1"];
+    const bankAccess = await bookAccessScope((req as any).employee ?? {});
+    if (bankAccess.ledgerIds) {
+      // A branch may see company-level postings on its own bank ledger, so
+      // ledger ownership is the authoritative scope here; location snapshots
+      // are still used for Head Office's optional filter.
+      bankParams.push([...bankAccess.ledgerIds]);
+      bankConds.push(`bre.ledger_id = ANY($${bankParams.length}::int[])`);
+    } else {
+      applyBankEntryLocationScope(req, bankParams, bankConds, { locationType, locationId });
+    }
+    if (fromDate) { bankParams.push(fromDate); bankConds.push(`bre.transaction_date >= $${bankParams.length}`); }
+    if (toDate) { bankParams.push(toDate); bankConds.push(`bre.transaction_date <= $${bankParams.length}`); }
+    if (search) {
+      bankParams.push(`%${search}%`);
+      bankConds.push(`(bre.voucher_number ILIKE $${bankParams.length} OR bre.description ILIKE $${bankParams.length} OR bre.entry_id ILIKE $${bankParams.length})`);
+    }
+    const bankResult = await pool.query(
+      `SELECT bre.id, bre.entry_id, bre.ledger_id, bre.source,
+              bre.transaction_date, bre.debit::numeric AS debit, bre.credit::numeric AS credit,
+              bre.voucher_number, bre.description, bre.location_type, bre.location_id,
+              bre.status, bre.reconciled_at, bre.reconciled_by,
+              bre.reconciliation_reference,
+              al.name AS bank_ledger_name,
+              COALESCE(o.name, w.name, 'Head Office') AS location_name
+         FROM bank_reconciliation_entries bre
+         JOIN account_ledgers al ON al.id = bre.ledger_id
+         LEFT JOIN outlets o ON bre.location_type = 'outlet' AND o.id = bre.location_id
+         LEFT JOIN warehouses w ON bre.location_type = 'warehouse' AND w.id = bre.location_id
+        WHERE ${bankConds.join(" AND ")}
+        ORDER BY bre.transaction_date DESC, bre.id DESC`,
+      bankParams,
+    );
+    bankRows.push(...bankResult.rows.map((r: any) => ({
+      entryType: "bank_book",
+      id: r.id,
+      entryId: r.entry_id,
+      ledgerId: r.ledger_id,
+      saleId: null,
+      paymentDate: r.transaction_date,
+      method: r.source,
+      amount: Number(r.debit) || Number(r.credit),
+      referenceNumber: r.reconciliation_reference ?? null,
+      reconciliationStatus: r.status,
+      matchedReference: null,
+      matchedBy: r.reconciled_by ?? null,
+      matchedAt: r.reconciled_at ?? null,
+      invoiceNumber: r.voucher_number ?? r.entry_id,
+      locationName: r.location_name ?? "—",
+      customerName: null,
+      source: r.source,
+      bankLedgerName: r.bank_ledger_name,
+      description: r.description,
+    })));
+  }
+
+  res.json([...salePaymentRows, ...bankRows]);
 });
 
 // ── POST /reconciliation/:id/match ────────────────────────────────────────────

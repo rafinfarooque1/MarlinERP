@@ -362,6 +362,36 @@ async function runMigrations() {
       UNIQUE(sale_payment_id)
     );
 
+    -- Generic Bank Book reconciliation state. This is deliberately separate
+    -- from sale_payments: the Bank Book can show payments, receipts, journals,
+    -- expenses, sales, and purchases, while sale_payments remains the
+    -- electronic-collection workflow used by the settlement batch screen.
+    CREATE TABLE IF NOT EXISTS bank_reconciliation_entries (
+      id serial PRIMARY KEY,
+      entry_id text NOT NULL,
+      ledger_id integer NOT NULL,
+      source text NOT NULL,
+      transaction_date text NOT NULL,
+      debit numeric(12,2) NOT NULL DEFAULT 0,
+      credit numeric(12,2) NOT NULL DEFAULT 0,
+      voucher_number text,
+      description text NOT NULL DEFAULT '',
+      location_type text,
+      location_id integer,
+      status text NOT NULL DEFAULT 'unreconciled',
+      reconciled_at timestamptz,
+      reconciled_by text,
+      unreconciled_at timestamptz,
+      unreconciled_by text,
+      reconciliation_reference text,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      UNIQUE(ledger_id, entry_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_bank_reconciliation_status
+      ON bank_reconciliation_entries(status);
+    CREATE INDEX IF NOT EXISTS idx_bank_reconciliation_entry
+      ON bank_reconciliation_entries(entry_id);
+
     CREATE TABLE IF NOT EXISTS cash_deposits (
       id serial PRIMARY KEY,
       outlet_id integer,

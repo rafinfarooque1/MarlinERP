@@ -14,6 +14,7 @@ const TAG = "ZZBOOK";
 let adminToken = "";
 let employeeToken = "";
 let hierarchyId = 0;
+let createdBankRecon = null;
 let passed = 0;
 let failed = 0;
 const failures = [];
@@ -67,18 +68,18 @@ async function cleanup() {
   await sql(`DELETE FROM hierarchies WHERE name LIKE $1`, [`${TAG}%`]);
 }
 
-function permissionBody(canView) {
+function permissionBody(canView, canEdit = false) {
   return {
     hierarchyId,
     canView,
     canAdd: false,
-    canEdit: false,
+    canEdit,
     canDelete: false,
     canDownload: false,
   };
 }
 
-async function setBookPermissions({ cash, bank }) {
+async function setBookPermissions({ cash, bank, bankEdit = false }) {
   const cashResult = await api(
     "POST",
     "/company/permissions",
@@ -87,7 +88,7 @@ async function setBookPermissions({ cash, bank }) {
   const bankResult = await api(
     "POST",
     "/company/permissions",
-    { module: "page:/accounts/bank-book", ...permissionBody(bank) },
+    { module: "page:/accounts/bank-book", ...permissionBody(bank, bankEdit) },
   );
   assert("Cash Book permission update accepted", cashResult.status === 200 || cashResult.status === 201);
   assert("Bank Book permission update accepted", bankResult.status === 200 || bankResult.status === 201);
@@ -272,6 +273,110 @@ try {
     Array.isArray(response.data.entries) &&
     typeof response.data.closingBalance === "number"
   ));
+
+  const bankEntry = response.data.entries?.find(
+    (row) => row.reconciliationEligible && row.reconciliationStatus === "unreconciled",
+  );
+  if (bankEntry) {
+    const existingRecon = (
+      await sql(
+        `SELECT id FROM bank_reconciliation_entries
+         WHERE ledger_id = $1 AND entry_id = $2`,
+        [Number(bankEntry.ledgerId), bankEntry.entryId],
+      )
+    ).rows[0];
+    if (!existingRecon) {
+      createdBankRecon = {
+        ledgerId: Number(bankEntry.ledgerId),
+        entryId: bankEntry.entryId,
+      };
+    }
+
+    const beforePostingCount = Number(
+      (await sql(`SELECT COUNT(*)::int AS count FROM journal_vouchers`)).rows[0].count,
+    );
+    await setBookPermissions({ cash: false, bank: true, bankEdit: true });
+    employeeToken = await login(`${TAG.toLowerCase()}_clerk`, password);
+    response = await api(
+      "POST",
+      `/reconciliation/bank-book/${encodeURIComponent(bankEntry.entryId)}/reconcile`,
+      { ledgerId: Number(bankEntry.ledgerId), reconciled: true },
+      employeeToken,
+    );
+    assert("Bank Book checkbox persists reconciliation", response.status === 200 && response.data.reconciliationStatus === "reconciled");
+
+    response = await api(
+      "GET",
+      `/accounts/cash-bank-book?ledgerId=${fixture.bank_ledger_id}&kind=bank&fromDate=2000-01-01&toDate=2099-12-31`,
+      undefined,
+      employeeToken,
+    );
+    const refreshedEntry = response.data.entries?.find((row) => row.entryId === bankEntry.entryId);
+    assert("Reconciliation survives a Bank Book refresh", refreshedEntry?.reconciliationStatus === "reconciled");
+
+    const concurrent = await Promise.all([
+      api("POST", `/reconciliation/bank-book/${encodeURIComponent(bankEntry.entryId)}/reconcile`, {
+        ledgerId: Number(bankEntry.ledgerId), reconciled: true,
+      }, employeeToken),
+      api("POST", `/reconciliation/bank-book/${encodeURIComponent(bankEntry.entryId)}/reconcile`, {
+        ledgerId: Number(bankEntry.ledgerId), reconciled: true,
+      }, employeeToken),
+    ]);
+    assert("Concurrent reconciliation requests are idempotent", concurrent.every((r) => r.status === 200));
+    const rowCount = Number(
+      (await sql(
+        `SELECT COUNT(*)::int AS count FROM bank_reconciliation_entries
+         WHERE ledger_id = $1 AND entry_id = $2`,
+        [Number(bankEntry.ledgerId), bankEntry.entryId],
+      )).rows[0].count,
+    );
+    assert("Concurrent requests leave one reconciliation record", rowCount === 1);
+
+    response = await api(
+      "GET",
+      "/reconciliation/reconciled?status=reconciled",
+      undefined,
+      adminToken,
+    );
+    assert("Reconciliation review includes the Bank Book transaction", response.data.some(
+      (row) => row.entryType === "bank_book" && row.entryId === bankEntry.entryId,
+    ));
+
+    response = await api(
+      "POST",
+      `/reconciliation/bank-book/${encodeURIComponent(bankEntry.entryId)}/reconcile`,
+      { ledgerId: Number(bankEntry.ledgerId), reconciled: false },
+      employeeToken,
+    );
+    assert("Bank Book checkbox supports unreconcile", response.status === 200 && response.data.reconciliationStatus === "unreconciled");
+
+    const afterPostingCount = Number(
+      (await sql(`SELECT COUNT(*)::int AS count FROM journal_vouchers`)).rows[0].count,
+    );
+    assert("Status-only reconciliation does not create journal vouchers", beforePostingCount === afterPostingCount);
+
+    await setBookPermissions({ cash: false, bank: false });
+    employeeToken = await login(`${TAG.toLowerCase()}_clerk`, password);
+    response = await api(
+      "POST",
+      `/reconciliation/bank-book/${encodeURIComponent(bankEntry.entryId)}/reconcile`,
+      { ledgerId: Number(bankEntry.ledgerId), reconciled: true },
+      employeeToken,
+    );
+    assert("Bank Book reconciliation respects action permission", response.status === 403);
+
+    await setBookPermissions({ cash: false, bank: true, bankEdit: true });
+    employeeToken = await login(`${TAG.toLowerCase()}_clerk`, password);
+    response = await api(
+      "POST",
+      `/reconciliation/bank-book/${encodeURIComponent(bankEntry.entryId)}/reconcile`,
+      { ledgerId: Number(bankRoot?.id), reconciled: true },
+      employeeToken,
+    );
+    assert("Bank Book reconciliation rejects the wrong bank account", response.status === 403 || response.status === 404);
+  } else {
+    console.log("  - No unreconciled Bank Book entry available; mutation probes skipped");
+  }
   response = await api(
     "GET",
     "/accounts/cash-bank-book/ledgers?kind=cash",
@@ -327,6 +432,12 @@ try {
   process.exitCode = 1;
 } finally {
   try {
+    if (createdBankRecon) {
+      await sql(
+        `DELETE FROM bank_reconciliation_entries WHERE ledger_id = $1 AND entry_id = $2`,
+        [createdBankRecon.ledgerId, createdBankRecon.entryId],
+      );
+    }
     await cleanup();
     console.log("\n  ✓ fixtures removed");
   } catch (error) {

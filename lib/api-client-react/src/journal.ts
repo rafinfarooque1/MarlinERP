@@ -129,6 +129,8 @@ export interface DayBookResponse {
 }
 
 export interface CashBankBookEntry {
+  entryId: string;
+  ledgerId: number;
   date: string;
   source: string;
   voucherNumber?: string | null;
@@ -136,6 +138,13 @@ export interface CashBankBookEntry {
   debit: number;
   credit: number;
   balance: number;
+  locationType?: string | null;
+  locationId?: number | null;
+  reconciliationEligible: boolean;
+  reconciliationStatus: 'unreconciled' | 'reconciled';
+  reconciledAt?: string | null;
+  reconciledBy?: string | null;
+  reconciliationReference?: string | null;
 }
 
 export interface CashBankBookResponse {
@@ -317,6 +326,30 @@ export function useCashBankBook(ledgerId: number, fromDate?: string, toDate?: st
     queryFn: ({ signal }) =>
       customFetch<CashBankBookResponse>(`/api/accounts/cash-bank-book?${qs.toString()}`, { signal }),
     enabled: ledgerId > 0,
+  });
+}
+
+export function useReconcileCashBankEntry() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ entryId, ledgerId, reconciled, reference }: {
+      entryId: string;
+      ledgerId: number;
+      reconciled: boolean;
+      reference?: string;
+    }) =>
+      customFetch<CashBankBookEntry>(
+        `/api/reconciliation/bank-book/${encodeURIComponent(entryId)}/reconcile`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ledgerId, reconciled, reference: reference || undefined }),
+        },
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['/api/accounts/cash-bank-book'] });
+      qc.invalidateQueries({ queryKey: ['reconciliation-reconciled'] });
+    },
   });
 }
 
