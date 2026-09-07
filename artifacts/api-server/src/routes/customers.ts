@@ -768,10 +768,25 @@ router.post("/vendors/:id/payment", requireModuleAction(["page:/vendors", "page:
 
   // Find the VEND-{id} ledger account
   const { rows: [vendorLedger] } = await pool.query(
-    `SELECT id FROM account_ledgers WHERE code = $1`, [`VEND-${vendorId}`],
+    `SELECT id FROM account_ledgers
+      WHERE code = $1 AND is_active = true AND is_group = false`,
+    [`VEND-${vendorId}`],
   );
   if (!vendorLedger) {
     res.status(400).json({ error: `Ledger account VEND-${vendorId} not found. Please re-save the vendor to create it.` }); return;
+  }
+  const { rows: [payingLedger] } = await pool.query(
+    `SELECT id, name, is_active, is_group FROM account_ledgers WHERE id = $1`,
+    [Number(cashBankLedgerId)],
+  );
+  if (!payingLedger) {
+    res.status(400).json({ error: "The selected paying account no longer exists. Choose a current ledger." }); return;
+  }
+  if (!payingLedger.is_active) {
+    res.status(400).json({ error: `Account "${payingLedger.name}" is inactive. Choose a current ledger.` }); return;
+  }
+  if (payingLedger.is_group) {
+    res.status(400).json({ error: `Account "${payingLedger.name}" is a group and cannot receive postings.` }); return;
   }
 
   // The voucher belongs to the location that owns the paying account (an

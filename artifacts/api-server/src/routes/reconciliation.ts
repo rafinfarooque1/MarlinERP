@@ -8,6 +8,10 @@ import { LEGACY_BANK_MODES } from "../lib/paymentModes";
 import { getLocationFilter } from "../lib/requestLocation";
 import { resolveMoneyVoucherLocation } from "../lib/moneyScope";
 import { respondIfMonthLocked } from "../lib/periodLock";
+import { buildBooks } from "../lib/books";
+import { buildDerivedPostings, computeTrialBalance } from "./journal";
+import { stockValuation } from "../lib/valuation";
+import { getPostingLocationFilter } from "../lib/requestLocation";
 
 const router = Router();
 
@@ -64,6 +68,255 @@ function applyLocationScope(
   params.push(Number(id)); const i = params.length;
   conds.push(`(s.location_type = $${t} AND s.location_id = $${i})`);
 }
+
+// ── GET /accounts/reconciliation/audit ───────────────────────────────────────
+// Read-only, source-level accounting checks. This is intentionally separate
+// from the presentation reports: it returns the failed equation and the
+// underlying anomaly counts instead of plugging or hiding a value.
+router.get(
+  "/accounts/reconciliation/audit",
+  requireModuleView("page:/accounts/reconciliation"),
+  async (req, res): Promise<void> => {
+    const from = typeof req.query.fromDate === "string" ? req.query.fromDate : undefined;
+    const to = typeof req.query.toDate === "string" ? req.query.toDate : undefined;
+    if ((from && !isIsoDate(from)) || (to && !isIsoDate(to))) {
+      res.status(400).json({ error: "fromDate/toDate must be valid YYYY-MM-DD dates" });
+      return;
+    }
+
+    const emp = (req as any).employee as { branchType?: string; branchId?: number } | undefined;
+    const location = emp?.branchType && emp.branchType !== "headoffice"
+      ? { type: emp.branchType as "warehouse" | "outlet", id: Number(emp.branchId ?? 0) }
+      : getPostingLocationFilter(req);
+
+    const books = await buildBooks(buildDerivedPostings, {
+      fromDate: from,
+      toDate: to,
+      location,
+    });
+    const trialBalance = await computeTrialBalance({
+      fromDate: from,
+      toDate: to,
+      locFilter: location,
+    });
+
+    const valuationScope = location && location.type !== "company" && location.type !== "headoffice"
+      ? { branchType: location.type, branchId: Number(location.id ?? 0) }
+      : {};
+    const valuation = await stockValuation(pool, valuationScope);
+
+    const [
+      { rows: staleTransfers },
+      { rows: negativeStock },
+      { rows: negativeBatches },
+      { rows: batchMismatches },
+      { rows: duplicateInvoices },
+      { rows: orphanMoneyVouchers },
+    ] = await Promise.all([
+      // A fully received transfer must not keep an active in-transit hold.
+      // Short receipts are deliberately excluded: their active shortfall is
+      // the documented exception until the missing stock is found or written
+      // off through a business decision.
+      pool.query(`
+        WITH dispatched AS (
+          SELECT st.id,
+                 SUM(COALESCE((line->>'quantity')::numeric, 0)) AS qty
+            FROM stock_transfers st
+            CROSS JOIN LATERAL jsonb_array_elements(COALESCE(st.line_items, '[]'::jsonb)) line
+           GROUP BY st.id
+        ), received AS (
+          SELECT st.id,
+                 SUM(COALESCE((line->>'quantity')::numeric, 0)) AS qty
+            FROM stock_transfers st
+            CROSS JOIN LATERAL jsonb_array_elements(COALESCE(st.received_line_items, '[]'::jsonb)) line
+           GROUP BY st.id
+        )
+        SELECT sr.id AS reservation_id, sr.doc_id AS transfer_id,
+               st.challan_number, st.from_type, st.from_id,
+               d.qty AS dispatched_qty, COALESCE(r.qty, 0) AS received_qty,
+               sr.ref_id, sr.material_type, sr.quantity::numeric AS reserved_qty
+          FROM stock_reservations sr
+          JOIN stock_transfers st ON st.id = sr.doc_id AND sr.doc_type = 'stock_transfer'
+          JOIN dispatched d ON d.id = st.id
+          LEFT JOIN received r ON r.id = st.id
+         WHERE sr.status = 'active'
+           AND sr.kind = 'in_transit'
+           AND st.status = 'completed'
+           AND COALESCE(r.qty, 0) >= d.qty - 0.001
+         ORDER BY st.id, sr.id
+      `),
+      pool.query(`SELECT COUNT(*)::int AS count FROM stock_entries WHERE quantity::numeric < -0.001`),
+      pool.query(`SELECT COUNT(*)::int AS count FROM stock_batches WHERE quantity::numeric < -0.001`),
+      // Batch rows are an additive lot layer, so an absent batch total is not
+      // automatically an error. A mismatch is still surfaced for review.
+      pool.query(`
+        WITH se AS (
+          SELECT item_id, material_type, branch_type, branch_id,
+                 SUM(quantity::numeric) AS qty
+            FROM stock_entries
+           GROUP BY item_id, material_type, branch_type, branch_id
+        ), sb AS (
+          SELECT item_id, material_type, branch_type, branch_id,
+                 SUM(quantity::numeric) AS qty
+            FROM stock_batches
+           GROUP BY item_id, material_type, branch_type, branch_id
+        )
+        SELECT COALESCE(se.item_id, sb.item_id) AS item_id,
+               COALESCE(se.material_type, sb.material_type) AS material_type,
+               COALESCE(se.branch_type, sb.branch_type) AS branch_type,
+               COALESCE(se.branch_id, sb.branch_id) AS branch_id,
+               COALESCE(se.qty, 0)::numeric AS entry_qty,
+               COALESCE(sb.qty, 0)::numeric AS batch_qty
+          FROM se
+          FULL OUTER JOIN sb USING (item_id, material_type, branch_type, branch_id)
+         WHERE ABS(COALESCE(se.qty, 0) - COALESCE(sb.qty, 0)) > 0.001
+         ORDER BY material_type, item_id, branch_type, branch_id
+         LIMIT 200
+      `),
+      pool.query(`
+        SELECT invoice_number, COUNT(*)::int AS count
+          FROM sales
+         WHERE cancelled_at IS NULL
+           AND invoice_number IS NOT NULL
+           AND invoice_number <> ''
+         GROUP BY invoice_number
+        HAVING COUNT(*) > 1
+         ORDER BY count DESC, invoice_number
+         LIMIT 200
+      `),
+      pool.query(`
+        WITH refs AS (
+          SELECT 'payment' AS source, id, voucher_number,
+                 paid_from_ledger_id AS from_id, paid_to_ledger_id AS to_id
+            FROM payments
+          UNION ALL
+          SELECT 'receipt', id, voucher_number,
+                 received_in_ledger_id, received_from_ledger_id
+            FROM receipts
+        )
+        SELECT r.source, r.id, r.voucher_number,
+               r.from_id, r.to_id,
+               CASE WHEN lf.id IS NULL THEN 'from' ELSE NULL END AS missing_from,
+               CASE WHEN lt.id IS NULL THEN 'to' ELSE NULL END AS missing_to
+          FROM refs r
+          LEFT JOIN account_ledgers lf ON lf.id = r.from_id
+          LEFT JOIN account_ledgers lt ON lt.id = r.to_id
+         WHERE lf.id IS NULL OR lt.id IS NULL
+         ORDER BY r.source, r.id
+         LIMIT 200
+      `),
+    ]);
+
+    const r2 = (n: number) => Math.round(n * 100) / 100;
+    const check = (name: string, passed: boolean, detail: string, extra: Record<string, unknown> = {}) => ({
+      name, status: passed ? "pass" : "fail", detail, ...extra,
+    });
+    const checks = [
+      check(
+        "P&L / Balance Sheet integrity",
+        books.integrity.balanced,
+        books.integrity.balanced ? "No books integrity defects." : books.integrity.issues.join(" "),
+        { difference: books.integrity.difference, issues: books.integrity.issues },
+      ),
+      check(
+        "Trial Balance",
+        trialBalance.balanced === true,
+        `Debits ₹${Number(trialBalance.totalDebit).toFixed(2)}; credits ₹${Number(trialBalance.totalCredit).toFixed(2)}; difference ₹${Number(trialBalance.difference).toFixed(2)}.`,
+        { difference: trialBalance.difference },
+      ),
+      check(
+        "Balance Sheet",
+        Math.abs(Number(books.balanceSheet.liabilities.difference)) <= 0.01,
+        `Assets ₹${books.balanceSheet.assets.total.toFixed(2)}; liabilities and equity ₹${books.balanceSheet.liabilities.total.toFixed(2)}; difference ₹${books.balanceSheet.liabilities.difference.toFixed(2)}.`,
+        { difference: books.balanceSheet.liabilities.difference },
+      ),
+      check(
+        "P&L closing stock = Balance Sheet inventory",
+        Math.abs(books.profitAndLoss.incomes.closingStock - books.balanceSheet.assets.closingStock) <= 0.01,
+        `P&L ₹${books.profitAndLoss.incomes.closingStock.toFixed(2)}; Balance Sheet ₹${books.balanceSheet.assets.closingStock.toFixed(2)}.`,
+      ),
+      check(
+        "Inventory valuation = current closing stock",
+        Boolean(to && to < new Date().toISOString().slice(0, 10))
+          || Math.abs(valuation.grandTotal - books.profitAndLoss.incomes.closingStock) <= 0.01,
+        to && to < new Date().toISOString().slice(0, 10)
+          ? "Historical closing requires dated stock evidence; current valuation is not substituted for it."
+          : `Valuation ₹${valuation.grandTotal.toFixed(2)}; closing stock ₹${books.profitAndLoss.incomes.closingStock.toFixed(2)}.`,
+        { historical: Boolean(to && to < new Date().toISOString().slice(0, 10)) },
+      ),
+      check(
+        "Completed transfers have no stale full-receipt reservation",
+        staleTransfers.length === 0,
+        staleTransfers.length === 0 ? "No stale full-receipt reservations found." : `${staleTransfers.length} reservation(s) remain active after a completed full receipt.`,
+        { anomalies: staleTransfers.slice(0, 50) },
+      ),
+      check(
+        "No negative on-hand stock",
+        Number(negativeStock[0]?.count ?? 0) === 0,
+        `${Number(negativeStock[0]?.count ?? 0)} negative stock_entries row(s).`,
+      ),
+      check(
+        "No negative batch quantities",
+        Number(negativeBatches[0]?.count ?? 0) === 0,
+        `${Number(negativeBatches[0]?.count ?? 0)} negative stock_batches row(s).`,
+      ),
+      {
+        name: "Batch layer reconciles to stock entries",
+        status: batchMismatches.length === 0 ? "pass" : "warning",
+        detail: batchMismatches.length === 0
+          ? "All batch totals equal stock_entries totals."
+          : `${batchMismatches.length} product/location total(s) differ; untracked residual stock is allowed but must be reviewed.`,
+        anomalies: batchMismatches,
+      },
+      check(
+        "No duplicate active sales invoice numbers",
+        duplicateInvoices.length === 0,
+        duplicateInvoices.length === 0 ? "No duplicate active invoice numbers." : `${duplicateInvoices.length} duplicate invoice number group(s).`,
+        { anomalies: duplicateInvoices },
+      ),
+      check(
+        "No orphaned money-voucher ledger references",
+        orphanMoneyVouchers.length === 0,
+        orphanMoneyVouchers.length === 0 ? "Every payment and receipt points to existing ledger rows." : `${orphanMoneyVouchers.length} payment/receipt row(s) reference a missing ledger.`,
+        { anomalies: orphanMoneyVouchers },
+      ),
+    ];
+
+    const failed = checks.filter((c) => c.status === "fail").length;
+    const warnings = checks.filter((c) => c.status === "warning").length;
+    res.json({
+      period: { fromDate: from ?? null, toDate: to ?? null },
+      location: location ? { type: location.type, id: location.id } : null,
+      equations: {
+        netSales: {
+          sales: books.profitAndLoss.incomes.grossSales,
+          returns: books.profitAndLoss.incomes.salesReturns,
+          net: books.profitAndLoss.summary.revenue,
+        },
+        goodsAvailable: r2(
+          books.profitAndLoss.expenses.openingStock
+          + books.profitAndLoss.expenses.purchases
+          + books.profitAndLoss.expenses.directExpenses.total,
+        ),
+        cogs: books.profitAndLoss.summary.costOfGoodsSold,
+        grossProfit: books.profitAndLoss.summary.grossProfit,
+        netProfit: books.profitAndLoss.netProfit,
+      },
+      valuation: {
+        onHandValue: valuation.onHandValue,
+        inTransitValue: valuation.inTransitValue,
+        grandTotal: valuation.grandTotal,
+      },
+      checks,
+      summary: {
+        status: failed > 0 ? "fail" : warnings > 0 ? "warning" : "pass",
+        failed,
+        warnings,
+        passed: checks.length - failed - warnings,
+      },
+    });
+  },
+);
 
 // ── GET /reconciliation/bank-ledgers ─────────────────────────────────────────
 // Returns all active ledgers under STD-BANK hierarchy (for destination dropdown)

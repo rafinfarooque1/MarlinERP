@@ -37,6 +37,7 @@ import { addQuotations } from "./migrations/quotations";
 import { runOrgHierarchyRestructure } from "./migrations/orgHierarchyRestructure";
 import { backfillPartyLocations } from "./migrations/partyLocationBackfill";
 import { restampMoneyVoucherLocations } from "./migrations/moneyVoucherLocationRestamp";
+import { repairOrphanPaymentLegs } from "./migrations/repairOrphanPaymentLegs";
 import { backfillSalePaymentLegs } from "./migrations/salePaymentLegsBackfill";
 import { backfillSalePaymentLegsV2 } from "./migrations/salePaymentLegsBackfillV2";
 import { addStorageLocationsSetup } from "./migrations/storageLocationsSetup";
@@ -4938,6 +4939,15 @@ try {
   await restampMoneyVoucherLocations(pool);
 } catch (err) {
   console.error("[migration] money_voucher_location_restamp_v1 FAILED (non-fatal):", (err as Error).message);
+}
+
+// Legacy payment rows can retain a deleted paid_from ledger. Repair only the
+// deterministic vendor/allocation case with an unambiguous stamped branch
+// till; all other orphan references remain visible to the accounting audit.
+try {
+  await repairOrphanPaymentLegs(pool);
+} catch (err) {
+  console.error("[migration] orphan_payment_legs_v1 FAILED (non-fatal, retries next boot):", (err as Error).message);
 }
 
 // Payment-history backfill for counter-settled cash sales that predate the

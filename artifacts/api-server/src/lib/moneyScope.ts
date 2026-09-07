@@ -339,8 +339,11 @@ export async function checkVoucherPartyLocation(
   const actualType = party.location_type ?? "headoffice";
   const actualId = Number(party.location_id ?? 0);
   const isSharedVendor = kind === "vendor" && actualType === "headoffice";
+  // Head Office may settle a branch party through a company-level bank/cash
+  // ledger. Branch callers cannot reach this path because checkVoucherLegs()
+  // refuses Head Office cash/bank accounts before this helper runs.
   const matches = location.locationType === "headoffice"
-    ? actualType === "headoffice"
+    ? true
     : isSharedVendor
       || (actualType === location.locationType && actualId === Number(location.locationId));
 

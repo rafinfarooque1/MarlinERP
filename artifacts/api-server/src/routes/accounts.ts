@@ -44,6 +44,28 @@ function monthKeyOf(value: unknown): string {
   return ym ? `${ym.year}-${String(ym.month).padStart(2, "0")}` : "";
 }
 
+async function postableLedgerError(
+  q: { query: Function },
+  ids: number[],
+): Promise<string | null> {
+  const unique = [...new Set(ids.map(Number))].filter((id) => Number.isInteger(id) && id > 0);
+  if (unique.length !== ids.length || unique.length === 0) return "Invalid account selection.";
+  const { rows } = await q.query(
+    `SELECT id, name, is_active, is_group
+       FROM account_ledgers
+      WHERE id = ANY($1::int[])`,
+    [unique],
+  );
+  const byId = new Map<number, any>(rows.map((r: any) => [Number(r.id), r]));
+  for (const id of unique) {
+    const row: any = byId.get(id);
+    if (!row) return `Account ${id} no longer exists. Choose a current ledger.`;
+    if (!row.is_active) return `Account "${row.name}" is inactive. Choose a current ledger.`;
+    if (row.is_group) return `Account "${row.name}" is a group and cannot receive postings.`;
+  }
+  return null;
+}
+
 /**
  * Location condition on a SOURCE DOCUMENT row, mirroring how the derived
  * posting stream stamps that document's postings (lib/postingLocation.ts):
@@ -1052,6 +1074,8 @@ router.post("/accounts/payments", requireModuleAction(["page:/accounts/vouchers"
   if (Number(paidFromLedgerId) === Number(paidToLedgerId)) {
     res.status(400).json({ error: "Paid From and Paid To cannot be the same account." }); return;
   }
+  const accountError = await postableLedgerError(pool, [Number(paidFromLedgerId), Number(paidToLedgerId)]);
+  if (accountError) { res.status(400).json({ error: accountError }); return; }
   // A branch user may only pay out of its own cash box, and never into another
   // location's or Head Office's cash/bank accounts.
   const scope = ownLocationScope((req as any).employee);
@@ -1320,6 +1344,8 @@ router.patch("/accounts/payments/:id", requireModuleAction(["page:/accounts/vouc
       await client.query("ROLLBACK"); res.status(400).json({ error: "Invalid account selection." }); return;
     }
     if (newFrom === newTo) { await client.query("ROLLBACK"); res.status(400).json({ error: "Paid From and Paid To cannot be the same account." }); return; }
+    const accountError = await postableLedgerError(client, [newFrom, newTo]);
+    if (accountError) { await client.query("ROLLBACK"); res.status(400).json({ error: accountError }); return; }
     const legCheck = await checkVoucherLegs(scope, newFrom, newTo, 'Paid from');
     if (!legCheck.ok) { await client.query("ROLLBACK"); res.status(403).json({ error: legCheck.error }); return; }
 

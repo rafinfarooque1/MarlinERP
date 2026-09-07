@@ -11,6 +11,10 @@
 import { pool } from "@workspace/db";
 import { logActivity } from "./audit";
 
+type Queryable = {
+  query: Function;
+};
+
 export interface OpeningBalanceInput {
   ledgerId: number;
   /** Non-negative rupee amount. */
@@ -60,7 +64,7 @@ export async function upsertOpeningBalance(input: OpeningBalanceInput): Promise<
  * books.ts keeps its own separate opening fold (cumulative-only); callers must
  * use one mechanism or the other, never both.
  */
-export async function openingBalancePostings(opts: { toDate?: string } = {}): Promise<Array<{
+export async function openingBalancePostings(opts: { toDate?: string; q?: Queryable } = {}): Promise<Array<{
   date: string; entryId: string; ledgerId: number; debit: number; credit: number;
   source: string; voucherNumber: string | null; description: string;
   locationType: string | null; locationId: number | null;
@@ -68,7 +72,8 @@ export async function openingBalancePostings(opts: { toDate?: string } = {}): Pr
   const params: unknown[] = [];
   let where = "";
   if (opts.toDate) { params.push(opts.toDate); where = `WHERE as_of_date <= $1`; }
-  const { rows } = await pool.query(
+  const q = opts.q ?? pool;
+  const { rows } = await q.query(
     `SELECT id, ledger_id, balance::numeric AS balance, balance_type, as_of_date::text AS as_of_date
      FROM opening_balances ${where}`, params,
   );
