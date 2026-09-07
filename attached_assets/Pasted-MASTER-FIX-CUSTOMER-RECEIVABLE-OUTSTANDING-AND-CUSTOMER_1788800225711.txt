@@ -1,0 +1,1182 @@
+MASTER FIX — CUSTOMER RECEIVABLE, OUTSTANDING AND CUSTOMER LEDGER MUST FULLY RECONCILE
+
+I have identified a serious accounting/reporting issue in Frozen Fruits ERP:
+
+CUSTOMER RECEIVABLE / OUTSTANDING DOES NOT MATCH THE CUSTOMER LEDGER.
+
+The main confirmed issue is:
+
+SALES RETURNS ARE NOT BEING CALCULATED/DEDUCTED CORRECTLY IN CUSTOMER OUTSTANDING.
+
+I do NOT want a simple UI fix.
+
+I want the complete customer receivable architecture audited and corrected from source transactions through:
+
+Sales
+→ Sales Returns
+→ Receipts
+→ Credit Notes/Adjustments
+→ Customer Ledger
+→ Customer Outstanding
+→ Receivables
+→ Balance Sheet
+→ Dashboard
+→ Reports
+→ PDFs/Exports
+
+Everything must use one authoritative calculation.
+
+============================================================
+1. FUNDAMENTAL CUSTOMER RECEIVABLE EQUATION
+============================================================
+
+For each customer:
+
+OPENING RECEIVABLE
++ SALES
++ OTHER VALID CUSTOMER DEBITS
+- SALES RETURNS / CREDIT NOTES
+- RECEIPTS
+± VALID ADJUSTMENTS
+=
+CLOSING CUSTOMER OUTSTANDING
+
+The exact signs must follow the ERP's accounting model, but the economic result must be:
+
+SALES increase customer receivable.
+
+SALES RETURNS decrease customer receivable.
+
+RECEIPTS decrease customer receivable.
+
+CREDIT NOTES that reverse sales decrease customer receivable.
+
+Valid debit adjustments increase receivable.
+
+Valid credit adjustments decrease receivable.
+
+The final Customer Outstanding MUST equal the customer's actual ledger closing balance.
+
+============================================================
+2. DO NOT CALCULATE OUTSTANDING FROM SALES ONLY
+============================================================
+
+Do NOT use:
+
+Sales - Receipts
+
+as the complete outstanding calculation.
+
+This is WRONG when sales returns exist.
+
+The calculation must include:
+
+Sales
+- Sales Returns
+- Receipts
+± Adjustments
++ Opening Balance
+
+and any other legitimate customer ledger transactions.
+
+============================================================
+3. SALES
+============================================================
+
+Audit every customer sale.
+
+For each sale verify:
+
+- customer
+- location
+- invoice number
+- invoice date
+- subtotal
+- discount
+- GST
+- Other Charges
+- invoice total
+- payment received
+- outstanding amount
+- cancellation status
+- return status
+
+Determine the amount that actually creates customer receivable.
+
+Do not accidentally:
+
+- exclude valid sales
+- count cancelled sales
+- count sales twice
+- count GST incorrectly
+- count Other Charges incorrectly
+- use subtotal when invoice total should be used
+- use invoice total when only a particular accounting component should be used
+
+Use the ERP's authoritative accounting amount.
+
+============================================================
+4. SALES RETURNS — CRITICAL
+============================================================
+
+Audit ALL sales returns.
+
+This is the main reported problem.
+
+Every valid Sales Return must reduce:
+
+CUSTOMER RECEIVABLE
+
+and must also correctly affect:
+
+- sales
+- sales return account
+- GST
+- stock
+- customer ledger
+- customer outstanding
+- accounting
+- P&L
+- inventory
+- audit trail
+
+Example:
+
+Customer sale:
+₹10,000
+
+Customer pays:
+₹2,000
+
+Outstanding before return:
+₹8,000
+
+Customer returns goods:
+₹3,000
+
+Correct outstanding:
+₹5,000
+
+NOT ₹8,000.
+
+The Sales Return must therefore appear as a credit/reduction in the customer's receivable ledger.
+
+============================================================
+5. SALES RETURN ACCOUNTING
+============================================================
+
+For every sales return verify the accounting entries.
+
+Conceptually:
+
+Dr Sales Return
+Dr Output GST reversal where applicable
+Cr Customer
+
+and inventory must be restored appropriately.
+
+Use the ERP's actual chart/account structure.
+
+Do NOT create duplicate reversal entries if the existing return already has valid accounting.
+
+============================================================
+6. CUSTOMER LEDGER MUST BE THE AUTHORITATIVE RESULT
+============================================================
+
+Determine the authoritative customer ledger calculation.
+
+Customer Ledger should contain all applicable customer financial events:
+
+Opening Balance
+Sales
+Other Charges where applicable
+Sales Returns
+Receipts
+Credit Notes
+Debit Notes
+Adjustments
+Reversals
+Cancellations
+
+The customer's closing ledger balance must equal Customer Outstanding.
+
+DO NOT maintain:
+
+Customer Ledger calculation A
+
+and
+
+Customer Outstanding calculation B.
+
+They must use the same transaction source/calculation engine.
+
+============================================================
+7. CUSTOMER OUTSTANDING
+============================================================
+
+Audit the Outstanding calculation.
+
+For every customer calculate:
+
+Opening Balance
++ Sales
++ valid debit transactions
+- Sales Returns
+- Receipts
+- valid credit transactions
+± adjustments
+=
+Outstanding
+
+Then compare this directly with the Customer Ledger.
+
+If different:
+
+Difference =
+Outstanding calculation
+- Ledger balance
+
+Identify the exact transactions causing the difference.
+
+============================================================
+8. RECEIVABLES IN BALANCE SHEET
+============================================================
+
+Balance Sheet Accounts Receivable must reconcile with customer-level outstanding.
+
+Therefore:
+
+SUM(Customer Outstanding)
+=
+Accounts Receivable
+
+for the same:
+
+- date
+- location
+- reporting period
+- company scope
+
+unless the ERP intentionally supports non-customer receivable accounts; if so, clearly separate those accounts.
+
+Do not force Balance Sheet Receivables to equal customer outstanding.
+
+Find the underlying difference.
+
+============================================================
+9. DASHBOARD RECEIVABLES
+============================================================
+
+Dashboard Receivables must use the same authoritative calculation.
+
+Verify:
+
+Customer Outstanding
+=
+Customer Ledger
+=
+Receivables Report
+=
+Balance Sheet Receivables
+=
+Dashboard Receivables
+
+where the same scope/date/location is selected.
+
+============================================================
+10. LOCATION
+============================================================
+
+Customer receivables must obey the ERP location architecture.
+
+Warehouse employees:
+
+Only their warehouse customers and balances.
+
+Head Office:
+
+Head Office customers when Head Office is specifically selected.
+
+All Locations:
+
+Consolidated customer receivable for all authorized locations.
+
+Do not leak another warehouse's customers or balances.
+
+Server-side location filtering is mandatory.
+
+Do not rely only on frontend filtering.
+
+============================================================
+11. CUSTOMER LEDGER DATE FILTERS
+============================================================
+
+Audit:
+
+- Today
+- This Month
+- Previous Month
+- Financial Year
+- Custom Date Range
+- All Time
+
+Opening balance must correctly represent the customer's balance immediately before the selected period.
+
+For a selected period:
+
+Opening Balance
++ period transactions
+=
+Closing Balance
+
+Do not use the customer's current lifetime balance as the opening balance for every date range.
+
+============================================================
+12. SALES RETURN DATE
+============================================================
+
+A sales return must affect the customer's outstanding according to the return transaction date and the ERP's accounting date rules.
+
+Example:
+
+Sale:
+01 September
+
+Return:
+05 September
+
+The September report must include the return.
+
+A report ending:
+03 September
+
+must NOT include a return dated:
+05 September
+
+unless the ERP's documented accounting policy specifically requires another treatment.
+
+Respect transaction date boundaries consistently.
+
+============================================================
+13. CANCELLED SALES / RETURNS
+============================================================
+
+Audit cancellation logic.
+
+Cancelled sale:
+
+Must not remain in receivable.
+
+Cancelled sales return:
+
+Must not continue reducing receivable.
+
+If cancellation happens after posting, use proper reversal accounting rather than deleting historical evidence.
+
+Original transaction should remain auditable.
+
+============================================================
+14. RECEIPTS
+============================================================
+
+Audit all customer receipts.
+
+A valid customer receipt must reduce customer outstanding.
+
+Verify:
+
+Customer
+Amount
+Date
+Location
+Cash/Bank
+Receipt Voucher
+Journal Voucher
+Customer Ledger
+
+Example:
+
+Outstanding:
+₹10,000
+
+Receipt:
+₹4,000
+
+Outstanding:
+₹6,000
+
+If there is a sales return of ₹2,000:
+
+Outstanding:
+₹4,000
+
+The final number must reconcile with the ledger.
+
+============================================================
+15. OTHER CHARGES
+============================================================
+
+Audit Other Charges.
+
+Existing business rule:
+
+Other Charges are Direct Income charges.
+
+They are:
+
+- post-tax
+- no GST
+- included in customer total
+- included in customer outstanding
+- posted to selected Direct Income ledger
+
+Verify that Other Charges:
+
+- increase customer receivable when included in the sale
+- appear in customer ledger
+- appear in outstanding
+- appear in reports
+- do not get counted twice
+
+Quotation Other Charges must NOT create receivable until the quotation is converted into an actual sale.
+
+============================================================
+16. CREDIT NOTES / DEBIT NOTES
+============================================================
+
+Find all credit/debit note logic.
+
+Credit Note:
+should reduce customer receivable where applicable.
+
+Debit Note:
+should increase customer receivable where applicable.
+
+Sales Return may already function as a credit transaction.
+
+Do not double-count:
+
+Sales Return
++
+Credit Note
+
+if they represent the same underlying reversal.
+
+============================================================
+17. OPENING BALANCE
+============================================================
+
+Audit customer opening balances.
+
+Verify:
+
+Opening Balance
++
+period transactions
+=
+closing balance
+
+Opening balances must not be counted repeatedly.
+
+Do not treat opening balance as a new sale.
+
+Do not treat opening balance as a receipt.
+
+============================================================
+18. CUSTOMER LEDGER vs OUTSTANDING RECONCILIATION
+============================================================
+
+Create a reconciliation for every customer:
+
+Customer
+Opening Balance
+Sales
+Sales Returns
+Receipts
+Other Charges
+Credit Notes
+Debit Notes
+Adjustments
+Expected Closing
+Actual Ledger Closing
+Outstanding
+Difference
+
+Any non-zero difference must be investigated.
+
+Do not simply round away differences.
+
+============================================================
+19. EXACT RECONCILIATION
+============================================================
+
+The following must equal for the same scope:
+
+A = Customer Ledger Closing Balance
+
+B = Customer Outstanding
+
+C = Receivables Report
+
+D = Balance Sheet Receivables
+
+E = Dashboard Receivables
+
+Expected:
+
+A = B = C = D = E
+
+subject only to explicitly documented separate receivable accounts.
+
+If not equal:
+
+identify the exact difference and its source.
+
+============================================================
+20. CUSTOMER-WISE TEST
+============================================================
+
+For every customer with sales returns, create a test case.
+
+Example:
+
+Sale ₹10,000
+Receipt ₹2,000
+Sales Return ₹3,000
+
+Expected Outstanding:
+
+₹10,000
+- ₹2,000
+- ₹3,000
+=
+₹5,000
+
+Customer Ledger:
+₹5,000
+
+Outstanding:
+₹5,000
+
+Receivables:
+₹5,000
+
+Dashboard:
+₹5,000
+
+Balance Sheet:
+₹5,000
+
+All must match.
+
+============================================================
+21. MULTIPLE TRANSACTIONS TEST
+============================================================
+
+Test:
+
+Opening = ₹5,000
+
+Sale 1 = ₹10,000
+Sale 2 = ₹7,000
+
+Sales Return = ₹3,000
+
+Receipt 1 = ₹4,000
+Receipt 2 = ₹2,000
+
+Expected:
+
+₹5,000
++ ₹10,000
++ ₹7,000
+- ₹3,000
+- ₹4,000
+- ₹2,000
+
+= ₹13,000
+
+Verify the ERP produces:
+
+Customer Ledger = ₹13,000
+Outstanding = ₹13,000
+
+============================================================
+22. PARTIAL PAYMENTS
+============================================================
+
+Test:
+
+Invoice = ₹10,000
+
+Receipt = ₹4,000
+
+Outstanding = ₹6,000
+
+Return = ₹2,000
+
+Outstanding = ₹4,000
+
+Additional Receipt = ₹1,000
+
+Outstanding = ₹3,000
+
+Verify ledger after every step.
+
+============================================================
+23. FULL PAYMENT + RETURN
+============================================================
+
+Test:
+
+Sale = ₹10,000
+
+Receipt = ₹10,000
+
+Outstanding = ₹0
+
+Then Sales Return = ₹2,000
+
+Correct result depends on the ERP's credit-balance policy:
+
+Customer should have:
+
+₹2,000 credit balance / advance
+
+OR
+
+₹2,000 refundable/adjustable customer credit
+
+Do NOT incorrectly display ₹0 if the customer has a valid credit balance.
+
+Determine how the existing ERP represents customer credit balances and preserve that accounting model.
+
+============================================================
+24. OVERPAYMENTS
+============================================================
+
+If customer pays more than outstanding:
+
+Do not discard the excess.
+
+Represent it as:
+
+Customer Advance / Credit Balance
+
+according to the existing accounting architecture.
+
+Ensure the customer ledger and outstanding reflect the same balance.
+
+============================================================
+25. CUSTOMER RETURN STOCK
+============================================================
+
+Sales Return must also correctly restore inventory.
+
+Verify:
+
+Sale:
+stock decreases
+
+Sales Return:
+stock increases
+
+Inventory valuation:
+correct cost
+
+Customer receivable:
+decreases
+
+Sales:
+reversed appropriately
+
+GST:
+reversed appropriately
+
+COGS:
+reversed appropriately
+
+All effects must be part of one atomic transaction.
+
+============================================================
+26. ACCOUNTING JOURNALS
+============================================================
+
+For every customer transaction verify:
+
+Sale
+Receipt
+Sales Return
+Credit Note
+Debit Note
+Adjustment
+Reversal
+
+Journal Voucher must reconcile with Customer Ledger.
+
+No transaction should affect outstanding without proper accounting linkage unless explicitly defined as an opening balance.
+
+============================================================
+27. NO DUPLICATE POSTING
+============================================================
+
+Check for:
+
+- duplicate sales ledger entries
+- duplicate sales return entries
+- duplicate receipt entries
+- duplicate journal postings
+- duplicate outstanding updates
+- duplicate return deductions
+
+A transaction must affect the customer balance exactly once.
+
+============================================================
+28. HISTORICAL DATA
+============================================================
+
+Audit existing customer outstanding data.
+
+DO NOT blindly overwrite all customer balances.
+
+For each discrepancy determine:
+
+- missing sales return
+- missing receipt
+- duplicate sale
+- duplicate return
+- incorrect opening balance
+- cancelled transaction still counted
+- incorrect journal
+- location mismatch
+- date mismatch
+- GST/total mismatch
+- Other Charges mismatch
+- calculation bug
+
+Only repair existing records when the source data proves the correct value.
+
+Preserve historical auditability.
+
+============================================================
+29. NO MANUAL BALANCE PATCH
+============================================================
+
+DO NOT fix the problem by:
+
+- manually changing customer outstanding
+- manually changing Balance Sheet receivables
+- inserting arbitrary journal entries
+- hiding returned invoices
+- excluding sales returns from reports
+- hard-coding balances
+- changing only the dashboard
+- changing only the ledger UI
+
+Fix the authoritative calculation and transaction posting logic.
+
+============================================================
+30. SERVER-SIDE CALCULATION
+============================================================
+
+Customer Outstanding must be calculated server-side.
+
+Do not trust frontend-calculated totals.
+
+API must return authoritative values.
+
+Reports must use server-calculated values.
+
+Exports must use server-calculated values.
+
+PDFs must use the same calculation.
+
+============================================================
+31. CUSTOMER DETAIL PAGE
+============================================================
+
+Customer detail should show:
+
+Total Sales
+Sales Returns
+Receipts
+Other Charges
+Credit/Debit Notes
+Opening Balance
+Current Outstanding
+
+The displayed outstanding must equal the customer ledger closing balance.
+
+============================================================
+32. CUSTOMER LIST
+============================================================
+
+Customer list Outstanding column must use the same authoritative calculation.
+
+Do not calculate customer list outstanding differently from Customer Detail.
+
+Customer Detail
+=
+Customer List
+=
+Customer Ledger
+
+============================================================
+33. REPORTS
+============================================================
+
+Audit:
+
+- Receivables Report
+- Customer Outstanding
+- Customer Ledger
+- Customer Statement
+- P&L where relevant
+- Balance Sheet
+- Trial Balance
+- Dashboard
+- PDF
+- CSV/export
+
+All must reconcile.
+
+============================================================
+34. LOCATION TOTAL
+============================================================
+
+For each warehouse:
+
+SUM(customer outstanding for warehouse)
+=
+warehouse receivable
+
+For All Locations:
+
+SUM(all accessible warehouse/customer receivables)
+=
+All Locations receivable
+
+Do not double-count customers appearing in multiple scopes.
+
+============================================================
+35. ACCOUNTING EQUATION
+============================================================
+
+Verify the complete relationship:
+
+CUSTOMER TRANSACTION
+↓
+JOURNAL ENTRY
+↓
+CUSTOMER LEDGER
+↓
+CUSTOMER OUTSTANDING
+↓
+RECEIVABLES
+↓
+BALANCE SHEET
+
+All six layers must agree.
+
+============================================================
+36. DATABASE INTEGRITY
+============================================================
+
+Inspect relevant tables and relationships.
+
+Find actual table names in the current codebase.
+
+Check for:
+
+- orphan sales returns
+- sales returns without customer
+- sales returns without original sale where required
+- returns without accounting
+- returns without stock movement
+- duplicate return references
+- receipts without journal
+- journal entries without source
+- customer ledger rows without source
+- outstanding records without source
+- location mismatches
+- cancelled transactions still included
+- invalid customer references
+
+Do not delete anomalies automatically.
+
+============================================================
+37. PERFORMANCE
+============================================================
+
+Do not solve reconciliation by loading the entire database into the browser.
+
+Use efficient server-side queries.
+
+Avoid N+1 customer ledger queries.
+
+Use appropriate indexes.
+
+============================================================
+38. SECURITY
+============================================================
+
+Customer financial information must obey location permissions.
+
+A user from Warehouse A must not access Warehouse B customer outstanding by changing customer ID in the URL/API.
+
+Server-side authorization is mandatory.
+
+============================================================
+39. REGRESSION PROTECTION
+============================================================
+
+Add automated tests for:
+
+1. Sale increases outstanding.
+
+2. Receipt decreases outstanding.
+
+3. Sales Return decreases outstanding.
+
+4. Credit Note decreases outstanding.
+
+5. Debit Note increases outstanding.
+
+6. Other Charge increases outstanding when posted through sale.
+
+7. Quotation Other Charge does not create outstanding.
+
+8. Cancelled sale does not remain outstanding.
+
+9. Cancelled return does not continue reducing outstanding.
+
+10. Partial receipt works.
+
+11. Partial return works.
+
+12. Full payment + return produces correct customer credit balance.
+
+13. Multiple returns work.
+
+14. Multiple receipts work.
+
+15. Opening balance works.
+
+16. Location filtering works.
+
+17. All Locations aggregation works.
+
+18. Customer Ledger equals Outstanding.
+
+19. Outstanding equals Receivables.
+
+20. Receivables equals Balance Sheet receivable where applicable.
+
+============================================================
+40. FINAL LIVE RECONCILIATION
+============================================================
+
+After implementing the fix, run a complete reconciliation against the current database.
+
+Produce:
+
+TOTAL CUSTOMERS
+
+TOTAL SALES
+
+TOTAL SALES RETURNS
+
+TOTAL RECEIPTS
+
+TOTAL OTHER CHARGES
+
+TOTAL CREDIT NOTES
+
+TOTAL DEBIT NOTES
+
+TOTAL OPENING BALANCES
+
+CALCULATED CUSTOMER RECEIVABLE
+
+CUSTOMER LEDGER TOTAL
+
+OUTSTANDING TOTAL
+
+BALANCE SHEET RECEIVABLE
+
+DASHBOARD RECEIVABLE
+
+DIFFERENCE
+
+Every difference must be explained.
+
+============================================================
+41. SALES RETURN RECONCILIATION
+============================================================
+
+Produce a specific report:
+
+Customer
+Sales
+Sales Returns
+Receipts
+Opening
+Adjustments
+Expected Outstanding
+Ledger Outstanding
+System Outstanding
+Difference
+
+Sort by largest difference first.
+
+This is required so we can identify customers whose returns are currently missing from outstanding.
+
+============================================================
+42. IMPORTANT ACCOUNTING RULE
+============================================================
+
+DO NOT treat Sales Return merely as a stock movement.
+
+A Sales Return is simultaneously:
+
+1. Inventory transaction
+2. Sales reversal
+3. GST reversal where applicable
+4. Customer receivable reduction
+5. COGS reversal
+6. Accounting transaction
+7. Audit event
+
+All these effects must be linked.
+
+============================================================
+43. ATOMIC TRANSACTION
+============================================================
+
+Creating a Sales Return must atomically update:
+
+Stock
++
+Batch
++
+Stock Ledger
++
+Customer Ledger
++
+Customer Outstanding calculation
++
+Sales Return accounting
++
+GST
++
+COGS
++
+Audit
+
+If any critical operation fails:
+
+ROLL BACK.
+
+Do not leave a return partially posted.
+
+============================================================
+44. FINAL ACCEPTANCE CRITERIA
+============================================================
+
+The fix is complete only when:
+
+CUSTOMER LEDGER
+=
+CUSTOMER OUTSTANDING
+
+and:
+
+CUSTOMER OUTSTANDING
+=
+RECEIVABLES REPORT
+
+and:
+
+RECEIVABLES REPORT
+=
+BALANCE SHEET RECEIVABLES
+
+and:
+
+DASHBOARD RECEIVABLES
+=
+AUTHORITATIVE RECEIVABLES
+
+for the same date/location/scope.
+
+Most importantly:
+
+SALES RETURNS MUST REDUCE CUSTOMER OUTSTANDING.
+
+No valid sales return may remain ignored in customer receivable calculation.
+
+============================================================
+45. DO NOT STOP AT THE FIRST FIX
+============================================================
+
+Do NOT simply add:
+
+"- sales returns"
+
+to one query.
+
+Trace the entire flow.
+
+If adding sales returns causes another report to become inconsistent, fix the underlying shared calculation architecture.
+
+There must be ONE authoritative customer receivable calculation.
+
+============================================================
+46. FINAL REPORT
+============================================================
+
+At completion report:
+
+1. Root cause.
+
+2. Why Sales Returns were not reducing Outstanding.
+
+3. Number/value of affected sales returns.
+
+4. Number of affected customers.
+
+5. Old Outstanding total.
+
+6. Correct Outstanding total.
+
+7. Difference.
+
+8. Old Receivables.
+
+9. Correct Receivables.
+
+10. Customer Ledger total.
+
+11. Balance Sheet Receivables.
+
+12. Dashboard Receivables.
+
+13. Any historical data repaired.
+
+14. Code files changed.
+
+15. Database/migrations changed.
+
+16. API endpoints changed.
+
+17. Tests added.
+
+18. Tests passed.
+
+19. Remaining discrepancies.
+
+20. Whether Customer Ledger = Outstanding = Receivables = Balance Sheet.
+
+DO NOT report "fixed" until the complete reconciliation passes.
+
+START NOW.

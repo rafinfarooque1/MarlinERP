@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react';
-import { useCashBankBook, useCashBankBookLedgers } from '@workspace/api-client-react';
+import { useCashBankBook, useCashBankBookLedgers, useReconcileCashBankEntry } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
+import { Checkbox } from '@/components/ui/checkbox';
 import { EntityCombobox } from '@/components/ui/entity-combobox';
 import { Wallet, Landmark, AlertTriangle } from 'lucide-react';
 import { downloadCSV } from '@/lib/download';
@@ -16,6 +17,7 @@ import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
 import { EmptyState } from '@/components/app/empty-state';
 import { TableSkeleton } from '@/components/app/loading-skeletons';
 import { TablePager, useClientPage } from '@/components/ui/table-pager';
+import { toast } from 'sonner';
 
 const inr = (n: number) => `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
 const today = () => new Date().toISOString().split('T')[0];
@@ -46,7 +48,13 @@ export default function CashBankBook({ kind }: { kind: 'cash' | 'bank' }) {
   const { locationState } = useLocationContext();
   const loc = locationFilterParams(locationState);
   const { data, isLoading } = useCashBankBook(ledgerId, fromDate || undefined, toDate || undefined, loc);
-  const entries = data?.entries ?? [];
+  const allEntries = data?.entries ?? [];
+  const [reconciliationFilter, setReconciliationFilter] = useState<'all' | 'reconciled' | 'unreconciled'>('all');
+  const reconcileMutation = useReconcileCashBankEntry();
+  const [busyEntryId, setBusyEntryId] = useState<string | null>(null);
+  const entries = allEntries.filter(e =>
+    reconciliationFilter === 'all' || e.reconciliationStatus === reconciliationFilter,
+  );
   const companyLevel = (data as any)?.location ? (data as any)?.companyLevel : null;
 
   const { sorted, sort } = useTableSort(entries, {
@@ -57,9 +65,28 @@ export default function CashBankBook({ kind }: { kind: 'cash' | 'bank' }) {
     debit: e => Number(e.debit) || null,
     credit: e => Number(e.credit) || null,
     balance: e => Number(e.balance),
+    reconciliation: e => e.reconciliationStatus,
   });
 
   const { pageRows, pagerProps } = useClientPage(sorted);
+
+  async function handleReconcile(entry: typeof allEntries[number], checked: boolean) {
+    if (!entry.reconciliationEligible || busyEntryId === entry.entryId) return;
+    if (!checked && !window.confirm('Unreconcile this transaction?')) return;
+    setBusyEntryId(entry.entryId);
+    try {
+      await reconcileMutation.mutateAsync({
+        entryId: entry.entryId,
+        ledgerId: entry.ledgerId,
+        reconciled: checked,
+      });
+      toast.success(checked ? 'Transaction reconciled successfully.' : 'Transaction unreconciled successfully.');
+    } catch (e: any) {
+      toast.error(e?.data?.error || e?.message || 'Unable to update reconciliation status. Please try again.');
+    } finally {
+      setBusyEntryId(null);
+    }
+  }
 
   // Server-rendered Excel/PDF — always the FULL filtered range, never the
   // visible client page.
@@ -87,9 +114,10 @@ export default function CashBankBook({ kind }: { kind: 'cash' | 'bank' }) {
         { label: 'In (Dr)', align: 'right', width: 1.4 },
         { label: 'Out (Cr)', align: 'right', width: 1.4 },
         { label: 'Balance', align: 'right', width: 1.4 },
+         { label: 'Reconciliation' },
       ],
       rows: [
-        ['', '', 'Opening Balance', '', '', '', pdfMoney(data?.openingBalance ?? 0)] as (string | number)[],
+         ['', '', 'Opening Balance', '', '', '', pdfMoney(data?.openingBalance ?? 0), ''] as (string | number)[],
         ...entries.map(e => [
           new Date(`${e.date}T00:00:00`).toLocaleDateString('en-IN'),
           SOURCE_LABEL[e.source] ?? e.source,
@@ -98,9 +126,10 @@ export default function CashBankBook({ kind }: { kind: 'cash' | 'bank' }) {
           e.debit > 0 ? pdfMoney(e.debit) : '',
           e.credit > 0 ? pdfMoney(e.credit) : '',
           pdfMoney(e.balance),
+           e.reconciliationEligible ? e.reconciliationStatus : 'Not applicable',
         ] as (string | number)[]),
       ],
-      totalsRow: ['', '', 'Total', '', pdfMoney(data?.totalDebit ?? 0), pdfMoney(data?.totalCredit ?? 0), pdfMoney(data?.closingBalance ?? 0)],
+       totalsRow: ['', '', 'Total', '', pdfMoney(data?.totalDebit ?? 0), pdfMoney(data?.totalCredit ?? 0), pdfMoney(data?.closingBalance ?? 0), ''],
     }],
   });
 
@@ -131,10 +160,11 @@ export default function CashBankBook({ kind }: { kind: 'cash' | 'bank' }) {
               disabled={entries.length === 0}
               doc={doc}
               onCSV={() => downloadCSV(`${kind}-book-${fromDate}-to-${toDate}.csv`, [
-                { Date: '', Type: '', Voucher: 'Opening Balance', Description: '', Debit: '', Credit: '', Balance: data?.openingBalance ?? 0 },
+               { Date: '', Type: '', Voucher: 'Opening Balance', Description: '', Debit: '', Credit: '', Balance: data?.openingBalance ?? 0, Reconciliation: '' },
                 ...entries.map(e => ({
                   Date: e.date, Type: SOURCE_LABEL[e.source] ?? e.source, Voucher: e.voucherNumber || '',
-                  Description: e.description, Debit: e.debit || '', Credit: e.credit || '', Balance: e.balance,
+                 Description: e.description, Debit: e.debit || '', Credit: e.credit || '', Balance: e.balance,
+                 Reconciliation: e.reconciliationEligible ? e.reconciliationStatus : 'Not applicable',
                 })),
               ])}
             />
@@ -153,6 +183,16 @@ export default function CashBankBook({ kind }: { kind: 'cash' | 'bank' }) {
           <Input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} className="w-38" />
           <span className="text-muted-foreground text-sm">to</span>
           <Input type="date" value={toDate} onChange={e => setToDate(e.target.value)} className="w-38" />
+           <select
+             value={reconciliationFilter}
+             onChange={e => setReconciliationFilter(e.target.value as typeof reconciliationFilter)}
+             className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+             aria-label="Reconciliation status"
+           >
+             <option value="all">All statuses</option>
+             <option value="reconciled">Reconciled</option>
+             <option value="unreconciled">Unreconciled</option>
+           </select>
         </div>
 
         {/* Company-level bucket note */}
@@ -174,12 +214,15 @@ export default function CashBankBook({ kind }: { kind: 'cash' | 'bank' }) {
             value={<span className={(data?.closingBalance ?? 0) < 0 ? 'text-destructive' : ''}>{inr(data?.closingBalance ?? 0)}</span>}
             loading={isLoading}
           />
+           <SummaryCard label="Reconciled" value={String(allEntries.filter(e => e.reconciliationStatus === 'reconciled').length)} tone="positive" loading={isLoading} />
+           <SummaryCard label="Unreconciled" value={String(allEntries.filter(e => e.reconciliationEligible && e.reconciliationStatus !== 'reconciled').length)} tone="warning" loading={isLoading} />
         </SummaryCardGrid>
 
         <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
+                 <TableHead className="w-10">Reconcile</TableHead>
                 <SortableHead k="date" sort={sort}>Date</SortableHead>
                 <SortableHead k="type" sort={sort}>Type</SortableHead>
                 <SortableHead k="voucher" sort={sort}>Voucher #</SortableHead>
@@ -191,19 +234,31 @@ export default function CashBankBook({ kind }: { kind: 'cash' | 'bank' }) {
             </TableHeader>
             <TableBody>
               {isLoading ? (
-                <TableRow><TableCell colSpan={7} className="p-0"><TableSkeleton rows={4} cols={7} /></TableCell></TableRow>
+                <TableRow><TableCell colSpan={8} className="p-0"><TableSkeleton rows={4} cols={8} /></TableCell></TableRow>
               ) : entries.length === 0 ? (
-                <TableRow><TableCell colSpan={7} className="p-0">
+                <TableRow><TableCell colSpan={8} className="p-0">
                   <EmptyState icon={Icon} title="No movements in this period" compact />
                 </TableCell></TableRow>
               ) : (
                 <>
-                  <TableRow className="bg-muted/5 hover:bg-muted/5">
-                    <TableCell colSpan={6} className="text-sm font-medium text-muted-foreground">Opening Balance</TableCell>
+                   <TableRow className="bg-muted/5 hover:bg-muted/5">
+                     <TableCell colSpan={7} className="text-sm font-medium text-muted-foreground">Opening Balance</TableCell>
                     <TableCell className="text-right font-mono font-semibold">{inr(data?.openingBalance ?? 0)}</TableCell>
                   </TableRow>
                   {pageRows.map((e, i) => (
                     <TableRow key={i} className="hover:bg-muted/10">
+                       <TableCell>
+                         {e.reconciliationEligible ? (
+                           <Checkbox
+                             checked={e.reconciliationStatus === 'reconciled'}
+                             disabled={!perm.canEdit || busyEntryId === e.entryId}
+                             onCheckedChange={value => handleReconcile(e, value === true)}
+                             aria-label={`${e.reconciliationStatus === 'reconciled' ? 'Unreconcile' : 'Reconcile'} ${e.voucherNumber || e.entryId}`}
+                           />
+                         ) : (
+                           <span className="text-xs text-muted-foreground">—</span>
+                         )}
+                       </TableCell>
                       <TableCell className="text-sm text-muted-foreground whitespace-nowrap">{new Date(`${e.date}T00:00:00`).toLocaleDateString('en-IN')}</TableCell>
                       <TableCell><Badge variant="outline" className="text-xs">{SOURCE_LABEL[e.source] ?? e.source}</Badge></TableCell>
                       <TableCell className="font-mono text-primary text-xs font-semibold">{e.voucherNumber || '—'}</TableCell>
