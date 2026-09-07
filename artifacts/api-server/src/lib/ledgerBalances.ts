@@ -131,7 +131,7 @@ export async function buildLedgerBalanceIndex(
   postingsFn: PostingsFn,
   opts: {
     toDate?: string | null;
-    postings?: Array<{ ledgerId: number; debit: number; credit: number }>;
+    postings?: Array<{ ledgerId: number; debit: number; credit: number; [key: string]: any }>;
     /**
      * Location slices exclude opening balances: an opening balance is a
      * company-level figure with no location attribution, so folding it into a
@@ -139,6 +139,8 @@ export async function buildLedgerBalanceIndex(
      * reconciliation. Default true (company-wide view).
      */
     includeOpeningBalances?: boolean;
+    /** Optional presentation filter over the already-derived posting stream. */
+    postingFilter?: (posting: Record<string, any>) => boolean;
     /** Queryable to run on (default the shared pool); also threaded into postingsFn. */
     q?: Q;
   } = {},
@@ -147,7 +149,7 @@ export async function buildLedgerBalanceIndex(
   const includeOb = opts.includeOpeningBalances !== false;
   const q = opts.q ?? pool;
 
-  const [{ rows: ledgerRows }, postings, { rows: obRows }] = await Promise.all([
+  const [{ rows: ledgerRows }, rawPostings, { rows: obRows }] = await Promise.all([
     q.query(`SELECT id, code, parent_id FROM account_ledgers`),
     opts.postings
       ? Promise.resolve(opts.postings)
@@ -161,6 +163,9 @@ export async function buildLedgerBalanceIndex(
         )
       : Promise.resolve({ rows: [] as Array<Record<string, unknown>> }),
   ]);
+  const postings = opts.postingFilter
+    ? (rawPostings as Array<Record<string, any>>).filter(opts.postingFilter)
+    : rawPostings;
 
   const agg = new Map<number, { debit: number; credit: number }>();
   const bump = (id: number, debit: number, credit: number) => {
@@ -337,6 +342,8 @@ export async function buildLedgerStatement(
     fromDate?: string | null; toDate?: string | null; natural?: 1 | -1;
     /** An already-derived posting stream for the same `toDate`, to avoid rebuilding it. */
     postings?: Array<Record<string, any>>;
+    /** Location slices do not inherit company-level opening balances. */
+    includeOpeningBalances?: boolean;
     /** Queryable to run on (default the shared pool); also threaded into postingsFn. */
     q?: Q;
   } = {},
@@ -348,11 +355,13 @@ export async function buildLedgerStatement(
 
   const [all, { rows: obRows }] = await Promise.all([
     opts.postings ? Promise.resolve(opts.postings) : postingsFn(toDate ? { toDate, q } : { q }),
-    q.query(
-      `SELECT balance::numeric AS balance, balance_type, as_of_date
-         FROM opening_balances WHERE ledger_id = $1${toDate ? ` AND as_of_date <= $2` : ""}`,
-      toDate ? [ledgerId, toDate] : [ledgerId],
-    ),
+    opts.includeOpeningBalances === false
+      ? Promise.resolve({ rows: [] as Array<Record<string, unknown>> })
+      : q.query(
+          `SELECT balance::numeric AS balance, balance_type, as_of_date
+             FROM opening_balances WHERE ledger_id = $1${toDate ? ` AND as_of_date <= $2` : ""}`,
+          toDate ? [ledgerId, toDate] : [ledgerId],
+        ),
   ]);
 
   const mine = (all as Array<Record<string, any>>)
@@ -410,7 +419,12 @@ export async function buildLedgerStatement(
  * cycle. Everything downstream stays a plain function call.
  */
 export async function currentBalanceIndex(
-  opts: { toDate?: string | null; q?: Q } = {},
+  opts: {
+    toDate?: string | null;
+    q?: Q;
+    includeOpeningBalances?: boolean;
+    postingFilter?: (posting: Record<string, any>) => boolean;
+  } = {},
 ): Promise<LedgerBalanceIndex> {
   const { buildDerivedPostings } = await import("../routes/journal");
   return buildLedgerBalanceIndex(buildDerivedPostings as PostingsFn, opts);
@@ -453,6 +467,7 @@ export async function currentPartyStatement(
     fromDate: opts.fromDate, toDate: opts.toDate,
     natural: PARTY[kind].natural,
     postings: stream,
+    includeOpeningBalances: !opts.postingFilter,
     q,
   });
   return { ...st, hasLedger: true };

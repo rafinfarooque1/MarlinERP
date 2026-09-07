@@ -226,18 +226,15 @@ export function buildGstInvoiceHtml(opts: {
   const MONEY_EPSILON = 0.005;
   const invoiceTotalNum = Number(sale.totalAmount ?? 0);
   const amountReceivedNum = Number(sale.amountReceived ?? sale.amountPaid ?? 0);
-  const creditAdjustmentsNum = Number(sale.creditAdjustments ?? 0);
-  // Prefer the server-derived outstanding when present; otherwise fall back to
-  // (total - received - credited) — same semantics as the server position, so
-  // the fallback can never disagree with it. Never negative.
+  // The API supplies this server-derived value for every sale response. Do not
+  // reconstruct receivables in the browser: a missing value is unknown, not a
+  // settled invoice.
   const serverOutstanding = sale.balanceDue ?? sale.outstanding ?? sale.outstandingAmount;
-  const outstandingNum = serverOutstanding != null
-    ? Math.max(0, Number(serverOutstanding))
-    : Math.max(0, invoiceTotalNum - amountReceivedNum - creditAdjustmentsNum);
+  const outstandingNum = serverOutstanding == null ? null : Math.max(0, Number(serverOutstanding));
   const isCancelled = Boolean(sale.cancelledAt) || sale.paymentStatus === 'cancelled' || String(sale.status || '').toLowerCase() === 'cancelled';
-  const isSettled = isCancelled || outstandingNum <= MONEY_EPSILON;
+  const isSettled = isCancelled || (outstandingNum != null && outstandingNum <= MONEY_EPSILON);
   // A QR is only ever rendered when the caller supplied one AND money is still due.
-  const showQr = Boolean(qrDataUrl) && !isSettled;
+  const showQr = Boolean(qrDataUrl) && outstandingNum != null && !isSettled;
   const invoiceType = sale.customerGstin ? 'GST INVOICE B2B' : 'GST INVOICE B2C';
   const dateStr = new Date(sale.saleDate).toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: '2-digit' });
 
@@ -410,7 +407,7 @@ export function buildGstInvoiceHtml(opts: {
             <table class="no-border" style="width:100%;margin-top:8px;font-size:9px">
               <tr><td>Invoice Total</td><td class="right">${invoiceTotalNum.toFixed(2)}</td></tr>
               <tr><td>Amount Received</td><td class="right">${amountReceivedNum.toFixed(2)}</td></tr>
-              <tr class="bold"><td>Outstanding Amount</td><td class="right">${outstandingNum.toFixed(2)}</td></tr>
+              <tr class="bold"><td>Outstanding Amount</td><td class="right">${outstandingNum == null ? 'Unavailable' : outstandingNum.toFixed(2)}</td></tr>
             </table>
             `}
           </td>
@@ -419,7 +416,7 @@ export function buildGstInvoiceHtml(opts: {
             <div class="bold small" style="color:#0d9488;margin-bottom:4px;font-size:8px;letter-spacing:0.5px">SCAN TO PAY (UPI)</div>
             <img src="${qrDataUrl}" style="width:100px;height:100px;display:block;margin:0 auto" alt="UPI QR" />
             <div style="font-size:8px;color:#666;margin-top:3px;word-break:break-all">${(sale as any).outletUpiId || ''}</div>
-            <div style="font-size:10px;font-weight:bold;margin-top:2px">₹${outstandingNum.toFixed(2)}</div>
+            <div style="font-size:10px;font-weight:bold;margin-top:2px">${outstandingNum == null ? 'Balance unavailable' : `₹${outstandingNum.toFixed(2)}`}</div>
             <div style="font-size:7px;color:#999">Outstanding &middot; ${sale.invoiceNumber || ''}</div>
           </td>` : ''}
           <td style="width:${showQr ? '38%' : '45%'};padding:8px;text-align:right">

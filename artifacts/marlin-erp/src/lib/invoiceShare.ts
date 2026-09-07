@@ -151,9 +151,10 @@ export function composeInvoiceMessage({
   const modeLabel = paymentModeLabel(sale.paymentMode);
   const received = Number(sale.amountReceived ?? sale.amountPaid ?? 0);
   const credited = Number(sale.creditAdjustments ?? 0);
-  const due = Number(
-    sale.balanceDue ?? Math.max(0, Number(sale.totalAmount || 0) - received - credited),
-  );
+  // The API supplies balanceDue for sale responses. Do not recreate the
+  // receivable formula here: a missing authoritative figure must fail closed
+  // instead of turning a stale payload into a different balance.
+  const due = sale.balanceDue == null ? null : Number(sale.balanceDue);
   const cancelled = sale.paymentStatus === 'cancelled';
   const payLines: string[] = [];
   if (cancelled) {
@@ -162,9 +163,11 @@ export function composeInvoiceMessage({
     if (modeLabel) payLines.push(`  Payment: ${modeLabel}`);
     if (received > 0.004) payLines.push(`  Amount received: ${inr(received)}`);
     if (credited > 0.004) payLines.push(`  Credit notes: -${inr(credited)}`);
-    payLines.push(due > 0.004
+    payLines.push(due != null && due > 0.004
       ? `  *Balance due: ${inr(due)}*`
-      : `  *Paid in full — thank you!*`);
+      : due != null
+        ? `  *Paid in full — thank you!*`
+        : `  *Balance due is available on the invoice PDF.*`);
   }
 
   return [
