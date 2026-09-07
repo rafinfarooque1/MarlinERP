@@ -532,11 +532,12 @@ function ByLocationReport({ range, canDownload }: { range: RangeState; canDownlo
     const subTaxable = (g.wh?.taxable ?? 0) + g.outlets.reduce((s, r) => s + r.taxable, 0);
     const subTax = (g.wh?.tax ?? 0) + g.outlets.reduce((s, r) => s + r.tax, 0);
     const subPaid = (g.wh?.paid ?? 0) + g.outlets.reduce((s, r) => s + r.paid, 0);
+    const subOutstanding = (g.wh?.outstanding ?? 0) + g.outlets.reduce((s, r) => s + r.outstanding, 0);
     exportRows.push({ locationType: 'subtotal', locationId: Number(w.id),
       locationName: `TOTAL — ${whNameMap.get(Number(w.id)) ?? w.name}`,
       invoices: (g.wh?.invoices ?? 0) + g.outlets.reduce((s, r) => s + r.invoices, 0),
       taxable: subTaxable, tax: subTax, total: subTotal,
-      paid: subPaid, outstanding: subTotal - subPaid });
+      paid: subPaid, outstanding: subOutstanding });
   });
 
   return (

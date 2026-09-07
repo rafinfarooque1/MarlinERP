@@ -212,7 +212,8 @@ router.get("/customers", requireModuleView(["page:/sales/pos", "page:/accounts/v
   const conds: string[] = [scopeLocationTypeWhere(scope, params, "c")];
   // View narrowing (page filter or the global selector) — ANDed ON TOP of the
   // LBAC scope above, so it can only narrow what the caller may already see.
-  const { getLocationFilter } = await import("../lib/requestLocation");
+  const { getLocationFilter, getPostingLocationFilter } = await import("../lib/requestLocation");
+  const { postingMatchesLocation } = await import("../lib/postingLocation");
   const { pushLocationFilter } = await import("../lib/queryFilters");
   pushLocationFilter(conds, params, getLocationFilter(req),
     `COALESCE(c.location_type, 'headoffice')`, `c.location_id`);
@@ -233,7 +234,11 @@ router.get("/customers", requireModuleView(["page:/sales/pos", "page:/accounts/v
   // receipts cannot see any of those, which is how this list used to contradict
   // the customer's own ledger.
   const { currentBalanceIndex } = await import("../lib/ledgerBalances");
-  const balIdx = await currentBalanceIndex();
+  const postingLocation = getPostingLocationFilter(req);
+  const balIdx = await currentBalanceIndex(postingLocation ? {
+    includeOpeningBalances: false,
+    postingFilter: (p) => postingMatchesLocation(p as any, postingLocation),
+  } : {});
   const { advanceBalanceMap } = await import("../lib/advanceLedgers");
   attachPartyBalance(rows, balIdx, "customer", await advanceBalanceMap("customer", balIdx));
   const paging = parsePaging(req.query as Record<string, unknown>);

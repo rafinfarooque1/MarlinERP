@@ -1,0 +1,909 @@
+MASTER FIX — RECEIPT VOUCHER MUST POST AS ONE CUSTOMER LEDGER ENTRY
+
+I need to correct the Receipt Voucher → Customer Ledger → Outstanding workflow.
+
+CURRENT PROBLEM:
+
+When I create ONE Receipt Voucher for a customer, for example:
+
+Receipt Amount = ₹2,000
+
+and the ₹2,000 is allocated/settled against multiple outstanding invoices, the Customer Ledger is showing the receipt as multiple bill-wise receipt entries.
+
+I DO NOT WANT THIS.
+
+A Receipt Voucher is ONE financial transaction.
+
+The Customer Ledger must show ONE receipt entry for the TOTAL receipt amount.
+
+Example:
+
+Receipt Voucher:
+Customer = TEAKOD
+Receipt Amount = ₹2,000
+Reference = UTR/transaction reference
+Date = 07-09-2026
+
+Even if the ₹2,000 is allocated like:
+
+Invoice A = ₹234.98
+Invoice B = ₹1,670.00
+Invoice C = ₹95.02
+
+The CUSTOMER LEDGER must show:
+
+Receipt Voucher | ₹2,000
+
+NOT:
+
+Receipt against Invoice A | ₹234.98
+Receipt against Invoice B | ₹1,670.00
+Receipt against Invoice C | ₹95.02
+
+The bill-wise allocation must remain available for settlement/outstanding tracking, but it must NOT create multiple receipt transactions in the Customer Ledger.
+
+============================================================
+1. FUNDAMENTAL RULE
+============================================================
+
+ONE RECEIPT VOUCHER
+=
+ONE CUSTOMER LEDGER RECEIPT ENTRY
+
+The receipt amount must be posted once.
+
+Example:
+
+Receipt Voucher:
+₹2,000
+
+Customer Ledger:
+
+Receipt Voucher    ₹2,000 CR
+
+There must NOT be three separate receipt ledger transactions totaling ₹2,000.
+
+============================================================
+2. BILL-WISE ALLOCATION IS NOT A NEW TRANSACTION
+============================================================
+
+Bill-wise allocation is only a settlement/allocation relationship.
+
+Example:
+
+Receipt Voucher RV-000123
+Total = ₹2,000
+
+Allocation:
+
+Invoice 000840 = ₹234.98
+Invoice 000845 = ₹1,670.00
+Invoice 000851 = ₹95.02
+
+These three allocation records must be treated as:
+
+ONE RECEIPT
++
+THREE BILL ALLOCATIONS
+
+NOT:
+
+THREE RECEIPTS.
+
+============================================================
+3. CUSTOMER LEDGER
+============================================================
+
+Customer Ledger must display:
+
+Date
+Voucher No
+Particulars
+Debit
+Credit
+Balance
+
+For the receipt:
+
+07-09-2026
+RV-000123
+Receipt Voucher
+Credit ₹2,000
+Balance ...
+
+ONLY ONE ROW.
+
+Do not display:
+
+Invoice 000840 Receipt ₹234.98
+Invoice 000845 Receipt ₹1,670
+Invoice 000851 Receipt ₹95.02
+
+as separate customer ledger transactions.
+
+============================================================
+4. OUTSTANDING CALCULATION
+============================================================
+
+Customer Outstanding must still calculate correctly.
+
+The customer's outstanding reduction from this receipt is:
+
+₹2,000
+
+regardless of how many invoices the receipt is allocated against.
+
+Therefore:
+
+Opening Balance
++ Sales
++ valid charges/debits
+- Sales Returns
+- Credit Notes
+- RECEIPTS
+=
+Outstanding
+
+The receipt deduction must happen ONCE:
+
+-₹2,000
+
+not:
+
+-₹234.98
+-₹1,670
+-₹95.02
+
+as three separate receipt transactions.
+
+The mathematical total may be the same, but the accounting transaction must remain one receipt.
+
+============================================================
+5. BILL SETTLEMENT
+============================================================
+
+The system must still know which bills were settled.
+
+Maintain:
+
+Receipt Voucher RV-000123
+Total Receipt = ₹2,000
+
+Allocations:
+
+Invoice A → ₹234.98
+Invoice B → ₹1,670.00
+Invoice C → ₹95.02
+
+This is useful for:
+
+- invoice outstanding
+- bill settlement
+- customer statement
+- payment allocation
+- overdue calculation
+- invoice status
+
+But allocation records must NOT become customer ledger receipt transactions.
+
+============================================================
+6. RECEIPT VOUCHER SCREEN
+============================================================
+
+Keep the existing "Settle bills" functionality.
+
+The user should be able to:
+
+Select customer
+Enter receipt amount
+Select bills
+Allocate amount against bills
+
+Example:
+
+Amount:
+₹2,000
+
+Bills:
+
+Invoice A     Due ₹234.98    This Voucher ₹234.98
+Invoice B     Due ₹1,670.00  This Voucher ₹1,670.00
+Invoice C     Due ₹95.02     This Voucher ₹95.02
+
+Total allocated:
+₹2,000
+
+This allocation UI is fine.
+
+BUT after saving:
+
+Customer Ledger = ONE ₹2,000 receipt.
+
+============================================================
+7. RECEIPT VOUCHER ACCOUNTING
+============================================================
+
+Accounting must create ONE receipt accounting transaction.
+
+Example:
+
+Dr Cash/Bank ₹2,000
+Cr Customer Receivable ₹2,000
+
+Do NOT create three separate accounting receipt entries merely because the receipt is allocated to three invoices.
+
+The bill allocation should be a settlement mapping against the customer's receivable.
+
+============================================================
+8. CUSTOMER LEDGER SOURCE
+============================================================
+
+Find the current Customer Ledger calculation.
+
+Determine whether it currently joins:
+
+Receipt Voucher
++
+Receipt Allocation / Bill Settlement
+
+in a way that duplicates/splits the receipt.
+
+Fix the query/calculation.
+
+The Customer Ledger must derive the receipt transaction from the RECEIPT VOUCHER itself.
+
+Receipt amount:
+
+receipt_voucher.amount
+
+not:
+
+SUM(receipt_allocations.amount) as separate ledger transactions.
+
+If allocation totals are used for validation, they must reconcile to the receipt amount.
+
+============================================================
+9. NO DUPLICATE RECEIPT POSTING
+============================================================
+
+Check whether the current system is doing something similar to:
+
+Receipt Voucher = ₹2,000
+
+then creating ledger rows:
+
+₹234.98
+₹1,670
+₹95.02
+
+If so, remove/fix that duplicate transaction-generation behavior.
+
+There must be only one customer ledger transaction for the receipt voucher.
+
+============================================================
+10. RECEIPT ALLOCATION VALIDATION
+============================================================
+
+The system must validate:
+
+SUM(all bill allocations)
+<= Receipt Amount
+
+depending on the existing advance/overpayment rules.
+
+If:
+
+Receipt = ₹2,000
+
+Allocation = ₹2,000
+
+then:
+
+Allocated = ₹2,000
+Unallocated = ₹0
+
+If:
+
+Receipt = ₹2,000
+
+Allocation = ₹1,500
+
+then:
+
+Allocated = ₹1,500
+Unallocated = ₹500
+
+The ₹500 must remain as customer advance/unallocated receipt according to the existing ERP accounting model.
+
+It must NOT disappear.
+
+============================================================
+11. OVERPAYMENT
+============================================================
+
+If:
+
+Receipt = ₹2,000
+
+Outstanding bills = ₹1,500
+
+Then:
+
+Allocated = ₹1,500
+Unallocated = ₹500
+
+Customer Ledger must still show:
+
+Receipt ₹2,000
+
+NOT:
+
+Receipt ₹1,500
+
+The ₹500 must remain as customer advance/credit balance according to the existing system.
+
+============================================================
+12. PARTIAL BILL SETTLEMENT
+============================================================
+
+Example:
+
+Invoice = ₹10,000
+
+Receipt = ₹2,000
+
+Allocation:
+Invoice = ₹2,000
+
+Customer Ledger:
+
+ONE Receipt = ₹2,000
+
+Invoice outstanding:
+
+₹8,000
+
+Do not create a second ledger transaction for the invoice settlement.
+
+============================================================
+13. MULTIPLE BILLS
+============================================================
+
+Example:
+
+Invoice A = ₹5,000
+Invoice B = ₹4,000
+Invoice C = ₹3,000
+
+Receipt = ₹7,000
+
+Allocation:
+
+A = ₹5,000
+B = ₹2,000
+C = ₹0
+
+Customer Ledger:
+
+ONE Receipt = ₹7,000
+
+Bill balances:
+
+A = ₹0
+B = ₹2,000
+C = ₹3,000
+
+This is the required behavior.
+
+============================================================
+14. SALES RETURNS
+============================================================
+
+This must remain compatible with the previous required fix.
+
+Customer Ledger must contain:
+
+Sales
+Sales Returns
+Receipts
+Other Charges
+Credit Notes
+Debit Notes
+Opening Balance
+Adjustments
+
+Sales Return must reduce receivable.
+
+Receipt must reduce receivable.
+
+But they remain separate transaction types.
+
+Example:
+
+Sale = ₹10,000
+Sales Return = ₹2,000
+Receipt = ₹3,000
+
+Customer Ledger should show:
+
+Sale             ₹10,000
+Sales Return      ₹2,000 CR
+Receipt           ₹3,000 CR
+
+Outstanding:
+
+₹10,000
+- ₹2,000
+- ₹3,000
+=
+₹5,000
+
+============================================================
+15. CUSTOMER LEDGER VS OUTSTANDING
+============================================================
+
+After this fix:
+
+Customer Ledger Closing Balance
+=
+Customer Outstanding
+
+The number of invoices allocated to a receipt must NOT affect this equality.
+
+One receipt of ₹2,000:
+ledger reduction = ₹2,000
+
+Ten allocations totaling ₹2,000:
+ledger reduction = ₹2,000
+
+Same result.
+
+============================================================
+16. CUSTOMER STATEMENT
+============================================================
+
+Customer Statement should also show the receipt as ONE transaction.
+
+Example:
+
+Date        Voucher       Particulars       Debit      Credit
+07-09-26    RV-000123     Receipt                         ₹2,000
+
+Do NOT show separate receipt rows for each invoice.
+
+If bill-wise details are useful, provide them as an expandable/detail section:
+
+Receipt RV-000123
+Total ₹2,000
+
+Allocated to:
+- Invoice A ₹234.98
+- Invoice B ₹1,670
+- Invoice C ₹95.02
+
+But the main statement remains ONE receipt transaction.
+
+============================================================
+17. RECEIPT VOUCHER DETAIL
+============================================================
+
+Receipt Voucher detail page/PDF may show bill allocation details.
+
+For example:
+
+Receipt Amount: ₹2,000
+
+Settlement Details:
+Invoice A ₹234.98
+Invoice B ₹1,670
+Invoice C ₹95.02
+
+This is acceptable.
+
+The Customer Ledger should still show:
+
+Receipt ₹2,000
+
+============================================================
+18. PDF
+============================================================
+
+Receipt Voucher PDF should continue showing:
+
+- Receipt Voucher number
+- date
+- customer
+- amount
+- cash/bank
+- reference
+- bill settlement details if already supported
+
+Do NOT split the accounting receipt amount into multiple receipt transactions in the PDF ledger/statement.
+
+============================================================
+19. CASH / BANK
+============================================================
+
+Cash/Bank must receive ONE transaction:
+
+₹2,000
+
+not:
+
+₹234.98
+₹1,670
+₹95.02
+
+The bank/cash ledger must therefore match the Receipt Voucher total exactly.
+
+============================================================
+20. JOURNAL VOUCHER
+============================================================
+
+The Journal Voucher must represent ONE receipt accounting event.
+
+Example:
+
+Dr Bank       ₹2,000
+Cr Customer   ₹2,000
+
+Bill allocation is not additional accounting.
+
+Do not create duplicate journal entries per invoice.
+
+============================================================
+21. RECEIVABLES
+============================================================
+
+Receivables must reduce by:
+
+₹2,000
+
+once.
+
+Customer outstanding must reduce by:
+
+₹2,000
+
+once.
+
+Balance Sheet receivable must reduce by:
+
+₹2,000
+
+once.
+
+Dashboard receivable must reduce by:
+
+₹2,000
+
+once.
+
+============================================================
+22. LOCATION
+============================================================
+
+Receipt and allocation must obey the current location architecture.
+
+The customer must be accessible to the selected location.
+
+Receipt must be posted to the correct location.
+
+Bill allocation must only allow eligible bills for that customer/location.
+
+Do not allow cross-location settlement.
+
+Server-side validation is mandatory.
+
+============================================================
+23. DATABASE DESIGN
+============================================================
+
+Inspect the existing schema first.
+
+Do NOT create unnecessary new tables.
+
+Identify:
+
+- receipt voucher table
+- receipt allocation/settlement table
+- customer ledger table if any
+- journal voucher table
+- journal lines
+- customer outstanding calculation
+
+The preferred architecture is:
+
+RECEIPT VOUCHER
+        |
+        +---- Customer Ledger Transaction = ONE
+        |
+        +---- Journal Voucher = ONE
+        |
+        +---- Bank/Cash Transaction = ONE
+        |
+        +---- Allocation 1
+        +---- Allocation 2
+        +---- Allocation 3
+
+Allocations are child settlement records, not independent receipts.
+
+============================================================
+24. EXISTING HISTORICAL RECEIPTS
+============================================================
+
+Audit existing receipt vouchers.
+
+Find receipts where:
+
+ONE receipt voucher
+has multiple bill allocation rows
+and customer ledger is incorrectly split.
+
+Do NOT blindly rewrite historical data.
+
+Determine whether the current ledger calculation is simply displaying allocations as separate rows or whether duplicate accounting/ledger transactions were actually created.
+
+If it is only a reporting/query problem:
+fix the calculation/query.
+
+If duplicate accounting transactions actually exist:
+identify them carefully and repair only when the source receipt voucher proves the correct accounting.
+
+Never create duplicate credits/debits during the repair.
+
+Preserve audit history.
+
+============================================================
+25. RECONCILIATION REPORT
+============================================================
+
+Create an internal validation:
+
+Receipt Voucher
+Receipt Amount
+Number of Bill Allocations
+Allocated Amount
+Unallocated Amount
+Customer Ledger Receipt Amount
+Bank/Cash Amount
+Journal Customer Credit
+Difference
+
+Example:
+
+RV-000123
+Receipt = ₹2,000
+Allocations = 3
+Allocated = ₹2,000
+Unallocated = ₹0
+Customer Ledger = ₹2,000
+Bank = ₹2,000
+Journal = ₹2,000
+Difference = ₹0
+
+============================================================
+26. TEST CASES
+============================================================
+
+TEST 1 — SINGLE BILL
+
+Receipt ₹2,000
+One bill allocation ₹2,000
+
+Expected:
+ONE ledger receipt ₹2,000
+
+TEST 2 — MULTIPLE BILLS
+
+Receipt ₹2,000
+
+Bill A ₹234.98
+Bill B ₹1,670
+Bill C ₹95.02
+
+Expected:
+
+ONE customer ledger receipt ₹2,000
+
+TEST 3 — PARTIAL ALLOCATION
+
+Receipt ₹2,000
+Allocation ₹1,500
+
+Expected:
+
+ONE receipt ₹2,000
+Unallocated ₹500
+
+TEST 4 — OVERPAYMENT
+
+Receipt ₹2,000
+Outstanding bills ₹1,500
+
+Expected:
+
+ONE receipt ₹2,000
+₹1,500 allocated
+₹500 customer advance/credit
+
+TEST 5 — MULTIPLE RECEIPTS
+
+Receipt 1 = ₹2,000
+Receipt 2 = ₹3,000
+
+Expected Customer Ledger:
+
+Receipt 1 ₹2,000
+Receipt 2 ₹3,000
+
+NOT bill-wise split rows.
+
+TEST 6 — SALES RETURN + RECEIPT
+
+Sale ₹10,000
+Return ₹2,000
+Receipt ₹3,000
+
+Expected Outstanding:
+
+₹5,000
+
+TEST 7 — REFRESH
+
+Create receipt.
+
+Refresh page.
+
+Ledger must still show ONE receipt.
+
+TEST 8 — PDF
+
+Receipt PDF may show allocations but accounting amount remains ₹2,000.
+
+TEST 9 — BANK
+
+Bank ledger amount = ₹2,000.
+
+TEST 10 — JOURNAL
+
+Customer credit = ₹2,000.
+
+============================================================
+27. IMPORTANT — DO NOT BREAK BILL-WISE OUTSTANDING
+============================================================
+
+I am NOT asking to remove bill-wise settlement.
+
+Keep bill-wise settlement for:
+
+- tracking which invoices are paid
+- partial payments
+- due amounts
+- overdue bills
+- invoice status
+- allocation history
+
+I am asking to separate:
+
+TRANSACTION LEVEL
+
+from
+
+ALLOCATION LEVEL.
+
+Receipt Voucher = transaction.
+
+Bill Allocation = settlement mapping.
+
+============================================================
+28. REQUIRED FINAL DATA MODEL
+
+Conceptually:
+
+RECEIPT:
+RV-001
+Customer: ABC
+Amount: ₹2,000
+
+CUSTOMER LEDGER:
+RV-001 → ₹2,000 credit
+
+BANK:
+RV-001 → ₹2,000
+
+JOURNAL:
+Dr Bank ₹2,000
+Cr Customer ₹2,000
+
+ALLOCATIONS:
+RV-001 → Invoice A ₹234.98
+RV-001 → Invoice B ₹1,670
+RV-001 → Invoice C ₹95.02
+
+That is the correct architecture.
+
+============================================================
+29. FINAL ACCEPTANCE CRITERIA
+============================================================
+
+The feature is correct only when:
+
+ONE Receipt Voucher
+=
+ONE Customer Ledger Receipt
+
+regardless of:
+
+- number of bills
+- number of allocations
+- partial allocation
+- full allocation
+- multiple invoice settlement
+
+And:
+
+Receipt Voucher Amount
+=
+Customer Ledger Receipt Amount
+=
+Bank/Cash Amount
+=
+Journal Customer Credit
+
+The bill allocations must sum to the allocated portion of the receipt but must NEVER create additional customer ledger receipt transactions.
+
+============================================================
+30. FINAL INSTRUCTION
+============================================================
+
+Inspect the current Receipt Voucher implementation first.
+
+Trace:
+
+Receipt UI
+→ API
+→ database
+→ receipt voucher
+→ bill allocation
+→ customer ledger
+→ customer outstanding
+→ journal voucher
+→ cash/bank
+→ reports
+
+Find exactly where bill-wise allocation is being incorrectly treated as separate receipt transactions.
+
+Fix the ROOT CAUSE.
+
+Do not simply hide bill-wise rows in the UI.
+
+The underlying accounting model must remain:
+
+ONE RECEIPT
++
+MULTIPLE ALLOCATIONS
+
+not:
+
+MULTIPLE RECEIPTS.
+
+After implementing the fix, run full regression testing for:
+
+Receipt Voucher
+Customer Ledger
+Customer Outstanding
+Receivables
+Balance Sheet
+Cash Book
+Bank Book
+Journal Voucher
+Sales Returns
+Credit Notes
+Bill Settlement
+Location Security
+PDF
+Reports
+Dashboard
+
+START NOW.

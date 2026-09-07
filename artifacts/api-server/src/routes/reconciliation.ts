@@ -18,6 +18,7 @@ import {
 } from "./journal";
 import { stockValuation } from "../lib/valuation";
 import { getPostingLocationFilter } from "../lib/requestLocation";
+import { postingMatchesLocation } from "../lib/postingLocation";
 
 const router = Router();
 
@@ -353,6 +354,243 @@ router.get(
         warnings,
         passed: checks.length - failed - warnings,
       },
+    });
+  },
+);
+
+// ── GET /accounts/reconciliation/customer-receivables ────────────────────────
+// Customer-wise source-to-ledger reconciliation. This is deliberately
+// read-only and does not try to make invoice arithmetic equal the books:
+// opening balances, advances, overpayments and manual vouchers are real
+// accounting inputs and are surfaced in the adjustment column.
+router.get(
+  "/accounts/reconciliation/customer-receivables",
+  requireModuleView("page:/accounts/reconciliation"),
+  async (req, res): Promise<void> => {
+    const from = typeof req.query.fromDate === "string" ? req.query.fromDate : undefined;
+    const to = typeof req.query.toDate === "string" ? req.query.toDate : undefined;
+    if ((from && !isIsoDate(from)) || (to && !isIsoDate(to))) {
+      res.status(400).json({ error: "fromDate/toDate must be valid YYYY-MM-DD dates" });
+      return;
+    }
+
+    const emp = (req as any).employee as { branchType?: string; branchId?: number } | undefined;
+    const postingLocation = emp?.branchType && emp.branchType !== "headoffice"
+      ? { type: emp.branchType as "warehouse" | "outlet", id: Number(emp.branchId ?? 0) }
+      : getPostingLocationFilter(req);
+
+    const { getUserDataScope, scopeLocationTypeWhere } = await import("../lib/dataScope");
+    const { pushLocationFilter } = await import("../lib/queryFilters");
+    const scope = await getUserDataScope(
+      emp as { branchType: string; branchId: number },
+    );
+    const customerParams: any[] = [];
+    const customerConds: string[] = [scopeLocationTypeWhere(scope, customerParams, "c")];
+    pushLocationFilter(
+      customerConds,
+      customerParams,
+      getLocationFilter(req),
+      "COALESCE(c.location_type, 'headoffice')",
+      "c.location_id",
+    );
+
+    const [{ rows: customers }, { rows: ledgers }, { rows: returnVouchers }, { rows: salesCharges }] =
+      await Promise.all([
+        pool.query<any>(
+          `SELECT c.id, c.name
+             FROM customers c
+            WHERE ${customerConds.join(" AND ")}
+            ORDER BY c.id`,
+          customerParams,
+        ),
+        pool.query<any>(
+          `SELECT id, code
+             FROM account_ledgers
+            WHERE code ~ '^CUST-[0-9]+$'`,
+        ),
+        pool.query<any>(
+          `SELECT credit_note_id
+             FROM sales_returns
+            WHERE credit_note_id IS NOT NULL`,
+        ),
+        (() => {
+          const p: any[] = [];
+          const c: string[] = [
+            "s.customer_id IS NOT NULL",
+            "s.cancelled_at IS NULL",
+            "s.branch_transfer_id IS NULL",
+          ];
+          if (from) { p.push(from); c.push(`s.sale_date >= $${p.length}`); }
+          if (to) { p.push(to); c.push(`s.sale_date <= $${p.length}`); }
+          if (postingLocation && postingLocation.type !== "company") {
+            p.push(postingLocation.type);
+            if (postingLocation.type === "headoffice") {
+              c.push(`s.location_type = $${p.length}`);
+            } else {
+              p.push(Number(postingLocation.id));
+              c.push(`s.location_type = $${p.length - 1} AND s.location_id = $${p.length}`);
+            }
+          }
+          return pool.query<any>(
+            `SELECT s.customer_id,
+                    COALESCE(SUM(COALESCE(s.other_charges, 0)::numeric), 0) AS other_charges
+               FROM sales s
+              WHERE ${c.join(" AND ")}
+              GROUP BY s.customer_id`,
+            p,
+          );
+        })(),
+      ]);
+
+    const customerById = new Map<number, { id: number; name: string }>(
+      customers.map((c: any) => [Number(c.id), { id: Number(c.id), name: String(c.name ?? "") }]),
+    );
+    const ledgerToCustomer = new Map<number, number>();
+    const customerLedgerIds: number[] = [];
+    for (const row of ledgers) {
+      const match = /^CUST-(\d+)$/.exec(String(row.code ?? ""));
+      if (!match) continue;
+      const ledgerId = Number(row.id);
+      const customerId = Number(match[1]);
+      ledgerToCustomer.set(ledgerId, customerId);
+      if (customerById.has(customerId)) customerLedgerIds.push(ledgerId);
+    }
+
+    const openingByLedger = new Map<number, number>();
+    if (customerLedgerIds.length > 0) {
+      const openingParams: any[] = [customerLedgerIds];
+      if (to) openingParams.push(to);
+      const { rows: openings } = await pool.query<any>(
+        `SELECT ledger_id,
+                COALESCE(SUM(
+                  CASE WHEN LOWER(COALESCE(balance_type, 'debit')) = 'debit'
+                       THEN balance::numeric ELSE -balance::numeric END
+                ), 0) AS amount
+           FROM opening_balances
+          WHERE ledger_id = ANY($1::int[])${to ? " AND as_of_date <= $2" : ""}
+          GROUP BY ledger_id`,
+        openingParams,
+      );
+      for (const row of openings) openingByLedger.set(Number(row.ledger_id), Number(row.amount));
+    }
+
+    const allPostings = await buildDerivedPostings(to ? { toDate: to } : {});
+    const located = postingLocation
+      ? allPostings.filter((p) => postingMatchesLocation(p, postingLocation))
+      : allPostings;
+    const before = from
+      ? located.filter((p) => String(p.date).slice(0, 10) < from)
+      : [];
+    const period = located.filter((p) => !from || String(p.date).slice(0, 10) >= from);
+    const salesReturnVoucherIds = new Set<number>(
+      returnVouchers
+        .map((r: any) => Number(r.credit_note_id))
+        .filter((id: number) => Number.isInteger(id) && id > 0),
+    );
+    const chargesByCustomer = new Map<number, number>(
+      salesCharges.map((r: any) => [Number(r.customer_id), Number(r.other_charges) || 0]),
+    );
+
+    type Totals = {
+      openingBalance: number;
+      sales: number;
+      salesReturns: number;
+      receipts: number;
+      otherCharges: number;
+      creditNotes: number;
+      debitNotes: number;
+      adjustments: number;
+      expectedClosing: number;
+      ledgerClosing: number;
+      displayedOutstanding: number;
+      difference: number;
+    };
+    const zeroTotals = (): Totals => ({
+      openingBalance: 0, sales: 0, salesReturns: 0, receipts: 0,
+      otherCharges: 0, creditNotes: 0, debitNotes: 0, adjustments: 0,
+      expectedClosing: 0, ledgerClosing: 0, displayedOutstanding: 0, difference: 0,
+    });
+    const byCustomer = new Map<number, Totals>();
+    for (const customerId of customerById.keys()) byCustomer.set(customerId, zeroTotals());
+    const forLedger = (ledgerId: number): Totals | null => {
+      const customerId = ledgerToCustomer.get(Number(ledgerId));
+      return customerId == null ? null : byCustomer.get(customerId) ?? null;
+    };
+    const net = (p: { debit: number; credit: number }) => Number(p.debit || 0) - Number(p.credit || 0);
+
+    for (const ledgerId of customerLedgerIds) {
+      const totals = byCustomer.get(ledgerToCustomer.get(ledgerId)!);
+      if (totals) {
+        totals.openingBalance += openingByLedger.get(ledgerId) ?? 0;
+        totals.ledgerClosing += openingByLedger.get(ledgerId) ?? 0;
+      }
+    }
+    for (const p of before) {
+      const totals = forLedger(Number(p.ledgerId));
+      if (totals) {
+        totals.openingBalance += net(p);
+        totals.ledgerClosing += net(p);
+      }
+    }
+    for (const p of period) {
+      const totals = forLedger(Number(p.ledgerId));
+      if (!totals) continue;
+      const debit = Number(p.debit) || 0;
+      const credit = Number(p.credit) || 0;
+      totals.ledgerClosing += debit - credit;
+      const source = String(p.source ?? "");
+      const description = String(p.description ?? "");
+      const voucherId = source === "credit_note"
+        ? Number(String(p.entryId ?? "").replace(/^jv:/, ""))
+        : 0;
+
+      if (source === "sale" && debit > 0 && description.startsWith("Invoice ")) totals.sales += debit;
+      else if (source === "sale" && credit > 0 && description.includes("Payment received")) totals.receipts += credit;
+      else if (source === "receipt" && credit > 0) totals.receipts += credit;
+      else if (source === "credit_note" && credit > 0 && salesReturnVoucherIds.has(voucherId)) totals.salesReturns += credit;
+      else if (source === "credit_note" && credit > 0) totals.creditNotes += credit;
+      else if (source === "debit_note" && debit > 0) totals.debitNotes += debit;
+      else totals.adjustments += debit - credit;
+    }
+
+    const round2 = (n: number) => Math.round(n * 100) / 100;
+    const rows = [...customerById.values()].map((customer) => {
+      const t = byCustomer.get(customer.id) ?? zeroTotals();
+      t.openingBalance = round2(t.openingBalance);
+      t.sales = round2(t.sales);
+      t.salesReturns = round2(t.salesReturns);
+      t.receipts = round2(t.receipts);
+      t.otherCharges = round2(chargesByCustomer.get(customer.id) ?? 0);
+      t.creditNotes = round2(t.creditNotes);
+      t.debitNotes = round2(t.debitNotes);
+      t.adjustments = round2(t.adjustments);
+      t.expectedClosing = round2(
+        t.openingBalance + t.sales + t.debitNotes + t.adjustments
+        - t.salesReturns - t.receipts - t.creditNotes,
+      );
+      t.ledgerClosing = round2(t.ledgerClosing);
+      t.displayedOutstanding = t.ledgerClosing;
+      t.difference = round2(t.expectedClosing - t.ledgerClosing);
+      return { ...customer, ...t };
+    });
+    const totals = rows.reduce((acc, row) => {
+      for (const key of Object.keys(acc) as Array<keyof Totals>) {
+        acc[key] = round2(acc[key] + Number(row[key] ?? 0)) as never;
+      }
+      return acc;
+    }, zeroTotals());
+
+    res.json({
+      period: { fromDate: from ?? null, toDate: to ?? null },
+      location: postingLocation,
+      definitions: {
+        openingBalance: "Opening balance plus pre-period postings for the selected location.",
+        displayedOutstanding: "Authoritative customer ledger closing balance; never invoice arithmetic.",
+        otherCharges: "Source-document charges already included in sales invoice totals; informational only.",
+        difference: "Expected closing minus ledger closing. A non-zero value is a reconciliation defect.",
+      },
+      customers: rows,
+      totals,
     });
   },
 );

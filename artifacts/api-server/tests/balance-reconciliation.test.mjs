@@ -303,6 +303,17 @@ try {
   assert('F — journal reduced Sundry Debtors', near(arF.tbDebtors, arE.tbDebtors - CJV), `got ${arF.tbDebtors}`);
   assert('F — every customer surface agrees', near(arF.list, arF.ledger) && near(arF.ageingControl, arF.tbDebtors),
     `list ${arF.list} ledger ${arF.ledger} ageing ${arF.ageingControl} TB ${arF.tbDebtors}`);
+  const reconciliation = await get('/accounts/reconciliation/customer-receivables');
+  const reconciliationRow = (reconciliation.data?.customers ?? [])
+    .find((c) => Number(c.id) === fx.customerId);
+  assert('F — customer reconciliation endpoint is available', reconciliation.status === 200,
+    `status ${reconciliation.status}`);
+  assert('F — reconciliation row matches the authoritative customer ledger',
+    reconciliationRow
+      && near(reconciliationRow.displayedOutstanding, arF.ledger)
+      && near(reconciliationRow.ledgerClosing, arF.ledger)
+      && near(reconciliationRow.difference, 0),
+    `row ${JSON.stringify(reconciliationRow ?? null).slice(0, 300)} ledger ${arF.ledger}`);
 
   // ══ TESTS G–I — cash receipt / cash payment / bank ════════════════════════
   console.log('\n── G–I. Cash and bank vouchers ──');

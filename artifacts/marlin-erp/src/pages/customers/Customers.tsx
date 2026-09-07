@@ -168,7 +168,7 @@ export default function Customers() {
           actions={
             <>
               {perm.canDownload && (
-              <Button variant="outline" size="sm" onClick={() => downloadCSV('customers.csv', filtered.map(c => ({ Name: c.name, Phone: c.phone || '', Email: c.email || '', State: (c as any).state || '', GST: c.gstNumber || '', Location: loc.nameOf((c as any).locationType ?? (c as any).location_type, (c as any).locationId ?? (c as any).location_id), Address: c.address || '', Balance: c.totalPurchases || 0 })))}>
+              <Button variant="outline" size="sm" onClick={() => downloadCSV('customers.csv', filtered.map(c => ({ Name: c.name, Phone: c.phone || '', Email: c.email || '', State: (c as any).state || '', GST: c.gstNumber || '', Location: loc.nameOf((c as any).locationType ?? (c as any).location_type, (c as any).locationId ?? (c as any).location_id), Address: c.address || '', Balance: (c as any).outstandingBalance ?? '' })))}>
                 <Download className="w-4 h-4 mr-2" /> Export
               </Button>
               )}
