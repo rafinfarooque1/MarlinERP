@@ -339,9 +339,15 @@ export async function stockTransferOpeningAdjustment(
     const materialType = String(row.material_type) as ValuedItem["materialType"];
     const refId = Number(row.ref_id);
     const rawQty = Number(row.qty_change ?? 0);
-    const rawUnitCost = row.unit_cost == null
-      ? Number(meta.get(`${materialType}:${refId}`)?.unitCost ?? 0)
-      : Number(row.unit_cost);
+    // Older transfer rows were written with a non-null zero cost when the
+    // source batch had no stamped cost. Zero is not a real cost here: the
+    // authoritative closing valuation uses the product's weighted average
+    // (with manual cost fallback), so the opening-side transfer adjustment
+    // must use the same fallback or an internal transfer creates a false P&L
+    // delta. Positive movement costs remain the traceable document basis.
+    const recordedUnitCost = Number(row.unit_cost ?? 0);
+    const fallbackUnitCost = Number(meta.get(`${materialType}:${refId}`)?.unitCost ?? 0);
+    const rawUnitCost = recordedUnitCost > 0 ? recordedUnitCost : fallbackUnitCost;
     // An active in-transit reservation is already included in the sender's
     // closing valuation. Remove that part of transfer_out from the opening
     // adjustment; otherwise an unreceived shipment creates artificial profit

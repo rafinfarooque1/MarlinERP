@@ -239,6 +239,17 @@ try {
   assert('Historical destination opening is zero before receipt', (await qtyAsOf(destinationId, D0)) === 0);
   assert('Historical destination closing includes receipt', (await qtyAsOf(destinationId, D1)) === 4);
 
+  // Legacy transfer rows can have a non-null zero unit cost even though the
+  // product's authoritative inventory valuation has a real weighted-average
+  // cost. The books must use that fallback or a transfer manufactures COGS.
+  await sql(
+    `UPDATE stock_ledger
+        SET unit_cost = 0
+      WHERE doc_type = 'stock_transfer' AND doc_id = $1`,
+    [firstId],
+  );
+  assert('Zero-cost legacy transfer fixture is prepared', true);
+
   const destinationLedger = await get(
     `/stock/ledger?from=${D1}&to=${D1}&txnType=transfer_in&branchType=warehouse`,
     { 'x-location-type': 'warehouse', 'x-location-id': String(destinationId) },
