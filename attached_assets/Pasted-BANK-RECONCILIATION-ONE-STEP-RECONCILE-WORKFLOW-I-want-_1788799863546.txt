@@ -1,0 +1,710 @@
+BANK RECONCILIATION — ONE-STEP RECONCILE WORKFLOW
+
+I want to change the current Bank Reconciliation workflow to a SIMPLE ONE-STEP PROCESS.
+
+CURRENT PROBLEM:
+The user currently has to go through/open the Reconciliation page to reconcile a bank transaction.
+
+REQUIRED NEW BEHAVIOUR:
+
+From the Bank Book / Bank Account transaction list:
+
+[ ] Reconcile
+
+The user should be able to simply TICK the Reconcile checkbox.
+
+Once the checkbox is ticked:
+
+1. The transaction is immediately marked as RECONCILED.
+2. The reconciliation is saved to the database immediately.
+3. No separate Reconciliation page should be required.
+4. No second "Save Reconciliation" step should be required.
+5. No navigation to another page should be required.
+6. The row should immediately show the reconciled status.
+7. The bank reconciliation balance/status should update immediately.
+8. The action must be atomic and server-side validated.
+9. Show a small success confirmation such as:
+   "Transaction reconciled successfully."
+
+==================================================
+1. BANK BOOK UI
+==================================================
+
+In the Bank Book / Bank Account transaction list, add/use:
+
+[ ] Reconcile
+
+When unchecked:
+Transaction is NOT reconciled.
+
+When checked:
+Transaction is RECONCILED immediately.
+
+The checkbox must reflect the actual database status.
+
+Do NOT make this only a frontend visual checkbox.
+
+==================================================
+2. ONE-CLICK RECONCILIATION
+==================================================
+
+When user clicks:
+
+[ ] Reconcile
+
+Frontend must call a dedicated backend API such as:
+
+POST /api/bank-reconciliation/reconcile
+
+or reuse the existing reconciliation endpoint if one already exists.
+
+Backend must:
+
+- authenticate user
+- verify permission
+- verify bank account access
+- verify transaction access
+- verify location access
+- verify transaction is eligible for reconciliation
+- update reconciliation status
+- record reconciliation date/time
+- record reconciled user
+- create audit log
+- return updated transaction
+
+All changes must be persisted immediately.
+
+==================================================
+3. DO NOT REDIRECT
+==================================================
+
+IMPORTANT:
+
+After clicking Reconcile:
+
+DO NOT redirect the user to:
+
+/reconciliation
+
+Do NOT open a new page.
+
+Do NOT require the user to leave Bank Book.
+
+The user remains on the current Bank Book screen.
+
+Example:
+
+Bank Book
+
+Transaction 1   ₹10,000   [✓ Reconciled]
+Transaction 2   ₹5,000    [ ] Reconcile
+Transaction 3   ₹2,500    [✓ Reconciled]
+
+The user can continue ticking transactions directly.
+
+==================================================
+4. RECONCILIATION PAGE
+==================================================
+
+DO NOT DELETE the existing Reconciliation page.
+
+Keep it available for:
+
+- reconciliation overview
+- filtering
+- search
+- history
+- reconciliation summary
+- statement reconciliation
+- reviewing reconciled transactions
+- unreconciled transactions
+- reconciliation date
+- reconciled user
+
+But the page must NOT be required to perform a normal single-transaction reconciliation.
+
+The normal workflow should be:
+
+BANK BOOK
+→ TICK RECONCILE
+→ DONE
+
+==================================================
+5. UNRECONCILE
+==================================================
+
+If business rules allow unreconciliation:
+
+Clicking an already reconciled checkbox:
+
+[✓] Reconciled
+
+should either:
+
+A. Immediately unreconcile it
+
+OR
+
+B. Ask for confirmation:
+
+"Unreconcile this transaction?"
+
+Use the existing ERP business rule if one already exists.
+
+Do NOT allow unauthorized users to unreconcile transactions.
+
+Record the action in audit logs.
+
+==================================================
+6. RECONCILIATION DATA
+==================================================
+
+Store proper reconciliation information.
+
+At minimum:
+
+- transaction ID
+- bank account ID
+- location ID
+- reconciled status
+- reconciled date/time
+- reconciled by user
+- reconciliation reference if applicable
+- statement/reference information if applicable
+
+Do not store reconciliation only in frontend state.
+
+==================================================
+7. LOCATION SECURITY
+==================================================
+
+Reconciliation must respect existing location architecture.
+
+Warehouse employee:
+
+Can reconcile only permitted bank accounts/transactions.
+
+Head Office selected:
+
+Show Head Office transactions according to existing location rules.
+
+All Locations:
+
+Only authorized users can access consolidated reconciliation data.
+
+Never allow a user to reconcile another location's bank transaction by changing an ID in the API request.
+
+Server-side authorization is mandatory.
+
+==================================================
+8. ACCOUNTING SAFETY
+==================================================
+
+VERY IMPORTANT:
+
+Reconciliation itself must NOT create a new:
+
+- Sale
+- Purchase
+- Expense
+- Income
+- Receipt
+- Payment
+- GST
+- Journal Voucher
+- COGS
+- Profit/Loss transaction
+
+Bank reconciliation is a reconciliation/status operation.
+
+It should NOT change the underlying accounting transaction.
+
+Example:
+
+Payment Voucher ₹10,000
+
+Before reconciliation:
+Payment remains ₹10,000.
+
+After reconciliation:
+Payment remains ₹10,000.
+
+Only its bank reconciliation status changes.
+
+==================================================
+9. CASH/BANK BALANCE
+==================================================
+
+Reconciliation must NOT alter:
+
+- bank ledger balance
+- cash balance
+- customer outstanding
+- vendor outstanding
+- P&L
+- Balance Sheet
+- Trial Balance
+
+It only identifies whether the bank transaction has been reconciled.
+
+==================================================
+10. BANK STATEMENT RECONCILIATION
+==================================================
+
+If the ERP already supports imported bank statements or statement matching:
+
+Do not break that functionality.
+
+The one-click "Reconcile" action should mark the ERP transaction as reconciled only when the existing reconciliation rules allow it.
+
+If statement matching is required by the existing system, preserve that validation.
+
+Do not falsely mark a transaction reconciled if the system requires an actual bank statement match.
+
+If the business rule allows manual reconciliation without statement matching, allow the direct checkbox.
+
+Use the existing intended accounting/business rules rather than inventing a new financial rule.
+
+==================================================
+11. BULK RECONCILIATION
+==================================================
+
+If practical, also support:
+
+[ ] Select All
+
+and:
+
+Reconcile Selected
+
+But DO NOT make bulk reconciliation mandatory.
+
+Normal reconciliation must work with one click on one transaction.
+
+For bulk action:
+
+- permission check
+- location check
+- transaction eligibility check
+- atomic processing
+- audit log
+- success/failure result per transaction
+
+==================================================
+12. UI FEEDBACK
+==================================================
+
+When user clicks Reconcile:
+
+Immediately show loading state on that row.
+
+Then:
+
+[✓] Reconciled
+
+Show a small confirmation:
+
+"Reconciled successfully."
+
+If the API fails:
+
+- revert checkbox to previous state
+- show error
+- do not falsely display reconciled
+
+Example:
+
+User clicks:
+
+[ ] Reconcile
+
+API fails.
+
+Result:
+
+[ ] Reconcile
+
+Message:
+
+"Unable to reconcile transaction. Please try again."
+
+==================================================
+13. DATA REFRESH
+==================================================
+
+After successful reconciliation:
+
+Update the current screen without forcing a full-page reload.
+
+Update:
+
+- checkbox
+- reconciled count
+- unreconciled count
+- reconciliation status
+- reconciliation totals
+- filters if applicable
+
+Invalidate/refetch the relevant React Query cache correctly.
+
+Do not leave stale data.
+
+==================================================
+14. SEARCH / FILTER
+==================================================
+
+Bank Book should support:
+
+All
+Reconciled
+Unreconciled
+
+Example:
+
+Status:
+[ All ▼ ]
+
+Options:
+
+All
+Reconciled
+Unreconciled
+
+The status must come from the database.
+
+==================================================
+15. AUDIT LOG
+==================================================
+
+Every reconciliation action must be auditable.
+
+Record:
+
+User
+Date/Time
+Bank Account
+Transaction
+Location
+Previous Status
+New Status
+Action
+
+Example:
+
+Transaction:
+Payment Voucher PV-000123
+
+Previous:
+Unreconciled
+
+New:
+Reconciled
+
+User:
+current authenticated user
+
+Timestamp:
+server timestamp
+
+==================================================
+16. DATABASE INTEGRITY
+==================================================
+
+Inspect the existing reconciliation schema first.
+
+Do NOT create duplicate reconciliation tables/columns if the ERP already has a valid implementation.
+
+Reuse existing:
+
+- reconciliation fields
+- reconciliation tables
+- bank transaction tables
+- audit system
+
+only where appropriate.
+
+If schema changes are required:
+
+- create a proper migration
+- preserve existing data
+- do not delete reconciliation history
+- make migration safe and idempotent
+
+==================================================
+17. EXISTING RECONCILIATION PAGE
+==================================================
+
+After implementing one-step reconciliation, verify that the existing Reconciliation page still works.
+
+A transaction reconciled from Bank Book must immediately appear as:
+
+RECONCILED
+
+on the Reconciliation page.
+
+A transaction unreconciled from the Reconciliation page must update the Bank Book status accordingly, if unreconciliation is permitted.
+
+Both interfaces must use the same authoritative reconciliation status.
+
+Do NOT create two separate reconciliation states.
+
+==================================================
+18. BANK BOOK / DAY BOOK
+==================================================
+
+Check whether the reconciliation status is displayed consistently in:
+
+- Bank Book
+- Bank Account transaction list
+- Day Book where applicable
+- Reconciliation page
+- transaction detail
+- reports
+- exports
+
+Do not alter accounting totals because of reconciliation status.
+
+==================================================
+19. PERMISSIONS
+==================================================
+
+Use existing page/action permissions.
+
+A user who can only VIEW bank transactions must NOT automatically receive permission to reconcile.
+
+Create/use a specific action permission such as:
+
+Bank Reconciliation → Reconcile
+
+if the existing permission architecture supports action-level permissions.
+
+Admin should retain appropriate access.
+
+==================================================
+20. API SECURITY
+==================================================
+
+Do not trust:
+
+transaction ID
+bank account ID
+location ID
+user ID
+
+sent by the frontend.
+
+Backend must derive/validate authorization from the authenticated session.
+
+Prevent:
+
+IDOR
+cross-location reconciliation
+unauthorized reconciliation
+reconciling a transaction belonging to another bank account
+
+==================================================
+21. CONCURRENCY
+==================================================
+
+Handle two users attempting to reconcile the same transaction.
+
+The backend should safely prevent conflicting updates.
+
+Use an atomic update/transaction.
+
+Do not create duplicate reconciliation records.
+
+==================================================
+22. REPORTING
+==================================================
+
+Reconciliation status must not alter accounting reports.
+
+But reports that specifically show reconciliation status should correctly reflect:
+
+Reconciled
+vs
+Unreconciled
+
+Verify:
+
+- Bank Book
+- Bank Reconciliation
+- reconciliation summary
+- exports
+- PDF if applicable
+
+==================================================
+23. IMPORTANT WORKFLOW
+
+FINAL USER WORKFLOW MUST BE:
+
+OPEN BANK BOOK
+
+↓
+
+Find transaction
+
+↓
+
+Click:
+
+[ ] Reconcile
+
+↓
+
+System saves immediately
+
+↓
+
+Checkbox becomes:
+
+[✓] Reconciled
+
+↓
+
+Success message
+
+↓
+
+User stays on Bank Book
+
+DONE.
+
+NO:
+
+Bank Book
+→ Reconciliation Page
+→ Select transaction
+→ Tick
+→ Save
+→ Return to Bank Book
+
+That extra workflow must NOT be required.
+
+==================================================
+24. DO NOT BREAK EXISTING FEATURES
+==================================================
+
+Do not break:
+
+- Bank Book
+- Cash Book
+- Day Book
+- Payment Voucher
+- Receipt Voucher
+- Journal Voucher
+- bank ledger
+- bank balance
+- accounting
+- location isolation
+- permissions
+- audit
+- reports
+- PDFs
+- exports
+
+Reconciliation is a status/reconciliation function only.
+
+==================================================
+25. TESTING
+==================================================
+
+Test:
+
+1. Unreconciled bank transaction appears unchecked.
+
+2. Click checkbox.
+
+3. Transaction immediately becomes reconciled.
+
+4. Refresh page.
+
+5. It remains reconciled.
+
+6. Open Reconciliation page.
+
+7. Same transaction is reconciled there.
+
+8. Verify bank balance did not change.
+
+9. Verify Trial Balance did not change.
+
+10. Verify P&L did not change.
+
+11. Verify Balance Sheet did not change.
+
+12. Verify audit record exists.
+
+13. Test unauthorized user.
+
+14. Test wrong location.
+
+15. Test another bank account.
+
+16. Test concurrent reconciliation.
+
+17. Test API failure.
+
+18. Test unreconciliation if supported.
+
+19. Test filters:
+   All
+   Reconciled
+   Unreconciled
+
+20. Test Bank Book after page refresh.
+
+==================================================
+26. FINAL ACCEPTANCE CRITERIA
+==================================================
+
+The feature is complete only when:
+
+ONE CLICK/TICK
+=
+IMMEDIATE RECONCILIATION
+
+No separate Reconciliation page is required for normal reconciliation.
+
+The Reconciliation page remains available for review/history.
+
+The same reconciliation status is shared everywhere.
+
+No accounting values are changed.
+
+No bank balance is changed.
+
+No duplicate reconciliation record is created.
+
+Location permissions are enforced.
+
+Action permissions are enforced.
+
+Audit logging works.
+
+Database state persists after refresh.
+
+API failure correctly rolls back the UI.
+
+All tests pass.
+
+==================================================
+FINAL INSTRUCTION
+
+Inspect the CURRENT reconciliation implementation first.
+
+Reuse the existing architecture wherever possible.
+
+Do not build a parallel reconciliation system.
+
+Implement the simplest reliable one-step workflow:
+
+BANK BOOK
+→ TICK RECONCILE
+→ IMMEDIATELY SAVED
+→ STAY ON BANK BOOK
+
+Then test the complete reconciliation workflow and all affected accounting/reporting/security functionality.
+
+START NOW.
