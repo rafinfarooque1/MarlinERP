@@ -1,0 +1,1602 @@
+MASTER REQUEST — COMPLETE ACCOUNTING EQUATION, TRADING ACCOUNT, P&L, BALANCE SHEET AND INVENTORY RECONCILIATION
+
+PROJECT:
+Frozen Fruits ERP
+
+I need you to perform a COMPLETE END-TO-END AUDIT AND REPAIR of the ERP's accounting calculations.
+
+DO NOT fix only the visible Gross Profit formula.
+
+DO NOT assume the existing numbers are correct.
+
+DO NOT simply make the displayed equation mathematically balance.
+
+You must trace every amount back to its source transactions and verify that the accounting logic, inventory valuation, COGS, P&L, Balance Sheet, Trial Balance, customer/vendor ledgers, GST, cash/bank, transfers and reports all use one consistent accounting model.
+
+The ERP must produce mathematically correct AND accounting-correct results.
+
+============================================================
+1. CURRENT PROBLEM
+============================================================
+
+The current Trading and Profit & Loss screen shows:
+
+Sales (net of GST)                  ₹40,895.17
+Less: Sales Returns                 ₹990.47
+Net Sales                            ₹39,904.70
+
+Opening Stock                       ₹18,489.54
+Purchases (net of returns)          ₹29,060.00
+Direct Expenses                      ₹1,330.00
+
+Goods Available for Sale            ₹48,879.54
+
+Closing Stock                       ₹58,650.11
+
+Current COGS                        (₹9,770.57)
+
+Current Gross Profit                 ₹49,675.27
+Current GP %                         124.5%
+
+Other Income                         ₹0.00
+Indirect Expenses                    ₹52,649.44
+Financial Charges                    ₹0.00
+Depreciation                         ₹0.00
+
+Total Expenses                       ₹53,979.44
+
+Net Loss                             ₹2,974.17
+NP %                                  -7.5%
+
+The arithmetic currently displayed is:
+
+18,489.54 + 29,060.00 + 1,330.00
+= 48,879.54
+
+48,879.54 - 58,650.11
+= -9,770.57
+
+39,904.70 - (-9,770.57)
+= 49,675.27
+
+The arithmetic itself works.
+
+BUT THIS RESULT IS A MAJOR ACCOUNTING RED FLAG because:
+
+Closing Stock ₹58,650.11
+is greater than
+Goods Available for Sale ₹48,879.54
+
+This produces:
+
+Negative COGS
+and
+Gross Profit greater than Net Sales.
+
+DO NOT simply change the formula to hide this.
+
+FIND THE ROOT CAUSE.
+
+============================================================
+2. FUNDAMENTAL ACCOUNTING EQUATIONS
+============================================================
+
+Implement and verify the ERP against the following accounting relationships.
+
+TRADING ACCOUNT:
+
+Net Sales
+=
+Gross Sales
+- Sales Returns
+- applicable sales deductions
+
+Goods Available for Sale
+=
+Opening Stock
++ Net Purchases
++ valid Direct Inventory Costs
++ valid production/inventory adjustments
+± valid inventory movements
+
+COGS
+=
+Goods Available for Sale
+- Closing Stock
+
+Gross Profit
+=
+Net Sales
+- COGS
+
+OR equivalently:
+
+Gross Profit
+=
+Net Sales
++ Closing Stock
+- Opening Stock
+- Net Purchases
+- valid Direct Inventory Costs
+
+PROFIT & LOSS:
+
+Gross Profit
++ Other Income
+- Indirect Expenses
+- Financial Charges
+- Depreciation
+± other legitimate P&L items
+=
+Net Profit / Net Loss
+
+BALANCE SHEET:
+
+Assets
+=
+Liabilities
++ Equity
+
+TRIAL BALANCE:
+
+Total Debits
+=
+Total Credits
+
+These equations must work simultaneously.
+
+DO NOT fix one equation by breaking another.
+
+============================================================
+3. SOURCE-OF-TRUTH PRINCIPLE
+============================================================
+
+Every financial amount must originate from authoritative source data.
+
+Do NOT calculate P&L independently from dashboard data.
+
+Do NOT calculate Balance Sheet independently from P&L.
+
+Do NOT calculate PDF separately.
+
+Do NOT calculate exports from frontend-prepared values.
+
+Do NOT maintain multiple competing accounting formulas.
+
+Use one authoritative accounting calculation layer wherever possible.
+
+Reports, Dashboard, PDF, CSV and UI should consume the same validated calculations.
+
+============================================================
+4. SALES VERIFICATION
+============================================================
+
+Audit every sales transaction contributing to the selected period.
+
+Verify:
+
+- invoice
+- invoice date
+- location
+- customer
+- subtotal
+- discount
+- GST
+- Other Charges
+- total
+- payment
+- outstanding
+- cancellation
+- returns
+
+Verify:
+
+Sales shown in P&L
+=
+actual eligible sales transactions
+
+Exclude:
+
+- cancelled sales
+- invalid/duplicate transactions
+- transactions outside selected period
+- transactions outside selected location
+
+Verify GST is excluded from "Sales net of GST" where appropriate.
+
+Verify Other Charges are treated according to the configured Direct Income accounting rule.
+
+Do NOT count GST as revenue.
+
+============================================================
+5. SALES RETURNS
+============================================================
+
+Audit every sales return.
+
+Verify:
+
+- original sale reference
+- return quantity
+- return value
+- GST reversal
+- stock return
+- customer balance
+- accounting reversal
+- location
+
+Verify:
+
+Net Sales
+=
+Sales
+- Sales Returns
+
+Do not subtract the return twice.
+
+Do not leave returned sales included in revenue.
+
+============================================================
+6. PURCHASE VERIFICATION
+============================================================
+
+Audit all purchases included in the period.
+
+Verify:
+
+- purchase invoice
+- vendor
+- location
+- item
+- quantity
+- unit cost
+- discount
+- GST
+- net purchase value
+- purchase return
+- cancellation
+- stock receipt
+- batch
+- expiry
+- accounting
+
+Calculate:
+
+Net Purchases
+=
+Purchases
+- Purchase Returns
+
+Verify the ₹29,060.00 amount directly against source transactions.
+
+Do not trust the existing report number.
+
+============================================================
+7. PURCHASE RETURNS
+============================================================
+
+Verify every purchase return.
+
+It must correctly affect:
+
+- stock
+- vendor payable
+- purchase value
+- GST
+- accounting
+- inventory valuation
+
+Do not subtract purchase returns twice.
+
+============================================================
+8. DIRECT EXPENSES
+============================================================
+
+Audit the ₹1,330.00 Direct Expenses.
+
+List exactly which ledger/accounts are included.
+
+Determine whether each account is genuinely a DIRECT INVENTORY COST.
+
+Examples that may qualify depending on the ERP's accounting policy:
+
+- freight directly attributable to inventory
+- inward transportation
+- import-related landed cost
+- directly attributable purchase cost
+
+Do NOT include ordinary operating expenses merely because they are classified as "Direct Expense".
+
+If the ₹1,330.00 is not a valid inventory cost, correct the classification/calculation at the accounting-source level.
+
+Do not manipulate the number just to improve Gross Profit.
+
+============================================================
+9. OPENING STOCK
+============================================================
+
+Audit ₹18,489.54.
+
+Determine exactly how opening stock is generated.
+
+Verify:
+
+- previous period closing stock
+- opening stock entries
+- opening inventory configuration
+- stock adjustments
+- location
+- date
+- migration data
+
+CRITICAL RULE:
+
+For a period:
+
+Opening Stock
+must equal
+the prior period's valid Closing Stock
+
+unless there is an explicitly documented opening balance adjustment.
+
+Do not allow arbitrary opening stock calculation.
+
+============================================================
+10. CLOSING STOCK
+============================================================
+
+THIS IS THE MOST IMPORTANT PART.
+
+Audit ₹58,650.11 completely.
+
+Generate an internal reconciliation by item.
+
+For every item calculate:
+
+Opening Qty
+Opening Value
+
++ Purchase Qty
++ Purchase Value
+
++ Transfer In Qty
++ Transfer In Value
+
+- Transfer Out Qty
+- Transfer Out Value
+
+- Sales Qty
+- Sales Value/COGS
+
++ Sales Return Qty
++ Sales Return Value
+
+- Purchase Return Qty
+- Purchase Return Value
+
+± Stock Adjustments
+
+= Closing Qty
+= Closing Inventory Value
+
+Verify every item.
+
+Then verify the grand total equals the Closing Stock used in P&L.
+
+Do not simply trust stock_entries or stock_batches without reconciling them with stock_ledger.
+
+============================================================
+11. INVENTORY SOURCE OF TRUTH
+============================================================
+
+Current architecture includes:
+
+stock_entries
+stock_batches
+stock_ledger
+stock_reservations
+
+Verify their intended roles.
+
+Expected model:
+
+stock_entries:
+current on-hand quantity
+
+stock_batches:
+batch/lot quantity and cost layer
+
+stock_ledger:
+dated inventory movements
+
+reservations:
+temporary stock holds/in-transit reservations
+
+Reservations must NOT create additional on-hand stock.
+
+Available stock:
+
+Available Stock
+=
+On-hand Stock
+- Active Reservations
+
+Do not subtract reservations twice.
+
+Do not add reservations to inventory value.
+
+============================================================
+12. FIFO / FEFO / VALUATION
+============================================================
+
+Determine the actual inventory valuation method implemented.
+
+Verify consistency across:
+
+- purchase
+- sale
+- sale return
+- purchase return
+- transfer
+- stock adjustment
+- inventory valuation report
+- COGS
+- P&L
+- Balance Sheet
+
+If FIFO/FEFO is the intended operational method, verify cost consumption follows it.
+
+If weighted average is the accounting valuation method, verify exactly how it is calculated.
+
+Do NOT use one valuation method for Inventory and another for COGS.
+
+Historical valuation must not use current cost incorrectly when historical cost information exists.
+
+============================================================
+13. STOCK TRANSFERS
+============================================================
+
+Audit ALL warehouse transfers.
+
+Internal transfers must be P&L neutral.
+
+Transfer Out:
+
+Source warehouse:
+stock decreases
+
+Transfer In:
+
+Destination warehouse:
+stock increases
+
+Company-wide:
+
+Transfer Out
++
+Transfer In
+=
+zero net inventory change
+
+Do not count transferred stock twice.
+
+For warehouse-specific reports, transfers must affect the respective warehouse correctly.
+
+For All Locations, transfers must not artificially increase:
+
+- Sales
+- Purchases
+- Revenue
+- Expense
+- COGS
+- Gross Profit
+- Net Profit
+- Company inventory
+
+============================================================
+14. CRITICAL RESERVATION ISSUE
+============================================================
+
+Investigate production:
+
+Reservation ID 18
+Transfer ID 9
+Item ID 90
+Warehouse ID 5
+Quantity 5
+Status = active
+Transfer = completed
+
+Trace:
+
+Transfer creation
+→ Transfer Out
+→ source stock deduction
+→ reservation creation
+→ Transfer In
+→ destination stock increase
+→ reservation release
+→ transfer completion
+
+Verify whether the 5 units are already included in destination stock.
+
+If yes, safely resolve the stale reservation.
+
+DO NOT blindly delete it.
+
+Preserve audit history.
+
+Then fix the underlying code so:
+
+COMPLETED TRANSFER
+=
+NO ACTIVE RESERVATION FOR THAT TRANSFER
+
+Add regression tests.
+
+============================================================
+15. HISTORICAL INVENTORY
+============================================================
+
+Audit whether historical stock is being reconstructed by:
+
+current stock
+minus/plus historical stock ledger movements.
+
+Determine whether this causes incorrect historical closing stock.
+
+Check:
+
+- deleted historical records
+- missing stock ledger entries
+- missing batches
+- transfer receipt timing
+- legacy records
+- current cost vs historical cost
+- opening stock
+- stock adjustments
+
+If historical data is insufficient to prove an exact value:
+
+DO NOT INVENT A VALUE.
+
+Flag the report as historically limited and explain why.
+
+============================================================
+16. COGS
+============================================================
+
+COGS must be calculated from authoritative inventory values.
+
+Expected:
+
+COGS
+=
+Opening Stock
++ Net Purchases
++ valid direct inventory costs
+- Closing Stock
+
+But only after validating all three components.
+
+Do NOT force:
+
+COGS >= 0
+
+just to make the report look normal.
+
+If negative COGS genuinely results from legitimate source data, flag it as an accounting anomaly and identify the source.
+
+For this current case, negative COGS must be investigated because Closing Stock exceeds Goods Available.
+
+============================================================
+17. GROSS PROFIT
+============================================================
+
+Gross Profit:
+
+Gross Profit
+=
+Net Sales
+- COGS
+
+Verify GP percentage.
+
+Use a mathematically consistent denominator.
+
+Do not calculate GP percentage from an unrelated figure.
+
+If:
+
+Net Sales = ₹39,904.70
+
+and COGS is correctly established,
+
+then Gross Profit must be recomputed from those authoritative values.
+
+Do not manually enter GP.
+
+============================================================
+18. OTHER INCOME
+============================================================
+
+Audit Other Income.
+
+Verify that Direct Income/Other Income accounts are not accidentally:
+
+- counted twice
+- omitted
+- classified as sales
+- included in purchases
+- included in direct expenses
+
+Other Charges from sales should follow their configured Direct Income accounting treatment.
+
+Quotation must not create accounting.
+
+============================================================
+19. INDIRECT EXPENSES
+============================================================
+
+Audit ₹52,649.44.
+
+List all accounts included.
+
+Verify:
+
+- rent
+- salaries
+- administrative expenses
+- office expenses
+- utilities
+- other indirect costs
+
+Ensure direct expenses are not duplicated here.
+
+Ensure the same expense is not included in both:
+
+Direct Expenses
+and
+Indirect Expenses.
+
+============================================================
+20. FINANCIAL CHARGES
+============================================================
+
+Audit Financial Charges.
+
+Verify interest, bank charges and similar financial costs are correctly classified.
+
+Do not include them in COGS unless explicitly required by accounting policy.
+
+============================================================
+21. DEPRECIATION
+============================================================
+
+Audit depreciation.
+
+Verify:
+
+- fixed assets
+- depreciation method
+- useful life
+- start date
+- accumulated depreciation
+- current-period depreciation
+- P&L
+- Balance Sheet
+
+Do not double-count asset purchase as expense.
+
+============================================================
+22. FIXED ASSETS
+============================================================
+
+Every valid asset purchase must reconcile with:
+
+Asset Register
+Fixed Asset Ledger
+Vendor Ledger
+Journal Voucher
+Balance Sheet
+
+Asset purchase must not incorrectly become a normal purchase expense.
+
+Verify historical asset purchases already in the database.
+
+Do not duplicate accounting entries during repair.
+
+============================================================
+23. CUSTOMER LEDGER
+============================================================
+
+For every customer:
+
+Opening Balance
++ Sales
++ Other applicable charges
+- Receipts
+- Sales Returns/Credit Notes
+± Adjustments
+=
+Closing Receivable
+
+Reconcile customer outstanding with:
+
+- sales
+- receipts
+- returns
+- ledger
+- Balance Sheet receivables
+
+============================================================
+24. VENDOR LEDGER
+============================================================
+
+For every vendor:
+
+Opening Balance
++ Purchases
+- Payments
+- Purchase Returns/Debit Notes
+± Adjustments
+=
+Closing Payable
+
+Reconcile vendor outstanding with:
+
+- purchases
+- payments
+- returns
+- vendor ledger
+- Balance Sheet payables
+
+============================================================
+25. RECEIPTS AND PAYMENTS
+============================================================
+
+Receipts must correctly affect:
+
+Customer
+Cash/Bank
+Accounting
+Outstanding
+
+Payments must correctly affect:
+
+Vendor
+Cash/Bank
+Accounting
+Outstanding
+
+No duplicate postings.
+
+No missing postings.
+
+============================================================
+26. CASH AND BANK
+============================================================
+
+Cash/Bank balances must reconcile with:
+
+Opening Balance
++ Receipts
+- Payments
+± valid adjustments
+=
+Closing Balance
+
+Accounts remain SINGLE LOCATION.
+
+Verify location-specific visibility.
+
+Do not allow warehouse A users to access warehouse B cash/bank information.
+
+============================================================
+27. GST
+============================================================
+
+There must be ONE authoritative GST calculation model.
+
+Reconcile:
+
+Sales GST
+Purchase GST
+Sales Returns GST
+Purchase Returns GST
+GST ledgers
+GST Summary
+Reports Center GST
+Invoice GST
+
+CGST + SGST / IGST must follow the applicable GST rules.
+
+Do not allow two different GST calculation streams to produce different results.
+
+============================================================
+28. TRIAL BALANCE
+============================================================
+
+Verify:
+
+Total Debit
+=
+Total Credit
+
+Run this before and after any repair.
+
+Do not repair P&L by inserting arbitrary journal entries.
+
+============================================================
+29. BALANCE SHEET
+============================================================
+
+Verify:
+
+Assets
+=
+Liabilities
++
+Equity
+
+Inventory in Balance Sheet must equal the authoritative closing inventory value.
+
+Receivables must reconcile with customer ledgers.
+
+Payables must reconcile with vendor ledgers.
+
+Cash must reconcile.
+
+Bank must reconcile.
+
+Fixed assets must reconcile.
+
+Current-period profit/loss must flow correctly into equity according to the ERP's accounting architecture.
+
+============================================================
+30. P&L / BALANCE SHEET / TRIAL BALANCE CROSS-CHECK
+============================================================
+
+Perform a three-way reconciliation.
+
+P&L
+↕
+Trial Balance
+↕
+Balance Sheet
+
+The same underlying accounting data must drive all three.
+
+No independent report-specific financial calculations.
+
+============================================================
+31. DASHBOARD
+============================================================
+
+Dashboard figures must match authoritative reports.
+
+Verify:
+
+Sales
+Purchases
+Expenses
+Inventory
+Receivables
+Payables
+Cash
+Bank
+Gross Profit
+Net Profit
+
+All Locations:
+show consolidated totals and location breakdown.
+
+Specific location:
+show only that location's result.
+
+============================================================
+32. LOCATION ACCOUNTING
+============================================================
+
+Run the entire accounting equation separately for:
+
+HEAD OFFICE
+
+WAREHOUSE 1
+
+WAREHOUSE 2
+
+EVERY OTHER ACTIVE WAREHOUSE
+
+ALL LOCATIONS
+
+Verify that:
+
+Sum of individual accessible locations
+=
+All Locations consolidated amount
+
+where aggregation logically applies.
+
+Internal transfers must cancel at company level.
+
+============================================================
+33. MONTH-WISE ACCOUNTING
+============================================================
+
+Month Wise report must use the same accounting engine.
+
+For each month:
+
+Opening Stock
++ Net Purchases
++ valid direct costs
+- Closing Stock
+=
+COGS
+
+Net Sales
+- COGS
+=
+Gross Profit
+
+Do not calculate each month using current final stock.
+
+Do not accidentally use annual closing stock for every month.
+
+Each month's closing stock must be that month's actual closing position.
+
+Next month:
+
+Opening Stock
+=
+Previous Month Closing Stock
+
+unless there is a documented adjustment.
+
+============================================================
+34. DATE FILTERS
+============================================================
+
+Test:
+
+- Today
+- This Month
+- Previous Month
+- Financial Year
+- Custom Date Range
+- All Time
+
+Verify opening and closing stock boundaries.
+
+Transactions outside the selected period must not leak into period calculations.
+
+Opening balances must include prior-period state correctly.
+
+============================================================
+35. PDF / PRINT / EXPORT
+============================================================
+
+PDF must exactly match the selected report.
+
+If P&L selected:
+PDF = P&L only
+
+If Month Wise:
+PDF = Month Wise
+
+If valued-only:
+PDF = valued-only
+
+If subgroup collapsed:
+PDF stays collapsed
+
+If expanded:
+PDF shows expansion
+
+Do not create a separate PDF calculation formula.
+
+Exports must use server-calculated values.
+
+Do not trust client-prepared financial rows.
+
+============================================================
+36. ZERO / VALUED ACCOUNTS
+============================================================
+
+"Show Valued Accounts Only" checkbox:
+
+UNCHECKED:
+show all accounts including zero.
+
+CHECKED:
+show only accounts with non-zero calculated values.
+
+Do not delete zero accounts.
+
+Do not deactivate zero accounts.
+
+Do not change accounting values.
+
+Parent accounts required to preserve hierarchy may remain visible.
+
+This is presentation-only.
+
+============================================================
+37. RETURNS / CANCELLATIONS / EDITS
+============================================================
+
+Audit all edits and cancellations.
+
+A cancelled transaction must not continue affecting:
+
+- stock
+- revenue
+- expense
+- COGS
+- GST
+- customer/vendor balance
+- cash/bank
+
+Do not physically delete financial transactions where that destroys audit history.
+
+Use proper reversal/cancellation logic.
+
+Original transaction remains auditable.
+
+============================================================
+38. AUDIT LOGGING
+============================================================
+
+Critical accounting mutations must have durable audit records.
+
+Audit:
+
+- create
+- edit
+- cancel
+- reverse
+- stock adjustment
+- transfer
+- payment
+- receipt
+- journal
+- asset purchase
+- payroll
+- configuration changes
+
+If audit failure can currently allow a financial transaction to succeed silently, fix this.
+
+============================================================
+39. DATABASE INTEGRITY
+============================================================
+
+Run comprehensive integrity checks.
+
+Check:
+
+- orphan records
+- orphan JV lines
+- orphan stock ledger
+- orphan batches
+- orphan reservations
+- invalid locations
+- invalid accounts
+- invalid parties
+- negative stock
+- negative batches
+- duplicate references
+- duplicate invoices
+- duplicate vouchers
+- completed transfers with reservations
+- cancelled transactions with active effects
+- reversed transactions without reversal links
+- missing location stamps
+- invalid quantities
+- invalid dates
+- unbalanced journals
+
+Do not delete anomalies automatically.
+
+Investigate each category first.
+
+============================================================
+40. IMPORTANT: DO NOT PATCH THE DISPLAY
+============================================================
+
+The following are NOT acceptable fixes:
+
+- hard-code Gross Profit
+- hard-code COGS
+- cap GP at 100%
+- force COGS to zero
+- hide negative COGS
+- hide closing stock
+- subtract arbitrary stock
+- add arbitrary expense
+- change dashboard only
+- change PDF only
+- change frontend only
+
+The calculation must be corrected at the authoritative accounting/inventory layer.
+
+============================================================
+41. AUTOMATED RECONCILIATION ENGINE
+============================================================
+
+Create automated validation checks for:
+
+CHECK 1:
+
+Net Sales
+=
+Sales - Sales Returns
+
+CHECK 2:
+
+Goods Available
+=
+Opening Stock + Net Purchases + valid Direct Inventory Costs ± valid inventory adjustments
+
+CHECK 3:
+
+COGS
+=
+Goods Available - Closing Stock
+
+CHECK 4:
+
+Gross Profit
+=
+Net Sales - COGS
+
+CHECK 5:
+
+Net Profit
+=
+Gross Profit + Other Income - Expenses
+
+CHECK 6:
+
+Trial Balance
+Debit = Credit
+
+CHECK 7:
+
+Balance Sheet
+Assets = Liabilities + Equity
+
+CHECK 8:
+
+Inventory:
+stock_entries = stock_batches
+where expected
+
+CHECK 9:
+
+Inventory valuation report = P&L closing stock
+
+CHECK 10:
+
+P&L closing stock = Balance Sheet inventory
+
+CHECK 11:
+
+Customer ledger = customer outstanding
+
+CHECK 12:
+
+Vendor ledger = vendor outstanding
+
+CHECK 13:
+
+Cash ledger = cash balance
+
+CHECK 14:
+
+Bank ledger = bank balance
+
+CHECK 15:
+
+Completed transfer = no active reservation
+
+CHECK 16:
+
+Company-wide transfer net effect = zero
+
+CHECK 17:
+
+All Locations = valid aggregation of locations
+
+CHECK 18:
+
+Month N Opening Stock = Month N-1 Closing Stock
+
+CHECK 19:
+
+Dashboard = report
+
+CHECK 20:
+
+PDF = report
+
+Any failed equation must identify the exact source of the difference.
+
+============================================================
+42. CONTROL TEST
+============================================================
+
+Create a safe test environment/test data.
+
+Test:
+
+Opening Stock = ₹10,000
+Purchases = ₹5,000
+Closing Stock = ₹8,000
+Net Sales = ₹12,000
+
+Expected:
+
+Goods Available = ₹15,000
+COGS = ₹7,000
+Gross Profit = ₹5,000
+GP = 41.6667%
+
+Then test:
+
+Opening = ₹18,489.54
+Purchases = ₹29,060
+Direct Inventory Costs = ₹1,330
+Closing = ₹58,650.11
+
+The system must detect that:
+
+Closing Stock > Goods Available
+
+and must trace the cause rather than silently accepting an impossible/abnormal COGS result.
+
+============================================================
+43. HISTORICAL DATA SAFETY
+============================================================
+
+DO NOT rewrite valid historical transactions.
+
+DO NOT fabricate missing historical stock.
+
+DO NOT delete records to make equations balance.
+
+DO NOT create arbitrary journal entries.
+
+If historical information is insufficient:
+
+Report:
+
+NOT PROVABLY RECONCILABLE
+
+and explain exactly what data is missing.
+
+Only perform a historical repair when the source transactions provide sufficient evidence.
+
+============================================================
+44. TRANSACTION ATOMICITY
+============================================================
+
+Critical operations must be atomic.
+
+SALE:
+
+stock
++
+accounting
++
+customer balance
++
+GST
++
+audit
+
+PURCHASE:
+
+stock
++
+accounting
++
+vendor balance
++
+GST
++
+audit
+
+PAYMENT:
+
+cash/bank
++
+vendor balance
++
+accounting
++
+audit
+
+RECEIPT:
+
+cash/bank
++
+customer balance
++
+accounting
++
+audit
+
+TRANSFER:
+
+source stock
++
+reservation
++
+destination stock
++
+transfer status
++
+stock ledger
++
+audit
+
+RETURN:
+
+stock
++
+accounting
++
+GST
++
+party balance
++
+audit
+
+If a critical component fails, rollback the transaction.
+
+============================================================
+45. FULL TESTING
+============================================================
+
+After all repairs run:
+
+- TypeScript check
+- build
+- lint where configured
+- API tests
+- accounting tests
+- inventory tests
+- transfer tests
+- GST tests
+- location tests
+- authorization tests
+- customer/vendor tests
+- cash/bank tests
+- asset tests
+- payroll tests
+- report tests
+- PDF tests
+- export tests
+- backup tests
+
+Then run full regression.
+
+============================================================
+46. FINAL LIVE RECONCILIATION
+============================================================
+
+After code fixes, recalculate the actual live ERP numbers.
+
+Show:
+
+Sales
+Sales Returns
+Net Sales
+
+Opening Stock
+Purchases
+Purchase Returns
+Direct Inventory Costs
+Goods Available
+
+Closing Stock
+COGS
+Gross Profit
+GP %
+
+Other Income
+Indirect Expenses
+Financial Charges
+Depreciation
+
+Total Expenses
+Net Profit/Loss
+NP %
+
+Then reconcile those numbers with:
+
+Trial Balance
+Balance Sheet
+Inventory Valuation
+Customer Outstanding
+Vendor Outstanding
+Cash
+Bank
+GST
+
+============================================================
+47. FINAL RESULT REQUIREMENT
+============================================================
+
+DO NOT tell me:
+
+"Formula corrected."
+
+I need:
+
+1. Exact root cause of the current abnormal COGS.
+
+2. Exact reason Closing Stock is ₹58,650.11.
+
+3. Whether ₹58,650.11 is actually correct.
+
+4. Correct Opening Stock.
+
+5. Correct Net Purchases.
+
+6. Correct Direct Inventory Costs.
+
+7. Correct Closing Stock.
+
+8. Correct COGS.
+
+9. Correct Gross Profit.
+
+10. Correct GP %.
+
+11. Correct Other Income.
+
+12. Correct Expenses.
+
+13. Correct Net Profit/Loss.
+
+14. Whether Trial Balance balances.
+
+15. Whether Balance Sheet balances.
+
+16. Whether inventory reconciles.
+
+17. Whether customer/vendor ledgers reconcile.
+
+18. Whether GST reconciles.
+
+19. Whether Cash/Bank reconciles.
+
+20. Whether All Locations reconciles with individual locations.
+
+21. Whether Month Wise reconciles.
+
+22. Whether Dashboard/PDF/Export match.
+
+23. Whether stock transfers are P&L neutral.
+
+24. Whether reservation #18 is safely resolved.
+
+25. All code files changed.
+
+26. All database changes.
+
+27. Tests performed.
+
+28. Tests passed/failed.
+
+29. Remaining historical limitations.
+
+30. Remaining production risks.
+
+============================================================
+48. FINAL ACCEPTANCE RULE
+============================================================
+
+The ERP is NOT considered fixed simply because:
+
+- build passes
+- page loads
+- API returns 200
+- P&L looks reasonable
+- GP percentage looks normal
+
+The ERP is considered correct only when:
+
+ACCOUNTING EQUATIONS
++
+INVENTORY EQUATIONS
++
+PARTY LEDGERS
++
+CASH/BANK
++
+GST
++
+TRIAL BALANCE
++
+BALANCE SHEET
++
+P&L
++
+DASHBOARD
++
+REPORTS
++
+PDF
++
+EXPORT
+
+all reconcile to the same authoritative underlying transactions.
+
+If any equation does not reconcile, continue investigating.
+
+DO NOT STOP AT THE FIRST ERROR.
+
+============================================================
+49. FINAL INSTRUCTION
+============================================================
+
+Take ownership of the complete accounting engine.
+
+Start from source transactions and work upward:
+
+TRANSACTIONS
+↓
+INVENTORY
+↓
+VALUATION
+↓
+COGS
+↓
+TRADING ACCOUNT
+↓
+GROSS PROFIT
+↓
+P&L
+↓
+NET PROFIT/LOSS
+↓
+TRIAL BALANCE
+↓
+BALANCE SHEET
+
+At every level verify that the numbers agree.
+
+Also verify:
+
+LOCATION
+↓
+WAREHOUSE
+↓
+ALL LOCATIONS
+
+and:
+
+MONTH
+↓
+NEXT MONTH OPENING
+↓
+CLOSING STOCK
+
+Do not patch symptoms.
+
+Find and fix the root cause.
+
+Do not make destructive changes.
+
+Do not fabricate data.
+
+Do not hard-code values.
+
+Do not ask me for another small task.
+
+Perform the COMPLETE investigation, repair, reconciliation, testing and final verification in one continuous task.
+
+START NOW.
