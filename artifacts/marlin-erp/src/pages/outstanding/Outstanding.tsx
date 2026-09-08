@@ -206,6 +206,7 @@ export default function Outstanding() {
                                   <th className="text-right py-1">Overdue</th>
                                   <th className="text-right py-1">Total</th>
                                   <th className="text-right py-1">Paid</th>
+                                  <th className="text-right py-1">Credit note</th>
                                   <th className="text-right py-1">Balance</th>
                                 </tr>
                               </thead>
@@ -222,6 +223,7 @@ export default function Outstanding() {
                                     </td>
                                     <td className="py-1.5 text-right font-mono">{inr(inv.total)}</td>
                                     <td className="py-1.5 text-right font-mono">{inr(inv.paid)}</td>
+                                    <td className="py-1.5 text-right font-mono text-emerald-600">{Number(inv.creditNotes) > 0 ? `−${inr(inv.creditNotes)}` : '—'}</td>
                                     <td className="py-1.5 text-right font-mono font-semibold">{inr(inv.balance)}</td>
                                   </tr>
                                 ))}

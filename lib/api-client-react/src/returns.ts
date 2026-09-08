@@ -113,6 +113,7 @@ export interface ReceivableInvoice {
   bucket: keyof AgingBuckets;
   total: number;
   paid: number;
+  creditNotes: number;
   balance: number;
 }
 
@@ -131,14 +132,14 @@ export interface ReceivableCustomer extends AgingBuckets {
   uninvoicedBalance?: number;
   /** Invoiced more than the ledger says is owed — an unallocated credit. */
   unallocatedCredit?: number;
-  /** The control figure: the ledger balance when head office, else totalDue−creditNotes. */
+  /** The control figure: the matching customer-ledger balance for this view. */
   netDue: number;
   invoices: ReceivableInvoice[];
 }
 
 export interface ReceivablesAging {
   asOf: string;
-  /** "ledger" when netDue is anchored to Sundry Debtors, "invoices" when location-scoped. */
+  /** "ledger" when netDue is anchored to Sundry Debtors, "invoices" only for an unlocated branch view. */
   basis?: 'ledger' | 'invoices';
   totals: AgingBuckets & { totalDue: number; creditNotes: number; uninvoiced?: number; netDue: number };
   customers: ReceivableCustomer[];

@@ -23,7 +23,8 @@ import {
 } from "../lib/salePaymentPosition";
 import { deductMaterialAt, creditMaterialAt, isMaterialKind, type MaterialKind } from "../lib/materialStock";
 import { getUserDataScope, isLocationInScope } from "../lib/dataScope";
-import { getLocationFilter } from "../lib/requestLocation";
+import { getLocationFilter, getPostingLocationFilter } from "../lib/requestLocation";
+import { postingMatchesLocation } from "../lib/postingLocation";
 import { availabilityAt, insufficientStockMessage } from "../lib/reservations";
 import { isIsoDate } from "../lib/dateInput";
 import { respondIfMonthLocked, isMonthLocked, ymOfDate, monthLockedBody } from "../lib/periodLock";
@@ -1861,9 +1862,10 @@ router.get("/outstanding/receivables", requireModuleView(["page:/outstanding", "
     }
     const rcvScopeCond = scopeSalesWhere(rcvScope, rcvParams);
     // Global location context — narrows the invoice pool to one location's
-    // sales. Ledger anchoring is disabled for a location view: the ledger
-    // index is company-wide, so the document view is the honest basis there.
+    // sales. The same location is also applied to the derived posting stream
+    // below so the control figure and customer ledger stay identical.
     const rcvViewLoc = getLocationFilter(req);
+    const rcvPostingLoc = getPostingLocationFilter(req);
     let rcvLocCond = "TRUE";
     if (rcvViewLoc) {
       if (rcvViewLoc.locationType === 'headoffice') {
@@ -1916,21 +1918,30 @@ router.get("/outstanding/receivables", requireModuleView(["page:/outstanding", "
     // same number Sundry Debtors shows on the Balance Sheet, so a receipt, a
     // journal, a contra or a credit note all move it.
     //
-    // Ledger postings carry no location, so there is no honest way to scope this
-    // to a branch. A location-scoped caller therefore keeps the document view
-    // and is told so via `basis`, rather than being shown a company-wide figure
-    // under a branch heading.
-    const rcvLedgerAnchored = rcvScope.isHeadOffice && !rcvViewLoc;
+    // A location-filtered view uses the exact same posting filter as
+    // /customers/:id/ledger. Previously this endpoint deliberately fell back to
+    // invoice arithmetic whenever a location was selected; that made a return's
+    // credit-note posting reduce the customer ledger while the Outstanding page
+    // kept showing the pre-return invoice balance.
+    const rcvLedgerAnchored = rcvScope.isHeadOffice
+      || (rcvPostingLoc != null && rcvPostingLoc.type !== "headoffice" && rcvPostingLoc.type !== "company");
     const rcvBalIdx = rcvLedgerAnchored
-      ? await (await import("../lib/ledgerBalances")).currentBalanceIndex(dated ? { toDate: asOf } : {})
+      ? await (await import("../lib/ledgerBalances")).currentBalanceIndex({
+          ...(dated ? { toDate: asOf } : {}),
+          ...(rcvPostingLoc
+            ? {
+                includeOpeningBalances: false,
+                postingFilter: (p: Record<string, any>) => postingMatchesLocation(p as any, rcvPostingLoc),
+              }
+            : {}),
+        })
       : null;
     const ledgerByCustomer = rcvBalIdx
       ? rcvBalIdx.partyBalances("customer")
       : new Map<number, { balance: number }>();
     // Customer advances: a CREDIT (negative) balance on the customer's own
     // Sundry Debtor ledger IS the advance — no separate advance ledger exists
-    // (business decision, Aug 2026). Ledger-anchored views only — postings
-    // carry no location, so a branch/located slice has no honest figure.
+    // (business decision, Aug 2026).
     const advByCustomer = new Map<number, number>();
     if (rcvBalIdx) {
       for (const [cid, b] of ledgerByCustomer) {
@@ -2035,8 +2046,9 @@ router.get("/outstanding/receivables", requireModuleView(["page:/outstanding", "
     let totalUninvoiced = 0;
     const customers = [...byCustomer.values()].map(c => {
       if (!rcvLedgerAnchored) {
-        // Document view: no ledger to anchor to, so the old net-of-credit-notes
-        // figure stands and is labelled as an invoice-basis number.
+        // A branch without a selected location is kept on the legacy
+        // invoice-basis view because its LBAC scope can span more than one
+        // location and the posting stream has no equivalent implicit scope.
         return { ...c, netDue: r2(Math.max(0, c.totalDue - c.creditNotes)) };
       }
       // Sales carry a real per-invoice allocation (`amount_paid` plus credit
