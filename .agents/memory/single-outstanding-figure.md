@@ -64,3 +64,18 @@ it by comparing the report's net due against the party's ledger balance. Ids are
 only unique within their own table, so the merged rows need an explicit
 source-qualified key, and documents funded another way (e.g. paid from cash, no
 party) must stay out or the report will over-state.
+
+## Location-filtered control figures
+
+The customer-facing control figure must use the same derived-posting location
+filter as the customer ledger it is meant to match. Invoice rows remain useful
+for aging detail, but they cannot replace the ledger balance when a return,
+manual journal, advance, or other posting is outside the invoice allocation.
+
+**Why:** a location-filtered aging view that falls back to invoice arithmetic
+can show the pre-return amount even though the location-filtered customer
+ledger already includes the return's credit-note posting.
+
+**How to apply:** resolve the shared posting-location filter once, apply it to
+both surfaces, and label any unlocated branch fallback explicitly rather than
+presenting it as a ledger-equivalent number.

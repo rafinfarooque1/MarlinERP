@@ -125,6 +125,16 @@ async function dayBookVouchers(from, to, locQ) {
   const nowDue = now === null ? 0 : r2(now.netDue);
   assert('undated position agrees with asOf=return-date-or-later', near(nowDue, afterCN), `got ${nowDue} want ${afterCN}`);
 
+  const locatedRecv = await get(`/outstanding/receivables?asOf=${D5}&locationType=warehouse&locationId=${WH}`);
+  const locatedCustomer = (locatedRecv.data?.customers ?? []).find((c) => Number(c.customerId) === Number(CUST));
+  const locatedLedger = await get(`/customers/${CUST}/ledger?locationType=warehouse&locationId=${WH}`);
+  assert('location-filtered Outstanding equals the customer ledger after return',
+    near(locatedCustomer?.netDue, locatedLedger.data?.balance),
+    `outstanding=${locatedCustomer?.netDue} ledger=${locatedLedger.data?.balance}`);
+  assert('location-filtered Outstanding includes the return credit note',
+    near(locatedCustomer?.netDue, afterCN),
+    `outstanding=${locatedCustomer?.netDue} want=${afterCN}`);
+
   // ══ 2. Walk-in cash sale + cash refund: payment stamped with the location
   console.log('\n— Cash-refund return: payment location stamp —');
   const s2 = await post('/sales', {

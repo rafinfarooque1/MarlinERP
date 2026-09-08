@@ -117,7 +117,7 @@ export function creditAdjustmentsExpr(saleAlias = "s"): string {
     SELECT SUM(sr.total_amount::numeric)
       FROM sales_returns sr
      WHERE sr.sale_id = ${saleAlias}.id
-       AND sr.refund_mode = 'credit_note'
+        AND (sr.refund_mode = 'credit_note' OR sr.credit_note_id IS NOT NULL)
   ), 0)`;
 }
 
@@ -160,7 +160,7 @@ export function creditAdjustmentsAsOfExpr(saleAlias: string, asOfParam: string):
     SELECT SUM(sr.total_amount::numeric)
       FROM sales_returns sr
      WHERE sr.sale_id = ${saleAlias}.id
-       AND sr.refund_mode = 'credit_note'
+        AND (sr.refund_mode = 'credit_note' OR sr.credit_note_id IS NOT NULL)
        AND sr.return_date::date <= ${asOfParam}::date
   ), 0)`;
 }
