@@ -1,0 +1,1091 @@
+MASTER FIX — RECONCILIATION MUST INCLUDE RECEIPT VOUCHERS THROUGH BANK/CASH
+
+I need to extend the current Reconciliation system.
+
+CURRENT PROBLEM:
+
+The Reconciliation page is currently showing BANK transactions mainly from Sales/POS, but it is NOT showing Receipt Voucher transactions when a customer receipt is received into a BANK account.
+
+This is incorrect.
+
+A Receipt Voucher is also a bank/cash transaction.
+
+If a Receipt Voucher is:
+
+Received Into = Bank Account
+
+then that receipt MUST appear in Bank Reconciliation.
+
+If a Receipt Voucher is:
+
+Received Into = Cash Account
+
+then it must be available in the appropriate Cash Reconciliation workflow if the ERP supports cash reconciliation.
+
+Do NOT mix cash transactions into Bank Reconciliation.
+
+============================================================
+1. FUNDAMENTAL RULE
+============================================================
+
+Reconciliation must be based on the ACTUAL CASH/BANK ACCOUNT TRANSACTION, not only on the transaction type.
+
+Eligible bank transactions should include, where applicable:
+
+1. Sales/POS received through Bank
+2. Customer Receipt Vouchers received into Bank
+3. Other valid receipts posted directly to Bank
+4. Any other legitimate bank ledger transaction that the ERP's reconciliation rules support
+
+Therefore:
+
+BANK ACCOUNT
+↓
+BANK LEDGER TRANSACTIONS
+↓
+RECONCILIATION
+
+must be the fundamental model.
+
+Do NOT build reconciliation only from Sales.
+
+============================================================
+2. RECEIPT VOUCHER THROUGH BANK
+============================================================
+
+Example:
+
+Receipt Voucher:
+
+Receipt No:
+REC-00123
+
+Customer:
+TEAKOD
+
+Amount:
+₹2,000
+
+Received Into:
+Federal Bank — Tropicane - Ecity
+
+Location:
+Tropicane - Ecity
+
+This MUST appear in:
+
+Reconciliation
+→ Federal Bank
+→ Pending/Unreconciled transactions
+
+Example:
+
+Date        Type       Voucher       Customer    Bank Account     Amount     Reconcile
+
+07-09-2026  Receipt    REC-00123     TEAKOD      Federal Bank     ₹2,000     [ ]
+
+When the user ticks:
+
+[✓] Reconcile
+
+the transaction is immediately reconciled.
+
+============================================================
+3. SALES + RECEIPTS MUST BOTH APPEAR
+============================================================
+
+For the selected bank account:
+
+Federal Bank — Tropicane - Ecity
+
+Reconciliation must show BOTH:
+
+SALE BANK TRANSACTIONS
+
+and
+
+RECEIPT VOUCHERS RECEIVED INTO BANK
+
+Example:
+
+Sale:
+INV-001
+₹500
+Federal Bank
+[ ] Reconcile
+
+Receipt:
+REC-001
+₹2,000
+Federal Bank
+[ ] Reconcile
+
+Both must be visible.
+
+Do NOT show only sales.
+
+============================================================
+4. ACTUAL BANK ACCOUNT IS THE SOURCE
+============================================================
+
+Do not identify transactions only by:
+
+payment_method = BANK
+
+Instead identify the actual bank account.
+
+The system must trace:
+
+Transaction
+→ Journal Voucher
+→ Bank Ledger
+→ Bank Account
+
+or directly:
+
+Transaction
+→ Bank Account ID
+
+depending on the existing architecture.
+
+The final reconciliation query must use the actual bank account ID.
+
+============================================================
+5. RECEIPT VOUCHER ACCOUNTING
+============================================================
+
+For a customer Receipt Voucher:
+
+Receipt:
+
+₹2,000
+
+Received Into:
+
+Federal Bank
+
+Accounting conceptually:
+
+Dr Federal Bank ₹2,000
+Cr Customer Receivable ₹2,000
+
+This creates a ₹2,000 bank transaction.
+
+That bank transaction MUST be eligible for reconciliation.
+
+Reconciliation itself must NOT create another accounting entry.
+
+============================================================
+6. DO NOT DUPLICATE RECEIPTS
+============================================================
+
+A Receipt Voucher must remain ONE financial transaction.
+
+If:
+
+Receipt = ₹2,000
+
+and it is allocated to:
+
+Invoice A = ₹500
+Invoice B = ₹1,000
+Invoice C = ₹500
+
+Reconciliation must show:
+
+REC-001
+Receipt
+₹2,000
+Federal Bank
+[ ] Reconcile
+
+NOT:
+
+₹500
+₹1,000
+₹500
+
+as three reconciliation transactions.
+
+Bill allocations are settlement details only.
+
+One Receipt Voucher = one bank transaction.
+
+============================================================
+7. CUSTOMER RECEIPT BILL ALLOCATION
+============================================================
+
+Keep bill-wise settlement.
+
+Example:
+
+Receipt:
+₹2,000
+
+Allocated:
+
+Invoice A ₹500
+Invoice B ₹1,000
+Invoice C ₹500
+
+Customer Ledger:
+ONE receipt ₹2,000
+
+Bank Ledger:
+ONE bank transaction ₹2,000
+
+Reconciliation:
+ONE bank transaction ₹2,000
+
+Bill allocation:
+three child allocation records
+
+Do not split the bank transaction.
+
+============================================================
+8. CASH RECEIPTS
+============================================================
+
+If:
+
+Receipt Voucher
+Received Into = Cash
+
+then it must NOT appear in Bank Reconciliation.
+
+It belongs to Cash.
+
+If the ERP has Cash Reconciliation:
+
+Cash Receipt Voucher
+→ Cash Account
+→ Cash Reconciliation
+
+If the ERP does not currently support Cash Reconciliation, do NOT incorrectly add cash transactions to Bank Reconciliation.
+
+Keep the accounting account type authoritative.
+
+============================================================
+9. BANK RECONCILIATION SOURCE
+============================================================
+
+The Bank Reconciliation query should conceptually be:
+
+ALL eligible transactions posted to the selected BANK ACCOUNT
+
+not:
+
+ONLY sales where payment_method = BANK
+
+Include valid transaction types such as:
+
+SALE
+RECEIPT
+OTHER BANK RECEIPT
+OTHER BANK TRANSACTION
+
+according to the ERP's existing accounting architecture.
+
+Inspect the existing transaction types first.
+
+Do not invent unsupported transaction categories.
+
+============================================================
+10. BANK BOOK CONSISTENCY
+============================================================
+
+Anything that appears as a valid transaction in:
+
+Bank Book
+
+for the selected bank account
+
+and is eligible for reconciliation
+
+must also be available in:
+
+Bank Reconciliation
+
+Example:
+
+Bank Book:
+
+Federal Bank
+
+07-09-2026
+Receipt Voucher REC-00123
+TEAKOD
+₹2,000
+
+Reconciliation:
+
+Federal Bank
+
+07-09-2026
+Receipt Voucher REC-00123
+TEAKOD
+₹2,000
+[ ] Reconcile
+
+These must refer to the SAME underlying transaction.
+
+Do not create a second bank transaction for reconciliation.
+
+============================================================
+11. RECONCILIATION STATUS
+============================================================
+
+Reconciliation status must belong to the underlying bank transaction.
+
+If:
+
+Receipt REC-00123
+₹2,000
+
+is unreconciled:
+
+Bank Book:
+Unreconciled
+
+Reconciliation:
+[ ]
+
+If user ticks:
+
+[✓] Reconcile
+
+then:
+
+Bank Book:
+Reconciled
+
+Reconciliation:
+[✓] Reconciled
+
+Both must use the same database state.
+
+============================================================
+12. ONE-STEP RECONCILIATION
+============================================================
+
+Preserve the previously requested workflow:
+
+[ ] Reconcile
+
+→ click/tick
+
+→ immediately save
+
+→ [✓] Reconciled
+
+→ stay on current page
+
+No mandatory navigation to a separate Reconciliation page.
+
+No second Save button.
+
+No additional confirmation page.
+
+============================================================
+13. LOCATION
+============================================================
+
+Receipt Voucher reconciliation must respect location.
+
+Example:
+
+Receipt:
+
+Location:
+Tropicane - Ecity
+
+Received Into:
+Federal Bank — Tropicane - Ecity
+
+It must appear when:
+
+Location = Tropicane - Ecity
+
+and:
+
+Bank Account = Federal Bank — Tropicane - Ecity
+
+It must NOT appear under:
+
+Tropicane - Kochi
+Frozen Hub - Calicut
+another warehouse
+
+unless All Locations is selected and the user is authorized.
+
+============================================================
+14. BANK ACCOUNT LIST
+============================================================
+
+Use the bank accounts already assigned to the selected warehouse.
+
+Do NOT create a new bank-account assignment system.
+
+For:
+
+Tropicane - Ecity
+
+show:
+
+Federal Bank
+Ownly
+other valid assigned bank accounts
+
+The bank account selector must come from the same source as Cash & Bank.
+
+============================================================
+15. RECEIPT VOUCHER UI
+============================================================
+
+When creating a Receipt Voucher:
+
+Party Type:
+Customer
+
+Received From:
+Customer
+
+Received Into:
+Cash / Bank
+
+If Bank is selected:
+
+show:
+
+Bank Account:
+[ Select bank account ]
+
+The bank account must be restricted to bank accounts assigned to the selected location.
+
+Example:
+
+Received Into:
+Bank
+
+Bank Account:
+Federal Bank — Tropicane - Ecity
+
+The selected bank account must be stored with the transaction/accounting posting.
+
+Do NOT store only:
+
+payment_method = BANK
+
+if the ERP architecture requires an actual account ID.
+
+============================================================
+16. EXISTING RECEIPT VOUCHERS
+============================================================
+
+Audit existing Receipt Vouchers.
+
+Find all receipts where:
+
+Received Into = Bank
+
+Determine their actual bank account from:
+
+- receipt voucher
+- journal voucher
+- journal lines
+- bank ledger
+- account ID
+- location
+
+If the bank account can be reliably determined:
+
+make the receipt available in reconciliation.
+
+If the bank account cannot be determined:
+
+DO NOT assign a random bank account.
+
+Mark it as:
+
+Bank Account Not Determinable
+
+and report it for controlled data repair.
+
+Do not fabricate historical assignments.
+
+============================================================
+17. RECONCILIATION TRANSACTION TYPES
+============================================================
+
+Display a clear transaction type.
+
+Example:
+
+Type:
+
+SALE
+RECEIPT
+
+So the user can distinguish:
+
+INV-001
+SALE
+Customer ABC
+₹500
+
+REC-001
+RECEIPT
+Customer TEAKOD
+₹2,000
+
+This is preferable to displaying everything as "BANK".
+
+============================================================
+18. FILTERS
+============================================================
+
+Reconciliation should support:
+
+Location
+Bank Account
+Transaction Type
+Reconciled / Unreconciled
+Date
+Search
+
+Transaction Type:
+
+All
+Sales
+Receipts
+Other eligible transactions
+
+Status:
+
+All
+Unreconciled
+Reconciled
+
+============================================================
+19. RECONCILIATION TOTALS
+============================================================
+
+For the selected bank account calculate:
+
+Opening Bank Balance
++
+Eligible Bank Transactions
+=
+Closing Bank Balance
+
+Reconciliation status must NOT alter bank balance.
+
+Reconciled vs unreconciled is a status/matching dimension.
+
+Do not subtract reconciled transactions from actual bank balance.
+
+============================================================
+20. BANK STATEMENT MATCHING
+============================================================
+
+If the ERP has bank statement import/matching:
+
+Receipt Voucher bank transactions must be available for matching.
+
+Example:
+
+Bank Statement:
+₹2,000
+
+ERP:
+Receipt REC-00123
+₹2,000
+
+The system should allow matching/reconciliation according to existing matching rules.
+
+Do not create another receipt.
+
+============================================================
+21. RECONCILIATION PAGE
+============================================================
+
+The Reconciliation page should now effectively show:
+
+Location:
+Tropicane - Ecity
+
+Bank Account:
+Federal Bank
+
+------------------------------------------------
+
+Date | Type | Voucher | Customer | Reference | Amount | Status
+
+07-09-26 | SALE
+INV-001
+ABC
+₹500
+[ ]
+
+07-09-26 | RECEIPT
+REC-00123
+TEAKOD
+₹2,000
+[ ]
+
+------------------------------------------------
+
+This is the required behavior.
+
+============================================================
+22. BANK BOOK
+============================================================
+
+Bank Book should show the same transactions:
+
+SALE
+RECEIPT
+PAYMENT
+OTHER BANK TRANSACTIONS
+
+according to the actual bank account.
+
+If a transaction is eligible for reconciliation:
+
+it must have reconciliation status.
+
+============================================================
+23. PAYMENT VOUCHERS
+============================================================
+
+Do not break Payment Vouchers.
+
+A Payment Voucher paid through Bank should also be represented as a bank transaction and should be available in Bank Reconciliation if the ERP's reconciliation model includes outgoing bank transactions.
+
+Example:
+
+Payment Voucher
+PV-001
+Vendor ABC
+Federal Bank
+₹5,000
+
+Reconciliation:
+
+PV-001
+PAYMENT
+₹5,000
+[ ] Reconcile
+
+If the existing reconciliation scope is intended to include only incoming transactions, preserve the documented rule, but do NOT exclude a bank transaction simply because it is a Payment Voucher.
+
+Inspect the current design and make the bank reconciliation scope consistent.
+
+============================================================
+24. RECEIPT + SALE + PAYMENT
+============================================================
+
+Test all three:
+
+SALE → BANK
+RECEIPT → BANK
+PAYMENT → BANK
+
+Each must be associated with the correct bank account.
+
+Each must appear in Bank Book.
+
+Each eligible transaction must appear in Reconciliation.
+
+Each remains ONE underlying transaction.
+
+============================================================
+25. ACCOUNTING SAFETY
+============================================================
+
+Reconciliation must NOT change:
+
+- Sales
+- Purchases
+- Receipts
+- Payments
+- Customer Outstanding
+- Vendor Outstanding
+- Cash
+- Bank Balance
+- GST
+- P&L
+- Balance Sheet
+- Trial Balance
+
+Reconciliation only changes:
+
+Reconciliation Status
+Reconciliation Metadata
+
+============================================================
+26. CUSTOMER OUTSTANDING
+============================================================
+
+This must remain compatible with the customer outstanding fix.
+
+Receipt:
+
+₹2,000
+
+must reduce customer outstanding by:
+
+₹2,000
+
+once.
+
+Bill-wise allocations must not create duplicate ledger entries.
+
+Customer Ledger:
+ONE receipt ₹2,000
+
+Bank Ledger:
+ONE receipt ₹2,000
+
+Reconciliation:
+ONE receipt ₹2,000
+
+============================================================
+27. AUDIT
+============================================================
+
+When the user reconciles:
+
+record:
+
+- user
+- timestamp
+- location
+- bank account
+- transaction ID
+- transaction type
+- previous status
+- new status
+
+Do not create a new financial transaction.
+
+============================================================
+28. SECURITY
+============================================================
+
+Backend must enforce:
+
+User permission
++
+Location permission
++
+Bank Account permission
++
+Transaction ownership/access
+
+Do NOT trust frontend:
+
+location_id
+bank_account_id
+transaction_id
+
+Prevent cross-location access.
+
+============================================================
+29. DATABASE
+============================================================
+
+Inspect the existing database before changing it.
+
+Reuse existing:
+
+- bank account
+- bank ledger
+- receipt voucher
+- journal voucher
+- reconciliation
+- audit
+
+tables/fields where possible.
+
+Do not create duplicate transaction systems.
+
+If a migration is required:
+
+- make it safe
+- preserve existing records
+- make it idempotent
+- do not destroy history
+
+============================================================
+30. TEST CASE — RECEIPT THROUGH BANK
+============================================================
+
+Create:
+
+Location:
+Tropicane - Ecity
+
+Bank:
+Federal Bank
+
+Customer:
+TEAKOD
+
+Receipt:
+₹2,000
+
+Received Into:
+Federal Bank
+
+Expected:
+
+Receipt Voucher:
+₹2,000
+
+Customer Ledger:
+ONE receipt ₹2,000
+
+Customer Outstanding:
+reduced by ₹2,000
+
+Bank Ledger:
+ONE transaction ₹2,000
+
+Bank Book:
+ONE transaction ₹2,000
+
+Reconciliation:
+ONE transaction ₹2,000
+
+Status:
+Unreconciled
+
+Then tick:
+
+[✓] Reconcile
+
+Expected:
+
+Reconciliation:
+Reconciled
+
+Bank Book:
+Reconciled
+
+No other accounting value changes.
+
+============================================================
+31. TEST CASE — RECEIPT THROUGH CASH
+============================================================
+
+Create:
+
+Receipt:
+₹2,000
+
+Received Into:
+Cash
+
+Expected:
+
+Cash Book:
+₹2,000
+
+Customer Ledger:
+ONE receipt ₹2,000
+
+Customer Outstanding:
+reduced by ₹2,000
+
+Bank Reconciliation:
+DO NOT SHOW
+
+Cash Reconciliation:
+show only if the ERP supports cash reconciliation.
+
+============================================================
+32. TEST CASE — MULTIPLE BILL RECEIPT
+============================================================
+
+Receipt:
+
+₹2,000
+
+Allocated:
+
+Bill A ₹234.98
+Bill B ₹1,670
+Bill C ₹95.02
+
+Expected:
+
+Receipt Voucher:
+₹2,000
+
+Customer Ledger:
+ONE receipt ₹2,000
+
+Bank Book:
+ONE bank transaction ₹2,000
+
+Reconciliation:
+ONE bank transaction ₹2,000
+
+NOT three transactions.
+
+============================================================
+33. TEST CASE — MULTIPLE BANK ACCOUNTS
+============================================================
+
+Location:
+
+Tropicane - Ecity
+
+Accounts:
+
+Federal Bank
+Ownly
+
+Receipt 1:
+₹1,000 → Federal Bank
+
+Receipt 2:
+₹2,000 → Ownly
+
+Expected:
+
+Federal Bank reconciliation:
+₹1,000 receipt only
+
+Ownly reconciliation:
+₹2,000 receipt only
+
+All Bank Accounts:
+₹3,000
+
+Never mix the two accounts.
+
+============================================================
+34. TEST CASE — SALES + RECEIPT
+============================================================
+
+Federal Bank:
+
+Sale = ₹500
+Receipt = ₹2,000
+
+Reconciliation should show:
+
+SALE ₹500
+RECEIPT ₹2,000
+
+Total:
+₹2,500
+
+Each remains a separate underlying transaction.
+
+============================================================
+35. TEST HISTORICAL DATA
+============================================================
+
+Audit current production/development data.
+
+Count:
+
+- Receipt Vouchers through Bank
+- Receipt Vouchers through Cash
+- Bank sales
+- Bank payments
+- bank transactions without reconciliation records
+- bank transactions with incorrect bank account
+- bank transactions without location
+- duplicate reconciliation records
+
+Do not automatically rewrite historical data.
+
+Report anomalies.
+
+============================================================
+36. FINAL ACCEPTANCE CRITERIA
+============================================================
+
+The implementation is COMPLETE only when:
+
+1. Sales received through Bank appear in Bank Reconciliation.
+
+2. Customer Receipt Vouchers received through Bank appear in Bank Reconciliation.
+
+3. Payment Vouchers through Bank appear if they are within the existing reconciliation scope.
+
+4. Cash transactions are NOT incorrectly shown as Bank transactions.
+
+5. Every bank transaction is associated with the actual bank account.
+
+6. Bank accounts are filtered by selected warehouse/location.
+
+7. Multiple bank accounts per warehouse work correctly.
+
+8. One Receipt Voucher creates ONE reconciliation transaction.
+
+9. Bill-wise receipt allocation does NOT split the reconciliation transaction.
+
+10. Customer Ledger still shows ONE receipt.
+
+11. Bank Book shows ONE receipt.
+
+12. Journal shows ONE receipt accounting transaction.
+
+13. Customer Outstanding is reduced exactly once.
+
+14. Reconciliation does not alter accounting balances.
+
+15. One-click/tick reconciliation works immediately.
+
+16. Reconciliation status persists after refresh.
+
+17. Reconciliation page and Bank Book use the same status.
+
+18. Location security is enforced server-side.
+
+19. Historical bank receipts are preserved.
+
+20. No duplicate financial transactions are created.
+
+============================================================
+FINAL REQUIRED FLOW
+============================================================
+
+The final system must work like this:
+
+SALE
+→ Bank Account
+→ Bank Ledger
+→ Bank Book
+→ Reconciliation
+→ Tick Reconcile
+
+RECEIPT VOUCHER
+→ Received Into Bank Account
+→ Bank Ledger
+→ Bank Book
+→ Reconciliation
+→ Tick Reconcile
+
+PAYMENT VOUCHER
+→ Paid From Bank Account
+→ Bank Ledger
+→ Bank Book
+→ Reconciliation
+→ Tick Reconcile
+
+CASH RECEIPT
+→ Cash Account
+→ Cash Book
+→ Cash Reconciliation if supported
+
+Do NOT restrict Reconciliation to Sales/POS.
+
+Reconciliation must represent the actual eligible transactions of the selected BANK ACCOUNT.
+
+START NOW.

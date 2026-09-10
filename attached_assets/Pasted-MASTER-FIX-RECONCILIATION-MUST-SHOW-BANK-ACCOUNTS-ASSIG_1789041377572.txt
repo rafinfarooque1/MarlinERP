@@ -1,0 +1,918 @@
+MASTER FIX — RECONCILIATION MUST SHOW BANK ACCOUNTS ASSIGNED TO SELECTED WAREHOUSE
+
+I reviewed the current live Reconciliation workflow.
+
+The problem is:
+
+When a warehouse/location is selected, the Reconciliation page shows the BANK payment/sales transactions for that location, but the bank account list assigned to that warehouse is not properly available for reconciliation.
+
+I need the Reconciliation page to correctly load and display the BANK ACCOUNTS assigned to the currently selected warehouse/location.
+
+IMPORTANT:
+
+Do NOT create a separate bank-account assignment system.
+
+Use the SAME authoritative Cash & Bank account/location assignment already used by the ERP.
+
+============================================================
+1. REQUIRED WORKFLOW
+============================================================
+
+Current Location:
+
+Tropicane - Ecity
+
+The Reconciliation page should automatically identify the bank accounts assigned to:
+
+Tropicane - Ecity
+
+and make those bank accounts available in Reconciliation.
+
+Expected:
+
+Reconciliation
+
+Location:
+Tropicane - Ecity
+
+Bank Account:
+[ Select bank account ▼ ]
+
+Options should include ONLY bank accounts assigned to Tropicane - Ecity.
+
+Example:
+
+Federal Bank
+Ownly - Ecity
+Any other valid bank account assigned to Tropicane - Ecity
+
+Do NOT show:
+
+- Frozen Hub - Calicut bank accounts
+- Tropicane - Kochi bank accounts
+- other warehouse bank accounts
+- unrelated Head Office bank accounts
+
+unless the user is explicitly using All Locations and has permission.
+
+============================================================
+2. USE CASH & BANK AS SOURCE
+============================================================
+
+The Cash & Bank page already contains bank account/location information.
+
+Use the same authoritative account records.
+
+Do NOT create duplicate fields such as:
+
+reconciliationBankId
+or
+reconciliationLocationBank
+
+if the existing bank account table already contains the correct relationship.
+
+The relationship should be:
+
+BANK ACCOUNT
+→ assigned location
+→ available to reconciliation
+
+============================================================
+3. SELECTED LOCATION
+============================================================
+
+Reconciliation must respect the ERP's current location selector.
+
+If current location is:
+
+Tropicane - Ecity
+
+load:
+
+BANK ACCOUNTS WHERE location = Tropicane - Ecity
+
+If current location changes to:
+
+Tropicane - Kochi
+
+the available bank account list must immediately change to:
+
+BANK ACCOUNTS WHERE location = Tropicane - Kochi
+
+If current location changes to:
+
+Frozen Hub - Calicut
+
+show only:
+
+BANK ACCOUNTS WHERE location = Frozen Hub - Calicut
+
+Do not leave stale bank accounts from the previous location.
+
+============================================================
+4. HEAD OFFICE
+============================================================
+
+If Head Office is specifically selected:
+
+show bank accounts assigned to Head Office according to the existing location architecture.
+
+Do NOT automatically show every bank account merely because the user selected Head Office.
+
+Head Office selected ≠ All Locations.
+
+============================================================
+5. ALL LOCATIONS
+============================================================
+
+If the user is authorized to use:
+
+All Locations
+
+then the bank account selector may show all accessible bank accounts across authorized locations.
+
+Preferably show the location with each bank account:
+
+Federal Bank — Tropicane - Ecity
+Federal Bank — Tropicane - Kochi
+HDFC — Frozen Hub - Calicut
+
+This prevents confusion when bank names are identical.
+
+Server-side permission filtering is mandatory.
+
+============================================================
+6. BANK SALES / PAYMENT TRANSACTIONS
+============================================================
+
+The Reconciliation page currently displays transactions such as:
+
+Invoice
+Customer
+Location
+Date
+Method
+Reference
+Amount
+
+with:
+
+Method = BANK
+
+These BANK transactions must be linked to the actual bank account into which the transaction was posted.
+
+Do NOT assume every BANK transaction belongs to every bank account at that location.
+
+Trace the actual accounting transaction:
+
+SALE
+→ Payment Method = Bank
+→ Received Into / Bank Account
+→ Journal Voucher
+→ Bank Ledger
+
+Reconciliation must use that actual bank account.
+
+============================================================
+7. IMPORTANT — SALES RECEIVED INTO BANK
+============================================================
+
+For a sale/POS transaction:
+
+Payment Method:
+Bank
+
+Received Into:
+specific bank account
+
+Example:
+
+Sale:
+₹450
+
+Payment Method:
+Bank
+
+Received Into:
+Federal Bank — Tropicane - Ecity
+
+The reconciliation transaction must be associated with:
+
+Federal Bank — Tropicane - Ecity
+
+NOT merely:
+
+Tropicane - Ecity
++
+BANK
+
+The actual bank account is important.
+
+============================================================
+8. BANK ACCOUNT FILTER
+============================================================
+
+Add a bank-account filter/selector to Reconciliation if one does not already exist.
+
+Suggested layout:
+
+Search invoice/customer...
+Location
+Bank Account
+Method
+
+Example:
+
+Location:
+Tropicane - Ecity
+
+Bank Account:
+[ All Bank Accounts ▼ ]
+
+Options:
+
+All Bank Accounts
+Federal Bank
+Ownly - Ecity
+
+Method:
+All
+UPI
+Bank
+Other
+
+If only one bank account is assigned, it should still appear automatically.
+
+============================================================
+9. DEFAULT BANK ACCOUNT
+============================================================
+
+When the selected location has one bank account:
+
+Automatically select that bank account OR allow:
+
+All Bank Accounts
+
+according to the existing UX pattern.
+
+When multiple bank accounts exist:
+
+show all valid assigned bank accounts.
+
+Do not require the user to manually configure them again in Reconciliation.
+
+============================================================
+10. RECONCILIATION TRANSACTION MATCHING
+============================================================
+
+When a bank account is selected:
+
+show ONLY reconciliation-eligible BANK transactions posted to that bank account.
+
+Example:
+
+Selected:
+
+Federal Bank — Tropicane - Ecity
+
+Show:
+
+Sale A → Federal Bank — Ecity
+Sale B → Federal Bank — Ecity
+Sale C → Federal Bank — Ecity
+
+Do NOT show:
+
+Sale D → Ownly - Ecity
+Sale E → Federal Bank — Kochi
+Sale F → HDFC — Calicut
+
+============================================================
+11. DO NOT MATCH BY LOCATION ONLY
+============================================================
+
+This is critical.
+
+Do NOT use:
+
+transaction.location_id = selected_location_id
+
+as the ONLY matching rule.
+
+Use:
+
+transaction.location_id
+AND
+transaction.bank_account_id
+
+where the source transaction contains a bank account.
+
+This prevents different bank accounts within the same warehouse from being mixed.
+
+============================================================
+12. FIND WHY BANK ACCOUNT IS CURRENTLY MISSING
+============================================================
+
+Inspect the current implementation before changing anything.
+
+Trace:
+
+Reconciliation UI
+→ location selector
+→ bank account query
+→ bank account API
+→ Cash & Bank account records
+→ sale/POS payment records
+→ journal voucher
+→ bank ledger
+
+Determine exactly why the bank account list is currently missing.
+
+Possible causes to investigate:
+
+- reconciliation API does not load bank accounts
+- bank account endpoint has wrong location filter
+- bank accounts are not being associated with sales
+- payment method stores only "BANK" without bank account ID
+- frontend is not rendering bank accounts
+- selected location is not passed to API
+- stale React Query cache
+- Head Office/warehouse logic mismatch
+- bank account location field mismatch
+- account is present in Cash & Bank but excluded by reconciliation query
+- account type filter is incorrect
+- account is inactive incorrectly
+- system bank accounts are being treated differently
+
+Do not guess.
+
+Find the actual root cause.
+
+============================================================
+13. CASH & BANK CONSISTENCY
+============================================================
+
+If Cash & Bank shows:
+
+Federal Bank
+Location = Tropicane - Ecity
+
+then Reconciliation must be able to discover that same account.
+
+Do not maintain two different lists.
+
+Cash & Bank
+=
+authoritative bank account list
+
+Reconciliation
+=
+filtered view of the same bank account list
+
+============================================================
+14. SALES / POS PAYMENT STORAGE
+============================================================
+
+Audit the database schema for sales/POS payment information.
+
+Determine whether the sale stores:
+
+- payment method
+- cash/bank/UPI
+- bank account ID
+- cash account ID
+- payment amount
+- location
+
+If a bank payment is being saved only as:
+
+payment_method = BANK
+
+without identifying the actual bank account, determine whether the existing architecture can safely derive the bank account from the journal entry/account posting.
+
+Do NOT assign a random bank account.
+
+If the business workflow requires an explicit bank account selection during sale/POS, ensure that:
+
+Payment Method = Bank
+
+requires/selects:
+
+Received Into:
+[bank account]
+
+for that location.
+
+============================================================
+15. EXISTING SALES DATA
+============================================================
+
+Do not break historical sales.
+
+For existing BANK sales:
+
+determine their actual bank posting from:
+
+- journal voucher
+- journal lines
+- bank ledger
+- account ID
+- source transaction
+
+If the bank account can be reliably determined, use that relationship.
+
+If it cannot be determined from existing data:
+
+do NOT guess.
+
+Flag the transaction as:
+
+BANK ACCOUNT NOT DETERMINABLE
+
+rather than assigning it incorrectly.
+
+============================================================
+16. RECONCILIATION ACCOUNTING SAFETY
+============================================================
+
+Selecting a bank account in Reconciliation must NOT create:
+
+- new sale
+- new payment
+- new receipt
+- new journal voucher
+- new bank transaction
+- new income
+- new expense
+
+Reconciliation only matches/reconciles an existing bank transaction.
+
+============================================================
+17. ONE-STEP RECONCILIATION
+============================================================
+
+Preserve the previously requested one-step workflow:
+
+BANK BOOK / RECONCILIATION
+
+→ Tick Reconcile
+
+→ Immediately saved
+
+→ Stay on current page
+
+No mandatory navigation to another Reconciliation page.
+
+The bank-account selection is only for filtering/matching.
+
+It must not add unnecessary workflow steps.
+
+============================================================
+18. RECONCILIATION PAGE
+============================================================
+
+The page should work like:
+
+Reconciliation
+
+Pending Payments: XX
+Pending Amount: ₹XX
+Batches: XX
+Settled to Bank: ₹XX
+
+Filters:
+
+Search invoice/customer
+
+Location:
+Tropicane - Ecity
+
+Bank Account:
+[ All Bank Accounts ▼ ]
+
+Method:
+[ All methods ▼ ]
+
+Then transaction list:
+
+☐ Invoice
+Customer
+Location
+Date
+Method
+Bank Account
+Reference
+Amount
+Reconcile
+
+If the transaction is a BANK transaction, display the actual bank account.
+
+Example:
+
+SB2C/26-27/61
+Walk-in
+Tropicane - Ecity
+09-09-2026
+BANK
+Federal Bank
+₹100
+[ ] Reconcile
+
+============================================================
+19. BANK ACCOUNT COLUMN
+============================================================
+
+Add a:
+
+BANK ACCOUNT
+
+column to the reconciliation transaction list if space allows.
+
+Desktop:
+
+Invoice | Customer | Location | Date | Method | Bank Account | Reference | Amount | Reconcile
+
+Mobile:
+
+Show Bank Account inside the transaction card.
+
+This makes it clear which bank received the sale.
+
+============================================================
+20. UPI
+============================================================
+
+Do not incorrectly treat all UPI payments as bank-account transactions.
+
+Determine the existing ERP rule.
+
+If UPI is settled through a specific bank account:
+
+store/use the appropriate settlement bank account where the ERP supports it.
+
+If UPI is intentionally represented separately:
+
+keep that accounting model.
+
+Do not mix UPI and Bank transactions without an explicit relationship.
+
+============================================================
+21. LOCATION SECURITY
+============================================================
+
+Server-side validation is mandatory.
+
+A user must NOT be able to modify:
+
+location_id
+or
+bank_account_id
+
+in the browser/API request and access another warehouse's bank transactions.
+
+Backend must verify:
+
+current user
+→ permission
+→ location access
+→ bank account access
+→ transaction access
+
+before returning reconciliation data.
+
+============================================================
+22. BANK ACCOUNT STATUS
+============================================================
+
+Only show bank accounts that are:
+
+- active
+- valid
+- type = Bank
+- assigned to the selected/accessible location
+
+Do not show:
+
+- Cash accounts
+- deleted accounts
+- inactive accounts
+- unrelated ledgers
+- expense accounts
+- income accounts
+
+unless the existing business rule explicitly requires them.
+
+============================================================
+23. MULTIPLE BANK ACCOUNTS
+============================================================
+
+If a warehouse has:
+
+Federal Bank
+Ownly
+HDFC
+
+then Reconciliation must show all three.
+
+Example:
+
+Bank Account:
+[ All Bank Accounts ]
+
+Federal Bank
+Ownly
+HDFC
+
+Selecting Federal Bank:
+only Federal Bank transactions.
+
+Selecting Ownly:
+only Ownly transactions.
+
+Selecting All:
+all authorized bank transactions for that location.
+
+============================================================
+24. BANK ACCOUNT ASSIGNMENT
+============================================================
+
+DO NOT change the existing Cash & Bank rule:
+
+BANK ACCOUNT ASSIGNMENT = SINGLE LOCATION
+
+Do not introduce multiple-location assignment.
+
+One bank account belongs to one location.
+
+Reconciliation inherits that assignment.
+
+============================================================
+25. REFRESH / LOCATION CHANGE
+============================================================
+
+When location changes:
+
+1. clear previous bank-account selection if it is no longer valid
+2. fetch new bank accounts
+3. update transaction list
+4. update pending amount/count
+5. update reconciled totals
+6. update available methods
+
+No stale data.
+
+============================================================
+26. API DESIGN
+============================================================
+
+Reuse existing APIs if possible.
+
+If required, create a clean endpoint such as:
+
+GET /api/reconciliation/bank-accounts?locationId=...
+
+and:
+
+GET /api/reconciliation/pending?locationId=...&bankAccountId=...
+
+But first inspect existing endpoints and avoid unnecessary duplication.
+
+All values must be server-authoritative.
+
+============================================================
+27. DATA RECONCILIATION
+============================================================
+
+After fixing, verify:
+
+For every BANK sale:
+
+Sale bank amount
+=
+Bank ledger amount
+=
+Journal bank debit/credit amount
+=
+Reconciliation amount
+
+according to the ERP's accounting direction.
+
+No missing bank transactions.
+
+No duplicate bank transactions.
+
+No transaction assigned to the wrong bank account.
+
+============================================================
+28. TEST SCENARIO
+============================================================
+
+Use a safe test environment.
+
+Warehouse:
+
+Tropicane - Ecity
+
+Bank accounts:
+
+Federal Bank
+Ownly - Ecity
+
+Create:
+
+Sale 1:
+₹100
+Bank → Federal Bank
+
+Sale 2:
+₹200
+Bank → Ownly
+
+Expected Reconciliation:
+
+All Bank Accounts:
+₹100 + ₹200
+
+Federal Bank:
+₹100
+
+Ownly:
+₹200
+
+Selecting Federal Bank must NOT show the ₹200 transaction.
+
+Selecting Ownly must NOT show the ₹100 transaction.
+
+============================================================
+29. TEST LOCATION ISOLATION
+============================================================
+
+Warehouse A:
+
+Federal Bank A
+
+Warehouse B:
+
+Federal Bank B
+
+Even if both accounts have the same bank name:
+
+Federal Bank
+
+they must remain separate by account ID/location.
+
+Warehouse A reconciliation must never show Warehouse B transactions.
+
+============================================================
+30. TEST ONE-STEP RECONCILIATION
+============================================================
+
+Select:
+
+Tropicane - Ecity
+Federal Bank
+
+Find a pending bank sale.
+
+Click:
+
+[ ] Reconcile
+
+Expected:
+
+[✓] Reconciled
+
+Immediately saved.
+
+No redirect.
+
+Refresh page.
+
+Still:
+
+[✓] Reconciled
+
+Open Reconciliation page.
+
+Transaction remains reconciled.
+
+Bank ledger amount remains unchanged.
+
+Accounting remains unchanged.
+
+============================================================
+31. REGRESSION TESTS
+============================================================
+
+Test:
+
+- Cash & Bank
+- Bank Book
+- Reconciliation
+- Sales/POS
+- Receipt Voucher
+- Payment Voucher
+- Journal Voucher
+- Dashboard
+- Reports
+- location filtering
+- permissions
+- All Locations
+- Head Office
+- multiple bank accounts
+- UPI
+- cash
+- PDF
+- exports
+
+Do not break existing functionality.
+
+============================================================
+32. FINAL ACCEPTANCE CRITERIA
+============================================================
+
+The fix is COMPLETE only when:
+
+1. Reconciliation automatically knows the current selected warehouse/location.
+
+2. It loads bank accounts assigned to that location.
+
+3. It uses the SAME bank-account records as Cash & Bank.
+
+4. It does not create a second bank-account assignment system.
+
+5. Bank sales are associated with their actual bank account.
+
+6. Reconciliation can filter by actual bank account.
+
+7. Only authorized location bank accounts are visible.
+
+8. Cross-location bank transactions are impossible.
+
+9. Multiple bank accounts within one warehouse work correctly.
+
+10. All Locations works for authorized users.
+
+11. Head Office works according to existing location rules.
+
+12. Bank account selection does not change accounting.
+
+13. One-step reconciliation remains intact.
+
+14. Existing historical transactions are preserved.
+
+15. No random bank-account assignment is made.
+
+16. Dashboard/Bank Book/Reconciliation totals remain consistent.
+
+============================================================
+FINAL REQUIRED REPORT
+============================================================
+
+After implementation, report:
+
+A. Root cause of why bank accounts were not appearing in Reconciliation.
+
+B. How bank accounts are assigned to locations.
+
+C. How BANK sales identify their actual bank account.
+
+D. Number of bank accounts found per location.
+
+E. Number of BANK transactions with a determinable bank account.
+
+F. Number of historical BANK transactions whose bank account cannot be determined.
+
+G. Files changed.
+
+H. API routes changed.
+
+I. Database changes/migrations.
+
+J. Tests performed.
+
+K. Tests passed.
+
+L. Any remaining issues.
+
+DO NOT simply add a dropdown and say complete.
+
+The complete flow must work:
+
+WAREHOUSE/LOCATION
+↓
+ASSIGNED BANK ACCOUNTS
+↓
+BANK SALE/POS
+↓
+ACTUAL BANK ACCOUNT
+↓
+BANK LEDGER
+↓
+RECONCILIATION
+↓
+TICK RECONCILE
+↓
+IMMEDIATELY RECONCILED
+
+START NOW.
