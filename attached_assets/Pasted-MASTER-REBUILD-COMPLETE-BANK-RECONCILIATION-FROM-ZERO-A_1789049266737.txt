@@ -1,0 +1,1856 @@
+MASTER REBUILD — COMPLETE BANK RECONCILIATION FROM ZERO
+ALL ELIGIBLE BANK TRANSACTIONS + MULTI-SELECT RECONCILIATION + DATE + PROCESSING CHARGE
+
+I need you to completely audit and rebuild the Bank Reconciliation workflow.
+
+I have reviewed the current live Reconciliation screen/video.
+
+The current problem is:
+
+1. Some eligible bank transactions are appearing in Reconciliation.
+2. Some eligible bank transactions are missing.
+3. Receipt Voucher bank transactions are not consistently appearing.
+4. Sales/POS bank transactions are not consistently appearing.
+5. Other eligible bank transactions may also be missing.
+6. Existing reconciliation state is confusing and must be reset safely.
+7. I want to start reconciliation again from a clean state.
+8. I want multiple transactions to be selected and reconciled together.
+9. After selecting transactions, the system must ask for:
+   - Reconciliation Date
+   - Processing Charge
+10. The selected transactions' TOTAL amount must be shown clearly.
+11. The reconciled total must be correctly reflected in the Bank Ledger without duplicate financial posting.
+12. Every eligible bank amount must appear in Reconciliation.
+
+DO NOT make a superficial UI-only fix.
+
+Inspect the complete current architecture first and fix the ROOT CAUSE.
+
+============================================================
+PART 1 — VERY IMPORTANT: RESET RECONCILIATION SAFELY
+============================================================
+
+I want to CLEAR/RESET THE CURRENT RECONCILIATION STATUS and start reconciliation again from the beginning.
+
+IMPORTANT:
+
+"Clear reconciliation" means:
+
+RESET RECONCILIATION STATUS / RECONCILIATION BATCH STATE
+
+It does NOT mean:
+
+- delete sales
+- delete receipts
+- delete payments
+- delete bank transactions
+- delete journal vouchers
+- delete customer ledgers
+- delete vendor ledgers
+- delete invoices
+- delete accounting history
+- delete bank accounts
+- delete cash accounts
+- delete audit history
+
+NEVER delete the underlying financial transactions.
+
+Before resetting anything:
+
+1. Identify every existing reconciliation record.
+2. Identify every reconciliation batch.
+3. Identify every transaction currently marked reconciled.
+4. Identify how reconciliation status is stored.
+5. Identify whether reconciliation created any accounting entries.
+6. Identify whether reconciliation created bank ledger entries.
+7. Identify whether there are duplicate or orphan reconciliation records.
+8. Identify whether any current reconciliation batch has financial impact.
+
+Then safely reset only the reconciliation state.
+
+============================================================
+PART 2 — DO NOT DESTROY ACCOUNTING DATA
+============================================================
+
+This reset must NOT change:
+
+- Sales
+- Sales Returns
+- Purchase
+- Purchase Returns
+- Receipt Vouchers
+- Payment Vouchers
+- Journal Vouchers
+- Customer Outstanding
+- Vendor Outstanding
+- Cash balance
+- Bank balance
+- P&L
+- Balance Sheet
+- Trial Balance
+- GST
+- Inventory
+- Stock Ledger
+- Stock Valuation
+
+The reset is ONLY for reconciliation status/history according to the existing reconciliation model.
+
+If existing reconciliation batches have accounting impact, DO NOT blindly remove them.
+
+First determine their accounting effect and preserve accounting integrity.
+
+If a reconciliation batch is only a matching/status record, reset it safely.
+
+============================================================
+PART 3 — TAKE A BEFORE SNAPSHOT
+============================================================
+
+Before resetting reconciliation, generate an internal audit snapshot.
+
+Record:
+
+Total bank accounts
+Total bank ledger transactions
+Total eligible bank transactions
+Total currently reconciled
+Total currently unreconciled
+Total reconciliation batches
+Total reconciliation amount
+Total processing charges
+Total reconciliation-related journal entries if any
+
+Also record transaction counts by type:
+
+SALE
+RECEIPT
+PAYMENT
+OTHER RECEIPT
+OTHER BANK TRANSACTION
+
+This is required so we can verify nothing financial was lost.
+
+============================================================
+PART 4 — DEFINE THE CORRECT SOURCE
+============================================================
+
+The Reconciliation page must NOT be built only from Sales/POS.
+
+The authoritative concept should be:
+
+BANK ACCOUNT
+→ BANK LEDGER TRANSACTIONS
+→ ELIGIBLE RECONCILIATION TRANSACTIONS
+
+Every eligible transaction belonging to the selected bank account must be discoverable.
+
+The system must NOT arbitrarily choose only certain transaction types.
+
+============================================================
+PART 5 — ALL ELIGIBLE BANK TRANSACTIONS MUST APPEAR
+============================================================
+
+Audit all transaction sources.
+
+At minimum investigate:
+
+1. Sales/POS received through Bank
+2. Customer Receipt Vouchers received into Bank
+3. Vendor/Payment transactions through Bank if outgoing reconciliation is supported
+4. Other valid receipts posted directly to Bank
+5. Other valid bank transactions supported by the ERP
+6. Opening/adjustment bank transactions if they are eligible under the existing reconciliation model
+7. Any other transaction that actually affects a bank ledger
+
+Do not exclude a valid bank transaction just because it is not a Sale.
+
+============================================================
+PART 6 — RECEIPT VOUCHERS
+============================================================
+
+A Receipt Voucher received into Bank MUST appear in Bank Reconciliation.
+
+Example:
+
+Receipt Voucher:
+REC-00123
+
+Customer:
+TEAKOD
+
+Amount:
+₹2,000
+
+Received Into:
+Federal Bank
+
+Location:
+Tropicane - Ecity
+
+Expected:
+
+Bank Book:
+₹2,000
+
+Bank Ledger:
+₹2,000
+
+Reconciliation:
+₹2,000
+
+Status:
+Unreconciled after reset
+
+The receipt must appear exactly once.
+
+============================================================
+PART 7 — SALES/POS BANK TRANSACTIONS
+============================================================
+
+Every Sale/POS transaction received through Bank must appear.
+
+Example:
+
+Sale:
+INV-001
+
+Amount:
+₹500
+
+Received Into:
+Federal Bank
+
+Expected:
+
+Bank Book:
+₹500
+
+Reconciliation:
+₹500
+
+Do not rely only on payment_method = BANK.
+
+Trace the actual bank account.
+
+============================================================
+PART 8 — PAYMENT VOUCHERS
+============================================================
+
+Audit Payment Vouchers.
+
+If the ERP's reconciliation model includes outgoing bank transactions, then:
+
+Payment Voucher
+→ Bank Account
+→ Bank Ledger
+→ Reconciliation
+
+must work.
+
+Do not exclude valid bank transactions because they are Payment Vouchers.
+
+Preserve the existing intended reconciliation direction if the system explicitly separates incoming/outgoing reconciliation.
+
+============================================================
+PART 9 — ACTUAL BANK ACCOUNT
+============================================================
+
+Every bank transaction must be associated with the actual bank account.
+
+Example:
+
+Tropicane - Ecity
+
+Bank accounts:
+
+Federal Bank
+Ownly
+
+Sale 1:
+₹500 → Federal Bank
+
+Receipt 1:
+₹2,000 → Federal Bank
+
+Receipt 2:
+₹1,000 → Ownly
+
+Reconciliation:
+
+Federal Bank:
+₹2,500
+
+Ownly:
+₹1,000
+
+All Bank Accounts:
+₹3,500
+
+Do NOT identify transactions only as:
+
+BANK
+
+The actual bank account ID is required.
+
+============================================================
+PART 10 — LOCATION
+============================================================
+
+Reconciliation must respect warehouse/location.
+
+Selected location:
+
+Tropicane - Ecity
+
+must show only eligible transactions belonging to:
+
+Tropicane - Ecity
+
+and its assigned bank accounts.
+
+Do not show:
+
+Tropicane - Kochi
+Frozen Hub - Calicut
+
+unless:
+
+All Locations
+
+is selected and the user is authorized.
+
+Server-side filtering is mandatory.
+
+============================================================
+PART 11 — BANK ACCOUNT DROPDOWN
+============================================================
+
+Reconciliation must show bank accounts assigned to the selected location.
+
+Example:
+
+Location:
+Tropicane - Ecity
+
+Bank Account:
+[ All Bank Accounts ▼ ]
+
+Options:
+
+All Bank Accounts
+Federal Bank
+Ownly
+
+If Federal Bank is selected:
+
+show only Federal Bank transactions.
+
+If Ownly is selected:
+
+show only Ownly transactions.
+
+============================================================
+PART 12 — AFTER RESET EVERYTHING ELIGIBLE IS UNRECONCILED
+============================================================
+
+After the safe reconciliation reset:
+
+Every eligible historical bank transaction should be available as:
+
+[ ] Reconcile
+
+unless it is intentionally excluded by the business/accounting rules.
+
+Do NOT make only recent transactions appear.
+
+Do NOT use an arbitrary date limit.
+
+Do NOT use only transactions created after a specific software change.
+
+Historical eligible transactions must be included.
+
+============================================================
+PART 13 — DATE FILTER
+============================================================
+
+Reconciliation must support:
+
+Start Date
+End Date
+
+Default behavior should allow the user to retrieve the complete eligible transaction history.
+
+Do NOT silently limit the result to a small recent period.
+
+If pagination is used:
+
+pagination must still allow ALL eligible records to be retrieved.
+
+Do not mistake pagination for missing data.
+
+============================================================
+PART 14 — "GET ALL RECONCILIATION" REQUIREMENT
+============================================================
+
+When the user opens Reconciliation for a bank/location:
+
+the system must retrieve ALL eligible unreconciled transactions for the selected scope.
+
+Not:
+
+only sales.
+
+Not:
+
+only receipts.
+
+Not:
+
+only latest records.
+
+Not:
+
+only records with a particular status.
+
+Not:
+
+only records with a reconciliation batch.
+
+ALL ELIGIBLE BANK TRANSACTIONS.
+
+If there are thousands of records, use server-side pagination/infinite loading, but the total count and total amount must represent the full result set.
+
+============================================================
+PART 15 — RECONCILIATION LIST
+============================================================
+
+Use a clear table.
+
+Columns:
+
+[ ] Select
+
+Date
+
+Type
+
+Voucher No
+
+Customer/Vendor
+
+Bank Account
+
+Location
+
+Reference
+
+Amount
+
+Status
+
+Example:
+
+☐
+07-09-2026
+RECEIPT
+REC-00123
+TEAKOD
+Federal Bank
+Tropicane - Ecity
+UTR123
+₹2,000
+Unreconciled
+
+☐
+07-09-2026
+SALE
+INV-001
+ABC
+Federal Bank
+Tropicane - Ecity
+-
+₹500
+Unreconciled
+
+============================================================
+PART 16 — SELECT MULTIPLE
+============================================================
+
+Add:
+
+[ ] Select All
+
+and individual checkboxes.
+
+User can select:
+
+1 transaction
+
+or
+
+multiple transactions.
+
+Example:
+
+☑ Receipt ₹2,000
+☑ Sale ₹500
+☑ Sale ₹750
+☑ Receipt ₹1,250
+
+Selected Total:
+
+₹4,500
+
+Then button:
+
+RECONCILE SELECTED
+
+============================================================
+PART 17 — SELECTED TOTAL
+============================================================
+
+As the user selects transactions, immediately calculate:
+
+Selected Transactions:
+4
+
+Selected Amount:
+₹4,500
+
+Do NOT calculate this only from the current visible page if pagination exists.
+
+Use the actual selected transaction IDs and server-side validation.
+
+============================================================
+PART 18 — RECONCILE SELECTED
+============================================================
+
+When user clicks:
+
+RECONCILE SELECTED
+
+open a confirmation modal.
+
+Example:
+
+Reconcile Selected Transactions
+
+Transactions:
+4
+
+Total Amount:
+₹4,500
+
+Reconciliation Date:
+[ 10-09-2026 ]
+
+Processing Charge:
+[ ₹0.00 ]
+
+Net Bank Amount:
+₹4,500
+
+[ Cancel ]
+[ Confirm Reconciliation ]
+
+============================================================
+PART 19 — RECONCILIATION DATE
+============================================================
+
+The user MUST be able to enter/select:
+
+Reconciliation Date
+
+This is separate from the original transaction date.
+
+Example:
+
+Sale Date:
+07-09-2026
+
+Receipt Date:
+08-09-2026
+
+Reconciliation Date:
+10-09-2026
+
+Do NOT overwrite the original transaction date.
+
+Store reconciliation date in the reconciliation/batch record.
+
+Use the selected reconciliation date for the reconciliation batch/settlement record.
+
+============================================================
+PART 20 — PROCESSING CHARGE
+============================================================
+
+After selecting transactions, the user must be able to enter:
+
+Processing Charge
+
+Example:
+
+Selected transactions:
+₹10,000
+
+Processing Charge:
+₹100
+
+Gross Selected Amount:
+₹10,000
+
+Processing Charge:
+₹100
+
+Net Bank Settlement:
+₹9,900
+
+IMPORTANT:
+
+Do NOT silently reduce the original transaction amounts.
+
+The original transactions remain:
+
+₹10,000
+
+Processing Charge is a separate charge.
+
+============================================================
+PART 21 — PROCESSING CHARGE ACCOUNTING
+============================================================
+
+Inspect the existing Chart of Accounts for the appropriate bank/payment processing charge expense account.
+
+Do not create a random ledger.
+
+If the ERP already has:
+
+Bank Charges
+Payment Processing Charges
+Financial Charges
+
+use the appropriate existing postable expense ledger.
+
+If no suitable account exists:
+
+do not hard-code one.
+
+Use the existing accounting configuration/rule or clearly report that configuration is required.
+
+============================================================
+PART 22 — PROCESSING CHARGE ACCOUNTING SAFETY
+============================================================
+
+If the reconciliation batch is supposed to account for the processing charge:
+
+conceptually:
+
+Gross bank transactions = ₹10,000
+
+Processing charge = ₹100
+
+Net bank settlement = ₹9,900
+
+The accounting treatment must be consistent with the existing ERP architecture.
+
+Do NOT change customer receipts/sales amounts.
+
+Do NOT change invoice amounts.
+
+Do NOT reduce customer outstanding by the processing charge unless the business/accounting rules explicitly require it.
+
+The processing charge belongs to the appropriate expense/charge account.
+
+============================================================
+PART 23 — VERY IMPORTANT: BANK LEDGER TOTAL
+============================================================
+
+After selecting multiple transactions and confirming reconciliation:
+
+the Bank Ledger/Reconciliation Batch must clearly show:
+
+Gross Transaction Total
+₹10,000
+
+Processing Charge
+₹100
+
+Net Bank Amount
+₹9,900
+
+The selected transaction total must be visible.
+
+The bank ledger must NOT show only one arbitrary transaction amount.
+
+It must correctly represent the batch according to the existing accounting model.
+
+============================================================
+PART 24 — DO NOT DOUBLE POST BANK AMOUNT
+============================================================
+
+CRITICAL:
+
+If the selected transactions ALREADY EXIST in Bank Ledger:
+
+DO NOT create duplicate bank transactions merely because they were reconciled.
+
+Example:
+
+Existing bank receipts:
+
+₹2,000
+₹3,000
+₹5,000
+
+Total = ₹10,000
+
+After reconciliation:
+
+Bank Ledger must still represent:
+
+₹2,000
+₹3,000
+₹5,000
+
+and reconciliation batch:
+
+Total = ₹10,000
+
+Do NOT create another:
+
+Bank Ledger +₹10,000
+
+unless the current ERP architecture explicitly defines reconciliation as a separate bank settlement posting.
+
+Inspect the existing architecture first.
+
+Never duplicate the bank balance.
+
+============================================================
+PART 25 — IF CURRENT SYSTEM USES SETTLEMENT BATCHES
+============================================================
+
+If the current ERP already has a valid concept of:
+
+Settlement Batch
+Reconciliation Batch
+Bank Settlement
+
+reuse it.
+
+Then the batch can contain:
+
+Batch No
+Bank Account
+Location
+Reconciliation Date
+Gross Amount
+Processing Charge
+Net Amount
+Number of Transactions
+Status
+
+and child transaction mappings.
+
+But do NOT duplicate underlying bank transactions.
+
+============================================================
+PART 26 — ONE RECONCILIATION BATCH
+============================================================
+
+If user selects:
+
+Transaction A ₹2,000
+Transaction B ₹1,000
+Transaction C ₹500
+
+and clicks:
+
+Reconcile Selected
+
+create:
+
+ONE reconciliation batch
+
+Batch Total:
+₹3,500
+
+not three separate reconciliation batches.
+
+The batch contains:
+
+A
+B
+C
+
+as child allocations.
+
+============================================================
+PART 27 — TRANSACTION LEVEL STATUS
+============================================================
+
+Each selected transaction must become:
+
+Reconciled
+
+and store:
+
+- reconciliation batch ID
+- reconciliation date
+- reconciled by
+- timestamp
+
+Example:
+
+REC-00123
+₹2,000
+Batch:
+RB-00045
+Date:
+10-09-2026
+Status:
+Reconciled
+
+============================================================
+PART 28 — SAME TRANSACTION CANNOT BE RECONCILED TWICE
+============================================================
+
+Once a transaction is reconciled:
+
+it must not be selectable again.
+
+If the user attempts to reconcile the same transaction concurrently:
+
+server must reject it safely.
+
+No duplicate batch allocation.
+
+No duplicate accounting.
+
+============================================================
+PART 29 — ATOMIC OPERATION
+============================================================
+
+Multi-select reconciliation must be one atomic backend transaction.
+
+When user confirms:
+
+1. Validate all selected transaction IDs.
+2. Validate location.
+3. Validate bank account.
+4. Validate permissions.
+5. Validate transaction eligibility.
+6. Verify none are already reconciled.
+7. Calculate gross total server-side.
+8. Validate processing charge.
+9. Create/update reconciliation batch.
+10. Link selected transactions.
+11. Save reconciliation date.
+12. Save processing charge.
+13. Create accounting entries ONLY if the existing architecture requires them.
+14. Write audit event.
+15. Commit.
+
+If any critical operation fails:
+
+ROLL BACK THE ENTIRE RECONCILIATION.
+
+Do not reconcile half the selected transactions.
+
+============================================================
+PART 30 — SERVER MUST RECALCULATE TOTAL
+============================================================
+
+Never trust:
+
+selectedTotal
+
+sent by the frontend.
+
+Frontend can send:
+
+transaction IDs
+
+Backend must retrieve the actual transaction amounts from the database and calculate:
+
+Gross Total = SUM(selected eligible transaction amounts)
+
+Then compare with the frontend only for UI consistency.
+
+Server value is authoritative.
+
+============================================================
+PART 31 — PROCESSING CHARGE VALIDATION
+============================================================
+
+Processing Charge must:
+
+- be numeric
+- not be negative
+- respect decimal precision
+- belong to the selected bank account/location context
+- be recorded once
+
+If charge = ₹0:
+
+display:
+
+Processing Charge:
+₹0.00
+
+Net:
+same as gross.
+
+============================================================
+PART 32 — BANK ACCOUNT CONSISTENCY
+============================================================
+
+All selected transactions in one reconciliation batch must belong to the same bank account.
+
+Example:
+
+Federal Bank:
+
+₹1,000
+₹2,000
+₹3,000
+
+Can be selected together.
+
+Do NOT allow:
+
+Federal Bank ₹1,000
++
+Ownly ₹2,000
+
+in one bank reconciliation batch.
+
+If the user selects transactions from multiple bank accounts:
+
+show:
+
+"Please select transactions from one bank account at a time."
+
+Alternatively, if the existing architecture explicitly supports multi-bank batches, preserve that architecture, but the default should be one bank account per reconciliation batch.
+
+============================================================
+PART 33 — LOCATION CONSISTENCY
+============================================================
+
+Likewise, selected transactions in a batch should belong to the same selected location unless:
+
+All Locations
+
+is explicitly selected and the existing architecture supports consolidated reconciliation.
+
+Do not mix warehouses accidentally.
+
+============================================================
+PART 34 — ALL AMOUNTS MUST COME INTO RECONCILIATION
+============================================================
+
+This is one of the most important requirements.
+
+Perform a full audit comparing:
+
+BANK LEDGER
+vs
+RECONCILIATION
+
+For every bank account:
+
+Bank Ledger Transaction Count
+Bank Ledger Total Amount
+
+vs
+
+Eligible Reconciliation Transaction Count
+Eligible Reconciliation Total Amount
+
+Identify every difference.
+
+Every eligible bank transaction must appear in Reconciliation.
+
+If a bank ledger transaction is intentionally excluded:
+
+document the exact reason.
+
+Do not silently omit it.
+
+============================================================
+PART 35 — MISSING TRANSACTION REPORT
+============================================================
+
+After rebuilding the reconciliation source, generate an internal diagnostic:
+
+Bank Account
+Transaction ID
+Transaction Type
+Voucher No
+Date
+Amount
+Location
+Reason Missing From Reconciliation
+
+Possible reasons:
+
+- already reconciled
+- not eligible by business rule
+- cash account
+- invalid/deleted source
+- unsupported transaction type
+- missing bank account
+- invalid location
+- cancelled transaction
+- accounting reversal
+- data corruption
+
+Every omitted transaction must have a legitimate reason.
+
+============================================================
+PART 36 — RECEIPT VOUCHER BILL ALLOCATION
+============================================================
+
+Keep the previous requirement:
+
+ONE RECEIPT VOUCHER
+=
+ONE BANK TRANSACTION
+=
+ONE RECONCILIATION TRANSACTION
+
+even if the receipt is allocated across multiple invoices.
+
+Example:
+
+Receipt:
+₹2,000
+
+Invoice A:
+₹234.98
+
+Invoice B:
+₹1,670
+
+Invoice C:
+₹95.02
+
+Reconciliation:
+
+REC-001
+RECEIPT
+₹2,000
+
+NOT:
+
+₹234.98
+₹1,670
+₹95.02
+
+as separate reconciliation transactions.
+
+Bill allocations remain child settlement records only.
+
+============================================================
+PART 37 — CUSTOMER LEDGER
+============================================================
+
+Reconciliation must NOT split the customer receipt.
+
+Customer Ledger:
+
+Receipt ₹2,000
+
+ONE ROW.
+
+Customer Outstanding:
+
+reduced by ₹2,000.
+
+Reconciliation:
+
+₹2,000.
+
+Bank Ledger:
+
+₹2,000.
+
+All refer to the same underlying receipt.
+
+============================================================
+PART 38 — BANK BOOK
+============================================================
+
+Bank Book and Reconciliation must use the same underlying bank transaction.
+
+If Bank Book shows:
+
+REC-001
+₹2,000
+
+Reconciliation must be able to find:
+
+REC-001
+₹2,000
+
+provided it is eligible and within the selected scope/date.
+
+============================================================
+PART 39 — RECONCILIATION TOTALS
+============================================================
+
+Top summary should show:
+
+Eligible Transactions
+XX
+
+Unreconciled Transactions
+XX
+
+Unreconciled Amount
+₹XX
+
+Reconciled Transactions
+XX
+
+Reconciled Amount
+₹XX
+
+Selected Transactions
+XX
+
+Selected Amount
+₹XX
+
+These totals must be calculated from the authoritative database query.
+
+============================================================
+PART 40 — BANK LEDGER TOTAL AFTER RECONCILIATION
+============================================================
+
+After reconciliation:
+
+Bank Ledger must remain mathematically correct.
+
+Example:
+
+Selected:
+
+₹1,000
+₹2,000
+₹3,000
+
+Gross:
+₹6,000
+
+Processing Charge:
+₹100
+
+Net:
+₹5,900
+
+The system must clearly distinguish:
+
+Original bank transactions:
+₹6,000
+
+Processing charge:
+₹100
+
+Net settlement:
+₹5,900
+
+Do NOT make the bank ledger appear as though the original ₹6,000 transactions disappeared.
+
+============================================================
+PART 41 — RECONCILIATION DATE VS TRANSACTION DATE
+============================================================
+
+Never overwrite:
+
+Sale Date
+Receipt Date
+Payment Date
+
+when setting:
+
+Reconciliation Date.
+
+Store both independently.
+
+============================================================
+PART 42 — REPORTING
+============================================================
+
+Reconciliation reports must show:
+
+Batch No
+Bank Account
+Location
+Reconciliation Date
+Number of Transactions
+Gross Amount
+Processing Charge
+Net Amount
+Reconciled By
+Status
+
+Clicking a batch should show:
+
+Transaction
+Type
+Voucher
+Original Date
+Amount
+Processing Charge allocation if applicable
+Status
+
+============================================================
+PART 43 — AUDIT LOG
+============================================================
+
+Record:
+
+Reconciliation Batch Created
+Transactions Selected
+Gross Amount
+Processing Charge
+Net Amount
+Bank Account
+Location
+Reconciliation Date
+User
+Timestamp
+
+For reset:
+
+Reconciliation Reset
+Reason:
+"Reconciliation workflow reset/rebuilt"
+
+Do not delete audit history unless the existing legal/accounting architecture explicitly permits it.
+
+============================================================
+PART 44 — PERMISSIONS
+============================================================
+
+Use existing permissions.
+
+A user who can VIEW reconciliation must not automatically be allowed to reconcile.
+
+Reconciliation action permission must be enforced server-side.
+
+Location permissions must also be enforced.
+
+============================================================
+PART 45 — CROSS-LOCATION SECURITY
+============================================================
+
+Never trust frontend:
+
+locationId
+bankAccountId
+transactionIds
+
+Backend must verify every selected transaction.
+
+A user must not be able to reconcile another warehouse's bank transaction by changing IDs in the API request.
+
+============================================================
+PART 46 — API
+============================================================
+
+Inspect existing APIs first.
+
+Reuse existing reconciliation APIs where appropriate.
+
+If necessary, implement clean endpoints such as:
+
+GET /api/reconciliation/accounts
+
+GET /api/reconciliation/transactions
+
+POST /api/reconciliation/batch
+
+POST /api/reconciliation/reset
+
+But do not create duplicate APIs if equivalent endpoints already exist.
+
+============================================================
+PART 47 — RESET API
+============================================================
+
+If a reset endpoint is required, it must be:
+
+- permission protected
+- server-side
+- audited
+- transaction-safe
+- non-destructive to financial transactions
+
+It should reset only reconciliation state.
+
+Never expose an unrestricted public reset endpoint.
+
+============================================================
+PART 48 — PERFORMANCE
+============================================================
+
+Do not load the entire database into the browser.
+
+Use:
+
+server-side filtering
+server-side pagination
+proper indexes
+efficient aggregation
+
+But ensure the API can calculate totals across ALL matching records.
+
+Example:
+
+Showing 50 rows on screen does NOT mean:
+
+Total Amount = only those 50.
+
+Total Amount must represent all eligible transactions matching the selected filters.
+
+============================================================
+PART 49 — DATE RANGE AND PAGINATION BUG
+============================================================
+
+Investigate whether the current missing amounts are caused by:
+
+- pagination
+- default date range
+- page size
+- incorrect SQL LIMIT
+- offset bug
+- status filter
+- bank account filter
+- location filter
+- transaction type filter
+- join filtering
+- NULL bank account
+- wrong journal account
+- incorrect account type
+- cancelled status
+- receipt allocation joins
+- duplicate suppression
+- frontend filtering
+
+Do not assume the cause.
+
+Find it.
+
+============================================================
+PART 50 — DATABASE AUDIT
+============================================================
+
+Inspect actual production/development schema.
+
+Identify:
+
+bank accounts
+bank ledger
+sales
+sales payments
+receipt vouchers
+receipt allocations
+payment vouchers
+journal vouchers
+journal lines
+reconciliation tables
+reconciliation batches
+reconciliation mappings
+audit log
+locations
+
+Trace relationships.
+
+Do not invent table names.
+
+============================================================
+PART 51 — HISTORICAL DATA
+============================================================
+
+After the reset, verify historical bank transactions.
+
+Every valid historical bank transaction should become available for reconciliation.
+
+Do not automatically repair an ambiguous historical bank account.
+
+If a transaction has:
+
+payment_method = BANK
+
+but no determinable bank account:
+
+do NOT randomly assign one.
+
+Report it.
+
+============================================================
+PART 52 — RECONCILIATION VS ACCOUNTING
+============================================================
+
+Reconciliation itself is NOT a sale, receipt, payment, or income transaction.
+
+Do not alter:
+
+customer outstanding
+vendor outstanding
+sales
+purchases
+cash
+bank balance
+P&L
+Balance Sheet
+
+unless the existing architecture explicitly defines processing charges as an accounting expense.
+
+The processing charge itself may create a valid expense/accounting entry if that is the intended business rule.
+
+============================================================
+PART 53 — PROCESSING CHARGE MUST NOT DUPLICATE
+============================================================
+
+If processing charge = ₹100:
+
+there must be exactly one ₹100 processing charge.
+
+Do not create:
+
+₹100 expense
++
+₹100 bank deduction
+
+as two separate charges.
+
+The accounting should reflect the actual economic event exactly once.
+
+============================================================
+PART 54 — EXAMPLE COMPLETE WORKFLOW
+============================================================
+
+Location:
+
+Tropicane - Ecity
+
+Bank:
+
+Federal Bank
+
+Eligible transactions after reset:
+
+SALE INV-001      ₹1,000
+SALE INV-002      ₹2,000
+RECEIPT REC-001   ₹3,000
+RECEIPT REC-002   ₹4,000
+PAYMENT PV-001    ₹500
+
+If all are eligible according to the current reconciliation model:
+
+all must appear.
+
+User selects:
+
+☑ INV-001 ₹1,000
+☑ INV-002 ₹2,000
+☑ REC-001 ₹3,000
+☑ REC-002 ₹4,000
+
+Selected:
+
+4 transactions
+
+Gross:
+
+₹10,000
+
+Click:
+
+RECONCILE SELECTED
+
+Modal:
+
+Reconciliation Date:
+10-09-2026
+
+Processing Charge:
+₹100
+
+Gross Amount:
+₹10,000
+
+Processing Charge:
+₹100
+
+Net Amount:
+₹9,900
+
+Confirm.
+
+System creates ONE reconciliation batch:
+
+RB-00001
+
+Bank:
+Federal Bank
+
+Location:
+Tropicane - Ecity
+
+Date:
+10-09-2026
+
+Gross:
+₹10,000
+
+Processing Charge:
+₹100
+
+Net:
+₹9,900
+
+Transactions:
+4
+
+All four transaction statuses become:
+
+Reconciled
+
+============================================================
+PART 55 — BANK LEDGER RESULT
+============================================================
+
+After the batch:
+
+The original bank transactions remain correctly represented.
+
+The reconciliation batch shows:
+
+Gross:
+₹10,000
+
+Processing Charge:
+₹100
+
+Net:
+₹9,900
+
+Do NOT duplicate the original bank entries.
+
+If the existing architecture requires a separate bank settlement posting, implement it correctly and ensure:
+
+Trial Balance balances
+Bank balance remains mathematically correct
+No duplicate bank amount
+Processing charge is posted exactly once
+
+============================================================
+PART 56 — RECONCILIATION SUMMARY
+============================================================
+
+After reconciliation:
+
+Unreconciled Amount:
+
+Original eligible total
+-
+reconciled gross total
+
+Reconciled Amount:
+
+gross amount of all reconciled transactions
+
+Processing charges:
+
+separate total
+
+Do not subtract processing charge from the transaction reconciliation amount unless the existing business definition explicitly requires it.
+
+============================================================
+PART 57 — RESET + REBUILD VERIFICATION
+============================================================
+
+After reset:
+
+Run:
+
+BANK LEDGER TOTAL
+vs
+RECONCILIATION ELIGIBLE TOTAL
+
+Then:
+
+MISSING COUNT
+MISSING AMOUNT
+
+Expected:
+
+Every eligible transaction accounted for.
+
+If:
+
+Bank Ledger Eligible Total = ₹100,000
+
+Reconciliation Eligible Total must also represent ₹100,000.
+
+If not:
+
+find every missing transaction.
+
+============================================================
+PART 58 — AUTOMATED TESTS
+============================================================
+
+Create regression tests for:
+
+1. Sale through bank appears.
+
+2. Receipt Voucher through bank appears.
+
+3. Payment through bank appears where applicable.
+
+4. Cash receipt does NOT appear in Bank Reconciliation.
+
+5. Multiple bank accounts remain separate.
+
+6. Location filtering works.
+
+7. All Locations works.
+
+8. Historical transactions appear.
+
+9. Multiple selection works.
+
+10. Selected total is correct.
+
+11. Server recalculates selected total.
+
+12. Reconciliation date is stored.
+
+13. Processing charge is stored.
+
+14. Gross amount is correct.
+
+15. Net amount is correct.
+
+16. One reconciliation batch is created.
+
+17. Selected transactions become reconciled.
+
+18. Reconciled transactions cannot be reconciled again.
+
+19. Bank Ledger is not duplicated.
+
+20. Customer Ledger is not duplicated.
+
+21. Receipt allocated to multiple invoices still appears once.
+
+22. Audit log is created.
+
+23. Unauthorized reconciliation fails.
+
+24. Cross-location reconciliation fails.
+
+25. Concurrent reconciliation is safe.
+
+26. API failure rolls back the complete batch.
+
+27. Refresh preserves reconciliation status.
+
+============================================================
+PART 59 — FULL PRODUCTION RECONCILIATION AUDIT
+============================================================
+
+After implementation, run a read/validation audit against current data.
+
+Produce:
+
+BANK ACCOUNT
+LOCATION
+BANK LEDGER COUNT
+BANK LEDGER TOTAL
+ELIGIBLE RECONCILIATION COUNT
+ELIGIBLE RECONCILIATION TOTAL
+CURRENT RECONCILED COUNT
+CURRENT RECONCILED TOTAL
+CURRENT UNRECONCILED COUNT
+CURRENT UNRECONCILED TOTAL
+MISSING COUNT
+MISSING AMOUNT
+DUPLICATE COUNT
+DUPLICATE AMOUNT
+
+Do this per bank account.
+
+============================================================
+PART 60 — FINAL ACCEPTANCE CRITERIA
+============================================================
+
+The system is NOT complete until ALL of these are true:
+
+1. Existing reconciliation state has been safely reset.
+
+2. No financial transaction was deleted.
+
+3. No accounting history was deleted.
+
+4. ALL eligible bank transactions appear in Reconciliation.
+
+5. Sales through Bank appear.
+
+6. Receipt Vouchers through Bank appear.
+
+7. Other eligible bank transactions appear.
+
+8. Cash transactions are not incorrectly shown as Bank.
+
+9. Actual bank account is correctly identified.
+
+10. Location filtering works.
+
+11. Multiple bank accounts work.
+
+12. Historical transactions are included.
+
+13. No arbitrary date restriction hides transactions.
+
+14. Pagination does not hide totals.
+
+15. User can select multiple transactions.
+
+16. Selected total is shown.
+
+17. User can enter Reconciliation Date.
+
+18. User can enter Processing Charge.
+
+19. Gross amount is shown.
+
+20. Processing charge is shown separately.
+
+21. Net amount is calculated correctly.
+
+22. One reconciliation batch is created for multiple selected transactions.
+
+23. All selected transactions become reconciled.
+
+24. Reconciliation status persists after refresh.
+
+25. Same transaction cannot be reconciled twice.
+
+26. Bank Ledger does not receive duplicate transactions.
+
+27. Customer Ledger does not receive duplicate receipt entries.
+
+28. Processing charge is posted exactly once if accounting is required.
+
+29. Bank balance remains mathematically correct.
+
+30. Trial Balance remains balanced.
+
+31. P&L remains correct.
+
+32. Balance Sheet remains correct.
+
+33. Customer Outstanding remains correct.
+
+34. Location security works.
+
+35. Permission security works.
+
+36. Audit logging works.
+
+37. Historical ambiguous bank transactions are reported, not randomly assigned.
+
+38. Bank Ledger and Reconciliation totals reconcile completely.
+
+============================================================
+FINAL REQUIRED OUTPUT
+============================================================
+
+At the end, provide a detailed implementation report:
+
+A. Current reconciliation architecture found.
+
+B. Why some bank amounts were missing.
+
+C. Exact source of missing amounts.
+
+D. Number of bank transactions before reset.
+
+E. Number of eligible bank transactions after rebuild.
+
+F. Total eligible bank amount.
+
+G. Number of transactions reset.
+
+H. Number of transactions still requiring data correction.
+
+I. Bank account-wise reconciliation totals.
+
+J. Receipt Voucher bank transaction count/amount.
+
+K. Sales bank transaction count/amount.
+
+L. Payment bank transaction count/amount.
+
+M. Other bank transaction count/amount.
+
+N. Multi-select reconciliation implementation.
+
+O. Reconciliation date implementation.
+
+P. Processing charge implementation.
+
+Q. Gross amount implementation.
+
+R. Net amount implementation.
+
+S. Bank Ledger impact.
+
+T. Accounting impact.
+
+U. Files changed.
+
+V. API endpoints changed.
+
+W. Database migrations/changes.
+
+X. Tests performed.
+
+Y. Tests passed.
+
+Z. Any remaining discrepancies.
+
+IMPORTANT:
+
+DO NOT SAY "COMPLETE" JUST BECAUSE THE RECONCILIATION SCREEN LOOKS CORRECT.
+
+The final proof must be:
+
+BANK LEDGER
+=
+ALL ELIGIBLE RECONCILIATION TRANSACTIONS
+=
+CORRECT TOTAL
+
+and:
+
+SELECT MULTIPLE
+→ SHOW TOTAL
+→ ENTER RECONCILIATION DATE
+→ ENTER PROCESSING CHARGE
+→ CONFIRM
+→ ONE RECONCILIATION BATCH
+→ CORRECT BANK LEDGER/SETTLEMENT RESULT
+→ ALL SELECTED TRANSACTIONS RECONCILED
+
+START BY INSPECTING THE CURRENT IMPLEMENTATION AND DATABASE.
+THEN SAFELY RESET THE EXISTING RECONCILIATION STATE.
+THEN REBUILD THE RECONCILIATION SOURCE.
+THEN IMPLEMENT MULTI-SELECT + DATE + PROCESSING CHARGE.
+THEN RUN THE COMPLETE RECONCILIATION AUDIT.
+DO NOT SKIP ANY STEP.
