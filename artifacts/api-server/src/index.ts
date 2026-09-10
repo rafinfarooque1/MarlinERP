@@ -392,6 +392,44 @@ async function runMigrations() {
     CREATE INDEX IF NOT EXISTS idx_bank_reconciliation_entry
       ON bank_reconciliation_entries(entry_id);
 
+    -- Account-based bank reconciliation batches. This is intentionally separate
+    -- from reconciliation_batches, whose legacy electronic-collection workflow
+    -- creates settlement vouchers for sale_payments. These rows are review
+    -- metadata only and never change the underlying books.
+    CREATE TABLE IF NOT EXISTS bank_reconciliation_batches (
+      id serial PRIMARY KEY,
+      batch_reference text NOT NULL UNIQUE,
+      reconciliation_date date NOT NULL,
+      bank_account_id integer NOT NULL,
+      bank_ledger_id integer NOT NULL,
+      location_type text NOT NULL,
+      location_id integer NOT NULL DEFAULT 0,
+      gross_amount numeric(12,2) NOT NULL DEFAULT 0,
+      processing_charge numeric(12,2) NOT NULL DEFAULT 0,
+      net_amount numeric(12,2) NOT NULL DEFAULT 0,
+      accounting_impact text NOT NULL DEFAULT 'none',
+      created_by text,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      status text NOT NULL DEFAULT 'active'
+    );
+    CREATE TABLE IF NOT EXISTS bank_reconciliation_batch_items (
+      id serial PRIMARY KEY,
+      batch_id integer NOT NULL REFERENCES bank_reconciliation_batches(id) ON DELETE CASCADE,
+      entry_id text NOT NULL,
+      ledger_id integer NOT NULL,
+      source text NOT NULL,
+      transaction_date date NOT NULL,
+      debit numeric(12,2) NOT NULL DEFAULT 0,
+      credit numeric(12,2) NOT NULL DEFAULT 0,
+      amount numeric(12,2) NOT NULL DEFAULT 0,
+      UNIQUE(batch_id, ledger_id, entry_id),
+      UNIQUE(ledger_id, entry_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_bank_recon_batch_items_batch
+      ON bank_reconciliation_batch_items(batch_id);
+    CREATE INDEX IF NOT EXISTS idx_bank_recon_batches_created
+      ON bank_reconciliation_batches(created_at DESC);
+
     CREATE TABLE IF NOT EXISTS cash_deposits (
       id serial PRIMARY KEY,
       outlet_id integer,
