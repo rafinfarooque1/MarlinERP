@@ -349,6 +349,7 @@ export function useReconcileCashBankEntry() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['/api/accounts/cash-bank-book'] });
       qc.invalidateQueries({ queryKey: ['reconciliation-reconciled'] });
+      qc.invalidateQueries({ queryKey: ['reconciliation-bank-transactions'] });
     },
   });
 }

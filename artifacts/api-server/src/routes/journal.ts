@@ -1179,31 +1179,43 @@ export async function buildDerivedPostings(opts: { toDate?: string; q?: Q } = {}
     push({ entryId: eid, date: r.date, ledgerId: r.f, debit: 0, credit: amt, source: "receipt", voucherNumber: r.voucher_number, description: desc, ...loc });
   }
 
-  // 2b. Advance slice of ALLOCATION receipts. A receipt that settles bills is
-  // excluded above (its bill money reaches the books through sale_payments in
-  // section 5), but its EXCESS never touches a sale — so that slice posts here:
-  // Dr received_in / Cr customer advance. Without this the money would land in
-  // the till through section 5's legs while the advance liability never arose.
+  // 2b. ALLOCATION receipts. These are excluded from the generic receipt query
+  // above because their bill-wise customer credits are derived from
+  // sale_payments. The bank/cash leg must nevertheless remain one voucher-level
+  // transaction: one receipt allocated across five invoices is still one
+  // movement in the Bank Book and in reconciliation. The receipt therefore
+  // debits its actual destination and credits Electronic Clearing for the full
+  // voucher amount. Sale-payment legs below debit Electronic Clearing instead
+  // of the destination, preserving double-entry while keeping the bank identity
+  // at receipt:<id>. Advance slices then debit the same clearing account and
+  // credit the customer's ledger.
   const radvParams: any[] = [];
-  const { rows: allocAdvRecs } = await q.query(
+  const { rows: allocRecs } = await q.query(
     `SELECT id, receipt_date AS date, received_in_ledger_id AS t,
             received_from_ledger_id AS f,
-            advance_amount, voucher_number, narration,
+            amount, advance_amount, voucher_number, narration,
             location_type, location_id
      FROM receipts
-     WHERE advance_amount > 0.004
+      WHERE source = 'allocation'
        AND id IN (SELECT clearing_receipt_id FROM sale_payments WHERE clearing_receipt_id IS NOT NULL)
        ${upTo("receipt_date", radvParams)}`, radvParams
   );
-  for (const r of allocAdvRecs) {
-    const adv = Number(r.advance_amount);
-    const eid = `receiptadv:${r.id}`;
+  for (const r of allocRecs) {
+    const amount = Number(r.amount);
+    const adv = Math.min(Math.max(Number(r.advance_amount ?? 0), 0), amount);
+    const eid = `receipt:${r.id}`;
     const desc = r.narration || "Advance received";
     const loc = locOf(r.location_type ?? "headoffice", r.location_id ?? 0);
-    push({ entryId: eid, date: r.date, ledgerId: r.t, debit: adv, credit: 0, source: "receipt", voucherNumber: r.voucher_number, description: `Advance received — ${desc}`, ...loc });
-    // The excess credits the customer's OWN ledger — their advance is simply
-    // that ledger's credit (negative) balance; no separate advance ledger.
-    push({ entryId: eid, date: r.date, ledgerId: Number(r.f), debit: 0, credit: adv, source: "receipt", voucherNumber: r.voucher_number, description: `Advance received — ${desc}`, ...loc });
+    if (amount > 0.004) {
+      push({ entryId: eid, date: r.date, ledgerId: Number(r.t), debit: amount, credit: 0, source: "receipt", voucherNumber: r.voucher_number, description: desc, ...loc });
+      push({ entryId: eid, date: r.date, ledgerId: elecClr, debit: 0, credit: amount, source: "receipt", voucherNumber: r.voucher_number, description: desc, ...loc });
+    }
+    if (adv > 0.004) {
+      push({ entryId: eid, date: r.date, ledgerId: elecClr, debit: adv, credit: 0, source: "receipt", voucherNumber: r.voucher_number, description: `Advance received — ${desc}`, ...loc });
+      // The excess credits the customer's OWN ledger; their advance is simply
+      // that ledger's credit balance.
+      push({ entryId: eid, date: r.date, ledgerId: Number(r.f), debit: 0, credit: adv, source: "receipt", voucherNumber: r.voucher_number, description: `Advance received — ${desc}`, ...loc });
+    }
   }
 
   // 3. Journal voucher lines (journal, contra, credit/debit notes) — as stored.
@@ -1444,8 +1456,11 @@ export async function buildDerivedPostings(opts: { toDate?: string; q?: Q } = {}
         drLedger = (s.customer_id ? byCode.get(`CUST-${s.customer_id}`)?.id : 0) || debtors;
         legDesc = `Advance adjusted — ${inv}`;
       } else if (p.alloc_in) {
-        drLedger = Number(p.alloc_in);
-        legDesc = `Received — ${inv}`;
+        // The allocation receipt itself owns the bank/cash movement under
+        // receipt:<id>. This leg settles the sale against Electronic Clearing
+        // so one receipt remains one reconciliation transaction.
+        drLedger = elecClr;
+        legDesc = `Received via allocation — ${inv}`;
       } else if (directIn != null) {
         drLedger = directIn;
         legDesc = `Received — ${inv}`;

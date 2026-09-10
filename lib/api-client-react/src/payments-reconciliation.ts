@@ -156,9 +156,44 @@ export interface PendingPayment {
 
 export interface BankLedger {
   id: number;
+  accountId: number;
+  ledgerId: number;
   name: string;
   code: string | null;
+  accountType: string;
+  requiresReconciliation: boolean;
+  locationType: string;
+  locationId: number;
+  locationName: string;
   bankDetails: string | null;
+}
+
+export interface BankTransaction {
+  id: string;
+  entryId: string;
+  ledgerId: number;
+  accountId: number | null;
+  accountName: string;
+  accountType: string;
+  accountLocationType: string | null;
+  accountLocationId: number | null;
+  accountLocationName: string;
+  date: string;
+  source: string;
+  voucherNumber: string | null;
+  description: string;
+  counterpartyName: string | null;
+  debit: number;
+  credit: number;
+  amount: number;
+  direction: "in" | "out";
+  locationType: string | null;
+  locationId: number | null;
+  reconciliationEligible: boolean;
+  reconciliationStatus: "unreconciled" | "reconciled";
+  reconciledAt: string | null;
+  reconciledBy: string | null;
+  reconciliationReference: string | null;
 }
 
 export interface OutletCashBalance {
@@ -263,10 +298,40 @@ export function useGetReconciliationBatch(id: number, options?: { enabled?: bool
   });
 }
 
-export function useGetBankLedgers() {
+export function useGetBankLedgers(params?: { locationType?: string; locationId?: number }) {
   return useQuery<BankLedger[]>({
-    queryKey: getBankLedgersQueryKey(),
-    queryFn: () => customFetch("/api/reconciliation/bank-ledgers"),
+    queryKey: [...getBankLedgersQueryKey(), params],
+    queryFn: () => {
+      const qs = new URLSearchParams();
+      if (params?.locationType && params.locationType !== "all") qs.set("locationType", params.locationType);
+      if (params?.locationId) qs.set("locationId", String(params.locationId));
+      const query = qs.toString();
+      return customFetch(`/api/reconciliation/bank-ledgers${query ? `?${query}` : ""}`);
+    },
+  });
+}
+
+export function useGetBankTransactions(params?: {
+  locationType?: string;
+  locationId?: number;
+  bankAccountId?: number;
+  fromDate?: string;
+  toDate?: string;
+  search?: string;
+}) {
+  return useQuery<BankTransaction[]>({
+    queryKey: ["reconciliation-bank-transactions", params],
+    queryFn: () => {
+      const qs = new URLSearchParams();
+      if (params?.locationType && params.locationType !== "all") qs.set("locationType", params.locationType);
+      if (params?.locationId) qs.set("locationId", String(params.locationId));
+      if (params?.bankAccountId) qs.set("bankAccountId", String(params.bankAccountId));
+      if (params?.fromDate) qs.set("fromDate", params.fromDate);
+      if (params?.toDate) qs.set("toDate", params.toDate);
+      if (params?.search) qs.set("search", params.search);
+      const query = qs.toString();
+      return customFetch(`/api/reconciliation/bank-transactions${query ? `?${query}` : ""}`);
+    },
   });
 }
 

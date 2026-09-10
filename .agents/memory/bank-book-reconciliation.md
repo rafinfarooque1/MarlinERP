@@ -3,8 +3,8 @@ name: Bank Book reconciliation identity
 description: Durable identity and accounting boundary for one-step bank-book reconciliation.
 ---
 
-Bank Book reconciliation status is keyed by the exact pair `(posting ledger id, derived posting entry id)`, not by voucher number alone. A Bank Book row may be one leg of a multi-ledger posting, and voucher numbers are not guaranteed to be unique enough for status changes.
+Bank Book reconciliation status is keyed by the exact pair `(posting ledger id, derived posting entry id)`, not by voucher number alone. A Bank Book row may be one leg of a multi-ledger posting, and voucher numbers are not guaranteed to be unique enough for status changes. Allocation receipts must own the bank/cash leg under `receipt:<id>` and use Electronic Clearing for invoice allocation legs, so one receipt remains one bank transaction.
 
 **Why:** The Bank Book is derived from many source modules and can show several legs for one source transaction. Reconciliation is a review status only; it must never create or alter accounting postings, balances, GST, or P&L.
 
-**How to apply:** Re-read and authorize the exact derived posting inside one transaction, lock the status row by ledger plus entry identity, upsert idempotently, and audit the before/after status. Keep electronic sale-payment settlement states separate because settlement batches intentionally post accounting entries.
+**How to apply:** Re-read and authorize the exact derived posting inside one transaction, lock the status row by ledger plus entry identity, upsert idempotently, and audit the before/after status. Keep electronic sale-payment settlement states separate because settlement batches intentionally post accounting entries. A single receipt can settle multiple invoices; using each sale-payment row as the bank identity duplicates the bank movement and makes account-based reconciliation impossible.
