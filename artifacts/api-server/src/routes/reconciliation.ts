@@ -1081,7 +1081,7 @@ router.post("/reconciliation/bank-batches", requireModuleAction("page:/accounts/
       `${a.ledgerId}:${a.entryId}`.localeCompare(`${b.ledgerId}:${b.entryId}`));
     for (const identity of sorted) {
       await client.query(
-        `SELECT pg_advisory_xact_lock(hashtext('bank-reconciliation-entry'), hashtextextended($1, 0))`,
+        `SELECT pg_advisory_xact_lock(hashtext('bank-reconciliation-entry'), hashtext($1))`,
         [`${identity.ledgerId}:${identity.entryId}`],
       );
     }
@@ -1352,7 +1352,7 @@ router.post(
       // Coordinate with the multi-select batch route even when this is the
       // first reconciliation of the identity and no status row exists yet.
       await client.query(
-        `SELECT pg_advisory_xact_lock(hashtext('bank-reconciliation-entry'), hashtextextended($1, 0))`,
+        `SELECT pg_advisory_xact_lock(hashtext('bank-reconciliation-entry'), hashtext($1))`,
         [`${ledgerId}:${entryId}`],
       );
       const book = await computeCashBankBook({
