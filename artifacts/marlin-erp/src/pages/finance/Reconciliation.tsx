@@ -2,56 +2,127 @@ import { useState } from 'react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { usePermission } from '@/lib/usePermission';
 import { useOutletsEnabled, useClearOutletSelection } from '@/lib/useFeatureFlags';
+import { useLocationContext } from '@/lib/locationContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
-import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Label } from '@/components/ui/label';
-import { Separator } from '@/components/ui/separator';
+import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '@/components/ui/select';
 import {
-  useGetPendingPayments, useGetReconciliationBatches, useGetReconciliationBatch,
-  useGetBankLedgers, useCreateReconciliationBatch, useCreateBankAccount,
+  useGetBankLedgers, useGetBankTransactions, useReconcileCashBankEntry,
   useListOutlets, useListWarehouses,
 } from '@workspace/api-client-react';
 import { toast } from 'sonner';
-import { CheckSquare, Layers, Info, Wallet, Hash } from 'lucide-react';
-import { paymentModeLabel } from '@/lib/paymentModes';
+import { CheckSquare, Landmark, Wallet } from 'lucide-react';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { PageHeader } from '@/components/app/page-header';
 import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
 import { EmptyState } from '@/components/app/empty-state';
 import { TableSkeleton } from '@/components/app/loading-skeletons';
+import { TablePager, useClientPage } from '@/components/ui/table-pager';
 
-// ── Payment method badge ─────────────────────────────────────────────────────
-
-function MethodBadge({ method }: { method: string }) {
-  const map: Record<string, string> = {
-    upi: 'bg-violet-500/10 text-violet-600 border-violet-500/20',
-    // Legacy 'card' / 'bank_transfer' rows read as Bank and share its colour.
-    bank: 'bg-teal-500/10 text-teal-600 border-teal-500/20',
-    card: 'bg-teal-500/10 text-teal-600 border-teal-500/20',
-    bank_transfer: 'bg-teal-500/10 text-teal-600 border-teal-500/20',
-    other: 'bg-gray-500/10 text-gray-600 border-gray-500/20',
-  };
-  return (
-    <span className={`text-xs px-2 py-0.5 rounded border font-medium uppercase ${map[method] ?? map.other}`}>
-      {paymentModeLabel(method)}
-    </span>
-  );
-}
+const SOURCE_LABEL: Record<string, string> = {
+  payment: 'Payment',
+  receipt: 'Receipt',
+  sale: 'Sale',
+  purchase: 'Purchase',
+  expense: 'Expense',
+  journal: 'Journal',
+  contra: 'Contra',
+  credit_note: 'Credit Note',
+  debit_note: 'Debit Note',
+};
 
 function fmt(n: number) {
-  return `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  return `₹${Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-// ── Component ─────────────────────────────────────────────────────────────────
+function dateValue(daysAgo = 0) {
+  const d = new Date();
+  d.setDate(d.getDate() - daysAgo);
+  return d.toISOString().slice(0, 10);
+}
 
 export default function Reconciliation() {
   const perm = usePermission('page:/accounts/reconciliation');
-  const [tab, setTab] = useState<'pending' | 'batches'>('pending');
+  const { outletsEnabled } = useOutletsEnabled();
+  const { locationState } = useLocationContext();
+  const [locationFilter, setLocationFilter] = useState('all');
+  const [accountFilter, setAccountFilter] = useState('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'reconciled' | 'unreconciled'>('all');
+  const [search, setSearch] = useState('');
+  const [fromDate, setFromDate] = useState(dateValue(30));
+  const [toDate, setToDate] = useState(dateValue());
+  const [busyKey, setBusyKey] = useState<string | null>(null);
+
+  // The page has its own location filter for explicit, auditable account
+  // selection. The global selector is still sent by the client as a header.
+  useClearOutletSelection(locationFilter.startsWith('outlet:'), () => setLocationFilter('all'));
+  const { data: outlets = [] } = useListOutlets();
+  const { data: warehouses = [] } = useListWarehouses();
+  const [filterType, filterId] = locationFilter !== 'all' ? locationFilter.split(':') : [];
+  const locationId = filterId ? Number(filterId) : undefined;
+  const { data: bankLedgers = [], isLoading: accountsLoading } = useGetBankLedgers({
+    locationType: filterType,
+    locationId,
+  });
+  const { data: transactions = [], isLoading: transactionsLoading } = useGetBankTransactions({
+    locationType: filterType,
+    locationId,
+    bankAccountId: accountFilter !== 'all' ? Number(accountFilter) : undefined,
+    fromDate: fromDate || undefined,
+    toDate: toDate || undefined,
+    search: search.trim() || undefined,
+  });
+  const reconcileMutation = useReconcileCashBankEntry();
+
+  const visibleTransactions = transactions.filter((t) =>
+    statusFilter === 'all' || t.reconciliationStatus === statusFilter,
+  );
+  const { sorted, sort } = useTableSort(visibleTransactions, {
+    date: t => t.date,
+    source: t => SOURCE_LABEL[t.source] ?? t.source,
+    voucher: t => t.voucherNumber,
+    counterparty: t => t.counterpartyName,
+    account: t => t.accountName,
+    location: t => t.accountLocationName,
+    debit: t => Number(t.debit),
+    credit: t => Number(t.credit),
+    status: t => t.reconciliationStatus,
+  });
+  const { pageRows, pagerProps } = useClientPage(sorted);
+
+  const unreconciledAmount = transactions
+    .filter(t => t.reconciliationStatus !== 'reconciled')
+    .reduce((sum, t) => sum + Number(t.amount || 0), 0);
+  const reconciledAmount = transactions
+    .filter(t => t.reconciliationStatus === 'reconciled')
+    .reduce((sum, t) => sum + Number(t.amount || 0), 0);
+
+  async function handleReconcile(entry: typeof transactions[number], checked: boolean) {
+    if (!entry.reconciliationEligible || busyKey === entry.id) return;
+    if (!checked && !window.confirm('Unreconcile this transaction?')) return;
+    setBusyKey(entry.id);
+    try {
+      await reconcileMutation.mutateAsync({
+        entryId: entry.entryId,
+        ledgerId: entry.ledgerId,
+        reconciled: checked,
+      });
+      toast.success(checked ? 'Transaction reconciled.' : 'Transaction unreconciled.');
+    } catch (e: any) {
+      toast.error(e?.data?.error || e?.message || 'Unable to update reconciliation status.');
+    } finally {
+      setBusyKey(null);
+    }
+  }
+
+  function changeLocation(value: string) {
+    setLocationFilter(value);
+    // Account ids are location-specific. Never leave a hidden account selected
+    // after changing the location.
+    setAccountFilter('all');
+  }
 
   if (!perm.isLoading && !perm.canView) {
     return (
@@ -65,509 +136,152 @@ export default function Reconciliation() {
     );
   }
 
-  // Filters for pending tab
-  // Sales happen at outlets *and* warehouses, so the filter is keyed by
-  // "<type>:<id>" rather than by outlet id alone.
-  const [locationFilter, setLocationFilter] = useState('all');
-  useClearOutletSelection(locationFilter.startsWith('outlet:'), () => setLocationFilter('all'));
-  const [methodFilter, setMethodFilter] = useState('all');
-  const [search, setSearch] = useState('');
-
-  const { data: outlets = [] } = useListOutlets();
-  const { outletsEnabled } = useOutletsEnabled();
-  const { data: warehouses = [] } = useListWarehouses();
-  const [filterType, filterId] = locationFilter !== 'all' ? locationFilter.split(':') : [];
-  const { data: pending = [], isLoading: pendingLoading } = useGetPendingPayments({
-    locationType: filterType,
-    locationId: filterId ? Number(filterId) : undefined,
-    method: methodFilter !== 'all' ? methodFilter : undefined,
-    search: search || undefined,
-  });
-  const { data: batches = [], isLoading: batchesLoading } = useGetReconciliationBatches();
-  const { data: bankLedgers = [] } = useGetBankLedgers();
-
-  // Multi-select state
-  const [selected, setSelected] = useState<Set<number>>(new Set());
-  const toggleRow = (id: number) => setSelected(prev => {
-    const s = new Set(prev);
-    s.has(id) ? s.delete(id) : s.add(id);
-    return s;
-  });
-  const selectAll = () => setSelected(new Set(pending.map(p => p.id)));
-  const clearSel  = () => setSelected(new Set());
-
-  // Reconcile dialog state
-  const [showReconcile, setShowReconcile] = useState(false);
-  const [bankLedgerId, setBankLedgerId] = useState('');
-  const [charges, setCharges] = useState('0');
-  const [extRef, setExtRef] = useState('');
-  const [settlementDate, setSettlementDate] = useState(new Date().toISOString().split('T')[0]);
-  const createBatchMutation = useCreateReconciliationBatch();
-
-  // Add-bank-account dialog. Bank accounts have no master screen of their own,
-  // so this is where they get created — right next to the field that needs one.
-  const [bankDialogOpen, setBankDialogOpen] = useState(false);
-  const [bankForm, setBankForm] = useState({ name: '', bankName: '', accountNumber: '', ifscCode: '', branch: '' });
-  const createBankAccount = useCreateBankAccount();
-
-  async function handleCreateBankAccount() {
-    const name = bankForm.name.trim();
-    if (!name) { toast.error('Give the bank account a name'); return; }
-    try {
-      const created = await createBankAccount.mutateAsync({
-        name,
-        bankName: bankForm.bankName.trim() || undefined,
-        accountNumber: bankForm.accountNumber.trim() || undefined,
-        ifscCode: bankForm.ifscCode.trim() || undefined,
-        branch: bankForm.branch.trim() || undefined,
-      });
-      toast.success(`Bank account "${created.name}" added`);
-      setBankLedgerId(String(created.id));
-      setBankDialogOpen(false);
-      setBankForm({ name: '', bankName: '', accountNumber: '', ifscCode: '', branch: '' });
-    } catch (e: any) {
-      toast.error(e?.data?.error || e?.message || 'Failed to add bank account');
-    }
-  }
-
-  const selectedPayments = pending.filter(p => selected.has(p.id));
-  const grossTotal = selectedPayments.reduce((s, p) => s + p.amount, 0);
-  const chargesAmt = Math.max(0, Number(charges) || 0);
-  const netTotal   = grossTotal - chargesAmt;
-
-  function openReconcileDialog() {
-    if (selected.size === 0) { toast.error('Select at least one payment'); return; }
-    setShowReconcile(true);
-  }
-
-  async function handleReconcile() {
-    if (!bankLedgerId) { toast.error('Select a destination bank account'); return; }
-    if (netTotal <= 0) { toast.error('Net amount must be positive'); return; }
-    try {
-      await createBatchMutation.mutateAsync({
-        salePaymentIds: Array.from(selected),
-        charges: chargesAmt,
-        settlementDate,
-        destinationBankLedgerId: Number(bankLedgerId),
-        externalReference: extRef || undefined,
-      });
-      toast.success('Reconciliation batch created successfully');
-      setShowReconcile(false);
-      clearSel();
-      setCharges('0');
-      setExtRef('');
-    } catch (e: any) {
-      toast.error(e?.data?.error || e?.message || 'Failed to create reconciliation batch');
-    }
-  }
-
-  // Batch detail drawer
-  const [selectedBatchId, setSelectedBatchId] = useState<number>(0);
-  const { data: batchDetail, isLoading: batchDetailLoading } = useGetReconciliationBatch(selectedBatchId, { enabled: selectedBatchId > 0 });
-
-  // ── Column sorting per tab (default = server order until a header click) ──
-  const { sorted: sortedPending, sort: pendingSort } = useTableSort(pending, {
-    invoice: p => p.invoiceNumber,
-    customer: p => p.customerName,
-    location: p => p.locationName,
-    date: p => p.paymentDate,
-    method: p => paymentModeLabel(p.method),
-    reference: p => p.referenceNumber,
-    amount: p => Number(p.amount),
-  });
-  const { sorted: sortedBatches, sort: batchesSort } = useTableSort(batches, {
-    batchRef: b => b.batchReference,
-    settlementDate: b => b.settlementDate,
-    bank: b => b.bankLedgerName,
-    gross: b => Number(b.grossAmount),
-    charges: b => Number(b.charges),
-    net: b => Number(b.netAmount),
-    items: b => Number(b.itemCount),
-  });
-
-  const pendingTotal = pending.reduce((s, p) => s + p.amount, 0);
-  const batchesNetTotal = batches.reduce((s, b) => s + Number(b.netAmount), 0);
-
   return (
     <AppLayout>
       <div className="p-4 md:p-6 space-y-4">
-        {/* Header */}
         <PageHeader
-          title="Reconciliation"
-          description="Reconcile incoming UPI / Card / Bank payments directly to bank ledgers"
+          title="Bank Reconciliation"
+          description="Reconcile the actual transactions in each Cash & Bank account"
           icon={CheckSquare}
         />
 
-        {/* Summary cards */}
         <SummaryCardGrid>
-          <SummaryCard label="Pending Payments" value={String(pending.length)} icon={CheckSquare} tone="warning" loading={pendingLoading} />
-          <SummaryCard label="Pending Amount" value={fmt(pendingTotal)} icon={Wallet} tone="warning" loading={pendingLoading} />
-          <SummaryCard label="Batches" value={String(batches.length)} icon={Layers} loading={batchesLoading} />
-          <SummaryCard label="Settled to Bank" value={fmt(batchesNetTotal)} icon={Hash} tone="positive" loading={batchesLoading} />
+          <SummaryCard label="Transactions" value={String(transactions.length)} icon={Landmark} loading={transactionsLoading} />
+          <SummaryCard label="Unreconciled" value={fmt(unreconciledAmount)} icon={Wallet} tone="warning" loading={transactionsLoading} />
+          <SummaryCard label="Reconciled" value={fmt(reconciledAmount)} icon={CheckSquare} tone="positive" loading={transactionsLoading} />
+          <SummaryCard label="Bank Accounts" value={String(bankLedgers.length)} icon={Landmark} loading={accountsLoading} />
         </SummaryCardGrid>
 
-        {/* Tabs */}
-        <div className="flex gap-1 border-b border-border">
-          {(['pending', 'batches'] as const).map(t => (
-            <button
-              key={t}
-              onClick={() => setTab(t)}
-              className={`px-4 py-2 text-sm font-medium transition-colors capitalize ${tab === t ? 'border-b-2 border-primary text-primary' : 'text-muted-foreground hover:text-foreground'}`}
-            >
-              {t === 'pending' ? `Pending (${pending.length})` : 'Reconciled Batches'}
-            </button>
-          ))}
+        <div className="flex flex-wrap gap-2 items-center">
+          <Input
+            placeholder="Search voucher, customer, vendor…"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            className="h-9 w-60 max-md:w-full"
+          />
+          <Select value={locationFilter} onValueChange={changeLocation}>
+            <SelectTrigger className="h-9 w-48"><SelectValue placeholder="All locations" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All locations</SelectItem>
+              <SelectItem value="headoffice">Head Office</SelectItem>
+              {warehouses.length > 0 && (
+                <SelectGroup>
+                  <SelectLabel>Warehouses</SelectLabel>
+                  {warehouses.map((w: any) => (
+                    <SelectItem key={`warehouse:${w.id}`} value={`warehouse:${w.id}`}>{w.name}</SelectItem>
+                  ))}
+                </SelectGroup>
+              )}
+              {outletsEnabled && outlets.length > 0 && (
+                <SelectGroup>
+                  <SelectLabel>Outlets</SelectLabel>
+                  {outlets.map((o: any) => (
+                    <SelectItem key={`outlet:${o.id}`} value={`outlet:${o.id}`}>{o.name}</SelectItem>
+                  ))}
+                </SelectGroup>
+              )}
+            </SelectContent>
+          </Select>
+          <Select value={accountFilter} onValueChange={setAccountFilter}>
+            <SelectTrigger className="h-9 w-64"><SelectValue placeholder="All bank accounts" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All bank accounts</SelectItem>
+              {bankLedgers.map(account => (
+                <SelectItem key={account.accountId} value={String(account.accountId)}>
+                  {account.name} · {account.locationName}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} className="h-9 w-36" />
+          <span className="text-sm text-muted-foreground">to</span>
+          <Input type="date" value={toDate} onChange={e => setToDate(e.target.value)} className="h-9 w-36" />
+          <select
+            value={statusFilter}
+            onChange={e => setStatusFilter(e.target.value as typeof statusFilter)}
+            className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+            aria-label="Reconciliation status"
+          >
+            <option value="all">All statuses</option>
+            <option value="unreconciled">Unreconciled</option>
+            <option value="reconciled">Reconciled</option>
+          </select>
         </div>
 
-        {/* ── Pending Tab ── */}
-        {tab === 'pending' && (
-          <div className="space-y-3">
-            {/* Filters */}
-            <div className="flex flex-wrap gap-2 items-center">
-              <Input
-                placeholder="Search invoice / customer…"
-                value={search}
-                onChange={e => setSearch(e.target.value)}
-                className="h-8 w-52 text-sm max-md:w-full"
-              />
-              <Select value={locationFilter} onValueChange={setLocationFilter}>
-                <SelectTrigger className="h-8 w-44 text-sm"><SelectValue placeholder="All locations" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All locations</SelectItem>
-                  {/* A place can appear in both masters under the same name, so the
-                      two lists are labelled — the sale's own location_type decides
-                      which one actually matches. */}
-                  {warehouses.length > 0 && (
-                    <SelectGroup>
-                      <SelectLabel>Warehouses</SelectLabel>
-                      {warehouses.map((w: any) => <SelectItem key={`warehouse:${w.id}`} value={`warehouse:${w.id}`}>{w.name}</SelectItem>)}
-                    </SelectGroup>
-                  )}
-                  {outletsEnabled && outlets.length > 0 && (
-                    <SelectGroup>
-                      <SelectLabel>Outlets</SelectLabel>
-                      {outlets.map((o: any) => <SelectItem key={`outlet:${o.id}`} value={`outlet:${o.id}`}>{o.name}</SelectItem>)}
-                    </SelectGroup>
-                  )}
-                </SelectContent>
-              </Select>
-              <Select value={methodFilter} onValueChange={setMethodFilter}>
-                <SelectTrigger className="h-8 w-36 text-sm"><SelectValue placeholder="All methods" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All methods</SelectItem>
-                  <SelectItem value="upi">UPI</SelectItem>
-                  {/* 'bank' also covers older card / bank-transfer rows */}
-                  <SelectItem value="bank">Bank</SelectItem>
-                  <SelectItem value="other">Other</SelectItem>
-                </SelectContent>
-              </Select>
-
-              <div className="flex-1" />
-
-              {selected.size > 0 ? (
-                <>
-                  <span className="text-sm text-muted-foreground">{selected.size} selected — {fmt(grossTotal)}</span>
-                    <Button size="sm" onClick={openReconcileDialog} disabled={!perm.canAdd}>
-                      <CheckSquare className="w-4 h-4 mr-1.5" /> Reconcile to Bank
-                  </Button>
-                  <Button variant="outline" size="sm" onClick={clearSel}>Clear</Button>
-                </>
-              ) : (
-                pending.length > 0 && (
-                  <Button variant="outline" size="sm" onClick={selectAll}>Select All ({pending.length})</Button>
-                )
-              )}
-            </div>
-
-            {/* Table */}
-            {pendingLoading ? (
-              <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
-                <TableSkeleton rows={8} cols={8} />
-              </div>
-            ) : pending.length === 0 ? (
-              <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
-                <EmptyState icon={CheckSquare} title="No pending electronic payments" hint="UPI, card, and bank transfer payments will appear here once collected." />
-              </div>
-            ) : (
-              <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
-                <Table className="no-sticky-col">
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead className="w-10"><Checkbox checked={selected.size === pending.length && pending.length > 0} onCheckedChange={v => v ? selectAll() : clearSel()} /></TableHead>
-                      <SortableHead k="invoice" sort={pendingSort}>Invoice</SortableHead>
-                      <SortableHead k="customer" sort={pendingSort}>Customer</SortableHead>
-                      <SortableHead k="location" sort={pendingSort}>Location</SortableHead>
-                      <SortableHead k="date" sort={pendingSort}>Date</SortableHead>
-                      <SortableHead k="method" sort={pendingSort}>Method</SortableHead>
-                      <SortableHead k="reference" sort={pendingSort}>Reference</SortableHead>
-                      <SortableHead k="amount" sort={pendingSort} className="text-right">Amount</SortableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {sortedPending.map(p => (
-                      <TableRow key={p.id} className={selected.has(p.id) ? 'bg-primary/5' : ''}>
-                        <TableCell><Checkbox checked={selected.has(p.id)} onCheckedChange={() => toggleRow(p.id)} /></TableCell>
-                        <TableCell className="font-mono text-xs">{p.invoiceNumber}</TableCell>
-                        <TableCell className="text-sm">{p.customerName ?? <span className="text-muted-foreground italic text-xs">Walk-in</span>}</TableCell>
-                        <TableCell className="text-sm">{p.locationName}</TableCell>
-                        <TableCell className="text-xs text-muted-foreground">{p.paymentDate}</TableCell>
-                        <TableCell><MethodBadge method={p.method} /></TableCell>
-                        <TableCell className="font-mono text-xs text-muted-foreground">{p.referenceNumber ?? '—'}</TableCell>
-                        <TableCell className="text-right font-mono font-semibold text-sm">{fmt(p.amount)}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
-            )}
-          </div>
+        {locationState.locationName && locationFilter === 'all' && (
+          <p className="text-xs text-muted-foreground">
+            The account list is authorized by Cash &amp; Bank assignments. Use <span className="font-medium">All locations</span> to include Head Office and every assigned branch account.
+          </p>
         )}
 
-        {/* ── Batches Tab ── */}
-        {tab === 'batches' && (
-          <div className="space-y-3">
-            {batchesLoading ? (
-              <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
-                <TableSkeleton rows={8} cols={8} />
-              </div>
-            ) : batches.length === 0 ? (
-              <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
-                <EmptyState icon={Layers} title="No reconciliation batches yet" hint="Reconcile pending electronic payments to create your first batch." />
-              </div>
-            ) : (
-              <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <SortableHead k="batchRef" sort={batchesSort}>Batch Ref</SortableHead>
-                      <SortableHead k="settlementDate" sort={batchesSort}>Settlement Date</SortableHead>
-                      <SortableHead k="bank" sort={batchesSort}>Bank Account</SortableHead>
-                      <SortableHead k="gross" sort={batchesSort} className="text-right">Gross</SortableHead>
-                      <SortableHead k="charges" sort={batchesSort} className="text-right">Charges</SortableHead>
-                      <SortableHead k="net" sort={batchesSort} className="text-right">Net</SortableHead>
-                      <SortableHead k="items" sort={batchesSort} className="text-right">Items</SortableHead>
-                      <TableHead />
+        <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
+          {transactionsLoading ? (
+            <TableSkeleton rows={8} cols={10} />
+          ) : visibleTransactions.length === 0 ? (
+            <EmptyState
+              icon={Landmark}
+              title="No bank transactions"
+              hint="Transactions in assigned bank and UPI accounts will appear here. Cash accounts are excluded."
+            />
+          ) : (
+            <>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-20">Reconcile</TableHead>
+                    <SortableHead k="date" sort={sort}>Date</SortableHead>
+                    <SortableHead k="source" sort={sort}>Type</SortableHead>
+                    <SortableHead k="voucher" sort={sort}>Voucher</SortableHead>
+                    <SortableHead k="counterparty" sort={sort}>Customer / Vendor</SortableHead>
+                    <SortableHead k="account" sort={sort}>Bank Account</SortableHead>
+                    <SortableHead k="location" sort={sort}>Location</SortableHead>
+                    <SortableHead k="debit" sort={sort} className="text-right">In</SortableHead>
+                    <SortableHead k="credit" sort={sort} className="text-right">Out</SortableHead>
+                    <SortableHead k="status" sort={sort}>Status</SortableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {pageRows.map(t => (
+                    <TableRow key={t.id}>
+                      <TableCell>
+                        <Checkbox
+                          checked={t.reconciliationStatus === 'reconciled'}
+                          disabled={!perm.canEdit || busyKey === t.id}
+                          onCheckedChange={value => handleReconcile(t, value === true)}
+                          aria-label={`${t.reconciliationStatus === 'reconciled' ? 'Unreconcile' : 'Reconcile'} ${t.voucherNumber || t.entryId}`}
+                        />
+                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground whitespace-nowrap">{t.date}</TableCell>
+                      <TableCell className="text-sm">{SOURCE_LABEL[t.source] ?? t.source}</TableCell>
+                      <TableCell className="font-mono text-xs">{t.voucherNumber || t.entryId}</TableCell>
+                      <TableCell className="text-sm">{t.counterpartyName ?? <span className="text-muted-foreground">—</span>}</TableCell>
+                      <TableCell className="text-sm">
+                        <div className={t.reconciliationEligible ? undefined : 'text-amber-600'}>{t.accountName}</div>
+                        <div className="text-[11px] text-muted-foreground">{t.description}</div>
+                      </TableCell>
+                      <TableCell className="text-sm">{t.accountLocationName}</TableCell>
+                      <TableCell className="text-right font-mono text-sm text-emerald-600">{t.debit > 0 ? fmt(t.debit) : '—'}</TableCell>
+                      <TableCell className="text-right font-mono text-sm text-red-500">{t.credit > 0 ? fmt(t.credit) : '—'}</TableCell>
+                      <TableCell>
+                        <span className={`text-xs px-2 py-0.5 rounded border font-medium ${
+                          t.reconciliationStatus === 'reconciled'
+                            ? 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20'
+                            : 'bg-amber-500/10 text-amber-600 border-amber-500/20'
+                        }`}>
+                          {t.reconciliationStatus === 'reconciled' ? 'Reconciled' : 'Unreconciled'}
+                        </span>
+                      </TableCell>
                     </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {sortedBatches.map(b => (
-                      <TableRow key={b.id}>
-                        <TableCell className="font-mono text-xs font-semibold">{b.batchReference}</TableCell>
-                        <TableCell className="text-sm">{b.settlementDate}</TableCell>
-                        <TableCell className="text-sm">{b.bankLedgerName}</TableCell>
-                        <TableCell className="text-right font-mono text-sm">{fmt(b.grossAmount)}</TableCell>
-                        <TableCell className="text-right font-mono text-sm text-destructive">{b.charges > 0 ? `(${fmt(b.charges)})` : '—'}</TableCell>
-                        <TableCell className="text-right font-mono font-semibold text-sm text-emerald-600">{fmt(b.netAmount)}</TableCell>
-                        <TableCell className="text-right text-sm">{b.itemCount}</TableCell>
-                        <TableCell className="text-right">
-                          <Button variant="ghost" size="sm" onClick={() => setSelectedBatchId(b.id)}>
-                            <Info className="w-3.5 h-3.5 mr-1" /> Details
-                          </Button>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                  ))}
+                </TableBody>
+              </Table>
+              <div className="px-4 border-t border-border">
+                <TablePager {...pagerProps} />
               </div>
-            )}
-          </div>
-        )}
+            </>
+          )}
+        </div>
       </div>
-
-      {/* ── Reconcile Dialog ── */}
-      <Dialog open={showReconcile} onOpenChange={setShowReconcile}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader>
-            <DialogTitle>Create Reconciliation Batch</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4 py-2">
-            {/* Summary */}
-            <div className="rounded-lg border border-border p-3 space-y-2 text-sm">
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Payments selected</span>
-                <span className="font-semibold">{selected.size}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Gross amount</span>
-                <span className="font-mono font-semibold">{fmt(grossTotal)}</span>
-              </div>
-              {chargesAmt > 0 && (
-                <div className="flex justify-between text-destructive">
-                  <span>Charges</span>
-                  <span className="font-mono">({fmt(chargesAmt)})</span>
-                </div>
-              )}
-              <Separator />
-              <div className="flex justify-between font-semibold text-emerald-600">
-                <span>Net to bank</span>
-                <span className="font-mono">{fmt(netTotal)}</span>
-              </div>
-            </div>
-
-            <div className="space-y-3">
-              <div>
-                <Label className="text-sm mb-1.5 block">Settlement Date</Label>
-                <Input type="date" value={settlementDate} onChange={e => setSettlementDate(e.target.value)} className="h-9" />
-              </div>
-              <div>
-                <Label className="text-sm mb-1.5 block">Destination Bank Account <span className="text-destructive">*</span></Label>
-                <Select value={bankLedgerId} onValueChange={setBankLedgerId}>
-                  <SelectTrigger className="h-9">
-                    <SelectValue placeholder="Select bank account…" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {bankLedgers.map(l => <SelectItem key={l.id} value={String(l.id)}>{l.name}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-                {bankLedgers.length === 0 && (
-                  <p className="text-xs text-amber-500 mt-1">
-                    No bank accounts yet — add the account the money lands in before settling this batch.
-                  </p>
-                )}
-                {perm.canAdd && (
-                  <Button
-                    type="button" variant="link" size="sm"
-                    className="h-auto p-0 mt-1 text-xs"
-                    onClick={() => setBankDialogOpen(true)}
-                  >
-                    + Add a bank account
-                  </Button>
-                )}
-              </div>
-              <div>
-                <Label className="text-sm mb-1.5 block">Processor Charges (₹)</Label>
-                <Input type="number" min={0} step={0.01} value={charges} onChange={e => setCharges(e.target.value)} className="h-9" placeholder="0.00" />
-              </div>
-              <div>
-                <Label className="text-sm mb-1.5 block">Bank / Settlement Reference</Label>
-                <Input value={extRef} onChange={e => setExtRef(e.target.value)} placeholder="e.g. UTR12345 or statement ref" className="h-9" />
-              </div>
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowReconcile(false)}>Cancel</Button>
-            <Button onClick={handleReconcile} disabled={createBatchMutation.isPending || netTotal <= 0}>
-              {createBatchMutation.isPending ? 'Processing…' : `Reconcile ${fmt(netTotal)}`}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* ── Add Bank Account Dialog ── */}
-      <Dialog open={bankDialogOpen} onOpenChange={setBankDialogOpen}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Add Bank Account</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-3">
-            <p className="text-xs text-muted-foreground">
-              This is the account settled money lands in. Adding it here creates its ledger under
-              Bank in the chart of accounts.
-            </p>
-            <div>
-              <Label className="text-sm mb-1.5 block">Account Name <span className="text-destructive">*</span></Label>
-              <Input
-                value={bankForm.name}
-                onChange={e => setBankForm(f => ({ ...f, name: e.target.value }))}
-                placeholder="e.g. HDFC Current A/c"
-                className="h-9"
-              />
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <Label className="text-sm mb-1.5 block">Bank</Label>
-                <Input
-                  value={bankForm.bankName}
-                  onChange={e => setBankForm(f => ({ ...f, bankName: e.target.value }))}
-                  placeholder="e.g. HDFC Bank" className="h-9"
-                />
-              </div>
-              <div>
-                <Label className="text-sm mb-1.5 block">Branch</Label>
-                <Input
-                  value={bankForm.branch}
-                  onChange={e => setBankForm(f => ({ ...f, branch: e.target.value }))}
-                  placeholder="e.g. Andheri East" className="h-9"
-                />
-              </div>
-              <div>
-                <Label className="text-sm mb-1.5 block">Account Number</Label>
-                <Input
-                  value={bankForm.accountNumber}
-                  onChange={e => setBankForm(f => ({ ...f, accountNumber: e.target.value }))}
-                  className="h-9"
-                />
-              </div>
-              <div>
-                <Label className="text-sm mb-1.5 block">IFSC</Label>
-                <Input
-                  value={bankForm.ifscCode}
-                  onChange={e => setBankForm(f => ({ ...f, ifscCode: e.target.value }))}
-                  className="h-9"
-                />
-              </div>
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setBankDialogOpen(false)}>Cancel</Button>
-            <Button onClick={handleCreateBankAccount} disabled={createBankAccount.isPending || !bankForm.name.trim()}>
-              {createBankAccount.isPending ? 'Adding…' : 'Add Bank Account'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* ── Batch Detail Drawer ── */}
-      <Sheet open={selectedBatchId > 0} onOpenChange={o => { if (!o) setSelectedBatchId(0); }}>
-        <SheetContent className="w-full sm:max-w-xl overflow-y-auto">
-          <SheetHeader className="pb-4">
-            <SheetTitle>Batch Detail</SheetTitle>
-          </SheetHeader>
-          {batchDetailLoading ? (
-            <div className="py-12 text-center text-muted-foreground">Loading…</div>
-          ) : batchDetail ? (
-            <div className="space-y-4">
-              {/* Meta */}
-              <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm rounded-lg border border-border p-3">
-                <span className="text-muted-foreground">Reference</span><span className="font-mono font-semibold">{batchDetail.batchReference}</span>
-                <span className="text-muted-foreground">Settlement Date</span><span>{batchDetail.settlementDate}</span>
-                <span className="text-muted-foreground">Bank Account</span><span>{batchDetail.bankLedgerName}</span>
-                <span className="text-muted-foreground">Gross</span><span className="font-mono">{fmt(batchDetail.grossAmount)}</span>
-                <span className="text-muted-foreground">Charges</span><span className="font-mono text-destructive">{batchDetail.charges > 0 ? `(${fmt(batchDetail.charges)})` : '—'}</span>
-                <span className="text-muted-foreground font-semibold">Net</span><span className="font-mono font-bold text-emerald-600">{fmt(batchDetail.netAmount)}</span>
-                {batchDetail.externalReference && <><span className="text-muted-foreground">Ext. Reference</span><span className="font-mono text-xs">{batchDetail.externalReference}</span></>}
-              </div>
-
-              {/* Items */}
-              <div>
-                <p className="text-sm font-semibold mb-2">{batchDetail.items.length} Payment{batchDetail.items.length !== 1 ? 's' : ''}</p>
-                <div className="rounded-lg border border-border overflow-hidden">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Invoice</TableHead>
-                        <TableHead>Customer</TableHead>
-                        <TableHead>Method</TableHead>
-                        <TableHead className="text-right">Amount</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {batchDetail.items.map(i => (
-                        <TableRow key={i.id}>
-                          <TableCell className="font-mono text-xs">{i.invoiceNumber}</TableCell>
-                          <TableCell className="text-xs">{i.customerName ?? <span className="text-muted-foreground italic">Walk-in</span>}</TableCell>
-                          <TableCell><MethodBadge method={i.method} /></TableCell>
-                          <TableCell className="text-right font-mono text-sm">{fmt(i.amount)}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </div>
-              </div>
-            </div>
-          ) : null}
-        </SheetContent>
-      </Sheet>
     </AppLayout>
   );
 }

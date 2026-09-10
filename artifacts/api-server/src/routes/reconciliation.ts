@@ -19,6 +19,7 @@ import {
 import { stockValuation } from "../lib/valuation";
 import { getPostingLocationFilter } from "../lib/requestLocation";
 import { postingMatchesLocation } from "../lib/postingLocation";
+import { isLocationInScope } from "../lib/dataScope";
 
 const router = Router();
 
@@ -598,29 +599,254 @@ router.get(
 // ── GET /reconciliation/bank-ledgers ─────────────────────────────────────────
 // Returns all active ledgers under STD-BANK hierarchy (for destination dropdown)
 // Serves Reconciliation, Cash Balance (accounts + sales) pages.
-router.get("/reconciliation/bank-ledgers", requireModuleView(["page:/accounts/reconciliation", "page:/accounts/cash-in-outlet"]), async (_req, res): Promise<void> => {
-  const { rows: allLedgers } = await pool.query(`SELECT id, name, parent_id, code, bank_details FROM account_ledgers ORDER BY id`);
-  const bankRoot = allLedgers.find((r: any) => r.code === "STD-BANK");
-  if (!bankRoot) { res.json([]); return; }
+router.get("/reconciliation/bank-ledgers", requireModuleView(["page:/accounts/reconciliation", "page:/accounts/cash-in-outlet"]), async (req, res): Promise<void> => {
+  const access = await bookAccessScope(((req as any).employee ?? {}));
+  const viewLocation = getLocationFilter(req);
+  const { rows } = await pool.query(`
+    SELECT cba.id AS account_id, cba.ledger_id, cba.name, cba.account_type,
+           cba.requires_reconciliation, COALESCE(cba.location_type, 'headoffice') AS location_type,
+           COALESCE(cba.location_id, 0) AS location_id,
+           al.code, al.bank_details,
+           COALESCE(w.name, o.name, 'Head Office') AS location_name
+      FROM cash_bank_accounts cba
+      JOIN account_ledgers al ON al.id = cba.ledger_id
+      LEFT JOIN warehouses w ON cba.location_type = 'warehouse' AND w.id = cba.location_id
+      LEFT JOIN outlets o ON cba.location_type = 'outlet' AND o.id = cba.location_id
+     WHERE cba.ledger_id IS NOT NULL
+       AND cba.account_type <> 'cash'
+       AND COALESCE(al.is_active, true)
+     ORDER BY cba.location_type, location_name, cba.name, cba.id
+  `);
 
-  const ids = new Set<number>([bankRoot.id]);
-  for (let i = 0; i < 5; i++) {
-    for (const r of allLedgers) {
-      if (r.parent_id && ids.has(r.parent_id)) ids.add(r.id);
+  res.json(rows
+    .filter((r: any) => {
+      if (access.ledgerIds && !access.ledgerIds.has(Number(r.ledger_id))) return false;
+      if (!viewLocation) return true;
+      if (viewLocation.locationType === "headoffice") return r.location_type === "headoffice";
+      return r.location_type === viewLocation.locationType
+        && Number(r.location_id) === Number(viewLocation.locationId);
+    })
+    .map((r: any) => ({
+      // `id` remains the ledger id for legacy batch consumers. The new
+      // reconciliation surface uses accountId for the Cash & Bank identity.
+      id: Number(r.ledger_id),
+      accountId: Number(r.account_id),
+      ledgerId: Number(r.ledger_id),
+      name: r.name,
+      code: r.code ?? null,
+      accountType: r.account_type,
+      requiresReconciliation: r.requires_reconciliation === true,
+      bankDetails: r.bank_details ?? null,
+      locationType: r.location_type ?? "headoffice",
+      locationId: r.location_id == null ? 0 : Number(r.location_id),
+      locationName: r.location_name ?? "Head Office",
+    })));
+});
+
+// ── GET /reconciliation/bank-transactions ──────────────────────────────────────
+// Account-based reconciliation view. It is deliberately built from the same
+// derived posting stream as Bank Book, then grouped by the exact
+// (ledger_id, entry_id) identity. In particular, an allocation receipt that
+// settles several invoices remains one receipt transaction.
+router.get("/reconciliation/bank-transactions", requireModuleView("page:/accounts/reconciliation"), async (req, res): Promise<void> => {
+  const {
+    locationType, locationId, bankAccountId, fromDate, toDate, search,
+  } = req.query as Record<string, string | undefined>;
+  if ((fromDate && !isIsoDate(fromDate)) || (toDate && !isIsoDate(toDate))) {
+    res.status(400).json({ error: "fromDate/toDate must be valid YYYY-MM-DD dates" });
+    return;
+  }
+  const accountFilter = bankAccountId == null || bankAccountId === "" ? null : Number(bankAccountId);
+  if (accountFilter != null && (!Number.isInteger(accountFilter) || accountFilter <= 0)) {
+    res.status(400).json({ error: "bankAccountId must be a valid Cash & Bank account id" });
+    return;
+  }
+
+  const access = await bookAccessScope((req as any).employee ?? {});
+  const viewLocation = getLocationFilter(req);
+  const postingLocation = getPostingLocationFilter(req);
+  const { rows: accountRows } = await pool.query(`
+    SELECT cba.id AS account_id, cba.ledger_id, cba.name, cba.account_type,
+           cba.requires_reconciliation, COALESCE(cba.location_type, 'headoffice') AS location_type,
+           COALESCE(cba.location_id, 0) AS location_id,
+           COALESCE(w.name, o.name, 'Head Office') AS location_name
+      FROM cash_bank_accounts cba
+      JOIN account_ledgers al ON al.id = cba.ledger_id
+      LEFT JOIN warehouses w ON cba.location_type = 'warehouse' AND w.id = cba.location_id
+      LEFT JOIN outlets o ON cba.location_type = 'outlet' AND o.id = cba.location_id
+     WHERE cba.ledger_id IS NOT NULL
+       AND cba.account_type <> 'cash'
+       AND COALESCE(al.is_active, true)
+  `);
+  const accountLocationMatches = (r: any) => {
+    if (!viewLocation) return true;
+    if (viewLocation.locationType === "headoffice") return r.location_type === "headoffice";
+    return r.location_type === viewLocation.locationType
+      && Number(r.location_id) === Number(viewLocation.locationId);
+  };
+  const accounts = accountRows.filter((r: any) =>
+    (!access.ledgerIds || access.ledgerIds.has(Number(r.ledger_id)))
+    && accountLocationMatches(r)
+    && (accountFilter == null || Number(r.account_id) === accountFilter),
+  );
+  if (accountFilter != null && !accounts.some((r: any) => Number(r.account_id) === accountFilter)) {
+    // Do not disclose whether another location owns the account.
+    res.json([]);
+    return;
+  }
+  if (accounts.length === 0) {
+    // Keep going for Head Office so historical, unassigned bank-ledger rows
+    // can be shown as undetermined instead of being silently discarded.
+    if (!access.dataScope.isHeadOffice) {
+      res.json([]);
+      return;
     }
   }
 
-  // Return only leaf ledgers (non-group), excluding the root itself
-  const bankLedgers = allLedgers
-    .filter((r: any) => ids.has(r.id) && r.id !== bankRoot.id && !allLedgers.some((c: any) => c.parent_id === r.id))
-    .map((r: any) => ({
-      id: r.id,
-      name: r.name,
-      code: r.code ?? null,
-      bankDetails: r.bank_details ?? null,
-    }));
+  const accountByLedger = new Map<number, any>(
+    accounts.map((r: any) => [Number(r.ledger_id), r]),
+  );
+  const { rows: bankTreeRows } = await pool.query(`
+    WITH RECURSIVE bank_tree AS (
+      SELECT id, parent_id FROM account_ledgers WHERE code = 'STD-BANK'
+      UNION ALL
+      SELECT l.id, l.parent_id
+        FROM account_ledgers l
+        JOIN bank_tree b ON b.id = l.parent_id
+    )
+    SELECT id FROM bank_tree
+  `);
+  const bankLedgerIds = new Set<number>(bankTreeRows.map((r: any) => Number(r.id)));
+  const postings = await buildDerivedPostings({ toDate });
+  const visible = postings.filter((p: any) => {
+    const account = accountByLedger.get(Number(p.ledgerId));
+    const undetermined = !account && bankLedgerIds.has(Number(p.ledgerId));
+    if (!account && !undetermined) return false;
+    if (accountFilter != null && undetermined) return false;
+    if (postingLocation && !postingMatchesLocation(p, postingLocation)) return false;
+    if (access.ledgerIds
+      && !access.ledgerIds.has(Number(p.ledgerId))
+      && !isLocationInScope(access.dataScope, p.locationType, p.locationId)) return false;
+    if (fromDate && String(p.date) < fromDate) return false;
+    if (toDate && String(p.date) > toDate) return false;
+    if (search) {
+      const needle = search.toLowerCase();
+      return [p.entryId, p.voucherNumber, p.description, account.name]
+        .some((v) => String(v ?? "").toLowerCase().includes(needle));
+    }
+    return true;
+  });
 
-  res.json(bankLedgers);
+  type Txn = {
+    entryId: string; ledgerId: number; date: string; source: string;
+    voucherNumber: string | null; description: string; debit: number; credit: number;
+    locationType: string | null; locationId: number | null;
+  };
+  const grouped = new Map<string, Txn>();
+  for (const p of visible) {
+    const ledgerId = Number(p.ledgerId);
+    const key = `${ledgerId}:${p.entryId}`;
+    const current = grouped.get(key);
+    if (current) {
+      current.debit = Math.round((current.debit + Number(p.debit ?? 0)) * 100) / 100;
+      current.credit = Math.round((current.credit + Number(p.credit ?? 0)) * 100) / 100;
+    } else {
+      grouped.set(key, {
+        entryId: String(p.entryId),
+        ledgerId,
+        date: String(p.date).slice(0, 10),
+        source: String(p.source),
+        voucherNumber: p.voucherNumber ?? null,
+        description: String(p.description ?? ""),
+        debit: Number(p.debit ?? 0),
+        credit: Number(p.credit ?? 0),
+        locationType: p.locationType ?? null,
+        locationId: p.locationId == null ? null : Number(p.locationId),
+      });
+    }
+  }
+
+  const txns = [...grouped.values()];
+  const ledgerIds = [...new Set(txns.map((t) => t.ledgerId))];
+  const entryIds = [...new Set(txns.map((t) => t.entryId))];
+  const reconciliationByKey = new Map<string, any>();
+  if (ledgerIds.length > 0) {
+    const { rows } = await pool.query(
+      `SELECT ledger_id, entry_id, status, reconciled_at, reconciled_by,
+              unreconciled_at, unreconciled_by, reconciliation_reference
+         FROM bank_reconciliation_entries
+        WHERE ledger_id = ANY($1::int[]) AND entry_id = ANY($2::text[])`,
+      [ledgerIds, entryIds],
+    );
+    for (const row of rows) reconciliationByKey.set(`${Number(row.ledger_id)}:${row.entry_id}`, row);
+  }
+
+  const { rows: parties } = await pool.query(`
+    SELECT 'sale:' || s.id::text AS entry_id, c.name AS party_name
+      FROM sales s LEFT JOIN customers c ON c.id = s.customer_id
+    UNION ALL
+    SELECT 'purchase:' || p.id::text AS entry_id, v.name AS party_name
+      FROM purchases p LEFT JOIN vendors v ON v.id = p.vendor_id
+    UNION ALL
+    SELECT 'receipt:' || r.id::text AS entry_id,
+           COALESCE(c.name, v.name, al.name) AS party_name
+      FROM receipts r
+      JOIN account_ledgers al ON al.id = r.received_from_ledger_id
+      LEFT JOIN customers c ON al.code = 'CUST-' || c.id::text
+      LEFT JOIN vendors v ON al.code = 'VEND-' || v.id::text
+    UNION ALL
+    SELECT 'payment:' || p.id::text AS entry_id,
+           COALESCE(v.name, c.name, al.name) AS party_name
+      FROM payments p
+      JOIN account_ledgers al ON al.id = p.paid_to_ledger_id
+      LEFT JOIN vendors v ON al.code = 'VEND-' || v.id::text
+      LEFT JOIN customers c ON al.code = 'CUST-' || c.id::text
+    UNION ALL
+    SELECT 'jv:' || jv.id::text AS entry_id,
+           COALESCE(c.name, v.name, al.name) AS party_name
+      FROM journal_vouchers jv
+      LEFT JOIN account_ledgers al ON al.id = jv.party_ledger_id
+      LEFT JOIN customers c ON al.code = 'CUST-' || c.id::text
+      LEFT JOIN vendors v ON al.code = 'VEND-' || v.id::text
+  `);
+  const partyByEntry = new Map<string, string | null>(
+    parties.map((p: any) => [String(p.entry_id), p.party_name ?? null]),
+  );
+
+  res.json(txns
+    .sort((a, b) => b.date.localeCompare(a.date) || b.entryId.localeCompare(a.entryId))
+    .map((t) => {
+      const account = accountByLedger.get(t.ledgerId);
+      const saved = reconciliationByKey.get(`${t.ledgerId}:${t.entryId}`);
+      const net = Math.round((t.debit - t.credit) * 100) / 100;
+      return {
+        id: `${t.ledgerId}:${t.entryId}`,
+        entryId: t.entryId,
+        ledgerId: t.ledgerId,
+        accountId: account ? Number(account.account_id) : null,
+        accountName: account?.name ?? "Undetermined bank account",
+        accountType: account?.account_type ?? "bank",
+        accountLocationType: account?.location_type ?? null,
+        accountLocationId: account?.location_id == null ? null : Number(account.location_id),
+        accountLocationName: account?.location_name ?? "Undetermined",
+        date: t.date,
+        source: t.source,
+        voucherNumber: t.voucherNumber,
+        description: t.description,
+        counterpartyName: partyByEntry.get(t.entryId) ?? null,
+        debit: Math.round(t.debit * 100) / 100,
+        credit: Math.round(t.credit * 100) / 100,
+        amount: Math.abs(net),
+        direction: net >= 0 ? "in" : "out",
+        locationType: t.locationType,
+        locationId: t.locationId,
+        reconciliationEligible: !!account,
+        reconciliationStatus: saved?.status ?? "unreconciled",
+        reconciledAt: saved?.reconciled_at ?? null,
+        reconciledBy: saved?.reconciled_by ?? null,
+        reconciliationReference: saved?.reconciliation_reference ?? null,
+      };
+    }));
 });
 
 // ── POST /reconciliation/bank-book/:entryId/reconcile ────────────────────────
@@ -661,6 +887,19 @@ router.post(
       if (access.ledgerIds && !access.ledgerIds.has(ledgerId)) {
         await client.query("ROLLBACK");
         res.status(404).json({ error: "Bank ledger not found." });
+        return;
+      }
+      const { rows: assignedAccount } = await client.query(
+        `SELECT 1
+           FROM cash_bank_accounts
+          WHERE ledger_id = $1
+            AND account_type <> 'cash'
+          LIMIT 1`,
+        [ledgerId],
+      );
+      if (assignedAccount.length === 0) {
+        await client.query("ROLLBACK");
+        res.status(404).json({ error: "Bank account not found." });
         return;
       }
 
