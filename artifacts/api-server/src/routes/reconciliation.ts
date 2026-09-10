@@ -20,6 +20,7 @@ import { stockValuation } from "../lib/valuation";
 import { getPostingLocationFilter } from "../lib/requestLocation";
 import { postingMatchesLocation } from "../lib/postingLocation";
 import { isLocationInScope } from "../lib/dataScope";
+import { isLevelOneAdmin } from "../lib/adminGate";
 
 const router = Router();
 
@@ -731,7 +732,7 @@ router.get("/reconciliation/bank-transactions", requireModuleView("page:/account
     if (toDate && String(p.date) > toDate) return false;
     if (search) {
       const needle = search.toLowerCase();
-      return [p.entryId, p.voucherNumber, p.description, account.name]
+       return [p.entryId, p.voucherNumber, p.description, account?.name ?? "Undetermined bank account"]
         .some((v) => String(v ?? "").toLowerCase().includes(needle));
     }
     return true;
@@ -849,6 +850,451 @@ router.get("/reconciliation/bank-transactions", requireModuleView("page:/account
     }));
 });
 
+// ── GET /reconciliation/bank-audit ───────────────────────────────────────────
+// Compares the authoritative derived bank posting stream with Cash & Bank
+// assignments. Missing assignments are reported rather than guessed.
+router.get("/reconciliation/bank-audit", requireModuleView("page:/accounts/reconciliation"), async (req, res): Promise<void> => {
+  const access = await bookAccessScope((req as any).employee ?? {});
+  const viewLocation = getLocationFilter(req);
+  const { rows: accounts } = await pool.query(`
+    SELECT cba.id AS account_id, cba.ledger_id, cba.name,
+           COALESCE(cba.location_type, 'headoffice') AS location_type,
+           COALESCE(cba.location_id, 0) AS location_id,
+           COALESCE(w.name, o.name, 'Head Office') AS location_name
+      FROM cash_bank_accounts cba
+      JOIN account_ledgers al ON al.id = cba.ledger_id
+      LEFT JOIN warehouses w ON cba.location_type = 'warehouse' AND w.id = cba.location_id
+      LEFT JOIN outlets o ON cba.location_type = 'outlet' AND o.id = cba.location_id
+     WHERE cba.account_type <> 'cash' AND COALESCE(al.is_active, true)
+  `);
+  const allowed = accounts.filter((a: any) =>
+    (!access.ledgerIds || access.ledgerIds.has(Number(a.ledger_id))) &&
+    (!viewLocation ||
+      (viewLocation.locationType === "headoffice"
+        ? a.location_type === "headoffice"
+        : a.location_type === viewLocation.locationType
+          && Number(a.location_id) === Number(viewLocation.locationId))),
+  );
+  const accountByLedger = new Map<number, any>(allowed.map((a: any) => [Number(a.ledger_id), a]));
+  const postings = await buildDerivedPostings({});
+  const postingLocation = getPostingLocationFilter(req);
+  const identity = new Map<string, any>();
+  const undetermined: any[] = [];
+  for (const p of postings as any[]) {
+    const ledgerId = Number(p.ledgerId);
+    if (access.ledgerIds && !access.ledgerIds.has(ledgerId)
+      && !isLocationInScope(access.dataScope, p.locationType, p.locationId)) continue;
+    if (postingLocation && !postingMatchesLocation(p, postingLocation)) continue;
+    const key = `${ledgerId}:${p.entryId}`;
+    const current = identity.get(key);
+    if (current) {
+      current.debit += Number(p.debit ?? 0);
+      current.credit += Number(p.credit ?? 0);
+      current.legs += 1;
+      continue;
+    }
+    identity.set(key, {
+      ledgerId,
+      entryId: String(p.entryId),
+      date: String(p.date).slice(0, 10),
+      source: String(p.source),
+      debit: Number(p.debit ?? 0),
+      credit: Number(p.credit ?? 0),
+      legs: 1,
+    });
+    if (!accountByLedger.has(ledgerId) && String(p.source) !== "opening_balance") {
+      undetermined.push({
+        ledgerId,
+        entryId: String(p.entryId),
+        date: String(p.date).slice(0, 10),
+        source: String(p.source),
+        reason: "missing_bank_account_assignment",
+      });
+    }
+  }
+  const { rows: saved } = await pool.query(
+    `SELECT ledger_id, entry_id, status
+       FROM bank_reconciliation_entries
+      WHERE status = 'reconciled'`,
+  );
+  const savedByKey = new Set(saved.map((r: any) => `${Number(r.ledger_id)}:${r.entry_id}`));
+  const byAccount = new Map<number, any>();
+  for (const account of allowed) {
+    byAccount.set(Number(account.account_id), {
+      accountId: Number(account.account_id),
+      ledgerId: Number(account.ledger_id),
+      accountName: account.name,
+      locationName: account.location_name,
+      eligibleCount: 0,
+      eligibleAmount: 0,
+      reconciledCount: 0,
+      reconciledAmount: 0,
+      unreconciledCount: 0,
+      unreconciledAmount: 0,
+      duplicateCount: 0,
+      duplicateAmount: 0,
+    });
+  }
+  for (const row of identity.values()) {
+    const account = accountByLedger.get(row.ledgerId);
+    if (!account) continue;
+    const item = byAccount.get(Number(account.account_id))!;
+    const amount = Math.abs(Number(row.debit) - Number(row.credit));
+    const key = `${row.ledgerId}:${row.entryId}`;
+    item.eligibleCount += 1;
+    item.eligibleAmount += amount;
+    if (savedByKey.has(key)) {
+      item.reconciledCount += 1;
+      item.reconciledAmount += amount;
+    } else {
+      item.unreconciledCount += 1;
+      item.unreconciledAmount += amount;
+    }
+    byAccount.set(Number(account.account_id), item);
+  }
+  for (const row of byAccount.values()) {
+    for (const key of ["eligibleAmount", "reconciledAmount", "unreconciledAmount", "duplicateAmount"]) {
+      row[key] = Math.round(Number(row[key]) * 100) / 100;
+    }
+  }
+  res.json({
+    accounts: [...byAccount.values()],
+    undetermined,
+    legacySettlementBatchesPreserved: true,
+    notes: [
+      "Eligible totals are derived from the bank ledger posting stream.",
+      "Cash accounts and opening balances are excluded.",
+      "Legacy electronic settlement batches are not part of this resettable state.",
+    ],
+  });
+});
+
+// ── GET /reconciliation/bank-batches ─────────────────────────────────────────
+router.get("/reconciliation/bank-batches", requireModuleView("page:/accounts/reconciliation"), async (req, res): Promise<void> => {
+  const access = await bookAccessScope((req as any).employee ?? {});
+  const { rows } = await pool.query(`
+    SELECT b.*, cba.name AS bank_account_name,
+           COALESCE(w.name, o.name, 'Head Office') AS location_name,
+           COUNT(i.id)::int AS item_count
+      FROM bank_reconciliation_batches b
+      JOIN cash_bank_accounts cba ON cba.id = b.bank_account_id
+      LEFT JOIN warehouses w ON b.location_type = 'warehouse' AND w.id = b.location_id
+      LEFT JOIN outlets o ON b.location_type = 'outlet' AND o.id = b.location_id
+      LEFT JOIN bank_reconciliation_batch_items i ON i.batch_id = b.id
+     GROUP BY b.id, cba.name, w.name, o.name
+     ORDER BY b.created_at DESC
+     LIMIT 200
+  `);
+  const visible = rows.filter((r: any) =>
+    !access.ledgerIds || access.ledgerIds.has(Number(r.bank_ledger_id)),
+  );
+  res.json(visible.map((r: any) => ({
+    id: Number(r.id),
+    batchReference: r.batch_reference,
+    reconciliationDate: String(r.reconciliation_date).slice(0, 10),
+    bankAccountId: Number(r.bank_account_id),
+    bankLedgerId: Number(r.bank_ledger_id),
+    bankAccountName: r.bank_account_name,
+    locationType: r.location_type,
+    locationId: Number(r.location_id),
+    locationName: r.location_name,
+    grossAmount: Number(r.gross_amount),
+    processingCharge: Number(r.processing_charge),
+    netAmount: Number(r.net_amount),
+    accountingImpact: r.accounting_impact,
+    itemCount: Number(r.item_count),
+    createdBy: r.created_by,
+    createdAt: r.created_at,
+    status: r.status,
+  })));
+});
+
+// ── POST /reconciliation/bank-batches ────────────────────────────────────────
+// This is a metadata-only review batch. It deliberately does not create a
+// receipt, payment, journal voucher, customer-ledger leg, or bank posting.
+router.post("/reconciliation/bank-batches", requireModuleAction("page:/accounts/reconciliation", "add"), async (req, res): Promise<void> => {
+  const body = (req.body ?? {}) as Record<string, any>;
+  const selected = Array.isArray(body.transactions) ? body.transactions : [];
+  const bankAccountId = Number(body.bankAccountId);
+  const reconciliationDate = String(body.reconciliationDate ?? "");
+  const chargeText = body.processingCharge == null ? "0" : String(body.processingCharge).trim();
+  if (selected.length === 0 || selected.length > 500) {
+    res.status(400).json({ error: "Select between 1 and 500 bank transactions." });
+    return;
+  }
+  if (!Number.isInteger(bankAccountId) || bankAccountId <= 0) {
+    res.status(400).json({ error: "bankAccountId is required." });
+    return;
+  }
+  if (!isIsoDate(reconciliationDate)) {
+    res.status(400).json({ error: "reconciliationDate must be a real YYYY-MM-DD date." });
+    return;
+  }
+  if (!/^\d+(?:\.\d{1,2})?$/.test(chargeText)) {
+    res.status(400).json({ error: "processingCharge must be a non-negative amount with at most two decimals." });
+    return;
+  }
+  const processingCharge = Math.round(Number(chargeText) * 100) / 100;
+  const identities = selected.map((item: any) => ({
+    entryId: String(item?.entryId ?? "").trim(),
+    ledgerId: Number(item?.ledgerId),
+  }));
+  if (identities.some((x: any) => !x.entryId || x.entryId.length > 200 || !Number.isInteger(x.ledgerId) || x.ledgerId <= 0)) {
+    res.status(400).json({ error: "Every transaction must contain a valid entryId and ledgerId." });
+    return;
+  }
+  const uniqueKeys = new Set(identities.map((x: any) => `${x.ledgerId}:${x.entryId}`));
+  if (uniqueKeys.size !== identities.length) {
+    res.status(400).json({ error: "A transaction may appear only once in a batch." });
+    return;
+  }
+  if (await respondIfMonthLocked(res, pool, [reconciliationDate], "bank reconciliation batch")) return;
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const access = await bookAccessScope((req as any).employee ?? {});
+    const { rows: [account] } = await client.query(
+      `SELECT cba.id AS account_id, cba.ledger_id, cba.name, cba.account_type,
+              COALESCE(cba.location_type, 'headoffice') AS location_type,
+              COALESCE(cba.location_id, 0) AS location_id,
+              COALESCE(w.name, o.name, 'Head Office') AS location_name
+         FROM cash_bank_accounts cba
+         JOIN account_ledgers al ON al.id = cba.ledger_id
+         LEFT JOIN warehouses w ON cba.location_type = 'warehouse' AND w.id = cba.location_id
+         LEFT JOIN outlets o ON cba.location_type = 'outlet' AND o.id = cba.location_id
+        WHERE cba.id = $1 AND cba.account_type <> 'cash'
+          AND COALESCE(al.is_active, true)
+        FOR UPDATE OF cba`,
+      [bankAccountId],
+    );
+    if (!account || (access.ledgerIds && !access.ledgerIds.has(Number(account.ledger_id)))) {
+      await client.query("ROLLBACK");
+      res.status(404).json({ error: "Bank account not found." });
+      return;
+    }
+
+    // Advisory locks cover the first reconciliation of an identity, where no
+    // status row exists yet. Sorting makes concurrent batches acquire locks in
+    // the same order and prevents deadlocks.
+    const sorted = [...identities].sort((a: any, b: any) =>
+      `${a.ledgerId}:${a.entryId}`.localeCompare(`${b.ledgerId}:${b.entryId}`));
+    for (const identity of sorted) {
+      await client.query(
+        `SELECT pg_advisory_xact_lock(hashtext('bank-reconciliation-entry'), hashtextextended($1, 0))`,
+        [`${identity.ledgerId}:${identity.entryId}`],
+      );
+    }
+
+    const postings = await buildDerivedPostings({ q: client });
+    const byKey = new Map<string, any>();
+    for (const posting of postings as any[]) {
+      const key = `${Number(posting.ledgerId)}:${posting.entryId}`;
+      const current = byKey.get(key);
+      if (current) {
+        current.debit += Number(posting.debit ?? 0);
+        current.credit += Number(posting.credit ?? 0);
+      } else {
+        byKey.set(key, {
+          ...posting,
+          ledgerId: Number(posting.ledgerId),
+          entryId: String(posting.entryId),
+          debit: Number(posting.debit ?? 0),
+          credit: Number(posting.credit ?? 0),
+        });
+      }
+    }
+
+    const chosen: any[] = [];
+    for (const identity of identities) {
+      const posting = byKey.get(`${identity.ledgerId}:${identity.entryId}`);
+      if (!posting || identity.ledgerId !== Number(account.ledger_id) || posting.source === "opening_balance") {
+        await client.query("ROLLBACK");
+        res.status(409).json({ error: `Transaction ${identity.entryId} is not an eligible transaction in the selected bank account.` });
+        return;
+      }
+      if (access.ledgerIds && !access.ledgerIds.has(identity.ledgerId)
+        && !isLocationInScope(access.dataScope, posting.locationType, posting.locationId)) {
+        await client.query("ROLLBACK");
+        res.status(404).json({ error: "One or more transactions are outside your location scope." });
+        return;
+      }
+      if (posting.locationType && !isLocationInScope(access.dataScope, posting.locationType, posting.locationId)
+        && !access.dataScope.isHeadOffice) {
+        await client.query("ROLLBACK");
+        res.status(404).json({ error: "One or more transactions are outside your location scope." });
+        return;
+      }
+      const { rows: [existing] } = await client.query(
+        `SELECT status FROM bank_reconciliation_entries
+          WHERE ledger_id = $1 AND entry_id = $2
+          FOR UPDATE`,
+        [identity.ledgerId, identity.entryId],
+      );
+      if (existing?.status === "reconciled") {
+        await client.query("ROLLBACK");
+        res.status(409).json({ error: `Transaction ${identity.entryId} is already reconciled.` });
+        return;
+      }
+      chosen.push(posting);
+    }
+
+    const grossAmount = Math.round(chosen.reduce((sum, p) =>
+      sum + Math.abs(Number(p.debit) - Number(p.credit)), 0) * 100) / 100;
+    const netAmount = Math.round((grossAmount - processingCharge) * 100) / 100;
+    if (processingCharge > grossAmount) {
+      await client.query("ROLLBACK");
+      res.status(400).json({ error: "processingCharge cannot exceed the selected gross amount." });
+      return;
+    }
+
+    await client.query(
+      `SELECT pg_advisory_xact_lock(hashtext('bank-reconciliation-batch-reference'), EXTRACT(YEAR FROM CURRENT_DATE)::int)`,
+    );
+    const { rows: [maxRow] } = await client.query(
+      `SELECT COALESCE(MAX((regexp_replace(batch_reference, '^BANK-RECON-\\d+-', ''))::int), 0) AS max_seq
+         FROM bank_reconciliation_batches
+        WHERE batch_reference ~ ('^BANK-RECON-' || EXTRACT(YEAR FROM CURRENT_DATE)::text || '-\\d+$')`,
+    );
+    const sequence = Number(maxRow.max_seq) + 1;
+    const batchReference = `BANK-RECON-${new Date().getFullYear()}-${String(sequence).padStart(4, "0")}`;
+    const { rows: [batch] } = await client.query(
+      `INSERT INTO bank_reconciliation_batches
+         (batch_reference, reconciliation_date, bank_account_id, bank_ledger_id,
+          location_type, location_id, gross_amount, processing_charge, net_amount,
+          accounting_impact, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'none',$10)
+       RETURNING id`,
+      [
+        batchReference, reconciliationDate, Number(account.account_id), Number(account.ledger_id),
+        account.location_type, Number(account.location_id), grossAmount, processingCharge,
+        netAmount, (req as any).employee?.username ?? "system",
+      ],
+    );
+    for (const posting of chosen) {
+      await client.query(
+        `INSERT INTO bank_reconciliation_batch_items
+           (batch_id, entry_id, ledger_id, source, transaction_date, debit, credit, amount)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [
+          batch.id, posting.entryId, Number(posting.ledgerId), posting.source, String(posting.date).slice(0, 10),
+          Number(posting.debit), Number(posting.credit),
+          Math.abs(Number(posting.debit) - Number(posting.credit)),
+        ],
+      );
+      await client.query(
+        `INSERT INTO bank_reconciliation_entries
+           (entry_id, ledger_id, source, transaction_date, debit, credit, voucher_number,
+            description, location_type, location_id, status, reconciled_at, reconciled_by,
+            unreconciled_at, unreconciled_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'reconciled',now(),$11,NULL,NULL)
+         ON CONFLICT (ledger_id, entry_id) DO UPDATE
+           SET source=EXCLUDED.source, transaction_date=EXCLUDED.transaction_date,
+               debit=EXCLUDED.debit, credit=EXCLUDED.credit,
+               voucher_number=EXCLUDED.voucher_number, description=EXCLUDED.description,
+               location_type=EXCLUDED.location_type, location_id=EXCLUDED.location_id,
+               status='reconciled', reconciled_at=now(), reconciled_by=EXCLUDED.reconciled_by,
+               unreconciled_at=NULL, unreconciled_by=NULL`,
+        [
+          posting.entryId, Number(posting.ledgerId), posting.source, String(posting.date).slice(0, 10),
+          Number(posting.debit), Number(posting.credit), posting.voucherNumber ?? null,
+          posting.description ?? "", posting.locationType ?? null, posting.locationId ?? null,
+          (req as any).employee?.username ?? "system",
+        ],
+      );
+    }
+    await client.query("COMMIT");
+    logActivity({
+      action: "CREATE",
+      module: "reconciliation",
+      entityType: "bank_reconciliation_batch",
+      entityId: batch.id,
+      description: `Bank reconciliation batch ${batchReference}`,
+      metadata: {
+        after: {
+          batchReference, bankAccountId: Number(account.account_id), bankLedgerId: Number(account.ledger_id),
+          itemCount: chosen.length, grossAmount, processingCharge, netAmount,
+          accountingImpact: "none",
+        },
+      },
+    }).catch(() => {});
+    res.status(201).json({
+      id: Number(batch.id), batchReference, reconciliationDate,
+      bankAccountId: Number(account.account_id), bankLedgerId: Number(account.ledger_id),
+      itemCount: chosen.length, grossAmount, processingCharge, netAmount,
+      accountingImpact: "none", status: "active",
+    });
+  } catch (err: any) {
+    await client.query("ROLLBACK").catch(() => {});
+    if (err?.code === "23505") {
+      res.status(409).json({ error: "One or more selected transactions were reconciled concurrently. Refresh and try again." });
+      return;
+    }
+    console.error("Bank reconciliation batch error:", err);
+    res.status(500).json({ error: err?.message ?? "Failed to create bank reconciliation batch." });
+  } finally {
+    client.release();
+  }
+});
+
+// ── POST /reconciliation/bank-reset ──────────────────────────────────────────
+// Administrator-only reset of review state. It does not touch any financial
+// document, voucher, ledger, GST, stock, or legacy settlement batch.
+router.post("/reconciliation/bank-reset", requireModuleAction("page:/accounts/reconciliation", "delete"), async (req, res): Promise<void> => {
+  if (!(await isLevelOneAdmin((req as any).employee ?? {}))) {
+    res.status(403).json({ error: "Only an Administrator can reset bank reconciliation state." });
+    return;
+  }
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const before = {
+      entries: (await client.query(`SELECT COUNT(*)::int AS count FROM bank_reconciliation_entries WHERE status = 'reconciled'`)).rows[0].count,
+      batches: (await client.query(`SELECT COUNT(*)::int AS count, COALESCE(SUM(gross_amount),0)::numeric AS gross, COALESCE(SUM(processing_charge),0)::numeric AS charges FROM bank_reconciliation_batches`)).rows[0],
+    };
+    const deletedItems = await client.query(`DELETE FROM bank_reconciliation_batch_items RETURNING id`);
+    const deletedBatches = await client.query(`DELETE FROM bank_reconciliation_batches RETURNING id`);
+    await client.query(
+      `UPDATE bank_reconciliation_entries
+          SET status='unreconciled', unreconciled_at=now(),
+              unreconciled_by=$1, reconciled_at=NULL, reconciled_by=NULL,
+              reconciliation_reference=NULL`,
+      [(req as any).employee?.username ?? "system"],
+    );
+    await client.query("COMMIT");
+    logActivity({
+      action: "DELETE",
+      module: "reconciliation",
+      entityType: "bank_reconciliation_reset",
+      description: "Reconciliation Reset",
+      metadata: {
+        before: {
+          reconciledEntryCount: Number(before.entries),
+          batchCount: Number(before.batches.count),
+          grossAmount: Number(before.batches.gross),
+          processingCharges: Number(before.batches.charges),
+        },
+        after: { reconciledEntryCount: 0, batchCount: 0, accountingImpact: "none" },
+        deletedBatchItemCount: deletedItems.rowCount ?? 0,
+        deletedBatchCount: deletedBatches.rowCount ?? 0,
+        legacySettlementBatchesPreserved: true,
+      },
+    }).catch(() => {});
+    res.json({
+      reset: true,
+      reconciledEntriesReset: Number(before.entries),
+      bankBatchesDeleted: deletedBatches.rowCount ?? 0,
+      batchItemsDeleted: deletedItems.rowCount ?? 0,
+      legacySettlementBatchesPreserved: true,
+    });
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+});
+
 // ── POST /reconciliation/bank-book/:entryId/reconcile ────────────────────────
 // One-step Bank Book status change. This never creates a voucher or posting:
 // the selected posting is re-read from the authoritative derived book inside
@@ -903,6 +1349,12 @@ router.post(
         return;
       }
 
+      // Coordinate with the multi-select batch route even when this is the
+      // first reconciliation of the identity and no status row exists yet.
+      await client.query(
+        `SELECT pg_advisory_xact_lock(hashtext('bank-reconciliation-entry'), hashtextextended($1, 0))`,
+        [`${ledgerId}:${entryId}`],
+      );
       const book = await computeCashBankBook({
         q: client,
         ledgerId,

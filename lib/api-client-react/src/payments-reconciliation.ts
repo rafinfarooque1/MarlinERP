@@ -196,6 +196,52 @@ export interface BankTransaction {
   reconciliationReference: string | null;
 }
 
+export interface BankReconciliationBatch {
+  id: number;
+  batchReference: string;
+  reconciliationDate: string;
+  bankAccountId: number;
+  bankLedgerId: number;
+  bankAccountName: string;
+  locationType: string;
+  locationId: number;
+  locationName: string;
+  grossAmount: number;
+  processingCharge: number;
+  netAmount: number;
+  accountingImpact: string;
+  itemCount: number;
+  createdBy: string | null;
+  createdAt: string;
+  status: string;
+}
+
+export interface BankReconciliationAudit {
+  accounts: {
+    accountId: number;
+    ledgerId: number;
+    accountName: string;
+    locationName: string;
+    eligibleCount: number;
+    eligibleAmount: number;
+    reconciledCount: number;
+    reconciledAmount: number;
+    unreconciledCount: number;
+    unreconciledAmount: number;
+    duplicateCount: number;
+    duplicateAmount: number;
+  }[];
+  undetermined: {
+    ledgerId: number;
+    entryId: string;
+    date: string;
+    source: string;
+    reason: string;
+  }[];
+  legacySettlementBatchesPreserved: boolean;
+  notes: string[];
+}
+
 export interface OutletCashBalance {
   /** 'outlet' or 'warehouse' */
   locationType: string;
@@ -335,6 +381,20 @@ export function useGetBankTransactions(params?: {
   });
 }
 
+export function useGetBankReconciliationBatches() {
+  return useQuery<BankReconciliationBatch[]>({
+    queryKey: ["bank-reconciliation-batches"],
+    queryFn: () => customFetch("/api/reconciliation/bank-batches"),
+  });
+}
+
+export function useGetBankReconciliationAudit() {
+  return useQuery<BankReconciliationAudit>({
+    queryKey: ["bank-reconciliation-audit"],
+    queryFn: () => customFetch("/api/reconciliation/bank-audit"),
+  });
+}
+
 export function useCreateBankAccount() {
   const qc = useQueryClient();
   return useMutation({
@@ -358,6 +418,47 @@ export function useCreateReconciliationBatch() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: getReconciliationBatchesQueryKey() });
       qc.invalidateQueries({ queryKey: getPendingPaymentsQueryKey() });
+    },
+  });
+}
+
+export function useCreateBankReconciliationBatch() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: {
+      bankAccountId: number;
+      transactions: { entryId: string; ledgerId: number }[];
+      reconciliationDate: string;
+      processingCharge: string | number;
+    }) =>
+      customFetch<BankReconciliationBatch>("/api/reconciliation/bank-batches", {
+        method: "POST",
+        body: JSON.stringify(data),
+        headers: { "Content-Type": "application/json" },
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["reconciliation-bank-transactions"] });
+      qc.invalidateQueries({ queryKey: ["bank-reconciliation-batches"] });
+      qc.invalidateQueries({ queryKey: ["bank-reconciliation-audit"] });
+      qc.invalidateQueries({ queryKey: ["/api/accounts/cash-bank-book"] });
+    },
+  });
+}
+
+export function useResetBankReconciliation() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      customFetch("/api/reconciliation/bank-reset", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["reconciliation-bank-transactions"] });
+      qc.invalidateQueries({ queryKey: ["bank-reconciliation-batches"] });
+      qc.invalidateQueries({ queryKey: ["bank-reconciliation-audit"] });
+      qc.invalidateQueries({ queryKey: ["/api/accounts/cash-bank-book"] });
     },
   });
 }
