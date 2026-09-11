@@ -149,6 +149,7 @@ export interface CreateSalePayload {
   /** Back-compat: the outlet id for outlet sales, 1 otherwise. */
   outletId: number;
   customerId?: number;
+  salespersonEmployeeId?: number;
   saleDate: string;
   /** Create accepts only 'cash' (money now / partial) or 'credit'. The STORED
    * mode (Cash/Bank/UPI) is derived server-side from the receiving ledger. */

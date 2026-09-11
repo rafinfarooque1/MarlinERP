@@ -98,6 +98,8 @@ router.get("/reports/sales-register", requireModuleView("page:/reports/sales"), 
             COALESCE(s.location_type,'outlet') AS location_type,
             COALESCE(s.location_id, s.outlet_id) AS location_id,
             s.customer_id, c.name AS customer_name,
+             s.salesperson_employee_id,
+             COALESCE(NULLIF(TRIM(s.salesperson), ''), 'Unassigned') AS salesperson_name,
             COALESCE(s.subtotal,0) AS subtotal, COALESCE(s.discount_total,0) AS discount_total,
             COALESCE(s.tax_total,0) AS tax_total, s.total_amount,
             COALESCE(s.amount_paid,0) AS amount_paid,
@@ -134,6 +136,8 @@ router.get("/reports/sales-register", requireModuleView("page:/reports/sales"), 
       locationId: Number(r.location_id),
       locationName: locName(maps, r.location_type, Number(r.location_id)),
       customerName: r.customer_name ?? "Walk-in",
+       salespersonName: r.salesperson_name ?? "Unassigned",
+       salespersonEmployeeId: r.salesperson_employee_id != null ? Number(r.salesperson_employee_id) : null,
       subtotal: r2(Number(r.subtotal)),
       discount: r2(Number(r.discount_total)),
       tax: r2(Number(r.tax_total)),
@@ -156,6 +160,67 @@ router.get("/reports/sales-register", requireModuleView("page:/reports/sales"), 
     balance: r2(list.reduce((s, r) => s + r.balance, 0)),
   };
   res.json({ rows: list, totals });
+});
+
+// ── Sales by salesman — one row per snapshotted salesman ─────────────────────
+router.get("/reports/sales-by-salesperson", requireModuleView("page:/reports/sales"), async (req, res): Promise<void> => {
+  const range = parseRange(req as any);
+  if (!range) { res.status(400).json({ error: "from/to must be YYYY-MM-DD dates" }); return; }
+  const [locationType, locationId] = viewLocParams(req);
+  const { getUserDataScope: getScope, scopeSalesWhere: salesScope } = await import("../lib/dataScope");
+  const params: unknown[] = [range.from, range.to, locationType, locationId];
+  let scopeCond = "TRUE";
+  const scopeEmp = (req as any).employee as { branchType: string; branchId: number } | undefined;
+  if (scopeEmp && scopeEmp.branchType !== "headoffice") {
+    scopeCond = salesScope(await getScope(scopeEmp), params);
+  }
+  const { rows } = await pool.query<any>(
+    `SELECT s.salesperson_employee_id AS salesperson_employee_id,
+            COALESCE(NULLIF(TRIM(s.salesperson), ''), 'Unassigned') AS salesperson_name,
+            COUNT(*)::int AS invoices,
+            COALESCE(SUM(s.subtotal::numeric), 0) AS subtotal,
+            COALESCE(SUM(s.tax_total::numeric), 0) AS tax,
+            COALESCE(SUM(s.total_amount::numeric), 0) AS total,
+            COALESCE(SUM(s.amount_paid::numeric), 0) AS paid,
+            COALESCE(SUM(${creditAdjustmentsExpr("s")}), 0) AS credit_adjustments
+       FROM sales s
+      WHERE s.branch_transfer_id IS NULL AND s.cancelled_at IS NULL
+        AND ($1 = '' OR s.sale_date >= $1::date)
+        AND ($2 = '' OR s.sale_date <= $2::date)
+        AND ($3 = '' OR COALESCE(s.location_type,'outlet') = $3)
+        AND ($4 = 0 OR COALESCE(s.location_id, s.outlet_id) = $4)
+        AND (${scopeCond})
+      GROUP BY s.salesperson_employee_id, COALESCE(NULLIF(TRIM(s.salesperson), ''), 'Unassigned')
+      ORDER BY total DESC, salesperson_name`,
+    params,
+  );
+  const list = rows.map((r: any) => {
+    const total = r2(Number(r.total));
+    const paid = r2(Number(r.paid));
+    const creditAdjustments = r2(Number(r.credit_adjustments));
+    return {
+      salespersonEmployeeId: r.salesperson_employee_id != null ? Number(r.salesperson_employee_id) : null,
+      salespersonName: r.salesperson_name,
+      invoices: Number(r.invoices),
+      subtotal: r2(Number(r.subtotal)),
+      tax: r2(Number(r.tax)),
+      total,
+      paid,
+      outstanding: r2(Math.max(0, total - paid - creditAdjustments)),
+    };
+  });
+  res.json({
+    rows: list,
+    totals: {
+      salespeople: list.length,
+      invoices: list.reduce((sum, r) => sum + r.invoices, 0),
+      subtotal: r2(list.reduce((sum, r) => sum + r.subtotal, 0)),
+      tax: r2(list.reduce((sum, r) => sum + r.tax, 0)),
+      total: r2(list.reduce((sum, r) => sum + r.total, 0)),
+      paid: r2(list.reduce((sum, r) => sum + r.paid, 0)),
+      outstanding: r2(list.reduce((sum, r) => sum + r.outstanding, 0)),
+    },
+  });
 });
 
 // ── Sales by item ────────────────────────────────────────────────────────────

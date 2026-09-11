@@ -1056,6 +1056,8 @@ export const ListSalesResponseItem = zod.object({
   "outletName": zod.string().optional(),
   "customerId": zod.number().nullish(),
   "customerName": zod.string().nullish(),
+  "salesperson": zod.string().nullish(),
+  "salespersonEmployeeId": zod.number().nullish(),
   "saleDate": zod.string(),
   "lineItems": zod.array(zod.object({
   "itemId": zod.number(),
@@ -1094,6 +1096,7 @@ export const ListSalesResponse = zod.array(ListSalesResponseItem)
 export const CreateSaleBody = zod.object({
   "outletId": zod.number(),
   "customerId": zod.number().optional(),
+  "salespersonEmployeeId": zod.number().nullish().describe('Active employee selected as the salesman; the server snapshots the employee name on the invoice.'),
   "saleDate": zod.string(),
   "lineItems": zod.array(zod.object({
   "itemId": zod.number(),
@@ -1124,6 +1127,8 @@ export const CreateSaleResponse = zod.object({
   "outletName": zod.string().optional(),
   "customerId": zod.number().nullish(),
   "customerName": zod.string().nullish(),
+  "salesperson": zod.string().nullish(),
+  "salespersonEmployeeId": zod.number().nullish(),
   "saleDate": zod.string(),
   "lineItems": zod.array(zod.object({
   "itemId": zod.number(),
@@ -1166,6 +1171,8 @@ export const GetSaleResponse = zod.object({
   "outletName": zod.string().optional(),
   "customerId": zod.number().nullish(),
   "customerName": zod.string().nullish(),
+  "salesperson": zod.string().nullish(),
+  "salespersonEmployeeId": zod.number().nullish(),
   "saleDate": zod.string(),
   "lineItems": zod.array(zod.object({
   "itemId": zod.number(),

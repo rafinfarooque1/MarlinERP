@@ -22,6 +22,8 @@ export interface SalesRegisterRow {
   locationId: number;
   locationName: string;
   customerName: string;
+  salespersonName: string;
+  salespersonEmployeeId: number | null;
   subtotal: number;
   discount: number;
   tax: number;
@@ -35,6 +37,22 @@ export interface SalesRegisterRow {
 export interface SalesRegisterResponse {
   rows: SalesRegisterRow[];
   totals: { invoices: number; subtotal: number; discount: number; tax: number; total: number; paid: number; balance: number };
+}
+
+export interface SalesBySalespersonRow {
+  salespersonEmployeeId: number | null;
+  salespersonName: string;
+  invoices: number;
+  subtotal: number;
+  tax: number;
+  total: number;
+  paid: number;
+  outstanding: number;
+}
+
+export interface SalesBySalespersonResponse {
+  rows: SalesBySalespersonRow[];
+  totals: { salespeople: number; invoices: number; subtotal: number; tax: number; total: number; paid: number; outstanding: number };
 }
 
 export interface SalesByItemRow {
@@ -203,6 +221,14 @@ export function useSalesRegister(params: DateRangeParams & { locationType?: stri
   return useQuery({
     queryKey: ['/api/reports/sales-register', qs],
     queryFn: () => customFetch<SalesRegisterResponse>(`/api/reports/sales-register${qs}`),
+  });
+}
+
+export function useSalesBySalesperson(params: DateRangeParams & { locationType?: string; locationId?: number } = {}) {
+  const qs = buildQs({ ...params });
+  return useQuery({
+    queryKey: ['/api/reports/sales-by-salesperson', qs],
+    queryFn: () => customFetch<SalesBySalespersonResponse>(`/api/reports/sales-by-salesperson${qs}`),
   });
 }
 

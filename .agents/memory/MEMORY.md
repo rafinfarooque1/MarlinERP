@@ -154,3 +154,4 @@
 - [HR employee lifecycle](hr-employee-lifecycle.md) — app-created employees carry a pay_components row (delete removes it, history blocks with 400); leave cancel = status flip; POS cash sale payments are receipt-backed → system-delete the receipt before cancel.
 - [Voucher print verification](voucher-print-verification.md) — validate physical page geometry with pdfinfo, left-half text bounds with pdftotext -bbox, and clipping visually with a raster render
 - [Bank Book reconciliation identity](bank-book-reconciliation.md) — status keys are exact posting ledger + derived entry id; one-step reconciliation is metadata-only and never posts accounting
+- [Salesman assignment](salesman-assignment.md) — store employee ID plus name snapshot; validate new assignments by activity/location and grandfather unchanged historical assignments
