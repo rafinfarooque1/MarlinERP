@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { usePermission } from '@/lib/usePermission';
 import { useOutletsEnabled, useClearOutletSelection } from '@/lib/useFeatureFlags';
@@ -12,10 +12,11 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import {
   useGetBankLedgers, useGetBankTransactions, useCreateBankReconciliationBatch,
   useGetBankReconciliationAudit, useGetBankReconciliationBatches,
+  useGetBankReconciliationBatch, useUpdateBankReconciliationBatch,
   useListOutlets, useListWarehouses,
 } from '@workspace/api-client-react';
 import { toast } from 'sonner';
-import { CheckSquare, Landmark, Wallet, AlertTriangle } from 'lucide-react';
+import { CheckSquare, Landmark, Wallet, AlertTriangle, Pencil } from 'lucide-react';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { PageHeader } from '@/components/app/page-header';
 import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
@@ -56,6 +57,7 @@ export default function Reconciliation() {
   const [toDate, setToDate] = useState('');
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
   const [batchOpen, setBatchOpen] = useState(false);
+  const [editBatchId, setEditBatchId] = useState<number | null>(null);
   const [reconciliationDate, setReconciliationDate] = useState(localDateValue);
   const [processingCharge, setProcessingCharge] = useState('0');
 
@@ -79,8 +81,29 @@ export default function Reconciliation() {
     search: search.trim() || undefined,
   });
   const createBatchMutation = useCreateBankReconciliationBatch();
+  const updateBatchMutation = useUpdateBankReconciliationBatch();
   const { data: audit } = useGetBankReconciliationAudit();
   const { data: batches = [] } = useGetBankReconciliationBatches();
+  const { data: editingBatch } = useGetBankReconciliationBatch(editBatchId ?? 0, {
+    enabled: editBatchId != null,
+  });
+
+  useEffect(() => {
+    if (!editingBatch || editBatchId == null) return;
+    setSelectedKeys(new Set(editingBatch.items.map(item => `${item.ledgerId}:${item.entryId}`)));
+    setReconciliationDate(editingBatch.reconciliationDate);
+    setProcessingCharge(String(editingBatch.processingCharge));
+    setLocationFilter(
+      editingBatch.locationType === 'headoffice'
+        ? 'headoffice'
+        : `${editingBatch.locationType}:${editingBatch.locationId}`,
+    );
+    setAccountFilter(String(editingBatch.bankAccountId));
+    setStatusFilter('all');
+    setFromDate('');
+    setToDate('');
+    setSearch('');
+  }, [editingBatch, editBatchId]);
 
   const visibleTransactions = transactions.filter((t) =>
     statusFilter === 'all' || t.reconciliationStatus === statusFilter,
@@ -105,8 +128,14 @@ export default function Reconciliation() {
     .filter(t => t.reconciliationStatus === 'reconciled')
     .reduce((sum, t) => sum + Number(t.amount || 0), 0);
 
+  const editingItemKeys = new Set(
+    editingBatch?.items.map(item => `${item.ledgerId}:${item.entryId}`) ?? [],
+  );
+  const isEditableBatchItem = (t: typeof transactions[number]) =>
+    editBatchId != null && editingItemKeys.has(t.id);
   const selectableVisible = visibleTransactions.filter(t =>
-    t.reconciliationEligible && t.reconciliationStatus !== 'reconciled',
+    t.reconciliationEligible
+      && (t.reconciliationStatus !== 'reconciled' || isEditableBatchItem(t)),
   );
   const selectedTransactions = transactions.filter(t => selectedKeys.has(t.id));
   const selectedGross = selectedTransactions.reduce((sum, t) => sum + Number(t.amount || 0), 0);
@@ -114,7 +143,8 @@ export default function Reconciliation() {
   const selectedMixedAccounts = selectedTransactions.some(t => t.accountId !== selectedAccountId);
 
   function toggleSelected(entry: typeof transactions[number], checked: boolean) {
-    if (!entry.reconciliationEligible || entry.reconciliationStatus === 'reconciled') return;
+    if (!entry.reconciliationEligible
+      || (entry.reconciliationStatus === 'reconciled' && !isEditableBatchItem(entry))) return;
     if (checked && selectedAccountId != null && entry.accountId !== selectedAccountId) {
       toast.error('A reconciliation batch can contain only one bank account.');
       return;
@@ -148,19 +178,42 @@ export default function Reconciliation() {
   async function submitBatch() {
     if (!selectedTransactions.length || !selectedAccountId || selectedMixedAccounts) return;
     try {
-      await createBatchMutation.mutateAsync({
-        bankAccountId: selectedAccountId,
-        transactions: selectedTransactions.map(t => ({ entryId: t.entryId, ledgerId: t.ledgerId })),
-        reconciliationDate,
-        processingCharge,
-      });
+      const transactionsPayload = selectedTransactions.map(t => ({ entryId: t.entryId, ledgerId: t.ledgerId }));
+      if (editBatchId != null) {
+        await updateBatchMutation.mutateAsync({
+          id: editBatchId,
+          data: { transactions: transactionsPayload, reconciliationDate, processingCharge },
+        });
+      } else {
+        await createBatchMutation.mutateAsync({
+          bankAccountId: selectedAccountId,
+          transactions: transactionsPayload,
+          reconciliationDate,
+          processingCharge,
+        });
+      }
       setSelectedKeys(new Set());
       setBatchOpen(false);
+      setEditBatchId(null);
       setProcessingCharge('0');
-      toast.success('Bank reconciliation batch created.');
+      toast.success(editBatchId != null ? 'Bank reconciliation batch updated.' : 'Bank reconciliation batch created.');
     } catch (e: any) {
       toast.error(e?.data?.error || e?.message || 'Unable to reconcile selected transactions.');
     }
+  }
+
+  function openCreateBatch() {
+    setEditBatchId(null);
+    setSelectedKeys(new Set());
+    setReconciliationDate(localDateValue());
+    setProcessingCharge('0');
+    setBatchOpen(true);
+  }
+
+  function openEditBatch(batchId: number) {
+    setSelectedKeys(new Set());
+    setEditBatchId(batchId);
+    setBatchOpen(true);
   }
 
   function changeLocation(value: string) {
@@ -256,7 +309,7 @@ export default function Reconciliation() {
             size="sm"
             className="h-9"
             disabled={!perm.canEdit || selectedTransactions.length === 0 || selectedMixedAccounts}
-            onClick={() => setBatchOpen(true)}
+            onClick={openCreateBatch}
           >
             <CheckSquare className="w-4 h-4 mr-2" />
             Reconcile Selected{selectedTransactions.length ? ` (${selectedTransactions.length})` : ''}
@@ -306,7 +359,7 @@ export default function Reconciliation() {
                     <SortableHead k="location" sort={sort}>Location</SortableHead>
                     <SortableHead k="debit" sort={sort} className="text-right">In</SortableHead>
                     <SortableHead k="credit" sort={sort} className="text-right">Out</SortableHead>
-                    <SortableHead k="status" sort={sort}>Status</SortableHead>
+                     <SortableHead k="status" sort={sort}>Status</SortableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -314,8 +367,10 @@ export default function Reconciliation() {
                     <TableRow key={t.id}>
                       <TableCell>
                         <Checkbox
-                          checked={selectedKeys.has(t.id) || t.reconciliationStatus === 'reconciled'}
-                          disabled={!perm.canEdit || t.reconciliationStatus === 'reconciled' || !t.reconciliationEligible}
+                          checked={selectedKeys.has(t.id)}
+                          disabled={!perm.canEdit
+                            || !t.reconciliationEligible
+                            || (t.reconciliationStatus === 'reconciled' && !isEditableBatchItem(t))}
                           onCheckedChange={value => toggleSelected(t, value === true)}
                           aria-label={`Select ${t.voucherNumber || t.entryId}`}
                         />
@@ -360,7 +415,7 @@ export default function Reconciliation() {
             <p className="px-4 py-5 text-sm text-muted-foreground">No bank reconciliation batches yet.</p>
           ) : (
             <Table>
-              <TableHeader><TableRow><TableHead>Batch</TableHead><TableHead>Date</TableHead><TableHead>Bank account</TableHead><TableHead className="text-right">Gross</TableHead><TableHead className="text-right">Charge</TableHead><TableHead className="text-right">Net</TableHead><TableHead>Items</TableHead></TableRow></TableHeader>
+              <TableHeader><TableRow><TableHead>Batch</TableHead><TableHead>Date</TableHead><TableHead>Bank account</TableHead><TableHead className="text-right">Gross</TableHead><TableHead className="text-right">Charge</TableHead><TableHead className="text-right">Net</TableHead><TableHead>Items</TableHead><TableHead className="w-24">Actions</TableHead></TableRow></TableHeader>
               <TableBody>
                 {batches.slice(0, 10).map(batch => (
                   <TableRow key={batch.id}>
@@ -371,6 +426,19 @@ export default function Reconciliation() {
                     <TableCell className="text-right font-mono text-sm">{fmt(batch.processingCharge)}</TableCell>
                     <TableCell className="text-right font-mono text-sm">{fmt(batch.netAmount)}</TableCell>
                     <TableCell className="text-sm">{batch.itemCount}</TableCell>
+                    <TableCell>
+                      {perm.canEdit && batch.status === 'active' ? (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-8"
+                          onClick={() => openEditBatch(batch.id)}
+                        >
+                          <Pencil className="w-3.5 h-3.5 mr-1" />
+                          Edit
+                        </Button>
+                      ) : null}
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -381,9 +449,11 @@ export default function Reconciliation() {
         <Dialog open={batchOpen} onOpenChange={setBatchOpen}>
           <DialogContent className="sm:max-w-md">
             <DialogHeader>
-              <DialogTitle>Reconcile selected transactions</DialogTitle>
+            <DialogTitle>{editBatchId != null ? 'Edit reconciliation batch' : 'Reconcile selected transactions'}</DialogTitle>
               <DialogDescription>
-                This creates one review batch and updates reconciliation status. It does not create or alter accounting postings.
+              {editBatchId != null
+                ? 'Replace the reviewed transactions or update the batch metadata. Removed transactions become unreconciled. Accounting postings are not changed.'
+                : 'This creates one review batch and updates reconciliation status. It does not create or alter accounting postings.'}
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-4">
@@ -405,8 +475,10 @@ export default function Reconciliation() {
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setBatchOpen(false)}>Cancel</Button>
-              <Button onClick={submitBatch} disabled={createBatchMutation.isPending || !reconciliationDate || selectedMixedAccounts}>
-                {createBatchMutation.isPending ? 'Saving…' : 'Confirm reconciliation'}
+              <Button onClick={submitBatch} disabled={createBatchMutation.isPending || updateBatchMutation.isPending || !reconciliationDate || selectedMixedAccounts}>
+                {createBatchMutation.isPending || updateBatchMutation.isPending
+                  ? 'Saving…'
+                  : editBatchId != null ? 'Save batch changes' : 'Confirm reconciliation'}
               </Button>
             </DialogFooter>
           </DialogContent>
