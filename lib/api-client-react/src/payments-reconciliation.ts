@@ -216,6 +216,21 @@ export interface BankReconciliationBatch {
   status: string;
 }
 
+export interface BankReconciliationBatchItem {
+  id: number;
+  entryId: string;
+  ledgerId: number;
+  source: string;
+  transactionDate: string;
+  debit: number;
+  credit: number;
+  amount: number;
+}
+
+export interface BankReconciliationBatchDetail extends BankReconciliationBatch {
+  items: BankReconciliationBatchItem[];
+}
+
 export interface BankReconciliationAudit {
   accounts: {
     accountId: number;
@@ -385,6 +400,40 @@ export function useGetBankReconciliationBatches() {
   return useQuery<BankReconciliationBatch[]>({
     queryKey: ["bank-reconciliation-batches"],
     queryFn: () => customFetch("/api/reconciliation/bank-batches"),
+  });
+}
+
+export function useGetBankReconciliationBatch(id: number, options?: { enabled?: boolean }) {
+  return useQuery<BankReconciliationBatchDetail>({
+    queryKey: ["bank-reconciliation-batch", id],
+    queryFn: () => customFetch(`/api/reconciliation/bank-batches/${id}`),
+    enabled: options?.enabled !== false && id > 0,
+  });
+}
+
+export function useUpdateBankReconciliationBatch() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, data }: {
+      id: number;
+      data: {
+        transactions: { entryId: string; ledgerId: number }[];
+        reconciliationDate: string;
+        processingCharge: string | number;
+      };
+    }) =>
+      customFetch<BankReconciliationBatch>(`/api/reconciliation/bank-batches/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify(data),
+        headers: { "Content-Type": "application/json" },
+      }),
+    onSuccess: (_result, vars) => {
+      qc.invalidateQueries({ queryKey: ["reconciliation-bank-transactions"] });
+      qc.invalidateQueries({ queryKey: ["bank-reconciliation-batches"] });
+      qc.invalidateQueries({ queryKey: ["bank-reconciliation-batch", vars.id] });
+      qc.invalidateQueries({ queryKey: ["bank-reconciliation-audit"] });
+      qc.invalidateQueries({ queryKey: ["/api/accounts/cash-bank-book"] });
+    },
   });
 }
 
