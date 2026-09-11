@@ -10,9 +10,10 @@ import {
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { router } from 'expo-router';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   createSaleFull,
+  customFetch,
   useCashBankLedgersFlat,
   useListCustomers,
   useListItems,
@@ -102,6 +103,7 @@ export default function NewSaleScreen() {
       : null,
   );
   const [customer, setCustomer] = useState<{ id: number; name: string; hasGstin: boolean } | null>(null);
+  const [salesperson, setSalesperson] = useState<{ id: number; name: string } | null>(null);
   const [saleDate, setSaleDate] = useState(todayStr());
 
   // Step 2 — items
@@ -121,6 +123,7 @@ export default function NewSaleScreen() {
   // Pickers
   const [locPickerOpen, setLocPickerOpen] = useState(false);
   const [customerPickerOpen, setCustomerPickerOpen] = useState(false);
+  const [salespersonPickerOpen, setSalespersonPickerOpen] = useState(false);
   const [itemPickerOpen, setItemPickerOpen] = useState(false);
   const [accountPickerOpen, setAccountPickerOpen] = useState(false);
 
@@ -133,6 +136,10 @@ export default function NewSaleScreen() {
   const { data: warehouses } = useListWarehouses();
   const { data: outlets } = useListOutlets();
   const { data: customers, isLoading: customersLoading } = useListCustomers();
+  const { data: salespeople = [], isLoading: salespeopleLoading } = useQuery<any[]>({
+    queryKey: ['/api/sales/salespeople'],
+    queryFn: () => customFetch('/api/sales/salespeople'),
+  });
   const { data: items, isLoading: itemsLoading } = useListItems();
   const {
     data: cashBank,
@@ -317,6 +324,7 @@ export default function NewSaleScreen() {
     setStep(0);
     setCreated(null);
     setCustomer(null);
+    setSalesperson(null);
     setSaleDate(todayStr());
     setLines([]);
     setBillDiscount('');
@@ -336,6 +344,7 @@ export default function NewSaleScreen() {
       locationId: loc.locationType === 'headoffice' ? 1 : loc.locationId,
       outletId: loc.locationType === 'outlet' ? loc.locationId : 1,
       ...(customer ? { customerId: customer.id } : {}),
+      ...(salesperson ? { salespersonEmployeeId: salesperson.id } : {}),
       saleDate,
       paymentMode: payMode === 'credit' ? 'credit' : 'cash',
       lineItems: lines.map(l => ({
@@ -535,6 +544,10 @@ export default function NewSaleScreen() {
     label: String(c.name ?? `Customer #${c.id}`),
     sublabel: [c.phone, (c.gstNumber ?? c.gst_number) ? 'GSTIN' : null].filter(Boolean).join(' · ') || undefined,
   }));
+  const salespersonItems: PickerItem[] = ((salespeople as any[]) ?? [])
+    .filter(p => p.branchType === 'headoffice'
+      || (p.branchType === saleLoc?.locationType && Number(p.branchId) === Number(saleLoc?.locationId)))
+    .map(p => ({ key: String(p.id), label: String(p.name) }));
 
   const itemPickerItems: PickerItem[] = ((items as any[]) ?? [])
     .filter(i => (i.status ?? 'active') === 'active')
@@ -637,6 +650,14 @@ export default function NewSaleScreen() {
           <Text style={styles.mutedText}>
             Credit and partial payments need a registered customer.
           </Text>
+
+          <Text style={styles.fieldLabel}>Salesman <Text style={styles.mutedText}>(optional)</Text></Text>
+          <Pressable onPress={() => setSalespersonPickerOpen(true)} style={({ pressed }) => [styles.selectBox, pressed && { opacity: 0.8 }]}>
+            <Text style={salesperson ? styles.valueText : styles.placeholderText}>
+              {salesperson ? salesperson.name : 'Unassigned'}
+            </Text>
+            <Feather name="chevron-down" size={18} color={colors.mutedForeground} />
+          </Pressable>
 
           <Text style={styles.fieldLabel}>Sale date</Text>
           <View style={styles.dateRow}>
@@ -947,6 +968,24 @@ export default function NewSaleScreen() {
             });
           }
           setCustomerPickerOpen(false);
+        }}
+      />
+      <SearchablePicker
+        visible={salespersonPickerOpen}
+        onClose={() => setSalespersonPickerOpen(false)}
+        title="Salesman"
+        items={salespersonItems}
+        loading={salespeopleLoading}
+        selectedKey={salesperson ? String(salesperson.id) : null}
+        clearLabel="Unassigned"
+        onClear={() => {
+          setSalesperson(null);
+          setSalespersonPickerOpen(false);
+        }}
+        onSelect={pi => {
+          const p = ((salespeople as any[]) ?? []).find(x => String(x.id) === pi.key);
+          if (p) setSalesperson({ id: Number(p.id), name: String(p.name) });
+          setSalespersonPickerOpen(false);
         }}
       />
       <SearchablePicker

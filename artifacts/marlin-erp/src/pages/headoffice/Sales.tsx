@@ -189,6 +189,7 @@ const schema = z.object({
   locationType: z.enum(['outlet', 'warehouse', 'headoffice']).default('outlet'),
   locationId: z.coerce.number().min(1, 'Location required'),
   customerId: z.coerce.number().optional(),
+  salespersonEmployeeId: z.coerce.number().optional(),
   saleDate: z.string().min(1, 'Date required'),
   paymentMode: z.enum(STORED_SALE_MODES).default('cash'),
   couponCode: z.string().optional(),
@@ -205,6 +206,7 @@ const defaultFormValues: FormValues = {
   locationType: 'outlet',
   locationId: 0,
   saleDate: new Date().toISOString().split('T')[0],
+  salespersonEmployeeId: undefined,
   paymentMode: 'cash',
   couponCode: '',
   billDiscount: 0,
@@ -389,6 +391,10 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
       ? customFetch(`/api/customers?locationType=${forceLocationType}&locationId=${forceLocationId}`)
       : customFetch('/api/customers'),
   });
+  const { data: salespeople = [] } = useQuery<any[]>({
+    queryKey: ['/api/sales/salespeople'],
+    queryFn: () => customFetch('/api/sales/salespeople'),
+  });
   const { data: items = [] } = useListItems();
   const { data: companySettings } = useGetCompanySettings();
   const [statusFilter, setStatusFilter] = useState<'all' | 'unpaid' | 'partially_paid' | 'paid'>('all');
@@ -517,6 +523,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
       locationType: (sale.locationType ?? 'outlet') as 'outlet' | 'warehouse' | 'headoffice',
       locationId: sale.locationId ?? sale.outletId ?? 0,
       customerId: sale.customerId ?? undefined,
+      salespersonEmployeeId: sale.salespersonEmployeeId ?? (sale.salesperson_employee_id != null ? Number(sale.salesperson_employee_id) : undefined),
       saleDate: sale.saleDate,
       // Carry the stored mode through untouched — legacy 'card'/'bank_transfer'
       // included. They are shown as "Bank", but submitting 'bank' in their place
@@ -652,6 +659,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
     paymentMode: featureFlags.defaultSalesPaymentMode,
     locationType: (forceLocationType ?? pinnedLocation?.locationType ?? defaultFormValues.locationType) as 'outlet' | 'warehouse' | 'headoffice',
     locationId: forceLocationId ?? pinnedLocation?.locationId ?? defaultFormValues.locationId,
+     salespersonEmployeeId: undefined,
   }), [forceLocationType, forceLocationId, featureFlags.defaultSalesPaymentMode, pinnedLocation?.locationType, pinnedLocation?.locationId]);
 
   const form = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: effectiveDefaultValues });
@@ -1920,6 +1928,36 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                       {watchCustomerId && !isInterState && sellerState && customerState && (
                         <p className="text-xs text-emerald-600 mt-1">Intra-state sale → CGST + SGST apply</p>
                       )}
+                    </FormItem>
+                  );
+                }} />
+                <FormField control={form.control} name="salespersonEmployeeId" render={({ field }) => {
+                  const locationType = form.watch('locationType');
+                  const locationId = Number(form.watch('locationId') || 0);
+                  const eligible = (salespeople as any[]).filter((p: any) =>
+                    p.branchType === 'headoffice'
+                    || (p.branchType === locationType && Number(p.branchId) === locationId)
+                  );
+                  const selected = eligible.find((p: any) => Number(p.id) === Number(field.value));
+                  return (
+                    <FormItem>
+                      <FormLabel>Salesman <span className="text-xs text-muted-foreground font-normal">(optional)</span></FormLabel>
+                      <Select
+                        value={field.value ? String(field.value) : 'unassigned'}
+                        onValueChange={v => field.onChange(v === 'unassigned' ? undefined : Number(v))}
+                      >
+                        <FormControl><SelectTrigger><SelectValue placeholder="Unassigned" /></SelectTrigger></FormControl>
+                        <SelectContent>
+                          <SelectItem value="unassigned">Unassigned</SelectItem>
+                          {eligible.map((p: any) => (
+                            <SelectItem key={p.id} value={String(p.id)}>{p.name}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      {field.value && !selected && (
+                        <p className="text-xs text-muted-foreground">Previously assigned: {field.value}</p>
+                      )}
+                      <FormMessage />
                     </FormItem>
                   );
                 }} />

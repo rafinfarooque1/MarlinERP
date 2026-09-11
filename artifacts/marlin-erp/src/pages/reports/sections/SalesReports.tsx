@@ -4,6 +4,7 @@
 import { useState } from 'react';
 import {
   useSalesRegister, useSalesByItem, useSalesByLocation, useSalesStockCombined,
+  useSalesBySalesperson,
   useDiscountReport, useListWarehouses,
 } from '@workspace/api-client-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -21,7 +22,7 @@ import {
   type RangeState, type Col,
 } from '../shared';
 
-type SalesReport = 'register' | 'byItem' | 'byLocation' | 'discounts' | 'combined';
+type SalesReport = 'register' | 'bySalesperson' | 'byItem' | 'byLocation' | 'discounts' | 'combined';
 
 // ── Hierarchical warehouse→outlet location tree ───────────────────────────────
 type LocRow = {
@@ -272,6 +273,7 @@ function RegisterReport({ range, canDownload }: { range: RangeState; canDownload
     { key: 'locationName', label: 'Location' },
     { key: 'locationType', label: 'Type', render: (r) => <LocationBadge type={r.locationType} /> },
     { key: 'customerName', label: 'Customer' },
+    { key: 'salespersonName', label: 'Salesman' },
     { key: 'subtotal', label: 'Taxable', align: 'right', render: (r) => fmt(r.subtotal) },
     { key: 'tax', label: 'Tax', align: 'right', render: (r) => fmt(r.tax) },
     { key: 'total', label: 'Total', align: 'right', render: (r) => <b>{fmt(r.total)}</b> },
@@ -296,7 +298,7 @@ function RegisterReport({ range, canDownload }: { range: RangeState; canDownload
           disabled={isLoading || rows.length === 0}
           onCSV={() => downloadCSV('sales-register.csv', rows.map((r) => ({
             Invoice: r.invoiceNumber, Date: r.date, Location: r.locationName, 'Location Type': r.locationType,
-            Customer: r.customerName, 'Taxable (₹)': r.subtotal.toFixed(2), 'Discount (₹)': r.discount.toFixed(2),
+            Customer: r.customerName, Salesman: r.salespersonName, 'Taxable (₹)': r.subtotal.toFixed(2), 'Discount (₹)': r.discount.toFixed(2),
             'Tax (₹)': r.tax.toFixed(2), 'Total (₹)': r.total.toFixed(2), 'Paid (₹)': r.paid.toFixed(2),
             'Balance (₹)': r.balance.toFixed(2), Mode: paymentModeLabel(r.paymentMode), Status: r.paymentStatus,
           })))}
@@ -308,15 +310,15 @@ function RegisterReport({ range, canDownload }: { range: RangeState; canDownload
             sections: [{
               columns: [
                 { label: 'Invoice', width: 1.5 }, { label: 'Date' }, { label: 'Location', width: 1.5 },
-                { label: 'Customer', width: 1.5 }, { label: 'Taxable', align: 'right', width: 1.2 },
+                 { label: 'Customer', width: 1.5 }, { label: 'Salesman', width: 1.3 }, { label: 'Taxable', align: 'right', width: 1.2 },
                 { label: 'Tax', align: 'right' }, { label: 'Total', align: 'right', width: 1.2 },
                 { label: 'Paid', align: 'right', width: 1.2 }, { label: 'Balance', align: 'right', width: 1.2 },
                 { label: 'Status' },
               ],
-              rows: rows.map((r) => [r.invoiceNumber, fmtDate(r.date), r.locationName, r.customerName,
+               rows: rows.map((r) => [r.invoiceNumber, fmtDate(r.date), r.locationName, r.customerName, r.salespersonName,
                 pdfMoney(r.subtotal), pdfMoney(r.tax), pdfMoney(r.total), pdfMoney(r.paid), pdfMoney(r.balance),
                 titleCase(r.paymentStatus)]),
-              totalsRow: ['TOTAL', '', '', '', pdfMoney(t?.subtotal), pdfMoney(t?.tax), pdfMoney(t?.total),
+               totalsRow: ['TOTAL', '', '', '', '', pdfMoney(t?.subtotal), pdfMoney(t?.tax), pdfMoney(t?.total),
                 pdfMoney(t?.paid), pdfMoney(t?.balance), ''],
             }],
           })}
@@ -332,8 +334,80 @@ function RegisterReport({ range, canDownload }: { range: RangeState; canDownload
 
       <RTable
         cols={cols} rows={rows} loading={isLoading} rowKey={(r) => r.id}
-        footer={['TOTAL', '', '', '', '', fmt(t?.subtotal), fmt(t?.tax), fmt(t?.total), fmt(t?.paid), fmt(t?.balance), '']}
+         footer={['TOTAL', '', '', '', '', '', fmt(t?.subtotal), fmt(t?.tax), fmt(t?.total), fmt(t?.paid), fmt(t?.balance), '']}
       />
+    </div>
+  );
+}
+
+function SalespersonReport({ range, canDownload }: { range: RangeState; canDownload: boolean }) {
+  const [loc, setLoc] = useState('all');
+  const { data: outlets } = useEnabledOutlets();
+  const { data: warehouses = [] } = useListWarehouses();
+  const [locationType, locationIdStr] = loc === 'all' ? ['', ''] : loc.split(':');
+  const { data, isLoading } = useSalesBySalesperson({
+    from: range.from || undefined,
+    to: range.to || undefined,
+    locationType: locationType || undefined,
+    locationId: locationIdStr ? Number(locationIdStr) : undefined,
+  });
+  const rows = data?.rows ?? [];
+  const t = data?.totals;
+  const locLabel = loc === 'all'
+    ? 'All locations'
+    : [...(outlets as any[]).map((o) => ({ v: `outlet:${o.id}`, n: o.name })),
+       ...(warehouses as any[]).map((w) => ({ v: `warehouse:${w.id}`, n: w.name }))].find((x) => x.v === loc)?.n ?? loc;
+  const cols: Col<(typeof rows)[number]>[] = [
+    { key: 'salespersonName', label: 'Salesman', render: (r) => <span className="font-medium">{r.salespersonName}</span> },
+    { key: 'invoices', label: 'Invoices', align: 'center' },
+    { key: 'subtotal', label: 'Taxable', align: 'right', render: (r) => fmt(r.subtotal) },
+    { key: 'tax', label: 'Tax', align: 'right', render: (r) => fmt(r.tax) },
+    { key: 'total', label: 'Total', align: 'right', render: (r) => <b>{fmt(r.total)}</b> },
+    { key: 'paid', label: 'Collected', align: 'right', render: (r) => <span className="text-emerald-600">{fmt(r.paid)}</span> },
+    { key: 'outstanding', label: 'Outstanding', align: 'right', render: (r) => <span className={r.outstanding > 0 ? 'text-red-500' : ''}>{fmt(r.outstanding)}</span> },
+  ];
+  return (
+    <div className="space-y-4">
+      <RangeBar range={range}>
+        <Select value={loc} onValueChange={setLoc}>
+          <SelectTrigger className="h-8 text-xs w-52"><SelectValue placeholder="All locations" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All locations</SelectItem>
+            {(outlets as any[]).map((o) => <SelectItem key={`o${o.id}`} value={`outlet:${o.id}`}>{o.name} (Outlet)</SelectItem>)}
+            {(warehouses as any[]).map((w) => <SelectItem key={`w${w.id}`} value={`warehouse:${w.id}`}>{w.name} (Warehouse)</SelectItem>)}
+          </SelectContent>
+        </Select>
+        <ExportButtons
+          canDownload={canDownload} disabled={isLoading || rows.length === 0}
+          onCSV={() => downloadCSV('sales-by-salesman.csv', rows.map((r) => ({
+            Salesman: r.salespersonName, Invoices: r.invoices, 'Taxable (₹)': r.subtotal.toFixed(2),
+            'Tax (₹)': r.tax.toFixed(2), 'Total (₹)': r.total.toFixed(2),
+            'Collected (₹)': r.paid.toFixed(2), 'Outstanding (₹)': r.outstanding.toFixed(2),
+          })))}
+          onPDF={() => exportReportPdf({
+            title: 'Sales by Salesman',
+            subtitle: `Period: ${periodLabel(range.from, range.to)}   |   Location: ${locLabel}`,
+            metaRows: [['Period', periodLabel(range.from, range.to)], ['Location', locLabel], ['Invoices', String(t?.invoices ?? 0)]],
+            sections: [{
+              columns: [
+                { label: 'Salesman', width: 2 }, { label: 'Invoices', align: 'center' },
+                { label: 'Taxable', align: 'right' }, { label: 'Tax', align: 'right' },
+                { label: 'Total', align: 'right' }, { label: 'Collected', align: 'right' }, { label: 'Outstanding', align: 'right' },
+              ],
+              rows: rows.map((r) => [r.salespersonName, r.invoices, pdfMoney(r.subtotal), pdfMoney(r.tax), pdfMoney(r.total), pdfMoney(r.paid), pdfMoney(r.outstanding)]),
+              totalsRow: ['TOTAL', t?.invoices ?? 0, pdfMoney(t?.subtotal), pdfMoney(t?.tax), pdfMoney(t?.total), pdfMoney(t?.paid), pdfMoney(t?.outstanding)],
+            }],
+          })}
+        />
+      </RangeBar>
+      <SummaryCards cards={[
+        { label: 'Salesmen', value: t?.salespeople ?? 0 },
+        { label: 'Invoices', value: t?.invoices ?? 0 },
+        { label: 'Total Billed', value: fmt(t?.total), tone: 'accent' },
+        { label: 'Collected', value: fmt(t?.paid), tone: 'pos' },
+      ]} />
+      <RTable cols={cols} rows={rows} loading={isLoading} rowKey={(r) => r.salespersonEmployeeId ?? 'unassigned'}
+        footer={['TOTAL', t?.invoices ?? 0, fmt(t?.subtotal), fmt(t?.tax), fmt(t?.total), fmt(t?.paid), fmt(t?.outstanding)]} />
     </div>
   );
 }
@@ -724,12 +798,13 @@ export default function SalesSection() {
   const { canDownload } = usePermission('page:/reports/sales');
   const range = useDateRange('month');
   const [report, setReport] = useState<SalesReport>(() =>
-    reportViewFromUrl<SalesReport>(['register', 'byItem', 'byLocation', 'discounts', 'combined']) ?? 'register');
+    reportViewFromUrl<SalesReport>(['register', 'bySalesperson', 'byItem', 'byLocation', 'discounts', 'combined']) ?? 'register');
   return (
     <div className="space-y-4">
       <ReportPicker
         options={[
           { value: 'register', label: 'Sales Register' },
+          { value: 'bySalesperson', label: 'By Salesman' },
           { value: 'byItem', label: 'By Item' },
           { value: 'byLocation', label: 'By Location' },
           { value: 'discounts', label: 'Discounts' },
@@ -738,6 +813,7 @@ export default function SalesSection() {
         value={report} onChange={setReport}
       />
       {report === 'register' && <RegisterReport range={range} canDownload={canDownload} />}
+      {report === 'bySalesperson' && <SalespersonReport range={range} canDownload={canDownload} />}
       {report === 'byItem' && <ByItemReport range={range} canDownload={canDownload} />}
       {report === 'byLocation' && <ByLocationReport range={range} canDownload={canDownload} />}
       {report === 'discounts' && <DiscountsReport range={range} canDownload={canDownload} />}

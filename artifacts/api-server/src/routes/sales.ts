@@ -100,6 +100,54 @@ function computeLineTax(
 
 const round2 = (n: number): number => Math.round(n * 100) / 100;
 
+type SaleSalesperson = {
+  employeeId: number | null;
+  name: string | null;
+};
+
+/**
+ * Sales keep both the employee reference and the name as it was when the
+ * invoice was saved. The snapshot keeps historical reports stable when an
+ * employee is renamed or later leaves. An unchanged edit is grandfathered so
+ * old invoices do not become uneditable.
+ */
+async function resolveSaleSalesperson(
+  pgPool: { query: (sql: string, params?: any[]) => Promise<{ rows: any[] }> },
+  rawId: unknown,
+  locationType: string,
+  locationId: number,
+  existing?: { salesperson_employee_id?: number | null; salesperson?: string | null },
+): Promise<{ ok: true; value: SaleSalesperson } | { ok: false; error: string }> {
+  if (rawId === undefined) {
+    return {
+      ok: true,
+      value: {
+        employeeId: existing?.salesperson_employee_id != null ? Number(existing.salesperson_employee_id) : null,
+        name: existing?.salesperson ?? null,
+      },
+    };
+  }
+  if (rawId === null || rawId === '') return { ok: true, value: { employeeId: null, name: null } };
+  const employeeId = Number(rawId);
+  if (!Number.isInteger(employeeId) || employeeId <= 0) {
+    return { ok: false, error: "salespersonEmployeeId must be a positive employee id" };
+  }
+  if (existing && Number(existing.salesperson_employee_id) === employeeId) {
+    return { ok: true, value: { employeeId, name: existing.salesperson ?? null } };
+  }
+  const { rows: [employee] } = await pgPool.query(
+    `SELECT id, name, branch_type, branch_id, is_active FROM employees WHERE id = $1`,
+    [employeeId],
+  );
+  if (!employee) return { ok: false, error: "Salesman not found — pick an employee from the list" };
+  if (!employee.is_active) return { ok: false, error: `${employee.name} is no longer active and cannot be set as salesman` };
+  const employeeBranchType = employee.branch_type ?? "headoffice";
+  const atLocation = employeeBranchType === "headoffice"
+    || (employeeBranchType === locationType && Number(employee.branch_id) === Number(locationId));
+  if (!atLocation) return { ok: false, error: `${employee.name} does not work at this selling location` };
+  return { ok: true, value: { employeeId, name: employee.name } };
+}
+
 // Render a stored sale row into the same shape the create endpoint returns,
 // flagged `idempotentReplay`. Used when a create is replayed with a
 // clientRequestId that already produced a bill — the caller (a double-click or
@@ -124,6 +172,8 @@ async function buildSaleReplayResponse(
     locationType: row.location_type,
     locationId: row.location_id,
     customerName,
+    salesperson: row.salesperson ?? null,
+    salespersonEmployeeId: row.salesperson_employee_id != null ? Number(row.salesperson_employee_id) : null,
     saleDate: row.sale_date,
     lineItems: row.line_items ?? [],
     subtotal: Number(row.subtotal),
@@ -567,6 +617,8 @@ router.get("/sales", requireModuleView(["page:/sales/pos", "page:/returns", "pag
       locationType,
       locationId,
       customerId: r.customer_id,
+      salesperson: r.salesperson ?? null,
+      salespersonEmployeeId: r.salesperson_employee_id != null ? Number(r.salesperson_employee_id) : null,
       saleDate: r.sale_date,
       lineItems: r.line_items ?? [],
       subtotal: Number(r.subtotal),
@@ -680,6 +732,10 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
     res.status(403).json({ error: "You can only record sales for a location in your assigned scope." });
     return;
   }
+  const createSalesperson = await resolveSaleSalesperson(
+    pgPool, parsed.data.salespersonEmployeeId, locationType, locationId,
+  );
+  if (!createSalesperson.ok) { res.status(400).json({ error: createSalesperson.error }); return; }
   // Lifecycle gate on the EFFECTIVE location — a disabled warehouse takes no
   // new sales (its outlets included).
   {
@@ -1216,11 +1272,11 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
     // same printed number may exist at two different locations.
     const outletIdForInsert = locationType === 'outlet' ? locationId : null;
     ({ rows: [row] } = await txClient.query<any>(
-      `INSERT INTO sales (invoice_number, outlet_id, location_type, location_id, customer_id, sale_date, line_items, subtotal, tax_total, discount_total, bill_discount, total_amount, payment_mode, coupon_code, amount_paid, payment_status,
-                          number_scope, invoice_series, invoice_fy, invoice_serial, other_charges, client_request_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21::jsonb, $22) RETURNING *`,
+       `INSERT INTO sales (invoice_number, outlet_id, location_type, location_id, customer_id, salesperson_employee_id, salesperson, sale_date, line_items, subtotal, tax_total, discount_total, bill_discount, total_amount, payment_mode, coupon_code, amount_paid, payment_status,
+                           number_scope, invoice_series, invoice_fy, invoice_serial, other_charges, client_request_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23::jsonb, $24) RETURNING *`,
       [invoiceNumber, outletIdForInsert, locationType, locationId,
-       parsed.data.customerId ?? null, parsed.data.saleDate,
+        parsed.data.customerId ?? null, createSalesperson.value.employeeId, createSalesperson.value.name, parsed.data.saleDate,
        // Stored WITH the batch trail already resolved above, so the served lots
        // are committed with the bill rather than patched in afterwards.
        JSON.stringify(lineItemsWithBatches), subtotal, taxTotal, discountTotal, billDiscount, totalAmount,
@@ -1237,8 +1293,8 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
          : settledAtSale
            ? 'paid'
            : computePaymentPosition({ totalAmount, amountReceived: appliedAdvance, cancelledAt: null }).status,
-       numberAlloc.numberScope, numberAlloc.seriesPrefix, numberAlloc.fyLabel, numberAlloc.serial,
-       JSON.stringify(otherCharges), clientRequestId]
+        numberAlloc.numberScope, numberAlloc.seriesPrefix, numberAlloc.fyLabel, numberAlloc.serial,
+        JSON.stringify(otherCharges), clientRequestId]
     ));
 
     // ── Counter-settlement payment history (audit F-1) ───────────────────────
@@ -1558,6 +1614,10 @@ router.put("/sales/:id", requireModuleAction("page:/sales/pos", "edit"), async (
     res.status(403).json({ error: "You can only move a sale to a location in your assigned scope." });
     return;
   }
+  const editSalesperson = await resolveSaleSalesperson(
+    pgPool, parsed.data.salespersonEmployeeId, newLocationType, newLocationId, existingRaw,
+  );
+  if (!editSalesperson.ok) { res.status(400).json({ error: editSalesperson.error }); return; }
 
   // Old location (for stock reversal)
   const oldLocationType: string = existingRaw.location_type ?? 'outlet';
@@ -1988,12 +2048,14 @@ router.put("/sales/:id", requireModuleAction("page:/sales/pos", "edit"), async (
     ({ rows: [updated] } = await editTx.query<any>(
       `UPDATE sales SET outlet_id=$1, location_type=$2, location_id=$3, customer_id=$4, sale_date=$5,
        line_items=$6::jsonb, subtotal=$7, tax_total=$8, discount_total=$9, bill_discount=$10, total_amount=$11,
-       payment_mode=$12, coupon_code=$13, amount_paid=$14, payment_status=$15, number_scope=$17, other_charges=$18::jsonb
-       WHERE id=$16 RETURNING *`,
+       payment_mode=$12, coupon_code=$13, amount_paid=$14, payment_status=$15,
+       salesperson_employee_id=$16, salesperson=$17, number_scope=$19, other_charges=$20::jsonb
+       WHERE id=$18 RETURNING *`,
       [newOutletId, newLocationType, newLocationId, parsed.data.customerId ?? null,
        parsed.data.saleDate, JSON.stringify(newLineItemsWithBatches), subtotal, taxTotal, discountTotal, billDiscount, totalAmount,
-       newPaymentMode, parsed.data.couponCode ?? null, newAmountPaid, newPaymentStatus, id, editedNumberScope,
-       JSON.stringify(otherCharges)]
+        newPaymentMode, parsed.data.couponCode ?? null, newAmountPaid, newPaymentStatus,
+        editSalesperson.value.employeeId, editSalesperson.value.name, id, editedNumberScope,
+        JSON.stringify(otherCharges)]
     ));
 
     // 3b. Restate the counter-settlement history to the edited bill. The old
@@ -2573,6 +2635,23 @@ router.get("/sales/:id/invoice.pdf", async (req, res): Promise<void> => {
   res.send(buffer);
 });
 
+// Minimal active-employee directory for the Salesperson dropdown. This is kept
+// on the sales surface rather than HR so sales users do not need HR permission.
+router.get("/sales/salespeople", requireModuleView("page:/sales/pos"), async (_req, res): Promise<void> => {
+  const { rows } = await pool.query(
+    `SELECT id, name, branch_type AS "branchType", branch_id AS "branchId"
+       FROM employees
+      WHERE is_active = true
+      ORDER BY name`,
+  );
+  res.json(rows.map((r: any) => ({
+    id: Number(r.id),
+    name: r.name,
+    branchType: r.branchType ?? "headoffice",
+    branchId: r.branchId != null ? Number(r.branchId) : null,
+  })));
+});
+
 // Dispatch staff may open the bill they are packing (view-only surface —
 // PDF/share stay gated on the sales page's own download right client-side,
 // and every write on this sale still requires the sales page rights).
@@ -2629,6 +2708,8 @@ router.get("/sales/:id", requireModuleView(["page:/sales/pos", "page:/operations
     locationType,
     locationId,
     customerId: row.customer_id,
+    salesperson: row.salesperson ?? null,
+    salespersonEmployeeId: row.salesperson_employee_id != null ? Number(row.salesperson_employee_id) : null,
     saleDate: row.sale_date,
     lineItems: row.line_items ?? [],
     subtotal: Number(row.subtotal),

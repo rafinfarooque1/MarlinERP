@@ -692,6 +692,9 @@ export interface Sale {
   customerId?: number | null;
   /** @nullable */
   customerName?: string | null;
+  /** Name snapshotted when the invoice was saved. */
+  salesperson?: string | null;
+  salespersonEmployeeId?: number | null;
   saleDate: string;
   lineItems: SaleLineItem[];
   subtotal?: number;
@@ -723,6 +726,7 @@ export interface Sale {
 export interface SaleInput {
   outletId: number;
   customerId?: number;
+  salespersonEmployeeId?: number | null;
   saleDate: string;
   lineItems: SaleLineItem[];
   paymentMode: string;
