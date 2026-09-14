@@ -1,0 +1,129 @@
+FINAL PRODUCTION READINESS GATE
+
+Development only for verification.
+DO NOT modify production.
+DO NOT publish.
+DO NOT change accounting logic.
+
+Review the complete ERP after all previous hardening and closure tests.
+
+Do not repeat every previous test unnecessarily. Use the actual evidence from the completed test suites.
+
+Confirm:
+
+1. All critical accounting tests PASS.
+2. Trial Balance balances.
+3. P&L follows:
+   Revenue
+   - Cost of Goods Sold
+   = Gross Profit
+   - Operating Expenses
+   +/- Other Income/Expense
+   = Net Profit
+
+4. Balance Sheet balances:
+   Assets = Liabilities + Equity
+
+5. Inventory:
+   Opening Stock
+   + Purchases
+   - COGS
+   +/- valid adjustments/transfers
+   = Closing Stock
+
+6. Customer outstanding includes:
+   Sales
+   + valid charges
+   - sales returns/credit notes
+   - receipts
+   +/- valid adjustments
+
+7. Vendor outstanding includes:
+   Purchases
+   - purchase returns
+   - payments
+   +/- valid advances/credits
+
+8. Cash Book agrees with cash ledger.
+
+9. Bank Book agrees with bank ledger.
+
+10. Bank reconciliation contains every eligible bank transaction.
+
+11. Reconciliation never duplicates or deletes financial transactions.
+
+12. GST document calculations, accounting postings and GST reports agree.
+
+13. Fixed assets:
+    Acquisition
+    - accumulated depreciation
+    - disposal effects
+    = correct net book value.
+
+14. Depreciation is idempotent.
+
+15. Stock transfers are P&L neutral.
+
+16. Completed transfers cannot retain active reservations.
+
+17. Historical stock valuation uses historical checkpoints where available.
+
+18. Missing historical evidence is explicitly identified rather than silently estimated.
+
+19. Warehouse/location isolation is enforced server-side.
+
+20. Head Office and All Locations behave according to the established location rules.
+
+21. Critical financial mutations have durable transaction-bound audit logging.
+
+22. Failed financial transactions cannot leave misleading audit records.
+
+23. Background accounting jobs are idempotent.
+
+24. Reports, dashboard and PDFs use authoritative accounting calculations.
+
+25. No duplicate accounting postings.
+
+26. No orphan accounting or inventory records.
+
+27. No invalid location references.
+
+28. No negative stock/batch quantities caused by the tested workflows.
+
+29. No vendor allocation exceeds bill value.
+
+30. No customer allocation inconsistency.
+
+31. No completed transfer has an active reservation.
+
+32. API TypeScript/build checks are clean.
+
+33. Web and API workflows start without errors.
+
+34. Mobile employee workflow is either PASS or explicitly documented as a remaining limitation.
+
+35. Backup/restore readiness is explicitly reported.
+
+FINAL OUTPUT:
+
+A. PROVEN PASS ITEMS
+B. REMAINING NOT PROVEN ITEMS
+C. CONFIRMED FAILURES
+D. DATA-INTEGRITY ISSUES
+E. SECURITY/LOCATION ISSUES
+F. ACCOUNTING ISSUES
+G. PRODUCTION DEPLOYMENT RISKS
+
+Then give exactly one final verdict:
+
+GREEN — safe to proceed to controlled production deployment
+
+AMBER — do not publish yet; specific verification/remediation remains
+
+RED — material defect requires correction before deployment
+
+IMPORTANT:
+A code path existing is NOT proof.
+A passing unit test is NOT proof of an end-to-end workflow.
+Do not call something GREEN unless the evidence supports it.
+Do not modify anything during this gate.
