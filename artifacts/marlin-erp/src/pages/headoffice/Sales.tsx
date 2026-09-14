@@ -152,6 +152,13 @@ const saleOtherChargesTotal = (sale: any): number => {
   ) * 100) / 100;
 };
 
+const saleStatusLabel = (sale: any): string | undefined => {
+  const status = sale?.paymentStatus ?? 'paid';
+  if (status !== 'paid') return undefined;
+  const mode = paymentModeLabel(sale?.paymentMode);
+  return mode ? `Paid · ${mode}` : 'Paid';
+};
+
 // ── Form Schema ─────────────────────────────────────────────────────────────────
 
 const saleLineSchema = z.object({
@@ -1663,7 +1670,10 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                   <TableCell className="text-sm">{sale.outletName}</TableCell>
                   <TableCell className="text-sm">{sale.customerName || 'Walk-in'}</TableCell>
                   <TableCell>
-                    <StatusBadge status={(sale as any).paymentStatus ?? 'paid'} />
+                     <StatusBadge
+                       status={(sale as any).paymentStatus ?? 'paid'}
+                       label={saleStatusLabel(sale)}
+                     />
                   </TableCell>
                   <TableCell className="text-right font-mono text-xs text-muted-foreground">
                     {Number(sale.taxTotal) > 0 ? `${inr(Number(sale.taxTotal))}` : '—'}
@@ -1723,7 +1733,12 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
             ) : (
               <div className="space-y-2 p-3">
                 {sorted.map(sale => {
-                  const statusBadge = <StatusBadge status={(sale as any).paymentStatus ?? 'paid'} />;
+                  const statusBadge = (
+                    <StatusBadge
+                      status={(sale as any).paymentStatus ?? 'paid'}
+                      label={saleStatusLabel(sale)}
+                    />
+                  );
                   const balanceDue = Number((sale as any).balanceDue ?? 0);
                   return (
                     <div key={sale.id} className="border border-border rounded-lg p-3 space-y-2">
