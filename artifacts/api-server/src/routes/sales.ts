@@ -1897,12 +1897,38 @@ router.put("/sales/:id", requireModuleAction("page:/sales/pos", "edit"), async (
     await editTx.query(`SELECT id FROM sales WHERE id = $1 FOR UPDATE`, [id]);
     // ── Counter-settlement history follows the edit ──────────────────────────
     // The counter row is a restatement of the sale's own settlement, so an edit
-    // must never leave a stale one behind. Clear any existing counter leg under
-    // the row lock FIRST — before the credit re-derivation below sums the legs,
-    // so converting a cash bill to credit does not count the old counter row as
-    // a collection. A fresh counter leg for the edited total is written after
-    // the UPDATE (below) when the new mode is still settled at the counter.
-    await editTx.query(`DELETE FROM sale_payments WHERE sale_id = $1 AND source = 'counter'`, [id]);
+    // must never leave a stale one behind. Clear every billing-time settlement
+    // under the row lock FIRST — before the credit re-derivation below sums the
+    // legs, so converting a cash bill to credit does not count the old counter
+    // row as a collection.
+    //
+    // Explicit Receive-Into payments predate the `source='counter'` marker:
+    // they have a sale receipt and the note "Received at billing — <invoice>".
+    // Treating only source='counter' as removable made cash→credit leave that
+    // receipt-backed payment in place, so the edited credit invoice appeared
+    // paid and the old bank/cash receipt remained orphaned. Collection rows
+    // recorded later have different notes and are deliberately preserved.
+    const billingPaymentPredicate = `
+      sale_id = $1
+      AND (
+        source = 'counter'
+        OR notes = $2
+      )`;
+    await editTx.query(
+      `DELETE FROM receipts
+        WHERE source = 'sale'
+          AND id IN (
+            SELECT clearing_receipt_id
+              FROM sale_payments
+             WHERE ${billingPaymentPredicate}
+               AND clearing_receipt_id IS NOT NULL
+          )`,
+      [id, `Received at billing — ${existingRaw.invoice_number}`],
+    );
+    await editTx.query(
+      `DELETE FROM sale_payments WHERE ${billingPaymentPredicate}`,
+      [id, `Received at billing — ${existingRaw.invoice_number}`],
+    );
     if (!isSettledAtSale(newPaymentMode)) {
       const { rows: [lockedPaid] } = await editTx.query<{ paid: string }>(
         `SELECT COALESCE(SUM(amount::numeric), 0) AS paid FROM sale_payments WHERE sale_id = $1`, [id]

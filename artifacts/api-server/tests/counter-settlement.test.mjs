@@ -8,6 +8,9 @@
  *   2. Editing the sale restates that row (never duplicates it).
  *   3. Converting to credit removes it — credit bills never get invented
  *      history; converting back to cash recreates it.
+ *   3b. The same conversion works for the modern explicit Receive-Into path,
+ *      whose legacy payment rows have a linked sale receipt but no source
+ *      marker.
  *   4. Cancellation is NOT blocked by the counter row (it is till money, not a
  *      banked collection) and removes it with the bill.
  *   5. A credit sale creates no history rows at all.
@@ -70,15 +73,16 @@ const warehouse = warehouses[0];
 if (!taxableItem || !warehouse) { console.error('FATAL: need a taxable item and a warehouse.'); process.exit(1); }
 const unitPrice = Math.max(100, Number(taxableItem.mrp ?? 0));
 const today = new Date().toISOString().slice(0, 10);
-const saleBody = (mode, price, customerId) => ({
+const saleBody = (mode, price, customerId, receiveAccountId) => ({
   outletId: warehouse.id, locationType: 'warehouse', locationId: warehouse.id,
   saleDate: today, paymentMode: mode,
   ...(customerId ? { customerId } : {}),
+  ...(receiveAccountId ? { receivedInLedgerId: receiveAccountId } : {}),
   lineItems: [{ itemId: taxableItem.id, quantity: 1, unitPrice: price, discount: 0, taxAmount: 0 }],
 });
 
 const tb0 = await snapshotTB();
-let s1 = null, s2 = null, tempCustomerId = null;
+let s1 = null, s2 = null, s3 = null, tempCustomerId = null;
 
 try {
   // ── [1] Cash sale writes exactly one counter history row ────────────────
@@ -128,6 +132,39 @@ try {
     assert("Fresh row is source 'counter'", legs[0]?.source === 'counter', `source=${legs[0]?.source}`);
     assert('Amount = bill total', Math.abs(Number(legs[0]?.amount) - Number(e3.data?.totalAmount)) < 0.005);
 
+    // ── [4b] Explicit Receive-Into conversion ─────────────────────────────
+    // The modern POS writes a receipt-backed sale_payment without the
+    // source='counter' marker. This was the path that used to survive
+    // cash→credit edits and leave the credit bill paid.
+    const bankRows = (await get('/reconciliation/bank-ledgers')).data ?? [];
+    const receiveAccount = bankRows.find((row) =>
+      row.locationType === 'warehouse' && Number(row.locationId) === Number(warehouse.id)
+    );
+    if (receiveAccount?.accountId) {
+      console.log('\n[4b] Explicit Receive-Into cash → credit → cash conversion');
+      const r3 = await post('/sales', saleBody('cash', unitPrice, undefined, receiveAccount.accountId));
+      s3 = r3.data;
+      assert('Receive-Into sale created', r3.status === 201 && !!s3?.id, JSON.stringify(r3.data).slice(0, 200));
+      if (s3?.id) {
+        let explicitLegs = await legsOf(s3.id);
+        assert('Receive-Into sale has one payment row', explicitLegs.length === 1, `got ${explicitLegs.length}`);
+        assert('Receive-Into row is linked to a receipt', !!explicitLegs[0]?.clearingReceiptId);
+        const r3credit = await put(`/sales/${s3.id}`, saleBody('credit', unitPrice, tempCustomerId));
+        assert('Receive-Into cash → credit accepted', !r3credit.data?.error, JSON.stringify(r3credit.data).slice(0, 200));
+        explicitLegs = await legsOf(s3.id);
+        assert('Converted credit removes the billing-time row', explicitLegs.length === 0, `got ${explicitLegs.length}`);
+        assert('Converted credit is unpaid', Number(r3credit.data?.amountPaid ?? -1) === 0);
+        const r3cash = await put(`/sales/${s3.id}`, saleBody('cash', unitPrice, tempCustomerId));
+        assert('Receive-Into credit → cash accepted', !r3cash.data?.error, JSON.stringify(r3cash.data).slice(0, 200));
+        explicitLegs = await legsOf(s3.id);
+        assert('Converted cash has one fresh counter row',
+          explicitLegs.length === 1 && explicitLegs[0]?.source === 'counter',
+          `rows=${explicitLegs.length} source=${explicitLegs[0]?.source}`);
+      }
+    } else {
+      console.log('  (skip) no bank account is assigned to the fixture warehouse');
+    }
+
     // ── [5] Cancel: counter money never blocks, row leaves with the bill ──
     console.log('\n[5] Cancellation is not blocked and leaves no orphan row');
     const c1 = await post(`/sales/${s1.id}/cancel`, {});
@@ -155,6 +192,7 @@ try {
   // Self-cleaning even on assertion crashes.
   if (s1?.id) await post(`/sales/${s1.id}/cancel`, {}).catch(() => {});
   if (s2?.id) await post(`/sales/${s2.id}/cancel`, {}).catch(() => {});
+  if (s3?.id) await post(`/sales/${s3.id}/cancel`, {}).catch(() => {});
   if (tempCustomerId) {
     const d = await del(`/customers/${tempCustomerId}`).catch(() => null);
     if (!d || d.status >= 300) console.warn(`  (warn) temp customer ${tempCustomerId} not deleted — remove manually`);
