@@ -1,0 +1,394 @@
+FINAL ERP RELEASE — FIX REMAINING ISSUES, VERIFY, AND PREPARE FOR PRODUCTION
+
+This is the FINAL release cycle.
+
+The ERP is now extensively tested. Do not restart the entire audit from zero.
+
+Complete only the remaining confirmed/unproven items necessary to make the ERP production-ready.
+
+IMPORTANT:
+- Work on the current development code/database first.
+- Do NOT modify production data directly.
+- Do NOT bypass authentication or permissions.
+- Do NOT weaken security.
+- Do NOT delete historical financial data.
+- Do NOT change accounting logic just to make a test pass.
+- Preserve all existing working functionality.
+- If a real defect is found, fix the root cause narrowly.
+- Use current valid test authentication; never use obsolete hard-coded credentials.
+
+==================================================
+1. SALARY ACCRUAL — CURRENT CONFIRMED FAILURE
+==================================================
+
+Finish the authorized fix for salary scenario Q:
+
+NON-DIVISIBLE DAILY-RATE ROUNDING.
+
+Verify the exact calculation path:
+
+salary → daily rate → attendance/days → earnings → deductions → statutory amounts → net salary → accounting JV.
+
+Use one consistent accounting rounding policy.
+
+Verify:
+
+- employee-level calculation
+- aggregate calculation
+- salary expense
+- employee payable
+- PF
+- ESI
+- employer contributions
+- statutory liabilities
+- accounting JV
+
+Required:
+
+TOTAL DEBIT = TOTAL CREDIT
+
+Run the salary suite again.
+
+Scenario Q MUST PASS.
+
+Run the existing accounting regression suite afterward.
+
+==================================================
+2. CLOSE REMAINING CRITICAL VERIFICATION GAPS
+==================================================
+
+Run and prove the following only if they are still NOT PROVEN:
+
+A. Purchase returns
+B. Bank reconciliation
+C. Reconciliation reset + multi-select
+D. Monthly continuity
+E. Full location isolation
+F. Audit durability
+G. Background-job idempotency
+H. Full report/PDF parity
+I. GST transfer classification
+J. Employee mobile workflow
+
+Do not repeat already-proven suites unless required for regression.
+
+==================================================
+3. BANK RECONCILIATION
+==================================================
+
+Verify every eligible bank transaction can enter reconciliation.
+
+Include supported:
+
+- bank sales
+- customer bank receipts
+- settlement receipts
+- applicable bank payments
+- other eligible bank transactions
+
+Exclude cash transactions from Bank Reconciliation.
+
+Verify:
+
+- correct warehouse/location bank account
+- multi-select
+- selected count
+- selected gross amount
+- reconciliation date
+- processing charge
+- net amount
+- one reconciliation batch
+- no duplicate financial transaction
+- processing charge posted once
+- audit event
+- correct reconciled status
+
+Reset reconciliation must NEVER delete financial transactions.
+
+==================================================
+4. ACCOUNTING INTEGRITY
+==================================================
+
+Final global check:
+
+For every accounting voucher:
+
+DEBIT = CREDIT
+
+Verify:
+
+- Trial Balance
+- Trading Account
+- P&L
+- Balance Sheet
+- Customer Outstanding
+- Vendor Outstanding
+- Cash
+- Bank
+- GST
+- Inventory
+- Fixed Assets
+- Depreciation
+
+Balance Sheet:
+
+ASSETS = LIABILITIES + EQUITY
+
+P&L:
+
+Revenue
+- COGS
+= Gross Profit
+- Expenses
++/- Other Income/Expense
+= Net Profit
+
+Customer Outstanding must correctly include sales returns/credit notes and receipts.
+
+Vendor Outstanding must correctly include purchase returns, payments and advances.
+
+==================================================
+5. INVENTORY
+==================================================
+
+Verify:
+
+Opening Stock
++ Purchases
+- COGS
++/- valid adjustments
+= Closing Stock
+
+Verify historical stock uses historical valuation checkpoints where available.
+
+Verify FIFO/FEFO/batch/expiry behavior.
+
+Internal transfers must remain P&L neutral.
+
+Completed transfers must not retain active reservations.
+
+==================================================
+6. LOCATION SECURITY
+==================================================
+
+Prove server-side location isolation.
+
+Warehouse A must not access Warehouse B data.
+
+Test customers, vendors, sales, purchases, stock, expenses, cash, bank, accounting and reports.
+
+Verify:
+
+- Head Office
+- specific warehouse
+- All Locations
+
+behave according to the existing ERP rules.
+
+Never rely only on frontend filtering.
+
+==================================================
+7. AUDIT
+==================================================
+
+All critical financial mutations must have durable audit records.
+
+Prioritize:
+
+- Sales
+- Sales returns
+- Purchases
+- Purchase returns
+- Receipts
+- Payments
+- Expenses
+- Journal vouchers
+- Assets
+- Depreciation
+- Stock transfers
+- Reconciliation
+
+Where financial mutation and audit must be atomic, audit must be inside the same transaction.
+
+==================================================
+8. BACKGROUND JOBS
+==================================================
+
+Verify repeated execution does not duplicate:
+
+- salary accrual
+- rent accrual
+- depreciation
+- other accounting jobs
+
+Same accounting period run twice must not create duplicate financial postings.
+
+==================================================
+9. REPORTS / PDFs / DASHBOARD
+==================================================
+
+Verify authoritative server values match:
+
+SCREEN
+=
+API
+=
+PDF
+=
+EXPORT
+
+Check:
+
+- Trial Balance
+- P&L
+- Balance Sheet
+- Trading Account
+- Chart of Accounts
+- Customer Outstanding
+- Vendor Outstanding
+- Cash Book
+- Bank Book
+- GST
+- Inventory
+- Fixed Assets
+
+Dashboard parity must remain:
+
+48 PASSED / 0 FAILED
+
+Do not regress existing working functionality.
+
+==================================================
+10. PRODUCTION DATA SAFETY
+==================================================
+
+Before release:
+
+- no unbalanced JVs
+- no orphan JV lines
+- no orphan stock ledger references
+- no negative stock
+- no negative batches
+- no duplicate accounting entries
+- no duplicate reconciliation
+- no vendor allocation exceeding bill value
+- no invalid location references
+- no completed transfer with active reservation
+- no corrupted historical financial data
+
+==================================================
+11. BUILD + RUNTIME
+==================================================
+
+Run:
+
+- API TypeScript check
+- frontend production build using required PORT and BASE_PATH
+- git diff --check
+- API restart
+- web restart
+- login smoke test
+- authenticated critical workflow smoke test
+
+No startup errors.
+
+==================================================
+12. FINAL RELEASE GATE
+==================================================
+
+Create the final matrix:
+
+AREA | STATUS | EVIDENCE | ISSUE
+
+Use only:
+
+PASS
+FAIL
+LIMITED
+NOT PROVEN
+
+Critical accounting areas MUST NOT be marked PASS without actual test evidence.
+
+The final verdict must be:
+
+GREEN — READY FOR PRODUCTION
+
+only if:
+
+- no confirmed accounting/data-integrity failure remains
+- salary scenario Q passes
+- critical reconciliation tests pass
+- accounting remains balanced
+- customer/vendor balances reconcile
+- inventory is consistent
+- GST is consistent
+- fixed assets/depreciation are correct
+- location security passes
+- critical audit durability passes
+- no duplicate accounting postings
+- build and runtime are healthy
+
+If anything critical remains unresolved, return AMBER and identify it precisely.
+
+==================================================
+13. IF GREEN
+==================================================
+
+If and ONLY IF the final release gate is GREEN:
+
+1. Create a final checkpoint/commit containing the verified release.
+2. Confirm the exact version/commit being released.
+3. Confirm development database is not accidentally being used as production.
+4. Confirm production environment variables/secrets are configured.
+5. Confirm production database connection points to the intended production database.
+6. Confirm backup exists before release.
+7. Perform the normal supported Replit production deployment/publish.
+8. Do NOT run destructive database commands.
+9. Do NOT run drizzle push against production unless an explicitly required migration has been reviewed and is safe.
+10. After publishing, perform a production smoke test:
+    - login
+    - dashboard
+    - customer
+    - vendor
+    - purchase
+    - sale/POS
+    - receipt
+    - payment
+    - inventory
+    - quotation
+    - reports
+    - PDF/document generation
+    - logout
+
+11. Confirm the published URL is reachable.
+12. Confirm documents/PDFs can be generated and shared.
+13. Confirm production health endpoint is healthy.
+14. Confirm no startup/runtime errors.
+
+IMPORTANT:
+
+Do not claim GREEN before the tests actually pass.
+
+Do not publish if the final verdict is AMBER or RED.
+
+If GREEN, clearly report:
+
+PRODUCTION RELEASE: SUCCESS
+
+Production URL:
+[actual published URL]
+
+Version/commit:
+[actual release identity]
+
+Database:
+[production database confirmed]
+
+Smoke test:
+PASS
+
+Document generation:
+PASS
+
+ERP release status:
+LIVE
