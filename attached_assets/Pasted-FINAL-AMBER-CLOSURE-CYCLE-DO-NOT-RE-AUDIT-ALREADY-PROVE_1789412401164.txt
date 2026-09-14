@@ -1,0 +1,360 @@
+FINAL AMBER CLOSURE CYCLE — DO NOT RE-AUDIT ALREADY PROVEN AREAS
+
+Development only. No production changes. No publishing.
+
+The latest verification matrix is AMBER. Do not repeat tests that are already PASS unless required as a regression dependency.
+
+The objective of this cycle is to close the remaining NOT PROVEN/LIMITED items and convert them to PASS wherever they can actually be proven.
+
+Do not mark anything PASS based only on source-code inspection.
+
+==================================================
+1. BANK RECONCILIATION — MUST PROVE END TO END
+==================================================
+
+Use valid current test authentication.
+
+Verify the actual bank account selected for a warehouse/location.
+
+Confirm every eligible bank transaction appears in reconciliation, including:
+
+- bank-mode sales
+- customer receipts through bank
+- settlement receipts
+- applicable payment/bank transactions
+- other supported bank-originated transactions
+
+Cash transactions must never appear in Bank Reconciliation.
+
+Create a test reconciliation with multiple selected entries.
+
+Verify:
+
+- selected count
+- selected gross amount
+- reconciliation date
+- processing charge
+- net settlement
+- one reconciliation batch
+- correct bank ledger relationship
+- processing charge posted exactly once
+- no duplicate bank transaction
+- audit event created
+- reconciled status updated
+
+All amounts must be recalculated server-side from selected transaction IDs.
+
+==================================================
+2. RECONCILIATION RESET
+==================================================
+
+Test Reset Reconciliation.
+
+Before reset capture:
+
+- eligible count
+- eligible amount
+- reconciled count
+- reconciled amount
+- batch count
+
+After reset:
+
+- original financial transactions still exist
+- original amounts unchanged
+- original transaction dates unchanged
+- all eligible transactions are discoverable again as unreconciled
+- no duplicate transactions
+- no duplicate accounting entries
+
+Then reconcile a subset again and verify the remaining entries remain unreconciled.
+
+==================================================
+3. PURCHASE RETURNS
+==================================================
+
+Run complete purchase-return tests.
+
+For every return verify:
+
+- inventory reduction
+- batch/cost effect
+- vendor payable effect
+- GST effect
+- vendor ledger
+- accounting JV
+- audit event
+
+Test:
+
+- full return
+- partial return
+- return after payment
+- return with outstanding vendor balance
+- cancellation/reversal if supported
+
+Verify no double reversal.
+
+==================================================
+4. MONTHLY CONTINUITY
+==================================================
+
+Use two consecutive accounting months.
+
+Verify:
+
+Month 2 Opening Stock = Month 1 Closing Stock
+
+Month 2 Opening Receivable = Month 1 Closing Receivable
+
+Month 2 Opening Payable = Month 1 Closing Payable
+
+Month 2 Opening Cash = Month 1 Closing Cash
+
+Month 2 Opening Bank = Month 1 Closing Bank
+
+Asset opening balances carry forward correctly.
+
+Profit/equity continuity remains correct.
+
+No transaction is counted twice.
+
+Include stock transfers and returns in the continuity test.
+
+==================================================
+5. LOCATION ISOLATION — AUTHENTICATED E2E
+==================================================
+
+Use at least two warehouse users/locations.
+
+Warehouse A user must NOT be able to access Warehouse B:
+
+- customers
+- vendors
+- sales
+- purchases
+- receipts
+- payments
+- expenses
+- cash
+- bank
+- inventory
+- transfers
+- accounting
+- reports
+
+Test direct API requests as well as UI.
+
+Verify unauthorized direct IDs cannot bypass location filtering.
+
+Verify Head Office behavior.
+
+Verify All Locations behavior only for authorized users.
+
+Do not rely on frontend hiding.
+
+==================================================
+6. AUDIT DURABILITY
+==================================================
+
+Find every remaining critical mutation where audit logging occurs after commit.
+
+Prioritize:
+
+- purchases
+- purchase returns
+- sales returns
+- expenses
+- location expenses
+- voucher deletion/cancellation
+- reconciliation mutations
+
+For each critical mutation:
+
+SUCCESS:
+financial mutation + audit event commit together.
+
+FAILURE:
+force audit/database failure.
+
+Expected:
+
+financial mutation rolls back
+AND
+audit event does not falsely indicate a successful mutation.
+
+Audit event must contain:
+
+- actor
+- action
+- entity
+- entity ID
+- location
+- timestamp
+- before/after where applicable
+- source/reference
+
+No fire-and-forget behavior for mandatory financial audit events.
+
+==================================================
+7. BACKGROUND JOB IDEMPOTENCY
+==================================================
+
+Run the same period twice for:
+
+- salary accrual
+- rent accrual
+- depreciation
+- backup-related accounting jobs if applicable
+- startup repair jobs where applicable
+
+Second execution must not duplicate financial postings.
+
+Verify duplicate prevention using actual database/accounting evidence.
+
+==================================================
+8. FULL REPORT/PDF PARITY
+==================================================
+
+Test:
+
+- Trial Balance
+- Trading Account
+- P&L
+- Balance Sheet
+- Chart of Accounts
+- Customer Outstanding
+- Vendor Outstanding
+- Cash Book
+- Bank Book
+- GST
+- Inventory
+- Fixed Assets
+
+For each:
+
+SCREEN VALUE
+=
+AUTHORITATIVE SERVER VALUE
+=
+PDF VALUE
+=
+EXPORT VALUE
+
+Where applicable also verify:
+
+- location
+- month
+- month-wise columns
+- expanded/collapsed state
+- Show Valued Accounts Only
+
+Do not accept visual similarity without numeric comparison.
+
+==================================================
+9. GST TRANSFER CLASSIFICATION
+==================================================
+
+Test:
+
+A. same GST registration internal transfer
+B. different GST registration transfer
+
+Verify correct:
+
+- inventory treatment
+- accounting treatment
+- GST classification
+- invoice/document treatment
+- P&L neutrality where applicable
+
+Ensure internal transfers do not become ordinary Sales/Purchases incorrectly.
+
+==================================================
+10. EXPO EMPLOYEE APP
+==================================================
+
+Run the employee mobile app against the current API.
+
+Verify:
+
+- login
+- invalid 401 behavior
+- session persistence
+- logout
+- assigned location
+- location-restricted data
+- employee permissions
+- API authorization
+- no cross-location leakage
+
+Do not weaken authentication to make tests pass.
+
+==================================================
+11. FINAL DATA-INTEGRITY SWEEP
+==================================================
+
+After all tests, verify:
+
+- no unbalanced JVs
+- no orphan JV lines
+- no orphan stock ledger references
+- no negative stock
+- no negative batches caused by tests
+- no duplicate financial postings
+- no duplicate reconciliation batches
+- no active reservation for completed transfer
+- no vendor allocation greater than bill amount
+- no customer allocation inconsistencies
+- no invalid location references
+
+Clean up ONLY explicitly created test data using the existing supported test cleanup mechanism.
+
+Do not delete historical production-like accounting data.
+
+==================================================
+12. FINAL MATRIX
+==================================================
+
+Return only a final matrix for the previously unresolved areas:
+
+AREA | RESULT | TESTS | EVIDENCE | REMAINING ISSUE
+
+Use only:
+
+PASS
+FAIL
+LIMITED
+NOT PROVEN
+
+Then provide:
+
+TOTAL NEW TESTS
+PASSED
+FAILED
+NOT RUN
+
+FINAL VERDICT:
+
+GREEN:
+all critical accounting, reconciliation, location isolation and audit requirements proven.
+
+AMBER:
+no confirmed critical accounting failure, but one or more critical areas remain unproven.
+
+RED:
+confirmed financial/data-integrity/security failure.
+
+IMPORTANT:
+
+Do not downgrade a result simply because a test is inconvenient to execute.
+
+Do not call code inspection a functional PASS.
+
+Do not modify production.
+
+Do not publish.
+
+Do not change accounting behavior merely to satisfy tests.
+
+If a real defect is found, identify the exact root cause before proposing a fix.
