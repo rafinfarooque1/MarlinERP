@@ -45,7 +45,7 @@ import { CustomerFormDialog } from '@/components/customers/CustomerFormDialog';
 import { locationValueOf } from '@/lib/usePartyLocations';
 import {
   STORED_SALE_MODES, PAYMENT_MODE_OPTIONS, CREATE_PAYMENT_MODE_OPTIONS,
-  paymentModeLabel, storedSaleMode,
+  paymentModeLabel, editableSaleMode,
 } from '@/lib/paymentModes';
 import { ReceiveIntoSelect, useReceiveIntoOptions, isCashOption } from '@/components/receive-into-select';
 import {
@@ -542,11 +542,10 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
       customerId: sale.customerId ?? undefined,
       salespersonEmployeeId: sale.salespersonEmployeeId ?? (sale.salesperson_employee_id != null ? Number(sale.salesperson_employee_id) : undefined),
       saleDate: sale.saleDate,
-      // Carry the stored mode through untouched — legacy 'card'/'bank_transfer'
-      // included. They are shown as "Bank", but submitting 'bank' in their place
-      // would rewrite a value reconciliation points at, and the API would read
-      // it as changing the sale's mode and refuse the edit.
-      paymentMode: storedSaleMode(sale.paymentMode) as FormValues['paymentMode'],
+      // Show the canonical picker value for edits. The API preserves a legacy
+      // stored 'card'/'bank_transfer' spelling when the selected family remains
+      // Bank, so opening and saving an old invoice does not break reconciliation.
+      paymentMode: editableSaleMode(sale.paymentMode) as FormValues['paymentMode'],
       couponCode: sale.couponCode ?? '',
       billDiscount: Number((sale as any).billDiscount ?? 0),
       // List rows may be raw snake_case while detail reads map camelCase —
@@ -863,23 +862,9 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   const [billDiscountMode, setBillDiscountMode] = useState<'amount' | 'percent'>('amount');
   useEffect(() => { if (isOpen) setBillDiscountMode('amount'); }, [isOpen]);
 
-  // A new sale may only be Cash or Credit — Bank/UPI are collected later, never
-  // set at sale time (the API rejects them on create). Editing an existing
-  // bank/upi sale must not blank its mode, so that stored value stays selectable
-  // (but the API refuses to CHANGE any sale into bank/upi). Mirrors the
-  // "keep the current pick valid" rule used by lineItemOptions above.
-  const paymentModeOptions = useMemo(() => {
-    const current = watchPaymentMode;
-    if (current && !CREATE_PAYMENT_MODE_OPTIONS.some(o => o.value === current)) {
-      const known = PAYMENT_MODE_OPTIONS.find(o => o.value === current);
-      // A stored legacy spelling ('card'/'bank_transfer') has no option of its
-      // own; give it one under the Bank label so the select can hold the exact
-      // stored value instead of silently swapping it for 'bank'.
-      const option = known ?? { value: current, label: `🏦 ${paymentModeLabel(current)}` };
-      return [...CREATE_PAYMENT_MODE_OPTIONS, option];
-    }
-    return CREATE_PAYMENT_MODE_OPTIONS;
-  }, [watchPaymentMode]);
+  // New sales keep the Receive Now/Credit flow. Edits expose the complete
+  // payment-mode picker so Cash, Bank, UPI, and Credit can be reassigned.
+  const paymentModeOptions = PAYMENT_MODE_OPTIONS;
   // Create mode with location-assigned accounts available: 'cash' becomes
   // "Receive Now" — the actual Cash/Bank/UPI method follows from the account
   // picked below, not from this select. Locations without assigned accounts
