@@ -272,17 +272,23 @@ if (!vendor?.id) {
     assert('Trial balance balanced after purchase (|Dr − Cr| < 0.01)', diff < 0.01,
       `diff=${diff}`);
 
-    // Dr side grew by the full purchase total (Purchases debit + Input GST debit)
-    const drDelta = round2(tbAfter.totalDr - tbBefore.totalDr);
-    assert(`Debit side increased by ≈ ₹${total.toFixed(2)} (Purchases + Input GST)`,
-      Math.abs(drDelta - total) < 0.05,
-      `drBefore=${tbBefore.totalDr} drAfter=${tbAfter.totalDr} delta=${drDelta} expected=${total}`);
+    // Trial-balance totals are net balances, not movement totals: an existing
+    // credit balance can make totalDr fall even while the purchase posts the
+    // correct debit. Compare the affected ledgers' signed balances instead.
+    const signed = (row) => row ? round2(Number(row.debit ?? 0) - Number(row.credit ?? 0)) : 0;
+    const purchaseDelta = round2(
+      signed(tbAfter.byCode['STD-PUR']) - signed(tbBefore.byCode['STD-PUR']),
+    );
+    assert('Purchases ledger increased by the taxable amount (₹500.00)',
+      Math.abs(purchaseDelta - (total - taxTotal)) < 0.05,
+      `purchaseDelta=${purchaseDelta} expected=${round2(total - taxTotal)}`);
 
-    // Cr side grew by the full purchase total (vendor payable)
-    const crDelta = round2(tbAfter.totalCr - tbBefore.totalCr);
-    assert(`Credit side increased by ≈ ₹${total.toFixed(2)} (vendor payable credited)`,
-      Math.abs(crDelta - total) < 0.05,
-      `crBefore=${tbBefore.totalCr} crAfter=${tbAfter.totalCr} delta=${crDelta} expected=${total}`);
+    const vendorDelta = round2(
+      signed(tbAfter.byCode[`VEND-${vendor.id}`]) - signed(tbBefore.byCode[`VEND-${vendor.id}`]),
+    );
+    assert(`Vendor payable increased by the full invoice total (₹${total.toFixed(2)})`,
+      Math.abs(vendorDelta + total) < 0.05,
+      `vendorDelta=${vendorDelta} expected=${-total}`);
 
     // Vendor ledger code is VEND-{id} — it should appear with a credit balance
     const vendLedgerCode = `VEND-${vendor.id}`;

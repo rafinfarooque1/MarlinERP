@@ -151,7 +151,12 @@ console.log('\n[2] A NEW location cash ledger lands under Cash automatically');
 }
 
 console.log('\n[3] Backdated purchase enters stock history on the BILL date');
-const D1 = '2026-07-10', D2 = '2026-07-15', D3 = '2026-07-18';
+const daysAgo = (days) => {
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() - days);
+  return d.toISOString().slice(0, 10);
+};
+const D0 = daysAgo(11), D1 = daysAgo(10), D2 = daysAgo(8), D3 = daysAgo(6), D4 = daysAgo(5);
 let billId = 0;
 {
   const mk = await post('/purchases', {
@@ -165,7 +170,7 @@ let billId = 0;
     `SELECT txn_date::text AS d FROM stock_ledger WHERE doc_type='purchase' AND doc_id=$1`, [billId]);
   assert('Ledger rows carry the bill date, not the insert date', rows.length > 0 && rows.every(r => r.d === D1),
     rows.map(r => r.d).join(','));
-  assert('Stock as of the day before the bill is zero', (await qtyAsOf(fixtures.matA, '2026-07-09')) === 0);
+  assert('Stock as of the day before the bill is zero', (await qtyAsOf(fixtures.matA, D0)) === 0);
   assert('Stock as of the bill date is the bill quantity', (await qtyAsOf(fixtures.matA, D1)) === 10);
 }
 
@@ -285,13 +290,20 @@ console.log('\n[9] Edit: receiving-location move re-homes stock, lots and the bi
 
 console.log('\n[10] Range reporting: closing stock of D == opening stock of D+1');
 {
-  for (const [D, Dnext] of [['2026-07-14', '2026-07-15'], ['2026-07-20', '2026-07-21']]) {
+  for (const [D, Dnext] of [[D0, D1], [D2, daysAgo(7)]]) {
     const a = await get(`/accounts/financial-statements?fromDate=2026-04-01&toDate=${D}`);
-    const b = await get(`/accounts/financial-statements?fromDate=${Dnext}&toDate=2026-07-31`);
+    const b = await get(`/accounts/financial-statements?fromDate=${Dnext}&toDate=${D4}`);
     const closing = Number(a.data?.profitAndLoss?.incomes?.closingStock ?? NaN);
     const opening = Number(b.data?.profitAndLoss?.expenses?.openingStock ?? NaN);
-    assert(`Closing(${D}) equals Opening(${Dnext})`, Number.isFinite(closing) && closing === opening,
-      `closing=${closing} opening=${opening}`);
+    const physicalOpening = Number(b.data?.profitAndLoss?.expenses?.openingStockPhysical ?? NaN);
+    const transferAdjustment = Number(b.data?.profitAndLoss?.expenses?.openingStockTransferAdjustment ?? NaN);
+    assert(`Closing(${D}) equals physical Opening(${Dnext})`,
+      Number.isFinite(closing) && Number.isFinite(physicalOpening) && closing === physicalOpening,
+      `closing=${closing} physicalOpening=${physicalOpening}`);
+    assert(`Opening(${Dnext}) includes only its transfer adjustment`,
+      Number.isFinite(opening) && Number.isFinite(transferAdjustment)
+        && opening === physicalOpening + transferAdjustment,
+      `opening=${opening} physicalOpening=${physicalOpening} transferAdjustment=${transferAdjustment}`);
   }
 }
 
@@ -304,7 +316,7 @@ console.log('\n[11] Delete: the bill leaves history as if dated movements never 
     `SELECT COUNT(*)::int AS n FROM stock_batches WHERE item_id = ANY($1::int[]) AND material_type='material'`,
     [[fixtures.matA, fixtures.matB]]);
   assert('No lots remain for the bill', lots.n === 0, `${lots.n} rows`);
-  assert('Stock as of any date is zero again', (await qtyAsOf(fixtures.matA, '2026-07-31')) === 0);
+  assert('Stock as of any date is zero again', (await qtyAsOf(fixtures.matA, D4)) === 0);
   const { rows: revs } = await sql(
     `SELECT txn_date::text AS d FROM stock_ledger WHERE doc_type='purchase' AND doc_id=$1 AND notes LIKE 'Purchase deleted%'`, [billId]);
   assert('Delete reversal dated on the bill date', revs.length > 0 && revs.every(r => r.d === D3), revs.map(r => r.d).join(','));

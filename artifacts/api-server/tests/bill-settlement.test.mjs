@@ -27,6 +27,16 @@ import pg from 'pg';
 const BASE = process.env.API_URL || 'http://localhost:8080/api';
 const TAG = 'ZZBSET';
 const WH = 2; // Marlin Mangaluru Depot — same warehouse the other suites use
+const openDate = (daysAgo) => {
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() - daysAgo);
+  return d.toISOString().slice(0, 10);
+};
+const OPEN_10 = openDate(10);
+const OPEN_9 = openDate(9);
+const OPEN_8 = openDate(8);
+const OPEN_7 = openDate(7);
+const OPEN_6 = openDate(6);
 
 let authToken = '';
 let passed = 0, failed = 0;
@@ -154,7 +164,7 @@ preEntryIds = (await sql(`SELECT id FROM stock_entries WHERE item_id = $1 AND ma
 // Stock for the sales, from the stock vendor (kept out of the settlement tests).
 {
   const res = await post('/purchases', {
-    vendorId: fx.vendStockId, purchaseDate: '2026-07-01', vendorInvoiceDate: '2026-06-30', locationType: 'warehouse', locationId: WH,
+    vendorId: fx.vendStockId, purchaseDate: OPEN_10, vendorInvoiceDate: OPEN_10, locationType: 'warehouse', locationId: WH,
     lineItems: [{ materialType: 'item', materialId: fx.itemId, quantity: 100, unitCost: 40, mfgDate: '2026-06-01', expiryDate: '2027-06-01' }],
   });
   if (res.status === 201) made.purchases.push(res.data.id);
@@ -166,7 +176,7 @@ const cashLeaf = Number((await sql(`SELECT id FROM account_ledgers WHERE code = 
 const mkSale = async (qty, extra = {}) => {
   const res = await post('/sales', {
     outletId: WH, locationType: 'warehouse', locationId: WH,
-    saleDate: extra.saleDate ?? '2026-08-01', paymentMode: 'credit', customerId: fx.custId,
+    saleDate: extra.saleDate ?? OPEN_10, paymentMode: 'credit', customerId: fx.custId,
     lineItems: [{ itemId: fx.itemId, quantity: qty, unitPrice: 100 }], ...extra,
   });
   if (res.status === 201 && res.data?.id) made.sales.push(res.data.id);
@@ -174,8 +184,8 @@ const mkSale = async (qty, extra = {}) => {
 };
 const mkBill = async (qty, unitCost, extra = {}) => {
   const res = await post('/purchases', {
-    vendorId: fx.vendPayId, purchaseDate: extra.purchaseDate ?? '2026-08-01',
-    vendorInvoiceDate: extra.purchaseDate ?? '2026-08-01',
+    vendorId: fx.vendPayId, purchaseDate: extra.purchaseDate ?? OPEN_10,
+    vendorInvoiceDate: extra.purchaseDate ?? OPEN_10,
     locationType: 'warehouse', locationId: WH,
     lineItems: [{ materialType: 'item', materialId: fx.itemId, quantity: qty, unitCost, mfgDate: '2026-06-01', expiryDate: '2027-06-01' }],
     ...extra,
@@ -188,8 +198,8 @@ const mkBill = async (qty, unitCost, extra = {}) => {
 console.log('\n[A] Customer: settlement context lists open bills oldest-first');
 let S1, S2;
 {
-  S1 = (await mkSale(5, { saleDate: '2026-07-20' })).data; // ₹500
-  S2 = (await mkSale(3, { saleDate: '2026-07-25' })).data; // ₹300
+  S1 = (await mkSale(5, { saleDate: OPEN_10 })).data; // ₹500
+  S2 = (await mkSale(3, { saleDate: OPEN_9 })).data; // ₹300
   assert('Two credit sales created (₹500 + ₹300)', !!S1?.id && !!S2?.id && near(S1.totalAmount ?? 500, 500));
 
   const ctx = (await get(`/accounts/settlement-context?ledgerId=${fx.custLedger}`)).data;
@@ -208,7 +218,7 @@ console.log('\n[B] Receipt with a full allocation settles the bill exactly');
 let R1;
 {
   const res = await post('/accounts/receipts', {
-    receiptDate: '2026-08-01', receivedInLedgerId: cashLeaf, receivedFromLedgerId: fx.custLedger,
+    receiptDate: OPEN_8, receivedInLedgerId: cashLeaf, receivedFromLedgerId: fx.custLedger,
     amount: 500, allocations: [{ saleId: S1.id, amount: 500 }],
   });
   R1 = res.data;
@@ -230,13 +240,13 @@ let R1;
 console.log('\n[C] Refusals: over-allocation, over-bill, cancelled sale');
 {
   const over = await post('/accounts/receipts', {
-    receiptDate: '2026-08-01', receivedInLedgerId: cashLeaf, receivedFromLedgerId: fx.custLedger,
+    receiptDate: OPEN_8, receivedInLedgerId: cashLeaf, receivedFromLedgerId: fx.custLedger,
     amount: 100, allocations: [{ saleId: S2.id, amount: 200 }],
   });
   assert('Allocations > voucher amount → 400', over.status === 400, `status ${over.status}`);
 
   const overBill = await post('/accounts/receipts', {
-    receiptDate: '2026-08-01', receivedInLedgerId: cashLeaf, receivedFromLedgerId: fx.custLedger,
+    receiptDate: OPEN_8, receivedInLedgerId: cashLeaf, receivedFromLedgerId: fx.custLedger,
     amount: 400, allocations: [{ saleId: S2.id, amount: 400 }],
   });
   assert('Allocation > bill due → 400', overBill.status === 400, `status ${overBill.status}`);
@@ -246,7 +256,7 @@ console.log('\n[D] Overpay parks the excess as a customer advance');
 let R2;
 {
   const res = await post('/accounts/receipts', {
-    receiptDate: '2026-08-02', receivedInLedgerId: cashLeaf, receivedFromLedgerId: fx.custLedger,
+    receiptDate: OPEN_7, receivedInLedgerId: cashLeaf, receivedFromLedgerId: fx.custLedger,
     amount: 400, allocations: [{ saleId: S2.id, amount: 300 }], advanceAmount: 100,
   });
   R2 = res.data;
@@ -318,8 +328,8 @@ console.log('\n[G] Cancelled sale refuses settlement');
 console.log('\n[H] Vendor: payment with allocations + advance');
 let P1, P2, PY1;
 {
-  P1 = (await mkBill(6, 50, { purchaseDate: '2026-07-22' })).data;  // ₹300
-  P2 = (await mkBill(4, 50, { purchaseDate: '2026-07-28' })).data;  // ₹200
+  P1 = (await mkBill(6, 50, { purchaseDate: OPEN_10 })).data;  // ₹300
+  P2 = (await mkBill(4, 50, { purchaseDate: OPEN_9 })).data;  // ₹200
   assert('Two vendor bills created (₹300 + ₹200)', !!P1?.id && !!P2?.id);
 
   const ctx = (await get(`/accounts/settlement-context?ledgerId=${fx.vendLedger}`)).data;
@@ -327,7 +337,7 @@ let P1, P2, PY1;
   assert('Context kind = vendor, both bills open', ctx.kind === 'vendor' && b.length === 2 && near(b[0].due, 300) && near(b[1].due, 200), JSON.stringify(b));
 
   const res = await post('/accounts/payments', {
-    paymentDate: '2026-08-02', paidFromLedgerId: cashLeaf, paidToLedgerId: fx.vendLedger,
+    paymentDate: OPEN_7, paidFromLedgerId: cashLeaf, paidToLedgerId: fx.vendLedger,
     amount: 600, allocations: [{ purchaseId: P1.id, amount: 300 }, { purchaseId: P2.id, amount: 200 }],
     advanceAmount: 100,
   });
@@ -395,12 +405,12 @@ let R3, R4, S5;
   // Two advance-only receipts. Distinct amounts on purpose — the double-submit
   // guard refuses same ledger + same amount within seconds.
   const r3 = await post('/accounts/receipts', {
-    receiptDate: '2026-08-02', receivedInLedgerId: cashLeaf, receivedFromLedgerId: fx.custLedger,
+    receiptDate: OPEN_7, receivedInLedgerId: cashLeaf, receivedFromLedgerId: fx.custLedger,
     amount: 100, allocations: [], advanceAmount: 100,
   });
   R3 = r3.data; if (r3.status === 201) made.receipts.push(R3.id);
   const r4 = await post('/accounts/receipts', {
-    receiptDate: '2026-08-03', receivedInLedgerId: cashLeaf, receivedFromLedgerId: fx.custLedger,
+    receiptDate: OPEN_6, receivedInLedgerId: cashLeaf, receivedFromLedgerId: fx.custLedger,
     amount: 120, allocations: [], advanceAmount: 120,
   });
   R4 = r4.data; if (r4.status === 201) made.receipts.push(R4.id);
@@ -411,7 +421,7 @@ let R3, R4, S5;
   assert('Available advance = ₹120 (₹220 parked net of ₹100 still owed)', near(adv0?.available, 120), JSON.stringify(adv0));
 
   // Consume only ₹30 — FIFO must pin it to R3, the OLDEST voucher.
-  const s = await mkSale(2, { useAdvance: true, advanceAmount: 30, saleDate: '2026-08-03' });
+   const s = await mkSale(2, { useAdvance: true, advanceAmount: 30, saleDate: OPEN_6 });
   S5 = s.data;
   assert('Sale accepted with advanceApplied = 30', s.status === 201 && near(S5?.advanceApplied, 30), JSON.stringify(s.data).slice(0, 150));
   const { rows: cons } = await sql(
@@ -450,12 +460,12 @@ console.log('\n[M] Slice-precise guard: vendor mirror');
 let PY2, PY3, P4;
 {
   const p2 = await post('/accounts/payments', {
-    paymentDate: '2026-08-02', paidFromLedgerId: cashLeaf, paidToLedgerId: fx.vendLedger,
+    paymentDate: OPEN_7, paidFromLedgerId: cashLeaf, paidToLedgerId: fx.vendLedger,
     amount: 100, allocations: [], advanceAmount: 100,
   });
   PY2 = p2.data; if (p2.status === 201) made.payments.push(PY2.id);
   const p3 = await post('/accounts/payments', {
-    paymentDate: '2026-08-03', paidFromLedgerId: cashLeaf, paidToLedgerId: fx.vendLedger,
+    paymentDate: OPEN_6, paidFromLedgerId: cashLeaf, paidToLedgerId: fx.vendLedger,
     amount: 120, allocations: [], advanceAmount: 120,
   });
   PY3 = p3.data; if (p3.status === 201) made.payments.push(PY3.id);

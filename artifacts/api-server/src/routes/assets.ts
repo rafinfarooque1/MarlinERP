@@ -74,10 +74,10 @@ const trimOrNull = (v: unknown) => {
 };
 
 /** Names for every location an asset can sit at, for list labels. */
-async function locationNameMap(): Promise<Map<string, string>> {
+async function locationNameMap(q: { query: (sql: string, params?: unknown[]) => Promise<{ rows: any[] }> } = pool): Promise<Map<string, string>> {
   const [whs, outs] = await Promise.all([
-    pool.query(`SELECT id, name FROM warehouses`),
-    pool.query(`SELECT id, name FROM outlets`),
+    q.query(`SELECT id, name FROM warehouses`),
+    q.query(`SELECT id, name FROM outlets`),
   ]);
   const m = new Map<string, string>([["headoffice:1", "Head Office"]]);
   for (const w of whs.rows) m.set(`warehouse:${w.id}`, w.name);
@@ -827,7 +827,6 @@ router.post("/assets/transfers", requireModuleAction(PG_TRANSFERS, "add"), async
   const scope = await getUserDataScope(employee ?? { branchType: "headoffice", branchId: 0 });
   const client = await pool.connect();
   let out: Record<string, unknown> | null = null;
-  let audit: (() => void) | null = null;
   try {
     await client.query("BEGIN");
     const { rows: [row] } = await client.query(`
@@ -874,19 +873,10 @@ router.post("/assets/transfers", requireModuleAction(PG_TRANSFERS, "add"), async
       `UPDATE asset_purchases SET current_location_type = $1, current_location_id = $2, updated_at = now() WHERE id = $3`,
       [toType, toId, purchaseId],
     );
-    await client.query("COMMIT");
-
-    const locNames = await locationNameMap();
+    const locNames = await locationNameMap(client);
     const fromName = locNames.get(`${fromType}:${fromId}`) ?? "Head Office";
     const toName = locNames.get(`${toType}:${toId}`) ?? "Head Office";
-    out = {
-      id: tr.id, assetPurchaseId: purchaseId,
-      assetCode: row.asset_code, assetName: row.asset_name,
-      fromType, fromId, fromName, toType, toId, toName,
-      transferDate, approvedBy, reason,
-      createdBy: employee?.username ?? "system", createdAt: tr.created_at,
-    };
-    audit = () => logActivity({
+    await logActivityInTransaction(client, {
       action: "UPDATE", module: "assets", entityType: "asset_transfer", entityId: Number(tr.id),
       description: `Asset ${row.asset_code ?? `#${purchaseId}`} (${row.asset_name}) transferred ${fromName} → ${toName}`,
       user: employee?.username,
@@ -894,7 +884,16 @@ router.post("/assets/transfers", requireModuleAction(PG_TRANSFERS, "add"), async
         before: { currentLocationType: fromType, currentLocationId: fromId },
         after: { currentLocationType: toType, currentLocationId: toId, transferDate, approvedBy, reason },
       },
-    }).catch(() => {});
+    });
+    await client.query("COMMIT");
+
+    out = {
+      id: tr.id, assetPurchaseId: purchaseId,
+      assetCode: row.asset_code, assetName: row.asset_name,
+      fromType, fromId, fromName, toType, toId, toName,
+      transferDate, approvedBy, reason,
+      createdBy: employee?.username ?? "system", createdAt: tr.created_at,
+    };
   } catch (e) {
     await client.query("ROLLBACK").catch(() => {});
     throw e;
@@ -902,7 +901,6 @@ router.post("/assets/transfers", requireModuleAction(PG_TRANSFERS, "add"), async
     client.release();
   }
 
-  audit?.();
   res.status(201).json(out);
 });
 
@@ -978,7 +976,6 @@ router.post("/assets/disposals", requireModuleAction(PG_DISPOSAL, "add"), async 
   const scope = await getUserDataScope(employee ?? { branchType: "headoffice", branchId: 0 });
   const client = await pool.connect();
   let out: Record<string, unknown> | null = null;
-  let audit: (() => void) | null = null;
   try {
     await client.query("BEGIN");
     const { rows: [row] } = await client.query(`
@@ -1060,6 +1057,15 @@ router.post("/assets/disposals", requireModuleAction(PG_DISPOSAL, "add"), async 
       `UPDATE asset_purchases SET status = $1, updated_at = now() WHERE id = $2`,
       [disposalType, purchaseId],
     );
+    await logActivityInTransaction(client, {
+      action: "UPDATE", module: "assets", entityType: "asset_disposal", entityId: Number(d.id),
+      description: `Asset ${row.asset_code ?? `#${purchaseId}`} (${row.asset_name}) disposed — ${disposalType.replace(/_/g, " ")}`,
+      user: employee?.username,
+      metadata: {
+        before: { status: row.status ?? "active" },
+        after: { status: disposalType, disposalDate, reason },
+      },
+    });
     await client.query("COMMIT");
 
     out = {
@@ -1068,15 +1074,6 @@ router.post("/assets/disposals", requireModuleAction(PG_DISPOSAL, "add"), async 
       disposalType, disposalDate, reason,
       createdBy: employee?.username ?? "system", createdAt: d.created_at,
     };
-    audit = () => logActivity({
-      action: "UPDATE", module: "assets", entityType: "asset_disposal", entityId: Number(d.id),
-      description: `Asset ${row.asset_code ?? `#${purchaseId}`} (${row.asset_name}) disposed — ${disposalType.replace(/_/g, " ")}`,
-      user: employee?.username,
-      metadata: {
-        before: { status: row.status ?? "active" },
-        after: { status: disposalType, disposalDate, reason },
-      },
-    }).catch(() => {});
   } catch (e) {
     await client.query("ROLLBACK").catch(() => {});
     throw e;
@@ -1084,7 +1081,6 @@ router.post("/assets/disposals", requireModuleAction(PG_DISPOSAL, "add"), async 
     client.release();
   }
 
-  audit?.();
   res.status(201).json(out);
 });
 

@@ -445,7 +445,15 @@ router.get(
           }
           return pool.query<any>(
             `SELECT s.customer_id,
-                    COALESCE(SUM(COALESCE(s.other_charges, 0)::numeric), 0) AS other_charges
+                    COALESCE(SUM(
+                      CASE WHEN jsonb_typeof(COALESCE(s.other_charges, '[]'::jsonb)) = 'array'
+                        THEN COALESCE((
+                          SELECT SUM(NULLIF(charge->>'amount', '')::numeric)
+                            FROM jsonb_array_elements(COALESCE(s.other_charges, '[]'::jsonb)) AS charge
+                        ), 0)
+                        ELSE 0
+                      END
+                    ), 0) AS other_charges
                FROM sales s
               WHERE ${c.join(" AND ")}
               GROUP BY s.customer_id`,

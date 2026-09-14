@@ -772,6 +772,10 @@ export interface Books {
   profitAndLoss: {
     expenses: {
       openingStock: number;
+      /** Physical opening position before the period-scoped transfer adjustment. */
+      openingStockPhysical: number;
+      /** Transfer value added to the P&L opening term to keep internal moves neutral. */
+      openingStockTransferAdjustment: number;
       openingStockItems: ValuedItem[];
       openingStockReliable: boolean;
       openingStockNote: string | null;
@@ -1140,6 +1144,8 @@ export async function buildBooks(
     profitAndLoss: {
       expenses: {
         openingStock: opening.total,
+        openingStockPhysical: normalOpening.total,
+        openingStockTransferAdjustment: transferOpeningAdjustment.total,
         openingStockItems: opening.items,
         openingStockReliable: opening.reliable,
         openingStockNote: opening.note,
