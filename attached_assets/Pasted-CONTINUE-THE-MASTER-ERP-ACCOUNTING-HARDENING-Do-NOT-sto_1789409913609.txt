@@ -1,0 +1,855 @@
+CONTINUE THE MASTER ERP ACCOUNTING HARDENING.
+
+Do NOT stop at the fixed-asset work.
+
+The previous audit/fix task is NOT COMPLETE until the entire ERP accounting flow is verified and hardened.
+
+You have already implemented:
+
+- historical inventory valuation checkpoints
+- fixed-asset depreciation
+- fixed-asset disposal accounting
+- ₹1,890 vendor allocation correction
+- transaction-bound audit support for depreciation
+
+Now COMPLETE THE REMAINING ACCOUNTING HARDENING IN ONE TASK.
+
+============================================================
+1. DO NOT BREAK EXISTING CORRECT WORK
+============================================================
+
+First verify the work already completed.
+
+Do not undo:
+
+- stock_cost_snapshots
+- historical inventory valuation
+- depreciation
+- disposal accounting
+- vendor advance correction
+- transaction-bound audit infrastructure
+
+Verify that:
+
+TOTAL DEBIT = TOTAL CREDIT
+
+and existing accounting data remains intact.
+
+============================================================
+2. COMPLETE TRANSACTION-BOUND AUDIT LOGGING
+============================================================
+
+The previous audit found that audit logging was fire-and-forget.
+
+Extend durable transaction-bound audit logging to ALL critical financial mutation paths.
+
+Mandatory:
+
+Sales
+Sales Edit
+Sales Cancel
+Sales Return
+Sales Return Cancel
+Purchases
+Purchase Edit
+Purchase Cancel
+Purchase Return
+Purchase Return Cancel
+Receipt Voucher
+Receipt Edit
+Receipt Cancel
+Payment Voucher
+Payment Edit
+Payment Cancel
+Journal Voucher
+Journal Edit/Cancel
+Expense
+Asset Purchase
+Asset Edit
+Asset Disposal
+Depreciation
+Stock Adjustment
+Stock Transfer
+Transfer Receipt
+Transfer Reject
+Bank Reconciliation
+Reconciliation Reset
+Other Charges
+Quotation-to-Sale conversion
+
+The audit record must be committed in the SAME DATABASE TRANSACTION as the financial mutation.
+
+If the financial mutation succeeds but the audit record fails:
+
+ROLL BACK THE FINANCIAL MUTATION.
+
+Do not allow silent accounting changes without an audit trail.
+
+Do not create duplicate audit events.
+
+============================================================
+3. RECEIPT ACCOUNTING — CRITICAL
+============================================================
+
+Fix and verify the receipt architecture.
+
+If a customer pays ₹2,000 against multiple bills:
+
+Financial accounting must remain:
+
+ONE receipt = ₹2,000
+
+Customer Ledger:
+ONE receipt entry = ₹2,000
+
+Bank/Cash:
+ONE transaction = ₹2,000
+
+Journal:
+ONE receipt accounting transaction
+
+Bill allocation is ONLY settlement/allocation detail.
+
+Do NOT create:
+
+Bill 1 receipt ₹1,000
+Bill 2 receipt ₹1,000
+
+as two separate customer financial ledger transactions.
+
+The bill-wise allocation may remain available for settlement reporting, but must not split the actual receipt in the financial ledger.
+
+Verify:
+
+Customer Ledger
+Customer Outstanding
+Receipt Voucher
+Bank Ledger
+Cash Ledger
+Journal
+
+all remain consistent.
+
+============================================================
+4. RECEIVABLE / OUTSTANDING
+============================================================
+
+Customer Outstanding must include:
+
+Sales
+Sales Returns
+Credit Notes
+Other valid charges
+Receipts
+Adjustments
+
+Formula:
+
+Opening Receivable
++ Net Sales
++ Valid Charges
+- Sales Returns/Credit Notes
+- Receipts
+± Adjustments
+=
+Closing Receivable
+
+Verify against actual Customer Ledger.
+
+Customer Ledger balance must equal Customer Outstanding.
+
+Do not hide overpayments.
+
+Keep customer credit/advance balances separately identifiable.
+
+============================================================
+5. VENDOR OUTSTANDING
+============================================================
+
+Vendor accounting must distinguish:
+
+Invoice Outstanding
+Vendor Advance
+Vendor Credit
+Unallocated Payment
+
+Formula:
+
+Opening Payable
++ Purchases
+- Purchase Returns
+- Bill Settlements
+± Adjustments
+=
+Vendor Payable
+
+Payments exceeding bill value must not be silently allocated beyond the invoice.
+
+The corrected ₹1,890 must remain represented correctly as vendor advance/credit where applicable.
+
+============================================================
+6. BANK TRANSACTIONS
+============================================================
+
+Every eligible bank transaction must appear in Bank Book and Reconciliation.
+
+Include:
+
+Bank-mode Sales
+Receipt Vouchers through Bank
+Payments through Bank
+Other valid bank transactions
+
+Respect selected warehouse/location.
+
+Do not show only one source of bank transactions.
+
+Do not duplicate transactions.
+
+============================================================
+7. BANK RECONCILIATION
+============================================================
+
+Complete the reconciliation system.
+
+Provide:
+
+- all eligible unreconciled bank entries
+- Select All
+- multi-select
+- selected count
+- selected total
+- reconciliation date
+- processing charge
+- reconcile selected
+
+If multiple transactions are selected:
+
+create ONE reconciliation batch.
+
+Do not create duplicate financial transactions.
+
+Reconciliation is a bank matching/status process.
+
+It must NOT recreate the original receipt/payment/sale transaction.
+
+============================================================
+8. RECONCILIATION RESET
+============================================================
+
+Provide a safe reset mechanism.
+
+Reset only:
+
+- reconciliation status
+- reconciliation batch information
+
+Never delete:
+
+Sales
+Receipts
+Payments
+Bank Transactions
+JVs
+Ledger Entries
+
+After reset, all eligible transactions must again appear as unreconciled.
+
+============================================================
+9. PROCESSING CHARGE
+============================================================
+
+If reconciliation has processing charge:
+
+Store:
+
+Gross Amount
+Processing Charge
+Net Amount
+
+Post the processing charge exactly once to the correct expense/charge ledger.
+
+Do NOT reduce the original receipt/sale transaction itself incorrectly.
+
+Do NOT create duplicate bank transactions.
+
+============================================================
+10. BANK/CASH ACCOUNT LOCATION
+============================================================
+
+Cash and Bank accounts must have SINGLE location assignment.
+
+Warehouse employees see only permitted location accounts.
+
+Head Office follows existing Head Office / All Locations rules.
+
+Do not reintroduce multiple-location account assignment.
+
+============================================================
+11. SALES ACCOUNTING
+============================================================
+
+Verify:
+
+Sale
+→ Customer/Cash/Bank
+→ Sales
+→ GST
+→ Inventory
+→ COGS
+
+Correct treatment:
+
+Sales revenue excludes GST.
+
+COGS reduces inventory and contributes to Gross Profit.
+
+Internal transfers must not become sales.
+
+============================================================
+12. SALES RETURNS
+============================================================
+
+Sales return must correctly reverse:
+
+Sales
+Customer receivable
+GST
+Inventory
+COGS
+
+and must be included in customer outstanding.
+
+Test both:
+
+unpaid invoice return
+
+and:
+
+already-paid invoice return.
+
+============================================================
+13. PURCHASES / PURCHASE RETURNS
+============================================================
+
+Verify:
+
+Purchase
+→ Inventory/Expense/Asset
+→ Input GST
+→ Vendor Payable
+→ Bank/Cash
+
+Purchase Return must correctly reverse:
+
+Purchase
+Inventory
+GST
+Vendor Payable
+
+============================================================
+14. FIXED ASSETS
+============================================================
+
+Verify the newly implemented:
+
+Asset Purchase
+Depreciation
+Disposal
+
+For disposal:
+
+Dr Accumulated Depreciation
+Dr Disposal Loss if book value remains
+Cr Gross Asset Cost
+
+If there is a disposal gain in the future, support:
+
+Cr Disposal Gain
+
+Do not force every disposal into loss.
+
+Ensure asset register and accounting voucher remain atomic.
+
+============================================================
+15. DEPRECIATION
+============================================================
+
+Verify:
+
+monthly depreciation
+month locking
+location scope
+idempotency
+duplicate prevention
+
+Running depreciation twice for the same asset/month must not create duplicate accounting.
+
+============================================================
+16. INVENTORY + COGS
+============================================================
+
+Verify the previous negative COGS problem.
+
+DO NOT modify the COGS formula just to remove a negative result.
+
+Use:
+
+COGS
+=
+Opening Stock
++
+Net Purchases
++
+Direct Expenses
+-
+Closing Stock
+
+Gross Profit
+=
+Net Sales
+-
+COGS
+
+Find the actual reason if closing stock causes negative COGS.
+
+Historical stock must use persisted historical cost evidence.
+
+If historical evidence is unavailable:
+
+mark the result LIMITED/UNRELIABLE.
+
+Never invent historical cost.
+
+============================================================
+17. STOCK TRANSFERS
+============================================================
+
+Verify:
+
+Transfer Out:
+Source stock decreases.
+
+Transfer In:
+Destination stock increases.
+
+Company-wide inventory unchanged.
+
+P&L unchanged.
+
+No revenue.
+
+No purchase.
+
+No expense.
+
+No gross profit.
+
+No net profit impact.
+
+Completed transfers must release reservations.
+
+No completed transfer may leave an active reservation unless there is a legitimate remaining quantity.
+
+============================================================
+18. GST
+============================================================
+
+Verify one authoritative GST calculation.
+
+Check:
+
+Sales GST
+Sales Returns
+Purchases GST
+Purchase Returns
+Input GST
+Output GST
+
+Invoice
+Journal
+GST Report
+Balance Sheet
+
+must reconcile.
+
+============================================================
+19. TRIAL BALANCE
+============================================================
+
+Independently verify:
+
+TOTAL DEBIT
+=
+TOTAL CREDIT
+
+No orphan journal lines.
+
+No duplicate financial posting.
+
+No invalid account reference.
+
+============================================================
+20. TRADING ACCOUNT
+============================================================
+
+Verify:
+
+Opening Stock
++ Net Purchases
++ Direct Expenses
+- Closing Stock
+=
+COGS
+
+Net Sales
+- COGS
+=
+Gross Profit/Loss
+
+Do not manipulate values to make the result look reasonable.
+
+============================================================
+21. PROFIT & LOSS
+============================================================
+
+Verify:
+
+Net Sales
+- COGS
+=
+Gross Profit
+
+Gross Profit
++ Other Income
+- Indirect Expenses
+- Financial Charges
+- Depreciation
+=
+Net Profit/Loss
+
+============================================================
+22. BALANCE SHEET
+============================================================
+
+Verify:
+
+TOTAL ASSETS
+=
+TOTAL LIABILITIES + EQUITY
+
+Include:
+
+Cash
+Bank
+Inventory
+Receivables
+Fixed Assets
+Accumulated Depreciation
+GST
+Payables
+Loans
+Outstanding Expenses
+Capital
+Retained Earnings
+Current Year Profit/Loss
+
+============================================================
+23. PROFIT FLOW
+============================================================
+
+Verify:
+
+P&L Net Profit/Loss
+→ Balance Sheet Equity
+
+No double counting.
+
+============================================================
+24. MONTH-WISE ACCOUNTING
+============================================================
+
+Verify:
+
+Previous Closing Stock
+=
+Next Opening Stock
+
+Month boundaries must be correct.
+
+A transaction after the report period must not affect the previous month.
+
+============================================================
+25. ALL LOCATIONS
+============================================================
+
+Verify:
+
+All Locations
+=
+sum of authorized locations
+
+for:
+
+Sales
+Purchases
+Expenses
+Inventory
+Receivables
+Payables
+Cash
+Bank
+Gross Profit
+Net Profit
+
+No double counting.
+
+============================================================
+26. DASHBOARD
+============================================================
+
+Dashboard values must come from the same authoritative calculations.
+
+Verify:
+
+Sales
+Purchase
+Inventory
+Expense
+Receivables
+Payables
+Cash
+Bank
+Gross Profit
+Net Profit
+
+No separate incorrect formulas.
+
+============================================================
+27. REPORTS AND PDF
+============================================================
+
+Verify:
+
+P&L Screen = P&L PDF
+
+Balance Sheet Screen = Balance Sheet PDF
+
+Trial Balance Screen = Trial Balance PDF
+
+Ledger Screen = Ledger PDF
+
+Month Wise state must be reflected correctly.
+
+Selected location must be reflected correctly.
+
+============================================================
+28. EDIT / CANCEL / VOID
+============================================================
+
+Test:
+
+Sale edit
+Sale cancellation
+Purchase edit
+Purchase cancellation
+Receipt edit
+Receipt cancellation
+Payment edit
+Payment cancellation
+Return cancellation
+Asset disposal
+Reconciliation reset
+
+Ensure no stale:
+
+JV
+Ledger
+Stock
+GST
+Outstanding
+Bank
+Cash
+
+records remain.
+
+Prefer reversal/void accounting for financial history rather than destructive deletion.
+
+============================================================
+29. AUTOMATED REGRESSION TESTS
+============================================================
+
+Add automated tests for:
+
+1. Trial Balance
+2. P&L
+3. Balance Sheet
+4. COGS
+5. Inventory
+6. Historical inventory checkpoint
+7. Sales
+8. Sales Return
+9. Receipt
+10. Multi-bill receipt
+11. Customer Outstanding
+12. Purchase
+13. Purchase Return
+14. Payment
+15. Vendor Outstanding
+16. Vendor Advance
+17. Fixed Asset
+18. Depreciation
+19. Depreciation idempotency
+20. Asset Disposal
+21. Stock Transfer
+22. Transfer Reservation Release
+23. GST
+24. Bank
+25. Cash
+26. Bank Reconciliation
+27. Multi-select Reconciliation
+28. Processing Charge
+29. Reconciliation Reset
+30. Location Scope
+31. All Locations
+32. Dashboard
+33. PDF parity
+34. Audit durability
+35. Edit/Cancel/Reversal
+
+============================================================
+30. FINAL ACCOUNTING RECONCILIATION
+============================================================
+
+After all fixes run an independent reconciliation.
+
+Produce:
+
+| ACCOUNTING AREA | ERP VALUE | INDEPENDENT VALUE | DIFFERENCE | STATUS |
+
+Include:
+
+Sales
+Sales Returns
+Net Sales
+Purchases
+Purchase Returns
+Net Purchases
+Opening Stock
+Closing Stock
+Direct Expenses
+COGS
+Gross Profit
+Other Income
+Indirect Expenses
+Financial Charges
+Depreciation
+Net Profit
+Inventory
+Receivables
+Payables
+Vendor Advances
+Cash
+Bank
+Fixed Assets
+Accumulated Depreciation
+GST
+Total Assets
+Total Liabilities
+Equity
+Trial Balance Debit
+Trial Balance Credit
+
+============================================================
+31. ZERO DIFFERENCE REQUIREMENT
+============================================================
+
+Where accounting mathematics requires equality:
+
+Difference must be:
+
+₹0.00
+
+except explicitly documented rounding tolerance.
+
+Do not hide differences.
+
+============================================================
+32. PRODUCTION SAFETY
+============================================================
+
+DO NOT modify production.
+
+Do not publish automatically.
+
+Do not migrate production.
+
+Do not rewrite production historical accounting.
+
+Complete and validate in development first.
+
+============================================================
+33. FINAL VERIFICATION
+============================================================
+
+Do not report "complete" merely because:
+
+- TypeScript passes
+- build passes
+- database migration succeeds
+- journals balance
+
+The financial reports themselves must reconcile.
+
+The final acceptance requires:
+
+TRIAL BALANCE = PASS
+BALANCE SHEET = PASS
+P&L = PASS
+TRADING ACCOUNT = PASS
+COGS = PASS
+INVENTORY = PASS
+RECEIVABLES = PASS
+PAYABLES = PASS
+CASH = PASS
+BANK = PASS
+GST = PASS
+FIXED ASSETS = PASS
+DEPRECIATION = PASS
+STOCK TRANSFERS = PASS
+RECONCILIATION = PASS
+LOCATION ACCOUNTING = PASS
+DASHBOARD = PASS
+REPORT/PDF PARITY = PASS
+AUDIT LOGGING = PASS
+
+If anything cannot be proven, explicitly mark it:
+
+NOT PROVEN
+
+rather than PASS.
+
+============================================================
+34. FINAL REPORT
+============================================================
+
+Give me:
+
+A. All problems found
+B. Root cause of each
+C. What was fixed
+D. Database changes
+E. Code changes
+F. Accounting changes
+G. Before/after values
+H. Automated tests
+I. Regression results
+J. Remaining limitations
+K. Any data that requires manual review
+L. Exact final accounting reconciliation
+
+DO NOT STOP AFTER FIXED ASSETS.
+
+COMPLETE THE REMAINING RECEIPT, OUTSTANDING, BANK, RECONCILIATION, INVENTORY, COGS, P&L, BALANCE SHEET, GST, LOCATION, AUDIT, AND REGRESSION WORK IN THIS SAME TASK.
+
+START BY REVIEWING THE CURRENT IMPLEMENTATION, THEN COMPLETE ALL REMAINING WORK.
