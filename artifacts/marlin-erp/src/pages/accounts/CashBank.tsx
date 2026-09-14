@@ -40,8 +40,8 @@ const schema = z.object({
   accountNumber: z.string().optional(),
   bankName: z.string().optional(),
   ifscCode: z.string().optional(),
-  // Bank/UPI only: ON = collections pass through Reconciliation before the
-  // bank balance moves; OFF = they post straight into the account's ledger.
+  // Bank/UPI only: ON = default-routed collections pass through Reconciliation;
+  // an explicit Receive-Into account selection always posts to that account.
   requiresReconciliation: z.boolean(),
   // Coercion turns the input element's string into a number, and blank into 0
   // as the business rule requires. `.finite()` is what stops 'Infinity' —
@@ -321,8 +321,8 @@ export default function CashBank() {
                   <TableCell className="text-sm text-muted-foreground">{a.bankName || '—'}</TableCell>
                   <TableCell className="font-mono text-xs text-muted-foreground">{a.accountNumber || '—'}</TableCell>
                   <TableCell>
-                    {/* The switch is the "button for reconciliation": ON = money
-                        waits in Reconciliation; OFF = posts straight to the bank. */}
+                    {/* The switch controls default routing. An explicit
+                        Receive-Into account selection posts to that account. */}
                     {(a as any).source === 'module' && a.accountType !== 'cash' ? (
                       perm.canEdit ? (
                         <Switch
@@ -430,8 +430,8 @@ export default function CashBank() {
                       <FormLabel>Needs bank reconciliation</FormLabel>
                       <p className="text-xs text-muted-foreground">
                         {field.value
-                          ? 'Collections wait in Reconciliation and reach this account\u2019s balance when the settlement is recorded.'
-                          : 'Collections post straight into this account \u2014 the balance moves immediately, nothing to reconcile.'}
+                          ? 'Default-routed collections wait in Reconciliation. An explicit Receive-Into selection posts to the chosen account and remains reviewable there.'
+                          : 'Collections post straight into this account \u2014 the balance moves immediately and remains reviewable in Reconciliation.'}
                       </p>
                     </div>
                     <FormControl>
