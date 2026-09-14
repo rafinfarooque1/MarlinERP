@@ -6,6 +6,7 @@ import { customFetch, useGetMe } from '@workspace/api-client-react';
 import { useLocationContext } from '@/lib/locationContext';
 import { useOutletsEnabled } from '@/lib/useFeatureFlags';
 import { buildPickerHierarchy } from '@/lib/locationHierarchy';
+import { trackEvent } from '@/lib/analytics';
 import { MapPin, Warehouse, Store, ChevronRight, Layers } from 'lucide-react';
 import { PageHeader } from '@/components/app/page-header';
 import { EmptyState } from '@/components/app/empty-state';
@@ -66,17 +67,20 @@ export default function LocationPicker() {
   useEffect(() => {
     if (!soleWarehouse) return;
     setLocation({ locationType: 'warehouse', locationId: soleWarehouse.id, locationName: soleWarehouse.name });
+    trackEvent('location_selected', { location_type: 'warehouse', all_locations: false, auto_selected: true });
     navigate('/sales/pos');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [soleWarehouse?.id]);
 
   const handleSelect = (locationType: 'warehouse' | 'outlet' | 'headoffice', locationId: number, locationName: string) => {
     setLocation({ locationType, locationId, locationName });
+    trackEvent('location_selected', { location_type: locationType, all_locations: false, auto_selected: false });
     navigate('/sales/pos');
   };
 
   const handleSelectAll = () => {
     setLocation({ locationType: 'all', locationId: null, locationName: 'All Locations' });
+    trackEvent('location_selected', { location_type: 'all', all_locations: true, auto_selected: false });
     navigate('/sales/dashboard');
   };
 

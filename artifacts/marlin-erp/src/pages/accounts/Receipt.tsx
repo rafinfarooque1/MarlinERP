@@ -30,6 +30,7 @@ import { TableSkeleton } from '@/components/app/loading-skeletons';
 import { TablePager, useClientPage } from '@/components/ui/table-pager';
 import { FileStack } from 'lucide-react';
 import { inr } from '@/lib/currency';
+import { trackEvent } from '@/lib/analytics';
 
 const schema = z.object({
   receiptDate: z.string().min(1, 'Date required'),
@@ -106,7 +107,16 @@ export default function ReceiptPage() {
       body.advanceAmount = settlement.advanceAmount;
     }
     createMutation.mutate(body, {
-      onSuccess: () => { toast.success('Receipt recorded'); setIsOpen(false); form.reset(); setSettlement(null); },
+      onSuccess: () => {
+        trackEvent('receipt_recorded', {
+          has_bill_allocation: Boolean(body.allocations?.length),
+          has_advance: Number(body.advanceAmount ?? 0) > 0,
+        });
+        toast.success('Receipt recorded');
+        setIsOpen(false);
+        form.reset();
+        setSettlement(null);
+      },
       onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
     });
   };

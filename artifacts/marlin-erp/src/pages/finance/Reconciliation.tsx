@@ -17,6 +17,7 @@ import {
   useListOutlets, useListWarehouses,
 } from '@workspace/api-client-react';
 import { toast } from 'sonner';
+import { trackEvent } from '@/lib/analytics';
 import { CheckSquare, Landmark, Wallet, AlertTriangle, Pencil, RotateCcw } from 'lucide-react';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { PageHeader } from '@/components/app/page-header';
@@ -196,6 +197,11 @@ export default function Reconciliation() {
       setBatchOpen(false);
       setEditBatchId(null);
       setProcessingCharge('0');
+      trackEvent('bank_reconciliation_saved', {
+        operation: editBatchId != null ? 'edit' : 'create',
+        transaction_count: transactionsPayload.length,
+        has_processing_charge: Number(processingCharge) > 0,
+      });
       toast.success(editBatchId != null ? 'Bank reconciliation batch updated.' : 'Bank reconciliation batch created.');
     } catch (e: any) {
       toast.error(e?.data?.error || e?.message || 'Unable to reconcile selected transactions.');

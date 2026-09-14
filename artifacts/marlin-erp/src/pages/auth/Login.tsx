@@ -14,6 +14,7 @@ import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
 import { useTheme } from '@/lib/theme';
 import { useSession } from '@/lib/sessionContext';
+import { trackEvent } from '@/lib/analytics';
 
 const loginSchema = z.object({
   username: z.string().min(1, 'Username is required'),
@@ -57,6 +58,9 @@ export default function Login() {
     // exactly like "admin", not fail with a puzzling generic error.
     loginMutation.mutate({ data: { ...data, username: data.username.trim() } }, {
       onSuccess: (response) => {
+        trackEvent('login_success', {
+          password_change_required: Boolean((response.employee as any).mustChangePassword),
+        });
         setTheme('light');
         queryClient.clear();
         localStorage.setItem('marlin_auth_token', response.token);
