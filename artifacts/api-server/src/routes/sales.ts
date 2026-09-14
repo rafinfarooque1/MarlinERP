@@ -19,7 +19,7 @@ import {
 import { getUserDataScope, isLocationInScope, scopeSalesWhere } from "../lib/dataScope";
 import { getLocationFilter } from "../lib/requestLocation";
 import { blockedByInactiveProducts, INACTIVE_PRODUCT_CODE } from "../lib/productIdentity";
-import { CREATE_SALE_PAYMENT_MODES, isAllowedNewSaleMode, isSettledAtSale, clearsThroughBank, resolveEditedSaleMode } from "../lib/paymentModes";
+import { CREATE_SALE_PAYMENT_MODES, SALE_PAYMENT_MODES, isAllowedNewSaleMode, isSettledAtSale, clearsThroughBank, resolveEditedSaleMode } from "../lib/paymentModes";
 import { availabilityAt, insufficientStockMessage } from "../lib/reservations";
 import { isIsoDate } from "../lib/dateInput";
 import { respondIfMonthLocked, isMonthLocked, ymOfDate, monthLockedBody } from "../lib/periodLock";
@@ -1595,17 +1595,16 @@ router.put("/sales/:id", requireModuleAction("page:/sales/pos", "edit"), async (
   // invoice cannot be moved INTO a locked month — both dates must be open.
   if (await respondIfMonthLocked(res, pgPool, [existingRaw.sale_date, parsed.data.saleDate], "sale edit")) return;
 
-  // Editing must not be a loophole for setting bank/upi on a sale. A new sale
-  // may only be cash or credit; an edit may only leave the mode among the
-  // create-time modes OR keep the historical mode (bank/upi/card/bank_transfer)
-  // it already carried. Any attempt to CHANGE a sale into a non-create mode is
-  // rejected — those are collected later, never set at sale time.
+  // New sales may only be cash or credit, but an existing sale can be
+  // reassigned to any current payment mode during an edit. Legacy card and
+  // bank_transfer spellings are accepted and preserved when the selected mode
+  // remains in the Bank family.
   const editModeIn = parsed.data.paymentMode ?? 'cash';
   const existingMode = (existingRaw.payment_mode ?? 'cash') as string;
   const resolvedMode = resolveEditedSaleMode(editModeIn, existingMode);
   if (!resolvedMode.ok) {
     res.status(400).json({
-      error: `paymentMode must be one of: ${CREATE_SALE_PAYMENT_MODES.join(', ')}. A non-cash payment on this invoice is recorded through payment collection, not by changing the sale's mode.`,
+      error: `paymentMode must be one of: ${SALE_PAYMENT_MODES.join(', ')}.`,
     });
     return;
   }

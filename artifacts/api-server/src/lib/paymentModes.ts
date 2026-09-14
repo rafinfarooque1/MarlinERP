@@ -65,13 +65,11 @@ export function isBankFamily(mode: string): boolean {
 /**
  * The mode an EDIT should actually store.
  *
- * A sale may only be created as cash or credit, and an edit must never turn a
- * sale INTO bank/upi. But 'card' and 'bank_transfer' are historical spellings
- * of 'bank' and every client displays all three as "Bank", so a client that
- * submits 'bank' while editing a stored 'card' sale is not changing anything —
- * rejecting it would make ordinary edits of old invoices impossible. Treat that
- * as unchanged and keep the STORED spelling: reconciliation rows already point
- * at it, so it must never be rewritten.
+ * A new sale may only be created as cash or credit, but an existing sale can
+ * be reassigned to any current mode during an edit. 'card' and 'bank_transfer'
+ * are historical spellings of 'bank' and every client displays all three as
+ * "Bank", so a canonical Bank selection against one of those stored values
+ * keeps the STORED spelling because reconciliation rows point at it.
  *
  * Returns the mode to persist, or ok:false when this is a real attempt to move
  * a sale into a mode it may not have.
@@ -80,9 +78,11 @@ export function resolveEditedSaleMode(
   submitted: string,
   stored: string,
 ): { ok: true; mode: string } | { ok: false } {
-  if (isAllowedNewSaleMode(submitted)) return { ok: true, mode: submitted };
   if (submitted === stored) return { ok: true, mode: stored };
   if (isBankFamily(submitted) && isBankFamily(stored)) return { ok: true, mode: stored };
+  if ((SALE_PAYMENT_MODES as readonly string[]).includes(submitted)) {
+    return { ok: true, mode: submitted };
+  }
   return { ok: false };
 }
 

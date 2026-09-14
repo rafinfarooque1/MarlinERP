@@ -6,15 +6,16 @@
  *   1. A cash (counter-settled) sale writes EXACTLY ONE sale_payments history
  *      row — source 'counter', amount = bill total, dated the sale date.
  *   2. Editing the sale restates that row (never duplicates it).
- *   3. Converting to credit removes it — credit bills never get invented
+ *   3. Changing to Bank restates the row and persists the selected mode.
+ *   4. Converting to credit removes it — credit bills never get invented
  *      history; converting back to cash recreates it.
- *   3b. The same conversion works for the modern explicit Receive-Into path,
+ *   4b. The same conversion works for the modern explicit Receive-Into path,
  *      whose legacy payment rows have a linked sale receipt but no source
  *      marker.
- *   4. Cancellation is NOT blocked by the counter row (it is till money, not a
+ *   5. Cancellation is NOT blocked by the counter row (it is till money, not a
  *      banked collection) and removes it with the bill.
- *   5. A credit sale creates no history rows at all.
- *   6. The trial balance ends exactly where it started — the history rows are
+ *   6. A credit sale creates no history rows at all.
+ *   7. The trial balance ends exactly where it started — the history rows are
  *      display/reconciliation records, never postings.
  *
  * Self-cleaning: every sale it creates is cancelled before exit; the temp
@@ -111,8 +112,18 @@ try {
     assert('Still exactly ONE history row', legs.length === 1, `got ${legs.length}`);
     assert('Amount follows the edited total', Math.abs(Number(legs[0]?.amount) - newTotal) < 0.005, `amount=${legs[0]?.amount} total=${newTotal}`);
 
-    // ── [3] Convert to credit → history removed, not invented ─────────────
-    console.log('\n[3] Cash → credit conversion removes the counter row');
+    // ── [3] Reassign to Bank → mode and history are restated ───────────────
+    console.log('\n[3] Cash → Bank reassignment persists the selected mode');
+    const eb = await put(`/sales/${s1.id}`, saleBody('bank', unitPrice + 10));
+    assert('Bank reassignment accepted', !eb.data?.error, JSON.stringify(eb.data).slice(0, 200));
+    assert('Returned mode is bank', eb.data?.paymentMode === 'bank', `mode=${eb.data?.paymentMode}`);
+    legs = await legsOf(s1.id);
+    assert('Bank reassignment keeps ONE history row', legs.length === 1, `got ${legs.length}`);
+    assert('History row method is bank', legs[0]?.method === 'bank', `method=${legs[0]?.method}`);
+    assert('Bank history row is pending reconciliation', legs[0]?.reconciliationStatus === 'pending', `status=${legs[0]?.reconciliationStatus}`);
+
+    // ── [4] Convert to credit → history removed, not invented ─────────────
+    console.log('\n[4] Cash/Bank → credit conversion removes the counter row');
     const cr = await post('/customers', { name: `ZZ Counter Test ${Date.now()}`, creditLimit: 1000000 });
     tempCustomerId = cr.data?.id ?? null;
     assert('Temp customer created', !!tempCustomerId, JSON.stringify(cr.data).slice(0, 120));
@@ -123,8 +134,8 @@ try {
     assert('Amount paid re-derived to 0', Math.abs(Number(e2.data?.amountPaid ?? -1)) < 0.005, `amountPaid=${e2.data?.amountPaid}`);
     assert("Status is unpaid", e2.data?.paymentStatus === 'unpaid', `status=${e2.data?.paymentStatus}`);
 
-    // ── [4] Convert back to cash → one fresh counter row ──────────────────
-    console.log('\n[4] Credit → cash conversion recreates exactly one row');
+    // ── [5] Convert back to cash → one fresh counter row ──────────────────
+    console.log('\n[5] Credit → cash conversion recreates exactly one row');
     const e3 = await put(`/sales/${s1.id}`, saleBody('cash', unitPrice + 10, tempCustomerId));
     assert('Conversion accepted', !e3.data?.error, JSON.stringify(e3.data).slice(0, 200));
     legs = await legsOf(s1.id);
