@@ -1,0 +1,1301 @@
+MASTER ERP ACCOUNTING CORRECTION + FULL RECONCILIATION
+FIX ALL CONFIRMED ACCOUNTING/ERP ISSUES FROM THE FORENSIC AUDIT
+
+IMPORTANT:
+The previous forensic audit was READ-ONLY and is now complete.
+
+I am now authorizing you to IMPLEMENT FIXES.
+
+Do NOT make random UI patches.
+
+Use the forensic audit findings as the starting point, but first re-check the current source code and database state before changing anything.
+
+The objective is to make the Frozen Fruits ERP mathematically correct, internally consistent, and compliant with standard accounting treatment.
+
+============================================================
+PHASE 1 — PROTECT EXISTING DATA
+============================================================
+
+Before any modification:
+
+1. Create a complete backup/snapshot.
+2. Record current:
+   - Trial Balance
+   - P&L
+   - Balance Sheet
+   - Customer Outstanding
+   - Vendor Outstanding
+   - Cash
+   - Bank
+   - Inventory
+   - GST
+   - Fixed Assets
+   - Journal totals
+3. Do not delete legitimate historical transactions.
+4. Do not silently rewrite historical accounting.
+5. Do not destroy audit history.
+6. Do not change unrelated working modules.
+
+All corrections must preserve financial history.
+
+============================================================
+PHASE 2 — SINGLE ACCOUNTING SOURCE OF TRUTH
+============================================================
+
+Establish one authoritative accounting calculation model.
+
+The following must ultimately reconcile:
+
+Transaction
+→ Journal
+→ Ledger
+→ Trial Balance
+→ Trading Account
+→ P&L
+→ Balance Sheet
+
+Do not maintain separate conflicting formulas for the same financial metric.
+
+Where different reports currently calculate the same number differently:
+
+identify the difference and make them use the same authoritative accounting logic.
+
+Do NOT duplicate accounting engines.
+
+============================================================
+PHASE 3 — DOUBLE ENTRY
+============================================================
+
+Maintain:
+
+TOTAL DEBITS = TOTAL CREDITS
+
+For every financial transaction:
+
+Sales
+Purchases
+Sales Returns
+Purchase Returns
+Receipts
+Payments
+Expenses
+Assets
+Depreciation
+GST
+Stock Adjustments
+Transfers
+Other Income
+Other Charges
+
+must create the correct accounting effect exactly once.
+
+Prevent:
+
+duplicate JV
+duplicate journal line
+orphan JV
+orphan journal line
+wrong debit
+wrong credit
+stale accounting after cancellation
+duplicate accounting after edit
+
+============================================================
+PHASE 4 — STANDARD TRADING ACCOUNT
+============================================================
+
+Implement/verify the standard formula:
+
+NET SALES
+=
+SALES
+-
+SALES RETURNS
+-
+OTHER VALID SALES DEDUCTIONS
+
+NET PURCHASES
+=
+PURCHASES
+-
+PURCHASE RETURNS
++
+VALID DIRECT PURCHASE COSTS WHERE APPLICABLE
+
+COGS
+=
+OPENING STOCK
++
+NET PURCHASES
++
+DIRECT EXPENSES
+-
+CLOSING STOCK
+
+GROSS PROFIT
+=
+NET SALES
+-
+COGS
+
+If result is negative:
+
+it must be treated as Gross Loss.
+
+Do NOT manufacture a positive gross profit by hiding negative COGS.
+
+============================================================
+PHASE 5 — FIX THE CURRENT COGS PROBLEM PROPERLY
+============================================================
+
+The audit showed:
+
+Opening Stock ₹18,489.54
+Purchases ₹29,060.00
+Direct Expenses ₹1,330.00
+Closing Stock ₹58,650.11
+COGS -₹9,770.57
+Gross Profit ₹49,675.27
+
+The arithmetic itself is correct:
+
+18,489.54
++ 29,060
++ 1,330
+- 58,650.11
+=
+-9,770.57
+
+DO NOT simply change the formula.
+
+Find WHY closing stock is ₹58,650.11 for that exact report period/location.
+
+Trace:
+
+- stock_entries
+- stock_batches
+- stock_ledger
+- purchases
+- purchase returns
+- sales
+- sales returns
+- stock transfers
+- transfer receipts
+- adjustments
+- opening stock
+- inventory valuation
+- location filtering
+- date cutoff
+- cost calculation
+
+Then correct the ROOT CAUSE.
+
+The P&L must use the correct closing stock for the selected period and location.
+
+============================================================
+PHASE 6 — HISTORICAL INVENTORY VALUATION
+============================================================
+
+The audit found that historical stock is reconstructed using current weighted-average cost rather than historical cost.
+
+This is a major accounting limitation.
+
+Do NOT continue using today's cost to value an old reporting period.
+
+Implement a reliable historical inventory valuation mechanism consistent with the ERP's configured costing method.
+
+The system must retain sufficient historical cost information to calculate:
+
+Opening Stock
+Purchases
+Consumption/COGS
+Closing Stock
+
+for historical periods.
+
+Do not rewrite legitimate historical transactions.
+
+If the existing configured costing method is Weighted Average:
+
+preserve the correct historical weighted-average cost by period/movement.
+
+If the configured method is FIFO/FEFO:
+
+preserve historical cost layers.
+
+Do not silently change the company's configured inventory costing method.
+
+============================================================
+PHASE 7 — INVENTORY
+============================================================
+
+Inventory quantity and value must reconcile.
+
+For each item/location:
+
+Opening Quantity
++
+Purchases
+-
+Purchase Returns
+-
+Sales Consumption
++
+Sales Returns
+± Transfer Movements
+± Adjustments
+=
+Closing Quantity
+
+Then calculate value using the authoritative historical cost method.
+
+Ensure:
+
+stock_entries
+stock_batches
+stock_ledger
+
+do not produce conflicting quantity totals.
+
+Where multiple structures exist, define their exact role and ensure they cannot diverge.
+
+============================================================
+PHASE 8 — SALES
+============================================================
+
+Sales accounting:
+
+Dr Customer/Cash/Bank
+Cr Sales
+Cr Output GST
+
+according to actual transaction type and tax treatment.
+
+GST must not become revenue.
+
+P&L sales must use the correct net-of-GST revenue.
+
+============================================================
+PHASE 9 — SALES RETURNS
+============================================================
+
+Sales Returns must correctly affect:
+
+Sales
+Customer Receivable
+Inventory
+COGS
+GST
+Customer Outstanding
+Customer Ledger
+
+A sales return must NOT be treated as an ordinary expense.
+
+If a customer already paid and a credit note/return occurs:
+
+the customer balance must correctly reflect the resulting credit/receivable.
+
+============================================================
+PHASE 10 — RECEIVABLES
+============================================================
+
+Customer Outstanding must reconcile with Customer Ledger.
+
+Formula:
+
+Opening Receivable
++
+Sales
++
+Valid Other Charges
+-
+Sales Returns/Credit Notes
+-
+Receipts
+± Adjustments
+=
+Closing Receivable
+
+The same underlying receipt must not be counted multiple times because it is allocated across multiple invoices.
+
+One Receipt Voucher:
+
+ONE financial receipt
+ONE customer ledger transaction
+ONE bank/cash transaction
+
+Bill allocation is settlement detail only.
+
+============================================================
+PHASE 11 — PURCHASES
+============================================================
+
+Purchases must correctly affect:
+
+Inventory/expense/asset
+Input GST
+Vendor payable
+Cash/Bank
+
+depending on transaction type.
+
+Purchase Returns must reverse the correct purchase/inventory/GST/payable effects.
+
+============================================================
+PHASE 12 — FIX THE CONFIRMED ₹1,890 VENDOR ALLOCATION ISSUE
+============================================================
+
+The audit found:
+
+Invoice 5052:
+Bill = ₹22,019
+Allocated = ₹23,279
+Excess = ₹1,260
+
+Invoice 5408:
+Bill = ₹12,600
+Allocated = ₹13,230
+Excess = ₹630
+
+Total excess = ₹1,890.
+
+DO NOT simply delete the excess allocations.
+
+Determine whether the excess represents:
+
+- vendor advance
+- overpayment
+- incorrect allocation
+- duplicate allocation
+- data error
+
+Preserve the actual payment.
+
+If it is a legitimate vendor advance:
+
+the excess must be represented as Vendor Advance, not as bill settlement beyond the invoice.
+
+If it is an incorrect allocation:
+
+correct the allocation while preserving the actual payment and accounting transaction.
+
+After correction:
+
+Vendor Ledger
+=
+Vendor Outstanding
++
+Vendor Advance/Credit Balance
+
+must reconcile exactly.
+
+============================================================
+PHASE 13 — PAYABLES
+============================================================
+
+Vendor balance:
+
+Opening Payable
++
+Purchases
+-
+Purchase Returns
+-
+Payments
+± Adjustments
+=
+Closing Payable
+
+Separate:
+
+Bill outstanding
+Vendor advance
+Vendor credit
+Unallocated payment
+
+Do not hide advances inside invoice allocation.
+
+============================================================
+PHASE 14 — RECEIPTS
+============================================================
+
+Receipt Voucher:
+
+ONE receipt
+ONE customer ledger entry
+ONE cash/bank entry
+ONE accounting posting
+
+If allocated against multiple bills:
+
+do not split the financial receipt into multiple ledger transactions.
+
+============================================================
+PHASE 15 — PAYMENTS
+============================================================
+
+Payment Voucher:
+
+ONE payment
+ONE vendor ledger entry
+ONE cash/bank entry
+ONE accounting posting
+
+Bill allocation remains settlement detail.
+
+============================================================
+PHASE 16 — FIXED ASSETS
+============================================================
+
+The audit confirmed that depreciation is not implemented.
+
+Implement proper fixed asset accounting.
+
+Asset Purchase:
+
+Dr Fixed Asset
+Dr Input GST where applicable
+Cr Vendor/Bank/Cash
+
+Do NOT classify capital asset purchases as normal purchases/COGS.
+
+============================================================
+PHASE 17 — DEPRECIATION
+============================================================
+
+Implement depreciation according to the configured/accounting policy.
+
+For each depreciable asset maintain:
+
+Asset Cost
+Acquisition Date
+Useful Life
+Depreciation Method
+Residual Value where applicable
+Accumulated Depreciation
+Net Book Value
+Disposal if applicable
+
+Generate depreciation correctly by accounting period.
+
+Accounting:
+
+Dr Depreciation Expense
+Cr Accumulated Depreciation
+
+Depreciation must appear in:
+
+P&L
+Balance Sheet
+
+Do NOT create duplicate depreciation if the job runs again.
+
+The depreciation process must be idempotent.
+
+============================================================
+PHASE 18 — BALANCE SHEET
+============================================================
+
+Implement/verify standard Balance Sheet:
+
+ASSETS
+=
+LIABILITIES + EQUITY
+
+Assets:
+
+Cash
+Bank
+Inventory
+Trade Receivables
+Fixed Assets
+Less Accumulated Depreciation
+GST/Input Tax Receivable
+Other Assets
+
+Liabilities:
+
+Trade Payables
+GST Payable
+Loans
+Outstanding Expenses
+Other Liabilities
+
+Equity:
+
+Capital
+Retained Earnings
+Current Year Profit/Loss
+Drawings
+Reserves
+
+The Balance Sheet must balance exactly except legitimate rounding.
+
+============================================================
+PHASE 19 — P&L TO BALANCE SHEET
+============================================================
+
+The P&L result must flow correctly into Balance Sheet equity/current-year result.
+
+Do not double count:
+
+Current Year Profit
+Retained Earnings
+Opening Equity
+
+Verify the exact accounting-period logic.
+
+============================================================
+PHASE 20 — CASH
+============================================================
+
+For every cash account:
+
+Opening Cash
++
+Cash Receipts
+-
+Cash Payments
+± Adjustments
+=
+Closing Cash
+
+Cash Book
+=
+Cash Ledger
+=
+Balance Sheet Cash
+
+Do not mix cash and bank accounts.
+
+============================================================
+PHASE 21 — BANK
+============================================================
+
+For every bank account:
+
+Opening Bank
++
+Bank Receipts
+-
+Bank Payments
+± Adjustments
+=
+Closing Bank
+
+Bank Book
+=
+Bank Ledger
+=
+Balance Sheet Bank
+
+Respect warehouse/location assignment.
+
+============================================================
+PHASE 22 — COMPLETE BANK RECONCILIATION
+============================================================
+
+Rebuild the reconciliation workflow correctly.
+
+Every eligible bank transaction must appear:
+
+Sales through Bank
+Receipt Vouchers through Bank
+Payments through Bank where applicable
+Other eligible bank transactions
+
+Do not show only selected transaction types.
+
+Do not silently hide historical eligible transactions.
+
+Respect:
+
+Location
+Bank Account
+Date Range
+Permissions
+
+============================================================
+PHASE 23 — RECONCILIATION RESET
+============================================================
+
+Provide a safe reconciliation reset/rebuild mechanism.
+
+Reset ONLY reconciliation status/batches.
+
+NEVER delete:
+
+Sales
+Receipts
+Payments
+Bank transactions
+JVs
+Customer Ledger
+Vendor Ledger
+
+After reset:
+
+all eligible unreconciled bank transactions must appear.
+
+============================================================
+PHASE 24 — MULTI-SELECT RECONCILIATION
+============================================================
+
+Allow:
+
+Select All
+Individual selection
+Multiple selection
+
+Show:
+
+Selected Transactions
+Selected Gross Amount
+
+When clicking:
+
+RECONCILE SELECTED
+
+ask for:
+
+Reconciliation Date
+Processing Charge
+
+Example:
+
+Transactions = 4
+Gross = ₹10,000
+Processing Charge = ₹100
+Net Settlement = ₹9,900
+
+Create ONE reconciliation batch.
+
+Do not create four batches.
+
+============================================================
+PHASE 25 — RECONCILIATION ACCOUNTING
+============================================================
+
+CRITICAL:
+
+Reconciliation must not duplicate the original bank transactions.
+
+If transactions already exist in Bank Ledger:
+
+do not create another duplicate bank receipt/payment merely because they were reconciled.
+
+Processing charge must be posted exactly once if accounting treatment requires it.
+
+============================================================
+PHASE 26 — GST
+============================================================
+
+Maintain one authoritative GST calculation.
+
+Verify:
+
+Sales GST
+Sales Return GST
+Purchase GST
+Purchase Return GST
+Input GST
+Output GST
+GST Payable/Receivable
+
+Ensure:
+
+Invoice
+Journal
+GST Report
+Balance Sheet
+
+all reconcile.
+
+Do not create a second independent GST formula.
+
+============================================================
+PHASE 27 — STOCK TRANSFERS
+============================================================
+
+Internal transfer:
+
+Source stock decreases.
+Destination stock increases.
+Company-wide stock remains unchanged.
+P&L remains neutral.
+
+Do not count internal transfers as:
+
+Sales
+Purchase
+Revenue
+Expense
+Profit
+Loss
+
+Fix stale reservation states.
+
+A completed transfer must not leave an active reservation unless there is a documented legitimate remaining quantity.
+
+============================================================
+PHASE 28 — LOCATION ACCOUNTING
+============================================================
+
+All transactions must have correct location scope:
+
+Sales
+Purchases
+Expenses
+Receipts
+Payments
+Cash
+Bank
+Inventory
+Assets
+JVs
+Customers
+Vendors
+
+All Locations must equal:
+
+SUM(all authorized locations)
+
+No duplicate consolidation.
+
+============================================================
+PHASE 29 — MONTH-WISE ACCOUNTING
+============================================================
+
+Ensure:
+
+Previous Month Closing Stock
+=
+Next Month Opening Stock
+
+For every month:
+
+Sales
+Returns
+Purchases
+Returns
+Opening Stock
+Closing Stock
+COGS
+Gross Profit
+Expenses
+Net Profit
+
+must reconcile.
+
+Transactions after the report date must not affect the report.
+
+============================================================
+PHASE 30 — DASHBOARD
+============================================================
+
+Dashboard must use the same authoritative calculations as reports.
+
+Verify:
+
+Sales
+Purchase
+Expense
+Receivables
+Payables
+Inventory
+Cash
+Bank
+Gross Profit
+Net Profit
+
+No separate incorrect dashboard formulas.
+
+============================================================
+PHASE 31 — REPORTS AND PDF
+============================================================
+
+P&L screen = P&L PDF
+
+Balance Sheet screen = Balance Sheet PDF
+
+Trial Balance screen = Trial Balance PDF
+
+Ledger screen = Ledger PDF
+
+The calculation must be identical.
+
+============================================================
+PHASE 32 — AUDIT LOGGING
+============================================================
+
+The audit found that activity logging is fire-and-forget.
+
+Fix this.
+
+For critical financial mutations:
+
+Sale
+Purchase
+Receipt
+Payment
+Return
+Expense
+Asset
+Depreciation
+Journal
+Transfer
+Reconciliation
+Cancellation
+
+the audit event must be durably recorded.
+
+If audit logging fails for a transaction that legally/accountingly requires an audit record:
+
+the financial mutation must not silently succeed without its audit trail.
+
+Use the existing architecture where possible.
+
+Do not duplicate audit records.
+
+============================================================
+PHASE 33 — EDIT/CANCEL/DELETE
+============================================================
+
+Financial records must not leave stale accounting.
+
+For edit:
+
+old accounting must be correctly reversed/replaced.
+
+For cancellation:
+
+accounting, inventory, GST, receivable/payable, cash/bank effects must be reversed appropriately.
+
+For deletion:
+
+do NOT physically delete financial history where accounting integrity requires preservation.
+
+Use void/reversal/archive behavior where appropriate.
+
+Do not destroy source-to-accounting traceability.
+
+============================================================
+PHASE 34 — BACKGROUND JOBS
+============================================================
+
+Review:
+
+Salary
+Rent
+Depreciation
+Backup
+Startup migrations
+Repair jobs
+
+All accounting jobs must be idempotent.
+
+Running twice must NOT create duplicate JVs.
+
+Use transaction/advisory locking where appropriate.
+
+============================================================
+PHASE 35 — STARTUP SAFETY
+============================================================
+
+Startup must NOT unexpectedly mutate financial data.
+
+Migrations must be:
+
+- versioned
+- idempotent
+- transactional
+- safe to rerun
+
+Repair operations must not repeatedly alter accounting.
+
+============================================================
+PHASE 36 — FINAL ACCOUNTING VALIDATION
+============================================================
+
+After implementation, independently calculate:
+
+1. Trial Balance
+
+Debit = Credit
+
+2. Balance Sheet
+
+Assets = Liabilities + Equity
+
+3. Trading Account
+
+Opening Stock
++ Net Purchases
++ Direct Expenses
+- Closing Stock
+= COGS
+
+4. Gross Profit
+
+Net Sales - COGS
+
+5. Net Profit
+
+Gross Profit
++ Other Income
+- Indirect Expenses
+- Financial Charges
+- Depreciation
+
+6. Receivables
+
+Customer Ledger = Customer Outstanding
+
+7. Payables
+
+Vendor Ledger = Vendor Outstanding + Vendor Advances/Credits where applicable
+
+8. Cash
+
+Cash Book = Cash Ledger = Balance Sheet
+
+9. Bank
+
+Bank Book = Bank Ledger = Balance Sheet
+
+10. Inventory
+
+Stock Entries = Batches = Ledger Quantity where applicable
+
+11. Monthly continuity
+
+Previous Closing = Next Opening
+
+12. Location
+
+All Locations = Sum of Locations
+
+============================================================
+PHASE 37 — DO NOT ACCEPT "BALANCED" AS THE ONLY TEST
+============================================================
+
+A Trial Balance balancing does NOT automatically mean the ERP is correct.
+
+A Balance Sheet balancing does NOT automatically mean the ERP is correct.
+
+A P&L displaying numbers does NOT automatically mean the formula is correct.
+
+You must trace source transactions.
+
+============================================================
+PHASE 38 — TEST THE EXACT PREVIOUS PROBLEMS
+============================================================
+
+Specifically verify:
+
+A. Negative COGS / Closing Stock valuation
+
+B. ₹1,890 vendor over-allocation
+
+C. Missing depreciation
+
+D. Historical inventory valuation
+
+E. Bank reconciliation coverage
+
+F. Receipt bill-wise duplication risk
+
+G. Sales Return effect on outstanding
+
+H. Vendor advances
+
+I. Fixed Asset accounting
+
+J. P&L/Balance Sheet parity
+
+K. Dashboard/report parity
+
+L. GST parity
+
+M. Stock transfer neutrality
+
+N. Stale transfer reservations
+
+O. Audit-log durability
+
+============================================================
+PHASE 39 — REGRESSION TESTS
+============================================================
+
+Create automated tests covering:
+
+Sales
+Sales Returns
+Purchases
+Purchase Returns
+Receipts
+Payments
+Expenses
+Assets
+Depreciation
+GST
+Stock
+Stock Transfers
+Bank
+Cash
+Reconciliation
+Customer Outstanding
+Vendor Outstanding
+P&L
+Balance Sheet
+Trial Balance
+Dashboard
+Reports
+PDFs
+Locations
+
+Test:
+
+Create
+Edit
+Cancel
+Void
+Reverse
+Reconcile
+Reset
+Multi-select
+Historical period
+Month-end
+All Locations
+Individual Warehouse
+
+============================================================
+PHASE 40 — FINAL RECONCILIATION TABLE
+============================================================
+
+Produce:
+
+| Area | ERP | Independent | Difference | Status |
+
+Include:
+
+Sales
+Sales Returns
+Net Sales
+Purchases
+Purchase Returns
+Net Purchases
+Opening Stock
+Direct Expenses
+Closing Stock
+COGS
+Gross Profit
+Other Income
+Indirect Expenses
+Financial Charges
+Depreciation
+Net Profit/Loss
+Inventory
+Receivables
+Payables
+Vendor Advances
+Cash
+Bank
+Fixed Assets
+Accumulated Depreciation
+GST
+Total Assets
+Total Liabilities
+Equity
+Trial Balance Debit
+Trial Balance Credit
+
+============================================================
+PHASE 41 — FINAL ACCEPTANCE CRITERIA
+============================================================
+
+Do NOT call the work complete until:
+
+1. Trial Balance balances.
+
+2. Balance Sheet balances.
+
+3. P&L uses standard accounting formula.
+
+4. Trading Account uses standard accounting formula.
+
+5. COGS is based on correct period/location inventory valuation.
+
+6. Historical inventory valuation is reliable within the implemented costing method.
+
+7. Sales Returns reduce revenue and receivables correctly.
+
+8. Purchase Returns reduce purchases, inventory and payables correctly.
+
+9. Customer Ledger matches Outstanding.
+
+10. Vendor Ledger matches Outstanding/Advance.
+
+11. Cash Ledger matches Cash Book.
+
+12. Bank Ledger matches Bank Book.
+
+13. Reconciliation contains all eligible bank transactions.
+
+14. Reconciliation does not duplicate bank transactions.
+
+15. Multi-select reconciliation works.
+
+16. Reconciliation date works.
+
+17. Processing charge works.
+
+18. Processing charge is accounted exactly once.
+
+19. Fixed Assets are correctly posted.
+
+20. Depreciation works and is idempotent.
+
+21. Internal stock transfers remain P&L neutral.
+
+22. Stock transfer reservations are correctly released.
+
+23. GST is consistent across invoice, journal and reports.
+
+24. Dashboard matches accounting reports.
+
+25. PDFs match screen calculations.
+
+26. Audit logs are durable.
+
+27. Edit/cancel/reversal does not leave stale accounting.
+
+28. Background accounting jobs are idempotent.
+
+29. Location isolation works.
+
+30. All Locations totals equal authorized location totals.
+
+31. No duplicate financial postings exist.
+
+32. No orphan accounting records exist.
+
+============================================================
+PHASE 42 — FINAL REPORT
+============================================================
+
+After all fixes and tests, provide:
+
+1. What was wrong.
+2. Root cause of every issue.
+3. What was fixed.
+4. Database changes.
+5. Code changes.
+6. Accounting formula changes.
+7. Inventory valuation changes.
+8. Depreciation implementation.
+9. Vendor ₹1,890 correction treatment.
+10. Reconciliation changes.
+11. GST changes.
+12. Audit-log changes.
+13. Tests performed.
+14. Tests passed.
+15. Remaining discrepancies.
+16. Historical data limitations.
+17. Before vs after values.
+
+Most importantly provide:
+
+P&L:
+PASS / FAIL
+
+BALANCE SHEET:
+PASS / FAIL
+
+TRIAL BALANCE:
+PASS / FAIL
+
+TRADING ACCOUNT:
+PASS / FAIL
+
+COGS:
+PASS / FAIL
+
+INVENTORY:
+PASS / FAIL
+
+RECEIVABLES:
+PASS / FAIL
+
+PAYABLES:
+PASS / FAIL
+
+CASH:
+PASS / FAIL
+
+BANK:
+PASS / FAIL
+
+GST:
+PASS / FAIL
+
+FIXED ASSETS:
+PASS / FAIL
+
+DEPRECIATION:
+PASS / FAIL
+
+STOCK TRANSFERS:
+PASS / FAIL
+
+BANK RECONCILIATION:
+PASS / FAIL
+
+LOCATION ACCOUNTING:
+PASS / FAIL
+
+DASHBOARD:
+PASS / FAIL
+
+REPORTS/PDF:
+PASS / FAIL
+
+AUDIT LOGGING:
+PASS / FAIL
+
+HISTORICAL ACCOUNTING:
+PASS / FAIL / LIMITED
+
+============================================================
+FINAL INSTRUCTION
+============================================================
+
+DO NOT perform a cosmetic fix.
+
+DO NOT change numbers just to make reports balance.
+
+DO NOT hide discrepancies.
+
+DO NOT delete historical data to make reconciliation pass.
+
+DO NOT create duplicate accounting entries.
+
+DO NOT modify unrelated functionality.
+
+Every correction must be traceable from:
+
+SOURCE TRANSACTION
+→ ACCOUNTING ENTRY
+→ LEDGER
+→ TRIAL BALANCE
+→ P&L / BALANCE SHEET
+
+The ERP must be mathematically correct because the underlying accounting is correct — not because the report was manipulated to show a desired number.
+
+FIRST BACK UP THE CURRENT STATE.
+THEN INSPECT.
+THEN IMPLEMENT THE REQUIRED ROOT-CAUSE FIXES.
+THEN RUN THE COMPLETE REGRESSION AND ACCOUNTING RECONCILIATION.
+THEN PROVIDE THE BEFORE/AFTER AUDIT REPORT.
+
+START NOW.
