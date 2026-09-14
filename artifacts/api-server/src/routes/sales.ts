@@ -613,7 +613,7 @@ router.get("/sales", requireModuleView(["page:/sales/pos", "page:/returns", "pag
              THEN (SELECT id FROM account_ledgers WHERE code = 'STD-CASH' LIMIT 1)
            WHEN s.location_type = 'warehouse'
              THEN (SELECT cash_ledger_id FROM warehouses WHERE id = s.location_id)
-           ELSE (SELECT cash_ledger_id FROM outlets WHERE id = s.location_id)
+           ELSE (SELECT cash_ledger_id FROM outlets WHERE id = COALESCE(s.location_id, s.outlet_id))
          END
         WHERE sp.sale_id = ANY($1::int[])
           AND sp.clearing_receipt_id IS NULL
