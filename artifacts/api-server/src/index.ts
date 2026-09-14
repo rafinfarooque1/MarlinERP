@@ -104,6 +104,7 @@ async function runMigrations() {
     ALTER TABLE sales ADD COLUMN IF NOT EXISTS location_type text NOT NULL DEFAULT 'outlet';
     ALTER TABLE sales ADD COLUMN IF NOT EXISTS location_id integer;
     ALTER TABLE sales ADD COLUMN IF NOT EXISTS salesperson_employee_id integer;
+    ALTER TABLE sales ADD COLUMN IF NOT EXISTS salesperson text;
 
     CREATE TABLE IF NOT EXISTS payments (
       id serial PRIMARY KEY,
