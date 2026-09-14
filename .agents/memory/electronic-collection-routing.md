@@ -7,8 +7,8 @@ description: How bank/UPI sale collections pick a destination account and how th
 `POST /sales/:id/payments` (the ONE electronic write path) routes bank/UPI money by the sale's location:
 - Look up `cash_bank_accounts` assigned to the sale's location with matching `account_type` (`upi`→upi, every other electronic method→bank), active ledger, `ORDER BY id LIMIT 1` (oldest wins — silent pick, no primary-account model yet).
 - HO sales match HO accounts on TYPE alone (`location_type='headoffice'` with NULL location_id vs sales' placeholder id 1 — ho-location-convention).
-- Assigned + `requires_reconciliation=false` → receipt `received_in` = the account's CBA ledger, `sale_payments.reconciliation_status = NULL` (never appears in the pending queue).
-- Assigned + flag true, or no assignment → legacy STD-ELEC-CLR + `'pending'` (unchanged).
+- Explicit Receive-Into account → receipt `received_in` = the chosen CBA ledger, regardless of its reconciliation flag; `sale_payments.reconciliation_status = NULL` and the transaction is reviewable in account-based reconciliation.
+- No explicit account: assigned + `requires_reconciliation=false` → direct account posting; assigned + flag true, or no assignment → legacy STD-ELEC-CLR + `'pending'`.
 
 `requires_reconciliation` is a raw-migration boolean on cash_bank_accounts (default false; one-time backfill set non-cash rows true to preserve behaviour). Cash never consults it; PATCH rejects the toggle for cash accounts.
 
@@ -22,4 +22,4 @@ The receipt row alone is NOT the books. `buildDerivedPostings()` (journal.ts) ex
 ## Known limits (deliberate)
 - Multiple same-type accounts on one location: oldest silently receives everything. If this matters, add a primary/routing flag rather than a second query.
 - Counter-settled electronic sales at creation and importers still post to clearing; new sales only allow cash/credit so this is mostly moot.
-- Toggle vs in-flight payment: unlocked; a payment started before the toggle uses the old policy. Accepted.
+- Toggle vs in-flight payment: unlocked; a payment started before the toggle uses the old policy. Accepted. Explicit account selection is authoritative because account-based reconciliation is metadata-only; routing it to clearing makes the selected account appear empty.

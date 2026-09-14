@@ -177,9 +177,14 @@ export async function postSaleCollectionReceipt(
   // ── ELECTRONIC ────────────────────────────────────────────────────────────
   // Route the money by the location's OWN account assignment (or the picked
   // account outright):
-  //   · account, reconciliation OFF → post straight into that ledger;
-  //   · account, reconciliation ON  → Electronic Clearing + pending;
-  //   · no account at all → the legacy company-wide clearing flow, unchanged.
+  //   · an explicitly picked account → post straight into that ledger;
+  //   · no account, reconciliation OFF → post into the assigned ledger;
+  //   · no account, reconciliation ON  → Electronic Clearing + pending.
+  //
+  // An explicit Receive-Into choice is the caller's declaration of where the
+  // money actually landed. Account-based reconciliation is metadata-only, so
+  // forcing that posting through Electronic Clearing would make the selected
+  // bank account appear empty in the reconciliation screen.
   // HO sales match Head Office on TYPE alone (the sales placeholder id differs
   // from the account owner's fixed zero).
   const wantType = method === "upi" ? "upi" : "bank";
@@ -195,8 +200,11 @@ export async function postSaleCollectionReceipt(
           ORDER BY cb.id LIMIT 1`,
         [wantType, locType, locId],
       );
-  const directLedgerId = assigned && assigned.requires_reconciliation !== true
-    ? Number(assigned.ledger_id) : null;
+  const directLedgerId = account
+    ? Number(account.ledgerId)
+    : assigned && assigned.requires_reconciliation !== true
+      ? Number(assigned.ledger_id)
+      : null;
 
   let receiveInLedgerId: number;
   if (directLedgerId != null) {
