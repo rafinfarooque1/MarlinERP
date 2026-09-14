@@ -587,6 +587,49 @@ router.get("/sales", requireModuleView(["page:/sales/pos", "page:/returns", "pag
   const positions = await loadPaymentPositions(pgPool, rawRows.map((r: any) => Number(r.id)));
   const paySettings = await loadInvoicePaymentSettings(pgPool);
 
+  // The stored sale mode says how the customer paid, but it does not identify
+  // the account that actually received the money. Prefer the receipt's
+  // Cash & Bank ledger for the list badge. Electronic Payment Clearing is
+  // intentionally excluded: it is an intermediate ledger, not a destination
+  // account selected by the cashier.
+  const receivedLedgerNames = new Map<number, string[]>();
+  if (rawRows.length > 0) {
+    const saleIds = rawRows.map((r: any) => Number(r.id));
+    const { rows: receivedLedgers } = await pgPool.query(
+      `SELECT sp.sale_id, al.name AS received_in_ledger_name
+         FROM sale_payments sp
+         JOIN receipts rc ON rc.id = sp.clearing_receipt_id
+         JOIN account_ledgers al ON al.id = rc.received_in_ledger_id
+        WHERE sp.sale_id = ANY($1::int[])
+          AND COALESCE(al.code, '') <> 'STD-ELEC-CLR'
+
+       UNION ALL
+
+       SELECT sp.sale_id, al.name AS received_in_ledger_name
+         FROM sale_payments sp
+         JOIN sales s ON s.id = sp.sale_id
+         JOIN account_ledgers al ON al.id = CASE
+           WHEN COALESCE(s.location_type, 'outlet') = 'headoffice'
+             THEN (SELECT id FROM account_ledgers WHERE code = 'STD-CASH' LIMIT 1)
+           WHEN s.location_type = 'warehouse'
+             THEN (SELECT cash_ledger_id FROM warehouses WHERE id = s.location_id)
+           ELSE (SELECT cash_ledger_id FROM outlets WHERE id = s.location_id)
+         END
+        WHERE sp.sale_id = ANY($1::int[])
+          AND sp.clearing_receipt_id IS NULL
+          AND LOWER(COALESCE(sp.method, '')) = 'cash'`,
+      [saleIds],
+    );
+    for (const row of receivedLedgers as any[]) {
+      const saleId = Number(row.sale_id);
+      const name = String(row.received_in_ledger_name ?? '').trim();
+      if (!name) continue;
+      const names = receivedLedgerNames.get(saleId) ?? [];
+      if (!names.includes(name)) names.push(name);
+      receivedLedgerNames.set(saleId, names);
+    }
+  }
+
   const mapped = rawRows.map((r: any) => {
     const locationType: string = r.location_type ?? 'outlet';
     const locationId: number = r.location_id ?? r.outlet_id;
@@ -627,6 +670,7 @@ router.get("/sales", requireModuleView(["page:/sales/pos", "page:/returns", "pag
       billDiscount: Number(r.bill_discount ?? 0),
       totalAmount,
       paymentMode: r.payment_mode,
+      receivedLedgerNames: receivedLedgerNames.get(Number(r.id)) ?? [],
       couponCode: r.coupon_code,
       otherCharges: parseStoredOtherCharges(r.other_charges),
       otherChargesTotal: otherChargesTotal(parseStoredOtherCharges(r.other_charges)),

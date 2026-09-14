@@ -155,6 +155,12 @@ const saleOtherChargesTotal = (sale: any): number => {
 const saleStatusLabel = (sale: any): string | undefined => {
   const status = sale?.paymentStatus ?? 'paid';
   if (status !== 'paid') return undefined;
+  const receivedLedgerNames = Array.isArray(sale?.receivedLedgerNames)
+    ? sale.receivedLedgerNames.filter((name: unknown): name is string => typeof name === 'string' && Boolean(name.trim()))
+    : [];
+  if (receivedLedgerNames.length > 0) {
+    return `Paid · ${receivedLedgerNames.join(' + ')}`;
+  }
   const mode = paymentModeLabel(sale?.paymentMode);
   return mode ? `Paid · ${mode}` : 'Paid';
 };
