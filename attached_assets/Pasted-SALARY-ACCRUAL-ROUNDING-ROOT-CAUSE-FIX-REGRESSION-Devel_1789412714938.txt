@@ -1,0 +1,111 @@
+SALARY ACCRUAL ROUNDING — ROOT CAUSE + FIX + REGRESSION
+
+Development only.
+Do not modify production.
+Do not publish until all tests pass.
+
+The final production-readiness gate identified a confirmed development test failure in salary accrual rounding, scenario Q.
+
+Do not dismiss this as a test issue without proving that the expected accounting result is incorrect.
+
+1. Reproduce scenario Q exactly.
+
+2. Identify:
+   - input values
+   - employee count
+   - gross salary
+   - earnings
+   - deductions
+   - PF
+   - ESI
+   - statutory amounts
+   - employer contributions
+   - net salary
+   - accounting amounts
+   - expected rounding
+   - actual rounding
+   - exact difference
+
+3. Trace the complete calculation path from:
+   payroll input
+   → payroll calculation
+   → rounding
+   → employee payable
+   → salary expense
+   → statutory liabilities
+   → accounting JV
+   → P&L/Balance Sheet.
+
+4. Determine the precise root cause.
+
+Check for:
+- rounding at employee level versus aggregate level
+- premature decimal rounding
+- floating-point arithmetic
+- paise conversion
+- inconsistent rounding modes
+- rounding the same value more than once
+- statutory calculation rounding
+- employer contribution rounding
+- JV line rounding
+- database numeric precision/scale
+
+5. Establish one authoritative rounding policy consistent with the ERP's accounting requirements.
+
+Do NOT change unrelated accounting logic.
+
+6. Fix the smallest correct root cause.
+
+7. Add regression tests covering:
+   - scenario Q
+   - normal salary
+   - fractional/paise salary
+   - multiple employees
+   - PF rounding
+   - ESI rounding
+   - employer contributions
+   - zero deductions
+   - minimum/maximum relevant values
+   - aggregate versus employee-level rounding
+
+8. Verify:
+
+Total salary expense
+= sum of employee salary expense postings
+
+Total employee payable
+= sum of employee net salary liabilities
+
+Total statutory liability
+= applicable employee + employer statutory amounts
+
+Total JV debit
+= total JV credit
+
+No duplicate salary accrual is created when the same period is run again.
+
+9. Re-run the complete salary/payroll suite.
+
+10. Re-run the accounting regression suite and confirm previously passing tests remain green.
+
+11. Run TypeScript/build/diff checks.
+
+12. Restart API and web workflows.
+
+13. Do not modify production.
+
+FINAL RESULT:
+
+Report:
+
+- root cause
+- exact fix
+- before/after difference
+- affected accounting accounts
+- tests added
+- tests passed
+- tests failed
+- regression results
+- whether salary accrual is now PROVEN
+
+Do not mark salary/payroll PASS until scenario Q and the regression cases actually pass.
