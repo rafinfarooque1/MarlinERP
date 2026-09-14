@@ -226,7 +226,7 @@ export default function NewSaleScreen() {
     if (!isQtyString(l.quantity)) return 'Enter a quantity of at least 1.';
     if (!isMoneyString(l.unitPrice)) return 'Enter a valid rate (max 2 decimals).';
     if (l.mrp > 0 && Number(l.unitPrice) < l.mrp) {
-      return `Rate can't go below MRP ${formatMoney(l.mrp, { showPaise: true })} — use the discount instead.`;
+      return `Rate can't go below the item rate ${formatMoney(l.mrp, { showPaise: true })} — use the discount instead.`;
     }
     if (l.unitDiscount !== '' && !isMoneyString(l.unitDiscount)) {
       return 'Enter a valid discount (max 2 decimals).';
@@ -555,7 +555,7 @@ export default function NewSaleScreen() {
       key: String(i.id),
       label: String(i.name),
       sublabel:
-        [i.itemCode || null, Number(i.mrp ?? 0) > 0 ? `MRP ${formatMoney(Number(i.mrp))}` : null, `GST ${Number(i.taxRate ?? 0)}%`]
+        [i.itemCode || null, Number(i.mrp ?? 0) > 0 ? `Rate ${formatMoney(Number(i.mrp))}` : null, `GST ${Number(i.taxRate ?? 0)}%`]
           .filter(Boolean)
           .join(' · ') || undefined,
     }));

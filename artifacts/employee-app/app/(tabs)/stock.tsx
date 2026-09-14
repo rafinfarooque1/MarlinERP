@@ -152,7 +152,7 @@ export default function StockScreen() {
     const subBits = [
       info?.itemCode || null,
       isHO ? row.branchName || 'Head Office' : null,
-      info?.mrp != null && info.mrp > 0 ? `MRP ${formatMoney(info.mrp, { showPaise: false })}` : null,
+      info?.mrp != null && info.mrp > 0 ? `Rate ${formatMoney(info.mrp, { showPaise: false })}` : null,
     ].filter(Boolean);
 
     return (

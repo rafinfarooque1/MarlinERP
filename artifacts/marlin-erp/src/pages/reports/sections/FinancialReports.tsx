@@ -44,7 +44,7 @@ const MONEY_COL = { label: 'Amount', align: 'right' as const, width: 1.4 };
 // ── Shared payload shapes ─────────────────────────────────────────────────────
 // `id` is unique only within a product kind, so anything keyed by a stock item
 // must combine `materialType` with `id`. Cost is `unitCost` (weighted average),
-// never MRP — these lines are valued at cost, not at selling price.
+// never item rate — these lines are valued at cost, not at selling price.
 interface StockItem { id: number; name: string; unit: string; stock: number; unitCost: number; total: number; materialType: string }
 interface LedgerNode { id: number; name: string; type: string; parentId: number | null; code: string | null; balance: number; children: LedgerNode[] }
 interface GroupSummary { id: number | null; name: string; code: string | null; total: number; children: LedgerNode[] }

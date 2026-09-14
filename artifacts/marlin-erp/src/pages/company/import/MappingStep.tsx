@@ -271,7 +271,7 @@ export function MappingStep({ batchId = null, migrationId = null, canEdit }: {
                           onChange={(e) => setCreateField(u, 'unit', e.target.value)} />
                         <Input className="h-8 text-xs" type="number" placeholder="GST %" value={d.create.taxRate}
                           onChange={(e) => setCreateField(u, 'taxRate', e.target.value)} />
-                        <Input className="h-8 text-xs" type="number" placeholder="MRP ₹" value={d.create.mrp}
+                        <Input className="h-8 text-xs" type="number" placeholder="Rate ₹" value={d.create.mrp}
                           onChange={(e) => setCreateField(u, 'mrp', e.target.value)} />
                         <Input className="h-8 text-xs" type="number" placeholder="Cost ₹" value={d.create.cost}
                           onChange={(e) => setCreateField(u, 'cost', e.target.value)} />

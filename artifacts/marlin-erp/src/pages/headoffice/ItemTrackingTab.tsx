@@ -285,7 +285,7 @@ export default function ItemTrackingTab() {
             <Badge variant="outline">{KIND_LABELS[data.item.materialType]}</Badge>
             {data.item.itemCode ? <span>Code: <span className="font-mono">{data.item.itemCode}</span></span> : null}
             {data.item.hsnCode ? <span>HSN: <span className="font-mono">{data.item.hsnCode}</span></span> : null}
-            {data.item.mrp != null ? <span>MRP: {money(data.item.mrp)}</span> : null}
+            {data.item.mrp != null ? <span>Rate: {money(data.item.mrp)}</span> : null}
             {isFetching ? <span className="text-xs">Refreshing…</span> : null}
           </div>
         ) : null}

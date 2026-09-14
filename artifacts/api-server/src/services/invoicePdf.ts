@@ -895,7 +895,7 @@ export async function renderInvoicePdf(data: InvoiceData): Promise<{ buffer: Buf
   // ══════════════════════════════════════════════════════════════════════════
   // 3. GOODS TABLE
   // ══════════════════════════════════════════════════════════════════════════
-  // Col widths: Sl | Desc | HSN | Qty | Unit | MRP | Disc/Unit | Taxable | C% | CAmt | S% | SAmt | I% | IAmt | Total
+  // Col widths: Sl | Desc | HSN | Qty | Unit | Rate | Disc/Unit | Taxable | C% | CAmt | S% | SAmt | I% | IAmt | Total
   const W = [8, 35.5, 13, 8, 9, 14, 12.5, 18, 7.5, 10.5, 7.5, 10.5, 7.5, 10.5, 18];
   const X: number[] = [];
   { let cx = M; for (const w of W) { X.push(cx); cx += w; } }
@@ -926,7 +926,7 @@ export async function renderInvoicePdf(data: InvoiceData): Promise<{ buffer: Buf
     txt("CODE",         X[2]  + W[2]/2,  cy1 + 1.6, { bold: true, size: 6, color: WHITE, align: "center" });
     txt("QTY",          X[3]  + W[3]/2,  cy1,        { bold: true, size: 6, color: WHITE, align: "center" });
     txt("UNIT",         X[4]  + W[4]/2,  cy1,        { bold: true, size: 6, color: WHITE, align: "center" });
-    txt("MRP",          X[5]  + W[5]/2,  cy1 - 1.6, { bold: true, size: 5.6, color: WHITE, align: "center" });
+    txt("Rate",         X[5]  + W[5]/2,  cy1 - 1.6, { bold: true, size: 5.6, color: WHITE, align: "center" });
     txt("(\u20B9)",     X[5]  + W[5]/2,  cy1 + 1.6, { bold: true, size: 5.6, color: WHITE, align: "center" });
     txt("DISC./UNIT",   X[6]  + W[6]/2,  cy1 - 1.6, { bold: true, size: 5.2, color: WHITE, align: "center" });
     txt("(\u20B9)",     X[6]  + W[6]/2,  cy1 + 1.6, { bold: true, size: 5.2, color: WHITE, align: "center" });
@@ -977,9 +977,9 @@ export async function renderInvoicePdf(data: InvoiceData): Promise<{ buffer: Buf
     const qty     = Number(li.quantity  ?? 0);
     const gross   = qty * Number(li.unitPrice ?? 0) - Number(li.discount ?? 0);
     const taxable = Number(li.lineSubtotal ?? gross);
-    // Display-only decomposition: MRP column shows the stored per-unit price
+    // Display-only decomposition: Rate column shows the stored per-unit price
     // (the selling price BEFORE discount — sale lines are floored at master
-    // MRP), and the discount column shows the line's total pre-tax deduction
+    // Rate), and the discount column shows the line's total pre-tax deduction
     // (item discount + any allocated bill-discount share) per unit. Legacy
     // lines store the discount as a line total, so dividing by qty yields the
     // per-unit figure for both generations. Nothing here feeds the totals —

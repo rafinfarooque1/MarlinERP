@@ -251,7 +251,7 @@ const TEMPLATES: Record<ImportModule, { title: string; columns: ColSpec[] }> = {
       { key: "item", header: "Item", required: true, example: "Frozen Mango Chunks 1kg", hint: "Must already exist in the Item Master — this import never creates items", aliases: ["item", "itemname", "product", "productname", "description", "particulars", "goods"] },
       { key: "quantity", header: "Qty", required: true, example: 10, hint: "Quantity sold (decimals allowed)", aliases: ["qty", "quantity", "nos", "pcs", "qtysold"] },
       { key: "unit", header: "Unit", example: "pcs", hint: "Optional — blank uses the Item Master unit; a different unit is warned on", aliases: ["unit", "uom", "units"] },
-      { key: "price", header: "Price", required: true, example: 250, hint: "Per-unit selling price INCLUDING GST (the MRP / selling price), exactly like manual sale entry — GST is worked out from the Item Master rate. May be left blank when a Line Total is given", aliases: ["price", "rate", "unitprice", "saleprice", "priceperunit", "sellingprice", "mrp"] },
+      { key: "price", header: "Price", required: true, example: 250, hint: "Per-unit selling price INCLUDING GST (the item rate / selling price), exactly like manual sale entry — GST is worked out from the Item Master rate. May be left blank when a Line Total is given", aliases: ["price", "rate", "unitprice", "saleprice", "priceperunit", "sellingprice", "mrp"] },
       { key: "lineTotal", header: "Line Total", example: "", hint: "Optional — the line's total ₹ (Qty × Price). When Price is blank the unit price is worked out as Line Total ÷ Qty; when both are given they are cross-checked", aliases: ["linetotal", "lineamount", "amount", "total", "totalamount", "netamount", "grossamount", "value", "linevalue", "rowtotal", "itemtotal", "amountrs"] },
       { key: "discount", header: "Discount", example: 0, hint: "₹ discount PER UNIT (blank = 0), like manual sale entry", aliases: ["discount", "discountamount", "less", "itemdiscount", "linediscount", "unitdiscount", "discountperunit"] },
       { key: "gstRate", header: "GST %", hidden: true, example: 5, hint: "Cross-check only — the recorded GST always comes from the Item Master rate", aliases: ["gst", "gstrate", "gstpercent", "gstpercentage", "taxrate", "tax"] },
@@ -329,7 +329,7 @@ const TEMPLATES: Record<ImportModule, { title: string; columns: ColSpec[] }> = {
       { key: "unit", header: "Unit", required: true, example: "kg", hint: "Selling unit — kg, pcs, box…", aliases: ["unit", "uom", "units", "unitofmeasure", "sellingunit"] },
       { key: "hsnCode", header: "HSN Code", example: "08119010", hint: "HSN/SAC code, blank if unknown", aliases: ["hsncode", "hsn", "hsnsac", "sac", "saccode"] },
       { key: "taxRate", header: "GST %", example: 5, hint: "GST slab: 0, 5, 12, 18 or 28", aliases: ["gst", "gstrate", "gstpercent", "taxrate", "tax", "taxpercent", "igstrate", "gstslabs"] },
-      { key: "mrp", header: "MRP", example: 250, hint: "Maximum retail price per unit (sales are floored at MRP)", aliases: ["mrp", "maximumretailprice", "mrpperunit", "retailprice"] },
+      { key: "mrp", header: "Rate", example: 250, hint: "Item rate per unit (sales cannot be priced below this rate)", aliases: ["mrp", "maximumretailprice", "mrpperunit", "retailprice"] },
       { key: "cost", header: "Cost", example: 180, hint: "Purchase/production cost per unit (used until real purchases set the average cost)", aliases: ["cost", "costprice", "purchasecost", "purchaseprice", "costperunit", "rate"] },
       { key: "reorderLevel", header: "Reorder Level", example: 10, hint: "Low-stock alert threshold; blank = 10", aliases: ["reorderlevel", "reorder", "reorderqty", "minstock", "minimumstock"] },
       { key: "itemCode", header: "Item Code", example: "", hint: "Old ERP item code — blank rows draw the next code from the ERP's own series", aliases: ["itemcode", "code", "productcode", "skucode", "sku"] },
@@ -698,7 +698,7 @@ function validateRow(
         suggestions.push("Use 0, 5, 12, 18 or 28");
       } else norm.taxRate = tax;
     }
-    for (const [key, label] of [["mrp", "MRP"], ["cost", "Cost"], ["reorderLevel", "Reorder Level"]] as const) {
+    for (const [key, label] of [["mrp", "Rate"], ["cost", "Cost"], ["reorderLevel", "Reorder Level"]] as const) {
       const v = parseMoney((values[key] ?? "").trim());
       if (v !== null) {
         if (!Number.isFinite(v) || v < 0) errors.push(`${label} "${values[key]}" must be a number ≥ 0`);
@@ -1410,12 +1410,12 @@ async function validateTransactionRows(
         if (ctx.settings.mrpToDiscount) {
           lineUnitDiscount = Math.round((discount + (product.mrp - linePrice)) * 100) / 100;
           s.warnings.push(
-            `Price ₹${linePrice.toFixed(2)} is below the Item Master MRP ₹${product.mrp.toFixed(2)} for ${product.name} — recorded like the POS: MRP ₹${product.mrp.toFixed(2)} with ₹${lineUnitDiscount.toFixed(2)}/unit discount (net price unchanged)`,
+            `Price ₹${linePrice.toFixed(2)} is below the Item Master rate ₹${product.mrp.toFixed(2)} for ${product.name} — recorded like the POS: rate ₹${product.mrp.toFixed(2)} with ₹${lineUnitDiscount.toFixed(2)}/unit discount (net price unchanged)`,
           );
           linePrice = product.mrp;
         } else {
-          s.errors.push(`Price ₹${linePrice.toFixed(2)} is below the Item Master MRP ₹${product.mrp.toFixed(2)} for ${product.name}`);
-          s.suggestions.push("Fix the price, or switch on \u201cRecord below-MRP prices as discounts\u201d under Company Settings → Data Import");
+          s.errors.push(`Price ₹${linePrice.toFixed(2)} is below the Item Master rate ₹${product.mrp.toFixed(2)} for ${product.name}`);
+          s.suggestions.push("Fix the price, or switch on \u201cRecord below-rate prices as discounts\u201d under Company Settings → Data Import");
         }
       }
       if (product && qty !== null && Number.isFinite(qty) && qty > 0) {
@@ -2567,10 +2567,10 @@ router.get("/imports/templates/:module", requireModuleAction(PERM, "download"), 
     const party = module === "sales" ? "Customer" : "Vendor";
     help.addRow([`• One row per invoice LINE. Every row carrying the same Invoice No belongs to that invoice — rows may sit anywhere in the file. Repeat rows may leave Date and ${party} blank (they inherit the invoice's values); a DIFFERENT date or ${party.toLowerCase()} on the same invoice number is an error.`]);
     if (module === "sales") {
-      help.addRow(["• Price INCLUDES GST — it is the selling price / MRP, exactly as in manual sale entry. The ERP works the GST out from the Item Master rate; you never enter GST amounts."]);
+      help.addRow(["• Price INCLUDES GST — it is the selling price / item rate, exactly as in manual sale entry. The ERP works the GST out from the Item Master rate; you never enter GST amounts."]);
       help.addRow(["• Line Total is optional: leave Price blank and the unit price is worked out as Line Total ÷ Qty. When both are given they are cross-checked."]);
       help.addRow(["• Discount is ₹ per UNIT. Bill Discount is a pre-tax ₹ off the whole invoice — put it on any one row of the invoice."]);
-      help.addRow(["• A price BELOW the Item Master MRP is recorded like the POS: MRP stays at the master value and the difference becomes a per-unit discount — the customer's net price is unchanged. A price above MRP is used as-is."]);
+      help.addRow(["• A price BELOW the Item Master rate is recorded like the POS: the item rate stays at the master value and the difference becomes a per-unit discount — the customer's net price is unchanged. A price above the item rate is used as-is."]);
       help.addRow(["• A blank Customer on a Cash/Bank/UPI sale is recorded as a walk-in counter sale (no customer on the bill), like a POS cash sale. Credit sales always need a customer."]);
     } else {
       help.addRow(["• Purchase Rate EXCLUDES GST, exactly as in manual purchase entry. The ERP adds GST from the product master rate; you never enter GST amounts."]);

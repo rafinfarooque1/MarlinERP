@@ -271,8 +271,8 @@ async function buildQuotationFigures(data: {
   // written from here — the raised figure lives on this document alone.
   const mrpCheck = await checkMrpFloor(pool, rawLineItems, data.savedFloors,
     (itemName, floor) =>
-      `Quotation MRP cannot be lower than the Item Master MRP (₹${floor.toFixed(2)}). ` +
-      `Increase the MRP or use a discount if you want to quote a lower selling price. (${itemName})`);
+      `Quotation rate cannot be lower than the Item Master rate (₹${floor.toFixed(2)}). ` +
+      `Increase the rate or use a discount if you want to quote a lower selling price. (${itemName})`);
   if (!mrpCheck.ok) return { ok: false, error: mrpCheck.error, code: "MRP_BELOW_MASTER" };
 
   const built = buildSaleLines(rawLineItems, itemTaxMap, isInterState, data.billDiscount);
@@ -747,7 +747,7 @@ router.post("/quotations", requireModuleAction(QUOTE_PAGES, "add"), async (req, 
     action: "CREATE", module: "quotations", entityType: "quotation", entityId: mapped.id,
     user: employee?.username ?? "system",
     description: `New quotation ${mapped.quotationNumber} — ${mapped.customerName ?? "Walk-in"} — ₹${mapped.totalAmount.toFixed(2)}`
-      + (mrpOverrides.length ? ` — MRP raised on ${mrpOverrides.length} line${mrpOverrides.length > 1 ? "s" : ""}` : ""),
+      + (mrpOverrides.length ? ` — Rate raised on ${mrpOverrides.length} line${mrpOverrides.length > 1 ? "s" : ""}` : ""),
     metadata: {
       after: { quotationNumber: mapped.quotationNumber, locationType: mapped.locationType, locationId: mapped.locationId, customerId: mapped.customerId, totalAmount: mapped.totalAmount, lineCount: mapped.lineItems.length },
       ...(mrpOverrides.length ? { mrpOverrides } : {}),
@@ -873,7 +873,7 @@ router.put("/quotations/:id", requireModuleAction(QUOTE_PAGES, "edit"), async (r
     action: "UPDATE", module: "quotations", entityType: "quotation", entityId: id,
     user: employee?.username ?? "system",
     description: `Quotation ${mapped.quotationNumber} updated — ${mapped.customerName ?? "Walk-in"} — ₹${mapped.totalAmount.toFixed(2)}`
-      + (mrpOverrides.length ? ` — MRP raised on ${mrpOverrides.length} line${mrpOverrides.length > 1 ? "s" : ""}` : ""),
+      + (mrpOverrides.length ? ` — Rate raised on ${mrpOverrides.length} line${mrpOverrides.length > 1 ? "s" : ""}` : ""),
     ...(mrpOverrides.length ? { metadata: { mrpOverrides } } : {}),
   }).catch(() => {});
 

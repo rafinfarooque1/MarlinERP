@@ -100,7 +100,7 @@ export const MODULE_META: Record<ImportModule, { label: string; icon: typeof Use
   },
   items: {
     label: 'Items', icon: Boxes,
-    blurb: 'Creates finished products with unit, HSN, GST rate, MRP and cost.',
+    blurb: 'Creates finished products with unit, HSN, GST rate, item rate and cost.',
   },
   sales: {
     label: 'Sales', icon: ShoppingCart,

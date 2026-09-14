@@ -301,7 +301,7 @@ export default function StockItemDetailScreen() {
                 <Stat styles={styles} label="Reorder level" value={qtyIN(Number(row.reorderLevel))} />
               ) : null}
               {mrp != null && mrp > 0 ? (
-                <Stat styles={styles} label="MRP" value={formatMoney(mrp, { showPaise: true })} />
+                <Stat styles={styles} label="Rate" value={formatMoney(mrp, { showPaise: true })} />
               ) : null}
               {itemCode ? <Stat styles={styles} label="Item code" value={itemCode} /> : null}
             </View>

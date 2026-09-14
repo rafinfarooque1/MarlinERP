@@ -374,7 +374,7 @@ export async function checkMrpFloor(
         ok: false,
         error: messageFor
           ? messageFor(item.name, floor)
-          : `MRP cannot be lower than the Item Master MRP. Use Discount if you want to reduce the selling price. (${item.name}: minimum allowed ₹${floor.toFixed(2)})`,
+          : `Rate cannot be lower than the Item Master rate. Use Discount if you want to reduce the selling price. (${item.name}: minimum allowed ₹${floor.toFixed(2)})`,
       };
     }
   }

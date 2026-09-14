@@ -539,7 +539,7 @@ export default function Quotations() {
     return saved !== undefined && saved > 0 ? Math.min(master, saved) : master;
   };
   const mrpFloorMessage = (floor: number) =>
-    `Quotation MRP cannot be lower than the Item Master MRP (${inr(floor)}). Increase the MRP or use a discount if you want to quote a lower selling price.`;
+    `Quotation rate cannot be lower than the Item Master rate (${inr(floor)}). Increase the rate or use a discount if you want to quote a lower selling price.`;
 
   // GST state determination (same as Sales)
   const companyState = ((companySettings as any)?.state ?? '').trim().toLowerCase();
@@ -1459,7 +1459,7 @@ export default function Quotations() {
                                   </FormItem>
                                 )} />
                                 {masterMrp > 0 && (
-                                  <p className="text-[10px] text-muted-foreground mt-0.5 lg:text-right">MRP {inr(masterMrp)}</p>
+                                  <p className="text-[10px] text-muted-foreground mt-0.5 lg:text-right">Item Rate {inr(masterMrp)}</p>
                                 )}
                                 {belowFloor && (
                                   <p className="text-[10px] text-destructive mt-0.5" data-testid={`error-line-mrp-${index}`}>
@@ -1467,7 +1467,7 @@ export default function Quotations() {
                                   </p>
                                 )}
                                 {itemId > 0 && masterMrp <= 0 && unitPrice <= 0 && (
-                                  <p className="text-[10px] text-amber-500 mt-0.5">No MRP in Item Master — enter the quote price</p>
+                                  <p className="text-[10px] text-amber-500 mt-0.5">No rate in Item Master — enter the quote price</p>
                                 )}
                               </div>
 
@@ -1516,7 +1516,7 @@ export default function Quotations() {
                                 <CellLabel>Amount ₹</CellLabel>
                                 <div className="h-9 flex items-center justify-end text-sm font-mono font-medium tabular-nums whitespace-nowrap">
                                   {itemId > 0
-                                    ? (unitPrice > 0 ? inr(lineTotal) : <span className="text-xs text-amber-400 italic font-sans">No MRP</span>)
+                                    ? (unitPrice > 0 ? inr(lineTotal) : <span className="text-xs text-amber-400 italic font-sans">No rate</span>)
                                     : '—'}
                                 </div>
                               </div>
@@ -1682,7 +1682,7 @@ export default function Quotations() {
                       )}
                       {totals.itemDiscountTotal > 0 && (
                         <div className="flex justify-between text-emerald-600 font-medium">
-                          <span>Item Discounts (off MRP)</span>
+                          <span>Item Discounts (off Item Rate)</span>
                           <span className="font-mono">−{inr(totals.itemDiscountTotal)}</span>
                         </div>
                       )}
@@ -1919,7 +1919,7 @@ export default function Quotations() {
                           <span>
                             {li.quantity} × {inr(Number(li.unitPrice))}
                             {Number(li.masterMrp ?? 0) > 0 && Number(li.unitPrice) > Number(li.masterMrp) && (
-                              <span className="text-sky-600"> (MRP raised from {inr(Number(li.masterMrp))})</span>
+                              <span className="text-sky-600"> (Rate raised from {inr(Number(li.masterMrp))})</span>
                             )}
                             {Number(li.discount ?? 0) > 0 && (
                               <span className="text-emerald-600"> − {inr(Number(li.discount))} disc</span>
@@ -1945,7 +1945,7 @@ export default function Quotations() {
                   const itemDisc = ((viewItem.lineItems as any[]) ?? []).reduce((s: number, li: any) => s + Number(li?.discount ?? 0), 0);
                   return itemDisc > 0 ? (
                     <div className="flex justify-between text-emerald-600">
-                      <span>Item Discounts (off MRP)</span>
+                      <span>Item Discounts (off Item Rate)</span>
                       <span className="font-mono">−{inr(itemDisc)}</span>
                     </div>
                   ) : null;
