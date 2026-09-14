@@ -13,7 +13,7 @@ import { advanceFrom } from '@/lib/keyboard-entry';
  *
  * The old pattern was a plain <Select> listing the whole Item Master, with all
  * the useful facts concatenated into one line ("Marlin Tender 1.5 kg — 17 avail
- * · MRP ₹380 · 5% GST"). That is unreadable at billing speed and gets worse as
+ * · Rate ₹380 · 5% GST"). That is unreadable at billing speed and gets worse as
  * the master grows. This renders a compact aligned table instead, with the
  * columns each screen actually needs.
  *
@@ -47,7 +47,7 @@ const COLUMN_META: Record<ItemColumn, { label: string; width: string; align: 'le
   code:      { label: 'SKU',       width: '104px', align: 'left'  },
   hsn:       { label: 'HSN',       width: '96px',  align: 'left'  },
   available: { label: 'Available', width: '104px', align: 'right' },
-  mrp:       { label: 'MRP',       width: '88px',  align: 'right' },
+  mrp:       { label: 'Rate',      width: '88px',  align: 'right' },
   gst:       { label: 'GST',       width: '56px',  align: 'right' },
 };
 

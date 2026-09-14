@@ -335,7 +335,7 @@ export default function ItemMaster() {
                 <Button variant="outline" size="sm" onClick={() => downloadCSV('items.csv', filtered.map(i => ({
                   Code: (i as any).itemCode || '', Barcode: (i as any).barcode || '',
                   Type: (TYPE_LABELS as any)[i._type] ?? i._type, Name: i.name, Unit: i.unit,
-                  MRP: Number((i as any).mrp ?? 0),
+                  Rate: Number((i as any).mrp ?? 0),
                   HSN: (i as any).hsnCode || '', 'Tax%': (i as any).taxRate || '',
                   Stock: i.stock, Status: isActiveProduct(i) ? 'Active' : 'Inactive',
                   Description: i.description || '',
@@ -445,7 +445,7 @@ export default function ItemMaster() {
                 <SortableHead k="unit" sort={sort}>Unit</SortableHead>
                 <SortableHead k="hsn" sort={sort}>HSN</SortableHead>
                 <SortableHead k="tax" sort={sort}>Tax</SortableHead>
-                <SortableHead k="mrp" sort={sort} className="text-right">MRP (₹)</SortableHead>
+                <SortableHead k="mrp" sort={sort} className="text-right">Rate (₹)</SortableHead>
                 <SortableHead k="stock" sort={sort} className="text-right">
                   {locType === 'all' ? 'Stock' :
                    locType === 'headoffice' ? 'HO Stock' :
@@ -599,7 +599,7 @@ export default function ItemMaster() {
 
                 <FormField control={form.control} name="mrp" render={({ field }) => (
                   <FormItem>
-                    <FormLabel>MRP (₹)</FormLabel>
+                    <FormLabel>Rate (₹)</FormLabel>
                     <FormControl><Input type="number" min={0} step="0.01" placeholder="0.00" className="font-mono" {...field} /></FormControl>
                     <FormMessage />
                   </FormItem>

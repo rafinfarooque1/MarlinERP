@@ -746,7 +746,7 @@ export default function PurchaseEntry() {
                             </SelectContent>
                           </Select>
                           {/* Purchasing cares about the tax identity of the product, not
-                              about MRP or what is currently in stock, so this picker shows
+                              about the item rate or what is currently in stock, so this picker shows
                               HSN and GST only. Active only for new picks; an already-chosen
                               product stays listed so editing an old bill can't blank the line. */}
                           <SearchableItemSelect
@@ -779,7 +779,7 @@ export default function PurchaseEntry() {
                             <X className="w-3.5 h-3.5" />
                           </Button>
                         </div>
-                        {/* Unit + MRP straight from the master — display only,
+                        {/* Unit + rate straight from the master — display only,
                             nothing here feeds the costing arithmetic. */}
                         {Number(li.materialId) > 0 && (() => {
                           const kind = form.watch(`lineItems.${index}.materialType`);
@@ -788,7 +788,7 @@ export default function PurchaseEntry() {
                           return m ? (
                             <p className="text-[10px] text-muted-foreground">
                               Unit <span className="font-mono">{m.unit || '—'}</span>
-                              {Number(m.mrp ?? 0) > 0 && <> · MRP {inr(Number(m.mrp))}</>}
+                              {Number(m.mrp ?? 0) > 0 && <> · Rate {inr(Number(m.mrp))}</>}
                             </p>
                           ) : null;
                         })()}

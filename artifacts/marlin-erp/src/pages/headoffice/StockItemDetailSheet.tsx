@@ -170,7 +170,7 @@ export default function StockItemDetailSheet({ row, batches, canSeeValue, onOpen
                       <th className="text-right px-3 py-1.5 font-medium">Qty</th>
                       <th className="text-right px-3 py-1.5 font-medium">Rsvd</th>
                       <th className="text-right px-3 py-1.5 font-medium">Avail</th>
-                      <th className="text-right px-3 py-1.5 font-medium">MRP</th>
+                      <th className="text-right px-3 py-1.5 font-medium">Rate</th>
                       {canSeeValue && <th className="text-right px-3 py-1.5 font-medium">Unit Cost</th>}
                       {canSeeValue && <th className="text-right px-3 py-1.5 font-medium">Value</th>}
                     </tr>

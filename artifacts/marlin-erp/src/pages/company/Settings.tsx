@@ -174,11 +174,11 @@ const SETTING_GROUPS: SettingGroup[] = [
       },
       {
         key: 'importMrpToDiscount',
-        label: 'Record Below-MRP Prices as Discounts',
+        label: 'Record Below-Rate Prices as Discounts',
         type: 'toggle',
         defaultValue: true,
         description:
-          'A sale price below the Item Master MRP is recorded like the POS: MRP stays and the difference becomes a per-unit discount — the customer\'s net price is unchanged. Turn off to make below-MRP prices an error.',
+          'A sale price below the Item Master rate is recorded like the POS: the item rate stays and the difference becomes a per-unit discount — the customer\'s net price is unchanged. Turn off to make below-rate prices an error.',
       },
       {
         key: 'importDetectLineTotal',

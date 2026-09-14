@@ -335,7 +335,7 @@ export default function ImportData() {
                   {voucher
                     ? `Columns marked * are required. One row per voucher. ${module === 'receipts' ? 'Against Invoice' : 'Against Bill'} settles only that ${module === 'receipts' ? 'invoice' : 'bill'}; blank auto-allocates oldest-first, excess becomes a ${partyWord} advance.`
                     : txn
-                      ? `Columns marked * are required. One row per invoice line — rows of one invoice must sit together with the same invoice number, date and ${partyWord}. ${module === 'sales' ? 'Prices INCLUDE GST; a price below the item MRP is recorded at MRP with the difference as a line discount.' : 'Purchase rates are GST-exclusive, like manual purchase entry.'}`
+                      ? `Columns marked * are required. One row per invoice line — rows of one invoice must sit together with the same invoice number, date and ${partyWord}. ${module === 'sales' ? 'Prices INCLUDE GST; a price below the item rate is recorded at the item rate with the difference as a line discount.' : 'Purchase rates are GST-exclusive, like manual purchase entry.'}`
                       : module === 'daybook'
                         ? 'Columns marked * are required. One row per voucher line — rows sharing a voucher number become one voucher, and its debits must equal its credits.'
                         : module === 'opening_stock'

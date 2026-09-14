@@ -129,7 +129,7 @@ function computeLineGst(
 
 // Shown whenever a typed sale-line MRP falls below the enforced floor. The
 // server rejects the same case with the same message.
-const MRP_FLOOR_MESSAGE = 'MRP cannot be lower than the Item Master MRP. Use Discount if you want to reduce the selling price.';
+const MRP_FLOOR_MESSAGE = 'Rate cannot be lower than the Item Master rate. Use Discount if you want to reduce the selling price.';
 
 // Sales list responses are normally mapped to camelCase by the API, but some
 // historical/list-shaped responses can still expose the raw database keys.
@@ -2164,8 +2164,8 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                       <span>Item</span>
                       <span>SKU</span>
                       <span className="text-right">Qty</span>
-                      <span className="text-right">MRP ₹</span>
-                      <span className="text-right">Rate ₹</span>
+                      <span className="text-right">Item Rate ₹</span>
+                      <span className="text-right">Sale Rate ₹</span>
                       <span className="text-right">Disc/Unit ₹</span>
                       <span className="text-center">GST %</span>
                       <span className="text-right">Amount ₹</span>
@@ -2185,7 +2185,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                           i2 !== index && Number(l?.itemId) === Number(itemId) ? s + Math.max(0, Number(l?.quantity) || 0) : s, 0);
                         const maxQty   = Math.max(0, getMaxQty(itemId) - claimedElsewhere);
                         const taxRate  = Number((getItem(itemId) as any)?.taxRate ?? 0);
-                        // Item discount is PER UNIT: ₹10 off MRP ₹100 × qty 10
+                         // Item discount is PER UNIT: ₹10 off item rate ₹100 × qty 10
                         // = ₹100 off the line, not ₹10. The line figures here
                         // are pre-bill-discount; the summary below carries the
                         // final post-allocation taxable/GST.
@@ -2217,7 +2217,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                                       value={f.value}
                                       onChange={id => {
                                         f.onChange(id);
-                                        // Auto-fill from Item Master MRP — read-only in sale
+                                        // Auto-fill from Item Master Rate — read-only in sale
                                         form.setValue(`lineItems.${index}.unitPrice`, getPrice(id));
                                       }}
                                     /></FormControl>
@@ -2252,16 +2252,16 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                               )} />
                               {itemId > 0 && <p className="text-[10px] text-muted-foreground text-right">max {maxQty}</p>}
                             </div>
-                            {/* MRP — display-only; the sale price floor. */}
+                            {/* Item Rate — display-only; the sale price floor. */}
                             <div className="space-y-1 min-w-0">
-                              <CellLabel>MRP ₹</CellLabel>
+                              <CellLabel>Item Rate ₹</CellLabel>
                               <div className="h-9 flex items-center justify-end text-xs font-mono">
                                 {(() => { const m = getMrpFloor(itemId); return m > 0 ? inr(m) : '—'; })()}
                               </div>
                             </div>
 
-                              {/* MRP — editable UPWARD only. Floor = Item Master
-                                  MRP (or, on an old invoice, the line's saved
+                              {/* Sale Rate — editable UPWARD only. Floor = Item Master
+                                  Rate (or, on an old invoice, the line's saved
                                   price if the master rose since). Anything below
                                   is rejected and snapped back; reductions go
                                   through Discount. */}
@@ -2295,11 +2295,11 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                                   );
                                 }} />
                                 {itemId > 0 && getPrice(itemId) <= 0 && (
-                                  <p className="mt-1 text-[10px] text-amber-500">Set MRP in Item Master</p>
+                                    <p className="mt-1 text-[10px] text-amber-500">Set Rate in Item Master</p>
                                 )}
                               </div>
 
-                              {/* Item discount — ₹ off EVERY unit's MRP.
+                              {/* Item discount — ₹ off EVERY unit's item rate.
                                   Entry hidden while discounts are off; an
                                   existing amount on an edited historical sale
                                   stays visible read-only and is resubmitted
@@ -2349,7 +2349,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                                 <CellLabel>Amount ₹</CellLabel>
                                 <div className="h-9 flex items-center justify-end text-sm font-mono font-medium tabular-nums whitespace-nowrap">
                                   {itemId > 0
-                                    ? (unitPrice > 0 ? inr(lineTotal) : <span className="text-xs text-amber-400 italic font-sans">No MRP</span>)
+                                    ? (unitPrice > 0 ? inr(lineTotal) : <span className="text-xs text-amber-400 italic font-sans">No Rate</span>)
                                     : '—'}
                                 </div>
                               </div>
@@ -2485,7 +2485,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                       )}
                       {totals.itemDiscountTotal > 0 && (
                         <div className="flex justify-between text-emerald-600 font-medium">
-                          <span>Item Discounts (off MRP)</span>
+                          <span>Item Discounts (off Item Rate)</span>
                           <span className="font-mono">−{inr(totals.itemDiscountTotal)}</span>
                         </div>
                       )}
@@ -2769,7 +2769,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                   const itemDisc = ((viewItem.lineItems as any[]) ?? []).reduce((s: number, li: any) => s + Number(li?.discount ?? 0), 0);
                   return itemDisc > 0 ? (
                     <div className="flex justify-between text-emerald-600">
-                      <span>Item Discounts (off MRP)</span>
+                      <span>Item Discounts (off Item Rate)</span>
                       <span className="font-mono">−{inr(itemDisc)}</span>
                     </div>
                   ) : null;
