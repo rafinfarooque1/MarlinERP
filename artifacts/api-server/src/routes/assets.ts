@@ -11,9 +11,8 @@ import { disabledWarehouseError, WAREHOUSE_DISABLED_CODE } from "../lib/warehous
  * no input-tax-credit posting (explicitly out of scope).
  *
  * Register model: one asset_purchases row IS one register entry. It carries its
- * own current location and lifecycle status; transfers and disposals act on the
- * row and append history rows (no accounting entries for either — the disposal
- * schema leaves headroom for future proceeds accounting).
+ * own current location and lifecycle status; transfers append history rows and
+ * disposals write off the gross asset and accumulated depreciation.
  *
  * Most of the columns this module reads/writes were added by a startup
  * migration (assetModule.ts) and are invisible to drizzle — every query here is
@@ -27,7 +26,7 @@ import { disabledWarehouseError, WAREHOUSE_DISABLED_CODE } from "../lib/warehous
 import { Router, type IRouter } from "express";
 import { requireModuleAction, requireModuleView } from "../middleware/permissions";
 import { pool } from "@workspace/db";
-import { logActivity } from "../lib/audit";
+import { logActivity, logActivityInTransaction } from "../lib/audit";
 import { resolveActingLocation, locationLabel } from "../lib/productionCosting";
 import {
   getUserDataScope, isLocationInScope, scopeTransferWhere, type DataScope,
@@ -38,11 +37,17 @@ import { isIsoDate } from "../lib/dateInput";
 import { nextVoucherNumber } from "../lib/voucherNumber";
 import { ensureFixedAssetLedger } from "../migrations/fixedAssets";
 import {
+  DEPRECIATION_EXPENSE_CODE,
+  ACCUMULATED_DEPRECIATION_CODE,
+  ASSET_DISPOSAL_LOSS_CODE,
+} from "../migrations/assetDepreciation";
+import {
   ASSET_DISPOSAL_TYPES, ASSET_PAYMENT_MODES, ASSET_PAYMENT_STATUSES,
 } from "../migrations/assetModule";
 import { respondIfMonthLocked, isMonthLocked, ymOfDate, monthLockedBody } from "../lib/periodLock";
 
 const router: IRouter = Router();
+const FIXED_ASSET_CODE = "STD-FIXED-ASSET";
 
 // ── Permission keys ───────────────────────────────────────────────────────────
 const PG_PURCHASES  = "page:/assets/purchases";
@@ -1000,11 +1005,56 @@ router.post("/assets/disposals", requireModuleAction(PG_DISPOSAL, "add"), async 
       return;
     }
 
+    const { rows: [ledgers] } = await client.query(`
+      SELECT
+        (SELECT id FROM account_ledgers WHERE code = $1 LIMIT 1) AS fixed_asset_id,
+        (SELECT id FROM account_ledgers WHERE code = $2 LIMIT 1) AS disposal_loss_id,
+        (SELECT id FROM account_ledgers WHERE code = $3 LIMIT 1) AS accumulated_id
+    `, [FIXED_ASSET_CODE, ASSET_DISPOSAL_LOSS_CODE, ACCUMULATED_DEPRECIATION_CODE]);
+    if (!ledgers?.fixed_asset_id || !ledgers?.disposal_loss_id || !ledgers?.accumulated_id) {
+      await client.query("ROLLBACK");
+      res.status(500).json({ error: "Fixed-asset disposal ledgers are not initialised yet." });
+      return;
+    }
+    const grossCost = round2(Number(row.total_cost ?? 0));
+    const { rows: [dep] } = await client.query(`
+      SELECT COALESCE(SUM(amount), 0)::numeric AS amount
+        FROM asset_depreciation_runs
+       WHERE asset_purchase_id = $1
+         AND period_start <= date_trunc('month', $2::date)::date
+    `, [purchaseId, disposalDate]);
+    const accumulatedAmount = round2(Math.min(grossCost, Math.max(0, Number(dep?.amount ?? 0))));
+    const bookValue = round2(Math.max(0, grossCost - accumulatedAmount));
+    const voucherNumber = await nextVoucherNumber(client, "journal", disposalDate);
+    const { rows: [voucher] } = await client.query(`
+      INSERT INTO journal_vouchers
+        (voucher_type, voucher_number, voucher_date, narration, total_amount,
+         created_by, origin, source_module, location_type, location_id)
+      VALUES ('journal', $1, $2, $3, $4, $5, 'system', 'fixed_asset_disposal', $6, $7)
+      RETURNING id
+    `, [
+      voucherNumber, disposalDate,
+      `Disposal — ${row.asset_code ?? `Asset #${purchaseId}`} (${disposalType.replace(/_/g, " ")})`,
+      grossCost, employee?.username ?? "system", locType, locId,
+    ]);
+    const lines: Array<[number, number, number]> = [];
+    if (accumulatedAmount > 0) lines.push([Number(ledgers.accumulated_id), accumulatedAmount, 0]);
+    if (bookValue > 0) lines.push([Number(ledgers.disposal_loss_id), bookValue, 0]);
+    lines.push([Number(ledgers.fixed_asset_id), 0, grossCost]);
+    for (const [ledgerId, debit, credit] of lines) {
+      await client.query(
+        `INSERT INTO journal_voucher_lines (voucher_id, ledger_id, debit, credit) VALUES ($1,$2,$3,$4)`,
+        [voucher.id, ledgerId, debit, credit],
+      );
+    }
+
     const { rows: [d] } = await client.query(
       `INSERT INTO asset_disposals
-         (asset_purchase_id, disposal_type, disposal_date, reason, created_by)
-       VALUES ($1,$2,$3,$4,$5) RETURNING id, created_at`,
-      [purchaseId, disposalType, disposalDate, reason, employee?.username ?? "system"],
+         (asset_purchase_id, disposal_type, disposal_date, reason, amount,
+          journal_voucher_id, accumulated_depreciation, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id, created_at`,
+      [purchaseId, disposalType, disposalDate, reason, bookValue, voucher.id,
+       accumulatedAmount, employee?.username ?? "system"],
     );
     await client.query(
       `UPDATE asset_purchases SET status = $1, updated_at = now() WHERE id = $2`,
@@ -1036,6 +1086,118 @@ router.post("/assets/disposals", requireModuleAction(PG_DISPOSAL, "add"), async 
 
   audit?.();
   res.status(201).json(out);
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Depreciation — idempotent monthly straight-line posting
+// ═══════════════════════════════════════════════════════════════════════════
+router.post("/assets/depreciation/run", requireModuleAction(PG_REPORTS, "add"), async (req, res): Promise<void> => {
+  const employee = (req as any).employee;
+  const period = String(req.body?.period ?? "").slice(0, 10);
+  if (!/^\d{4}-\d{2}-01$/.test(period) || !isIsoDate(period)) {
+    res.status(400).json({ error: "period must be the first day of a month (YYYY-MM-01)" });
+    return;
+  }
+  const ym = ymOfDate(period);
+  if (ym && await isMonthLocked(pool, ym.year, ym.month)) {
+    res.status(423).json(monthLockedBody(ym.year, ym.month));
+    return;
+  }
+  const scope = await getUserDataScope(employee ?? { branchType: "headoffice", branchId: 0 });
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows: [expense] } = await client.query(
+      `SELECT id FROM account_ledgers WHERE code = $1 LIMIT 1`, [DEPRECIATION_EXPENSE_CODE],
+    );
+    const { rows: [accum] } = await client.query(
+      `SELECT id FROM account_ledgers WHERE code = $1 LIMIT 1`, [ACCUMULATED_DEPRECIATION_CODE],
+    );
+    if (!expense || !accum) {
+      await client.query("ROLLBACK");
+      res.status(500).json({ error: "Depreciation ledgers are not initialised yet." });
+      return;
+    }
+    const monthEnd = `${period.slice(0, 7)}-${new Date(Number(period.slice(0, 4)), Number(period.slice(5, 7)), 0).getDate().toString().padStart(2, "0")}`;
+    const scopeParams: unknown[] = [monthEnd, period];
+    const scopeWhere = scopeExprWhere(scope, scopeParams, CURRENT_TYPE_EXPR, CURRENT_ID_EXPR);
+    const { rows: assets } = await client.query(`
+      SELECT ap.id, ap.asset_code, ap.asset_id, ap.total_cost, ap.useful_life_months,
+             ap.purchase_date, ap.location_type, ap.location_id,
+             COALESCE(ap.current_location_type, ap.location_type, 'headoffice') AS current_type,
+             COALESCE(ap.current_location_id, ap.location_id, 1) AS current_id,
+             COALESCE(ad.disposal_date, DATE '9999-12-31') AS disposal_date
+        FROM asset_purchases ap
+        LEFT JOIN LATERAL (
+          SELECT disposal_date FROM asset_disposals
+           WHERE asset_purchase_id = ap.id ORDER BY disposal_date ASC, id ASC LIMIT 1
+        ) ad ON true
+       WHERE COALESCE(ap.total_cost, round(ap.quantity * ap.acquisition_cost, 2)) > 0
+         AND COALESCE(ap.useful_life_months, 0) > 0
+         AND ap.purchase_date <= $1::date
+         AND COALESCE(ad.disposal_date, DATE '9999-12-31') >= $1::date
+         AND ${scopeWhere}
+       ORDER BY ap.id
+    `, scopeParams);
+    let posted = 0;
+    let skipped = 0;
+    for (const asset of assets) {
+      const totalCost = Number(asset.total_cost ?? 0);
+      const life = Number(asset.useful_life_months ?? 0);
+      const monthly = round2(totalCost / life);
+      if (monthly <= 0.004) { skipped++; continue; }
+      const { rows: [prior] } = await client.query(
+        `SELECT COALESCE(SUM(amount)::numeric, 0) AS amount
+           FROM asset_depreciation_runs WHERE asset_purchase_id = $1
+             AND period_start <= $2::date`,
+        [asset.id, period],
+      );
+      const remaining = round2(Math.max(0, totalCost - Number(prior?.amount ?? 0)));
+      const amount = round2(Math.min(monthly, remaining));
+      if (amount <= 0.004) { skipped++; continue; }
+      const { rows: [existing] } = await client.query(
+        `SELECT id FROM asset_depreciation_runs
+          WHERE asset_purchase_id = $1 AND period_start = $2::date`,
+        [asset.id, period],
+      );
+      if (existing) { skipped++; continue; }
+      const voucherNumber = await nextVoucherNumber(client, "journal", period);
+      const { rows: [voucher] } = await client.query(`
+        INSERT INTO journal_vouchers
+          (voucher_type, voucher_number, voucher_date, narration, total_amount,
+           created_by, origin, source_module, location_type, location_id)
+        VALUES ('journal', $1, $2, $3, $4, $5, 'system', 'fixed_asset_depreciation', $6, $7)
+        RETURNING id
+      `, [
+        voucherNumber, period,
+        `Depreciation — ${asset.asset_code ?? `Asset #${asset.id}`} (${period.slice(0, 7)})`,
+        amount, employee?.username ?? "system", asset.current_type, Number(asset.current_id),
+      ]);
+      await client.query(`
+        INSERT INTO journal_voucher_lines (voucher_id, ledger_id, debit, credit)
+        VALUES ($1, $2, $3, 0), ($1, $4, 0, $3)
+      `, [voucher.id, expense.id, amount, accum.id]);
+      await client.query(`
+        INSERT INTO asset_depreciation_runs
+          (asset_purchase_id, period_start, amount, journal_voucher_id, created_by)
+        VALUES ($1, $2, $3, $4, $5)
+      `, [asset.id, period, amount, voucher.id, employee?.username ?? "system"]);
+      posted++;
+    }
+    await logActivityInTransaction(client, {
+      action: "CREATE", module: "assets", entityType: "asset_depreciation_run",
+      description: `Depreciation run for ${period.slice(0, 7)} posted ${posted} asset month(s)`,
+      user: employee?.username,
+      metadata: { period, posted, skipped },
+    });
+    await client.query("COMMIT");
+    res.status(201).json({ period, posted, skipped });
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
 });
 
 // ═══════════════════════════════════════════════════════════════════════════

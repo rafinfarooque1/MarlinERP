@@ -10,14 +10,16 @@
 import { useMemo, useState } from 'react';
 import {
   useAssetPurchases, useAssetTransfers, useAssetDisposals,
-  useAssetCategories, useListVendors,
+  useAssetCategories, useListVendors, useRunAssetDepreciation,
   type AssetPurchase,
 } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { usePermission } from '@/lib/usePermission';
 import { downloadCSV } from '@/lib/download';
 import { PageHeader } from '@/components/app/page-header';
-import { BarChart3 } from 'lucide-react';
+import { BarChart3, Calculator } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { toast } from 'sonner';
 import {
   fmt, fmtDate, pdfMoney, periodLabel,
   useDateRange, RangeBar, useLocationFilter, LocationFilter,
@@ -72,6 +74,7 @@ export default function AssetReports() {
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [vendorFilter, setVendorFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
+  const runDepreciation = useRunAssetDepreciation();
 
   const { data: categories = [] } = useAssetCategories();
   const { data: vendors = [] } = useListVendors();
@@ -121,6 +124,7 @@ export default function AssetReports() {
 
   const totalCost = assets.reduce((s, a) => s + (Number(a.totalCost) || 0), 0);
   const activeCount = assets.filter(a => a.status === 'active').length;
+  const currentMonth = todayIso().slice(0, 7);
 
   const cards = report === 'transfers' ? [
     { label: 'Transfers', value: String(transfers.length) },
@@ -362,6 +366,23 @@ export default function AssetReports() {
           title="Asset Reports"
           description="Register, purchases, warranty and movement history — filter and export."
           icon={BarChart3}
+          actions={perm.canAdd ? (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={runDepreciation.isPending}
+              onClick={() => runDepreciation.mutate(
+                { period: `${currentMonth}-01` },
+                {
+                  onSuccess: r => toast.success(`Depreciation posted for ${currentMonth}: ${r.posted} asset month(s).`),
+                  onError: (e: any) => toast.error(e?.data?.error || e.message || 'Depreciation run failed'),
+                },
+              )}
+            >
+              <Calculator className="w-4 h-4 mr-2" />
+              {runDepreciation.isPending ? 'Posting…' : `Post ${currentMonth} depreciation`}
+            </Button>
+          ) : undefined}
         />
 
         <ReportPicker options={REPORTS} value={report} onChange={setReport} />

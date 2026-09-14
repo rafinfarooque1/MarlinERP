@@ -491,7 +491,10 @@ async function inceptionDate(q: Q = pool): Promise<string | null> {
  * added after the first stock existed, and rows written fire-and-forget can be
  * lost, either of which leaves the log short of the quantity truth.
  *
- * Cost is today's weighted-average cost — per-date cost history is not stored.
+ * When a persisted cost checkpoint exists it supplies both the dated quantity
+ * and value. Older periods without a checkpoint fall back to the quantity
+ * rewind, but are explicitly marked unreliable rather than being presented as
+ * historical cost truth.
  */
 export async function stockAsOf(asOf: string | null | undefined, scope?: StockBranchScope | null, q: Q = pool): Promise<StockAtDate> {
   if (!isDate(asOf)) {
@@ -573,9 +576,29 @@ export async function stockAsOf(asOf: string | null | undefined, scope?: StockBr
        FROM stock_entries se${ohWhere}`,
     ohParams,
   );
+  const snapshotParams: unknown[] = [asOf];
+  const snapshotWhere = branchWhere("scs", snapshotParams);
+  const { rows: snapshots } = await q.query(
+    `SELECT DISTINCT ON (scs.material_type, scs.ref_id, scs.branch_type, scs.branch_id)
+            scs.material_type, scs.ref_id::int AS ref_id, scs.branch_type,
+            scs.branch_id::int AS branch_id, scs.quantity::numeric AS quantity,
+            scs.unit_cost::numeric AS unit_cost, scs.value::numeric AS value
+       FROM stock_cost_snapshots scs
+      WHERE scs.as_of_date <= $1::date${snapshotWhere.replace(/^ WHERE /, " AND ")}
+      ORDER BY scs.material_type, scs.ref_id, scs.branch_type, scs.branch_id,
+               scs.as_of_date DESC, scs.id DESC`,
+    snapshotParams,
+  );
   const todayByKey = new Map<string, number>();
   for (const r of onHand) {
     todayByKey.set(`${r.material_type}:${r.ref_id}:${r.branch_type}:${r.branch_id}`, Number(r.quantity));
+  }
+  const snapshotByKey = new Map<string, { quantity: number; unitCost: number; value: number }>();
+  for (const r of snapshots) {
+    snapshotByKey.set(
+      `${r.material_type}:${r.ref_id}:${r.branch_type}:${r.branch_id}`,
+      { quantity: Number(r.quantity), unitCost: Number(r.unit_cost), value: Number(r.value) },
+    );
   }
 
   // Every line either the quantity truth or the movement log knows about. The
@@ -595,6 +618,7 @@ export async function stockAsOf(asOf: string | null | undefined, scope?: StockBr
   let total = 0;
   let unreconciled = 0;
   let unvalued = 0;
+  let noCostHistory = 0;
 
   for (const key of keys) {
     const todayQty = todayByKey.get(key) ?? 0;
@@ -603,7 +627,10 @@ export async function stockAsOf(asOf: string | null | undefined, scope?: StockBr
     const explained = logged === undefined ? todayQty === 0 : Math.abs(logged - todayQty) <= 0.001;
     if (!explained) unreconciled += 1;
 
-    const qty = Math.round((todayQty - (afterByKey.get(key) ?? 0)) * 1000) / 1000;
+    const snapshot = snapshotByKey.get(key);
+    const qty = snapshot
+      ? Math.round(snapshot.quantity * 1000) / 1000
+      : Math.round((todayQty - (afterByKey.get(key) ?? 0)) * 1000) / 1000;
     if (qty <= 0) continue;
 
     const { materialType, refId } = parseKey(key);
@@ -612,7 +639,9 @@ export async function stockAsOf(asOf: string | null | undefined, scope?: StockBr
     // — must not be quietly valued at nothing.
     if (!info) { unvalued += 1; continue; }
 
-    const value = r2(qty * info.unitCost);
+    if (!snapshot) noCostHistory += 1;
+    const unitCost = snapshot?.unitCost ?? info.unitCost;
+    const value = snapshot ? r2(snapshot.value) : r2(qty * unitCost);
     total = r2(total + value);
     const pk = `${materialType}:${refId}`;
     const prev = byProduct.get(pk);
@@ -623,7 +652,7 @@ export async function stockAsOf(asOf: string | null | undefined, scope?: StockBr
     } else {
       byProduct.set(pk, {
         id: refId, name: info.name, unit: info.unit, stock: qty,
-        unitCost: info.unitCost, total: value, materialType,
+        unitCost, total: value, materialType,
         typeLabel: materialType === "item" ? "Finished Good"
           : materialType === "material" ? "Raw Material" : "Packing Material",
       });
@@ -652,6 +681,9 @@ export async function stockAsOf(asOf: string | null | undefined, scope?: StockBr
   if (unvalued > 0) {
     reasons.push(`${unvalued} line${unvalued === 1 ? "" : "s"} held stock on that date but the product record no longer exists, so it could not be valued`);
   }
+  if (noCostHistory > 0) {
+    reasons.push(`${noCostHistory} product/location line${noCostHistory === 1 ? "" : "s"} has no persisted cost checkpoint for that date`);
+  }
   const complete = reasons.length === 0;
 
   return {
@@ -674,8 +706,8 @@ export async function stockAsOf(asOf: string | null | undefined, scope?: StockBr
  * flight. Saying so is better than quietly reporting a smaller number.
  */
 const HISTORICAL_CLOSE_NOTE =
-  "Closing stock for a past date is reconstructed from stock movement history and is valued at today's average cost. "
-  + "Goods in transit on that date are excluded, because transfers record a dispatch date but no receipt date.";
+  "Closing stock for a past date uses persisted cost checkpoints where available. "
+  + "Periods before checkpoint history are explicitly marked derived and unreliable; goods in transit on that date are excluded because transfers record a dispatch date but no receipt date.";
 
 export interface StatementNode {
   id: number;
