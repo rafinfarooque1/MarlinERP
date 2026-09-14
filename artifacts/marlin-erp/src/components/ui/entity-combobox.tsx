@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { type MouseEvent, useRef, useState } from 'react';
 import { Check, ChevronsUpDown, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -89,7 +89,7 @@ export function EntityCombobox({
               <X
                 className="h-3.5 w-3.5 opacity-50 hover:opacity-100"
                 aria-label="Clear selection"
-                onClick={e => { e.stopPropagation(); e.preventDefault(); onChange(null); }}
+                onClick={(e: MouseEvent<SVGSVGElement>) => { e.stopPropagation(); e.preventDefault(); onChange(null); }}
               />
             ) : null}
             <ChevronsUpDown className="h-4 w-4 opacity-50" />

@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { type ComponentType, useState, useMemo } from 'react';
 import {
   useListRentAgreements, useUpdateRentAgreement, useListRentAccruals,
   useListRentPeriods, useApproveRentPeriod, usePayRentPeriod,
@@ -22,7 +22,10 @@ import {
   Building2, Download, Printer, BadgeCheck, Wallet, IndianRupee, AlertTriangle,
   Pencil, RefreshCw, FileText, CalendarClock, TrendingUp, Clock,
 } from 'lucide-react';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import {
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+  type BarProps, type TooltipProps, type XAxisProps, type YAxisProps,
+} from 'recharts';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV, printHTML } from '@/lib/download';
@@ -34,6 +37,15 @@ import { StatusBadge } from '@/components/app/status-badge';
 import { EmptyState } from '@/components/app/empty-state';
 import { TableSkeleton } from '@/components/app/loading-skeletons';
 import { inr as inrBase } from '@/lib/currency';
+
+// Recharts 2's class component declarations predate the React 19 JSX types.
+// Cast only the component boundary; runtime behavior and props stay unchanged.
+const RentXAxis = XAxis as unknown as ComponentType<XAxisProps>;
+const RentYAxis = YAxis as unknown as ComponentType<YAxisProps>;
+const RentTooltip = Tooltip as unknown as ComponentType<
+  TooltipProps<number | string | Array<number | string>, number | string>
+>;
+const RentBar = Bar as unknown as ComponentType<BarProps>;
 
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
@@ -472,12 +484,12 @@ export default function RentManagement() {
                 <ResponsiveContainer width="100%" height={300}>
                   <BarChart data={dashboard!.warehouseWise}>
                     <CartesianGrid strokeDasharray="3 3" opacity={0.25} />
-                    <XAxis dataKey="warehouseName" tick={{ fontSize: 11 }} interval={0} angle={-12} textAnchor="end" height={60} />
-                    <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `₹${(v / 1000).toFixed(0)}k`} />
-                    <Tooltip formatter={(v: any) => inr(Number(v))} />
-                    <Bar dataKey="totalAccrued" name="Accrued" fill="hsl(var(--primary))" radius={[4, 4, 0, 0]} />
-                    <Bar dataKey="totalPaid" name="Paid" fill="#10b981" radius={[4, 4, 0, 0]} />
-                    <Bar dataKey="outstanding" name="Outstanding" fill="#f59e0b" radius={[4, 4, 0, 0]} />
+                    <RentXAxis dataKey="warehouseName" tick={{ fontSize: 11 }} interval={0} angle={-12} textAnchor="end" height={60} />
+                    <RentYAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `₹${(v / 1000).toFixed(0)}k`} />
+                    <RentTooltip formatter={(v) => inr(Number(v))} />
+                    <RentBar dataKey="totalAccrued" name="Accrued" fill="hsl(var(--primary))" radius={[4, 4, 0, 0]} />
+                    <RentBar dataKey="totalPaid" name="Paid" fill="#10b981" radius={[4, 4, 0, 0]} />
+                    <RentBar dataKey="outstanding" name="Outstanding" fill="#f59e0b" radius={[4, 4, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
               )}

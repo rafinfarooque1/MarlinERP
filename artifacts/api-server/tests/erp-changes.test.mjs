@@ -102,6 +102,12 @@ if (!authToken) { console.error('FATAL: no token'); process.exit(1); }
 
 await cleanup(); // recover any previous crashed run
 savedGeneralSettings = await currentGeneralSettings();
+const businessDate = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'Asia/Kolkata',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+}).format(new Date());
 
 const vendorId = (await sql(
   `INSERT INTO vendors (name, state, gst_number) VALUES ($1,'Karnataka','29ZZERP1234F1Z5') RETURNING id`,
@@ -114,15 +120,15 @@ const custRes = await post('/customers', { name: `${TAG} Buyer`, phone: '9000000
 fixtures.custId = custRes.data?.id;
 assert('Fixture customer created', !!fixtures.custId);
 const purch = await post('/purchases', {
-  vendorId, purchaseDate: '2026-07-30', vendorInvoiceDate: '2026-07-29', locationType: 'warehouse', locationId: WH,
-  lineItems: [{ materialType: 'item', materialId: fixtures.itemA, quantity: 200, unitCost: 200, mfgDate: '2026-07-01', expiryDate: '2027-07-01' }],
+  vendorId, purchaseDate: businessDate, vendorInvoiceDate: businessDate, locationType: 'warehouse', locationId: WH,
+  lineItems: [{ materialType: 'item', materialId: fixtures.itemA, quantity: 200, unitCost: 200, mfgDate: businessDate, expiryDate: '2099-12-31' }],
 });
 fixtures.purchaseId = purch.data?.id;
 assert('Stock purchased into warehouse', purch.status === 201, JSON.stringify(purch.data).slice(0, 150));
 
 const saleBody = (extra = {}, lineExtra = {}) => ({
   outletId: WH, locationType: 'warehouse', locationId: WH,
-  saleDate: '2026-07-31', paymentMode: 'credit', customerId: fixtures.custId,
+  saleDate: businessDate, paymentMode: 'credit', customerId: fixtures.custId,
   lineItems: [{ itemId: fixtures.itemA, quantity: 2, unitPrice: 380, ...lineExtra }],
   ...extra,
 });
