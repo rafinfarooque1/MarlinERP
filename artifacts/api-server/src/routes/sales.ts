@@ -4,7 +4,7 @@ import { requireModuleAction, requireModuleView, hasModuleAction } from "../midd
 import { db, salesTable, outletsTable, customersTable, stockEntriesTable, itemsTable, itemPricesTable, companySettingsTable } from "@workspace/db";
 import { eq, and, inArray, sql } from "drizzle-orm";
 import { CreateSaleBody, GetSaleParams, SetItemPriceBody, ListItemPricesQueryParams } from "@workspace/api-zod";
-import { logActivity } from "../lib/audit";
+import { logActivity, logActivityInTransaction } from "../lib/audit";
 import { createInvoiceShareToken } from "../lib/shareToken";
 import { assembleInvoiceData, renderInvoicePdf } from "../services/invoicePdf";
 import { pool } from "@workspace/db";
@@ -1386,6 +1386,7 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
         pDate: parsed.data.saleDate,
         invoiceNumber,
         referenceNumber: payReferenceNumber,
+        createdBy: (req as any).employee?.username ?? null,
       });
       if ('error' in posted) {
         await txClient.query('ROLLBACK');
@@ -1485,16 +1486,28 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
         ? Math.round((totalAmount - appliedAdvance) * 100) / 100
         : totalAmount;
       if (debitLedgerId && trailAmount > 0.004) {
-        await txClient.query(
+        const { rows: [trailReceipt] } = await txClient.query(
           `INSERT INTO receipts (receipt_date, received_from_ledger_id, received_in_ledger_id, amount, narration, voucher_number, location_type, location_id, source)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'sale')`,
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'sale') RETURNING id`,
           [parsed.data.saleDate, salesLedgerId, debitLedgerId, trailAmount,
            `Sale: ${invoiceNumber}${locationName ? ` at ${locationName}` : ''}`, invoiceNumber,
            locationType, locationId]
         );
+        await logActivityInTransaction(txClient, {
+          action: "CREATE", module: "accounts", entityType: "receipt_voucher", entityId: Number(trailReceipt.id),
+          user: (req as any).employee?.username,
+          description: `Sale receipt ${invoiceNumber} — ₹${trailAmount.toFixed(2)}`,
+          metadata: { source: "sale", voucherNumber: invoiceNumber, invoiceNumber, amount: trailAmount, locationType, locationId },
+        });
       }
     }
 
+    await logActivityInTransaction(txClient, {
+      action: "CREATE", module: "sales", entityType: "sale", entityId: row.id,
+      user: (req as any).employee?.username,
+      description: `New sale ${invoiceNumber} — ₹${totalAmount.toFixed(2)}`,
+      metadata: { after: { invoiceNumber, locationType, locationId, customerId: parsed.data.customerId, totalAmount, lineCount: lineItems.length } },
+    });
     await txClient.query('COMMIT');
   } catch (txErr) {
     try { await txClient.query('ROLLBACK'); } catch { /* already rolled back */ }
@@ -1506,12 +1519,6 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
   const customerName = parsed.data.customerId
     ? (await db.select().from(customersTable).where(eq(customersTable.id, parsed.data.customerId)).limit(1))[0]?.name ?? null
     : null;
-
-  logActivity({
-    action: "CREATE", module: "sales", entityType: "sale", entityId: row.id,
-    description: `New sale ${invoiceNumber} — ${customerName ?? "Walk-in"} — ₹${totalAmount.toFixed(2)}`,
-    metadata: { after: { invoiceNumber, locationType, locationId, customerId: parsed.data.customerId, totalAmount, lineCount: lineItems.length } },
-  }).catch(() => {});
 
   res.status(201).json({
     id: row.id,
@@ -2468,23 +2475,32 @@ router.post("/sales/:id/cancel", requireModuleAction("page:/sales/pos", "delete"
     // number, the delete must also match this sale's location or it would
     // withdraw the twin's receipt. Unique numbers (all legacy rows) keep the
     // plain text match, since their receipts may predate location stamping.
-    await tx.query(
+    const { rows: removedReceipts } = await tx.query(
       `DELETE FROM receipts r
         WHERE r.voucher_number = $1
           AND (NOT EXISTS (SELECT 1 FROM sales s2 WHERE s2.invoice_number = $1 AND s2.id <> $2)
-               OR (r.location_type = $3 AND COALESCE(r.location_id, 0) = $4))`,
+                OR (r.location_type = $3 AND COALESCE(r.location_id, 0) = $4))
+       RETURNING r.id, r.voucher_number, r.amount`,
       [sale.invoice_number, id, locType, Number(locId ?? 0)]
     );
+    for (const receipt of removedReceipts) {
+      await logActivityInTransaction(tx, {
+        action: "DELETE", module: "accounts", entityType: "receipt_voucher", entityId: Number(receipt.id),
+        user: (req as any).employee?.username,
+        description: `Receipt ${receipt.voucher_number ?? ""} removed with cancelled sale ${sale.invoice_number}`,
+        metadata: { source: "sale", saleId: id, voucherNumber: receipt.voucher_number, amount: Number(receipt.amount), reason },
+      });
+    }
 
     await tx.query(`UPDATE sales SET cancelled_at = now() WHERE id = $1`, [id]);
 
-    await tx.query('COMMIT');
-
-    logActivity({
+    await logActivityInTransaction(tx, {
       action: "DELETE", module: "sales", entityType: "sale", entityId: id,
+      user: (req as any).employee?.username,
       description: `Sale ${sale.invoice_number} cancelled — ₹${Number(sale.total_amount).toFixed(2)}${reason ? ` (${reason})` : ''}`,
       metadata: { before: { totalAmount: Number(sale.total_amount), lineCount: lines.length }, reason },
-    }).catch(() => {});
+    });
+    await tx.query('COMMIT');
 
     res.json({
       id,

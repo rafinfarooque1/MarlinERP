@@ -13,7 +13,7 @@ import {
 } from "@workspace/api-zod";
 import { nextVoucherNumber, VOUCHER_TYPE_LABELS } from "../lib/voucherNumber";
 import { lineTaxHeads } from "../lib/gst";
-import { logActivity } from "../lib/audit";
+import { logActivity, logActivityInTransaction } from "../lib/audit";
 import { closingStockValuation } from "../lib/valuation";
 import { buildBooks } from "../lib/books";
 import { buildPeriodicBuckets } from "../lib/periodicSummary";
@@ -1238,9 +1238,7 @@ router.post("/accounts/payments", requireModuleAction(["page:/accounts/vouchers"
           [r.id, d.bill.id, d.alloc.amount],
         );
       }
-      await client.query("COMMIT");
-
-      logActivity({
+      await logActivityInTransaction(client, {
         action: "CREATE", module: "accounts", entityType: "payment_voucher", entityId: r.id,
         description: `Payment voucher ${voucherNumber} — ₹${Number(r.amount).toLocaleString("en-IN")} to ${toLedger?.name ?? paidToLedgerId}, settling ${details.length} bill(s)${advance > 0.004 ? ` with ₹${advance.toLocaleString("en-IN")} to advance` : ""}`,
         metadata: {
@@ -1248,7 +1246,8 @@ router.post("/accounts/payments", requireModuleAction(["page:/accounts/vouchers"
           allocations: details.map(d => ({ purchaseId: d.bill.id, invoiceNumber: d.bill.invoice_number, amount: d.alloc.amount })),
           advanceAmount: advance > 0.004 ? advance : 0,
         },
-      }).catch(() => {});
+      });
+      await client.query("COMMIT");
 
       const { rows: [pf] } = await pool.query(`SELECT name FROM account_ledgers WHERE id = $1`, [Number(paidFromLedgerId)]);
       res.status(201).json({
@@ -1271,21 +1270,34 @@ router.post("/accounts/payments", requireModuleAction(["page:/accounts/vouchers"
     }
   }
 
-  const voucherNumber = await nextVoucherNumber(pool, 'payment', paymentDate);
-  const result = await pool.query(
-    `INSERT INTO payments (voucher_number, payment_date, paid_from_ledger_id, paid_to_ledger_id, amount, narration, location_type, location_id,
-                           reference_number, created_by, source)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'manual') RETURNING *`,
-    [voucherNumber, paymentDate, paidFromLedgerId, paidToLedgerId, av.amount, narration ?? null, locationType, locationId,
-     referenceNumber?.trim() || null, (req as any).employee?.username ?? null]
-  );
-  const r = result.rows[0];
+  const client = await pool.connect();
+  let r: any;
+  try {
+    await client.query("BEGIN");
+    const voucherNumber = await nextVoucherNumber(client, 'payment', paymentDate);
+    const result = await client.query(
+      `INSERT INTO payments (voucher_number, payment_date, paid_from_ledger_id, paid_to_ledger_id, amount, narration, location_type, location_id,
+                             reference_number, created_by, source)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'manual') RETURNING *`,
+      [voucherNumber, paymentDate, paidFromLedgerId, paidToLedgerId, av.amount, narration ?? null, locationType, locationId,
+       referenceNumber?.trim() || null, (req as any).employee?.username ?? null]
+    );
+    r = result.rows[0];
+    await logActivityInTransaction(client, {
+      action: "CREATE", module: "accounts", entityType: "payment_voucher", entityId: r.id,
+      description: `Payment voucher ${r.voucher_number} — ₹${Number(r.amount).toLocaleString("en-IN")} from ${paidFromLedgerId} to ${paidToLedgerId}`,
+      metadata: { voucherNumber: r.voucher_number, date: r.payment_date, amount: Number(r.amount), paidFromLedgerId, paidToLedgerId, reference: r.reference_number },
+      user: (req as any).employee?.username,
+    });
+    await client.query("COMMIT");
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
   const [pf] = await db.select().from(accountLedgersTable).where(eq(accountLedgersTable.id, Number(paidFromLedgerId))).limit(1);
   const [pt] = await db.select().from(accountLedgersTable).where(eq(accountLedgersTable.id, Number(paidToLedgerId))).limit(1);
-  logActivity({ action: "CREATE", module: "accounts", entityType: "payment_voucher", entityId: r.id,
-    description: `Payment voucher ${r.voucher_number} — ₹${Number(r.amount).toLocaleString("en-IN")} from ${pf?.name ?? paidFromLedgerId} to ${pt?.name ?? paidToLedgerId}`,
-    metadata: { voucherNumber: r.voucher_number, date: r.payment_date, amount: Number(r.amount), paidFrom: pf?.name, paidTo: pt?.name, reference: r.reference_number },
-  }).catch(() => {});
   res.status(201).json({
     id: r.id, voucherNumber: r.voucher_number, paymentDate: r.payment_date,
     paidFromLedgerId: r.paid_from_ledger_id, paidFromName: pf?.name ?? '',
@@ -1395,17 +1407,19 @@ router.patch("/accounts/payments/:id", requireModuleAction(["page:/accounts/vouc
        locRes.loc.locationType, Number(locRes.loc.locationId),
       ],
     );
-    await client.query("COMMIT");
     const r = upd.rows[0];
-    const [pf] = await db.select().from(accountLedgersTable).where(eq(accountLedgersTable.id, newFrom)).limit(1);
-    const [pt] = await db.select().from(accountLedgersTable).where(eq(accountLedgersTable.id, newTo)).limit(1);
-    logActivity({ action: "UPDATE", module: "accounts", entityType: "payment_voucher", entityId: id,
+    await logActivityInTransaction(client, {
+      action: "UPDATE", module: "accounts", entityType: "payment_voucher", entityId: id,
       description: `Payment voucher ${r.voucher_number} edited`,
       metadata: {
         old: { date: row.payment_date, from: row.paid_from_ledger_id, to: row.paid_to_ledger_id, amount: Number(row.amount), narration: row.narration, reference: row.reference_number },
         new: { date: r.payment_date, from: r.paid_from_ledger_id, to: r.paid_to_ledger_id, amount: Number(r.amount), narration: r.narration, reference: r.reference_number },
       },
-    }).catch(() => {});
+      user: (req as any).employee?.username,
+    });
+    await client.query("COMMIT");
+    const [pf] = await db.select().from(accountLedgersTable).where(eq(accountLedgersTable.id, newFrom)).limit(1);
+    const [pt] = await db.select().from(accountLedgersTable).where(eq(accountLedgersTable.id, newTo)).limit(1);
     res.json({
       id: r.id, voucherNumber: r.voucher_number, paymentDate: r.payment_date,
       paidFromLedgerId: r.paid_from_ledger_id, paidFromName: pf?.name ?? '',
@@ -1773,9 +1787,7 @@ router.post("/accounts/receipts", requireModuleAction(["page:/accounts/vouchers"
         );
       }
 
-      await client.query("COMMIT");
-
-      logActivity({
+      await logActivityInTransaction(client, {
         action: "CREATE", module: "accounts", entityType: "receipt_voucher", entityId: r.id,
         description: `Receipt voucher ${voucherNumber} — ₹${Number(r.amount).toLocaleString("en-IN")} from ${fromLedger?.name ?? receivedFromLedgerId}, settling ${details.length} bill(s)${advance > 0.004 ? ` with ₹${advance.toLocaleString("en-IN")} to advance` : ""}`,
         metadata: {
@@ -1783,7 +1795,8 @@ router.post("/accounts/receipts", requireModuleAction(["page:/accounts/vouchers"
           allocations: details.map(d => ({ saleId: d.sale.id, invoiceNumber: d.sale.invoice_number, amount: d.alloc.amount })),
           advanceAmount: advance > 0.004 ? advance : 0,
         },
-      }).catch(() => {});
+      });
+      await client.query("COMMIT");
 
       const { rows: [ri] } = await pool.query(`SELECT name FROM account_ledgers WHERE id = $1`, [Number(receivedInLedgerId)]);
       res.status(201).json({
@@ -1806,21 +1819,34 @@ router.post("/accounts/receipts", requireModuleAction(["page:/accounts/vouchers"
     }
   }
 
-  const voucherNumber = await nextVoucherNumber(pool, 'receipt', receiptDate);
-  const result = await pool.query(
-    `INSERT INTO receipts (voucher_number, receipt_date, received_from_ledger_id, received_in_ledger_id, amount, narration, location_type, location_id,
-                           reference_number, created_by, source)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'manual') RETURNING *`,
-    [voucherNumber, receiptDate, receivedFromLedgerId, receivedInLedgerId, av.amount, narration ?? null, locationType, locationId,
-     referenceNumber?.trim() || null, (req as any).employee?.username ?? null]
-  );
-  const r = result.rows[0];
+  const client = await pool.connect();
+  let r: any;
+  try {
+    await client.query("BEGIN");
+    const voucherNumber = await nextVoucherNumber(client, 'receipt', receiptDate);
+    const result = await client.query(
+      `INSERT INTO receipts (voucher_number, receipt_date, received_from_ledger_id, received_in_ledger_id, amount, narration, location_type, location_id,
+                             reference_number, created_by, source)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'manual') RETURNING *`,
+      [voucherNumber, receiptDate, receivedFromLedgerId, receivedInLedgerId, av.amount, narration ?? null, locationType, locationId,
+       referenceNumber?.trim() || null, (req as any).employee?.username ?? null]
+    );
+    r = result.rows[0];
+    await logActivityInTransaction(client, {
+      action: "CREATE", module: "accounts", entityType: "receipt_voucher", entityId: r.id,
+      description: `Receipt voucher ${r.voucher_number} — ₹${Number(r.amount).toLocaleString("en-IN")} from ${receivedFromLedgerId} into ${receivedInLedgerId}`,
+      metadata: { voucherNumber: r.voucher_number, date: r.receipt_date, amount: Number(r.amount), receivedFromLedgerId, receivedInLedgerId, reference: r.reference_number },
+      user: (req as any).employee?.username,
+    });
+    await client.query("COMMIT");
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
   const [rf] = await db.select().from(accountLedgersTable).where(eq(accountLedgersTable.id, Number(receivedFromLedgerId))).limit(1);
   const [ri] = await db.select().from(accountLedgersTable).where(eq(accountLedgersTable.id, Number(receivedInLedgerId))).limit(1);
-  logActivity({ action: "CREATE", module: "accounts", entityType: "receipt_voucher", entityId: r.id,
-    description: `Receipt voucher ${r.voucher_number} — ₹${Number(r.amount).toLocaleString("en-IN")} from ${rf?.name ?? receivedFromLedgerId} into ${ri?.name ?? receivedInLedgerId}`,
-    metadata: { voucherNumber: r.voucher_number, date: r.receipt_date, amount: Number(r.amount), receivedFrom: rf?.name, receivedIn: ri?.name, reference: r.reference_number },
-  }).catch(() => {});
   res.status(201).json({
     id: r.id, voucherNumber: r.voucher_number, receiptDate: r.receipt_date,
     receivedFromLedgerId: r.received_from_ledger_id, receivedFromName: rf?.name ?? '',
@@ -1924,17 +1950,19 @@ router.patch("/accounts/receipts/:id", requireModuleAction(["page:/accounts/vouc
        locRes.loc.locationType, Number(locRes.loc.locationId),
       ],
     );
-    await client.query("COMMIT");
     const r = upd.rows[0];
-    const [rf] = await db.select().from(accountLedgersTable).where(eq(accountLedgersTable.id, newFrom)).limit(1);
-    const [ri] = await db.select().from(accountLedgersTable).where(eq(accountLedgersTable.id, newIn)).limit(1);
-    logActivity({ action: "UPDATE", module: "accounts", entityType: "receipt_voucher", entityId: id,
+    await logActivityInTransaction(client, {
+      action: "UPDATE", module: "accounts", entityType: "receipt_voucher", entityId: id,
       description: `Receipt voucher ${r.voucher_number} edited`,
       metadata: {
         old: { date: row.receipt_date, from: row.received_from_ledger_id, into: row.received_in_ledger_id, amount: Number(row.amount), narration: row.narration, reference: row.reference_number },
         new: { date: r.receipt_date, from: r.received_from_ledger_id, into: r.received_in_ledger_id, amount: Number(r.amount), narration: r.narration, reference: r.reference_number },
       },
-    }).catch(() => {});
+      user: (req as any).employee?.username,
+    });
+    await client.query("COMMIT");
+    const [rf] = await db.select().from(accountLedgersTable).where(eq(accountLedgersTable.id, newFrom)).limit(1);
+    const [ri] = await db.select().from(accountLedgersTable).where(eq(accountLedgersTable.id, newIn)).limit(1);
     res.json({
       id: r.id, voucherNumber: r.voucher_number, receiptDate: r.receipt_date,
       receivedFromLedgerId: r.received_from_ledger_id, receivedFromName: rf?.name ?? '',

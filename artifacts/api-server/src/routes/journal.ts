@@ -4,7 +4,7 @@ import { hasModuleAction, requireModuleAction, requireModuleView } from "../midd
 import { pool } from "@workspace/db";
 import { nextVoucherNumber, VOUCHER_TYPE_LABELS, financialYearLabel } from "../lib/voucherNumber";
 import { createJournalVoucherCore } from "../lib/journalCreate";
-import { logActivity } from "../lib/audit";
+import { logActivity, logActivityInTransaction } from "../lib/audit";
 import { lineTaxHeads } from "../lib/gst";
 import { clearsThroughBank } from "../lib/paymentModes";
 import { isIsoDate } from "../lib/dateInput";
@@ -685,13 +685,13 @@ router.post("/accounts/journal-vouchers", requireModuleAction("page:/accounts/vo
       voucherType, voucherDate, narration, partyLedgerId, reason, totalAmount, createdBy, locationType, locationId, lines,
     });
     const v = { id: voucherId };
-    await client.query("COMMIT");
-
-    logActivity({
+     await logActivityInTransaction(client, {
       action: "CREATE", module: "accounts", entityType: "journal_voucher", entityId: v.id,
       description: `${VOUCHER_TYPE_LABELS[voucherType]} ${voucherNumber} — ₹${totalAmount.toFixed(2)}`,
       metadata: { after: { voucherType, voucherNumber, voucherDate, totalAmount } },
-    }).catch(() => {});
+       user: createdBy,
+     });
+     await client.query("COMMIT");
 
     res.status(201).json(await fetchVoucher(v.id));
   } catch (err) {
@@ -903,9 +903,7 @@ router.patch("/accounts/journal-vouchers/:id", requireModuleAction("page:/accoun
       );
     }
 
-    await client.query("COMMIT");
-
-    logActivity({
+    await logActivityInTransaction(client, {
       action: "UPDATE", module: "accounts", entityType: "journal_voucher", entityId: id,
       user: updatedBy,
       description: `Edited ${VOUCHER_TYPE_LABELS[voucherType] ?? voucherType} ${cur.voucher_number} — ₹${Number(cur.total_amount).toFixed(2)} → ₹${totalAmount.toFixed(2)}`,
@@ -923,7 +921,8 @@ router.patch("/accounts/journal-vouchers/:id", requireModuleAction("page:/accoun
           lines: lines.map(l => ({ ledgerId: l.ledgerId, debit: l.debit, credit: l.credit })),
         },
       },
-    }).catch(() => {});
+    });
+    await client.query("COMMIT");
 
     res.json(await fetchVoucher(id));
   } catch (err) {
@@ -989,13 +988,13 @@ router.delete("/accounts/journal-vouchers/:id", requireModuleAction("page:/accou
     }
 
     await client.query(`DELETE FROM journal_vouchers WHERE id = $1`, [id]);
-    await client.query("COMMIT");
-
-    logActivity({
+    await logActivityInTransaction(client, {
       action: "DELETE", module: "accounts", entityType: "journal_voucher", entityId: id,
       user: (req as any).employee?.username,
       description: `Deleted ${VOUCHER_TYPE_LABELS[v.voucher_type] ?? v.voucher_type} ${v.voucher_number} — ₹${Number(v.total_amount).toFixed(2)}`,
-    }).catch(() => {});
+      metadata: { voucherNumber: v.voucher_number, voucherType: v.voucher_type, voucherDate: v.voucher_date, totalAmount: Number(v.total_amount) },
+    });
+    await client.query("COMMIT");
     res.status(204).send();
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
@@ -1200,7 +1199,9 @@ export async function buildDerivedPostings(opts: { toDate?: string; q?: Q } = {}
             location_type, location_id
      FROM receipts
       WHERE source = 'allocation'
-       AND id IN (SELECT clearing_receipt_id FROM sale_payments WHERE clearing_receipt_id IS NOT NULL)
+       -- Allocation receipts also represent customer advances without any
+       -- bill-wise sale_payments rows. They must still create one destination
+       -- movement and one customer-credit leg.
        ${upTo("receipt_date", radvParams)}`, radvParams
   );
   for (const r of allocRecs) {

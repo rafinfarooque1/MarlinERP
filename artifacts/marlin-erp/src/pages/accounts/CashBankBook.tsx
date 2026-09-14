@@ -248,7 +248,7 @@ export default function CashBankBook({ kind }: { kind: 'cash' | 'bank' }) {
                   {pageRows.map((e, i) => (
                     <TableRow key={i} className="hover:bg-muted/10">
                        <TableCell>
-                         {e.reconciliationEligible ? (
+                          {kind === 'bank' && e.reconciliationEligible ? (
                            <Checkbox
                              checked={e.reconciliationStatus === 'reconciled'}
                              disabled={!perm.canEdit || busyEntryId === e.entryId}
