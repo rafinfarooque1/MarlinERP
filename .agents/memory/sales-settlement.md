@@ -29,3 +29,19 @@ description: Domain rules for sale payment settlement (which modes settle at cre
 Both the sale CREATE and EDIT guards read the customer's LEDGER balance via `currentPartyStatement` (opening balances, journals, credit notes and unallocated receipts all count) and BOTH run inside their write transaction under the `customer-credit` advisory lock, taken before any stock row locks.
 **Why:** a guard outside the transaction lets two concurrent writes both read the old balance and both pass; and an edit guard using the STORED `amount_paid` projects zero exposure when a settled cash sale is converted to credit (the save path re-derives paid from `sale_payments`, normally 0).
 **How to apply:** the edit guard must project the POST-edit paid figure with the save path's own semantics (sum of `sale_payments`), never the stored one; subtract the sale's current contribution only when it already belongs to that customer.
+
+## Billing-time payment provenance
+
+**Rule:** When converting a sale between counter-settled and credit, remove only
+billing-time settlement rows and their linked sale receipts; preserve later
+collection rows. Billing-time Receive-Into rows may have a NULL `source` marker
+and are identified by their generated billing note, while current counter rows
+use `source='counter'`.
+
+**Why:** A source-only delete leaves receipt-backed billing payments behind,
+so cash→credit appears paid and the old cash/bank receipt remains orphaned.
+
+**How to apply:** Lock the sale first, delete linked sale receipts for the
+billing-time rows, then re-derive `amount_paid` from the remaining
+`sale_payments`; recreate exactly one counter row only when the edited mode is
+settled at sale time.

@@ -667,6 +667,14 @@ router.get("/reconciliation/bank-transactions", requireModuleView("page:/account
     res.status(400).json({ error: "fromDate/toDate must be valid YYYY-MM-DD dates" });
     return;
   }
+  if (fromDate && toDate && fromDate > toDate) {
+    res.status(400).json({ error: "fromDate cannot be later than toDate" });
+    return;
+  }
+  if ((locationType && !locationId) || (!locationType && locationId)) {
+    res.status(400).json({ error: "locationType and locationId must be provided together" });
+    return;
+  }
   const accountFilter = bankAccountId == null || bankAccountId === "" ? null : Number(bankAccountId);
   if (accountFilter != null && (!Number.isInteger(accountFilter) || accountFilter <= 0)) {
     res.status(400).json({ error: "bankAccountId must be a valid Cash & Bank account id" });
@@ -674,8 +682,19 @@ router.get("/reconciliation/bank-transactions", requireModuleView("page:/account
   }
 
   const access = await bookAccessScope((req as any).employee ?? {});
-  const viewLocation = getLocationFilter(req);
-  const postingLocation = getPostingLocationFilter(req);
+  // The page may deliberately request a location different from the global
+  // sidebar context.  Prefer the explicit query filter; falling back to the
+  // header keeps older callers working.
+  const explicitLocation = locationType && locationId
+    ? { locationType, locationId: Number(locationId) }
+    : null;
+  const viewLocation = explicitLocation ?? getLocationFilter(req);
+  const postingLocation = explicitLocation
+    ? {
+        type: explicitLocation.locationType as "warehouse" | "outlet" | "headoffice",
+        id: explicitLocation.locationId,
+      }
+    : getPostingLocationFilter(req);
   const { rows: accountRows } = await pool.query(`
     SELECT cba.id AS account_id, cba.ledger_id, cba.name, cba.account_type,
            cba.requires_reconciliation, COALESCE(cba.location_type, 'headoffice') AS location_type,
@@ -738,8 +757,11 @@ router.get("/reconciliation/bank-transactions", requireModuleView("page:/account
     if (access.ledgerIds
       && !access.ledgerIds.has(Number(p.ledgerId))
       && !isLocationInScope(access.dataScope, p.locationType, p.locationId)) return false;
-    if (fromDate && String(p.date) < fromDate) return false;
-    if (toDate && String(p.date) > toDate) return false;
+    // buildDerivedPostings normalises business dates to YYYY-MM-DD. Keep the
+    // slice here as a defensive boundary for older/custom posting producers.
+    const postingDate = String(p.date ?? "").slice(0, 10);
+    if (fromDate && postingDate < fromDate) return false;
+    if (toDate && postingDate > toDate) return false;
     if (search) {
       const needle = search.toLowerCase();
        return [p.entryId, p.voucherNumber, p.description, account?.name ?? "Undetermined bank account"]
@@ -1167,6 +1189,10 @@ router.post("/reconciliation/bank-batches", requireModuleAction("page:/accounts/
     res.status(400).json({ error: "reconciliationDate must be a real YYYY-MM-DD date." });
     return;
   }
+  // The reference belongs to the statement/reconciliation date, not to the
+  // server's current calendar year. This matters when an old bank statement is
+  // reviewed today or a future-dated statement is prepared in advance.
+  const reconciliationYear = Number(reconciliationDate.slice(0, 4));
   if (!/^\d+(?:\.\d{1,2})?$/.test(chargeText)) {
     res.status(400).json({ error: "processingCharge must be a non-negative amount with at most two decimals." });
     return;
@@ -1185,8 +1211,6 @@ router.post("/reconciliation/bank-batches", requireModuleAction("page:/accounts/
     res.status(400).json({ error: "A transaction may appear only once in a batch." });
     return;
   }
-  if (await respondIfMonthLocked(res, pool, [reconciliationDate], "bank reconciliation batch")) return;
-
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -1295,15 +1319,17 @@ router.post("/reconciliation/bank-batches", requireModuleAction("page:/accounts/
     }
 
     await client.query(
-      `SELECT pg_advisory_xact_lock(hashtext('bank-reconciliation-batch-reference'), EXTRACT(YEAR FROM CURRENT_DATE)::int)`,
+      `SELECT pg_advisory_xact_lock(hashtext('bank-reconciliation-batch-reference'), $1::int)`,
+      [reconciliationYear],
     );
     const { rows: [maxRow] } = await client.query(
       `SELECT COALESCE(MAX((regexp_replace(batch_reference, '^BANK-RECON-\\d+-', ''))::int), 0) AS max_seq
          FROM bank_reconciliation_batches
-        WHERE batch_reference ~ ('^BANK-RECON-' || EXTRACT(YEAR FROM CURRENT_DATE)::text || '-\\d+$')`,
+        WHERE batch_reference ~ ('^BANK-RECON-' || $1::text || '-\\d+$')`,
+      [reconciliationYear],
     );
     const sequence = Number(maxRow.max_seq) + 1;
-    const batchReference = `BANK-RECON-${new Date().getFullYear()}-${String(sequence).padStart(4, "0")}`;
+    const batchReference = `BANK-RECON-${reconciliationYear}-${String(sequence).padStart(4, "0")}`;
     const { rows: [batch] } = await client.query(
       `INSERT INTO bank_reconciliation_batches
          (batch_reference, reconciliation_date, bank_account_id, bank_ledger_id,
@@ -1423,8 +1449,6 @@ router.patch("/reconciliation/bank-batches/:id", requireModuleAction("page:/acco
     res.status(400).json({ error: "A transaction may appear only once in a batch." });
     return;
   }
-  if (await respondIfMonthLocked(res, pool, [reconciliationDate], "bank reconciliation batch")) return;
-
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -1449,16 +1473,6 @@ router.patch("/reconciliation/bank-batches/:id", requireModuleAction("page:/acco
       res.status(409).json({ error: "Only active reconciliation batches can be edited." });
       return;
     }
-    if (await respondIfMonthLocked(
-      res,
-      pool,
-      [String(batch.reconciliation_date).slice(0, 10)],
-      "bank reconciliation batch",
-    )) {
-      await client.query("ROLLBACK");
-      return;
-    }
-
     const access = await bookAccessScope((req as any).employee ?? {});
     const requestedLocation = getLocationFilter(req);
     const requestedPostingLocation = getPostingLocationFilter(req);
