@@ -36,6 +36,17 @@ reports — copies the formula above verbatim. If you catch yourself writing
 `days × rate`, stop. The cap falls out of `max(0, …)` for free, so don't add a separate
 `min(monthlySalary, …)`.
 
+The accrual engine's implicit `asOf` must be today's date in the company's configured
+business timezone (default Asia/Kolkata), not the server's UTC date.
+
+**Why:** between local midnight and UTC midnight, UTC leaves the new business day
+unpriced; with a non-divisible rate this appears as a one-day amount shortfall and
+makes attendance and accrual disagree.
+
+**How to apply:** any automatic accrual, attendance-triggered reprice, or open-period
+rebuild that defaults to "today" must use the company timezone; explicit test `asOf`
+dates remain authoritative.
+
 ## Generation freezes; attendance keeps moving
 
 Payroll generation snapshots gross/net onto the payroll row. A later attendance

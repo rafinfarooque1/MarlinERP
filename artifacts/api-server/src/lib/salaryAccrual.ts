@@ -103,6 +103,29 @@ const monthEnd = (s: string) => {
 };
 
 /**
+ * Salary accrual follows the company's business calendar, not the server's
+ * UTC calendar.  This matters in the hours between local midnight and UTC
+ * midnight: attendance written for the new business day must be eligible for
+ * accrual immediately, otherwise a non-divisible daily rate looks short by one
+ * rounded day until the next sweep.
+ */
+async function companyToday(pool: Pool): Promise<string> {
+  const { rows: [row] } = await pool.query(
+    `SELECT general_settings FROM company_settings LIMIT 1`,
+  );
+  const rawZone = String((row?.general_settings as Record<string, unknown> | undefined)?.timeZone ?? "Asia/Kolkata");
+  let timeZone = "Asia/Kolkata";
+  try {
+    new Intl.DateTimeFormat("en-CA", { timeZone: rawZone }).format();
+    timeZone = rawZone;
+  } catch {
+    // An invalid setting must not make the hourly accrual job fail. The
+    // application default is the documented company operating timezone.
+  }
+  return new Date().toLocaleDateString("en-CA", { timeZone });
+}
+
+/**
  * LEGACY display fallback only. Pricing no longer reads `pay_components` — the
  * working-days basis is the company-wide payroll policy (default 30, see
  * `loadPayrollSettings`). This constant remains solely so accrual rows written
@@ -199,7 +222,7 @@ export async function loadAccrualCutover(pool: Pool): Promise<string> {
   // No row means the migration has not run yet. Refusing to accrue is safer than
   // silently re-pricing everything, so fall back to the start of this month —
   // the same boundary the migration would have chosen.
-  return ymd(row?.attendance_from) ?? monthStart(ymd(new Date())!);
+  return ymd(row?.attendance_from) ?? monthStart(await companyToday(pool));
 }
 
 /**
@@ -240,7 +263,7 @@ export async function runSalaryAccrual(
   pool: Pool,
   opts: { asOf?: string; employeeId?: number; fromDate?: string } = {},
 ): Promise<SalaryAccrualResult> {
-  const asOf = opts.asOf ?? ymd(new Date())!;
+  const asOf = opts.asOf ?? await companyToday(pool);
 
   const params: unknown[] = [];
   let only = "";
@@ -649,7 +672,7 @@ export async function recalcUnapprovedSalaryAccruals(
   employeeId: number,
   opts: { asOf?: string } = {},
 ): Promise<RecalcResult> {
-  const asOf = opts.asOf ?? ymd(new Date())!;
+  const asOf = opts.asOf ?? await companyToday(pool);
   const empty: RecalcResult = {
     monthsRecalculated: [], entriesReversed: 0, entriesRegenerated: 0, previousTotal: 0, newTotal: 0,
   };
