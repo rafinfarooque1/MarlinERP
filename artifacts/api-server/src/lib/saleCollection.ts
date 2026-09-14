@@ -1,6 +1,7 @@
 import { nextVoucherNumber } from "./voucherNumber";
 import { paymentModeLabel } from "./paymentModes";
 import { scopeCashLedgerIds, locationOwnedLedgerMap, ledgerIdsUnderCodes } from "./moneyScope";
+import { logActivityInTransaction } from "./audit";
 
 type Queryable = { query: (text: string, params?: any[]) => Promise<any> };
 
@@ -101,6 +102,7 @@ export interface PostCollectionArgs {
   pDate: string;
   invoiceNumber: string;
   referenceNumber?: string | null;
+  createdBy?: string | null;
 }
 
 /**
@@ -171,6 +173,12 @@ export async function postSaleCollectionReceipt(
         `Cash payment for invoice ${invoiceNumber}`,
         locType, locId],
     );
+    await logActivityInTransaction(q, {
+      action: "CREATE", module: "accounts", entityType: "receipt_voucher", entityId: Number(receipt.id),
+      user: args.createdBy ?? undefined,
+      description: `Sale receipt ${voucherNum} — ₹${Number(amount).toFixed(2)} for invoice ${invoiceNumber}`,
+      metadata: { source: "sale", voucherNumber: voucherNum, invoiceNumber, amount, locationType: locType, locationId: locId, receivedInLedgerId: cashLedgerId },
+    });
     return { clearingReceiptId: Number(receipt.id), reconciliationStatus: null };
   }
 
@@ -227,5 +235,11 @@ export async function postSaleCollectionReceipt(
   );
   // Direct-posted money is already in the bank — nothing left to reconcile,
   // so it must never appear on the pending list.
+  await logActivityInTransaction(q, {
+    action: "CREATE", module: "accounts", entityType: "receipt_voucher", entityId: Number(receipt.id),
+    user: args.createdBy ?? undefined,
+    description: `Sale receipt ${voucherNum} — ₹${Number(amount).toFixed(2)} for invoice ${invoiceNumber}`,
+    metadata: { source: "sale", voucherNumber: voucherNum, invoiceNumber, amount, locationType: locType, locationId: locId, receivedInLedgerId: receiveInLedgerId, reconciliationStatus: directLedgerId != null ? null : "pending" },
+  });
   return { clearingReceiptId: Number(receipt.id), reconciliationStatus: directLedgerId != null ? null : "pending" };
 }

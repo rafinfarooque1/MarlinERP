@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { db, pool, itemsTable, salesTable, stockEntriesTable, employeesTable, stockTransfersTable, attendanceTable, leavesTable, productionsTable, expensesTable } from "@workspace/db";
+import { db, pool, itemsTable, salesTable, stockEntriesTable, employeesTable, stockTransfersTable, attendanceTable, leavesTable, productionsTable } from "@workspace/db";
 import { count, sum, eq, and, sql, inArray } from "drizzle-orm";
 import { getUserDataScope, scopeSalesWhere, scopeBranchWhere, type DataScope } from "../lib/dataScope";
 import { pushLocationFilter, type ParsedLocationFilter } from "../lib/queryFilters";
@@ -88,6 +88,10 @@ router.get("/dashboard/summary", requireModuleView("page:/"), async (req, res): 
   const todayMoney = rangeMoneyFlows(allPostings as never[], {
     fromDate: today, toDate: today, location: postingLoc, subtree: await ledgerSubtreeLookup(),
   });
+  const financials = await companyFinancials(
+    (async () => allPostings) as unknown as typeof buildDerivedPostings,
+    { location: postingLoc },
+  );
 
   // ── Other metrics ─────────────────────────────────────────────────────
   const salesConds = ["s.branch_transfer_id IS NULL", "s.cancelled_at IS NULL"];
@@ -151,7 +155,6 @@ router.get("/dashboard/summary", requireModuleView("page:/"), async (req, res): 
     todayAttQ,
     pendingLeavesQ,
     lowStockQ,
-    expenseSumQ,
     batchRows,
   ] = await Promise.all([
     // Catalog size is master data — global by design.
@@ -176,7 +179,6 @@ router.get("/dashboard/summary", requireModuleView("page:/"), async (req, res): 
     pool.query(`SELECT COUNT(*)::int AS count FROM attendance a JOIN employees e ON e.id = a.employee_id WHERE a.date = $${empParams.length + 1} AND ${empConds.join(" AND ")}`, [...empParams, today]),
     pool.query(`SELECT COUNT(*)::int AS count FROM leaves l JOIN employees e ON e.id = l.employee_id WHERE l.status = 'pending' AND ${empConds.join(" AND ")}`, empParams),
     pool.query(`SELECT COUNT(*)::int AS count FROM stock_entries se LEFT JOIN items i ON i.id = se.item_id WHERE ${stockConds.join(" AND ")}`, stockParams),
-    pool.query(`SELECT COALESCE(SUM(ex.amount::numeric), 0)::float AS total FROM expenses ex WHERE ${expConds.join(" AND ")}`, expParams),
     pool.query(`SELECT COUNT(*)::int AS batch_count, COALESCE(SUM(p.produced_quantity::numeric), 0)::float AS total_qty FROM productions p WHERE ${prodConds.join(" AND ")}`, prodParams),
   ]);
 
@@ -186,7 +188,6 @@ router.get("/dashboard/summary", requireModuleView("page:/"), async (req, res): 
   const todayAtt = { count: Number(todayAttQ.rows[0]?.count ?? 0) };
   const pendingLeaves = { count: Number(pendingLeavesQ.rows[0]?.count ?? 0) };
   const lowStock = { count: Number(lowStockQ.rows[0]?.count ?? 0) };
-  const expenseSum = { total: Number(expenseSumQ.rows[0]?.total ?? 0) };
   const batchRow = (batchRows.rows[0] ?? {}) as any;
 
   // Hiding the Value column on the Stock screen is pointless if the same
@@ -207,7 +208,7 @@ router.get("/dashboard/summary", requireModuleView("page:/"), async (req, res): 
     todayAttendance:      todayAtt.count,
     pendingLeaves:        pendingLeaves.count,
     lowStockCount:        lowStock.count,
-    totalExpense:         Number(expenseSum.total ?? 0),
+    totalExpense:         financials.expenses.total,
     todayMoney,
     totalBatchesCreated:  Number(batchRow.batch_count ?? 0),
     totalBatchQuantity:   Number(batchRow.total_qty ?? 0),

@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { requireModuleAction, requireModuleView } from "../middleware/permissions";
 import { pool } from "@workspace/db";
-import { logActivity } from "../lib/audit";
+import { logActivity, logActivityInTransaction } from "../lib/audit";
 import { nextVoucherNumber } from "../lib/voucherNumber";
 import { isIsoDate } from "../lib/dateInput";
 import { LEGACY_BANK_MODES } from "../lib/paymentModes";
@@ -1376,8 +1376,7 @@ router.post("/reconciliation/bank-batches", requireModuleAction("page:/accounts/
         ],
       );
     }
-    await client.query("COMMIT");
-    logActivity({
+    await logActivityInTransaction(client, {
       action: "CREATE",
       module: "reconciliation",
       entityType: "bank_reconciliation_batch",
@@ -1390,7 +1389,9 @@ router.post("/reconciliation/bank-batches", requireModuleAction("page:/accounts/
           accountingImpact: "none",
         },
       },
-    }).catch(() => {});
+      user: (req as any).employee?.username,
+    });
+    await client.query("COMMIT");
     res.status(201).json({
       id: Number(batch.id), batchReference, reconciliationDate,
       bankAccountId: Number(account.account_id), bankLedgerId: Number(account.ledger_id),
@@ -1680,8 +1681,7 @@ router.patch("/reconciliation/bank-batches/:id", requireModuleAction("page:/acco
         WHERE id=$1`,
       [batchId, reconciliationDate, grossAmount, processingCharge, netAmount],
     );
-    await client.query("COMMIT");
-    logActivity({
+    await logActivityInTransaction(client, {
       action: "UPDATE",
       module: "reconciliation",
       entityType: "bank_reconciliation_batch",
@@ -1701,7 +1701,9 @@ router.patch("/reconciliation/bank-batches/:id", requireModuleAction("page:/acco
           accountingImpact: "none",
         },
       },
-    }).catch(() => {});
+      user: (req as any).employee?.username,
+    });
+    await client.query("COMMIT");
     res.json({
       id: batchId,
       batchReference: batch.batch_reference,
@@ -1852,8 +1854,7 @@ router.post("/reconciliation/bank-reset", requireModuleAction("page:/accounts/re
               reconciliation_reference=NULL`,
        [requestedBy],
     );
-    await client.query("COMMIT");
-    logActivity({
+    await logActivityInTransaction(client, {
       action: "DELETE",
       module: "reconciliation",
       entityType: "bank_reconciliation_reset",
@@ -1868,7 +1869,9 @@ router.post("/reconciliation/bank-reset", requireModuleAction("page:/accounts/re
         deletedBatchCount: deletedBatches.rowCount ?? 0,
         legacySettlementBatchesPreserved: true,
       },
-    }).catch(() => {});
+      user: requestedBy,
+    });
+    await client.query("COMMIT");
     res.json({
       reset: true,
       resetAuditId: Number(snapshotInsert.rows[0].id),
@@ -2027,10 +2030,8 @@ router.post(
         saved = row;
       }
 
-      await client.query("COMMIT");
-
       const nextStatus = reconciled ? "reconciled" : "unreconciled";
-      logActivity({
+      await logActivityInTransaction(client, {
         action: "UPDATE",
         module: "reconciliation",
         entityType: "bank_reconciliation_entry",
@@ -2046,7 +2047,9 @@ router.post(
             reference: reconciled ? reference : null,
           },
         },
-      }).catch(() => {});
+        user: username,
+      });
+      await client.query("COMMIT");
 
       res.json({
         ...entry,
@@ -2134,13 +2137,13 @@ router.post(
          RETURNING id, name, bank_details`,
         [name, bankRoot.id, JSON.stringify(bankDetails)],
       );
-      await client.query("COMMIT");
-
-      logActivity({
+      await logActivityInTransaction(client, {
         action: "CREATE", module: "reconciliation", entityType: "bank_account", entityId: created.id,
         description: `Bank account ${name}`,
         metadata: { after: { name, ...bankDetails } },
-      }).catch(() => {});
+        user: (req as any).employee?.username,
+      });
+      await client.query("COMMIT");
 
       res.status(201).json({
         id: created.id,
@@ -2455,33 +2458,49 @@ router.post("/reconciliation/batches", requireModuleAction("page:/accounts/recon
 
     // Dr Bank (net) — receipt: received_from=clearing, received_in=bank
     const recVoucher = await nextVoucherNumber(client, 'receipt', settlementDate);
-    await client.query(
+    const { rows: [settlementReceipt] } = await client.query(
       `INSERT INTO receipts (voucher_number, receipt_date, received_from_ledger_id, received_in_ledger_id, amount, narration, source, location_type, location_id)
-       VALUES ($1, $2, $3, $4, $5, $6, 'settlement', $7, $8)`,
+       VALUES ($1, $2, $3, $4, $5, $6, 'settlement', $7, $8) RETURNING id`,
       [recVoucher, settlementDate, clearingLedger.id, destinationBankLedgerId, netAmount,
         `Bank settlement ${batchReference} — ${payments.length} payments`,
         batchLoc.locationType, Number(batchLoc.locationId)]
     );
 
     // Dr Charges expense (if any) — payment: paid_from=clearing, paid_to=charges ledger
+    let chargePayment: any = null;
     if (parsedCharges > 0 && chargesLedger) {
       const payVoucher = await nextVoucherNumber(client, 'payment', settlementDate);
-      await client.query(
+      const { rows: [createdChargePayment] } = await client.query(
         `INSERT INTO payments (voucher_number, payment_date, paid_from_ledger_id, paid_to_ledger_id, amount, narration, source, location_type, location_id)
-         VALUES ($1, $2, $3, $4, $5, $6, 'settlement', $7, $8)`,
+         VALUES ($1, $2, $3, $4, $5, $6, 'settlement', $7, $8) RETURNING id`,
         [payVoucher, settlementDate, clearingLedger.id, chargesLedger.id, parsedCharges,
           `Processor charges for ${batchReference}`,
           batchLoc.locationType, Number(batchLoc.locationId)]
       );
+      chargePayment = createdChargePayment;
     }
 
-    await client.query("COMMIT");
-
-    logActivity({
+    await logActivityInTransaction(client, {
+      action: "CREATE", module: "accounts", entityType: "receipt_voucher", entityId: Number(settlementReceipt.id),
+      user: (req as any).employee?.username,
+      description: `Settlement receipt ${recVoucher} — ₹${netAmount}`,
+      metadata: { source: "reconciliation", batchReference, amount: netAmount, settlementDate },
+    });
+    if (chargePayment) {
+      await logActivityInTransaction(client, {
+        action: "CREATE", module: "accounts", entityType: "payment_voucher", entityId: Number(chargePayment.id),
+        user: (req as any).employee?.username,
+        description: `Processor charges for ${batchReference} — ₹${parsedCharges}`,
+        metadata: { source: "reconciliation", batchReference, amount: parsedCharges, settlementDate },
+      });
+    }
+    await logActivityInTransaction(client, {
       action: "CREATE", module: "reconciliation", entityType: "reconciliation_batch", entityId: batch.id,
+      user: (req as any).employee?.username,
       description: `Reconciliation batch ${batchReference} — ${payments.length} payments, net ₹${netAmount}`,
       metadata: { after: { batchReference, grossAmount, charges: parsedCharges, netAmount, itemCount: payments.length } },
-    }).catch(() => {});
+    });
+    await client.query("COMMIT");
 
     res.status(201).json({
       id: batch.id,

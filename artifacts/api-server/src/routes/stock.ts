@@ -4,7 +4,7 @@ import { db, stockEntriesTable, itemsTable, warehousesTable, outletsTable } from
 import { requireModuleView, requireModuleAction, canViewStockValuation } from "../middleware/permissions";
 import { eq, and, sql } from "drizzle-orm";
 import { CreateStockTransferBody, ListStockQueryParams } from "@workspace/api-zod";
-import { logActivity } from "../lib/audit";
+import { logActivity, logActivityInTransaction } from "../lib/audit";
 import { pool } from "@workspace/db";
 import {
   consumeBatches, restoreBatches, creditBatch, inboundCostForItem, inboundCostForMaterial,
@@ -926,6 +926,12 @@ router.post("/stock/transfers", requireModuleAction("page:/transfers", "add"), a
 
     await client.query(`UPDATE stock_transfers SET line_items = $1 WHERE id = $2`, [JSON.stringify(enrichedLines), row.id]);
     // NOTE: destination stock is NOT updated here — only on approval
+    await logActivityInTransaction(client, {
+      action: "CREATE", module: "transfers", entityType: "stock_transfer", entityId: row.id,
+      user: (req as any).employee?.username,
+      description: `Transfer dispatched ${challanNumber}: ${branchFn(row.from_type, row.from_id)} → ${branchFn(row.to_type, row.to_id)} (${lineItems.length} lines)`,
+      metadata: { after: { challanNumber, fromType: row.from_type, fromId: row.from_id, toType: row.to_type, toId: row.to_id, lineCount: lineItems.length, isInterstate } },
+    });
     await client.query("COMMIT");
   } catch (e) {
     await client.query("ROLLBACK");
@@ -936,12 +942,6 @@ router.post("/stock/transfers", requireModuleAction("page:/transfers", "add"), a
 
   const fromName = branchFn(row.from_type, row.from_id);
   const toName   = branchFn(row.to_type,   row.to_id);
-
-  logActivity({
-    action: "CREATE", module: "transfers", entityType: "stock_transfer", entityId: row.id,
-    description: `Transfer dispatched ${challanNumber}: ${fromName} → ${toName} (${lineItems.length} line${lineItems.length !== 1 ? 's' : ''}) — awaiting receiver approval`,
-    metadata: { after: { challanNumber, fromType: row.from_type, fromId: row.from_id, fromName, toType: row.to_type, toId: row.to_id, toName, lineCount: lineItems.length, isInterstate } },
-  }).catch(() => {});
 
   res.status(201).json({
     id: row.id,
@@ -1319,6 +1319,12 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction("page:/transfer
       }));
     }
 
+    await logActivityInTransaction(client, {
+      action: "UPDATE", module: "transfers", entityType: "stock_transfer", entityId: id,
+      user: (req as any).employee?.username,
+      description: `Transfer ${row.challan_number} approved: stock credited to ${row.to_type} #${row.to_id}`,
+      metadata: { after: { status: "completed", receivedLineItems: linesToCredit } },
+    });
     await client.query("COMMIT");
   } catch (e) {
     await client.query("ROLLBACK");
@@ -1330,12 +1336,6 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction("page:/transfer
   const branchName = await buildBranchMaps();
   const fromName = branchName(row.from_type, row.from_id);
   const toName   = branchName(row.to_type, row.to_id);
-
-  logActivity({
-    action: "UPDATE", module: "transfers", entityType: "stock_transfer", entityId: id,
-    description: `Transfer ${row.challan_number} approved by ${approvedBy || 'admin'}: stock credited to ${toName}`,
-    metadata: { after: { status: "completed", receivedLineItems: linesToCredit } },
-  }).catch(() => {});
 
   // shortReceived is surfaced, never swallowed: a receipt that came up short is
   // an exception someone has to act on, not a rounding detail.
@@ -1494,6 +1494,12 @@ router.patch("/stock/transfers/:id/reject", requireModuleAction("page:/transfers
       }
     }
 
+    await logActivityInTransaction(client, {
+      action: "UPDATE", module: "transfers", entityType: "stock_transfer", entityId: id,
+      user: (req as any).employee?.username,
+      description: `Transfer ${row.challan_number} rejected — stock reversed to ${fromName}`,
+      metadata: { after: { status: "rejected", rejectionReason } },
+    });
     await client.query("COMMIT");
   } catch (e) {
     await client.query("ROLLBACK");
@@ -1501,12 +1507,6 @@ router.patch("/stock/transfers/:id/reject", requireModuleAction("page:/transfers
   } finally {
     client.release();
   }
-
-  logActivity({
-    action: "UPDATE", module: "transfers", entityType: "stock_transfer", entityId: id,
-    description: `Transfer ${row.challan_number} rejected — stock reversed to ${fromName}`,
-    metadata: { after: { status: "rejected", rejectionReason } },
-  }).catch(() => {});
 
   res.json({ success: true, id, status: "rejected" });
 });

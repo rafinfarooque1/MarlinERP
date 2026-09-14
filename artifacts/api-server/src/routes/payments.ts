@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { requireModuleAction, requireModuleView } from "../middleware/permissions";
 import { pool } from "@workspace/db";
-import { logActivity } from "../lib/audit";
+import { logActivity, logActivityInTransaction } from "../lib/audit";
 import { resolveReceiveIntoAccount, postSaleCollectionReceipt, type ReceiveIntoAccount } from "../lib/saleCollection";
 import { optionalIsoDate } from "../lib/dateInput";
 import { respondIfMonthLocked } from "../lib/periodLock";
@@ -312,6 +312,7 @@ router.post("/sales/:id/payments", requireModuleAction(["page:/sales/pos", "page
       pDate,
       invoiceNumber: invRow?.invoice_number ?? String(saleId),
       referenceNumber: referenceNumber ?? null,
+      createdBy,
     });
     if ("error" in posted) {
       await client.query("ROLLBACK");
@@ -343,13 +344,13 @@ router.post("/sales/:id/payments", requireModuleAction(["page:/sales/pos", "page
       [newAmountPaid, newStatus, saleId]
     );
 
-    await client.query("COMMIT");
-
-    logActivity({
+    await logActivityInTransaction(client, {
       action: "CREATE", module: "payments", entityType: "sale_payment", entityId: salePayment.id,
       description: `Payment of ₹${parsedAmount} via ${method} for sale #${saleId}`,
       metadata: { after: { saleId, method, amount: parsedAmount, reconciliationStatus } },
-    }).catch(() => {});
+      user: createdBy,
+    });
+    await client.query("COMMIT");
 
     res.status(201).json({
       id: salePayment.id,
