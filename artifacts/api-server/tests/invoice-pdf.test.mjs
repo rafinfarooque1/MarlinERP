@@ -100,10 +100,11 @@ async function restoreFromSnapshot(snap) {
   for (const w of snap.warehouses ?? []) {
     await sql(
       `UPDATE warehouses SET billing_name=$2, gst_number=$3, fssai_number=$4, bank_account_holder=$5,
-          bank_name=$6, bank_branch=$7, bank_account_number=$8, ifsc_code=$9, upi_id=$10, authorized_signatory=$11
+          bank_name=$6, bank_branch=$7, bank_account_number=$8, ifsc_code=$9, upi_id=$10,
+          authorized_signatory=$11, logo_url=COALESCE($12, logo_url)
         WHERE id=$1`,
       [w.id, w.billing_name, w.gst_number, w.fssai_number, w.bank_account_holder, w.bank_name,
-       w.bank_branch, w.bank_account_number, w.ifsc_code, w.upi_id, w.authorized_signatory]);
+       w.bank_branch, w.bank_account_number, w.ifsc_code, w.upi_id, w.authorized_signatory, w.logo_url]);
   }
   if (snap.company) {
     await sql(`UPDATE company_settings SET logo_url = $1, state = $2 WHERE id = $3`,
@@ -158,10 +159,11 @@ async function cleanup() {
   for (const w of savedWh) {
     await sql(
       `UPDATE warehouses SET billing_name=$2, gst_number=$3, fssai_number=$4, bank_account_holder=$5,
-          bank_name=$6, bank_branch=$7, bank_account_number=$8, ifsc_code=$9, upi_id=$10, authorized_signatory=$11
+           bank_name=$6, bank_branch=$7, bank_account_number=$8, ifsc_code=$9, upi_id=$10,
+           authorized_signatory=$11, logo_url=$12
         WHERE id=$1`,
       [w.id, w.billing_name, w.gst_number, w.fssai_number, w.bank_account_holder, w.bank_name,
-       w.bank_branch, w.bank_account_number, w.ifsc_code, w.upi_id, w.authorized_signatory]);
+       w.bank_branch, w.bank_account_number, w.ifsc_code, w.upi_id, w.authorized_signatory, w.logo_url]);
   }
   savedWh = [];
   if (savedCompany && savedFlags) {
@@ -203,7 +205,7 @@ if (savedCompany) await sql(`UPDATE company_settings SET state = 'Karnataka' WHE
 // switch the POS discount/coupon flags on — all restored in cleanup().
 savedWh = (await sql(
   `SELECT id, billing_name, gst_number, fssai_number, bank_account_holder, bank_name,
-          bank_branch, bank_account_number, ifsc_code, upi_id, authorized_signatory
+           bank_branch, bank_account_number, ifsc_code, upi_id, authorized_signatory, logo_url
      FROM warehouses WHERE id IN ($1, $2)`, [WH_FULL, WH_BARE])).rows;
 savedFlags = (await sql(`SELECT general_settings FROM company_settings WHERE id = $1`, [savedCompany?.id])).rows[0]?.general_settings ?? {};
 // Persist the snapshot BEFORE the first pinning UPDATE — a crash after this
@@ -213,12 +215,13 @@ await sql(
   `UPDATE warehouses SET billing_name='MARLIN FROZEN FRUITS PVT', gst_number='29ABCDE1234F1Z5',
       fssai_number='11223344556677', bank_account_holder='Marlin Frozen Fruits Pvt Ltd',
       bank_name='HDFC Bank', bank_branch='Electronic City', bank_account_number='50200012345678',
-      ifsc_code='HDFC0001234', upi_id='marlinblr@okhdfcbank', authorized_signatory='S. Raghavan'
+      ifsc_code='HDFC0001234', upi_id='marlinblr@okhdfcbank', authorized_signatory='S. Raghavan',
+      logo_url=''
     WHERE id = $1`, [WH_FULL]);
 await sql(
   `UPDATE warehouses SET billing_name='MARLIN COASTAL FOODS LLP', gst_number='29PQRSX6789K2Z1',
       fssai_number='', bank_account_holder='', bank_name='', bank_branch='',
-      bank_account_number='', ifsc_code='', upi_id='marlinkochi@ybl', authorized_signatory=''
+      bank_account_number='', ifsc_code='', upi_id='marlinkochi@ybl', authorized_signatory='', logo_url=''
     WHERE id = $1`, [WH_BARE]);
 if (savedCompany) {
   await sql(`UPDATE company_settings SET logo_url = '' WHERE id = $1`, [savedCompany.id]);
@@ -241,6 +244,13 @@ preEntries = (await sql(`SELECT id, quantity::text AS q FROM stock_entries WHERE
 preLotIds = preLots.map(r => r.id);
 preEntryIds = preEntries.map(r => r.id);
 
+const businessDate = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'Asia/Kolkata',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+}).format(new Date());
+
 const custKA = await post('/customers', {
   name: `${TAG} Fasin`, phone: '9036200208', state: 'Karnataka',
   address: 'A409, E block, GM Infinity, Electronic City, Bengaluru',
@@ -255,9 +265,9 @@ assert('Fixture customers created', !!fixtures.custKA && !!fixtures.custKL);
 
 for (const wh of [WH_FULL, WH_BARE]) {
   const res = await post('/purchases', {
-    vendorId: fixtures.vendorId, purchaseDate: '2026-07-30', vendorInvoiceDate: '2026-07-29',
+    vendorId: fixtures.vendorId, purchaseDate: businessDate, vendorInvoiceDate: businessDate,
     locationType: 'warehouse', locationId: wh,
-    lineItems: [{ materialType: 'item', materialId: fixtures.itemA, quantity: 100, unitCost: 200, mfgDate: '2026-07-01', expiryDate: '2027-07-01' }],
+    lineItems: [{ materialType: 'item', materialId: fixtures.itemA, quantity: 100, unitCost: 200, mfgDate: businessDate, expiryDate: '2099-12-31' }],
   });
   if (res.status === 201 && res.data?.id) createdPurchases.push(res.data.id);
   assert(`Stock purchased into warehouse ${wh}`, res.status === 201, JSON.stringify(res.data).slice(0, 150));
@@ -266,7 +276,7 @@ for (const wh of [WH_FULL, WH_BARE]) {
 async function createSale(lineItems, extra = {}) {
   const res = await post('/sales', {
     outletId: extra.locationId ?? WH_FULL, locationType: 'warehouse', locationId: WH_FULL,
-    saleDate: '2026-07-31', paymentMode: 'credit', customerId: fixtures.custKA,
+    saleDate: businessDate, paymentMode: 'credit', customerId: fixtures.custKA,
     lineItems, ...extra,
   });
   if (res.status === 201 && res.data?.id) createdSales.push(res.data.id);

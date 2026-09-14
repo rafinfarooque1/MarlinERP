@@ -1,0 +1,960 @@
+MASTER ACCOUNTING + P&L + BALANCE SHEET + STOCK TRANSFER + DASHBOARD REPORTS AUDIT & FIX
+
+You are working on the Frozen Fruits ERP / Marlin Frozen Fruits ERP.
+
+IMPORTANT:
+This is an accounting-integrity task, NOT a cosmetic UI fix.
+
+The primary objective is to make the ERP's accounting engine mathematically and logically correct so that:
+
+Balance Sheet
+Trial Balance
+Trading Account
+Profit & Loss
+Stock Valuation
+Opening Stock
+Closing Stock
+COGS
+Gross Profit
+Net Profit
+Day Book
+Cash Book
+Bank Book
+Dashboard KPIs
+PDF/Excel reports
+Location/Warehouse reports
+
+all derive from one consistent, auditable accounting source of truth.
+
+DO NOT PATCH THE P&L JUST TO MAKE THE CURRENT SCREEN LOOK CORRECT.
+
+FIRST AUDIT THE ACCOUNTING FOUNDATION.
+THEN FIX THE ROOT CAUSE.
+THEN PROVE THE RESULT WITH TESTS.
+
+==================================================
+1. CRITICAL ISSUE TO INVESTIGATE FIRST
+==================================================
+
+There is currently a suspicious Gross Profit appearing even when the main visible trading activity does not explain it.
+
+Example observed case:
+
+Opening Stock: ₹103,158.97
+Closing Stock: ₹108,952.69
+Displayed Gross Profit: ₹5,793.72
+
+The difference is:
+
+₹108,952.69 - ₹103,158.97 = ₹5,793.72
+
+This strongly suggests that the current P&L/Trading Account may be deriving Gross Profit from stock-value movement without correctly accounting for:
+
+Sales
+Sales Returns
+Purchases
+Purchase Returns
+Direct Expenses
+COGS
+Stock Transfers
+Opening Stock
+Closing Stock
+
+DO NOT assume this is correct.
+
+Trace the complete calculation from database → accounting engine → Trading Account → P&L → Dashboard.
+
+Identify exactly why ₹5,793.72 is being classified as Gross Profit.
+
+==================================================
+2. ACCOUNTING PRINCIPLE
+==================================================
+
+Gross Profit must NOT simply equal:
+
+Closing Stock - Opening Stock
+
+unless the complete Trading Account formula mathematically results in that value after considering all relevant trading postings.
+
+The authoritative calculation must follow:
+
+Net Sales
++ Opening Stock
++ Net Purchases
++ Direct Expenses
+- Closing Stock
+= COGS
+
+and:
+
+Net Sales - COGS = Gross Profit
+
+Equivalent form:
+
+Gross Profit =
+Net Sales
++ Closing Stock
+- Opening Stock
+- Net Purchases
+- Direct Expenses
+
+where:
+
+Net Sales =
+Gross Sales - Sales Returns / Credit Notes
+
+Net Purchases =
+Gross Purchases - Purchase Returns
+
+Do not double-count any component.
+
+==================================================
+3. OPENING STOCK / CLOSING STOCK CONTINUITY
+==================================================
+
+This is CRITICAL.
+
+For every warehouse/location and every accounting period:
+
+Previous period Closing Stock MUST become the next period Opening Stock.
+
+For example:
+
+15 Sep Closing Stock
+MUST equal
+16 Sep Opening Stock
+
+subject to clearly defined accounting-period boundaries.
+
+There must never be unexplained differences.
+
+Build an automated stock continuity audit:
+
+For each location:
+For each product:
+For each relevant date:
+
+opening_qty
+opening_value
+purchases_qty
+purchase_value
+purchase_returns
+sales_qty
+sales_cogs
+sales_returns
+stock_transfer_in
+stock_transfer_out
+adjustments
+closing_qty
+closing_value
+
+must reconcile.
+
+Flag:
+
+opening_stock != previous_closing_stock
+
+with exact quantity and value difference.
+
+DO NOT silently correct differences.
+
+Show the root cause.
+
+==================================================
+4. STOCK TRANSFER ACCOUNTING
+==================================================
+
+Stock transfers are NOT sales.
+
+Stock transfers are NOT purchases.
+
+Stock transfers must NOT create Gross Profit.
+
+Stock transfers must NOT create Net Profit.
+
+Stock transfers must NOT inflate company-wide revenue.
+
+Stock transfers must NOT inflate company-wide COGS.
+
+For SAME GST registration/internal warehouse transfers:
+
+Source Warehouse:
+Stock decreases by the transferred quantity/value.
+
+Destination Warehouse:
+Stock increases by the same quantity/value.
+
+The transferred inventory value must be preserved.
+
+Company-wide:
+
+Total inventory before transfer
+=
+Total inventory after transfer
+
+except for legitimate valuation/adjustment events.
+
+Most importantly:
+
+A transfer must NEVER create a fake difference between Opening Stock and Closing Stock that becomes Gross Profit.
+
+==================================================
+5. DIFFERENT GST REGISTRATION TRANSFERS
+==================================================
+
+If warehouses belong to different GST registrations/entities:
+
+Do NOT treat this as ordinary revenue/profit merely because an accounting/statutory document is required.
+
+Implement the correct inter-registration accounting treatment according to the ERP's established accounting design.
+
+Separate:
+
+inventory movement
+statutory GST/document requirement
+internal accounting
+profit recognition
+
+Do not let transfer documents accidentally become operational sales.
+
+==================================================
+6. STOCK VALUE MUST NOT CHANGE RANDOMLY
+==================================================
+
+Investigate whether Closing Stock is currently being calculated using:
+
+current weighted-average cost
+historical weighted-average cost
+FIFO
+FEFO
+batch cost
+stock ledger
+stock movement valuation
+stock cost snapshots
+
+Determine the authoritative inventory valuation method currently implemented.
+
+The system must not recalculate historical opening/closing stock using today's cost if that changes previously established accounting results.
+
+Historical valuation must be reproducible.
+
+If persisted valuation checkpoints/snapshots exist, use them appropriately.
+
+If historical evidence is missing:
+
+DO NOT fabricate a number.
+
+Mark the historical result as unreliable / insufficient evidence and identify the missing data.
+
+==================================================
+7. STOCK TRANSFER + OPENING STOCK TEST
+==================================================
+
+Create automated regression tests for this exact scenario:
+
+Warehouse A:
+Opening stock = ₹10,000
+
+Warehouse B:
+Opening stock = ₹5,000
+
+Transfer ₹3,000 inventory value:
+
+A → B
+
+Expected:
+
+Warehouse A stock decreases by ₹3,000.
+Warehouse B stock increases by ₹3,000.
+
+Company total remains:
+
+₹15,000
+
+There must be:
+
+NO Sales
+NO Purchase
+NO Revenue
+NO COGS creation
+NO Gross Profit
+NO Net Profit
+
+If the accounting period closes after this transfer:
+
+A closing stock = ₹7,000
+B closing stock = ₹8,000
+
+Company closing stock = ₹15,000.
+
+The transfer itself must not generate profit.
+
+==================================================
+8. SAME-DAY NO-ACTIVITY TEST
+==================================================
+
+Create a test where a warehouse has:
+
+No sales
+No purchases
+No returns
+No stock transfers
+No stock adjustments
+No inventory production
+No other inventory movement
+
+Then:
+
+Opening Stock MUST equal Closing Stock.
+
+Therefore:
+
+COGS contribution from stock movement = 0
+
+Gross Profit must NOT be generated merely because the valuation engine changed the stock value.
+
+If GP appears, fail the test and trace the exact source.
+
+==================================================
+9. SALES SCENARIO TEST
+==================================================
+
+Create a controlled test:
+
+Opening Stock = ₹10,000
+Purchases = ₹5,000
+Sales = ₹4,000
+COGS = ₹2,000
+Closing Stock = ₹13,000
+
+Expected:
+
+Net Sales = ₹4,000
+COGS = ₹2,000
+Gross Profit = ₹2,000
+
+Do NOT calculate GP from:
+
+Closing Stock - Opening Stock
+
+because that would be ₹3,000 and would be incorrect.
+
+The complete Trading Account must produce ₹2,000.
+
+==================================================
+10. PURCHASE-ONLY TEST
+==================================================
+
+Opening Stock = ₹10,000
+Purchases = ₹5,000
+No Sales
+
+Closing Stock = ₹15,000
+
+Expected:
+
+Gross Profit = ₹0
+
+There is no sale.
+
+Purchasing inventory does not create Gross Profit.
+
+If the system shows ₹5,000 GP, the P&L is wrong.
+
+==================================================
+11. SALES-RETURN TEST
+==================================================
+
+Verify:
+
+Gross Sales
+- Sales Returns
+= Net Sales
+
+Sales returns must reduce revenue and correctly reverse the related settlement/COGS effects according to the existing accounting architecture.
+
+No duplicate reversal.
+
+==================================================
+12. PURCHASE-RETURN TEST
+==================================================
+
+Verify:
+
+Gross Purchases
+- Purchase Returns
+= Net Purchases
+
+Purchase returns must not accidentally become revenue or fake profit.
+
+==================================================
+13. DIRECT EXPENSE TEST
+==================================================
+
+Direct expenses belong in the Trading Account / COGS calculation according to the ERP Chart of Accounts classification.
+
+Verify that:
+
+Net Sales
+- COGS
+
+produces Gross Profit,
+
+and indirect expenses do NOT reduce Gross Profit.
+
+Indirect expenses, financial charges, depreciation etc. reduce Net Profit after Gross Profit.
+
+==================================================
+14. BALANCE SHEET MUST BE AUTHORITATIVE
+==================================================
+
+Build/verify the Balance Sheet from the authoritative accounting books.
+
+Balance Sheet must satisfy:
+
+Assets = Liabilities + Equity
+
+exactly, to the accounting precision used by the system.
+
+Verify:
+
+Cash
+Bank
+Accounts Receivable
+Inventory
+Fixed Assets
+Accumulated Depreciation
+Other Assets
+Accounts Payable
+Loans/Liabilities
+GST Payable/Receivable
+Capital
+Retained Earnings / Opening Equity
+Current Period Profit/Loss
+Other Equity accounts
+
+Do not make the Balance Sheet balance by inserting artificial adjustment entries.
+
+If it does not balance:
+
+identify the underlying journal/posting/data issue.
+
+==================================================
+15. TRIAL BALANCE
+==================================================
+
+Trial Balance must be generated directly from authoritative journal postings.
+
+Required invariant:
+
+Total Debit = Total Credit
+
+with exact accounting precision.
+
+Verify:
+
+Opening balances
+Operational postings
+Sales
+Purchases
+Returns
+Receipts
+Payments
+Expenses
+Assets
+Depreciation
+Transfers
+Adjustments
+Closing entries if any
+
+No orphan journal lines.
+
+No invalid account references.
+
+No duplicate postings.
+
+No unbalanced vouchers.
+
+==================================================
+16. P&L MUST DERIVE FROM THE SAME BOOKS
+==================================================
+
+Do not create an independent Dashboard P&L calculation.
+
+The authoritative flow must be:
+
+Operational transaction
+→ accounting posting
+→ books
+→ Trial Balance / ledger
+→ Trading Account
+→ P&L
+→ Dashboard
+
+Dashboard Gross Profit and Net Profit must read from the authoritative P&L result.
+
+Never calculate Dashboard GP independently.
+
+==================================================
+17. BALANCE SHEET → P&L RELATIONSHIP
+==================================================
+
+The accounting system must maintain:
+
+Current Period Profit/Loss
+=
+P&L Net Profit/Loss
+
+and the Balance Sheet equity side must reflect that result according to the ERP's accounting-period design.
+
+Verify that changing a legitimate transaction affects:
+
+Journal
+→ Ledger
+→ Trial Balance
+→ P&L
+→ Balance Sheet
+→ Dashboard
+
+consistently.
+
+==================================================
+18. LOCATION / WAREHOUSE ACCOUNTING
+==================================================
+
+All accounting reports must respect location permissions.
+
+For a specific warehouse:
+
+Only that warehouse's permitted operational and accounting data should be included.
+
+For Head Office → All Locations:
+
+Consolidated company-wide figures.
+
+For Head Office → specific warehouse:
+
+Only that location.
+
+Internal transfers between warehouses must not create consolidated profit.
+
+Verify location scope server-side, not only in the UI.
+
+==================================================
+19. DASHBOARD REPORT LINKS
+==================================================
+
+From Dashboard, verify links/cards for:
+
+Day Book
+Cash Book
+Bank Book
+Trial Balance
+Trading Account
+Profit & Loss
+Balance Sheet
+Stock
+Receivables
+Payables
+
+Each click must open the authoritative report with the same:
+
+location
+date range
+company
+permissions
+accounting scope
+
+No dashboard report should calculate a different number from the actual report.
+
+==================================================
+20. PERMISSION VISIBILITY
+==================================================
+
+When an admin grants permissions by:
+
+user
+role
+warehouse/location
+report
+module
+hierarchy
+
+the admin must be able to clearly see:
+
+WHO has access
+WHAT permission they have
+WHICH warehouse/location they can access
+WHICH hierarchy/module they belong to
+WHETHER All Locations is allowed
+WHETHER specific report access is allowed
+
+Add a clear permission visibility/audit screen if missing.
+
+Example:
+
+User A
+Role: Warehouse Manager
+Location: Calicut Warehouse
+Access:
+- Dashboard
+- Sales
+- Stock
+- Day Book
+- Cash Book
+
+No access:
+- Kochi Warehouse
+- Bengaluru Warehouse
+- All Locations
+- Payroll
+
+The UI must clearly show this.
+
+==================================================
+21. SERVER-SIDE PERMISSION ENFORCEMENT
+==================================================
+
+Do not rely on hiding buttons.
+
+Every report/API must enforce location and permission scope on the backend.
+
+Test direct API access.
+
+A warehouse user must not be able to query another warehouse by changing:
+
+locationId
+warehouseId
+customerId
+vendorId
+report parameters
+URL
+API payload
+
+==================================================
+22. REPORT CONSISTENCY
+==================================================
+
+The following must reconcile:
+
+Dashboard
+P&L
+Trading Account
+Balance Sheet
+Trial Balance
+Day Book
+Cash Book
+Bank Book
+General Ledger
+Stock Report
+
+For a selected date/location:
+
+Dashboard GP
+=
+P&L GP
+
+Dashboard NP
+=
+P&L NP
+
+Trial Balance
+must balance.
+
+Balance Sheet
+must balance.
+
+Closing Stock in P&L
+=
+authoritative stock valuation for the same date/location.
+
+Opening Stock
+=
+previous period closing stock.
+
+==================================================
+23. PDF / EXCEL REPORTS
+==================================================
+
+PDF and Excel exports must use the exact same authoritative dataset shown on screen.
+
+No client-prepared numbers.
+
+No independent export calculation.
+
+Selected:
+
+date
+location
+accounting period
+account filter
+report filter
+
+must be respected.
+
+==================================================
+24. AUDIT TRAIL
+==================================================
+
+All accounting-critical mutations must have durable audit records.
+
+Audit must be transaction-bound for critical accounting operations.
+
+A transaction must NOT successfully commit if its mandatory audit event cannot be persisted.
+
+At minimum cover:
+
+Sales
+Sales cancellation
+Sales returns
+Purchases
+Purchase returns
+Receipts
+Payments
+Journal vouchers
+Expenses
+Stock adjustments
+Stock transfers
+Transfer approval/rejection/receipt
+Bank reconciliation
+Fixed asset acquisition
+Depreciation
+Asset disposal
+Opening balance changes
+Accounting configuration changes
+
+==================================================
+25. DO NOT DELETE HISTORICAL ACCOUNTING DATA
+==================================================
+
+Do not destructively delete financial transactions to fix reports.
+
+Use:
+
+reversal
+correction
+adjustment
+migration
+audit trail
+
+where appropriate.
+
+Preserve historical evidence.
+
+==================================================
+26. AUTOMATED ACCOUNTING INTEGRITY AUDIT
+==================================================
+
+Create or enhance an accounting audit command/report that checks:
+
+1. Trial Balance balanced
+2. Balance Sheet balanced
+3. P&L consistency
+4. Opening/closing stock continuity
+5. Stock quantity continuity
+6. Stock value continuity
+7. Transfer neutrality
+8. Sales/COGS consistency
+9. Purchase/COGS consistency
+10. Returns consistency
+11. Receivables reconciliation
+12. Payables reconciliation
+13. Cash reconciliation
+14. Bank reconciliation
+15. Fixed asset reconciliation
+16. Depreciation reconciliation
+17. GST reconciliation
+18. Location isolation
+19. Journal integrity
+20. Audit durability
+
+Every test must output:
+
+PASS
+FAIL
+NOT PROVEN
+
+Never silently label an unverified result as PASS.
+
+==================================================
+27. IMPORTANT: INVESTIGATE THE CURRENT ₹5,793.72 CASE
+==================================================
+
+Use the exact current case as a forensic test.
+
+Trace:
+
+Opening Stock ₹103,158.97
+Closing Stock ₹108,952.69
+Gross Profit ₹5,793.72
+
+Determine:
+
+Why did opening stock have this value?
+Why did closing stock have this value?
+What transactions occurred during the period?
+Were there stock transfers?
+Were there purchases?
+Were there sales?
+Were there returns?
+Were there adjustments?
+Did weighted-average/FIFO/FEFO valuation change?
+Was historical stock valuation reconstructed?
+Did a transfer incorrectly affect P&L?
+Did the P&L formula omit Sales/Purchases/COGS?
+Did a stock adjustment create the value difference?
+Did opening stock come from the previous day's closing stock?
+
+Produce a forensic breakdown.
+
+Do NOT merely say "the formula is correct."
+
+Show the actual source transactions and accounting postings.
+
+==================================================
+28. NO UNEXPLAINED STOCK-VALUE MOVEMENT
+==================================================
+
+For every period:
+
+Opening Stock Value
++ Purchase Inventory Value
++ Transfer In Value
+- Transfer Out Value
+- COGS Value
++/- legitimate adjustments
+=
+Closing Stock Value
+
+subject to the ERP's exact valuation architecture.
+
+Every difference must be explainable.
+
+If not explainable:
+
+FAIL.
+
+==================================================
+29. DO NOT MODIFY PRODUCTION YET
+==================================================
+
+FIRST:
+
+Run a read-only audit against development/staging.
+
+Do not modify production.
+
+Do not delete production data.
+
+Do not create production test transactions.
+
+Do not post fake accounting entries in production.
+
+Do not alter production balances just to make reports balance.
+
+==================================================
+30. TESTING REQUIREMENTS
+==================================================
+
+Run:
+
+API typecheck
+web typecheck
+production build
+accounting unit tests
+stock tests
+transfer tests
+P&L tests
+Balance Sheet tests
+Trial Balance tests
+location isolation tests
+permission tests
+dashboard parity tests
+PDF/Excel tests
+
+Also create regression tests for:
+
+A. no-activity day
+B. purchase-only day
+C. sales-only day
+D. sales + purchase
+E. sales return
+F. purchase return
+G. same-GST stock transfer
+H. multiple warehouse transfer
+I. different GST registration transfer
+J. opening balance
+K. closing-period continuity
+L. fixed asset + depreciation
+M. receipt/payment
+N. customer advance
+O. vendor advance
+
+==================================================
+31. ACCEPTANCE CRITERIA
+==================================================
+
+Do not finish the task until ALL of the following are true:
+
+[ ] Opening Stock = previous period Closing Stock
+[ ] No unexplained stock value differences
+[ ] No fake Gross Profit from stock valuation movement
+[ ] Transfers do not create GP/NP
+[ ] Purchases alone do not create GP
+[ ] No-sales/no-movement period does not create GP
+[ ] Sales GP is mathematically correct
+[ ] Sales returns correctly reduce Net Sales
+[ ] Purchase returns correctly reduce Net Purchases
+[ ] COGS is correct
+[ ] Gross Profit is correct
+[ ] Net Profit is correct
+[ ] Trial Balance balances
+[ ] Balance Sheet balances
+[ ] P&L and Balance Sheet reconcile
+[ ] Dashboard GP = P&L GP
+[ ] Dashboard NP = P&L NP
+[ ] Stock report = P&L closing stock
+[ ] Day Book agrees with books
+[ ] Cash Book agrees with cash ledger
+[ ] Bank Book agrees with bank ledger
+[ ] Location isolation works server-side
+[ ] Permission visibility works
+[ ] PDF matches screen
+[ ] Excel matches screen
+[ ] Audit trail is durable
+[ ] No destructive historical-data repair was used
+[ ] Production was not modified during audit/fix
+[ ] All regression tests pass
+
+==================================================
+32. FINAL REPORT TO ME
+==================================================
+
+At the end, give me a concise but complete report containing:
+
+1. ROOT CAUSE of the ₹5,793.72 Gross Profit.
+2. Whether Opening Stock / Closing Stock calculation was wrong.
+3. Whether stock transfers were incorrectly affecting P&L.
+4. Whether the current stock valuation engine is reliable.
+5. Exact accounting formula now used.
+6. Balance Sheet status.
+7. Trial Balance status.
+8. P&L status.
+9. Dashboard parity status.
+10. Warehouse/location isolation status.
+11. Permission visibility status.
+12. Tests executed with PASS/FAIL/NOT PROVEN.
+13. Files/modules changed.
+14. Database migrations made.
+15. Any historical records that require controlled correction.
+16. Any remaining limitations.
+
+MOST IMPORTANT:
+
+Do not optimize for making the numbers "look right".
+
+Optimize for accounting correctness, reproducibility, auditability and mathematical integrity.
+
+If the current implementation is wrong, identify the root cause and fix the underlying accounting engine rather than adding a special-case formula for the Dashboard or P&L.
+
+DO NOT PUBLISH TO PRODUCTION UNTIL THE ACCOUNTING INTEGRITY GATE PASSES.

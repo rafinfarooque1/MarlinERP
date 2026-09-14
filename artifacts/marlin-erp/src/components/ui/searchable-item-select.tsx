@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { type KeyboardEvent, useMemo, useRef, useState } from 'react';
 import { Check, ChevronsUpDown } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -204,7 +204,7 @@ export function SearchableItemSelect({
             handler, and on close Radix returns focus to the trigger so Tab can leave. */}
         <Command
           shouldFilter={false}
-          onKeyDown={e => { if (e.key === 'Escape') setOpen(false); }}
+          onKeyDown={(e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); }}
         >
           <CommandInput
             placeholder="Search item..."

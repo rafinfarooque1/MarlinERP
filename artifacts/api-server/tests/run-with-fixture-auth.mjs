@@ -22,6 +22,8 @@ try {
         ...process.env,
         TEST_USERNAME: fixture.username,
         TEST_PASSWORD: fixture.password,
+        TEST_ADMIN_USER: fixture.username,
+        TEST_ADMIN_PASSWORD: fixture.password,
       },
     },
   );

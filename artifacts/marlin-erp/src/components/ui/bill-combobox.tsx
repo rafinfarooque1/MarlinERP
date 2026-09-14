@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { type KeyboardEvent, useMemo, useState } from 'react';
 import { Check, ChevronsUpDown } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -113,7 +113,7 @@ export function BillCombobox({
       >
         {/* Escape closed explicitly — cmdk owns the keydown on the search input
             and whether it lets Escape bubble has varied between versions. */}
-        <Command shouldFilter={false} onKeyDown={e => { if (e.key === 'Escape') setOpen(false); }}>
+        <Command shouldFilter={false} onKeyDown={(e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); }}>
           <CommandInput placeholder={searchPlaceholder} value={query} onValueChange={setQuery} />
           <CommandList className="max-h-[clamp(180px,42vh,320px)]">
             {filtered.length === 0 ? (

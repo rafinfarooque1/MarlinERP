@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { type KeyboardEvent, useMemo, useState } from 'react';
 import { Check, ChevronsUpDown } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -99,7 +99,7 @@ export function StateCombobox({
             and whether it lets Escape bubble has varied between versions. */}
         <Command
           shouldFilter={false}
-          onKeyDown={e => { if (e.key === 'Escape') setOpen(false); }}
+          onKeyDown={(e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); }}
         >
           <CommandInput
             placeholder="Type to search state..."
