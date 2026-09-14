@@ -196,6 +196,20 @@ export interface BankTransaction {
   reconciliationReference: string | null;
 }
 
+export interface BankTransactionTotals {
+  eligibleCount: number;
+  eligibleAmount: number;
+  reconciledCount: number;
+  reconciledAmount: number;
+  unreconciledCount: number;
+  unreconciledAmount: number;
+}
+
+export interface BankTransactionsResponse {
+  transactions: BankTransaction[];
+  totals: BankTransactionTotals;
+}
+
 export interface BankReconciliationBatch {
   id: number;
   batchReference: string;
@@ -246,6 +260,11 @@ export interface BankReconciliationAudit {
     duplicateCount: number;
     duplicateAmount: number;
   }[];
+  totals: BankTransactionTotals & {
+    duplicateCount: number;
+    duplicateAmount: number;
+  };
+  sourceCounts: Record<string, { count: number; amount: number }>;
   undetermined: {
     ledgerId: number;
     entryId: string;
@@ -380,7 +399,7 @@ export function useGetBankTransactions(params?: {
   toDate?: string;
   search?: string;
 }) {
-  return useQuery<BankTransaction[]>({
+  return useQuery<BankTransactionsResponse>({
     queryKey: ["reconciliation-bank-transactions", params],
     queryFn: () => {
       const qs = new URLSearchParams();

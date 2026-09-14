@@ -1162,8 +1162,11 @@ export async function buildDerivedPostings(opts: { toDate?: string; q?: Q } = {}
             amount, voucher_number, narration, location_type, location_id,
             advance_amount, advance_ledger_id
      FROM receipts
-     WHERE id NOT IN (SELECT clearing_receipt_id FROM sale_payments WHERE clearing_receipt_id IS NOT NULL)
-       AND (voucher_number IS NULL OR voucher_number NOT IN (SELECT invoice_number FROM sales WHERE invoice_number IS NOT NULL))
+     WHERE NOT EXISTS (
+             SELECT 1 FROM sale_payments sp
+              WHERE sp.clearing_receipt_id = receipts.id
+           )
+       AND COALESCE(source, 'manual') NOT IN ('sale', 'allocation')
        ${upTo("receipt_date", rp)}`, rp
   );
   for (const r of recs) {
@@ -1311,8 +1314,9 @@ export async function buildDerivedPostings(opts: { toDate?: string; q?: Q } = {}
     // reconciliation switched off, the collection is received DIRECTLY into
     // that account's ledger instead of Electronic Clearing, and the books must
     // debit what the receipt actually says.
-    `SELECT sp.sale_id, sp.payment_date, sp.method, sp.amount,
+    `SELECT sp.id AS sale_payment_id, sp.sale_id, sp.payment_date, sp.method, sp.amount,
             rc.voucher_number AS receipt_vno,
+             sp.clearing_receipt_id AS clearing_receipt_id,
             CASE WHEN rc.source = 'allocation' THEN rc.received_in_ledger_id END AS alloc_in,
             CASE WHEN rc.source = 'sale'       THEN rc.received_in_ledger_id END AS sale_in
      FROM sale_payments sp
@@ -1433,6 +1437,14 @@ export async function buildDerivedPostings(opts: { toDate?: string; q?: Q } = {}
     for (const p of spBySale.get(s.id) ?? []) {
       const amt = Number(p.amount);
       paidViaSp += amt;
+      // A bank movement is a source-row transaction, not the whole invoice.
+      // Allocation receipts retain receipt:<id> so one receipt allocated to
+      // several invoices remains one bank movement. Older sale-payment rows
+      // without a receipt get a stable per-row identity instead of being
+      // merged with every other collection on the invoice.
+      const collectionEid = p.clearing_receipt_id != null
+        ? `receipt:${p.clearing_receipt_id}`
+        : `sale_payment:${p.sale_payment_id}`;
       // Four flavours of collection leg:
       //  · 'advance' — consumption of a customer advance: Dr the advance
       //    liability (the money arrived when the advance was received).
@@ -1468,7 +1480,7 @@ export async function buildDerivedPostings(opts: { toDate?: string; q?: Q } = {}
         drLedger = p.method === "cash" ? cashLedger : elecClr;
         legDesc = `${p.method === "cash" ? "Cash" : "Electronic"} received — ${inv}`;
       }
-      push({ entryId: eid, date: p.payment_date, ledgerId: drLedger, debit: amt, credit: 0, source: "sale", voucherNumber: s.invoice_number, description: legDesc, ...sLoc });
+      push({ entryId: collectionEid, date: p.payment_date, ledgerId: drLedger, debit: amt, credit: 0, source: "sale", voucherNumber: p.receipt_vno || s.invoice_number, description: legDesc, ...sLoc });
       if (grossParty) {
         // The matching credit on the customer's own ledger — this is the
         // "receipt" line of their statement. Carries the receipt's voucher
