@@ -319,6 +319,25 @@ async function roundingAndStalenessTests(hierarchyId) {
     `accrued ₹${t.total} vs expected ₹${expectedQ} (${k} priced day(s) × ₹20000/${DIM}, cumulative)` +
     `${near(t.total, expectedQ, 0.005) ? "" : "  ← rounding drift"}`);
 
+  const [roundingRows] = await q(
+    `SELECT COUNT(*) FILTER (WHERE amount > 0.004) AS earning_days,
+            COALESCE(SUM(amount), 0) AS total,
+            MAX(accrual_date) FILTER (WHERE amount > 0.004) AS last_earning_day
+       FROM salary_accruals
+      WHERE employee_id = $1 AND year = $2 AND month = $3`,
+    [EID, Y, M],
+  );
+  const expectedLastDay = D(k);
+  const actualLastDay = roundingRows.last_earning_day instanceof Date
+    ? roundingRows.last_earning_day.toISOString().slice(0, 10)
+    : String(roundingRows.last_earning_day ?? "").slice(0, 10);
+  check("Q1", "Non-divisible accrual includes the company-local current day without per-day rounding drift",
+    Number(roundingRows.earning_days) === k
+      && near(Number(roundingRows.total), round2(k * (20000 / DIM)), 0.005)
+      && actualLastDay === expectedLastDay,
+    `earning days=${roundingRows.earning_days}, total ₹${roundingRows.total}, ` +
+    `last earning day=${actualLastDay}; expected ${k} days through ${expectedLastDay}`);
+
   // Attendance moves after the payroll row was frozen. Approving now would true
   // up to a figure the attendance no longer supports.
   await api("PUT", "/hr/attendance", { employeeId: EID, date: D(26), status: "present" });
