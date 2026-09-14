@@ -1,0 +1,2312 @@
+MASTER ERP ACCOUNTING + FINANCIAL INTEGRITY AUDIT
+READ-ONLY — DO NOT CHANGE ANYTHING
+
+I need a COMPLETE forensic audit of the entire Frozen Fruits ERP.
+
+There are currently many problems in the ERP, especially around:
+
+- Profit & Loss
+- Trading Account
+- Gross Profit
+- Net Profit / Net Loss
+- Balance Sheet
+- Trial Balance
+- Customer Receivables
+- Customer Outstanding
+- Vendor Payables
+- Inventory
+- Opening Stock
+- Closing Stock
+- COGS
+- Sales Returns
+- Purchase Returns
+- Expenses
+- Bank
+- Cash
+- Receipts
+- Payments
+- Journal Vouchers
+- GST
+- Fixed Assets
+- Depreciation
+- Stock Transfers
+- Location accounting
+- Monthly accounting
+- Reports
+- Dashboard totals
+- Ledger balances
+
+I DO NOT WANT INDIVIDUAL UI FIXES.
+
+I want you to inspect the COMPLETE ERP architecture and determine whether the accounting and financial statements are mathematically and logically correct according to STANDARD ACCOUNTING PRINCIPLES.
+
+============================================================
+CRITICAL INSTRUCTION
+============================================================
+
+THIS IS A READ-ONLY AUDIT.
+
+DO NOT:
+
+- modify source code
+- modify database
+- run migrations
+- change accounting entries
+- delete records
+- update records
+- recalculate and save anything
+- repair historical data
+- change formulas
+- change UI
+- change permissions
+- change configuration
+- change production data
+- change development data
+
+DO NOT "FIX" ANYTHING.
+
+First investigate EVERYTHING and produce a complete discrepancy report.
+
+Only after I review the report will I ask for the implementation/fix.
+
+============================================================
+1. FIRST UNDERSTAND THE CURRENT ERP
+============================================================
+
+Inspect the complete application.
+
+Map:
+
+Frontend
+Backend
+Database
+Accounting engine
+Inventory engine
+Sales engine
+Purchase engine
+Receipt engine
+Payment engine
+Expense engine
+Asset engine
+GST engine
+Report engine
+Dashboard engine
+Location engine
+Reconciliation engine
+
+Identify:
+
+- React/Vite frontend
+- Express/API backend
+- PostgreSQL database
+- accounting services
+- journal creation
+- ledger calculation
+- stock calculation
+- report calculation
+- dashboard calculation
+- background jobs
+- scheduled jobs
+- migrations
+- repair scripts
+- startup calculations
+
+Do not assume the implementation is correct.
+
+Trace the actual code.
+
+============================================================
+2. ACCOUNTING SOURCE OF TRUTH
+============================================================
+
+Determine the actual accounting source of truth.
+
+Answer:
+
+Are financial statements calculated from:
+
+A. Journal Vouchers
+B. Operational transactions
+C. Ledger tables
+D. Inventory calculations
+E. A combination
+F. Something else
+
+For every report determine exactly which source is being used.
+
+This is critical.
+
+There must not be different accounting engines producing different numbers for:
+
+- Dashboard
+- P&L
+- Balance Sheet
+- Trial Balance
+- Ledger
+- GST
+- Outstanding
+- Bank
+- Reports
+
+Identify every place where accounting is calculated independently.
+
+============================================================
+3. DOUBLE-ENTRY ACCOUNTING VALIDATION
+============================================================
+
+Audit every Journal Voucher.
+
+For every JV:
+
+Total Debit
+=
+Total Credit
+
+Check:
+
+- unbalanced vouchers
+- zero-value vouchers
+- duplicate vouchers
+- orphan journal lines
+- invalid accounts
+- invalid locations
+- missing source transactions
+- duplicate source postings
+- incorrect debit/credit direction
+- cancelled voucher handling
+- reversal handling
+
+Produce:
+
+Total JVs
+Balanced JVs
+Unbalanced JVs
+Difference
+
+If ANY difference exists, list the exact vouchers.
+
+============================================================
+4. TRIAL BALANCE
+============================================================
+
+Calculate the Trial Balance independently from the underlying journal lines.
+
+Do NOT trust the existing Trial Balance report.
+
+Calculate:
+
+Total Debit
+Total Credit
+Difference
+
+Expected:
+
+Debit = Credit
+
+Compare:
+
+Independent Trial Balance
+vs
+ERP Trial Balance
+
+Report:
+
+Account
+ERP Debit
+Independent Debit
+ERP Credit
+Independent Credit
+Difference
+
+The Trial Balance must reconcile exactly.
+
+============================================================
+5. STANDARD TRADING ACCOUNT
+============================================================
+
+Verify that the ERP follows the standard Trading Account structure.
+
+The standard calculation must be:
+
+Opening Stock
++ Net Purchases
++ Direct Expenses
+- Closing Stock
+=
+Cost of Goods Sold
+
+Where:
+
+Net Purchases
+=
+Purchases
+- Purchase Returns
++/- other valid purchase adjustments according to the accounting model
+
+Then:
+
+Net Sales
+=
+Sales
+- Sales Returns
+- other valid sales deductions
+
+Gross Profit / Gross Loss:
+
+Net Sales
+- Cost of Goods Sold
+=
+Gross Profit / Gross Loss
+
+IMPORTANT:
+
+Do NOT accept the existing ERP formula merely because it produces a number.
+
+Independently verify the formula.
+
+============================================================
+6. SALES
+============================================================
+
+Audit Sales.
+
+Determine:
+
+- gross sales
+- discounts
+- GST
+- taxable value
+- net sales
+- sales returns
+- credit notes
+- other charges
+- cancelled sales
+- reversed sales
+
+Verify whether Sales shown in P&L is:
+
+NET OF GST
+
+or
+
+INCLUDING GST
+
+and whether this treatment is consistent everywhere.
+
+GST collected should generally not become revenue when the ERP is operating under the normal GST accounting model.
+
+Verify:
+
+Sales in P&L
+=
+correct net revenue
+
+Do NOT double count GST.
+
+============================================================
+7. SALES RETURNS
+============================================================
+
+This is critical.
+
+Verify Sales Returns.
+
+For every sales return:
+
+- customer receivable must reduce
+- sales revenue must reduce
+- inventory must increase where goods are physically returned
+- COGS must reverse appropriately
+- GST impact must reverse/correct according to the transaction
+- customer outstanding must reduce
+- customer ledger must reflect the return
+
+Do NOT treat sales return as an ordinary expense.
+
+Do NOT ignore sales returns in outstanding.
+
+Compare:
+
+Sales Returns
+vs
+Customer Ledger
+vs
+Outstanding
+vs
+P&L
+vs
+GST
+
+Find every mismatch.
+
+============================================================
+8. PURCHASES
+============================================================
+
+Audit purchases.
+
+Determine:
+
+Gross Purchase
+Purchase Returns
+GST Input
+Taxable Purchase
+Net Purchase
+Freight/direct purchase costs
+Capital purchases
+Expense purchases
+
+Verify that asset purchases are NOT incorrectly included as normal operating purchases/COGS.
+
+Verify that GST input is treated correctly.
+
+============================================================
+9. PURCHASE RETURNS
+============================================================
+
+For every Purchase Return verify:
+
+Vendor payable reduces
+Purchase cost reduces
+Inventory reduces
+GST input reverses appropriately
+Vendor ledger reflects return
+Vendor outstanding reflects return
+
+Compare:
+
+Purchase Return
+vs
+Vendor Ledger
+vs
+Outstanding
+vs
+P&L
+vs
+Inventory
+vs
+GST
+
+============================================================
+10. INVENTORY / COGS
+============================================================
+
+This is one of the highest-priority areas.
+
+Determine the actual inventory valuation method used.
+
+Verify whether the ERP uses:
+
+FIFO
+FEFO
+Weighted Average
+Moving Average
+other
+
+Document the exact implementation.
+
+Then verify:
+
+Opening Stock
++
+Purchases
+-
+Purchase Returns
++
+valid direct inventory costs
+-
+Sales/Consumption
++
+Sales Returns
+± Transfers
+=
+Closing Stock
+
+Then verify:
+
+COGS
+=
+Opening Stock
++
+Net Purchases
++
+Direct Expenses
+-
+Closing Stock
+
+Compare the independently calculated COGS against the ERP COGS.
+
+Report exact differences.
+
+============================================================
+11. OPENING STOCK
+============================================================
+
+Verify Opening Stock.
+
+Opening stock must come from the previous period's closing stock where applicable.
+
+For month-wise accounting:
+
+Previous Month Closing Stock
+=
+Current Month Opening Stock
+
+Verify every month.
+
+Example:
+
+April Closing
+=
+May Opening
+
+May Closing
+=
+June Opening
+
+June Closing
+=
+July Opening
+
+No unexplained reset.
+
+============================================================
+12. CLOSING STOCK
+============================================================
+
+Verify closing inventory independently from:
+
+- stock entries
+- batches
+- stock ledger
+- purchase cost
+- sales consumption
+- returns
+- transfers
+- adjustments
+- production
+- wastage
+
+Check:
+
+Stock Entry Quantity
+=
+Batch Quantity
+
+where expected.
+
+Check inventory value.
+
+Do NOT assume current stock value can automatically reconstruct historical closing stock correctly.
+
+Determine whether historical P&L is reliable.
+
+============================================================
+13. STOCK TRANSFERS
+============================================================
+
+Verify internal warehouse transfers.
+
+Internal transfers must NOT create:
+
+- Sales
+- Purchase
+- Revenue
+- Expense
+- Profit
+- Loss
+
+For same-business internal transfers:
+
+Source:
+Stock decreases
+
+Destination:
+Stock increases
+
+Company-wide stock:
+unchanged
+
+P&L:
+unchanged
+
+Verify transfer accounting.
+
+Also check:
+
+Transfer Out
+Transfer In
+In Transit
+Reservations
+Partial Receipt
+Rejected Transfer
+Cancelled Transfer
+
+Check whether any transfer is double counted in:
+
+Opening Stock
+Closing Stock
+COGS
+P&L
+Inventory
+
+============================================================
+14. HISTORICAL INVENTORY
+============================================================
+
+Determine whether historical inventory can be accurately reconstructed.
+
+Check whether the ERP retains:
+
+- dated stock movements
+- transfer receipt timing
+- lot/batch history
+- historical costs
+- deleted source records
+- reversal history
+
+If historical inventory cannot be reliably reconstructed, explicitly report:
+
+HISTORICAL VALUATION LIMITATION
+
+Do not hide the limitation.
+
+============================================================
+15. DIRECT EXPENSES
+============================================================
+
+Determine exactly which expenses are classified as Direct Expenses.
+
+Examples may include:
+
+Freight inward
+Carriage inward
+Loading/unloading
+Import-related direct costs
+Other costs directly attributable to inventory
+
+Verify that Direct Expenses are included in Trading Account/COGS only where appropriate.
+
+Do not classify ordinary:
+
+- rent
+- salary
+- office expenses
+- marketing
+- administrative expenses
+
+as direct expenses unless explicitly justified.
+
+============================================================
+16. INDIRECT EXPENSES
+============================================================
+
+Verify P&L indirect expenses.
+
+Examples:
+
+Salary
+Rent
+Office Expenses
+Marketing
+Utilities
+Administrative Expenses
+Repairs
+Software
+Professional Fees
+
+Verify:
+
+Indirect Expenses
+are deducted after Gross Profit.
+
+Do not include them inside COGS unless correctly classified.
+
+============================================================
+17. FINANCIAL CHARGES
+============================================================
+
+Audit:
+
+Bank Charges
+Payment Gateway Charges
+Processing Charges
+Interest
+Finance Costs
+
+Verify their classification.
+
+Do not double count processing charges.
+
+Verify whether reconciliation processing charges are:
+
+- bank expense
+- financial charge
+- operating expense
+
+according to the configured accounting model.
+
+============================================================
+18. DEPRECIATION
+============================================================
+
+Audit fixed assets.
+
+Verify:
+
+Asset Purchase
+→ Fixed Asset
+→ Asset Register
+→ Depreciation
+→ P&L
+→ Accumulated Depreciation
+→ Balance Sheet
+
+Asset purchases must NOT automatically become normal operating expense unless the ERP explicitly uses an expense treatment for low-value assets.
+
+Verify depreciation formula.
+
+Check:
+
+Opening Asset Value
++
+Additions
+-
+Disposals
+-
+Depreciation
+=
+Closing Net Asset Value
+
+Verify:
+
+Depreciation Expense
+=
+P&L expense
+
+Accumulated Depreciation
+=
+Balance Sheet reduction
+
+============================================================
+19. FIXED ASSET PURCHASES
+============================================================
+
+Verify that asset purchases correctly affect:
+
+Vendor payable
+Fixed Asset
+Bank/Cash if paid
+GST input where applicable
+Balance Sheet
+
+They should NOT incorrectly inflate:
+
+Purchases
+COGS
+Gross Profit calculation
+
+unless the accounting model explicitly requires otherwise.
+
+============================================================
+20. OTHER INCOME
+============================================================
+
+Verify Other Income.
+
+Examples:
+
+- bank interest
+- miscellaneous income
+- Direct Income charges
+- other operating income
+
+Verify that Other Income is included in the correct P&L section.
+
+Do not incorrectly classify sales revenue as Other Income.
+
+============================================================
+21. OTHER CHARGES
+============================================================
+
+Audit the ERP's Other Charges functionality.
+
+Verify:
+
+- customer total
+- receivable
+- income ledger
+- GST treatment
+- P&L classification
+- quotation-to-sale carry forward
+- PDF
+- customer ledger
+
+If charges are configured as Direct Income and post-tax/no GST, verify that the actual accounting matches the configuration.
+
+Do not change the configuration.
+
+Only report discrepancies.
+
+============================================================
+22. STANDARD PROFIT & LOSS
+============================================================
+
+Independently calculate the standard P&L.
+
+Use:
+
+NET SALES
+-
+COGS
+=
+GROSS PROFIT
+
+Then:
+
+GROSS PROFIT
++
+OTHER OPERATING/NON-OPERATING INCOME
+-
+INDIRECT EXPENSES
+-
+FINANCE COSTS
+-
+DEPRECIATION
+=
+NET PROFIT / NET LOSS
+
+Verify the ERP calculation.
+
+IMPORTANT:
+
+The ERP must NOT produce impossible results such as:
+
+Sales = ₹39,904.70
+COGS = negative ₹9,770.57
+Gross Profit = ₹49,675.27
+
+without a legitimate accounting reason.
+
+A negative COGS is possible only in specific accounting circumstances, but it must be explainable by returns/opening-closing inventory/adjustments.
+
+Determine whether every negative COGS or unusual result is mathematically justified.
+
+============================================================
+23. P&L FORMULA RECONCILIATION
+============================================================
+
+For every P&L:
+
+Calculate independently:
+
+Net Sales
+Opening Stock
+Net Purchases
+Direct Expenses
+Goods Available for Sale
+Closing Stock
+COGS
+Gross Profit
+Other Income
+Indirect Expenses
+Financial Charges
+Depreciation
+Net Profit/Loss
+
+Then compare:
+
+INDEPENDENT VALUE
+vs
+ERP VALUE
+
+Create a discrepancy table.
+
+============================================================
+24. BALANCE SHEET — STANDARD ACCOUNTING
+============================================================
+
+Independently calculate Balance Sheet.
+
+The fundamental equation is:
+
+ASSETS
+=
+LIABILITIES
++
+EQUITY
+
+Verify exactly.
+
+============================================================
+25. BALANCE SHEET ASSETS
+============================================================
+
+Audit:
+
+Fixed Assets
+Less Accumulated Depreciation
+Inventory
+Trade Receivables
+Cash
+Bank
+Advances
+GST Input/Receivable
+Other Current Assets
+Other Assets
+
+Verify each independently.
+
+============================================================
+26. BALANCE SHEET LIABILITIES
+============================================================
+
+Audit:
+
+Trade Payables
+Loans
+Borrowings
+GST Payable
+Statutory Liabilities
+Outstanding Expenses
+Other Current Liabilities
+Other Liabilities
+
+Verify every balance.
+
+============================================================
+27. EQUITY
+============================================================
+
+Audit:
+
+Capital
+Opening Capital
+Retained Earnings
+Current Year Profit/Loss
+Drawings
+Reserves
+Other equity accounts
+
+Verify that current-year profit/loss flows correctly into equity according to the ERP's accounting-period model.
+
+Do not double count profit.
+
+============================================================
+28. BALANCE SHEET PROFIT
+============================================================
+
+Verify:
+
+Current Year Profit/Loss
+
+from P&L
+
+matches the amount represented in Balance Sheet equity.
+
+No difference should exist unless the ERP intentionally separates current-year earnings from retained earnings.
+
+If separated:
+
+document exactly how.
+
+============================================================
+29. BALANCE SHEET EQUATION
+============================================================
+
+Calculate:
+
+Total Assets
+
+and:
+
+Total Liabilities + Equity
+
+Difference must be:
+
+₹0.00
+
+or an explicitly explainable rounding difference.
+
+If not zero:
+
+identify the exact accounts causing the imbalance.
+
+============================================================
+30. CUSTOMER RECEIVABLES
+============================================================
+
+Independently calculate each customer's balance.
+
+Formula:
+
+Opening Receivable
++
+Sales
++
+Valid Charges
+-
+Sales Returns
+-
+Credit Notes
+-
+Receipts
+± Adjustments
+=
+Closing Receivable
+
+Compare:
+
+Customer Ledger
+Customer Outstanding
+Receivables Report
+Balance Sheet Receivables
+Dashboard Receivables
+
+All must agree.
+
+CRITICAL:
+
+Sales Returns MUST reduce receivable.
+
+Receipts MUST reduce receivable.
+
+Bill-wise receipt allocation must NOT duplicate the receipt.
+
+============================================================
+31. CUSTOMER LEDGER
+============================================================
+
+Audit:
+
+Sales
+Sales Returns
+Receipts
+Credit Notes
+Debit Notes
+Other Charges
+Adjustments
+Opening Balance
+
+Verify chronological running balance.
+
+Verify closing ledger balance equals outstanding.
+
+============================================================
+32. RECEIPTS
+============================================================
+
+Audit Receipt Vouchers.
+
+For every receipt verify:
+
+Receipt Amount
+Customer Credit
+Cash/Bank Debit
+Customer Outstanding reduction
+Bank/Cash Ledger
+
+If receipt is allocated to multiple bills:
+
+ONE RECEIPT
+=
+ONE CUSTOMER LEDGER ENTRY
+=
+ONE BANK/CASH ENTRY
+
+Bill allocation is settlement detail only.
+
+Check for duplicate receipt posting.
+
+============================================================
+33. VENDOR PAYABLES
+============================================================
+
+Independently calculate:
+
+Opening Payable
++
+Purchases
+-
+Purchase Returns
+-
+Payments
+± Debit/Credit Notes
+± Adjustments
+=
+Closing Payable
+
+Compare:
+
+Vendor Ledger
+Vendor Outstanding
+Payables Report
+Balance Sheet Payables
+Dashboard Payables
+
+Find every difference.
+
+============================================================
+34. PAYMENT VOUCHERS
+============================================================
+
+Audit Payment Vouchers.
+
+For every payment:
+
+Vendor Debit
+Cash/Bank Credit
+
+where appropriate.
+
+One payment must not become multiple vendor ledger transactions.
+
+Check bill-wise allocation separately from transaction posting.
+
+============================================================
+35. CASH
+============================================================
+
+Audit Cash accounts.
+
+Calculate:
+
+Opening Cash
++
+Cash Receipts
+-
+Cash Payments
+± Adjustments
+=
+Closing Cash
+
+Compare:
+
+Cash Book
+Ledger
+Trial Balance
+Balance Sheet
+Dashboard
+
+Any negative cash balance must be flagged.
+
+Do not automatically assume it is wrong; identify the cause.
+
+============================================================
+36. BANK
+============================================================
+
+Audit each bank account independently.
+
+Calculate:
+
+Opening Bank Balance
++
+Bank Receipts
+-
+Bank Payments
+± valid adjustments
+=
+Closing Bank Balance
+
+Compare:
+
+Bank Book
+Bank Ledger
+Trial Balance
+Balance Sheet
+Dashboard
+Reconciliation
+
+Check bank account/location assignment.
+
+============================================================
+37. BANK RECONCILIATION
+============================================================
+
+Audit the complete reconciliation system.
+
+Check:
+
+Bank Ledger
+vs
+Reconciliation eligible transactions
+
+Every eligible bank transaction must be discoverable.
+
+Include:
+
+Sales through Bank
+Receipt Vouchers through Bank
+Payment Vouchers where applicable
+Other eligible bank transactions
+
+Check:
+
+missing transactions
+duplicate transactions
+wrong bank account
+wrong location
+incorrect reconciliation status
+incorrect reconciliation amount
+
+Do not change anything.
+
+============================================================
+38. RECONCILIATION ACCOUNTING
+============================================================
+
+Verify that reconciliation itself does NOT accidentally create duplicate financial transactions.
+
+Check:
+
+Original Bank Transaction
++
+Reconciliation Batch
+
+must not double count the bank amount.
+
+Processing Charge must be accounted exactly once if applicable.
+
+============================================================
+39. GST
+============================================================
+
+Audit the complete GST calculation.
+
+Check:
+
+Sales GST
+Sales Return GST
+Purchase GST
+Purchase Return GST
+Input GST
+Output GST
+GST payable/receivable
+
+Compare:
+
+Invoice-level GST
+Journal-level GST
+GST reports
+P&L
+Balance Sheet
+GST summary
+
+Identify whether multiple GST calculation streams exist.
+
+If there are two different GST engines:
+
+document both.
+
+Compare their outputs.
+
+============================================================
+40. GST AND REVENUE
+============================================================
+
+Verify that GST is not incorrectly included in revenue.
+
+For example:
+
+Invoice Total
+=
+Taxable Value
++
+GST
+
+P&L revenue should follow the ERP's proper accounting treatment and not double count GST.
+
+============================================================
+41. LOCATION ACCOUNTING
+============================================================
+
+Audit all location-specific accounting.
+
+For every:
+
+Sale
+Purchase
+Expense
+Receipt
+Payment
+Bank
+Cash
+Inventory
+Customer
+Vendor
+Asset
+Journal
+
+verify location.
+
+Check:
+
+Warehouse A
+Warehouse B
+Warehouse C
+Head Office
+
+No transaction should appear in the wrong location.
+
+============================================================
+42. ALL LOCATIONS
+============================================================
+
+Verify that:
+
+All Locations
+=
+sum of all authorized locations
+
+for:
+
+Sales
+Purchases
+Expenses
+Receivables
+Payables
+Cash
+Bank
+Inventory
+Gross Profit
+Net Profit
+
+Check for double counting.
+
+Head Office selected separately must NOT automatically mean All Locations.
+
+============================================================
+43. MONTH-WISE ACCOUNTING
+============================================================
+
+Audit month-wise P&L.
+
+For every month verify:
+
+Opening Stock
+Purchases
+Purchase Returns
+Direct Expenses
+Sales
+Sales Returns
+Closing Stock
+COGS
+Gross Profit
+Indirect Expenses
+Net Profit
+
+Critical continuity:
+
+Previous Month Closing Stock
+=
+Current Month Opening Stock
+
+No month should silently inherit incorrect values.
+
+============================================================
+44. DATE-CUTOFF TEST
+============================================================
+
+Test financial reports at:
+
+- day end
+- month end
+- quarter end
+- year end
+
+Transactions after the report date must not affect the report.
+
+Transactions before the report date must be included.
+
+Check timezone/date boundary issues.
+
+============================================================
+45. EDIT TRANSACTION
+============================================================
+
+Audit what happens when an existing:
+
+Sale
+Purchase
+Receipt
+Payment
+Expense
+Return
+Journal
+Transfer
+
+is edited.
+
+Determine whether the ERP:
+
+- updates accounting correctly
+- reverses old accounting
+- creates replacement accounting
+- duplicates entries
+- leaves stale ledger entries
+
+Do NOT edit anything.
+
+Only trace the code.
+
+============================================================
+46. CANCEL TRANSACTION
+============================================================
+
+Audit cancellation.
+
+Determine whether cancellation:
+
+- reverses accounting
+- reverses inventory
+- reverses receivable
+- reverses payable
+- reverses GST
+- reverses cash/bank
+- preserves audit trail
+
+Check for orphaned journal entries.
+
+============================================================
+47. DELETE TRANSACTION
+============================================================
+
+Audit delete behavior.
+
+Determine whether physical deletes are allowed for:
+
+Sales
+Purchases
+Quotations
+Vouchers
+Returns
+Masters
+
+Identify cases where deleting the source leaves:
+
+- journal entries
+- ledger entries
+- stock movements
+- GST entries
+- audit entries
+
+behind.
+
+Do not delete anything.
+
+============================================================
+48. REVERSAL ACCOUNTING
+============================================================
+
+Where transactions are cancelled/voided:
+
+verify whether reversal entries are:
+
+- equal
+- opposite
+- linked to source
+- included/excluded correctly in reports
+
+No transaction should remain economically active after cancellation.
+
+============================================================
+49. DASHBOARD VS REPORTS
+============================================================
+
+Compare Dashboard against authoritative reports.
+
+Check:
+
+Sales
+Purchase
+Expense
+Receivables
+Payables
+Inventory
+Cash
+Bank
+Gross Profit
+Net Profit
+
+Dashboard must not use different formulas from P&L/Balance Sheet.
+
+If different:
+
+identify exact calculation source.
+
+============================================================
+50. CHART OF ACCOUNTS
+============================================================
+
+Audit Chart of Accounts.
+
+Verify:
+
+Account Type
+Account Group
+Parent
+Normal Balance
+Debit/Credit behavior
+Location
+Active status
+Postable/non-postable
+
+Check that P&L and Balance Sheet classify accounts correctly.
+
+============================================================
+51. NORMAL ACCOUNT BALANCES
+============================================================
+
+Verify standard behavior:
+
+Assets:
+normally Debit
+
+Expenses:
+normally Debit
+
+Liabilities:
+normally Credit
+
+Equity:
+normally Credit
+
+Revenue:
+normally Credit
+
+Contra accounts:
+appropriate opposite behavior
+
+Flag accounts whose balances are inconsistent with their nature, but do not automatically call them errors without tracing the underlying transaction.
+
+============================================================
+52. ZERO / NEGATIVE ACCOUNTS
+============================================================
+
+Audit zero and negative balances.
+
+A negative balance is not automatically an error.
+
+For each unusual negative account:
+
+identify:
+
+Account
+Type
+Balance
+Source transactions
+Whether economically valid
+
+============================================================
+53. VALUED-ONLY ACCOUNT FILTER
+============================================================
+
+The existing "Show Valued Accounts Only" feature must be presentation-only.
+
+Verify that it does NOT change:
+
+- accounting
+- balances
+- Trial Balance
+- P&L
+- Balance Sheet
+
+Only visibility should change.
+
+============================================================
+54. PDF VS SCREEN
+============================================================
+
+Compare:
+
+P&L screen
+P&L PDF
+
+Balance Sheet screen
+Balance Sheet PDF
+
+Trial Balance screen
+Trial Balance PDF
+
+Ledger screen
+Ledger PDF
+
+They must represent the same underlying calculations.
+
+No formula differences.
+
+============================================================
+55. EXPORTS
+============================================================
+
+Audit CSV/Excel/PDF exports.
+
+Determine whether exports:
+
+A. recompute from server data
+or
+B. trust client-prepared rows
+
+Client-provided financial totals must NOT be considered authoritative.
+
+Report this as a risk if found.
+
+============================================================
+56. ROUNDING
+============================================================
+
+Audit decimal/rounding rules.
+
+Check:
+
+Invoice rounding
+GST rounding
+Ledger rounding
+P&L rounding
+Balance Sheet rounding
+Inventory valuation rounding
+
+Identify cases where rounding causes unexplained differences.
+
+============================================================
+57. PERIOD CLOSING
+============================================================
+
+Determine whether the ERP has:
+
+- financial year
+- accounting period
+- period lock
+- opening balance
+- closing balance
+
+Check whether transactions can be posted into closed periods.
+
+Do not change settings.
+
+============================================================
+58. BACKGROUND JOBS
+============================================================
+
+Audit background jobs that affect accounting:
+
+- salary accrual
+- rent accrual
+- depreciation
+- backups
+- stock processes
+- scheduled accounting
+- cleanup/repair
+
+Determine whether jobs can:
+
+- run twice
+- create duplicate JVs
+- create duplicate expenses
+- run without location
+- run partially
+
+============================================================
+59. STARTUP MIGRATIONS / REPAIR
+============================================================
+
+Inspect startup behavior.
+
+Determine whether application startup executes:
+
+- migrations
+- repairs
+- cleanup
+- accounting corrections
+- data mutations
+
+Report anything that changes financial data automatically during startup.
+
+============================================================
+60. AUDIT TRAIL
+============================================================
+
+Check whether every financial mutation creates a durable audit event.
+
+Test conceptually:
+
+Sale
+Purchase
+Receipt
+Payment
+Expense
+Journal
+Return
+Cancellation
+Reconciliation
+Asset
+Transfer
+
+Identify any best-effort audit logging where the financial mutation can succeed but audit logging can fail.
+
+============================================================
+61. DATABASE INTEGRITY
+============================================================
+
+Check for:
+
+orphan JVs
+orphan journal lines
+orphan stock ledger entries
+orphan batches
+orphan reservations
+orphan payments
+orphan receipts
+orphan allocations
+invalid account IDs
+invalid location IDs
+invalid party IDs
+
+Do not modify anything.
+
+============================================================
+62. ACCOUNTING RECONCILIATION MATRIX
+============================================================
+
+Create a master reconciliation matrix:
+
+METRIC
+ERP VALUE
+INDEPENDENT VALUE
+DIFFERENCE
+STATUS
+
+Include:
+
+Sales
+Sales Returns
+Net Sales
+Purchases
+Purchase Returns
+Net Purchases
+Opening Stock
+Direct Expenses
+Closing Stock
+COGS
+Gross Profit
+Other Income
+Indirect Expenses
+Financial Charges
+Depreciation
+Net Profit/Loss
+Inventory
+Receivables
+Payables
+Cash
+Bank
+Fixed Assets
+GST
+Total Assets
+Total Liabilities
+Equity
+Trial Balance Debit
+Trial Balance Credit
+
+============================================================
+63. FUNDAMENTAL EQUATION TESTS
+============================================================
+
+The following MUST be independently tested:
+
+TEST 1:
+
+Debit = Credit
+
+TEST 2:
+
+Assets = Liabilities + Equity
+
+TEST 3:
+
+Net Sales - COGS = Gross Profit
+
+TEST 4:
+
+Gross Profit + Other Income - Expenses = Net Profit
+
+TEST 5:
+
+Customer Ledger = Customer Outstanding
+
+TEST 6:
+
+Vendor Ledger = Vendor Outstanding
+
+TEST 7:
+
+Bank Book = Bank Ledger
+
+TEST 8:
+
+Cash Book = Cash Ledger
+
+TEST 9:
+
+Previous Closing Stock = Next Opening Stock
+
+TEST 10:
+
+Stock Entries Quantity = Batch Quantity where expected
+
+TEST 11:
+
+All Locations Total = Sum of Locations
+
+TEST 12:
+
+P&L Profit/Loss = Balance Sheet Current Year Result
+
+TEST 13:
+
+Sales Returns reduce sales and receivables
+
+TEST 14:
+
+Purchase Returns reduce purchases, inventory and payables
+
+TEST 15:
+
+Internal stock transfers are P&L neutral
+
+============================================================
+64. THE SCREENSHOT PROBLEM
+============================================================
+
+The current P&L screenshot shows:
+
+Sales (net of GST)
+₹40,895.17
+
+Less Sales Returns
+₹990.47
+
+Net Sales
+₹39,904.70
+
+Opening Stock
+₹18,489.54
+
+Purchases
+₹29,060.00
+
+Direct Expenses
+₹1,330.00
+
+Goods Available for Sale
+₹48,879.54
+
+Closing Stock
+₹58,650.11
+
+COGS
+-₹9,770.57
+
+Gross Profit
+₹49,675.27
+
+This MUST be independently audited.
+
+Do NOT assume the negative COGS is correct.
+
+Trace exactly why:
+
+Opening Stock
++
+Purchases
++
+Direct Expenses
+-
+Closing Stock
+
+produces negative COGS.
+
+Then determine whether:
+
+- closing stock is overstated
+- opening stock is wrong
+- purchases are incomplete/wrong
+- returns are missing
+- transfer movements are double counted
+- inventory valuation is wrong
+- historical stock reconstruction is wrong
+- direct expenses are incorrectly included
+- sales consumption is wrong
+- stock valuation method is wrong
+- date filtering is wrong
+- location aggregation is wrong
+
+Do not change the numbers.
+
+Explain the exact root cause.
+
+============================================================
+65. DO NOT TRUST CURRENT REPORT FORMULAS
+============================================================
+
+For every financial statement:
+
+Do NOT simply inspect the existing formula and say it is correct.
+
+Independently derive the expected result from source accounting data.
+
+Then compare.
+
+This is a forensic audit.
+
+============================================================
+66. PRODUCTION VS DEVELOPMENT
+============================================================
+
+If both production and development environments are accessible:
+
+compare:
+
+Database schema
+Accounting logic
+Migrations
+Journal totals
+Stock totals
+Report formulas
+Configuration
+Location setup
+
+Do not change either environment.
+
+If production cannot be authenticated, explicitly state:
+
+"Production authenticated financial validation was not possible."
+
+Do not claim production is reconciled without authentication.
+
+============================================================
+67. PRIOR KNOWN ISSUES
+============================================================
+
+Specifically check the previously identified areas:
+
+1. Historical inventory valuation limitations.
+
+2. Historical transfer/in-transit reconstruction.
+
+3. Customer/vendor location scope.
+
+4. Best-effort audit logging.
+
+5. Multiple GST calculation streams.
+
+6. Physical deletion of financial/source documents.
+
+7. Client-prepared report exports.
+
+8. Startup migrations/repairs.
+
+9. Asset purchase accounting/location stamping.
+
+10. Reconciliation completeness.
+
+11. Receipt Voucher bill-wise allocation incorrectly splitting ledger transactions.
+
+12. Bank Reconciliation missing eligible transactions.
+
+13. Stale stock transfer reservations.
+
+Do not assume these have been fixed.
+
+Verify their CURRENT state.
+
+============================================================
+68. DO NOT MAKE CHANGES
+============================================================
+
+Again:
+
+NO CODE CHANGES.
+
+NO DATABASE CHANGES.
+
+NO DATA REPAIR.
+
+NO MIGRATION.
+
+NO DELETE.
+
+NO UPDATE.
+
+NO ACCOUNTING POSTING.
+
+NO CONFIGURATION CHANGE.
+
+NO UI CHANGE.
+
+NO AUTOMATIC FIX.
+
+This task is ONLY:
+
+INSPECT
+TRACE
+CALCULATE
+COMPARE
+REPORT
+
+============================================================
+69. SEVERITY CLASSIFICATION
+============================================================
+
+Classify every issue:
+
+CRITICAL
+HIGH
+MEDIUM
+LOW
+INFORMATIONAL
+
+CRITICAL examples:
+
+- Trial Balance does not balance
+- Balance Sheet does not balance
+- P&L formula materially wrong
+- duplicated accounting
+- missing accounting entries
+- wrong inventory valuation
+- wrong customer/vendor balances
+- wrong bank/cash balance
+- GST materially incorrect
+
+HIGH:
+
+- location leakage
+- missing reconciliation transactions
+- historical valuation unreliability
+- incorrect return calculation
+- duplicate receipt/payment posting
+- incorrect asset accounting
+
+MEDIUM:
+
+- report mismatch
+- dashboard mismatch
+- PDF mismatch
+- export mismatch
+
+LOW:
+
+- presentation-only discrepancy
+
+============================================================
+70. ROOT CAUSE, NOT SYMPTOMS
+============================================================
+
+For every discrepancy provide:
+
+WHAT IS WRONG
+
+WHERE IT IS WRONG
+
+WHY IT IS WRONG
+
+WHAT DATA CAUSES IT
+
+WHICH CODE/PATH CALCULATES IT
+
+WHICH REPORTS ARE AFFECTED
+
+WHICH OTHER MODULES ARE AFFECTED
+
+Do not merely say:
+
+"COGS is wrong."
+
+Instead say:
+
+"COGS is wrong because closing inventory is calculated using X while the ledger uses Y, causing ₹X difference."
+
+============================================================
+71. DO NOT RECOMMEND RANDOM FIXES
+============================================================
+
+Do not propose a patch until the root cause is established.
+
+Do not say:
+
+"change formula"
+
+without proving:
+
+- current formula
+- expected formula
+- source data
+- exact difference
+
+============================================================
+72. FINAL ACCOUNTING AUDIT REPORT
+============================================================
+
+Produce one comprehensive final report with this structure:
+
+SECTION 1
+Executive Summary
+
+SECTION 2
+ERP Architecture
+
+SECTION 3
+Accounting Source of Truth
+
+SECTION 4
+Double-Entry Audit
+
+SECTION 5
+Trial Balance Audit
+
+SECTION 6
+Trading Account Audit
+
+SECTION 7
+P&L Audit
+
+SECTION 8
+Balance Sheet Audit
+
+SECTION 9
+Inventory/COGS Audit
+
+SECTION 10
+Sales/Sales Return Audit
+
+SECTION 11
+Purchase/Purchase Return Audit
+
+SECTION 12
+Customer Receivable Audit
+
+SECTION 13
+Vendor Payable Audit
+
+SECTION 14
+Cash Audit
+
+SECTION 15
+Bank Audit
+
+SECTION 16
+Bank Reconciliation Audit
+
+SECTION 17
+Receipt/Payment Audit
+
+SECTION 18
+GST Audit
+
+SECTION 19
+Fixed Asset/Depreciation Audit
+
+SECTION 20
+Stock Transfer Audit
+
+SECTION 21
+Location Accounting Audit
+
+SECTION 22
+Month-Wise Accounting Audit
+
+SECTION 23
+Dashboard/Report/PDF Audit
+
+SECTION 24
+Edit/Cancel/Delete Audit
+
+SECTION 25
+Background Jobs Audit
+
+SECTION 26
+Database Integrity Audit
+
+SECTION 27
+Security/Permission Audit
+
+SECTION 28
+Audit Trail Audit
+
+SECTION 29
+Historical Data Reliability
+
+SECTION 30
+Critical Issues
+
+SECTION 31
+High Issues
+
+SECTION 32
+Medium Issues
+
+SECTION 33
+Low Issues
+
+SECTION 34
+Complete Reconciliation Matrix
+
+SECTION 35
+Root Causes
+
+SECTION 36
+Recommended Fix Priority
+
+============================================================
+73. REQUIRED MASTER TABLE
+============================================================
+
+Create this exact style of table:
+
+| Area | ERP Value | Independently Calculated | Difference | Status | Root Cause |
+|------|-----------|--------------------------|------------|--------|------------|
+
+Include at minimum:
+
+Sales
+Sales Returns
+Net Sales
+Purchases
+Purchase Returns
+Net Purchases
+Opening Stock
+Direct Expenses
+Closing Stock
+COGS
+Gross Profit
+Other Income
+Indirect Expenses
+Financial Charges
+Depreciation
+Net Profit/Loss
+Inventory
+Receivables
+Payables
+Cash
+Bank
+Fixed Assets
+GST
+Total Assets
+Total Liabilities
+Equity
+Trial Balance Debit
+Trial Balance Credit
+
+============================================================
+74. REQUIRED FINAL VERDICT
+============================================================
+
+At the very end give:
+
+ERP ACCOUNTING STATUS:
+
+GREEN
+AMBER
+RED
+
+Then:
+
+P&L:
+PASS / FAIL
+
+Balance Sheet:
+PASS / FAIL
+
+Trial Balance:
+PASS / FAIL
+
+Inventory:
+PASS / FAIL
+
+COGS:
+PASS / FAIL
+
+Receivables:
+PASS / FAIL
+
+Payables:
+PASS / FAIL
+
+Cash:
+PASS / FAIL
+
+Bank:
+PASS / FAIL
+
+GST:
+PASS / FAIL
+
+Fixed Assets:
+PASS / FAIL
+
+Stock Transfers:
+PASS / FAIL
+
+Location Accounting:
+PASS / FAIL
+
+Reconciliation:
+PASS / FAIL
+
+Dashboard:
+PASS / FAIL
+
+Reports:
+PASS / FAIL
+
+Historical Reliability:
+PASS / FAIL / LIMITED
+
+============================================================
+75. MOST IMPORTANT FINAL RULE
+============================================================
+
+DO NOT FIX ANYTHING DURING THIS AUDIT.
+
+I want a complete factual diagnosis first.
+
+If something is correct, explicitly say:
+
+PASS — VERIFIED
+
+If something is wrong, say:
+
+FAIL — EXACT DIFFERENCE
+
+If something cannot be reliably verified, say:
+
+UNVERIFIED — REASON
+
+If historical calculation is inherently limited, say:
+
+LIMITED — EXPLAIN WHY
+
+Do not hide uncertainty.
+
+Do not assume.
+
+Do not make changes.
+
+Do not call the ERP "correct" merely because the current reports balance.
+
+The final goal is to establish whether the ERP's accounting engine actually follows standard accounting logic from source transactions through:
+
+TRANSACTION
+→ JOURNAL
+→ LEDGER
+→ TRIAL BALANCE
+→ TRADING ACCOUNT
+→ P&L
+→ BALANCE SHEET
+→ DASHBOARD
+→ PDF/REPORT
+
+Every stage must reconcile with the next stage.
+
+START THE COMPLETE READ-ONLY FORENSIC AUDIT NOW.
+DO NOT MODIFY ANYTHING.
