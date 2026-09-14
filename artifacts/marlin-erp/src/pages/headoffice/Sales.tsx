@@ -67,6 +67,7 @@ import { StatusBadge } from '@/components/app/status-badge';
 import { EmptyState } from '@/components/app/empty-state';
 import { TableSkeleton } from '@/components/app/loading-skeletons';
 import { cn } from '@/lib/utils';
+import { trackEvent } from '@/lib/analytics';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { toast } from 'sonner';
 import { useQueryClient, useQuery } from '@tanstack/react-query';
@@ -1261,6 +1262,12 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
       // Edit mode — PUT to existing sale
       updateMutation.mutate({ saleId: editItem.id, data: payload }, {
         onSuccess: (updated: any) => {
+          trackEvent('sale_saved', {
+            operation: 'edit',
+            payment_mode: String(payload.paymentMode ?? 'unknown'),
+            has_customer: Boolean(payload.customerId),
+            line_count: Number(payload.lineItems?.length ?? 0),
+          });
           toast.success('Sale updated successfully');
           invalidateSalesData();
           // Refresh view sheet if the edited sale is currently open
@@ -1287,6 +1294,12 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
     submitLockRef.current = true;
     createMutation.mutate({ data: payload }, {
       onSuccess: (created: any) => {
+        trackEvent('sale_saved', {
+          operation: convertFrom ? 'quotation_conversion' : 'create',
+          payment_mode: String(payload.paymentMode ?? 'unknown'),
+          has_customer: Boolean(payload.customerId),
+          line_count: Number(payload.lineItems?.length ?? 0),
+        });
         toast.success(convertFrom
           ? `Quotation ${convertFrom.quotationNumber} converted — invoice ${created?.invoiceNumber ?? ''} recorded`
           : 'Sale recorded successfully');
@@ -1361,6 +1374,12 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
     if (!creditWarning) return;
     createMutation.mutate({ data: { ...creditWarning.payload, creditOverride: true } }, {
       onSuccess: () => {
+        trackEvent('sale_saved', {
+          operation: 'create',
+          payment_mode: String(creditWarning.payload.paymentMode ?? 'unknown'),
+          has_customer: Boolean(creditWarning.payload.customerId),
+          line_count: Number(creditWarning.payload.lineItems?.length ?? 0),
+        });
         toast.success('Sale recorded (credit limit overridden)');
         invalidateSalesData();
         setCreditWarning(null);
