@@ -56,6 +56,23 @@ export async function writeStockLedger(
         e.txnDate ?? null,
       ],
     );
+    // Capture the post-movement quantity and weighted-average cost in the same
+    // transaction as the stock change. A checkpoint is append-only; the latest
+    // checkpoint for a key/date is the authoritative dated position.
+    await db.query(
+      `INSERT INTO stock_cost_snapshots
+         (as_of_date, material_type, ref_id, branch_type, branch_id,
+          quantity, unit_cost, value, source, source_id)
+       SELECT COALESCE($7::date, CURRENT_DATE), se.material_type, se.item_id,
+              se.branch_type, se.branch_id, se.quantity::numeric,
+               se.cost_price::numeric,
+               (se.quantity::numeric * se.cost_price::numeric)::numeric,
+              $1, $6
+         FROM stock_entries se
+        WHERE se.item_id = $2 AND se.material_type = $3
+          AND se.branch_type = $4 AND se.branch_id = $5`,
+      [e.txnType, e.refId, e.materialType, e.branchType, e.branchId, e.docId ?? null, e.txnDate ?? null],
+    );
   }
 }
 

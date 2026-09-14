@@ -1,6 +1,6 @@
 ---
 name: Asset module design
-description: Fixed-asset module — register model, route-order trap, and what is intentionally NOT posted
+description: Fixed-asset module — register model, route-order trap, and journal-backed lifecycle accounting
 ---
 
 # Asset Management module
@@ -20,12 +20,18 @@ Inventory owns `GET /assets/:id` (legacy asset master detail), which otherwise s
 **How to apply:** any new `/assets/<literal>` route stays safe only while that ordering
 holds; check `routes/index.ts` order when adding routers with overlapping prefixes.
 
-**Intentionally NOT posted (schema is future-ready only):** depreciation, disposal
-accounting, and GST input-tax-credit. GST on an asset purchase is capitalised into the
-Dr STD-FIXED-ASSET total; the only voucher is Dr fixed-asset / Cr STD-CASH | STD-BANK |
-VEND-&lt;id&gt; by payment mode, `source_module='fixed_asset'`, zero stock movement. Transfers
-and disposals post nothing. Deleting a purchase deletes its voucher; disposed assets
-refuse deletion (they are history).
+**Accounting:** GST on an asset purchase is capitalised into the Dr STD-FIXED-ASSET
+total; the acquisition voucher is Dr fixed-asset / Cr STD-CASH | STD-BANK |
+VEND-&lt;id&gt; by payment mode, `source_module='fixed_asset'`, with zero stock movement.
+Monthly straight-line depreciation posts Dr STD-DEPR-EXP / Cr STD-ACCUM-DEPR, keyed
+idempotently by asset and accounting month. Disposal posts Dr accumulated depreciation
+and any remaining book value to STD-ASSET-DISP-LOSS, Cr STD-FIXED-ASSET, and stores the
+voucher link on the disposal row. Transfers remain non-posting. Deleting a purchase
+deletes its voucher; disposed assets refuse deletion (they are history).
+**Why:** depreciation and disposal must flow through the same journal stream as the
+rest of the ERP so P&L and Balance Sheet agree with the asset register.
+**How to apply:** keep depreciation/disposal journals location-stamped to the asset's
+current location and guard both routes with month lock and LBAC checks.
 
 **LBAC:** asset rows are scoped on `COALESCE(current_location, purchase location)` — a
 transfer changes who can see the asset. Reports offer `locationBasis=purchase|current`.

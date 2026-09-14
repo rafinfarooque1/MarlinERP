@@ -300,3 +300,15 @@ export function useAssetSummary(enabled = true) {
     enabled,
   });
 }
+
+export function useRunAssetDepreciation() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { period: string }) =>
+      customFetch<{ period: string; posted: number; skipped: number }>(
+        '/api/assets/depreciation/run',
+        { method: 'POST', body: JSON.stringify(body) },
+      ),
+    onSuccess: () => qc.invalidateQueries({ queryKey: BASE }),
+  });
+}

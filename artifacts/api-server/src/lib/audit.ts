@@ -22,6 +22,22 @@ export interface AuditOptions {
   };
 }
 
+type AuditQuery = { query: (sql: string, params?: unknown[]) => Promise<unknown> };
+
+/** Durable variant for callers that already own a transaction. */
+export async function logActivityInTransaction(q: AuditQuery, opts: AuditOptions): Promise<void> {
+  await q.query(
+    `INSERT INTO activity_log
+       (action, module, entity_type, entity_id, description, "user", type, metadata)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb)`,
+    [
+      opts.action, opts.module, opts.entityType, opts.entityId ?? null,
+      opts.description, opts.user ?? "system", opts.action,
+      JSON.stringify(opts.metadata ?? null),
+    ],
+  );
+}
+
 /**
  * Log an audit event. Returns a promise that resolves once the insert
  * completes, but callers should generally fire-and-forget with `.catch(()=>{})`.
