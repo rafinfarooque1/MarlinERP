@@ -163,8 +163,9 @@ const line = (over = {}) => ({
   materialType: 'material', materialId: fixtures.materialId,
   quantity: 1, unitCost: 100, mfgDate: '2026-01-01', expiryDate: '2027-01-01', ...over,
 });
+const OPEN_MONTH_DATE = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Calcutta' });
 const bill = (over = {}) => ({
-  vendorId: fixtures.vendorKa, purchaseDate: '2026-07-30', vendorInvoiceDate: '2026-07-29',
+  vendorId: fixtures.vendorKa, purchaseDate: OPEN_MONTH_DATE, vendorInvoiceDate: OPEN_MONTH_DATE,
   locationType: 'warehouse', locationId: WH_OK, lineItems: [line()], ...over,
 });
 async function createBill(body, token) {
@@ -283,7 +284,8 @@ console.log('\n[11,12] Automatic batch numbers');
   const res = await createBill(bill({ lineItems: [line(), line({ quantity: 2 })] }));
   const [a, b] = res.data?.lineItems ?? [];
   assert('TEST 11 — a batch number is issued when none is given', /^PUR-\d{8}-\d{5}$/.test(a?.batchNumber ?? ''), `got ${a?.batchNumber}`);
-  assert('TEST 11 — the number is dated to the bill', (a?.batchNumber ?? '').includes('PUR-20260730-'), `got ${a?.batchNumber}`);
+  const batchDate = OPEN_MONTH_DATE.replaceAll('-', '');
+  assert('TEST 11 — the number is dated to the bill', (a?.batchNumber ?? '').includes(`PUR-${batchDate}-`), `got ${a?.batchNumber}`);
   assert('TEST 12 — two lines on one bill get different numbers', a?.batchNumber !== b?.batchNumber, `${a?.batchNumber} vs ${b?.batchNumber}`);
 
   const lots = await sql(
@@ -294,7 +296,7 @@ console.log('\n[11,12] Automatic batch numbers');
 
   // A hand-typed number in the reserved shape would collide with a future
   // allocation, so it is refused outright.
-  const reserved = await createBill(bill({ lineItems: [line({ batchNumber: 'PUR-20260730-00001' })] }));
+  const reserved = await createBill(bill({ lineItems: [line({ batchNumber: `PUR-${batchDate}-00001` })] }));
   assert('TEST 12 — a reserved-format batch number is refused', reserved.status === 400, `status=${reserved.status}`);
 
   // The same manual number twice at the same location is refused.

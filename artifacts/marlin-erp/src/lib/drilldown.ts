@@ -61,6 +61,12 @@ export function resolveDrill(
     case 'receipt':
     case 'receiptadv':
       return { kind: 'link', href: `/accounts/vouchers?kind=receipt&view=${id}`, label: 'Open receipt voucher' };
+    case 'sale_payment':
+      return {
+        kind: 'info',
+        reason:
+          'Sale collection leg — the payment is part of the sale settlement history and has no standalone voucher document.',
+      };
     case 'jv': {
       const t = source && JV_TYPES.has(source) ? source : 'journal';
       return { kind: 'link', href: `/accounts/vouchers?kind=${t}&view=${id}`, label: 'Open voucher' };

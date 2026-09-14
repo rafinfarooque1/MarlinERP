@@ -83,6 +83,7 @@ const FAMILY_PROOF = {
   payment:    async (id) => (await q(`SELECT 1 FROM payments WHERE id = $1`, [id])).length === 1,
   receipt:    async (id) => (await q(`SELECT 1 FROM receipts WHERE id = $1`, [id])).length === 1,
   receiptadv: async (id) => (await q(`SELECT 1 FROM receipts WHERE id = $1`, [id])).length === 1,
+  sale_payment: async (id) => (await q(`SELECT 1 FROM sale_payments WHERE id = $1`, [id])).length === 1,
   jv:         async (id) => (await q(`SELECT 1 FROM journal_vouchers WHERE id = $1`, [id])).length === 1,
   expense:    async (id) => (await q(`SELECT 1 FROM location_expenses WHERE id = $1`, [id])).length === 1,
   purchadv:   async (id) => (await q(`SELECT 1 FROM purchase_advance_applications WHERE id = $1`, [id])).length === 1,
@@ -234,7 +235,7 @@ try {
       if (typeof c.value === "number") cellNumbers.push(round2(c.value));
       else if (c.value != null) cellText.push(String(c.value));
     }));
-    const missingDesc = fixture.filter((e) => !cellText.some((t) => t.includes(String(e.description).slice(0, 40))));
+    const missingDesc = fixture.filter((e) => !cellText.some((t) => t.includes(String(e.description).trim().slice(0, 40))));
     assert(`Workbook contains all ${fixture.length} fixture descriptions`, missingDesc.length === 0,
       missingDesc.slice(0, 3).map((e) => e.description).join(" | "));
     const wantNumbers = fixture.flatMap((e) => [e.debit, e.credit].filter((n) => Number(n) > 0)).map(round2);

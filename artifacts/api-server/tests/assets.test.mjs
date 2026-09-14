@@ -16,6 +16,16 @@ import bcrypt from 'bcryptjs';
 
 const BASE = process.env.API_URL || 'http://localhost:8080/api';
 const TAG = 'ZZASSET';
+const daysAgo = (days) => {
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() - days);
+  return d.toISOString().slice(0, 10);
+};
+const D10 = daysAgo(10);
+const D9 = daysAgo(9);
+const D8 = daysAgo(8);
+const D7 = daysAgo(7);
+const D6 = daysAgo(6);
 
 let authToken = '';
 let passed = 0, failed = 0;
@@ -125,7 +135,7 @@ async function voucherLines(purchaseId) {
 
 // Odd-paise GST case: 2 × 1355.55 = 2711.10 → 18% = 487.998 → 488.00
 const cash = await post('/assets/purchases', {
-  assetName: `${TAG} Laptop`, categoryId: catId, purchaseDate: '2026-07-10',
+  assetName: `${TAG} Laptop`, categoryId: catId, purchaseDate: D10,
   invoiceNumber: 'ZZA-1', locationType: 'headoffice', locationId: 1,
   quantity: 2, acquisitionCost: 1355.55, gstRate: 18, paymentMode: 'cash',
 });
@@ -141,7 +151,7 @@ assert('Cash voucher keeps its resolved location stamp',
   lines[0]?.voucher_location_type === 'headoffice' && Number(lines[0]?.voucher_location_id) === 1);
 
 const bank = await post('/assets/purchases', {
-  assetName: `${TAG} Printer`, categoryId: catId, purchaseDate: '2026-07-20',
+  assetName: `${TAG} Printer`, categoryId: catId, purchaseDate: D8,
   locationType: 'headoffice', locationId: 1,
   quantity: 1, acquisitionCost: 8000, gstRate: 18, paymentMode: 'bank',
 });
@@ -153,7 +163,7 @@ assert('Bank voucher keeps its resolved location stamp',
   lines[0]?.voucher_location_type === 'headoffice' && Number(lines[0]?.voucher_location_id) === 1);
 
 const credit = await post('/assets/purchases', {
-  assetName: `${TAG} Freezer`, categoryId: catId, purchaseDate: '2026-07-30',
+  assetName: `${TAG} Freezer`, categoryId: catId, purchaseDate: D6,
   locationType: 'headoffice', locationId: 1, vendorId: fixtures.vendorId,
   quantity: 1, acquisitionCost: 25000, gstRate: 18, paymentMode: 'credit',
 });
@@ -163,7 +173,7 @@ lines = await voucherLines(credit.data.id);
 assert('Credit: Cr vendor ledger', lines[1]?.code === `VEND-${fixtures.vendorId}` && Number(lines[1]?.credit) === 29500);
 
 const noVendor = await post('/assets/purchases', {
-  assetName: `${TAG} Bad`, categoryId: catId, purchaseDate: '2026-07-30',
+  assetName: `${TAG} Bad`, categoryId: catId, purchaseDate: D6,
   locationType: 'headoffice', locationId: 1,
   quantity: 1, acquisitionCost: 100, paymentMode: 'credit',
 });
@@ -177,13 +187,13 @@ console.log('\n[2] Date-range filters (from/to) on the purchases list');
 
 const mine = (res) => (res.data ?? []).filter(a => String(a.assetName).startsWith(TAG));
 
-let res = await get(`/assets/purchases?locationBasis=purchase&from=2026-07-15&to=2026-07-25`);
+let res = await get(`/assets/purchases?locationBasis=purchase&from=${D9}&to=${D7}`);
 assert('purchases from/to window returns only the bank purchase',
   mine(res).length === 1 && mine(res)[0].id === bank.data.id,
   `got ${mine(res).map(a => a.assetName).join(',')}`);
-res = await get(`/assets/purchases?locationBasis=purchase&from=2026-07-01`);
+res = await get(`/assets/purchases?locationBasis=purchase&from=${D10}`);
 assert('purchases open-ended from returns all three', mine(res).length === 3);
-res = await get(`/assets/purchases?locationBasis=purchase&to=2026-07-11`);
+res = await get(`/assets/purchases?locationBasis=purchase&to=${D10}`);
 assert('purchases open-ended to returns only the cash purchase',
   mine(res).length === 1 && mine(res)[0].id === cash.data.id);
 res = await get(`/assets/purchases?from=bogus`);
@@ -195,35 +205,35 @@ console.log('\n[3] Transfer flow + date filter');
 const whId = (await sql(`SELECT id FROM warehouses ORDER BY id LIMIT 1`)).rows[0].id;
 const tr = await post('/assets/transfers', {
   assetPurchaseId: cash.data.id, toType: 'warehouse', toId: whId,
-  transferDate: '2026-07-12', approvedBy: 'ZZ Tester', reason: 'test move',
+  transferDate: D9, approvedBy: 'ZZ Tester', reason: 'test move',
 });
 assert('Transfer created', tr.status === 201, `status=${tr.status} ${JSON.stringify(tr.data).slice(0, 150)}`);
 res = await get(`/assets/purchases?locationBasis=current&q=${TAG}%20Laptop`);
 const moved = mine(res)[0];
 assert('Asset current location updated', moved?.currentLocationType === 'warehouse' && Number(moved?.currentLocationId) === Number(whId));
 
-res = await get(`/assets/transfers?from=2026-07-12&to=2026-07-12`);
+res = await get(`/assets/transfers?from=${D9}&to=${D9}`);
 assert('transfers date window includes the row', (res.data ?? []).some(t => t.id === tr.data.id));
-res = await get(`/assets/transfers?from=2026-07-13`);
+res = await get(`/assets/transfers?from=${D8}`);
 assert('transfers window after the date excludes the row', !(res.data ?? []).some(t => t.id === tr.data.id));
 
 // ───────────────────────────────────────────────────────────────────────────
 console.log('\n[4] Disposal flow + date filter + guards');
 
 const disp = await post('/assets/disposals', {
-  assetPurchaseId: bank.data.id, disposalType: 'scrapped', disposalDate: '2026-07-22', reason: 'test scrap',
+  assetPurchaseId: bank.data.id, disposalType: 'scrapped', disposalDate: D7, reason: 'test scrap',
 });
 assert('Disposal created', disp.status === 201);
 res = await get(`/assets/purchases?q=${TAG}%20Printer`);
 assert('Asset status = scrapped', mine(res)[0]?.status === 'scrapped');
 
-res = await get(`/assets/disposals?from=2026-07-22&to=2026-07-22`);
+res = await get(`/assets/disposals?from=${D7}&to=${D7}`);
 assert('disposals date window includes the row', (res.data ?? []).some(d => d.id === disp.data.id));
-res = await get(`/assets/disposals?to=2026-07-21`);
+res = await get(`/assets/disposals?to=${D8}`);
 assert('disposals window before the date excludes the row', !(res.data ?? []).some(d => d.id === disp.data.id));
 
 const trDisposed = await post('/assets/transfers', {
-  assetPurchaseId: bank.data.id, toType: 'warehouse', toId: whId, transferDate: '2026-07-23',
+  assetPurchaseId: bank.data.id, toType: 'warehouse', toId: whId, transferDate: D6,
 });
 assert('Transfer of a disposed asset rejected (400)', trDisposed.status === 400);
 const delDisposed = await del(`/assets/purchases/${bank.data.id}`);
@@ -248,7 +258,7 @@ for (const p of ['/assets/purchases', '/assets/categories', '/assets/transfers',
   assert(`GET ${p} → 403`, r.status === 403, `status=${r.status}`);
 }
 const badPost = await post('/assets/purchases', {
-  assetName: 'X', categoryId: catId, purchaseDate: '2026-07-01',
+  assetName: 'X', categoryId: catId, purchaseDate: D10,
   locationType: 'headoffice', locationId: 1, quantity: 1, acquisitionCost: 10, paymentMode: 'cash',
 }, badToken);
 assert('POST /assets/purchases → 403', badPost.status === 403);

@@ -1426,13 +1426,12 @@ export async function buildDerivedPostings(opts: { toDate?: string; q?: Q } = {}
     // exactly total − paid, so every balance, TB row and report total is
     // unchanged — but the customer's statement now reads like a book of
     // account: invoice, receipts, advance adjustments, all visible.
-    // Walk-in sales (no customer) and rows whose ledger was hand-deleted
-    // keep the old net "Outstanding" shape against Sundry Debtors.
+    // Walk-in sales (no customer) use the consolidated debtor control as their
+    // party ledger, so the invoice and its later collection can each balance.
     const custLedgerId = s.customer_id ? byCode.get(`CUST-${s.customer_id}`)?.id : undefined;
     const grossParty = custLedgerId != null;
-    if (grossParty) {
-      push({ entryId: eid, date: s.sale_date, ledgerId: custLedgerId!, debit: total, credit: 0, source: "sale", voucherNumber: s.invoice_number, description: `Invoice ${inv}`, ...sLoc });
-    }
+    const partyLedgerId = custLedgerId ?? debtors;
+    push({ entryId: eid, date: s.sale_date, ledgerId: partyLedgerId, debit: total, credit: 0, source: "sale", voucherNumber: s.invoice_number, description: `Invoice ${inv}`, ...sLoc });
 
     let paidViaSp = 0;
     for (const p of spBySale.get(s.id) ?? []) {
@@ -1482,14 +1481,11 @@ export async function buildDerivedPostings(opts: { toDate?: string; q?: Q } = {}
         legDesc = `${p.method === "cash" ? "Cash" : "Electronic"} received — ${inv}`;
       }
       push({ entryId: collectionEid, date: p.payment_date, ledgerId: drLedger, debit: amt, credit: 0, source: "sale", voucherNumber: p.receipt_vno || s.invoice_number, description: legDesc, ...sLoc });
-      if (grossParty) {
-        // The matching credit on the customer's own ledger — this is the
-        // "receipt" line of their statement. Carries the receipt's voucher
-        // number when a real collection voucher exists. For advance-method
-        // rows this forms a deliberate Dr/Cr wash on the same ledger: the
-        // adjustment stays visible in the statement without moving the net.
-        push({ entryId: eid, date: p.payment_date, ledgerId: custLedgerId!, debit: 0, credit: amt, source: "sale", voucherNumber: p.receipt_vno || s.invoice_number, description: p.method === "advance" ? `Advance adjusted — ${inv}` : `Payment received — ${inv}`, ...sLoc });
-      }
+      // Keep the debtor/customer credit with the actual collection identity.
+      // For allocation receipts this makes one receipt spread across several
+      // invoices a single balanced financial event; the invoice entry itself
+      // remains the balanced Dr party / Cr revenue+tax document.
+      push({ entryId: collectionEid, date: p.payment_date, ledgerId: partyLedgerId, debit: 0, credit: amt, source: "sale", voucherNumber: p.receipt_vno || s.invoice_number, description: p.method === "advance" ? `Advance adjusted — ${inv}` : `Payment received — ${inv}`, ...sLoc });
     }
 
     const amountPaid = Number(s.amount_paid ?? 0);
@@ -1506,32 +1502,11 @@ export async function buildDerivedPostings(opts: { toDate?: string; q?: Q } = {}
       // Cash sits in the cash box; bank/UPI/card clear through Electronic Clearing.
       const drLedger = clearsThroughBank(s.payment_mode) ? elecClr : cashLedger;
       push({ entryId: eid, date: s.sale_date, ledgerId: drLedger, debit: extra, credit: 0, source: "sale", voucherNumber: s.invoice_number, description: `Received — ${inv}`, ...sLoc });
-      if (grossParty) {
-        push({ entryId: eid, date: s.sale_date, ledgerId: custLedgerId!, debit: 0, credit: extra, source: "sale", voucherNumber: s.invoice_number, description: `Payment received — ${inv}`, ...sLoc });
-      }
+      push({ entryId: eid, date: s.sale_date, ledgerId: partyLedgerId, debit: 0, credit: extra, source: "sale", voucherNumber: s.invoice_number, description: `Payment received — ${inv}`, ...sLoc });
     }
 
-    // The gross model needs no remainder legs: what the customer still owes
-    // (or overpaid) is simply the entry's net on their ledger.
-    if (grossParty) continue;
-
-    const due = round2(total - amountPaid);
-    if (due > 0.004) {
-      const custLedger = s.customer_id ? (byCode.get(`CUST-${s.customer_id}`)?.id ?? debtors) : debtors;
-      push({ entryId: eid, date: s.sale_date, ledgerId: custLedger, debit: due, credit: 0, source: "sale", voucherNumber: s.invoice_number, description: `Outstanding — ${inv}`, ...sLoc });
-    } else if (due < -0.004) {
-      // Collected beyond the bill — an edit can lower a bill below what was
-      // already collected (payments are never wiped), and legacy imports carry
-      // such rows too. The excess is money held for the customer: credit their
-      // OWN ledger (their advance is that ledger's credit balance) so the
-      // entry balances and the credit is visible and adjustable against future
-      // invoices. Silently dropping this negative leg is what let the balance
-      // sheet drift with "no identifiable cause".
-      const overLedger = (s.customer_id
-        ? byCode.get(`CUST-${s.customer_id}`)?.id
-        : 0) || debtors;
-      push({ entryId: eid, date: s.sale_date, ledgerId: overLedger, debit: 0, credit: round2(-due), source: "sale", voucherNumber: s.invoice_number, description: `Overpayment held — ${inv}`, ...sLoc });
-    }
+    // The party ledger's net after the invoice debit and dated collection
+    // credits is the outstanding balance (or a customer advance).
   }
 
   // 6. Purchases: Dr Purchases (taxable + round-off) + Dr Input GST / Cr vendor.
