@@ -431,6 +431,21 @@ async function runMigrations() {
     CREATE INDEX IF NOT EXISTS idx_bank_recon_batches_created
       ON bank_reconciliation_batches(created_at DESC);
 
+    -- Immutable evidence for an administrator reset. The reset clears only
+    -- review state, but this snapshot must survive it so the before/after
+    -- comparison is not dependent on a best-effort activity-log write.
+    CREATE TABLE IF NOT EXISTS bank_reconciliation_reset_audits (
+      id serial PRIMARY KEY,
+      reason text NOT NULL,
+      requested_by text,
+      requested_at timestamptz NOT NULL DEFAULT now(),
+      snapshot jsonb NOT NULL,
+      deleted_batch_count integer NOT NULL DEFAULT 0,
+      deleted_item_count integer NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_bank_recon_reset_audits_requested
+      ON bank_reconciliation_reset_audits(requested_at DESC);
+
     CREATE TABLE IF NOT EXISTS cash_deposits (
       id serial PRIMARY KEY,
       outlet_id integer,

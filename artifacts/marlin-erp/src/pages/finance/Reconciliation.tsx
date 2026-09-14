@@ -13,10 +13,11 @@ import {
   useGetBankLedgers, useGetBankTransactions, useCreateBankReconciliationBatch,
   useGetBankReconciliationAudit, useGetBankReconciliationBatches,
   useGetBankReconciliationBatch, useUpdateBankReconciliationBatch,
+  useResetBankReconciliation,
   useListOutlets, useListWarehouses,
 } from '@workspace/api-client-react';
 import { toast } from 'sonner';
-import { CheckSquare, Landmark, Wallet, AlertTriangle, Pencil } from 'lucide-react';
+import { CheckSquare, Landmark, Wallet, AlertTriangle, Pencil, RotateCcw } from 'lucide-react';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { PageHeader } from '@/components/app/page-header';
 import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
@@ -72,7 +73,7 @@ export default function Reconciliation() {
     locationType: filterType,
     locationId,
   });
-  const { data: transactions = [], isLoading: transactionsLoading } = useGetBankTransactions({
+  const { data: transactionResult, isLoading: transactionsLoading } = useGetBankTransactions({
     locationType: filterType,
     locationId,
     bankAccountId: accountFilter !== 'all' ? Number(accountFilter) : undefined,
@@ -80,6 +81,7 @@ export default function Reconciliation() {
     toDate: toDate || undefined,
     search: search.trim() || undefined,
   });
+  const transactions = transactionResult?.transactions ?? [];
   const createBatchMutation = useCreateBankReconciliationBatch();
   const updateBatchMutation = useUpdateBankReconciliationBatch();
   const { data: audit } = useGetBankReconciliationAudit();
@@ -87,6 +89,7 @@ export default function Reconciliation() {
   const { data: editingBatch } = useGetBankReconciliationBatch(editBatchId ?? 0, {
     enabled: editBatchId != null,
   });
+  const resetMutation = useResetBankReconciliation();
 
   useEffect(() => {
     if (!editingBatch || editBatchId == null) return;
@@ -121,12 +124,9 @@ export default function Reconciliation() {
   });
   const { pageRows, pagerProps } = useClientPage(sorted);
 
-  const unreconciledAmount = transactions
-    .filter(t => t.reconciliationStatus !== 'reconciled')
-    .reduce((sum, t) => sum + Number(t.amount || 0), 0);
-  const reconciledAmount = transactions
-    .filter(t => t.reconciliationStatus === 'reconciled')
-    .reduce((sum, t) => sum + Number(t.amount || 0), 0);
+  const authoritativeTotals = transactionResult?.totals;
+  const unreconciledAmount = authoritativeTotals?.unreconciledAmount ?? 0;
+  const reconciledAmount = authoritativeTotals?.reconciledAmount ?? 0;
 
   const editingItemKeys = new Set(
     editingBatch?.items.map(item => `${item.ledgerId}:${item.entryId}`) ?? [],
@@ -223,6 +223,24 @@ export default function Reconciliation() {
     setAccountFilter('all');
   }
 
+  async function resetReconciliation() {
+    const confirmed = window.confirm(
+      'Reset bank reconciliation review state? This clears reconciliation batches and statuses, but does not delete sales, receipts, payments, journals, or bank postings.',
+    );
+    if (!confirmed) return;
+    try {
+      const result = await resetMutation.mutateAsync() as { reconciledEntriesReset: number };
+      setSelectedKeys(new Set());
+      setEditBatchId(null);
+      setBatchOpen(false);
+      toast.success(
+        `Reset complete: ${result.reconciledEntriesReset} transaction status(es) cleared; financial transactions were preserved.`,
+      );
+    } catch (e: any) {
+      toast.error(e?.data?.error || e?.message || 'Unable to reset reconciliation state.');
+    }
+  }
+
   if (!perm.isLoading && !perm.canView) {
     return (
       <AppLayout>
@@ -245,7 +263,7 @@ export default function Reconciliation() {
         />
 
         <SummaryCardGrid>
-          <SummaryCard label="Transactions" value={String(transactions.length)} icon={Landmark} loading={transactionsLoading} />
+          <SummaryCard label="Eligible transactions" value={String(authoritativeTotals?.eligibleCount ?? 0)} icon={Landmark} loading={transactionsLoading} />
           <SummaryCard label="Unreconciled" value={fmt(unreconciledAmount)} icon={Wallet} tone="warning" loading={transactionsLoading} />
           <SummaryCard label="Reconciled" value={fmt(reconciledAmount)} icon={CheckSquare} tone="positive" loading={transactionsLoading} />
           <SummaryCard label="Bank Accounts" value={String(bankLedgers.length)} icon={Landmark} loading={accountsLoading} />
@@ -314,6 +332,18 @@ export default function Reconciliation() {
             <CheckSquare className="w-4 h-4 mr-2" />
             Reconcile Selected{selectedTransactions.length ? ` (${selectedTransactions.length})` : ''}
           </Button>
+          {perm.canDelete ? (
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-9"
+              disabled={resetMutation.isPending}
+              onClick={resetReconciliation}
+            >
+              <RotateCcw className="w-4 h-4 mr-2" />
+              {resetMutation.isPending ? 'Resetting…' : 'Reset review state'}
+            </Button>
+          ) : null}
         </div>
 
         {audit?.undetermined?.length ? (

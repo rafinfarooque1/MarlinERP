@@ -111,6 +111,16 @@ function applyBankEntryLocationScope(
   }
 }
 
+function matchesViewLocation(
+  row: { location_type?: string | null; location_id?: number | null },
+  location: { locationType: string; locationId: number } | null,
+): boolean {
+  if (!location) return true;
+  if (location.locationType === "headoffice") return row.location_type === "headoffice";
+  return row.location_type === location.locationType
+    && Number(row.location_id) === Number(location.locationId);
+}
+
 // ── GET /accounts/reconciliation/audit ───────────────────────────────────────
 // Read-only, source-level accounting checks. This is intentionally separate
 // from the presentation reports: it returns the failed equation and the
@@ -789,6 +799,11 @@ router.get("/reconciliation/bank-transactions", requireModuleView("page:/account
     SELECT 'purchase:' || p.id::text AS entry_id, v.name AS party_name
       FROM purchases p LEFT JOIN vendors v ON v.id = p.vendor_id
     UNION ALL
+    SELECT 'sale_payment:' || sp.id::text AS entry_id, c.name AS party_name
+      FROM sale_payments sp
+      JOIN sales s ON s.id = sp.sale_id
+      LEFT JOIN customers c ON c.id = s.customer_id
+    UNION ALL
     SELECT 'receipt:' || r.id::text AS entry_id,
            COALESCE(c.name, v.name, al.name) AS party_name
       FROM receipts r
@@ -814,9 +829,9 @@ router.get("/reconciliation/bank-transactions", requireModuleView("page:/account
     parties.map((p: any) => [String(p.entry_id), p.party_name ?? null]),
   );
 
-  res.json(txns
-    .sort((a, b) => b.date.localeCompare(a.date) || b.entryId.localeCompare(a.entryId))
-    .map((t) => {
+  const ordered = txns
+    .sort((a, b) => b.date.localeCompare(a.date) || b.entryId.localeCompare(a.entryId));
+  const mapped = ordered.map((t) => {
       const account = accountByLedger.get(t.ledgerId);
       const saved = reconciliationByKey.get(`${t.ledgerId}:${t.entryId}`);
       const net = Math.round((t.debit - t.credit) * 100) / 100;
@@ -847,7 +862,21 @@ router.get("/reconciliation/bank-transactions", requireModuleView("page:/account
         reconciledBy: saved?.reconciled_by ?? null,
         reconciliationReference: saved?.reconciliation_reference ?? null,
       };
-    }));
+    });
+  const eligible = mapped.filter((t) => t.reconciliationEligible);
+  const totals = {
+    eligibleCount: eligible.length,
+    eligibleAmount: Math.round(eligible.reduce((sum, t) => sum + Number(t.amount || 0), 0) * 100) / 100,
+    reconciledCount: eligible.filter((t) => t.reconciliationStatus === "reconciled").length,
+    reconciledAmount: Math.round(eligible
+      .filter((t) => t.reconciliationStatus === "reconciled")
+      .reduce((sum, t) => sum + Number(t.amount || 0), 0) * 100) / 100,
+    unreconciledCount: eligible.filter((t) => t.reconciliationStatus !== "reconciled").length,
+    unreconciledAmount: Math.round(eligible
+      .filter((t) => t.reconciliationStatus !== "reconciled")
+      .reduce((sum, t) => sum + Number(t.amount || 0), 0) * 100) / 100,
+  };
+  res.json({ transactions: mapped, totals });
 });
 
 // ── GET /reconciliation/bank-audit ───────────────────────────────────────────
@@ -879,13 +908,22 @@ router.get("/reconciliation/bank-audit", requireModuleView("page:/accounts/recon
   const postings = await buildDerivedPostings({});
   const postingLocation = getPostingLocationFilter(req);
   const identity = new Map<string, any>();
+  const duplicateKeys = new Set<string>();
+  const seenPostingSignatures = new Set<string>();
   const undetermined: any[] = [];
+  const sourceCounts = new Map<string, { count: number; amount: number }>();
   for (const p of postings as any[]) {
     const ledgerId = Number(p.ledgerId);
     if (access.ledgerIds && !access.ledgerIds.has(ledgerId)
       && !isLocationInScope(access.dataScope, p.locationType, p.locationId)) continue;
     if (postingLocation && !postingMatchesLocation(p, postingLocation)) continue;
     const key = `${ledgerId}:${p.entryId}`;
+    const signature = [
+      key, p.source, String(p.date).slice(0, 10), Number(p.debit ?? 0),
+      Number(p.credit ?? 0), p.voucherNumber ?? "",
+    ].join("|");
+    if (seenPostingSignatures.has(signature)) duplicateKeys.add(key);
+    seenPostingSignatures.add(signature);
     const current = identity.get(key);
     if (current) {
       current.debit += Number(p.debit ?? 0);
@@ -943,6 +981,21 @@ router.get("/reconciliation/bank-audit", requireModuleView("page:/accounts/recon
     const key = `${row.ledgerId}:${row.entryId}`;
     item.eligibleCount += 1;
     item.eligibleAmount += amount;
+    const sourceKey = (() => {
+      if (row.source === "sale") return "SALE";
+      if (row.source === "receipt") return "RECEIPT";
+      if (row.source === "payment") return "PAYMENT";
+      if (row.source === "expense" || row.source === "deposit") return "OTHER BANK TRANSACTION";
+      return "OTHER BANK TRANSACTION";
+    })();
+    const sourceTotal = sourceCounts.get(sourceKey) ?? { count: 0, amount: 0 };
+    sourceTotal.count += 1;
+    sourceTotal.amount += amount;
+    sourceCounts.set(sourceKey, sourceTotal);
+    if (duplicateKeys.has(key)) {
+      item.duplicateCount += 1;
+      item.duplicateAmount += amount;
+    }
     if (savedByKey.has(key)) {
       item.reconciledCount += 1;
       item.reconciledAmount += amount;
@@ -959,6 +1012,19 @@ router.get("/reconciliation/bank-audit", requireModuleView("page:/accounts/recon
   }
   res.json({
     accounts: [...byAccount.values()],
+    totals: {
+      eligibleCount: [...byAccount.values()].reduce((n, row) => n + Number(row.eligibleCount), 0),
+      eligibleAmount: Math.round([...byAccount.values()].reduce((n, row) => n + Number(row.eligibleAmount), 0) * 100) / 100,
+      reconciledCount: [...byAccount.values()].reduce((n, row) => n + Number(row.reconciledCount), 0),
+      reconciledAmount: Math.round([...byAccount.values()].reduce((n, row) => n + Number(row.reconciledAmount), 0) * 100) / 100,
+      unreconciledCount: [...byAccount.values()].reduce((n, row) => n + Number(row.unreconciledCount), 0),
+      unreconciledAmount: Math.round([...byAccount.values()].reduce((n, row) => n + Number(row.unreconciledAmount), 0) * 100) / 100,
+      duplicateCount: [...byAccount.values()].reduce((n, row) => n + Number(row.duplicateCount), 0),
+      duplicateAmount: Math.round([...byAccount.values()].reduce((n, row) => n + Number(row.duplicateAmount), 0) * 100) / 100,
+    },
+    sourceCounts: Object.fromEntries([...sourceCounts.entries()].map(([source, value]) => [
+      source, { count: value.count, amount: Math.round(value.amount * 100) / 100 },
+    ])),
     undetermined,
     legacySettlementBatchesPreserved: true,
     notes: [
@@ -972,6 +1038,7 @@ router.get("/reconciliation/bank-audit", requireModuleView("page:/accounts/recon
 // ── GET /reconciliation/bank-batches ─────────────────────────────────────────
 router.get("/reconciliation/bank-batches", requireModuleView("page:/accounts/reconciliation"), async (req, res): Promise<void> => {
   const access = await bookAccessScope((req as any).employee ?? {});
+  const viewLocation = getLocationFilter(req);
   const { rows } = await pool.query(`
     SELECT b.*, cba.name AS bank_account_name,
            COALESCE(w.name, o.name, 'Head Office') AS location_name,
@@ -982,11 +1049,15 @@ router.get("/reconciliation/bank-batches", requireModuleView("page:/accounts/rec
       LEFT JOIN outlets o ON b.location_type = 'outlet' AND o.id = b.location_id
       LEFT JOIN bank_reconciliation_batch_items i ON i.batch_id = b.id
      GROUP BY b.id, cba.name, w.name, o.name
-     ORDER BY b.created_at DESC
-     LIMIT 200
+      ORDER BY b.created_at DESC
   `);
   const visible = rows.filter((r: any) =>
-    !access.ledgerIds || access.ledgerIds.has(Number(r.bank_ledger_id)),
+    (!access.ledgerIds || access.ledgerIds.has(Number(r.bank_ledger_id)))
+      && (!viewLocation
+        || (viewLocation.locationType === "headoffice"
+          ? r.location_type === "headoffice"
+          : r.location_type === viewLocation.locationType
+            && Number(r.location_id) === Number(viewLocation.locationId))),
   );
   res.json(visible.map((r: any) => ({
     id: Number(r.id),
@@ -1017,6 +1088,7 @@ router.get("/reconciliation/bank-batches/:id", requireModuleView("page:/accounts
     return;
   }
   const access = await bookAccessScope((req as any).employee ?? {});
+  const viewLocation = getLocationFilter(req);
   const { rows: [batch] } = await pool.query(
     `SELECT b.*, cba.name AS bank_account_name,
             COALESCE(w.name, o.name, 'Head Office') AS location_name
@@ -1027,7 +1099,12 @@ router.get("/reconciliation/bank-batches/:id", requireModuleView("page:/accounts
       WHERE b.id = $1`,
     [id],
   );
-  if (!batch || (access.ledgerIds && !access.ledgerIds.has(Number(batch.bank_ledger_id)))) {
+  if (!batch
+    || (access.ledgerIds && !access.ledgerIds.has(Number(batch.bank_ledger_id)))
+    || (viewLocation && (viewLocation.locationType === "headoffice"
+      ? batch.location_type !== "headoffice"
+      : batch.location_type !== viewLocation.locationType
+        || Number(batch.location_id) !== Number(viewLocation.locationId)))) {
     res.status(404).json({ error: "Reconciliation batch not found." });
     return;
   }
@@ -1114,6 +1191,8 @@ router.post("/reconciliation/bank-batches", requireModuleAction("page:/accounts/
   try {
     await client.query("BEGIN");
     const access = await bookAccessScope((req as any).employee ?? {});
+    const requestedLocation = getLocationFilter(req);
+    const requestedPostingLocation = getPostingLocationFilter(req);
     const { rows: [account] } = await client.query(
       `SELECT cba.id AS account_id, cba.ledger_id, cba.name, cba.account_type,
               COALESCE(cba.location_type, 'headoffice') AS location_type,
@@ -1128,7 +1207,9 @@ router.post("/reconciliation/bank-batches", requireModuleAction("page:/accounts/
         FOR UPDATE OF cba`,
       [bankAccountId],
     );
-    if (!account || (access.ledgerIds && !access.ledgerIds.has(Number(account.ledger_id)))) {
+    if (!account
+      || (access.ledgerIds && !access.ledgerIds.has(Number(account.ledger_id)))
+      || !matchesViewLocation(account, requestedLocation)) {
       await client.query("ROLLBACK");
       res.status(404).json({ error: "Bank account not found." });
       return;
@@ -1177,6 +1258,11 @@ router.post("/reconciliation/bank-batches", requireModuleAction("page:/accounts/
         && !isLocationInScope(access.dataScope, posting.locationType, posting.locationId)) {
         await client.query("ROLLBACK");
         res.status(404).json({ error: "One or more transactions are outside your location scope." });
+        return;
+      }
+      if (requestedPostingLocation && !postingMatchesLocation(posting, requestedPostingLocation)) {
+        await client.query("ROLLBACK");
+        res.status(404).json({ error: "One or more transactions are outside the selected location." });
         return;
       }
       if (posting.locationType && !isLocationInScope(access.dataScope, posting.locationType, posting.locationId)
@@ -1374,7 +1460,14 @@ router.patch("/reconciliation/bank-batches/:id", requireModuleAction("page:/acco
     }
 
     const access = await bookAccessScope((req as any).employee ?? {});
+    const requestedLocation = getLocationFilter(req);
+    const requestedPostingLocation = getPostingLocationFilter(req);
     if (access.ledgerIds && !access.ledgerIds.has(Number(batch.bank_ledger_id))) {
+      await client.query("ROLLBACK");
+      res.status(404).json({ error: "Reconciliation batch not found." });
+      return;
+    }
+    if (!matchesViewLocation(batch, requestedLocation)) {
       await client.query("ROLLBACK");
       res.status(404).json({ error: "Reconciliation batch not found." });
       return;
@@ -1455,6 +1548,11 @@ router.patch("/reconciliation/bank-batches/:id", requireModuleAction("page:/acco
         && !isLocationInScope(access.dataScope, posting.locationType, posting.locationId)) {
         await client.query("ROLLBACK");
         res.status(404).json({ error: "One or more transactions are outside your location scope." });
+        return;
+      }
+      if (requestedPostingLocation && !postingMatchesLocation(posting, requestedPostingLocation)) {
+        await client.query("ROLLBACK");
+        res.status(404).json({ error: "One or more transactions are outside the selected location." });
         return;
       }
       if (posting.locationType && !isLocationInScope(access.dataScope, posting.locationType, posting.locationId)
@@ -1627,18 +1725,118 @@ router.post("/reconciliation/bank-reset", requireModuleAction("page:/accounts/re
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    const [accountCount, statusTotals, batchTotals, batchItems, bankTreeRows] = await Promise.all([
+      client.query(`
+        SELECT COUNT(*)::int AS count
+          FROM cash_bank_accounts cba
+          JOIN account_ledgers al ON al.id = cba.ledger_id
+         WHERE cba.account_type <> 'cash' AND COALESCE(al.is_active, true)
+      `),
+      client.query(`
+        SELECT status, COUNT(*)::int AS count,
+               COALESCE(SUM(ABS(debit - credit)), 0)::numeric AS amount
+          FROM bank_reconciliation_entries
+         GROUP BY status
+      `),
+      client.query(`
+        SELECT COUNT(*)::int AS count,
+               COALESCE(SUM(gross_amount), 0)::numeric AS gross,
+               COALESCE(SUM(processing_charge), 0)::numeric AS charges,
+               COALESCE(SUM(net_amount), 0)::numeric AS net
+          FROM bank_reconciliation_batches
+      `),
+      client.query(`
+        SELECT COUNT(*)::int AS count,
+               COALESCE(SUM(amount), 0)::numeric AS amount
+          FROM bank_reconciliation_batch_items
+      `),
+      client.query(`
+        WITH RECURSIVE bank_tree AS (
+          SELECT id, parent_id FROM account_ledgers WHERE code = 'STD-BANK'
+          UNION ALL
+          SELECT l.id, l.parent_id
+            FROM account_ledgers l
+            JOIN bank_tree b ON b.id = l.parent_id
+        )
+        SELECT id FROM bank_tree
+      `),
+    ]);
+    const postings = await buildDerivedPostings({ q: client });
+    const bankLedgerIds = new Set<number>(bankTreeRows.rows.map((r: any) => Number(r.id)));
+    const { rows: assignedBankAccounts } = await client.query(`
+      SELECT cba.id AS account_id, cba.ledger_id
+        FROM cash_bank_accounts cba
+        JOIN account_ledgers al ON al.id = cba.ledger_id
+       WHERE cba.account_type <> 'cash' AND COALESCE(al.is_active, true)
+    `);
+    const assignedLedgers = new Set<number>(assignedBankAccounts.map((r: any) => Number(r.ledger_id)));
+    const identity = new Map<string, { source: string; amount: number }>();
+    for (const posting of postings as any[]) {
+      const ledgerId = Number(posting.ledgerId);
+      if (!bankLedgerIds.has(ledgerId) || posting.source === "opening_balance") continue;
+      const key = `${ledgerId}:${posting.entryId}`;
+      const amount = Math.abs(Number(posting.debit ?? 0) - Number(posting.credit ?? 0));
+      const prior = identity.get(key);
+      if (prior) prior.amount += amount;
+      else identity.set(key, { source: String(posting.source), amount });
+    }
+    const eligibleIdentities = [...identity.values()].filter((_row, index) => {
+      const key = [...identity.keys()][index];
+      return assignedLedgers.has(Number(key.split(":")[0]));
+    });
+    const sourceCounts: Record<string, { count: number; amount: number }> = {};
+    for (const row of eligibleIdentities) {
+      const source = row.source === "sale" ? "SALE"
+        : row.source === "receipt" ? "RECEIPT"
+          : row.source === "payment" ? "PAYMENT"
+            : "OTHER BANK TRANSACTION";
+      sourceCounts[source] ??= { count: 0, amount: 0 };
+      sourceCounts[source].count += 1;
+      sourceCounts[source].amount += row.amount;
+    }
+    const statusByName = new Map<string, any>(statusTotals.rows.map((r: any) => [String(r.status), r]));
     const before = {
-      entries: (await client.query(`SELECT COUNT(*)::int AS count FROM bank_reconciliation_entries WHERE status = 'reconciled'`)).rows[0].count,
-      batches: (await client.query(`SELECT COUNT(*)::int AS count, COALESCE(SUM(gross_amount),0)::numeric AS gross, COALESCE(SUM(processing_charge),0)::numeric AS charges FROM bank_reconciliation_batches`)).rows[0],
+      bankAccountCount: Number(accountCount.rows[0]?.count ?? 0),
+      bankLedgerTransactionCount: identity.size,
+      eligibleTransactionCount: eligibleIdentities.length,
+      eligibleTransactionAmount: Math.round(eligibleIdentities.reduce((n, r) => n + r.amount, 0) * 100) / 100,
+      reconciledTransactionCount: Number(statusByName.get("reconciled")?.count ?? 0),
+      reconciledTransactionAmount: Number(statusByName.get("reconciled")?.amount ?? 0),
+      unreconciledTransactionCount: Number(statusByName.get("unreconciled")?.count ?? 0),
+      unreconciledTransactionAmount: Number(statusByName.get("unreconciled")?.amount ?? 0),
+      batchCount: Number(batchTotals.rows[0]?.count ?? 0),
+      batchGrossAmount: Number(batchTotals.rows[0]?.gross ?? 0),
+      batchProcessingCharges: Number(batchTotals.rows[0]?.charges ?? 0),
+      batchNetAmount: Number(batchTotals.rows[0]?.net ?? 0),
+      batchItemCount: Number(batchItems.rows[0]?.count ?? 0),
+      batchItemAmount: Number(batchItems.rows[0]?.amount ?? 0),
+      sourceCounts: Object.fromEntries(Object.entries(sourceCounts).map(([source, value]) => [
+        source, { count: value.count, amount: Math.round(value.amount * 100) / 100 },
+      ])),
+      accountingImpact: "none: account-based reconciliation is metadata-only",
     };
+    const requestedBy = (req as any).employee?.username ?? "system";
+    const snapshotInsert = await client.query(
+      `INSERT INTO bank_reconciliation_reset_audits
+         (reason, requested_by, snapshot)
+       VALUES ($1, $2, $3::jsonb)
+       RETURNING id, requested_at`,
+      ["Reconciliation workflow reset/rebuilt", requestedBy, JSON.stringify(before)],
+    );
     const deletedItems = await client.query(`DELETE FROM bank_reconciliation_batch_items RETURNING id`);
     const deletedBatches = await client.query(`DELETE FROM bank_reconciliation_batches RETURNING id`);
+    await client.query(
+      `UPDATE bank_reconciliation_reset_audits
+          SET deleted_batch_count = $2, deleted_item_count = $3
+        WHERE id = $1`,
+      [Number(snapshotInsert.rows[0].id), deletedBatches.rowCount ?? 0, deletedItems.rowCount ?? 0],
+    );
     await client.query(
       `UPDATE bank_reconciliation_entries
           SET status='unreconciled', unreconciled_at=now(),
               unreconciled_by=$1, reconciled_at=NULL, reconciled_by=NULL,
               reconciliation_reference=NULL`,
-      [(req as any).employee?.username ?? "system"],
+       [requestedBy],
     );
     await client.query("COMMIT");
     logActivity({
@@ -1648,12 +1846,10 @@ router.post("/reconciliation/bank-reset", requireModuleAction("page:/accounts/re
       description: "Reconciliation Reset",
       metadata: {
         before: {
-          reconciledEntryCount: Number(before.entries),
-          batchCount: Number(before.batches.count),
-          grossAmount: Number(before.batches.gross),
-          processingCharges: Number(before.batches.charges),
+          ...before,
         },
         after: { reconciledEntryCount: 0, batchCount: 0, accountingImpact: "none" },
+        resetAuditId: Number(snapshotInsert.rows[0].id),
         deletedBatchItemCount: deletedItems.rowCount ?? 0,
         deletedBatchCount: deletedBatches.rowCount ?? 0,
         legacySettlementBatchesPreserved: true,
@@ -1661,7 +1857,9 @@ router.post("/reconciliation/bank-reset", requireModuleAction("page:/accounts/re
     }).catch(() => {});
     res.json({
       reset: true,
-      reconciledEntriesReset: Number(before.entries),
+      resetAuditId: Number(snapshotInsert.rows[0].id),
+      before,
+      reconciledEntriesReset: Number(before.reconciledTransactionCount),
       bankBatchesDeleted: deletedBatches.rowCount ?? 0,
       batchItemsDeleted: deletedItems.rowCount ?? 0,
       legacySettlementBatchesPreserved: true,
