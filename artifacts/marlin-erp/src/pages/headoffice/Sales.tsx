@@ -156,7 +156,11 @@ const saleStatusLabel = (sale: any): string | undefined => {
   const status = sale?.paymentStatus ?? 'paid';
   if (status !== 'paid') return undefined;
   const receivedLedgerNames = Array.isArray(sale?.receivedLedgerNames)
-    ? sale.receivedLedgerNames.filter((name: unknown): name is string => typeof name === 'string' && Boolean(name.trim()))
+    ? Array.from(new Set(sale.receivedLedgerNames.filter((name: unknown): name is string =>
+      typeof name === 'string' &&
+      Boolean(name.trim()) &&
+      name.trim().toLowerCase() !== 'electronic payment clearing'
+    ).map((name: string) => name.trim())))
     : [];
   if (receivedLedgerNames.length > 0) {
     return `Paid · ${receivedLedgerNames.join(' + ')}`;
