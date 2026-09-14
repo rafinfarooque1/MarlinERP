@@ -1,0 +1,715 @@
+FINAL ACCOUNTING + ERP VERIFICATION — CLOSE ALL REMAINING GAPS
+
+Continue from the latest completed hardening work.
+
+IMPORTANT:
+- Development only.
+- DO NOT modify production.
+- DO NOT publish/deploy.
+- DO NOT run destructive migrations.
+- Do not change accounting logic merely to make tests pass.
+- Do not use obsolete credentials.
+- Use the currently valid development authentication/session or create/use a dedicated test fixture user through the existing supported test setup.
+- If a test cannot run because authentication is unavailable, fix the TEST FIXTURE/TEST AUTHENTICATION only; do not weaken application authentication.
+- Preserve all existing accounting, location, GST, inventory and audit rules.
+
+GOAL:
+
+Finish the remaining ERP verification items and produce a final PASS / FAIL / NOT PROVEN report.
+
+==================================================
+1. FIX TEST AUTHENTICATION FIRST
+==================================================
+
+The broader accounting suite currently cannot start because integration tests still default to obsolete:
+
+admin / marlin1458
+
+The current development database correctly rejects this with HTTP 401.
+
+Do NOT restore or hard-code obsolete credentials.
+
+Instead:
+
+1. Inspect the current authentication/test-fixture architecture.
+2. Identify the correct supported test/admin/probe user.
+3. Update test fixtures to use the current supported authentication mechanism.
+4. Never hard-code real production credentials.
+5. Never weaken login/password validation.
+6. Confirm the test user has the minimum permissions required.
+7. Confirm location permissions are appropriate for each test.
+8. Re-run the previously blocked integration suites.
+
+The objective is to make the test environment authenticate correctly, not to bypass authentication.
+
+==================================================
+2. PURCHASE + PURCHASE EDIT/DELETE AUDIT DURABILITY
+==================================================
+
+Verify transaction-bound audit logging for:
+
+- Purchase creation
+- Purchase edit
+- Purchase cancellation
+- Purchase deletion/void/reversal
+- Purchase return
+- Purchase return edit/cancel if supported
+- Vendor allocation/payment effects caused by purchase changes
+
+For every mutation:
+
+- accounting mutation
+- inventory mutation
+- vendor ledger mutation
+- GST mutation
+- audit event
+
+must remain consistent.
+
+Where the operation is transactional, the audit event must be written inside the same DB transaction.
+
+Test failure scenario:
+
+- force a downstream accounting/database failure
+- verify the entire transaction rolls back
+- verify the audit event also does not remain as a false successful mutation
+
+Test success scenario:
+
+- financial mutation succeeds
+- exactly the appropriate audit event exists
+- no duplicate audit event
+- correct user/location/source document/reference
+
+Do not physically delete historical financial evidence unless the existing architecture explicitly requires a controlled reversal/void.
+
+==================================================
+3. SALES RETURNS + PURCHASE RETURNS AUDIT
+==================================================
+
+Verify:
+
+Sales return:
+- stock effect
+- customer receivable effect
+- GST effect
+- refund/credit-note effect
+- accounting JV
+- customer ledger
+- audit event
+
+Purchase return:
+- stock effect
+- vendor payable effect
+- GST effect
+- accounting JV
+- vendor ledger
+- audit event
+
+Confirm returns are not merely UI adjustments.
+
+Confirm returns correctly affect:
+
+Customer Outstanding:
+Opening Receivable
++ Sales
++ applicable charges
+- Sales Returns/Credit Notes
+- Receipts
+± valid adjustments
+= Closing Receivable
+
+Vendor Outstanding:
+Opening Payable
++ Purchases
+- Purchase Returns
+- Payments
+± valid advances/credits/adjustments
+= Closing Payable
+
+==================================================
+4. RECEIPT ACCOUNTING — ONE RECEIPT = ONE FINANCIAL EVENT
+==================================================
+
+Re-run the receipt regression suite after fixing authentication.
+
+Verify:
+
+A customer pays ₹2,000 against multiple invoices.
+
+There must be:
+
+- ONE receipt transaction
+- ONE customer ledger receipt entry for ₹2,000
+- ONE cash/bank transaction for ₹2,000
+- ONE corresponding accounting posting
+
+Bill allocations are settlement detail only.
+
+Do NOT create separate financial receipt rows for each allocated invoice.
+
+Also test:
+
+A. receipt fully allocated to one bill
+B. receipt allocated across multiple bills
+C. advance-only receipt
+D. partially allocated receipt + remaining advance
+E. receipt edit
+F. receipt cancellation/deletion
+G. advance allocation later
+H. advance deletion/cancellation
+
+Verify no duplicate settlement or accounting postings.
+
+==================================================
+5. VENDOR PAYMENT + ADVANCE ACCOUNTING
+==================================================
+
+Verify the same principle for vendor payments.
+
+Test:
+
+- payment against one bill
+- payment against multiple bills
+- advance-only payment
+- partial bill payment
+- remaining vendor advance
+- edit
+- cancel/delete
+
+Vendor ledger must show the actual single financial payment.
+
+Allocation records must remain settlement detail.
+
+No payment amount may exceed the actual financial transaction.
+
+Verify the previously corrected ₹1,890 allocation anomaly remains resolved:
+
+Invoice 5052:
+- bill amount ₹22,019
+- allocation must not exceed bill amount
+
+Invoice 5408:
+- bill amount ₹12,600
+- allocation must not exceed bill amount
+
+Do not recreate the anomaly.
+
+==================================================
+6. BANK RECONCILIATION — COMPLETE SOURCE COVERAGE
+==================================================
+
+Verify that reconciliation is sourced from the actual bank ledger/account, not only Sales.
+
+For each permitted warehouse/location bank account, verify that eligible transactions include all supported bank-originated financial transactions, including:
+
+- bank-mode sales
+- customer receipt vouchers through bank
+- applicable payment transactions
+- settlement receipts
+- other eligible bank ledger transactions
+
+Cash transactions must NOT appear in Bank Reconciliation.
+
+Cash Book must NOT show bank reconciliation controls for cash entries.
+
+Verify bank account assignment remains SINGLE LOCATION as required by the ERP architecture.
+
+==================================================
+7. RECONCILIATION RESET + MULTI-SELECT
+==================================================
+
+Test the rebuilt reconciliation workflow.
+
+Reset must:
+
+- reset reconciliation state/status/batches only
+- never delete original financial transactions
+- never duplicate transactions
+- preserve original transaction date
+- preserve original amount
+
+After reset:
+
+ALL eligible historical bank transactions must again be discoverable as unreconciled.
+
+Then:
+
+1. Select multiple transactions.
+2. UI must show selected count.
+3. UI must show gross selected amount.
+4. Click Reconcile Selected.
+5. Enter:
+   - Reconciliation Date
+   - Processing Charge
+6. Submit.
+
+Backend must recalculate selected transaction IDs and amounts server-side.
+
+Create exactly one reconciliation batch.
+
+Do not create duplicate bank transactions.
+
+Example:
+
+Selected gross bank transactions = ₹10,000
+Processing charge = ₹100
+Net settlement = ₹9,900
+
+Verify:
+
+- gross = ₹10,000
+- processing charge = ₹100
+- net = ₹9,900
+- processing charge posted exactly once
+- correct expense/charge ledger
+- bank ledger not duplicated
+- reconciliation status updated correctly
+- audit event recorded transactionally
+
+==================================================
+8. RECONCILIATION COMPLETENESS
+==================================================
+
+The previous audit found:
+
+26 eligible bank reconciliation entries
+0 reconciled entries
+0 reconciliation batches
+
+After completing the workflow, verify the system can discover and reconcile all eligible entries.
+
+Produce:
+
+- eligible count
+- eligible amount
+- reconciled count
+- reconciled amount
+- unreconciled count
+- unreconciled amount
+- batch count
+
+The accounting totals must reconcile mathematically.
+
+If any eligible amount remains outside reconciliation, identify exactly why.
+
+Do not simply hide or exclude records.
+
+==================================================
+9. REPORT/PDF PARITY
+==================================================
+
+Verify that reports and PDFs use authoritative accounting calculations.
+
+Test at minimum:
+
+- Trial Balance
+- Trading Account
+- P&L
+- Balance Sheet
+- Chart of Accounts
+- Customer Outstanding
+- Vendor Outstanding
+- Cash Book
+- Bank Book
+- GST reports
+- Inventory valuation
+
+For each report:
+
+1. Capture the values displayed on screen.
+2. Re-read the authoritative server-side calculation.
+3. Generate/export PDF.
+4. Compare values and hierarchy.
+
+PDF must reflect exactly the selected screen state.
+
+For Chart of Accounts:
+
+- collapsed groups remain collapsed
+- expanded groups remain expanded
+- Month Wise remains Month Wise
+- Show Valued Accounts Only remains respected
+- zero accounts remain hidden only when checkbox is enabled
+- no accounting values are altered by filtering
+
+Do not use client-prepared rows as the accounting source.
+
+==================================================
+10. FIXED ASSET + DEPRECIATION
+==================================================
+
+Verify the newly implemented depreciation system.
+
+Test:
+
+- asset purchase
+- capitalization
+- monthly depreciation
+- rerun same month
+- next month depreciation
+- location scope
+- month lock
+- disposal
+- disposal after depreciation
+- disposal before full depreciation
+- gain/loss if applicable
+
+Verify:
+
+Depreciation Expense
+Accumulated Depreciation
+Asset Cost
+Net Book Value
+Disposal Gain/Loss
+
+all follow proper double-entry accounting.
+
+Rerunning the same month must NOT duplicate depreciation.
+
+Verify the depreciation JV remains balanced.
+
+Verify P&L and Balance Sheet reflect depreciation correctly.
+
+==================================================
+11. HISTORICAL INVENTORY / COGS
+==================================================
+
+Verify the newly added stock cost snapshots.
+
+Test:
+
+- stock purchase at cost A
+- stock movement
+- later purchase at cost B
+- historical period report
+
+Historical closing stock and COGS must use persisted historical valuation checkpoints where available.
+
+Do NOT silently use today's weighted-average cost for an old period when a historical checkpoint exists.
+
+If historical evidence is genuinely missing:
+
+- mark the period unreliable
+- explain exactly what evidence is missing
+- do not invent a value
+
+Verify:
+
+Opening Stock
++ Purchases
++/- applicable adjustments
+- COGS
+= Closing Stock
+
+and ensure stock transfers do not create artificial profit.
+
+==================================================
+12. STOCK TRANSFER P&L NEUTRALITY
+==================================================
+
+Verify completed internal transfers:
+
+Source:
+Opening Stock - Transfer Out
+
+Destination:
+Opening Stock + Transfer In
+
+Company total stock remains unchanged.
+
+Transfers must NOT affect:
+
+- Sales
+- Purchase
+- Revenue
+- Expense
+- COGS
+- Gross Profit
+- Net Profit
+
+Verify transfer reservations are released correctly after completion.
+
+Specifically re-check the previously identified production reservation anomaly pattern:
+
+completed transfer + active reservation
+
+Ensure no completed transfer can leave an active reservation.
+
+Add/verify a permanent invariant preventing:
+
+transfer.status = completed
+AND
+related reservation.status = active
+
+If such a state is found, report it; do not blindly delete reservations.
+
+==================================================
+13. GST PARITY
+==================================================
+
+Verify GST calculations across:
+
+- Sales
+- Sales returns
+- Purchases
+- Purchase returns
+- Other Charges where applicable
+- credit notes
+- transfer GST where applicable
+- GST reports
+- accounting postings
+
+The same tax-resolution logic must drive:
+
+document calculation
+accounting posting
+GST report
+
+Identify any divergence.
+
+==================================================
+14. DOUBLE-ENTRY ACCOUNTING
+==================================================
+
+Run global checks:
+
+For every JV:
+
+SUM(debit) = SUM(credit)
+
+Check:
+
+- orphan JV lines
+- invalid ledger references
+- invalid locations
+- duplicate accounting postings
+- missing accounting postings
+- source transaction without JV
+- JV without valid source where source is required
+
+Verify:
+
+Trial Balance:
+Total Debit = Total Credit
+
+Then verify:
+
+Trading Account
+Gross Profit
+P&L
+Net Profit
+Balance Sheet
+
+are mathematically consistent.
+
+==================================================
+15. MONTHLY CONTINUITY
+==================================================
+
+Test at least two consecutive months.
+
+Verify:
+
+Opening Stock Month 2 = Closing Stock Month 1
+
+Opening Receivables Month 2 = Closing Receivables Month 1
+
+Opening Payables Month 2 = Closing Payables Month 1
+
+Opening Cash/Bank Month 2 = Closing Cash/Bank Month 1
+
+Opening asset balances carry forward correctly.
+
+Profit for the month changes retained earnings/equity correctly according to the ERP's existing architecture.
+
+No transaction should be counted twice across months.
+
+==================================================
+16. LOCATION ISOLATION
+==================================================
+
+Verify with actual authenticated users:
+
+Warehouse A cannot see:
+
+- Warehouse B customers
+- Warehouse B vendors
+- Warehouse B sales
+- Warehouse B purchases
+- Warehouse B cash
+- Warehouse B bank
+- Warehouse B stock
+- Warehouse B expenses
+- Warehouse B accounting data
+
+Head Office selected specifically behaves as Head Office.
+
+All Locations, when authorized, provides consolidated data.
+
+Do not rely only on frontend filtering.
+
+Verify backend authorization and query scoping.
+
+==================================================
+17. AUDIT LOG COMPLETENESS
+==================================================
+
+Confirm transaction-bound audit logging now covers all critical financial mutations:
+
+- Sales
+- Sales edit/cancel
+- Sales returns
+- Purchases
+- Purchase edit/cancel
+- Purchase returns
+- Receipts
+- Receipt allocation
+- Receipt edit/cancel/delete
+- Payments
+- Payment allocation
+- Payment edit/cancel/delete
+- Journal vouchers
+- Expenses
+- Asset purchase
+- Depreciation
+- Asset disposal
+- Stock transfer
+- Transfer receipt/rejection
+- Bank reconciliation
+- Reconciliation reset
+- Settlement
+- Processing charge
+- Other Charges
+- Quotation-to-sale accounting mutation
+
+For every event verify:
+
+- actor
+- timestamp
+- action
+- entity
+- entity ID
+- location
+- before/after where applicable
+- source/reference
+- transaction atomicity
+
+==================================================
+18. BACKGROUND JOB SAFETY
+==================================================
+
+Verify rerun safety for:
+
+- salary accrual
+- rent accrual
+- depreciation
+- backup
+- startup repair/migration routines
+
+No job may create duplicate accounting entries when executed twice for the same period.
+
+Verify month locking/idempotency where implemented.
+
+==================================================
+19. FINAL RECONCILIATION MATRIX
+==================================================
+
+Produce a final table:
+
+AREA | STATUS | EVIDENCE | EXCEPTION | RISK
+
+Rows:
+
+1. Double-entry journals
+2. Trial Balance
+3. Trading Account
+4. P&L
+5. Balance Sheet
+6. Historical P&L
+7. Inventory quantity
+8. Inventory valuation
+9. Historical inventory valuation
+10. COGS
+11. Sales
+12. Sales returns
+13. Customer receivables
+14. Customer advances
+15. Purchases
+16. Purchase returns
+17. Vendor payables
+18. Vendor advances
+19. Receipts
+20. Payments
+21. Cash Book
+22. Bank Book
+23. Bank reconciliation
+24. GST
+25. Fixed assets
+26. Depreciation
+27. Asset disposal
+28. Stock transfers
+29. Location isolation
+30. Audit logging
+31. Dashboard parity
+32. PDF/report parity
+33. Monthly continuity
+34. Background-job idempotency
+35. Backup/restore readiness
+
+Use ONLY:
+
+PASS
+FAIL
+NOT PROVEN
+LIMITED
+
+Do not call something PASS merely because code exists.
+
+==================================================
+20. FINAL VERDICT
+==================================================
+
+Give one of:
+
+GREEN — accounting and ERP behavior sufficiently proven
+
+AMBER — major functionality works but specific areas remain unproven or require remediation
+
+RED — material accounting/data-integrity issue remains
+
+For every AMBER/RED item:
+
+- exact problem
+- exact evidence
+- business impact
+- whether data is affected
+- whether code fix is required
+- whether historical data correction is required
+- recommended next action
+
+IMPORTANT:
+
+Do not make speculative fixes.
+
+Do not alter production.
+
+Do not publish.
+
+Do not delete historical financial data.
+
+Do not rewrite historical accounting merely to make totals match.
+
+If a discrepancy is found, trace it to its source transaction and explain the root cause.
+
+At the end explicitly state:
+
+- All tests run
+- Tests passed
+- Tests failed
+- Tests not run
+- Authentication issues
+- Data issues
+- Code issues
+- Remaining risks
+- Whether the ERP is ready for production or requires another hardening cycle
