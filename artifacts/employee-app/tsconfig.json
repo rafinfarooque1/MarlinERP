@@ -6,6 +6,9 @@
     "paths": {
       "@/*": [
         "./*"
+      ],
+      "expo-modules-core": [
+        "./node_modules/expo-modules-core"
       ]
     }
   },

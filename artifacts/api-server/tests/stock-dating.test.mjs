@@ -307,6 +307,18 @@ console.log('\n[10] Range reporting: closing stock of D == opening stock of D+1'
   }
 }
 
+console.log('\n[10b] Month boundary: month 1 closing == month 2 opening');
+{
+  const august = await get('/accounts/financial-statements?fromDate=2026-04-01&toDate=2026-08-31');
+  const september = await get(`/accounts/financial-statements?fromDate=2026-09-01&toDate=${D4}`);
+  const augustClosing = Number(august.data?.profitAndLoss?.incomes?.closingStock ?? NaN);
+  const septemberOpening = Number(september.data?.profitAndLoss?.expenses?.openingStock ?? NaN);
+  assert('Closing stock at 2026-08-31 equals opening stock at 2026-09-01',
+    Number.isFinite(augustClosing) && Number.isFinite(septemberOpening) &&
+      augustClosing === septemberOpening,
+    `closing=${augustClosing} opening=${septemberOpening}`);
+}
+
 console.log('\n[11] Delete: the bill leaves history as if dated movements never happened');
 {
   const rm = await del(`/purchases/${billId}`);

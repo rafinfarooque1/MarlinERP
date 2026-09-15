@@ -19,6 +19,9 @@ import { OfflineBanner } from '@/components/ui/OfflineBanner';
 import { AuthProvider, useAuth } from '@/contexts/AuthContext';
 import { LocationProvider } from '@/contexts/LocationContext';
 
+const GestureHandlerRootViewCompat =
+  GestureHandlerRootView as React.ComponentType<any>;
+
 // ── Module-level: set API base URL for Expo builds (outside the web proxy) ──
 if (process.env.EXPO_PUBLIC_DOMAIN) {
   setBaseUrl(`https://${process.env.EXPO_PUBLIC_DOMAIN}`);
@@ -83,7 +86,7 @@ export default function RootLayout() {
     <SafeAreaProvider>
       <ErrorBoundary>
         <QueryClientProvider client={queryClient}>
-          <GestureHandlerRootView style={{ flex: 1 }}>
+          <GestureHandlerRootViewCompat style={{ flex: 1 }}>
             <KeyboardProvider>
               <AuthProvider>
                 <LocationProvider>
@@ -94,7 +97,7 @@ export default function RootLayout() {
                 </LocationProvider>
               </AuthProvider>
             </KeyboardProvider>
-          </GestureHandlerRootView>
+          </GestureHandlerRootViewCompat>
         </QueryClientProvider>
       </ErrorBoundary>
     </SafeAreaProvider>
