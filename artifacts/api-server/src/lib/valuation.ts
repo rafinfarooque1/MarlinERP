@@ -183,7 +183,8 @@ export async function stockValuationRows(q: Queryable, scope: ValuationScope = {
   const onHand: ValuationRow[] = rows.map((r: any) => {
     const quantity = r3(Number(r.quantity));
     const reserved = r3(Number(r.reserved ?? 0));
-    const unitCost = r2(Number(r.unit_cost ?? 0));
+    const rawUnitCost = Number(r.unit_cost ?? 0);
+    const unitCost = r2(rawUnitCost);
     return {
       materialType: (r.material_type ?? "item") as ProductKind,
       refId: Number(r.ref_id),
@@ -195,7 +196,10 @@ export async function stockValuationRows(q: Queryable, scope: ValuationScope = {
       reserved,
       available: r3(Math.max(0, quantity - reserved)),
       unitCost,
-      value: r2(quantity * unitCost),
+      // Keep checkpoint precision through the value calculation. The display
+      // unit cost may be rounded to paise, but rounding it before multiplying
+      // can turn a conserved blended receipt into a one-paise inventory gain.
+      value: r2(quantity * rawUnitCost),
       inTransit: false,
     };
   });
