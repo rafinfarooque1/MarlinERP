@@ -124,23 +124,39 @@ export async function creditMaterialAt(
   qty: number,
   unitCost = 0,
   opts: { mirror?: boolean } = {},
-): Promise<void> {
-  await c.query(
-    `INSERT INTO stock_entries (item_id, material_type, branch_type, branch_id, quantity, cost_price)
-     VALUES ($1, $2, $3, $4, $5, $6)
-     ON CONFLICT (item_id, material_type, branch_type, branch_id) DO UPDATE SET
-       quantity = stock_entries.quantity::numeric + EXCLUDED.quantity::numeric,
-       cost_price = CASE
-         WHEN stock_entries.quantity::numeric + EXCLUDED.quantity::numeric > 0
-         THEN (
-           ROUND(stock_entries.quantity::numeric * stock_entries.cost_price::numeric, 2)
-           + ROUND(EXCLUDED.quantity::numeric * EXCLUDED.cost_price::numeric, 2)
-         ) / (stock_entries.quantity::numeric + EXCLUDED.quantity::numeric)
-         ELSE EXCLUDED.cost_price::numeric
-       END,
-       updated_at = now()`,
-    [refId, kind, branchType, branchId, qty, unitCost],
+): Promise<number> {
+  // Lock and read the current row so callers that also write a valuation
+  // checkpoint can retain the precise blended cost even though the legacy
+  // stock_entries.cost_price column is stored to two decimal places.
+  const { rows: [existing] } = await c.query(
+    `SELECT quantity::numeric AS quantity, cost_price::numeric AS cost_price
+       FROM stock_entries
+      WHERE item_id = $1 AND material_type = $2 AND branch_type = $3 AND branch_id = $4
+      FOR UPDATE`,
+    [refId, kind, branchType, branchId],
   );
+  const existingQty = Number(existing?.quantity ?? 0);
+  const existingCost = Number(existing?.cost_price ?? 0);
+  const blendedCost = existing
+    ? paiseConservativeBlendCost(existingQty, existingCost, qty, unitCost)
+    : unitCost;
+
+  if (existing) {
+    await c.query(
+      `UPDATE stock_entries
+          SET quantity = quantity::numeric + $1,
+              cost_price = $2,
+              updated_at = now()
+        WHERE item_id = $3 AND material_type = $4 AND branch_type = $5 AND branch_id = $6`,
+      [qty, blendedCost, refId, kind, branchType, branchId],
+    );
+  } else {
+    await c.query(
+      `INSERT INTO stock_entries (item_id, material_type, branch_type, branch_id, quantity, cost_price)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [refId, kind, branchType, branchId, qty, unitCost],
+    );
+  }
 
   if (opts.mirror) {
     await c.query(
@@ -148,4 +164,5 @@ export async function creditMaterialAt(
       [qty, refId],
     );
   }
+  return blendedCost;
 }

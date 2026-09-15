@@ -123,6 +123,23 @@ async function printCompanyDiagnostics(label, date, fixtureTransferId = 0) {
       [fixtureTransferId],
     )).rows
     : [];
+  const fixtureRows = materialId
+    ? (await sql(
+      `SELECT 'entry' AS source, branch_type, branch_id,
+              quantity::numeric AS quantity, cost_price::numeric AS unit_cost,
+              ROUND((quantity::numeric * cost_price::numeric)::numeric, 2) AS value,
+              NULL::date AS as_of_date, NULL::bigint AS snapshot_id
+         FROM stock_entries
+        WHERE material_type = 'material' AND item_id = $1
+       UNION ALL
+       SELECT 'snapshot', branch_type, branch_id, quantity, unit_cost,
+              ROUND(value::numeric, 2), as_of_date, id
+         FROM stock_cost_snapshots
+        WHERE material_type = 'material' AND ref_id = $1
+        ORDER BY source, branch_id, snapshot_id`,
+      [materialId],
+    )).rows
+    : [];
   console.log(`[diagnostic:${label}] ${JSON.stringify({
     period: response.data?.period,
     inputs: {
@@ -139,6 +156,7 @@ async function printCompanyDiagnostics(label, date, fixtureTransferId = 0) {
       netProfit: figures.netProfit,
     },
     transferRows,
+    fixtureRows,
   })}`);
   return figures;
 }

@@ -32,6 +32,7 @@ export interface LedgerEntry {
    * Omitted → defaults to CURRENT_DATE (the insert day IS the business day).
    */
   txnDate?: string | null;
+  snapshotUnitCost?: number | null;
 }
 
 /** Bulk-insert ledger entries. Silently skips empty arrays. */
@@ -65,13 +66,16 @@ export async function writeStockLedger(
           quantity, unit_cost, value, source, source_id)
        SELECT COALESCE($7::date, CURRENT_DATE), se.material_type, se.item_id,
               se.branch_type, se.branch_id, se.quantity::numeric,
-               se.cost_price::numeric,
-               (se.quantity::numeric * se.cost_price::numeric)::numeric,
+                COALESCE($8::numeric, se.cost_price::numeric),
+                (se.quantity::numeric * COALESCE($8::numeric, se.cost_price::numeric))::numeric,
               $1, $6
          FROM stock_entries se
         WHERE se.item_id = $2 AND se.material_type = $3
           AND se.branch_type = $4 AND se.branch_id = $5`,
-      [e.txnType, e.refId, e.materialType, e.branchType, e.branchId, e.docId ?? null, e.txnDate ?? null],
+       [
+         e.txnType, e.refId, e.materialType, e.branchType, e.branchId,
+         e.docId ?? null, e.txnDate ?? null, e.snapshotUnitCost ?? null,
+       ],
     );
   }
 }
