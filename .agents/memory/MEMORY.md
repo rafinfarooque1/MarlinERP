@@ -116,6 +116,7 @@
 - [Warehouse lifecycle](warehouse-lifecycle.md) — disabled_at raw cols; EVERY new transaction producer needs the disabled guard (effective location, ROLLBACK in-txn); permanent delete = 1 txn cascade + in-txn validation; cross-location = blocker.
 - [Company holidays & weekly offs](holidays-weekly-offs.md) — stored rows outvote the calendar; untracked months never synthesise; `until` bounds balance views only; moved cutover fakes "accrual writes ₹0" suite failures.
 - [Expo Metro in pnpm monorepo](expo-metro-pnpm.md) — watchFolders must include root node_modules or every import fails (blank app, JSON bundle error); it's config, not cache.
+- [Expo static build routing](expo-static-build.md) — Metro HTTP bundle and asset URLs resolve from the workspace root; use workspace-relative paths and an available local port.
 - [Expo pnpm type resolution](expo-pnpm-type-resolution.md) — strict virtual-store links can hide Expo peer types; direct dependency + narrow tsconfig mapping fixes typecheck without changing runtime.
 - [RN Web dialogs](rn-web-dialogs.md) — Alert.alert is a no-op on web; all confirms/error popups in the employee app go through lib/dialogs.ts.
 - [401 = dead session contract](session-401-contract.md) — clients log out on any 401; wrong typed credentials must be 400; self-service GETs self-scope instead of 403 (a 403 zeroes mobile tiles silently).
