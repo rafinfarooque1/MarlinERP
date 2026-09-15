@@ -111,56 +111,6 @@ function assertSamePnl(label, before, after) {
   }
 }
 
-async function printCompanyDiagnostics(label, date, fixtureTransferId = 0) {
-  const { response, figures } = await companyPnl();
-  const transferRows = fixtureTransferId
-    ? (await sql(
-      `SELECT txn_type, qty_change::numeric AS qty_change, unit_cost::numeric AS unit_cost,
-              (qty_change::numeric * unit_cost::numeric)::numeric AS extended
-         FROM stock_ledger
-        WHERE doc_type = 'stock_transfer' AND doc_id = $1
-        ORDER BY id`,
-      [fixtureTransferId],
-    )).rows
-    : [];
-  const fixtureRows = materialId
-    ? (await sql(
-      `SELECT 'entry' AS source, branch_type, branch_id,
-              quantity::numeric AS quantity, cost_price::numeric AS unit_cost,
-              ROUND((quantity::numeric * cost_price::numeric)::numeric, 2) AS value,
-              NULL::date AS as_of_date, NULL::bigint AS snapshot_id
-         FROM stock_entries
-        WHERE material_type = 'material' AND item_id = $1
-       UNION ALL
-       SELECT 'snapshot', branch_type, branch_id, quantity, unit_cost,
-              ROUND(value::numeric, 2), as_of_date, id
-         FROM stock_cost_snapshots
-        WHERE material_type = 'material' AND ref_id = $1
-        ORDER BY source, branch_id, snapshot_id`,
-      [materialId],
-    )).rows
-    : [];
-  console.log(`[diagnostic:${label}] ${JSON.stringify({
-    period: response.data?.period,
-    inputs: {
-      openingPhysical: figures.openingPhysical,
-      openingTransferAdjustment: figures.openingTransferAdjustment,
-      openingStock: figures.openingStock,
-      purchases: figures.purchases,
-      purchaseReturns: figures.purchaseReturns,
-      directExpenses: figures.directExpenses,
-      closingStock: figures.closingStock,
-      revenue: figures.revenue,
-      cogs: figures.cogs,
-      grossProfit: figures.grossProfit,
-      netProfit: figures.netProfit,
-    },
-    transferRows,
-    fixtureRows,
-  })}`);
-  return figures;
-}
-
 async function readStatement(date, locationId) {
   const response = await get(
     `/accounts/financial-statements?fromDate=${date}&toDate=${date}` +
@@ -357,7 +307,7 @@ async function main() {
     `grossProfit=${locationA.figures.grossProfit}`);
 
   await assertCompanyIntegrity(today, "After location B cost change");
-  const pnlBeforeTransfer = await printCompanyDiagnostics("before", today);
+  const pnlBeforeTransfer = (await companyPnl()).figures;
   const transfer = await post("/stock/transfers", {
     fromType: "warehouse",
     fromId: warehouseA,
@@ -371,12 +321,12 @@ async function main() {
   assert("Checkpoint-cost transfer is dispatched", transfer.status === 201 && transferId > 0,
     `status=${transfer.status} body=${JSON.stringify(transfer.data).slice(0, 260)}`);
   if (transferId) {
-    const pnlAfterDispatch = await printCompanyDiagnostics("dispatch", today, transferId);
+    const pnlAfterDispatch = (await companyPnl()).figures;
     assertSamePnl("Dispatch preserves company valuation", pnlBeforeTransfer, pnlAfterDispatch);
     const receive = await apiReq("PATCH", `/stock/transfers/${transferId}/approve`, { approvedBy: `${TAG} test` });
     assert("Checkpoint-cost transfer is received", receive.status === 200 && !receive.data?.error,
       `status=${receive.status} body=${JSON.stringify(receive.data).slice(0, 260)}`);
-    const pnlAfterReceipt = await printCompanyDiagnostics("receipt", today, transferId);
+    const pnlAfterReceipt = (await companyPnl()).figures;
     assertSamePnl("Receipt preserves company valuation", pnlBeforeTransfer, pnlAfterReceipt);
   }
   const owned = {
