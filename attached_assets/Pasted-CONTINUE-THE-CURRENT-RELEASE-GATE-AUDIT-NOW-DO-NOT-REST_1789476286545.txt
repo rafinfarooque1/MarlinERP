@@ -1,0 +1,441 @@
+CONTINUE THE CURRENT RELEASE-GATE AUDIT NOW.
+
+DO NOT RESTART THE ENTIRE AUDIT.
+DO NOT PUBLISH TO PRODUCTION.
+DO NOT MODIFY PRODUCTION DATA.
+
+Resume from the exact current checkpoint.
+
+The previous work already established:
+
+- Reservation integrity = PASS
+- Transfer 9 lifecycle = PASS
+- Item 90 physical/batch reconciliation = PASS
+- Production active completed-transfer reservations with full receipt = 0
+- The 5 kg Reservation 18 is the deliberate short-receipt reconciliation for Transfer 9, not an unrelated production defect.
+- Historical Tropicane–Ecity ₹5,793.72 case = NOT PROVEN because the exact historical database snapshot cannot currently be reconstructed.
+- Employee app packaging = PASS
+- API typecheck = PASS
+- Web typecheck = PASS
+- Production build = PASS when required environment variables are supplied.
+- Current accounting engine tests for stock continuity / transfer neutrality / P&L / Balance Sheet / Trial Balance have already been substantially strengthened.
+
+DO NOT repeat completed work unless needed as a regression check.
+
+==================================================
+CURRENT TASK
+==================================================
+
+Continue the remaining release-gate verification from the current checkpoint.
+
+The remaining release blockers are:
+
+1. Calicut report-integrity finding
+2. Dashboard browser drill-down verification
+3. PDF vs XLSX numerical parity
+4. Full backup/restore rehearsal
+5. Complete report-suite verification
+6. Final production-build verification
+7. Employee-app final verification
+8. Final release-gate report
+
+==================================================
+1. CALICUT ₹3,062.95 ISSUE — FINISH THIS FIRST
+==================================================
+
+You already confirmed that Calicut is:
+
+Location/Warehouse ID: 2
+Kerala GST registration
+Current stock: 69 item rows
+Current stock value: approximately ₹193,010.78
+
+Continue the forensic investigation of the previously reported:
+
+₹3,062.95 report-integrity difference.
+
+DO NOT stop at “difference exists”.
+
+Find the exact source.
+
+Break it down by:
+
+- item/product
+- quantity
+- unit cost
+- batch
+- opening valuation
+- closing valuation
+- stock ledger
+- stock snapshots/checkpoints
+- purchases
+- purchase returns
+- sales
+- sales returns
+- transfers in
+- transfers out
+- stock adjustments
+- production movements
+- valuation adjustments
+
+Determine whether the ₹3,062.95 difference is:
+
+A. a real legitimate accounting movement
+B. a stock valuation issue
+C. an opening/closing continuity issue
+D. a transfer accounting issue
+E. a historical reconstruction limitation
+F. a test-fixture issue
+G. a report calculation bug
+H. another data/accounting issue
+
+Do not alter production.
+
+If production data itself is historically inconsistent, report it as such and do not silently rewrite it.
+
+If application code is responsible, fix the application code in development and add a regression test.
+
+If the difference is legitimate, provide the exact reconciliation proving why.
+
+==================================================
+2. P&L / GROSS PROFIT FINAL VALIDATION
+==================================================
+
+Confirm that the current Trading Account uses the complete periodic formula.
+
+Verify:
+
+Net Sales
++ Closing Stock
+- Opening Stock
+- Net Purchases
+- Direct Expenses
+= Gross Profit
+
+and equivalently:
+
+Net Sales - COGS = Gross Profit
+
+There must be NO hidden:
+
+Closing Stock - Opening Stock = Gross Profit
+
+shortcut.
+
+Create/retain regression tests proving:
+
+NO ACTIVITY:
+Opening Stock = Closing Stock
+COGS = 0
+GP = 0
+
+PURCHASE ONLY:
+Inventory increases
+Revenue = 0
+COGS = 0
+GP = 0
+
+TRANSFER ONLY:
+Company inventory unchanged
+Revenue = 0
+COGS = 0
+GP = 0
+
+SALES:
+GP correctly reflects sales minus COGS.
+
+==================================================
+3. OPENING/CLOSING STOCK CONTINUITY
+==================================================
+
+Explicitly verify:
+
+Previous day closing = next day opening
+
+and:
+
+Previous month closing = next month opening.
+
+Test:
+
+company level
+warehouse level
+product level
+
+Any unexplained difference = FAIL.
+
+==================================================
+4. STOCK TRANSFER NEUTRALITY
+==================================================
+
+Complete real same-GST registration transfer testing.
+
+Do not use blank GSTINs.
+
+Verify:
+
+Source warehouse stock decreases.
+Destination warehouse stock increases.
+Inventory value is preserved.
+Company inventory is unchanged.
+
+P&L effect:
+
+Revenue = 0
+COGS = 0
+Gross Profit = 0
+Net Profit = 0
+
+Also verify the different-GST-registration scenario according to the existing statutory accounting design.
+
+==================================================
+5. DASHBOARD BROWSER DRILL-DOWN
+==================================================
+
+Actually use the running application/browser.
+
+From Dashboard click each relevant report:
+
+Day Book
+Cash Book
+Bank Book
+Trial Balance
+Trading Account / P&L
+Balance Sheet
+
+Verify that the destination report preserves:
+
+- selected location
+- selected date range
+- permission scope
+- All Locations vs specific warehouse
+
+This must be actual browser/UI verification.
+
+Do not mark this PASS based only on route source-code inspection.
+
+==================================================
+6. PDF / XLSX NUMERICAL PARITY
+==================================================
+
+Generate representative reports in:
+
+PDF
+XLSX
+
+Compare their numerical values against the authoritative report/API dataset.
+
+Verify:
+
+screen = API = PDF = XLSX
+
+for the same:
+
+location
+date range
+report type
+filters
+
+Do not merely verify that files download successfully.
+
+==================================================
+7. BACKUP / RESTORE REHEARSAL
+==================================================
+
+Perform a SAFE DEVELOPMENT-ONLY backup/restore rehearsal.
+
+Use an isolated/disposable development database.
+
+Do NOT restore over production.
+
+Verify that after restore:
+
+- schema is intact
+- users/configuration required for the application are intact
+- customers/vendors intact
+- sales intact
+- purchases intact
+- stock intact
+- batches intact
+- transfers intact
+- accounting vouchers intact
+- journal lines intact
+- fixed assets intact
+- depreciation intact
+- GST data intact
+- audit records intact where included
+- files/attachments included where applicable
+- Trial Balance remains balanced
+- Balance Sheet remains balanced
+- P&L remains consistent
+- stock valuation remains consistent
+
+Record the backup version and verification result.
+
+==================================================
+8. COMPLETE REPORT SUITE
+==================================================
+
+Run representative verification for:
+
+Dashboard
+Day Book
+Cash Book
+Bank Book
+Trial Balance
+General Ledger
+Trading Account
+Profit & Loss
+Balance Sheet
+Stock Report
+Receivables
+Payables
+GST
+Fixed Assets
+Bank Reconciliation
+
+Verify that reports use the same authoritative accounting data.
+
+==================================================
+9. PERMISSIONS
+==================================================
+
+Verify:
+
+Admin
+Head Office
+Warehouse user
+
+permission behavior.
+
+Admin must be able to see:
+
+User
+Role
+Warehouse/Location
+Hierarchy
+Module permissions
+Report permissions
+All Locations access
+
+Backend must enforce location isolation.
+
+Test direct API access to another warehouse.
+
+==================================================
+10. FINAL BUILD / APP VERIFICATION
+==================================================
+
+Run:
+
+API typecheck
+Web typecheck
+Web production build
+Employee app typecheck
+Employee Android static packaging
+Employee iOS static packaging
+git diff --check
+
+Do not change accounting behavior for build-only issues.
+
+==================================================
+11. PRODUCTION SAFETY
+==================================================
+
+Production must remain:
+
+READ ONLY
+
+No:
+
+- test sales
+- test purchases
+- test transfers
+- test receipts
+- test payments
+- test journal vouchers
+- test users
+- destructive repairs
+- balance adjustments
+
+==================================================
+12. FINAL RELEASE GATE
+==================================================
+
+At the end provide this exact table:
+
+CHECK | STATUS | EVIDENCE | RISK
+
+Use ONLY:
+
+PASS
+FAIL
+NOT PROVEN
+
+Required checks:
+
+1. Calicut report integrity
+2. Historical Ecity ₹5,793.72 case
+3. Opening/closing stock continuity
+4. Stock valuation
+5. Same-GST transfer neutrality
+6. Different-GST transfer handling
+7. Trial Balance
+8. Balance Sheet
+9. P&L
+10. Gross Profit calculation
+11. Net Profit calculation
+12. Dashboard GP/NP parity
+13. Dashboard browser drill-down
+14. Day Book
+15. Cash Book
+16. Bank Book
+17. General Ledger
+18. Receivables
+19. Payables
+20. GST
+21. Fixed Assets
+22. Bank Reconciliation
+23. PDF/XLSX numerical parity
+24. Backup/restore
+25. Permission visibility
+26. Location isolation
+27. API typecheck
+28. Web typecheck
+29. Production build
+30. Employee app packaging
+31. Audit durability
+32. Production safety
+
+==================================================
+FINAL DECISION
+==================================================
+
+Only recommend:
+
+PUBLISH
+
+if there are ZERO current accounting/reporting FAIL findings and all critical release checks are PASS.
+
+Historical Ecity ₹5,793.72 may remain NOT PROVEN ONLY if the exact historical snapshot genuinely cannot be recovered.
+
+However:
+
+Any CURRENT accounting engine FAIL
+or
+Balance Sheet FAIL
+or
+Trial Balance FAIL
+or
+P&L FAIL
+or
+stock continuity FAIL
+or
+transfer neutrality FAIL
+must result in:
+
+DO NOT PUBLISH.
+
+Do not publish automatically.
+
+Finish the remaining work now and return the final release-gate table.
