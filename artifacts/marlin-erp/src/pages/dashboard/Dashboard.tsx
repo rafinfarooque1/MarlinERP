@@ -25,9 +25,9 @@ import {
   Landmark, Trophy, Users, AlertTriangle, Clock, MapPin,
   Warehouse, Store, ArrowUpRight, ArrowDownRight, Wallet,
   Receipt, PieChart, BarChart3, Banknote, HandCoins,
-  LayoutDashboard, Share2, Loader2, Hourglass, ChevronRight, type LucideIcon,
+  LayoutDashboard, Share2, Loader2, Hourglass, ChevronRight, Scale, type LucideIcon,
 } from 'lucide-react';
-import { useLocation } from 'wouter';
+import { Link, useLocation } from 'wouter';
 import {
   fmt, num, fmtDate, periodLabel,
   useDateRange, RangeBar, SummaryCards, LocationBadge, TONE_CLS,
@@ -323,6 +323,14 @@ export default function Dashboard() {
   const drillTo = (path: string, view: string, anchor = '') => () =>
     navigate(`${path}?${drillQs(view)}${anchor ? `#${anchor}` : ''}`);
   const drill = (anchor: string) => drillTo('/reports/financial', 'pnl', anchor);
+  const bookLinks = [
+    { label: 'Day Book', view: 'dayBook', icon: Receipt },
+    { label: 'Cash Book', view: 'cash', icon: Wallet },
+    { label: 'Bank Book', view: 'bank', icon: Landmark },
+    { label: 'Trial Balance', view: 'trialBalance', icon: Scale },
+    { label: 'P&L', view: 'pnl', icon: PieChart },
+    { label: 'Balance Sheet', view: 'balanceSheet', icon: BarChart3 },
+  ] as const;
 
   // ── Export / Share: capture ONLY the dedicated KPI report (owner spec) ────
   // The DashboardShareReport component renders off-screen at a fixed design
@@ -751,6 +759,29 @@ export default function Dashboard() {
             )}
           </>
         )}
+
+        {/* ── Books & statements ─────────────────────────────────────────── */}
+        <SectionCard
+          title="Books & statements"
+          icon={<Receipt className="w-5 h-5 text-primary" />}
+          description="Open the authoritative reports for the selected range and location."
+        >
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+            {bookLinks.map(({ label, view, icon: Icon }) => (
+              <Link
+                key={view}
+                href={`/reports/financial?${drillQs(view)}`}
+                className="group rounded-lg border border-border bg-card p-3 transition-colors hover:border-primary/50 hover:bg-primary/5"
+              >
+                <div className="flex items-center gap-2">
+                  <Icon className="h-4 w-4 text-primary" />
+                  <span className="text-sm font-medium text-foreground">{label}</span>
+                  <ChevronRight className="ml-auto h-4 w-4 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+                </div>
+              </Link>
+            ))}
+          </div>
+        </SectionCard>
 
         {/* ── Sales trend + payment mix ──────────────────────────────────── */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
