@@ -1,0 +1,412 @@
+CONTINUE FROM THE CURRENT AUDIT — DO NOT STOP AT “NOT PROVEN” YET
+
+The original screenshot/report evidence has now been provided.
+
+Do not publish to production yet.
+
+The exact historical database snapshot may no longer exist, but the original screenshot proves that the ERP displayed:
+
+Location: Tropicane - Ecify
+
+Opening Stock: ₹103,158.97
+Closing Stock: ₹108,952.69
+Gross Profit: ₹5,793.72
+
+Now perform a deeper forensic reconstruction using BOTH:
+
+1. The original screenshot evidence
+2. The current accounting/stock code and database structure
+
+==================================================
+1. DO NOT INVENT THE HISTORICAL TRANSACTIONS
+==================================================
+
+If the exact historical rows cannot be recovered, do NOT invent a transaction-level explanation.
+
+However, determine from the source code exactly how the ERP WOULD have produced these three values.
+
+Trace the complete execution path:
+
+Chart of Accounts / P&L UI
+→ API
+→ report service
+→ buildBooks
+→ Trading Account
+→ stock valuation
+→ opening stock calculation
+→ closing stock calculation
+→ Gross Profit calculation
+
+Identify the exact functions/files responsible.
+
+==================================================
+2. RECONSTRUCT THE FORMULA
+==================================================
+
+For the screenshot's Trading Account, determine whether the system used:
+
+Gross Profit =
+Net Sales + Closing Stock
+- Opening Stock
+- Net Purchases
+- Direct Expenses
+
+or any different formula.
+
+Show the exact code path.
+
+Do NOT rely on the displayed result alone.
+
+==================================================
+3. DETERMINE WHY ₹5,793.72 APPEARED
+==================================================
+
+We know mathematically:
+
+₹108,952.69
+- ₹103,158.97
+= ₹5,793.72
+
+But this does NOT prove that the ERP intentionally calculated GP that way.
+
+Determine whether:
+
+A. Sales/Purchases/Direct Expenses were actually zero for that report period,
+
+OR
+
+B. They existed but were omitted from the Trading Account,
+
+OR
+
+C. They existed but were incorrectly classified,
+
+OR
+
+D. Opening/closing stock was incorrectly calculated,
+
+OR
+
+E. Stock valuation changed without an underlying inventory movement,
+
+OR
+
+F. Stock transfers were incorrectly included/excluded,
+
+OR
+
+G. historical valuation was reconstructed incorrectly,
+
+OR
+
+H. another accounting mapping caused the result.
+
+==================================================
+4. SOURCE CODE FORENSIC CHECK
+==================================================
+
+Search the entire accounting implementation for:
+
+- opening stock
+- closing stock
+- gross profit
+- COGS
+- trading account
+- P&L
+- stock valuation
+- weighted average
+- FIFO
+- FEFO
+- stock transfer
+- transfer in
+- transfer out
+- buildBooks
+- profitAndLoss.summary
+
+Identify whether any code path can produce:
+
+Gross Profit = Closing Stock - Opening Stock
+
+without properly incorporating Sales, Purchases, COGS and Direct Expenses.
+
+If such a code path exists, fix it.
+
+==================================================
+5. STOCK TRANSFER RULE
+==================================================
+
+Confirm with automated tests that internal warehouse transfers cannot create GP.
+
+Example:
+
+Warehouse A → Warehouse B
+
+Transfer value ₹3,000.
+
+Expected:
+
+A stock -₹3,000
+B stock +₹3,000
+
+Company stock = unchanged.
+
+Expected:
+
+Revenue = ₹0
+COGS = ₹0
+Gross Profit impact = ₹0
+Net Profit impact = ₹0
+
+Do this for:
+
+same GST registration
+different GST registration
+
+using the ERP's intended statutory accounting treatment.
+
+==================================================
+6. OPENING/CLOSING CONTINUITY
+==================================================
+
+Confirm:
+
+Previous Closing Stock
+=
+Next Opening Stock
+
+at:
+
+company level
+warehouse level
+product level
+
+where the accounting period rules require it.
+
+Create regression tests for:
+
+Day 1 closing
+→ Day 2 opening
+
+and:
+
+Month 1 closing
+→ Month 2 opening
+
+There must be no unexplained value jump.
+
+==================================================
+7. IMPORTANT ACCOUNTING RULE
+==================================================
+
+Stock value changing between two dates does NOT automatically mean profit.
+
+A stock increase caused by:
+
+Purchase
+Transfer IN
+Production
+Adjustment
+
+is not automatically Gross Profit.
+
+A stock decrease caused by:
+
+Sale
+Transfer OUT
+Adjustment
+
+is not automatically a loss.
+
+Profit must come from the complete accounting flow.
+
+==================================================
+8. BALANCE SHEET FIRST
+==================================================
+
+Before changing P&L, verify:
+
+Inventory Asset
++
+Cash
++
+Bank
++
+Receivables
++
+Fixed Assets
++
+Other Assets
+
+=
+
+Liabilities
++
+Equity
++
+Current Period Profit/Loss
+
+Balance Sheet must balance without artificial adjustment entries.
+
+Trial Balance:
+
+Total Debit = Total Credit
+
+P&L:
+
+Gross Profit and Net Profit must reconcile to the accounting books.
+
+==================================================
+9. DASHBOARD
+==================================================
+
+Confirm Dashboard:
+
+Gross Profit
+Net Profit
+
+are directly sourced from the authoritative P&L/books result.
+
+There must be no separate Dashboard formula.
+
+Also verify Dashboard links to:
+
+Day Book
+Cash Book
+Bank Book
+Trial Balance
+P&L
+Balance Sheet
+
+preserve:
+
+selected location
+date range
+permissions
+
+==================================================
+10. PERMISSION HIERARCHY
+==================================================
+
+Verify that Admin can clearly inspect permissions by:
+
+User
+Role
+Warehouse/Location
+Module
+Report
+Hierarchy
+All Locations
+
+For each user, Admin should be able to see:
+
+- allowed warehouses
+- denied warehouses
+- All Locations access
+- report access
+- accounting/report permissions
+- role-derived permissions
+
+Backend must enforce the same permissions.
+
+Do not rely only on UI hiding.
+
+==================================================
+11. RELEASE GATE
+==================================================
+
+Do NOT publish production until:
+
+PASS:
+- Trial Balance
+- Balance Sheet
+- P&L
+- Opening/Closing Stock continuity
+- Transfer neutrality
+- Stock valuation
+- Dashboard parity
+- Location isolation
+- Permissions
+- Day Book
+- Cash Book
+- Bank Book
+- PDF
+- XLSX
+- API typecheck
+- Web typecheck
+- Production build
+- Regression tests
+
+The historical ₹5,793.72 case may remain:
+
+NOT PROVEN
+
+ONLY if the exact historical database rows genuinely no longer exist.
+
+But distinguish:
+
+“Historical transaction cannot be recovered”
+
+from
+
+“Current accounting logic is correct.”
+
+Those are two separate conclusions.
+
+==================================================
+12. FINAL REPORT
+==================================================
+
+Return:
+
+1. Historical ₹5,793.72 case:
+   PASS / FAIL / NOT PROVEN
+
+2. Current accounting formula:
+   PASS / FAIL
+
+3. Opening stock continuity:
+   PASS / FAIL
+
+4. Closing stock valuation:
+   PASS / FAIL / LIMITED
+
+5. Stock transfer neutrality:
+   PASS / FAIL
+
+6. Balance Sheet:
+   PASS / FAIL
+
+7. Trial Balance:
+   PASS / FAIL
+
+8. P&L:
+   PASS / FAIL
+
+9. Dashboard parity:
+   PASS / FAIL
+
+10. Location isolation:
+    PASS / FAIL
+
+11. Permission visibility:
+    PASS / FAIL
+
+12. Tests:
+    exact counts
+
+13. Code changes:
+    exact files/modules
+
+14. Database migrations:
+    exact migrations
+
+15. Remaining NOT PROVEN items
+
+16. Final recommendation:
+    PUBLISH
+    or
+    DO NOT PUBLISH
+
+Do not mark the system publish-ready merely because the current tests pass.
+
+The historical screenshot issue must be separated from current-system correctness, and the current accounting engine must be proven independently.
