@@ -1,0 +1,220 @@
+CONTINUE FROM THE LAST RELEASE-GATE RESULT.
+
+DO NOT PUBLISH YET.
+
+The previous audit identified one remaining production integrity FAIL:
+
+Production contains stale active Reservation 18 for 5 units of Item 90, while Transfer 9 is already completed.
+
+This must now be investigated and safely resolved.
+
+==================================================
+1. FORENSICALLY TRACE RESERVATION 18
+==================================================
+
+Read-only first.
+
+Find:
+
+- Reservation 18
+- Item 90
+- reserved quantity
+- source/destination location
+- linked transfer
+- Transfer 9
+- transfer creation date
+- dispatch date
+- receipt/completion date
+- reservation creation date
+- reservation status history
+- any sales/order/document linked to the reservation
+- any code path that creates/releases reservations
+
+Determine exactly why Reservation 18 remained ACTIVE after Transfer 9 was completed.
+
+Do NOT simply delete the reservation.
+
+==================================================
+2. IDENTIFY THE CORRECT BUSINESS STATE
+==================================================
+
+Determine whether Reservation 18 should be:
+
+A. released/cancelled because Transfer 9 completed,
+
+OR
+
+B. still active because it belongs to another legitimate order/process.
+
+Prove this from production records.
+
+If the reservation is genuinely stale, identify the exact invariant that was violated.
+
+==================================================
+3. CHECK INVENTORY IMPACT
+==================================================
+
+Determine whether the stale reservation currently affects:
+
+Available Stock
+Reserved Stock
+Free Stock
+Warehouse stock
+Transfer stock
+Sales availability
+Dashboard stock
+Stock reports
+
+Calculate the exact impact of the 5 units.
+
+Do not modify stock quantity itself merely to fix a reservation.
+
+==================================================
+4. FIX THE ROOT CAUSE
+==================================================
+
+First fix the application lifecycle logic in development so that:
+
+Transfer dispatched
+→ reservation remains appropriately reserved
+
+Transfer received/completed
+→ obsolete transfer reservation is automatically released
+
+Cancelled/rejected transfer
+→ reservation is released appropriately
+
+Repeated lifecycle actions
+→ no duplicate release
+→ no negative reservation
+→ idempotent behavior
+
+The fix must be transaction-safe.
+
+==================================================
+5. ADD REGRESSION TESTS
+==================================================
+
+Add tests for:
+
+1. Create transfer
+2. Reserve stock
+3. Dispatch transfer
+4. Receive transfer
+5. Complete transfer
+6. Verify reservation is released
+7. Verify available stock is correct
+
+Also test:
+
+Transfer rejection
+Transfer cancellation
+Partial transfer if supported
+Repeated receipt/approval
+Multiple reservations
+Multiple warehouses
+Same-GST transfer
+Different-GST transfer
+
+==================================================
+6. PRODUCTION DATA REPAIR
+==================================================
+
+DO NOT modify production until the development fix and tests pass.
+
+Once proven:
+
+Identify the safest production correction for Reservation 18.
+
+The correction must:
+
+- preserve historical audit information
+- not delete the reservation record
+- change only the incorrect lifecycle/status state
+- not alter stock quantities
+- not alter sales
+- not alter purchases
+- not alter accounting
+- not alter transfer history
+- create a durable audit record
+- be idempotent
+
+Before executing any production correction, show:
+
+Current state
+→ Expected state
+→ Exact proposed mutation
+
+Do not execute destructive SQL.
+
+==================================================
+7. RECHECK PRODUCTION INVENTORY
+==================================================
+
+After the safe correction:
+
+Verify:
+
+Reserved quantity
+Available quantity
+Physical stock
+Stock ledger
+Batch quantities
+Transfer status
+
+all reconcile.
+
+Verify no other active reservation is linked to a completed/cancelled/rejected transfer.
+
+Run a production-wide stale-reservation audit.
+
+==================================================
+8. RELEASE GATE
+==================================================
+
+After fixing the reservation issue, rerun the release gate.
+
+Required:
+
+PASS:
+- Trial Balance
+- Balance Sheet
+- P&L
+- Stock valuation
+- Opening/closing continuity
+- Transfer neutrality
+- Reservation integrity
+- Dashboard parity
+- Location isolation
+- Permission enforcement
+- Dashboard drill-down
+- PDF/XLSX parity
+- Backup/restore
+- API typecheck
+- Web typecheck
+- Production build
+- Employee app build
+- Regression tests
+
+Historical ₹5,793.72 case may remain NOT PROVEN if the original database snapshot genuinely cannot be recovered.
+
+But there must be no unresolved production FAIL.
+
+==================================================
+FINAL REPORT
+==================================================
+
+Give me:
+
+1. Reservation 18 root cause
+2. Transfer 9 lifecycle
+3. Exact 5-unit inventory impact
+4. Application fix
+5. Regression tests
+6. Production correction performed, if required
+7. Before/after reservation state
+8. Confirmation that stock/accounting were not altered incorrectly
+9. Remaining NOT PROVEN items
+10. Final PUBLISH / DO NOT PUBLISH recommendation
+
+Do not publish automatically.
