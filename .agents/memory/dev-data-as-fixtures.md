@@ -59,3 +59,19 @@ turned POS coupons off — every suite that asserted the old QA identities broke
   `NOT EXISTS` its status row) so cleanup = delete-your-own-stamped-writes and
   survives a mid-run crash; for rows a test only *attempts* to mutate, snapshot
   before and assert bitwise-identical after.
+
+## Release-gate authentication
+
+Do not infer a release-gate failure from a `401` or `429` produced by a suite's
+retired default admin credentials. Create one disposable level-1 development
+user, export both credential pairs (`TEST_USERNAME`/`TEST_PASSWORD` and
+`TEST_ADMIN_USER`/`TEST_ADMIN_PASSWORD`), run suites serially, and delete the
+user plus lockout/audit rows afterward.
+
+**Why:** several suites still have different legacy fallback names, and failed
+fallback attempts can trigger the login lockout policy; that masks the actual
+business assertions and leaves the result ambiguous.
+
+**How to apply:** before a release-gate batch, inspect each suite's environment
+variable names and use a fresh fixture identity. Treat a clean run under that
+identity as the evidence, not a failed seeded-admin fallback.
