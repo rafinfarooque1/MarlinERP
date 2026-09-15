@@ -1,0 +1,291 @@
+CONTINUE THE RELEASE AUDIT — DO NOT PUBLISH
+
+The current status shows one explicit FAIL:
+
+CALICUT REPORT INTEGRITY = FAIL
+
+This must be investigated and resolved before production publishing.
+
+Do NOT treat the historical Tropicane-Ecity ₹5,793.72 case and the current Calicut FAIL as the same issue unless the evidence proves they are related.
+
+==================================================
+1. CALICUT REPORT INTEGRITY — ROOT CAUSE
+==================================================
+
+Identify exactly what caused the Calicut report integrity FAIL.
+
+Show:
+
+- report name
+- location
+- date range
+- expected value
+- actual value
+- exact difference
+- source tables
+- source transactions
+- accounting postings
+- stock valuation involved
+- whether the issue is data, calculation, classification, or test-fixture related
+
+Do NOT hide the failure by changing the expected test value.
+
+If the application logic is wrong, fix the application logic.
+
+If historical test data is wrong, explain why and repair only the test fixture/data in development.
+
+==================================================
+2. VERIFY ALL ACCOUNTING STATEMENTS
+==================================================
+
+After fixing the Calicut issue, rerun:
+
+Trial Balance
+Balance Sheet
+Trading Account
+Profit & Loss
+General Ledger
+Stock Valuation
+
+Verify:
+
+Total Debits = Total Credits
+
+Assets = Liabilities + Equity
+
+P&L GP = authoritative books GP
+
+P&L NP = authoritative books NP
+
+Closing Stock in P&L = authoritative stock valuation
+
+Previous Closing Stock = Next Opening Stock
+
+==================================================
+3. STOCK TRANSFER
+==================================================
+
+Complete the real same-GST registration transfer test.
+
+Do not use blank GSTINs.
+
+Use two warehouses with the same actual GST registration.
+
+Transfer inventory between them.
+
+Prove:
+
+Source stock decreases
+Destination stock increases
+Company inventory remains unchanged
+Revenue = unchanged
+COGS = unchanged
+Gross Profit = unchanged
+Net Profit = unchanged
+
+Also test different GST registrations separately.
+
+==================================================
+4. PERIOD CONTINUITY
+==================================================
+
+Explicitly test:
+
+31-Aug closing stock
+=
+1-Sep opening stock
+
+and another month boundary.
+
+Test:
+
+company level
+warehouse level
+product level
+
+Any difference must be explained.
+
+==================================================
+5. HISTORICAL ₹5,793.72 CASE
+==================================================
+
+Keep this as NOT PROVEN if the original database snapshot genuinely cannot be reconstructed.
+
+Do NOT fabricate the cause.
+
+However, prove independently that the current accounting engine cannot reproduce the erroneous behavior.
+
+Run regression scenarios:
+
+A. no activity
+B. purchase only
+C. sales only
+D. sales + purchase
+E. transfer only
+F. sales return
+G. purchase return
+
+Especially verify:
+
+Closing Stock - Opening Stock
+
+must NOT independently become Gross Profit.
+
+==================================================
+6. DASHBOARD DRILL-DOWN
+==================================================
+
+Actually open the Dashboard in a browser and click:
+
+Day Book
+Cash Book
+Bank Book
+Trial Balance
+P&L
+Balance Sheet
+
+Verify each link preserves:
+
+- selected location
+- date range
+- user permission scope
+
+This must be a real browser/UI verification, not just route-code inspection.
+
+==================================================
+7. PDF / XLSX PARITY
+==================================================
+
+For at least one representative report:
+
+Generate PDF.
+
+Generate XLSX.
+
+Compare the numerical dataset against the exact screen/report API result.
+
+Do not only verify that the files successfully download.
+
+Prove the numbers are identical.
+
+==================================================
+8. BACKUP / RESTORE
+==================================================
+
+Perform the development backup/restore rehearsal.
+
+Use a disposable development database or safe isolated environment.
+
+Verify:
+
+- database backup created
+- files included where applicable
+- restore succeeds
+- schema intact
+- journal balances preserved
+- stock preserved
+- customers/vendors preserved
+- transactions preserved
+- attachments/files preserved where applicable
+- no orphan references
+- Trial Balance remains balanced after restore
+
+DO NOT modify production.
+
+==================================================
+9. PERMISSIONS
+==================================================
+
+Complete the permission verification.
+
+Admin must be able to see:
+
+User
+Role
+Warehouse/Location
+Hierarchy
+Module
+Report permission
+All Locations access
+
+Verify server-side enforcement.
+
+Test a warehouse user attempting direct access to another warehouse's:
+
+Sales
+Purchases
+Customers
+Vendors
+Stock
+Cash
+Bank
+Reports
+
+==================================================
+10. FINAL RELEASE GATE
+==================================================
+
+Do not recommend PUBLISH until:
+
+PASS:
+- Calicut report integrity
+- Trial Balance
+- Balance Sheet
+- P&L
+- Stock valuation
+- Opening/closing continuity
+- Same-GST transfer neutrality
+- Different-GST transfer handling
+- Dashboard parity
+- Dashboard browser drill-down
+- PDF/XLSX parity
+- Permission enforcement
+- Permission visibility
+- API typecheck
+- Web typecheck
+- Production build
+- Employee app packaging
+- Regression tests
+- Backup/restore rehearsal
+
+Historical ₹5,793.72 may remain NOT PROVEN if the exact historical database snapshot is genuinely unavailable.
+
+But there must be ZERO current accounting-engine FAIL findings.
+
+==================================================
+FINAL RESPONSE
+==================================================
+
+Return a release-gate table:
+
+ITEM | STATUS | EVIDENCE | REMAINING RISK
+
+Use only:
+
+PASS
+FAIL
+NOT PROVEN
+
+Then give:
+
+1. Calicut FAIL root cause
+2. Fix implemented
+3. Regression result
+4. Historical ₹5,793.72 status
+5. Balance Sheet status
+6. Trial Balance status
+7. P&L status
+8. Stock continuity status
+9. Transfer neutrality status
+10. Dashboard navigation status
+11. PDF/XLSX parity status
+12. Backup/restore status
+13. Permission status
+14. Final recommendation:
+
+PUBLISH
+or
+DO NOT PUBLISH
+
+Do not publish automatically.
+Do not modify production.
