@@ -1138,6 +1138,11 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction("page:/transfer
     const destType = row.to_type === "headoffice" ? "warehouse" : row.to_type;
     const destId   = row.to_type === "headoffice" ? 0 : row.to_id;
 
+    // Keep the precise post-receipt location cost for the checkpoint. The
+    // legacy stock_entries cost column rounds to paise, but the checkpoint
+    // must preserve the value represented by the existing and inbound rows.
+    const snapshotUnitCosts = new Map<string, number>();
+
     // Credit destination with received quantities
     for (const li of linesToCredit) {
       if (!li.quantity || li.quantity <= 0) continue;
@@ -1147,9 +1152,10 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction("page:/transfer
         // Material: land it at the destination location. The dispatch already
         // took it off the source, so the company-wide mirror is untouched — a
         // completed transfer relocates goods without changing the total.
-        await creditMaterialAt(
+        const landedCost = await creditMaterialAt(
           client, matType, li.itemId, destType, destId, Number(li.quantity), Number(li.costPrice ?? 0)
         );
+        snapshotUnitCosts.set(`${matType}:${li.itemId}`, landedCost);
         // Material lots travel with the goods, same rule as finished items:
         // land the dispatched lots at the destination, allocated across a
         // partial receipt, and fall back to a challan-named lot when the
@@ -1194,6 +1200,7 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction("page:/transfer
           const combinedCost = paiseConservativeBlendCost(
             existingQty, existingCost, inboundQty, inboundCost,
           );
+          snapshotUnitCosts.set(`item:${li.itemId}`, combinedCost);
           await client.query(
             `UPDATE stock_entries
                 SET quantity = quantity::numeric + $1, cost_price = $2, updated_at = now()
@@ -1201,6 +1208,7 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction("page:/transfer
             [li.quantity, String(combinedCost), dstExisting.id]
           );
         } else {
+          snapshotUnitCosts.set(`item:${li.itemId}`, Number(li.costPrice ?? 0));
           await client.query(
             `INSERT INTO stock_entries (item_id, material_type, branch_type, branch_id, quantity, cost_price) VALUES ($1,'item',$2,$3,$4,$5)`,
             [li.itemId, destType, destId, li.quantity, String(li.costPrice ?? 0)]
@@ -1346,7 +1354,22 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction("page:/transfer
       await writeStockLedger(client, approveLedgerLines.map((l: any) => {
         const mt   = l.materialType ?? 'item';
         const info = approveMeta.get(`${mt}:${l.itemId}`) ?? { name: '', unit: '' };
-        return { txnType: 'transfer_in', materialType: mt, refId: Number(l.itemId), itemName: info.name, unit: info.unit, branchType: approveDestType, branchId: approveDestId, branchName: approveBm(row.to_type, Number(row.to_id)), qtyChange: Number(l.quantity), unitCost: Number(l.costPrice ?? 0), docType: 'stock_transfer', docId: id, txnDate: toTxnDate(row.transfer_date) };
+        return {
+          txnType: 'transfer_in',
+          materialType: mt,
+          refId: Number(l.itemId),
+          itemName: info.name,
+          unit: info.unit,
+          branchType: approveDestType,
+          branchId: approveDestId,
+          branchName: approveBm(row.to_type, Number(row.to_id)),
+          qtyChange: Number(l.quantity),
+          unitCost: Number(l.costPrice ?? 0),
+          snapshotUnitCost: snapshotUnitCosts.get(`${mt}:${Number(l.itemId)}`) ?? null,
+          docType: 'stock_transfer',
+          docId: id,
+          txnDate: toTxnDate(row.transfer_date),
+        };
       }));
     }
 
