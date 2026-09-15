@@ -9,6 +9,9 @@ import { Icon, Label, NativeTabs } from 'expo-router/unstable-native-tabs';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { PAGE, useErpPermissions } from '@/hooks/useErpPermissions';
 
+const NativeTabsCompat = NativeTabs as React.ComponentType<any>;
+const BlurViewCompat = BlurView as unknown as React.ComponentType<any>;
+
 /**
  * Permission-driven tab shape:
  *  • ERP users (any business-module view right): Home, Sales*, Dispatch*,
@@ -53,7 +56,7 @@ function NativeTabLayout({ vis }: { vis: TabVisibility }) {
   // `{cond && <Trigger/>}` children also emit "children must be of type
   // Screen" warnings, so `hidden` handles both.
   return (
-    <NativeTabs>
+    <NativeTabsCompat>
       <NativeTabs.Trigger name="index">
         <Icon sf={{ default: 'house' as any, selected: 'house.fill' as any }} />
         <Label>Home</Label>
@@ -86,7 +89,7 @@ function NativeTabLayout({ vis }: { vis: TabVisibility }) {
         <Icon sf={{ default: 'leaf' as any, selected: 'leaf.fill' as any }} />
         <Label>Leaves</Label>
       </NativeTabs.Trigger>
-    </NativeTabs>
+    </NativeTabsCompat>
   );
 }
 
@@ -127,7 +130,7 @@ function ClassicTabLayout({ vis }: { vis: TabVisibility }) {
         },
         tabBarBackground: () =>
           isIOS ? (
-            <BlurView
+            <BlurViewCompat
               intensity={100}
               tint={isDark ? 'dark' : 'light'}
               style={StyleSheet.absoluteFill}

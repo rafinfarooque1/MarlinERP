@@ -150,15 +150,16 @@ try {
   assert('Admin login returns a token', !!authToken, `status=${login.status}`);
   if (!authToken) throw new Error('Cannot obtain authentication token');
 
-  // These locations deliberately have blank GST numbers, keeping this suite
-  // on the internal challan path and avoiding unrelated accounting cleanup.
+  // These locations deliberately share a real non-blank GSTIN, proving the
+  // registered same-GSTIN path is classified as an internal challan rather
+  // than relying on the separate "missing GSTIN" fallback.
   const source = await sql(
-    `INSERT INTO warehouses (name, state, gst_number) VALUES ($1, 'Karnataka', '') RETURNING id`,
+    `INSERT INTO warehouses (name, state, gst_number) VALUES ($1, 'Karnataka', '29ZZTRFDATE1Z5') RETURNING id`,
     [`${TAG} Source`],
   );
   sourceId = Number(source.rows[0].id);
   const destination = await sql(
-    `INSERT INTO warehouses (name, state, gst_number) VALUES ($1, 'Karnataka', '') RETURNING id`,
+    `INSERT INTO warehouses (name, state, gst_number) VALUES ($1, 'Karnataka', '29ZZTRFDATE1Z5') RETURNING id`,
     [`${TAG} Destination`],
   );
   destinationId = Number(destination.rows[0].id);
@@ -206,6 +207,15 @@ try {
   const firstId = Number(first.data?.id ?? 0);
   if (firstId) transferIds.push(firstId);
   assert('Transfer created', first.status === 201 && firstId > 0, JSON.stringify(first.data).slice(0, 240));
+  if (firstId) {
+    const detail = await apiReq('GET', `/stock/transfers/${firstId}`);
+    assert('Registered same-GSTIN transfer is internal',
+      detail.data?.transferType === 'internal' &&
+      detail.data?.taxType === 'none' &&
+      detail.data?.fromGstin === '29ZZTRFDATE1Z5' &&
+      detail.data?.toGstin === '29ZZTRFDATE1Z5',
+      JSON.stringify(detail.data).slice(0, 260));
+  }
   assert('Pending transfer leaves destination unchanged', (await locationQty(destinationId)) === 0);
   assert('Dispatch deducts source stock', (await locationQty(sourceId)) === 8);
   const firstPendingLedger = await transferLedger(firstId);

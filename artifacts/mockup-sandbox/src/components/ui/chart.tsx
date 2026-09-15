@@ -97,11 +97,21 @@ ${colorConfig
   )
 }
 
-const ChartTooltip = RechartsPrimitive.Tooltip
+type ChartTooltipPropsBase = RechartsPrimitive.TooltipProps<
+  number | string | Array<number | string>,
+  number | string
+>
+
+// Recharts 2's class component declarations predate the React 19 JSX types.
+// Keep the runtime component unchanged while exposing its actual props to
+// TypeScript as a callable React component.
+const ChartTooltip = RechartsPrimitive.Tooltip as unknown as React.ComponentType<
+  ChartTooltipPropsBase
+>
 
 const ChartTooltipContent = React.forwardRef<
   HTMLDivElement,
-  React.ComponentProps<typeof RechartsPrimitive.Tooltip> &
+  ChartTooltipPropsBase &
     React.ComponentProps<"div"> & {
       hideLabel?: boolean
       hideIndicator?: boolean

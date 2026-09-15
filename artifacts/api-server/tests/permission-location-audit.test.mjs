@@ -69,10 +69,13 @@ const locOf = (s) => ({
   id: Number(s.locationId ?? s.location_id ?? s.outletId ?? s.outlet_id ?? 0),
 });
 
-const fx = { hierId: 0, empId: 0 };
+const fx = { hierId: 0, empId: 0, transferIds: [] };
 let adminTok = '';
 
 async function cleanup() {
+  if (fx.transferIds.length) {
+    await q(`DELETE FROM stock_transfers WHERE id = ANY($1::int[])`, [fx.transferIds]).catch(() => {});
+  }
   for (const u of [USERNAME, ADMIN_USERNAME]) {
     await q(`DELETE FROM login_attempts WHERE username = $1`, [u]).catch(() => {});
     await q(`DELETE FROM login_lockouts WHERE username = $1`, [u]).catch(() => {});
@@ -117,6 +120,13 @@ try {
              OR ($1 = 'outlet' AND w.id = (SELECT warehouse_id FROM outlets WHERE id = $2::int)))
      ORDER BY w.id LIMIT 1`, [foreignSale.ltype, foreignSale.lid]);
   if (!ownWh) throw new Error('need a second warehouse to prove isolation');
+  const foreignWhs = await q(
+    `SELECT id FROM warehouses WHERE id <> $1 ORDER BY id LIMIT 2`,
+    [ownWh.id],
+  );
+  if (foreignWhs.length < 2) throw new Error('need two foreign warehouses to prove transfer isolation');
+  const foreignWhA = Number(foreignWhs[0].id);
+  const foreignWhB = Number(foreignWhs[1].id);
   const childOutletIds = (await q(`SELECT id FROM outlets WHERE warehouse_id = $1`, [ownWh.id])).map(r => Number(r.id));
   const [foreignCustomer] = await q(`
     SELECT id
@@ -254,6 +264,53 @@ try {
     const prLeaked = prRows.filter(p => Number(p.employeeId ?? p.employee_id) !== Number(fx.empId));
     assert('branch user self-scopes on payroll (only their own rows, if any)',
       pr.status === 200 && prLeaked.length === 0, `status=${pr.status} leaked=${prLeaked.length}`);
+  }
+
+  // ── [E2] Transfer-specific location isolation ─────────────────────────────
+  console.log('\n[E2] Transfer list/detail and receive/reject actions stay location-scoped');
+  await setPerm('page:/transfers', { ...NONE, canView: true, canEdit: true });
+  const [ownTransfer] = await q(
+    `INSERT INTO stock_transfers
+       (challan_number, from_type, from_id, to_type, to_id, transfer_date,
+        line_items, is_interstate, status, notes)
+     VALUES ($1,'warehouse',$2,'warehouse',$3,CURRENT_DATE,'[]'::jsonb,false,'in_transit',$4)
+     RETURNING id`,
+    [`${TAG}-OWN-TRANSFER`, ownWh.id, foreignWhA, `${TAG} own endpoint`],
+  );
+  const [foreignTransfer] = await q(
+    `INSERT INTO stock_transfers
+       (challan_number, from_type, from_id, to_type, to_id, transfer_date,
+        line_items, is_interstate, status, notes)
+     VALUES ($1,'warehouse',$2,'warehouse',$3,CURRENT_DATE,'[]'::jsonb,false,'in_transit',$4)
+     RETURNING id`,
+    [`${TAG}-FOREIGN-TRANSFER`, foreignWhA, foreignWhB, `${TAG} foreign endpoints`],
+  );
+  fx.transferIds.push(Number(ownTransfer.id), Number(foreignTransfer.id));
+  {
+    const list = await apiReq('GET', '/stock/transfers', undefined, tok);
+    const visible = rows(list.data).map(t => Number(t.id));
+    assert('transfer list includes a transfer touching the user warehouse',
+      list.status === 200 && visible.includes(Number(ownTransfer.id)),
+      `status=${list.status} ids=${visible.join(',')}`);
+    assert('transfer list excludes a transfer outside the user warehouse',
+      list.status === 200 && !visible.includes(Number(foreignTransfer.id)),
+      `status=${list.status} ids=${visible.join(',')}`);
+
+    const ownDetail = await apiReq('GET', `/stock/transfers/${ownTransfer.id}`, undefined, tok);
+    assert('transfer detail is readable when one endpoint is in scope',
+      ownDetail.status === 200 && Number(ownDetail.data?.id) === Number(ownTransfer.id),
+      `status=${ownDetail.status}`);
+    const foreignDetail = await apiReq('GET', `/stock/transfers/${foreignTransfer.id}`, undefined, tok);
+    assert('foreign transfer detail is hidden as 404', foreignDetail.status === 404, `status=${foreignDetail.status}`);
+
+    const receiveForeign = await apiReq('PATCH', `/stock/transfers/${foreignTransfer.id}/approve`,
+      { approvedBy: `${TAG} foreign receive` }, tok);
+    assert('foreign transfer cannot be received by this warehouse user',
+      receiveForeign.status === 404, `status=${receiveForeign.status}`);
+    const rejectForeign = await apiReq('PATCH', `/stock/transfers/${foreignTransfer.id}/reject`,
+      { rejectionReason: `${TAG} foreign reject` }, tok);
+    assert('foreign transfer cannot be rejected by this warehouse user',
+      rejectForeign.status === 404, `status=${rejectForeign.status}`);
   }
 
   // ── [F] Selector/preference never grants ──────────────────────────────────
