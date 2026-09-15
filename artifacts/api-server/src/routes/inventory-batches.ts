@@ -11,7 +11,7 @@ import { consumeBatches, creditBatch, planFEFO, inboundCostForItem } from "../li
 import { writeStockLedger } from "../lib/stockLedger";
 import { productBatchIdentity } from "../lib/productIdentity";
 import { getUserDataScope, scopeBranchWhere } from "../lib/dataScope";
-import { stockValuation, PRODUCT_UNIT_COST_SQL, PRODUCT_MASTER_JOINS, PRODUCT_KIND_LABELS, type ProductKind } from "../lib/valuation";
+import { stockValuation, PRODUCT_UNIT_COST_SQL, PRODUCT_MASTER_JOINS, LATEST_STOCK_COST_SNAPSHOT_JOIN, PRODUCT_KIND_LABELS, type ProductKind } from "../lib/valuation";
 import { batchReservedSql, reservedSql } from "../lib/reservations";
 import {
   expiryBucket, expiryStatus, summarizeExpiryBuckets, EXPIRY_BUCKET_LABELS, EXPIRY_BUCKET_TONE,
@@ -398,6 +398,7 @@ router.get("/stock/movement-analysis", requireModuleView("page:/headoffice/inven
               (CURRENT_DATE - mv.last_out_at::date) AS days_since_outbound
        FROM stock_entries se
        ${PRODUCT_MASTER_JOINS}
+        ${LATEST_STOCK_COST_SNAPSHOT_JOIN}
        LEFT JOIN LATERAL (
          SELECT MAX(sl.created_at) AS last_at,
                 MAX(CASE WHEN sl.qty_change::numeric < 0 THEN sl.created_at END) AS last_out_at

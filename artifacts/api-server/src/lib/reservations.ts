@@ -38,6 +38,7 @@ export type ReservationDocType = "stock_transfer" | "sale" | "production";
 
 const r3 = (n: number) => Math.round(n * 1000) / 1000;
 const r2 = (n: number) => Math.round(n * 100) / 100;
+const r4 = (n: number) => Math.round(n * 10000) / 10000;
 
 export interface ReservationLine {
   batchId?: number | null;
@@ -153,7 +154,7 @@ export async function reserveStock(c: Queryable, args: {
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
       [args.refId, args.materialType ?? "item", args.branchType, args.branchId,
        line.batchId ?? null, line.batchNumber ?? null,
-       qty, r2(Number(line.unitCost ?? 0)),
+       qty, r4(Number(line.unitCost ?? 0)),
        args.kind, args.docType, args.docId, args.notes ?? null],
     );
   }
@@ -222,7 +223,10 @@ export async function activeInTransit(c: Queryable, opts: {
   );
   return rows.map((r: any) => {
     const quantity = r3(Number(r.quantity));
-    const unitCost = r2(Number(r.unit_cost ?? 0));
+    // Checkpoint costs are stored to four decimal places. Keep those places in
+    // the reservation ledger: rounding a sender's location cost to cents makes
+    // an otherwise neutral dispatch change company inventory by qty * rounding.
+    const unitCost = r4(Number(r.unit_cost ?? 0));
     return {
       refId: Number(r.ref_id),
       materialType: (r.material_type ?? "item") as ReservationProductKind,

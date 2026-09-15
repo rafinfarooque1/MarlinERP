@@ -13,9 +13,10 @@
  *    `materials.current_stock` (retired company-wide counters that cannot
  *    express a location) and never from `stock_batches` (a reconciling lot
  *    layer that may total less than the entry).
- *  - Cost is the product's weighted-average cost, falling back to its manual
- *    cost. MRP is a selling price and must never value stock — that would
- *    capitalise unrealised profit into inventory.
+ *  - Cost is the latest dated per-product/per-location weighted-average cost
+ *    checkpoint, falling back to the product's weighted-average cost and then
+ *    manual cost when no checkpoint exists. MRP is a selling price and must
+ *    never value stock — that would capitalise unrealised profit into inventory.
  *  - Raw materials and packing materials are stock too. Valuing finished goods
  *    only understated inventory by the whole material holding.
  *  - Dispatched-but-unreceived stock belongs to nobody's on-hand figure: it
@@ -41,9 +42,23 @@ const r2 = (n: number) => Math.round(n * 100) / 100;
  *  row (the id spaces overlap, so every join is guarded by material_type), so
  *  COALESCE picks that one master's figures. */
 export const PRODUCT_UNIT_COST_SQL = `
-  CASE WHEN COALESCE(i.avg_cost, m.avg_cost, rm.avg_cost, 0)::numeric > 0
+  CASE WHEN scs.unit_cost IS NOT NULL THEN scs.unit_cost::numeric
+       WHEN COALESCE(i.avg_cost, m.avg_cost, rm.avg_cost, 0)::numeric > 0
        THEN COALESCE(i.avg_cost, m.avg_cost, rm.avg_cost, 0)::numeric
        ELSE COALESCE(i.cost,     m.cost,     rm.cost,     0)::numeric END`;
+
+/** Latest authoritative dated cost for the exact product/location key. */
+export const LATEST_STOCK_COST_SNAPSHOT_JOIN = `
+   LEFT JOIN LATERAL (
+     SELECT scs.unit_cost
+       FROM stock_cost_snapshots scs
+      WHERE scs.material_type = se.material_type
+        AND scs.ref_id = se.item_id
+        AND scs.branch_type = se.branch_type
+        AND scs.branch_id = se.branch_id
+      ORDER BY scs.as_of_date DESC, scs.id DESC
+      LIMIT 1
+   ) scs ON TRUE`;
 
 /** Items-only form, for queries that join `items` alone. Kept so the per-item
  *  reports and this module cannot value the same item differently. */
@@ -159,6 +174,7 @@ export async function stockValuationRows(q: Queryable, scope: ValuationScope = {
             ${PRODUCT_UNIT_COST_SQL}                    AS unit_cost
        FROM stock_entries se
        ${PRODUCT_MASTER_JOINS}
+        ${LATEST_STOCK_COST_SNAPSHOT_JOIN}
       WHERE ${conds.join(" AND ")}
       ORDER BY se.branch_type, se.branch_id, item_name`,
     params,

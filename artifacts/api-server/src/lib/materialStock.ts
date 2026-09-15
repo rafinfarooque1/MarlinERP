@@ -16,6 +16,26 @@ type Queryable = {
   query: (sql: string, params?: unknown[]) => Promise<{ rows: any[] }>;
 };
 
+const r2 = (n: number) => Math.round(n * 100) / 100;
+
+/**
+ * Preserve the cents represented by each side of an inbound blend. Rounding
+ * only after adding quantities makes a merged row differ from the two rows it
+ * replaces because stock valuation rounds each row's value independently.
+ */
+export function paiseConservativeBlendCost(
+  existingQty: number,
+  existingCost: number,
+  inboundQty: number,
+  inboundCost: number,
+): number {
+  const totalQty = existingQty + inboundQty;
+  if (!(totalQty > 0)) return inboundCost;
+  const existingValue = r2(existingQty * existingCost);
+  const inboundValue = r2(inboundQty * inboundCost);
+  return r2(existingValue + inboundValue) / totalQty;
+}
+
 /** The tables each discriminator points at. `item` is deliberately absent —
  *  items go through the item paths, which also maintain batches. */
 const MIRROR_TABLE: Record<string, string> = {
@@ -92,8 +112,8 @@ export async function deductMaterialAt(
 
 /**
  * Credit a location, creating the row when the material has never been held
- * there. `unitCost` only seeds a brand-new row; an existing row keeps the cost
- * it already carries so a relocation cannot silently revalue stock.
+ * there. Existing rows are blended at the inbound cost so a transfer carries
+ * the sender's authoritative cost without changing company inventory value.
  */
 export async function creditMaterialAt(
   c: Queryable,
@@ -110,6 +130,14 @@ export async function creditMaterialAt(
      VALUES ($1, $2, $3, $4, $5, $6)
      ON CONFLICT (item_id, material_type, branch_type, branch_id) DO UPDATE SET
        quantity = stock_entries.quantity::numeric + EXCLUDED.quantity::numeric,
+       cost_price = CASE
+         WHEN stock_entries.quantity::numeric + EXCLUDED.quantity::numeric > 0
+         THEN (
+           ROUND(stock_entries.quantity::numeric * stock_entries.cost_price::numeric, 2)
+           + ROUND(EXCLUDED.quantity::numeric * EXCLUDED.cost_price::numeric, 2)
+         ) / (stock_entries.quantity::numeric + EXCLUDED.quantity::numeric)
+         ELSE EXCLUDED.cost_price::numeric
+       END,
        updated_at = now()`,
     [refId, kind, branchType, branchId, qty, unitCost],
   );

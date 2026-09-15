@@ -7,7 +7,7 @@ import { CreateStockTransferBody, ListStockQueryParams } from "@workspace/api-zo
 import { logActivity, logActivityInTransaction } from "../lib/audit";
 import { pool } from "@workspace/db";
 import {
-  consumeBatches, restoreBatches, creditBatch, inboundCostForItem, inboundCostForMaterial,
+  consumeBatches, restoreBatches, creditBatch,
   validateBatchOverride, type BatchBreakdownEntry,
 } from "../lib/batches";
 import { writeStockLedger, batchResolveMeta, toTxnDate } from "../lib/stockLedger";
@@ -21,7 +21,7 @@ import {
 } from "../lib/gstTransfer";
 import { getUserDataScope, isLocationInScope, scopeBranchWhere, scopeTransferWhere } from "../lib/dataScope";
 import { getLocationFilter } from "../lib/requestLocation";
-import { deductMaterialAt, creditMaterialAt } from "../lib/materialStock";
+import { deductMaterialAt, creditMaterialAt, paiseConservativeBlendCost } from "../lib/materialStock";
 import { outletWritesBlocked, OUTLETS_DISABLED_MESSAGE, OUTLETS_DISABLED_CODE } from "../lib/featureFlags";
 import { productBatchIdentity, blockedByInactiveProducts, INACTIVE_PRODUCT_CODE, isProductKind } from "../lib/productIdentity";
 import {
@@ -36,28 +36,53 @@ const r2 = (n: number) => Math.round(n * 100) / 100;
 
 /**
  * A transfer is a relocation, not a purchase. Its cost must therefore come
- * from the source inventory, never from the request body. Tracked quantities
- * use their FEFO lot costs; any untracked remainder uses the server-side
- * product average/manual cost used by the valuation engine.
+ * from the source inventory, never from the request body. The location's
+ * latest cost checkpoint is authoritative; the product average/manual cost is
+ * used only when that location has no checkpoint.
  */
 function transferUnitCost(
   quantity: number,
   breakdown: BatchBreakdownEntry[] | null | undefined,
   fallbackCost: number,
 ): number {
-  const qty = Number(quantity);
-  if (!(qty > 0)) return 0;
-  let trackedQty = 0;
-  let trackedValue = 0;
-  for (const batch of breakdown ?? []) {
-    const batchQty = Math.max(0, Number(batch?.quantity ?? 0));
-    if (!(batchQty > 0)) continue;
-    const batchCost = Number(batch?.unitCost ?? 0);
-    trackedQty += batchQty;
-    trackedValue += batchQty * (batchCost > 0 ? batchCost : fallbackCost);
-  }
-  const remainder = Math.max(0, qty - trackedQty);
-  return r2((trackedValue + remainder * Math.max(0, fallbackCost)) / qty);
+  // FEFO costs remain attached to batchBreakdown for traceability, but stock
+  // valuation is per location. Using a lot blend here would make dispatch
+  // value differ from the sender's checkpoint whenever lots and the location
+  // weighted average diverge.
+  void quantity;
+  void breakdown;
+  return Math.round(Math.max(0, Number(fallbackCost)) * 10000) / 10000;
+}
+
+/** Cost basis shared by sender on-hand, in-transit and destination stock. */
+async function authoritativeTransferCost(
+  c: { query: (sql: string, params?: unknown[]) => Promise<{ rows: any[] }> },
+  materialType: ReservationProductKind,
+  refId: number,
+  branchType: string,
+  branchId: number,
+): Promise<number> {
+  const table = materialType === "item" ? "items"
+    : materialType === "raw_material" ? "raw_materials" : "materials";
+  const { rows: [row] } = await c.query(
+    `SELECT CASE WHEN checkpoint.unit_cost IS NOT NULL THEN checkpoint.unit_cost::numeric
+                 WHEN COALESCE(master.avg_cost, 0)::numeric > 0 THEN master.avg_cost::numeric
+                 ELSE COALESCE(master.cost, 0)::numeric END AS unit_cost
+       FROM ${table} master
+       LEFT JOIN LATERAL (
+         SELECT scs.unit_cost
+           FROM stock_cost_snapshots scs
+          WHERE scs.material_type = $2
+            AND scs.ref_id = $1
+            AND scs.branch_type = $3
+            AND scs.branch_id = $4
+          ORDER BY scs.as_of_date DESC, scs.id DESC
+          LIMIT 1
+       ) checkpoint ON TRUE
+      WHERE master.id = $1`,
+    [refId, materialType, branchType, branchId],
+  );
+  return Number(row?.unit_cost ?? 0);
 }
 
 // ── Branch-name lookup with preloaded maps (no per-row DB hits) ────────────────
@@ -742,7 +767,9 @@ router.post("/stock/transfers", requireModuleAction("page:/transfers", "add"), a
           quantity: Number(li.quantity),
           override: rawLines[i]?.batchOverride,
         });
-        const matValuationCost = await inboundCostForMaterial(client, 'material', li.itemId);
+        const matValuationCost = await authoritativeTransferCost(
+          client, 'material', li.itemId, row.from_type, row.from_id,
+        );
         const matCost = transferUnitCost(
           Number(li.quantity),
           matBreakdown,
@@ -801,7 +828,9 @@ router.post("/stock/transfers", requireModuleAction("page:/transfers", "add"), a
           quantity: Number(li.quantity),
           override: rawLines[i]?.batchOverride,
         });
-        const rmValuationCost = await inboundCostForMaterial(client, 'raw_material', li.itemId);
+        const rmValuationCost = await authoritativeTransferCost(
+          client, 'raw_material', li.itemId, row.from_type, row.from_id,
+        );
         const rmCost = transferUnitCost(
           Number(li.quantity),
           rmBreakdown,
@@ -847,7 +876,9 @@ router.post("/stock/transfers", requireModuleAction("page:/transfers", "add"), a
           quantity: li.quantity,
           override: rawLines[i]?.batchOverride,
         });
-        const itemValuationCost = await inboundCostForItem(client, li.itemId);
+        const itemValuationCost = await authoritativeTransferCost(
+          client, 'item', li.itemId, row.from_type, row.from_id,
+        );
         const itemCost = transferUnitCost(
           Number(li.quantity),
           batchBreakdown,
@@ -1160,9 +1191,9 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction("page:/transfer
           const inboundQty = Number(li.quantity);
           const existingCost = Number(dstExisting.cost_price ?? 0);
           const inboundCost = Number(li.costPrice ?? 0);
-          const combinedCost = existingQty + inboundQty > 0
-            ? r2((existingQty * existingCost + inboundQty * inboundCost) / (existingQty + inboundQty))
-            : inboundCost;
+          const combinedCost = paiseConservativeBlendCost(
+            existingQty, existingCost, inboundQty, inboundCost,
+          );
           await client.query(
             `UPDATE stock_entries
                 SET quantity = quantity::numeric + $1, cost_price = $2, updated_at = now()
