@@ -150,3 +150,4 @@
 - [Salesman assignment](salesman-assignment.md) — store employee ID plus name snapshot; validate new assignments by activity/location and grandfather unchanged historical assignments
 - [Rate terminology compatibility](rate-terminology-compatibility.md) — user-facing MRP terminology is Rate; preserve internal mrp/masterMrp fields and API aliases for compatibility
 - [Location-authoritative inventory costing](location-cost-checkpoints.md) — global product average changes must not revalue unchanged branch stock or create artificial Gross Profit
+- [Release-gate browser verification](release-gate-browser.md) — use the preview proxy for authenticated checks; report drill-down query removal is intentional and must be verified in rendered state
