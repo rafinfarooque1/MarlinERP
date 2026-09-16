@@ -1,0 +1,109 @@
+FINAL ACCOUNTING REGRESSION CHECK — ₹0.09 TRANSFER RECEIPT DIFFERENCE
+======================================================================
+
+Do NOT publish production.
+
+The customer receipt correction is complete and its dedicated bill-settlement
+suite is 82/82 PASS.
+
+However, the broader accounting suite still reports 4 transfer-receipt costing
+assertions differing by ₹0.09 total.
+
+Investigate these 4 failures completely.
+
+IMPORTANT:
+Do not modify customer receipt logic.
+Do not modify production.
+Do not suppress or skip the failing tests.
+Do not simply increase test tolerance unless the accounting design explicitly
+requires that tolerance.
+
+For each of the 4 failing assertions, report:
+
+1. Test name
+2. Exact expected value
+3. Exact actual value
+4. Difference
+5. Source transaction
+6. Transfer ID
+7. Receipt/receiving transaction
+8. Item
+9. Quantity
+10. Unit cost
+11. FIFO/FEFO or weighted-cost calculation involved
+12. Tax treatment if applicable
+13. Rounding point
+14. Database stored value
+15. Accounting journal value
+16. Whether the difference is caused by paise rounding
+17. Whether the difference can affect:
+    - Stock valuation
+    - COGS
+    - Gross Profit
+    - Net Profit
+    - Balance Sheet
+    - Trial Balance
+    - GST
+    - Customer/Vendor balances
+
+Then determine whether the ₹0.09 difference is:
+
+A. A genuine accounting bug
+B. An expected deterministic rounding difference
+C. A test expectation bug
+D. A transfer-receipt costing implementation issue
+
+If it is a genuine accounting bug, FIX IT.
+
+If it is a legitimate rounding behavior, make the accounting calculation
+deterministic and update the regression assertion only after proving the
+accounting invariant.
+
+Required invariant:
+
+For every transfer receipt:
+
+source valuation
+=
+destination received valuation
++
+documented rounding difference
+
+and the rounding difference must NOT create artificial revenue, expense,
+COGS, GST, or profit.
+
+Run the full accounting regression suite again after the investigation.
+
+Also rerun:
+
+- Customer bill settlement suite
+- Trial Balance
+- P&L
+- Balance Sheet
+- Inventory valuation
+- Stock transfer tests
+- Customer receivable tests
+- Bank/Cash tests
+
+FINAL GATE:
+
+[ ] Customer receipt suite 82/82 or better
+[ ] Full accounting suite 100% PASS
+[ ] No hidden/skipped failures
+[ ] Trial Balance balanced
+[ ] P&L unchanged except for legitimate transfer costing
+[ ] Balance Sheet balanced
+[ ] Inventory valuation consistent
+[ ] Transfer neutrality preserved
+[ ] API typecheck PASS
+[ ] Web typecheck PASS
+[ ] Production builds PASS
+[ ] git diff --check PASS
+[ ] Production untouched
+[ ] Nothing published
+
+If any test remains genuinely failing:
+
+NOT READY TO PUBLISH
+
+Return the exact root cause and evidence.
