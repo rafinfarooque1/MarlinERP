@@ -13,9 +13,11 @@ import { usePermission } from '@/lib/usePermission';
 import { downloadCSV } from '@/lib/download';
 import {
   fmt, pdfMoney, fmtDate, titleCase, periodLabel,
-  useDateRange, RangeBar, ReportPicker, SummaryCards, RTable, ExportButtons, exportReportPdf, reportViewFromUrl,
-  type RangeState, type Col,
+  useDateRange, useLocationFilter, LocationFilter, RangeBar, ReportPicker, SummaryCards, RTable, ExportButtons, exportReportPdf, reportViewFromUrl,
+  type RangeState, type Col, type ReportDoc, type LocationOption,
 } from '../shared';
+import { useEnabledOutlets } from '@/lib/locationStructure';
+import { useListWarehouses } from '@workspace/api-client-react';
 
 type PartyReport = 'customerStatement' | 'vendorStatement' | 'receivables' | 'payables';
 
@@ -142,10 +144,24 @@ function Statement({ kind, range, canDownload }: { kind: 'customer' | 'vendor'; 
 }
 
 // ── Receivables aging ─────────────────────────────────────────────────────────
+function PartyLocationOptions() {
+  const warehouses = useListWarehouses();
+  const outlets = useEnabledOutlets();
+  return {
+    options: [
+      ...(warehouses.data ?? []).map((w: any) => ({ type: 'warehouse' as const, id: w.id, name: w.name })),
+      ...outlets.data.map((o: any) => ({ type: 'outlet' as const, id: o.id, name: o.name })),
+    ] satisfies LocationOption[],
+    loading: warehouses.isLoading || outlets.isLoading,
+  };
+}
+
 function ReceivablesReport({ range, canDownload }: { range: RangeState; canDownload: boolean }) {
   // Aging is a position, not a flow: only the END of the selected range
   // matters. `range.to` empty means "today" — the original current view.
-  const { data, isLoading } = useReceivablesAging(range.to || undefined);
+  const loc = useLocationFilter();
+  const { options, loading: locationsLoading } = PartyLocationOptions();
+  const { data, isLoading } = useReceivablesAging(range.to || undefined, { locationType: loc.type || undefined, locationId: loc.id || undefined });
   const rows = data?.customers ?? [];
   const t = data?.totals;
 
@@ -153,33 +169,29 @@ function ReceivablesReport({ range, canDownload }: { range: RangeState; canDownl
     <div className="space-y-4">
       <RangeBar range={range}>
         <p className="text-xs text-muted-foreground">Position as of {fmtDate(data?.asOf)} — only the end date matters for aging</p>
+        <LocationFilter state={loc} options={options} loading={locationsLoading} />
         <ExportButtons
           canDownload={canDownload}
           disabled={isLoading || rows.length === 0}
+          doc={() => ({
+            title: 'Receivables Aging',
+            subtitle: `As of ${fmtDate(data?.asOf)}`,
+            metaRows: [['As of', fmtDate(data?.asOf)], ['Customers', String(rows.length)], ['Net Due', pdfMoney(t?.netDue)]],
+            orientation: 'landscape',
+            sections: [{ columns: [
+              { label: 'Customer', width: 2 }, { label: 'Phone', width: 1.2 },
+              { label: '0-30 days', align: 'right', width: 1.2 }, { label: '31-60 days', align: 'right', width: 1.2 },
+              { label: '61-90 days', align: 'right', width: 1.2 }, { label: '90+ days', align: 'right', width: 1.2 },
+              { label: 'Total Due', align: 'right', width: 1.3 }, { label: 'Credit Notes', align: 'right', width: 1.2 },
+              { label: 'Net Due', align: 'right', width: 1.3 },
+            ], rows: rows.map((r) => [r.name, r.phone ?? '-', r.b0_30, r.b31_60, r.b61_90, r.b90p, r.totalDue, r.creditNotes, r.netDue]),
+              totalsRow: ['TOTAL', '', t?.b0_30 ?? 0, t?.b31_60 ?? 0, t?.b61_90 ?? 0, t?.b90p ?? 0, t?.totalDue ?? 0, t?.creditNotes ?? 0, t?.netDue ?? 0] }],
+          } satisfies ReportDoc)}
           onCSV={() => downloadCSV('receivables-aging.csv', rows.map((r) => ({
             Customer: r.name, Phone: r.phone ?? '', '0-30 (₹)': r.b0_30.toFixed(2), '31-60 (₹)': r.b31_60.toFixed(2),
             '61-90 (₹)': r.b61_90.toFixed(2), '90+ (₹)': r.b90p.toFixed(2), 'Total Due (₹)': r.totalDue.toFixed(2),
             'Credit Notes (₹)': r.creditNotes.toFixed(2), 'Net Due (₹)': r.netDue.toFixed(2),
           })))}
-          onPDF={() => exportReportPdf({
-            title: 'Receivables Aging',
-            subtitle: `As of ${fmtDate(data?.asOf)}`,
-            metaRows: [['As of', fmtDate(data?.asOf)], ['Customers', String(rows.length)], ['Net Due', pdfMoney(t?.netDue)]],
-            orientation: 'landscape',
-            sections: [{
-              columns: [
-                { label: 'Customer', width: 2 }, { label: 'Phone', width: 1.2 },
-                { label: '0-30 days', align: 'right', width: 1.2 }, { label: '31-60 days', align: 'right', width: 1.2 },
-                { label: '61-90 days', align: 'right', width: 1.2 }, { label: '90+ days', align: 'right', width: 1.2 },
-                { label: 'Total Due', align: 'right', width: 1.3 }, { label: 'Credit Notes', align: 'right', width: 1.2 },
-                { label: 'Net Due', align: 'right', width: 1.3 },
-              ],
-              rows: rows.map((r) => [r.name, r.phone ?? '-', pdfMoney(r.b0_30), pdfMoney(r.b31_60), pdfMoney(r.b61_90),
-                pdfMoney(r.b90p), pdfMoney(r.totalDue), pdfMoney(r.creditNotes), pdfMoney(r.netDue)]),
-              totalsRow: ['TOTAL', '', pdfMoney(t?.b0_30), pdfMoney(t?.b31_60), pdfMoney(t?.b61_90), pdfMoney(t?.b90p),
-                pdfMoney(t?.totalDue), pdfMoney(t?.creditNotes), pdfMoney(t?.netDue)],
-            }],
-          })}
         />
       </RangeBar>
 
@@ -212,7 +224,9 @@ function ReceivablesReport({ range, canDownload }: { range: RangeState; canDownl
 // ── Payables aging ────────────────────────────────────────────────────────────
 function PayablesReport({ range, canDownload }: { range: RangeState; canDownload: boolean }) {
   // Same as-of contract as receivables: position at the range END.
-  const { data, isLoading } = usePayablesAging(range.to || undefined);
+  const loc = useLocationFilter();
+  const { options, loading: locationsLoading } = PartyLocationOptions();
+  const { data, isLoading } = usePayablesAging(range.to || undefined, { locationType: loc.type || undefined, locationId: loc.id || undefined });
   const rows = data?.vendors ?? [];
   const t = data?.totals;
   // The control figure from the payables report: the sum of the vendor ledger
@@ -224,33 +238,29 @@ function PayablesReport({ range, canDownload }: { range: RangeState; canDownload
     <div className="space-y-4">
       <RangeBar range={range}>
         <p className="text-xs text-muted-foreground">Position as of {fmtDate(data?.asOf)} — only the end date matters for aging</p>
+        <LocationFilter state={loc} options={options} loading={locationsLoading} />
         <ExportButtons
           canDownload={canDownload}
           disabled={isLoading || rows.length === 0}
+          doc={() => ({
+            title: 'Payables Aging',
+            subtitle: `As of ${fmtDate(data?.asOf)}`,
+            metaRows: [['As of', fmtDate(data?.asOf)], ['Vendors', String(rows.length)], ['Net Due', pdfMoney(netPayable)]],
+            orientation: 'landscape',
+            sections: [{ columns: [
+              { label: 'Vendor', width: 2 }, { label: 'Phone', width: 1.2 },
+              { label: '0-30 days', align: 'right', width: 1.2 }, { label: '31-60 days', align: 'right', width: 1.2 },
+              { label: '61-90 days', align: 'right', width: 1.2 }, { label: '90+ days', align: 'right', width: 1.2 },
+              { label: 'Billed', align: 'right', width: 1.3 }, { label: 'Paid', align: 'right', width: 1.3 },
+              { label: 'Net Due', align: 'right', width: 1.3 },
+            ], rows: rows.map((r) => [r.name, r.phone ?? '-', r.b0_30, r.b31_60, r.b61_90, r.b90p, r.totalBilled, r.totalPaid, r.netDue]),
+              totalsRow: ['TOTAL', '', t?.b0_30 ?? 0, t?.b31_60 ?? 0, t?.b61_90 ?? 0, t?.b90p ?? 0, '', '', netPayable] }],
+          } satisfies ReportDoc)}
           onCSV={() => downloadCSV('payables-aging.csv', rows.map((r) => ({
             Vendor: r.name, Phone: r.phone ?? '', '0-30 (₹)': r.b0_30.toFixed(2), '31-60 (₹)': r.b31_60.toFixed(2),
             '61-90 (₹)': r.b61_90.toFixed(2), '90+ (₹)': r.b90p.toFixed(2), 'Billed (₹)': r.totalBilled.toFixed(2),
             'Paid (₹)': r.totalPaid.toFixed(2), 'Net Due (₹)': r.netDue.toFixed(2),
           })))}
-          onPDF={() => exportReportPdf({
-            title: 'Payables Aging',
-            subtitle: `As of ${fmtDate(data?.asOf)}`,
-            metaRows: [['As of', fmtDate(data?.asOf)], ['Vendors', String(rows.length)], ['Net Due', pdfMoney(netPayable)]],
-            orientation: 'landscape',
-            sections: [{
-              columns: [
-                { label: 'Vendor', width: 2 }, { label: 'Phone', width: 1.2 },
-                { label: '0-30 days', align: 'right', width: 1.2 }, { label: '31-60 days', align: 'right', width: 1.2 },
-                { label: '61-90 days', align: 'right', width: 1.2 }, { label: '90+ days', align: 'right', width: 1.2 },
-                { label: 'Billed', align: 'right', width: 1.3 }, { label: 'Paid', align: 'right', width: 1.3 },
-                { label: 'Net Due', align: 'right', width: 1.3 },
-              ],
-              rows: rows.map((r) => [r.name, r.phone ?? '-', pdfMoney(r.b0_30), pdfMoney(r.b31_60), pdfMoney(r.b61_90),
-                pdfMoney(r.b90p), pdfMoney(r.totalBilled), pdfMoney(r.totalPaid), pdfMoney(r.netDue)]),
-              totalsRow: ['TOTAL', '', pdfMoney(t?.b0_30), pdfMoney(t?.b31_60), pdfMoney(t?.b61_90), pdfMoney(t?.b90p),
-                '', '', pdfMoney(netPayable)],
-            }],
-          })}
         />
       </RangeBar>
 

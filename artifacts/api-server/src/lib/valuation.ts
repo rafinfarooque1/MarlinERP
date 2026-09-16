@@ -114,6 +114,8 @@ export interface ValuationScope {
    * nothing rather than someone else's numbers.
    */
   dataScope?: DataScope;
+  /** Historical position from the append-only stock cost checkpoints. */
+  asOf?: string;
 }
 
 /** Whether one location is inside an employee's scope. */
@@ -148,6 +150,7 @@ export interface ValuationSummary {
 export async function stockValuationRows(q: Queryable, scope: ValuationScope = {}): Promise<ValuationRow[]> {
   const conds = ["se.quantity::numeric > 0"];
   const params: unknown[] = [];
+  if (scope.asOf) params.push(scope.asOf);
   if (scope.branchPairs && scope.branchPairs.length > 0) {
     const parts = scope.branchPairs.map((p) => {
       params.push(p.type, p.id);
@@ -163,6 +166,20 @@ export async function stockValuationRows(q: Queryable, scope: ValuationScope = {
     conds.push(scopeBranchWhere(scope.dataScope, params, "se"));
   }
 
+  const source = scope.asOf
+    ? `(SELECT DISTINCT ON (material_type, ref_id, branch_type, branch_id)
+          ref_id AS item_id, material_type, branch_type, branch_id,
+          quantity, unit_cost
+          FROM stock_cost_snapshots
+         WHERE as_of_date <= $1::date
+         ORDER BY material_type, ref_id, branch_type, branch_id, as_of_date DESC, id DESC) se`
+    : `stock_entries se`;
+  const costSql = scope.asOf
+    ? `COALESCE(se.unit_cost::numeric, COALESCE(i.avg_cost, m.avg_cost, rm.avg_cost, 0)::numeric,
+                COALESCE(i.cost, m.cost, rm.cost, 0)::numeric)`
+    : PRODUCT_UNIT_COST_SQL;
+  const reservedSqlForScope = scope.asOf ? "0::numeric" : reservedSql("se");
+  const snapshotJoin = scope.asOf ? "" : LATEST_STOCK_COST_SNAPSHOT_JOIN;
   const { rows } = await q.query(
     `SELECT se.item_id                                 AS ref_id,
             se.material_type,
@@ -170,11 +187,11 @@ export async function stockValuationRows(q: Queryable, scope: ValuationScope = {
             COALESCE(i.unit, m.unit, rm.unit, '')      AS unit,
             se.branch_type, se.branch_id::int           AS branch_id,
             se.quantity::numeric                        AS quantity,
-            ${reservedSql("se")}                        AS reserved,
-            ${PRODUCT_UNIT_COST_SQL}                    AS unit_cost
-       FROM stock_entries se
+            ${reservedSqlForScope}                       AS reserved,
+            ${costSql}                                  AS unit_cost
+       FROM ${source}
        ${PRODUCT_MASTER_JOINS}
-        ${LATEST_STOCK_COST_SNAPSHOT_JOIN}
+        ${snapshotJoin}
       WHERE ${conds.join(" AND ")}
       ORDER BY se.branch_type, se.branch_id, item_name`,
     params,

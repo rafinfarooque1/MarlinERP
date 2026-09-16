@@ -206,10 +206,11 @@ export interface CollectionsResponse {
 
 export const getSalesReturnsQueryKey = () => ['/api/sales-returns'] as const;
 export const getPurchaseReturnsQueryKey = () => ['/api/purchase-returns'] as const;
-export const getReceivablesAgingQueryKey = (asOf?: string) =>
-  asOf ? (['/api/outstanding/receivables', asOf] as const) : (['/api/outstanding/receivables'] as const);
-export const getPayablesAgingQueryKey = (asOf?: string) =>
-  asOf ? (['/api/outstanding/payables', asOf] as const) : (['/api/outstanding/payables'] as const);
+export type AgingLocation = { locationType?: string; locationId?: number };
+export const getReceivablesAgingQueryKey = (asOf?: string, location?: AgingLocation) =>
+  ['/api/outstanding/receivables', asOf ?? '', location?.locationType ?? '', location?.locationId ?? 0] as const;
+export const getPayablesAgingQueryKey = (asOf?: string, location?: AgingLocation) =>
+  ['/api/outstanding/payables', asOf ?? '', location?.locationType ?? '', location?.locationId ?? 0] as const;
 export const getCollectionsQueryKey = () => ['/api/outstanding/collections'] as const;
 
 // ── Hooks ─────────────────────────────────────────────────────────────────────
@@ -305,18 +306,36 @@ export function useUpdatePurchaseReturn() {
  * payments and credit notes capped there), matching a Balance Sheet dated the
  * same day. Omit for today.
  */
-export function useReceivablesAging(asOf?: string) {
+export function useReceivablesAging(asOf?: string, location?: AgingLocation) {
   return useQuery({
-    queryKey: getReceivablesAgingQueryKey(asOf),
-    queryFn: () => customFetch<ReceivablesAging>(`/api/outstanding/receivables${asOf ? `?asOf=${asOf}` : ''}`),
+    queryKey: getReceivablesAgingQueryKey(asOf, location),
+    queryFn: () => {
+      const p = new URLSearchParams();
+      if (asOf) p.set('asOf', asOf);
+      if (location?.locationType) {
+        p.set('locationType', location.locationType);
+        if (location.locationId) p.set('locationId', String(location.locationId));
+      }
+      const query = p.toString();
+      return customFetch<ReceivablesAging>(`/api/outstanding/receivables${query ? `?${query}` : ''}`, { cache: 'no-store' });
+    },
   });
 }
 
 /** Same `asOf` contract as {@link useReceivablesAging}. */
-export function usePayablesAging(asOf?: string) {
+export function usePayablesAging(asOf?: string, location?: AgingLocation) {
   return useQuery({
-    queryKey: getPayablesAgingQueryKey(asOf),
-    queryFn: () => customFetch<PayablesAging>(`/api/outstanding/payables${asOf ? `?asOf=${asOf}` : ''}`),
+    queryKey: getPayablesAgingQueryKey(asOf, location),
+    queryFn: () => {
+      const p = new URLSearchParams();
+      if (asOf) p.set('asOf', asOf);
+      if (location?.locationType) {
+        p.set('locationType', location.locationType);
+        if (location.locationId) p.set('locationId', String(location.locationId));
+      }
+      const query = p.toString();
+      return customFetch<PayablesAging>(`/api/outstanding/payables${query ? `?${query}` : ''}`, { cache: 'no-store' });
+    },
   });
 }
 

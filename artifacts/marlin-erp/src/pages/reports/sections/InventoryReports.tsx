@@ -30,11 +30,16 @@ function ValuationReport({ canDownload }: { canDownload: boolean }) {
   const [materialType, setMaterialType] = useState<string>('all');
   const [branchType, setBranchType] = useState<string>('all');
   const [branchId, setBranchId] = useState<string>('');
+  const [asOf, setAsOf] = useState(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  });
 
   const params: any = {};
   if (materialType !== 'all') params.materialType = materialType as StockProductKind;
   if (branchType !== 'all') params.branchType = branchType;
   if (branchId && branchId !== '0') params.branchId = Number(branchId);
+  if (asOf) params.asOf = asOf;
 
   const { data, isLoading } = useGetStockValuation(params);
   const rows = data?.rows ?? [];
@@ -61,7 +66,9 @@ function ValuationReport({ canDownload }: { canDownload: boolean }) {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
-        <p className="text-xs text-muted-foreground">Live snapshot as of {today()}</p>
+        <label className="text-xs text-muted-foreground flex items-center gap-1.5">
+          As of <Input type="date" value={asOf} onChange={(e) => setAsOf(e.target.value)} className="h-8 w-36 text-xs" />
+        </label>
         <Select value={materialType} onValueChange={setMaterialType}>
           <SelectTrigger className="h-8 text-xs w-44"><SelectValue placeholder="All Types" /></SelectTrigger>
           <SelectContent>
@@ -101,9 +108,9 @@ function ValuationReport({ canDownload }: { canDownload: boolean }) {
           })))}
           onPDF={() => exportReportPdf({
             title: 'Stock Valuation',
-            subtitle: `Snapshot as of ${today()}`,
+            subtitle: `Snapshot as of ${asOf}`,
             metaRows: [
-              ['As of', today()],
+              ['As of', asOf],
               ['Locations', String(byLocation.length)],
               ['On-hand value', pdfMoney(onHandValue)],
               ['In-transit value', pdfMoney(inTransitValue)],

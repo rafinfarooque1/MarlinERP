@@ -69,7 +69,9 @@ function groupBy(rows: AssetPurchase[], keyOf: (a: AssetPurchase) => string): Gr
 export default function AssetReports() {
   const perm = usePermission('page:/assets/reports');
   const [report, setReport] = useState<ReportKind>('register');
-  const range = useDateRange('all');
+  // Asset register views are point-in-time reports. Starting at today makes
+  // the as-of date explicit instead of silently presenting the live register.
+  const range = useDateRange('today');
   const loc = useLocationFilter();
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [vendorFilter, setVendorFilter] = useState('all');
@@ -81,12 +83,13 @@ export default function AssetReports() {
   const locationOptions = useAssetLocationOptions();
   const locFilterOptions: LocationOption[] = locationOptions.map(o => ({ type: o.type, id: o.id, name: o.name }));
 
-  // Purchase report filters by purchase date + purchase location; every other
-  // asset slice is a point-in-time view of the register (current location).
+  // Purchase report filters by purchase date + purchase location. Register and
+  // grouped views are explicitly valued at the selected end date, so assets
+  // acquired after that date cannot leak into a historical position.
   const isPurchaseView = report === 'purchases';
   const purchaseFilters = useMemo(() => ({
     fromDate: isPurchaseView ? (range.from || undefined) : undefined,
-    toDate: isPurchaseView ? (range.to || undefined) : undefined,
+    toDate: range.to || undefined,
     locationType: loc.type || undefined,
     locationId: loc.id || undefined,
     categoryId: categoryFilter !== 'all' ? categoryFilter : undefined,
@@ -256,7 +259,7 @@ export default function AssetReports() {
 
   const buildDoc = (): ReportDoc => {
     const meta: [string, string][] = [
-      ['Period', (isPurchaseView || report === 'transfers' || report === 'disposals') ? periodLabel(range.from || undefined, range.to || undefined) : 'As of today'],
+      ['Period', (isPurchaseView || report === 'transfers' || report === 'disposals') ? periodLabel(range.from || undefined, range.to || undefined) : `As of ${range.to ? fmtDate(range.to) : 'today'}`],
       ['Location', loc.key ? (locFilterOptions.find(o => `${o.type}:${o.id}` === loc.key)?.name ?? loc.key) : 'All locations'],
     ];
     if (categoryFilter !== 'all') meta.push(['Category', categories.find(c => String(c.id) === categoryFilter)?.name ?? '']);
