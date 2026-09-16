@@ -1,5 +1,5 @@
-import { useState, useMemo, useEffect } from 'react';
-import { useListReceipts, useCreateReceipt, useDeleteReceipt, useListAccountsFlat, useCashBankLedgersFlat, useVoucherPartyLedgers } from '@workspace/api-client-react';
+import { Fragment, useState, useMemo, useEffect } from 'react';
+import { useListReceipts, useCreateReceipt, useUpdateReceipt, useDeleteReceipt, useListAccountsFlat, useCashBankLedgersFlat, useVoucherPartyLedgers } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -9,7 +9,7 @@ import { TransactionDialog, TransactionDialogContent } from '@/components/ui/tra
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Plus, ArrowDownRight, Download, Trash2, Search, Calendar, AlertTriangle, Lock } from 'lucide-react';
+import { Plus, ArrowDownRight, Download, Trash2, Search, Calendar, AlertTriangle, Lock, Pencil, ChevronDown, ChevronUp } from 'lucide-react';
 import { toast } from 'sonner';
 import { Form, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Textarea } from '@/components/ui/textarea';
@@ -52,8 +52,11 @@ export default function ReceiptPage() {
   const [isOpen, setIsOpen] = useState(false);
   const [search, setSearch] = useState('');
   const [deleteTarget, setDeleteTarget] = useState<any>(null);
+  const [editTarget, setEditTarget] = useState<any>(null);
+  const [expandedId, setExpandedId] = useState<number | null>(null);
   const [settlement, setSettlement] = useState<SettlementSelection | null>(null);
   const createMutation = useCreateReceipt();
+  const updateMutation = useUpdateReceipt();
   const deleteMutation = useDeleteReceipt();
 
   // The selected location OWNS the receipt's accounting — an Admin recording
@@ -96,6 +99,18 @@ export default function ReceiptPage() {
   }, [locKey, inOptions, foreignLedgerIds, allowedPartyLedgerIds]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const onSubmit = (data: FormValues) => {
+    if (editTarget) {
+      updateMutation.mutate({ id: editTarget.id, ...data }, {
+        onSuccess: () => {
+          toast.success('Receipt updated');
+          setIsOpen(false);
+          setEditTarget(null);
+          form.reset();
+        },
+        onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
+      });
+      return;
+    }
     const loc = parseLocKey(locKey);
     if (!loc) { toast.error('Please select a location.'); return; }
     // A customer receipt carries its bill split so the books settle those
@@ -184,6 +199,8 @@ export default function ReceiptPage() {
               {perm.canAdd && (
                 <Button onClick={() => {
                   form.reset({ receiptDate: new Date().toISOString().split('T')[0], receivedFromLedgerId: 0, receivedInLedgerId: 0, amount: 0, referenceNumber: '', narration: '' });
+                  setEditTarget(null);
+                  setSettlement(null);
                   setIsOpen(true);
                 }}>
                   <Plus className="w-4 h-4 mr-2" /> New Receipt
@@ -227,7 +244,8 @@ export default function ReceiptPage() {
                   <EmptyState icon={ArrowDownRight} title="No receipt vouchers yet" hint="Record an incoming receipt to see it here." compact />
                 </TableCell></TableRow>
               ) : pageRows.map((r: any) => (
-                <TableRow key={r.id} className="hover:bg-muted/10">
+                <Fragment key={r.id}>
+                <TableRow className="hover:bg-muted/10">
                   <TableCell className="font-mono text-emerald-500 font-bold text-sm whitespace-nowrap">
                     {r.voucherNumber}
                     {r.origin === 'system' && (
@@ -257,13 +275,69 @@ export default function ReceiptPage() {
                       <span title="System voucher — manage from its own module" className="inline-flex justify-center w-8">
                         <Lock className="w-3.5 h-3.5 text-muted-foreground/60" />
                       </span>
-                    ) : perm.canDelete && isAdmin && (
-                      <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-destructive" onClick={() => setDeleteTarget(r)}>
-                        <Trash2 className="w-4 h-4" />
-                      </Button>
+                    ) : (
+                      <div className="flex items-center justify-end gap-1">
+                        {r.allocations?.length > 0 && (
+                          <Button variant="ghost" size="icon" className="h-8 w-8" title="View allocation"
+                            onClick={() => setExpandedId(expandedId === r.id ? null : r.id)}>
+                            {expandedId === r.id ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                          </Button>
+                        )}
+                        {r.editable && perm.canEdit && (
+                          <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" title="Edit receipt"
+                            onClick={() => {
+                              setEditTarget(r);
+                              setSettlement(null);
+                              form.reset({
+                                receiptDate: r.receiptDate,
+                                receivedFromLedgerId: Number(r.receivedFromLedgerId),
+                                receivedInLedgerId: Number(r.receivedInLedgerId),
+                                amount: Number(r.amount),
+                                referenceNumber: r.referenceNumber || '',
+                                narration: r.narration || '',
+                              });
+                              setIsOpen(true);
+                            }}>
+                            <Pencil className="w-4 h-4" />
+                          </Button>
+                        )}
+                        {perm.canDelete && isAdmin && (
+                          <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-destructive" onClick={() => setDeleteTarget(r)}>
+                            <Trash2 className="w-4 h-4" />
+                          </Button>
+                        )}
+                      </div>
                     )}
                   </TableCell>
                 </TableRow>
+                {expandedId === r.id && r.allocations?.length > 0 && (
+                  <TableRow className="bg-muted/10">
+                    <TableCell colSpan={9} className="px-6 py-3">
+                      <div className="rounded-lg border border-border bg-background p-3">
+                        <p className="text-xs font-semibold mb-2">Bill Allocation / Settlement Details</p>
+                        <div className="grid grid-cols-4 gap-2 text-[11px] text-muted-foreground border-b border-border pb-1">
+                          <span>Invoice</span><span className="text-right">Original Due</span>
+                          <span className="text-right">Allocated</span><span className="text-right">Remaining</span>
+                        </div>
+                        {r.allocations.map((a: any) => (
+                          <div key={`${r.id}-${a.saleId}`} className="grid grid-cols-4 gap-2 text-xs py-1">
+                            <span className="font-mono">{a.invoiceNumber || `Sale #${a.saleId}`}</span>
+                            <span className="text-right font-mono">{inr(Number(a.originalDue))}</span>
+                            <span className="text-right font-mono text-emerald-600">{inr(Number(a.allocated))}</span>
+                            <span className="text-right font-mono">{inr(Number(a.remaining))}</span>
+                          </div>
+                        ))}
+                        {Number(r.advanceAmount) > 0.004 && (
+                          <div className="mt-2 pt-2 border-t border-border text-xs flex justify-between">
+                            <span>Customer advance from this receipt</span>
+                            <span className="font-mono text-emerald-600">{inr(Number(r.advanceAmount))}</span>
+                          </div>
+                        )}
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                )}
+                </Fragment>
               ))}
             </TableBody>
           </Table>
@@ -273,9 +347,9 @@ export default function ReceiptPage() {
       </div>
 
       {/* ── New Receipt Dialog ── */}
-      <TransactionDialog open={isOpen} dirty={form.formState.isDirty} onOpenChange={v => { setIsOpen(v); if (!v) form.reset(); }}>
+       <TransactionDialog open={isOpen} dirty={form.formState.isDirty} onOpenChange={v => { setIsOpen(v); if (!v) { setEditTarget(null); form.reset(); } }}>
         <TransactionDialogContent className="sm:max-w-lg">
-          <DialogHeader><DialogTitle>New Receipt Voucher</DialogTitle></DialogHeader>
+           <DialogHeader><DialogTitle>{editTarget ? 'Edit Receipt Voucher' : 'New Receipt Voucher'}</DialogTitle></DialogHeader>
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4 pt-2">
 
@@ -326,12 +400,13 @@ export default function ReceiptPage() {
                 </FormItem>
               )} />
 
-              {/* Bill-wise settlement — appears when a customer ledger is picked */}
-              <BillSettlementPanel
-                ledgerId={Number(form.watch('receivedFromLedgerId')) || 0}
-                amount={Number(form.watch('amount')) || 0}
-                onSelection={setSettlement}
-              />
+               {!editTarget && (
+                 <BillSettlementPanel
+                   ledgerId={Number(form.watch('receivedFromLedgerId')) || 0}
+                   amount={Number(form.watch('amount')) || 0}
+                   onSelection={setSettlement}
+                 />
+               )}
 
               {/* Reference — descriptive metadata only */}
               <FormField control={form.control} name="referenceNumber" render={({ field }) => (
@@ -350,8 +425,10 @@ export default function ReceiptPage() {
 
               <DialogFooter className="max-md:sticky max-md:bottom-0 max-md:z-20 max-md:-mx-4 max-md:px-4 max-md:py-2 max-md:bg-background/95 max-md:backdrop-blur max-md:border-t max-md:border-border">
                 <DialogClose asChild><Button variant="outline" type="button">Cancel</Button></DialogClose>
-                <Button type="submit" disabled={createMutation.isPending}>
-                  {createMutation.isPending ? 'Recording…' : 'Record Receipt'}
+                 <Button type="submit" disabled={createMutation.isPending || updateMutation.isPending}>
+                   {editTarget
+                     ? (updateMutation.isPending ? 'Saving…' : 'Save Receipt')
+                     : (createMutation.isPending ? 'Recording…' : 'Record Receipt')}
                 </Button>
               </DialogFooter>
             </form>
