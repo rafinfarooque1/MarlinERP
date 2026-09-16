@@ -1,0 +1,858 @@
+FINAL REPORT EXPORT + REPORTS RELEASE BLOCKER FIX
+=================================================
+
+You are working on Frozen Fruits ERP.
+
+IMPORTANT:
+This is a RELEASE-BLOCKER FIX.
+Do NOT publish production.
+Do NOT modify production data.
+Do NOT perform destructive cleanup.
+Do NOT create test transactions in production.
+
+Work only against the development environment/database.
+
+The latest fresh PDF/XLSX parity verification identified the following real blockers:
+
+1. All Locations Day Book:
+   API returns:
+   - 771 entries
+   - Dr/Cr ₹58,16,138.54
+
+   But the rendered All Locations Day Book screen displays:
+   - 0 entries
+   - ₹0.00
+   - PDF/XLSX export disabled
+
+2. Stock Report:
+   - PDF exists
+   - XLSX action is missing
+   - Current report is "as of today"
+   - It does not correctly honor the requested historical date range
+
+3. Receivables:
+   - PDF exists
+   - XLSX action is missing
+   - Location isolation is not working correctly on Calicut
+   - Calicut currently shows company-wide values
+
+4. Payables:
+   - PDF exists
+   - XLSX action is missing
+   - Location isolation is not working correctly on Calicut
+   - Calicut currently shows company-wide values
+
+5. Bank Reconciliation:
+   - Valid route is /accounts/reconciliation
+   - There is currently no PDF/XLSX export surface
+
+6. Fixed Assets:
+   - PDF/XLSX exists
+   - Report is currently "As of today"
+   - Strict 1–15 September date-range semantics are not supported
+
+7. Balance Sheet:
+   - Numerical values are correct
+   - Difference is ₹0.00
+   - But UI says:
+     "Balanced: No — out by ₹0.00"
+   - This must be corrected to indicate balanced when difference = 0.
+
+8. Calicut Stock export:
+   - Existing captured export was All Locations
+   - A fresh isolated Calicut export must be generated and verified.
+
+The goal is to make EVERY report's:
+SCREEN = API PAYLOAD = PDF = XLSX
+
+for the same:
+- location
+- date range
+- filters
+- accounting scope
+- report parameters
+
+
+=================================================
+PHASE 1 — DO A CODE AUDIT BEFORE CHANGING ANYTHING
+=================================================
+
+Identify:
+
+A. All report screen components
+B. Report API endpoints
+C. Report query/builders
+D. PDF generators
+E. XLSX generators
+F. Export buttons/actions
+G. Location filter handling
+H. Date-range handling
+I. All Locations logic
+J. Warehouse-specific filtering
+K. Shared report utilities
+
+Do not create duplicate report logic.
+
+The report architecture must have one authoritative server-side report dataset/query.
+
+Preferred flow:
+
+DATABASE
+   ↓
+AUTHORITATIVE REPORT SERVICE
+   ↓
+REPORT API PAYLOAD
+   ↓
+SCREEN
+   ↓
+PDF
+   ↓
+XLSX
+
+PDF and XLSX must NOT independently reconstruct accounting values.
+
+They must consume the same authoritative report payload/data used by the screen.
+
+
+=================================================
+PHASE 2 — FIX ALL LOCATIONS DAY BOOK
+=================================================
+
+This is the highest-priority screen/API defect.
+
+Current problem:
+
+API:
+771 entries
+₹58,16,138.54
+
+Screen:
+0 entries
+₹0.00
+
+Find the exact reason the screen is not consuming/rendering the API result.
+
+Check:
+
+- query parameters
+- location ID
+- All Locations sentinel value
+- undefined/null location
+- "all" vs "all-locations"
+- selected location state
+- React Query key
+- stale cached query
+- response property mismatch
+- pagination handling
+- date range
+- report type
+- empty-state logic
+- permission filtering
+- frontend transformation
+- table row mapping
+- total calculation
+
+IMPORTANT:
+
+When Head Office selects "All Locations":
+
+The Day Book must query all locations that the user is authorized to see.
+
+It must NOT interpret All Locations as:
+location_id = NULL
+unless the backend explicitly defines that as the authorized all-location scope.
+
+The screen must render the exact API result.
+
+Expected:
+
+API entries = screen entries
+API Dr/Cr = screen Dr/Cr
+
+Then PDF and XLSX must use the same dataset.
+
+Add a regression test specifically for:
+
+All Locations Day Book:
+API 771 entries
+Screen 771 entries
+Screen total = API total
+PDF total = API total
+XLSX total = API total
+
+
+=================================================
+PHASE 3 — IMPLEMENT XLSX FOR STOCK REPORT
+=================================================
+
+Stock Report currently has PDF but no XLSX.
+
+Add an XLSX export action.
+
+Requirements:
+
+- Same filters as screen
+- Same selected location
+- Same date/as-of date
+- Same stock quantities
+- Same valuation
+- Same batches where applicable
+- Same totals
+- Same authorized location scope
+
+Do NOT calculate a different stock valuation inside XLSX.
+
+Use the same authoritative stock report dataset used by the screen/PDF.
+
+Filename example:
+
+Stock_Report_<Location>_<Date>.xlsx
+
+
+=================================================
+PHASE 4 — FIX STOCK REPORT DATE SEMANTICS
+=================================================
+
+Current Stock Report is "As of today".
+
+This must be made explicit and correct.
+
+Implement one of these clean designs:
+
+Option A:
+Stock Report has:
+- As of Date
+
+and the report is clearly a historical stock snapshot.
+
+OR
+
+Option B:
+Stock Report has:
+- Date Range
+- Opening Stock
+- Stock In
+- Stock Out
+- Closing Stock
+
+Use whichever matches the existing ERP accounting/reporting architecture.
+
+Do NOT fake historical stock by simply applying today's stock to an old date.
+
+For an "As of Date" snapshot:
+
+Stock as of date =
+all valid stock movements through the selected business date
+
+using the authoritative historical stock/cost checkpoint system already implemented.
+
+Do not fall back to mutable current item master average cost.
+
+The PDF and XLSX must state the same as-of date.
+
+If the user selects 1–15 September in the report center, do not silently produce a 16 September/current snapshot.
+
+Either:
+- support the requested historical date, or
+- clearly change the UI semantics so the report is an As-of-Date report.
+
+Do not leave ambiguous behavior.
+
+
+=================================================
+PHASE 5 — FIX RECEIVABLES LOCATION ISOLATION
+=================================================
+
+Current problem:
+
+Calicut Receivables shows company-wide:
+
+₹9,31,697.88
+
+instead of the Calicut-authorized dataset.
+
+Implement strict server-side location filtering.
+
+Rules:
+
+HEAD OFFICE + "ALL LOCATIONS":
+    authorized consolidated data
+
+HEAD OFFICE + specific warehouse:
+    only that warehouse
+
+WAREHOUSE:
+    only its assigned warehouse
+
+No frontend-only filtering.
+
+The backend must enforce location scope.
+
+Check:
+- customers
+- sales
+- sales returns
+- receipts
+- customer advances
+- credit notes
+- allocations
+- opening receivables
+- adjustments
+- ledger entries
+
+Receivables formula must remain:
+
+Opening Receivable
++ Sales
++ valid charges
+- Sales Returns / Credit Notes
+- Receipts
+± valid adjustments
+= Closing Receivable
+
+Only include records belonging to the selected authorized location.
+
+Customer-level access must also remain location-safe.
+
+
+=================================================
+PHASE 6 — ADD RECEIVABLES XLSX
+=================================================
+
+Add XLSX export.
+
+Screen/API/PDF/XLSX must contain the same:
+
+- customers
+- invoice references
+- opening
+- sales
+- returns
+- receipts
+- adjustments
+- outstanding
+- totals
+
+No client-prepared financial values.
+
+XLSX must be generated from authoritative server-side data.
+
+
+=================================================
+PHASE 7 — FIX PAYABLES LOCATION ISOLATION
+=================================================
+
+Current problem:
+
+Calicut Payables shows company-wide:
+
+₹1,16,60,893.44
+
+Fix server-side location scoping.
+
+Rules:
+
+HEAD OFFICE + ALL:
+    all authorized locations
+
+HEAD OFFICE + specific warehouse:
+    only selected warehouse
+
+WAREHOUSE:
+    only assigned warehouse
+
+Include only correctly scoped:
+
+- purchase invoices
+- purchase returns
+- vendor payments
+- vendor advances
+- allocations
+- debit/credit adjustments
+- opening payables
+
+Formula:
+
+Opening Payable
++ Purchases
+- Purchase Returns
+- Payments
+± Advances/Credits/Adjustments
+= Closing Payable
+
+
+=================================================
+PHASE 8 — ADD PAYABLES XLSX
+=================================================
+
+Add XLSX export.
+
+Screen/API/PDF/XLSX must match exactly.
+
+Verify:
+
+- vendor count
+- invoice count
+- opening payable
+- purchases
+- returns
+- payments
+- advances
+- outstanding
+- totals
+
+
+=================================================
+PHASE 9 — BANK RECONCILIATION EXPORTS
+=================================================
+
+Valid route:
+
+/accounts/reconciliation
+
+Do NOT create or use:
+
+/finance/reconciliation
+
+Add:
+
+1. Export PDF
+2. Export XLSX
+
+Both must use the same reconciliation dataset displayed on screen.
+
+Export must respect:
+
+- selected bank account
+- selected location
+- date range
+- reconciliation status
+- reconciliation batch
+- selected/filtered transactions
+- processing charges where applicable
+
+PDF should contain:
+
+Bank account
+Location
+Date range
+Opening balance if available
+Eligible transactions
+Reconciled transactions
+Unreconciled transactions
+Processing charges
+Closing/reconciled balance
+Totals
+
+XLSX should contain the detailed transaction-level dataset.
+
+Do not fabricate reconciliation balances.
+
+
+=================================================
+PHASE 10 — FIX FIXED ASSET DATE SEMANTICS
+=================================================
+
+Current Fixed Assets report says:
+
+"As of today"
+
+Do not pretend this is a 1–15 September report.
+
+Implement explicit:
+
+"As of Date"
+
+or
+
+"Date Range"
+
+depending on existing accounting design.
+
+If As-of-Date:
+
+Only assets/acquisitions/disposals/depreciation applicable through that business date are included.
+
+Depreciation must use the existing monthly depreciation engine.
+
+Do not recalculate depreciation using today's date when an historical date is selected.
+
+PDF/XLSX must show the exact as-of date.
+
+If a date range is not supported, do not label the report as a date-range report.
+
+
+=================================================
+PHASE 11 — FIX BALANCE SHEET STATUS LABEL
+=================================================
+
+Current situation:
+
+Numerical difference:
+₹0.00
+
+UI:
+"Balanced: No — out by ₹0.00"
+
+Fix the condition.
+
+Use a tolerance-safe comparison.
+
+For example conceptually:
+
+if abs(totalAssets - totalLiabilitiesAndEquity) <= tolerance:
+    balanced = true
+
+else:
+    balanced = false
+
+Display:
+
+Balanced: Yes
+
+when balanced.
+
+If not balanced:
+
+Balanced: No — out by ₹X
+
+Do not show:
+
+Balanced: No — out by ₹0.00
+
+
+Do not alter the underlying accounting calculation merely to fix the label.
+
+
+=================================================
+PHASE 12 — CALICUT EXPORT ISOLATION TEST
+=================================================
+
+Run a fresh report test:
+
+Location:
+Frozen Hub – Calicut
+
+Date:
+1 September 2026 → 15 September 2026
+
+Generate:
+
+- Day Book PDF/XLSX
+- Cash Book PDF/XLSX
+- Bank Book PDF/XLSX
+- Trial Balance PDF/XLSX
+- General Ledger PDF/XLSX
+- Trading Account/P&L PDF/XLSX
+- Balance Sheet PDF/XLSX
+- Stock Report PDF/XLSX
+- Receivables PDF/XLSX
+- Payables PDF/XLSX
+- GST PDF/XLSX
+- Fixed Assets PDF/XLSX
+- Bank Reconciliation PDF/XLSX
+
+For each report verify that no All Locations data leaks into Calicut.
+
+
+=================================================
+PHASE 13 — ALL LOCATIONS TEST
+=================================================
+
+Run the same reports for:
+
+Location:
+All Locations
+
+Date:
+1 September 2026 → 15 September 2026
+
+Verify:
+
+All Locations totals are consolidated.
+
+Then select:
+
+Frozen Hub – Calicut
+
+Verify totals change appropriately and only Calicut data is included.
+
+
+=================================================
+PHASE 14 — SCREEN/API/PDF/XLSX PARITY MATRIX
+=================================================
+
+Create a final automated verification table.
+
+For EVERY exportable report:
+
+REPORT
+LOCATION
+DATE
+SCREEN TOTAL
+API TOTAL
+PDF TOTAL
+XLSX TOTAL
+SCREEN=API
+API=PDF
+API=XLSX
+LOCATION ISOLATION
+STATUS
+
+No "not proven".
+
+Every applicable cell must be freshly tested.
+
+For detailed reports where a single total is not meaningful, compare:
+
+- row count
+- primary identifiers
+- debit
+- credit
+- quantity
+- amount
+- tax
+- closing balance
+- grand totals
+
+depending on report type.
+
+
+=================================================
+PHASE 15 — PDF VERIFICATION
+=================================================
+
+For every PDF:
+
+1. Generate from UI export action.
+2. Extract text with pdftotext or equivalent.
+3. Parse important numerical totals.
+4. Compare against API payload.
+5. Confirm selected location.
+6. Confirm date/as-of date.
+7. Confirm no hidden All Locations data.
+8. Confirm no duplicate totals.
+9. Confirm page content is complete.
+
+Do not merely confirm that a PDF file was downloaded.
+
+Actually inspect its contents.
+
+
+=================================================
+PHASE 16 — XLSX VERIFICATION
+=================================================
+
+For every XLSX:
+
+1. Generate from UI export action.
+2. Open/read worksheet.
+3. Verify headers.
+4. Verify row count.
+5. Verify important numeric cells.
+6. Verify totals.
+7. Verify location.
+8. Verify date/as-of date.
+9. Compare against API payload.
+
+Do not merely verify that the file exists.
+
+
+=================================================
+PHASE 17 — REPORT PERMISSION / RBAC / LBAC
+=================================================
+
+Do not weaken permissions to fix reports.
+
+Server-side rules:
+
+HEAD OFFICE:
+    may access authorized locations and All Locations
+
+WAREHOUSE:
+    only assigned warehouse
+
+Users must not obtain another warehouse's report by manually changing:
+
+- locationId
+- branchId
+- warehouseId
+- query parameters
+- export endpoint
+- PDF endpoint
+- XLSX endpoint
+
+Test direct API access as well as UI access.
+
+Verify exports use the same authorization middleware as screen APIs.
+
+
+=================================================
+PHASE 18 — ACCOUNTING SAFETY
+=================================================
+
+Do NOT modify:
+
+- journal postings
+- sales accounting
+- purchase accounting
+- COGS
+- stock valuation engine
+- GST logic
+- payroll
+- depreciation calculations
+
+unless the report bug genuinely originates there.
+
+The current accounting engine has already passed its accounting integrity gate.
+
+This task is primarily:
+
+REPORT DATA
++
+FILTERING
++
+EXPORT PARITY
++
+DATE SEMANTICS
++
+UI STATUS
+
+
+=================================================
+PHASE 19 — NO DESTRUCTIVE FIXES
+=================================================
+
+Do NOT:
+
+- delete financial transactions
+- delete vouchers
+- delete stock movements
+- rewrite historical accounting entries
+- alter production records
+- reset balances
+- modify opening balances to make reports match
+- fabricate historical values
+- hard-code expected totals
+- hard-code the current audit numbers into the application
+
+
+=================================================
+PHASE 20 — TEST SUITE
+=================================================
+
+Run all relevant existing tests.
+
+Additionally create regression coverage for:
+
+1. All Locations Day Book API/screen parity
+2. All Locations Day Book PDF
+3. All Locations Day Book XLSX
+4. Calicut Day Book isolation
+5. Stock XLSX
+6. Stock historical/as-of-date behavior
+7. Receivables location isolation
+8. Receivables XLSX
+9. Payables location isolation
+10. Payables XLSX
+11. Bank Reconciliation PDF
+12. Bank Reconciliation XLSX
+13. Fixed Asset historical/as-of-date behavior
+14. Balance Sheet zero-difference status
+15. Export location authorization
+16. Export date-filter parity
+17. Screen/API/PDF/XLSX numeric parity
+
+
+=================================================
+PHASE 21 — FINAL ACCEPTANCE CRITERIA
+=================================================
+
+The task is NOT complete unless ALL are true:
+
+[ ] All Locations Day Book screen equals API
+[ ] All Locations Day Book PDF equals API
+[ ] All Locations Day Book XLSX equals API
+
+[ ] Stock has PDF
+[ ] Stock has XLSX
+[ ] Stock date/as-of semantics are explicit and correct
+
+[ ] Receivables has PDF
+[ ] Receivables has XLSX
+[ ] Receivables is location isolated
+
+[ ] Payables has PDF
+[ ] Payables has XLSX
+[ ] Payables is location isolated
+
+[ ] Bank Reconciliation has PDF
+[ ] Bank Reconciliation has XLSX
+
+[ ] Fixed Assets date semantics are explicit and correct
+
+[ ] Balance Sheet displays "Balanced: Yes" when difference is ₹0.00
+
+[ ] Calicut exports contain only Calicut-authorized data
+
+[ ] All Locations exports contain consolidated authorized data
+
+[ ] PDF values equal authoritative API values
+
+[ ] XLSX values equal authoritative API values
+
+[ ] Screen values equal authoritative API values
+
+[ ] Export filters equal screen filters
+
+[ ] Server-side location authorization passes
+
+[ ] No production data changed
+
+[ ] No production transactions created
+
+[ ] No accounting mutation introduced
+
+[ ] API typecheck passes
+
+[ ] Web production build passes
+
+[ ] All relevant regression tests pass
+
+[ ] git diff --check passes
+
+[ ] No tracked accidental changes
+
+[ ] Final report contains actual freshly tested results, not "not proven"
+
+
+=================================================
+FINAL REPORT FORMAT
+=================================================
+
+Return:
+
+1. Files changed
+2. Root cause of every blocker
+3. Exact fixes implemented
+4. Test results
+5. Screen/API/PDF/XLSX parity table
+6. All Locations results
+7. Calicut results
+8. Permission/isolation results
+9. Date semantics results
+10. Balance Sheet status result
+11. Build/typecheck results
+12. git diff --check
+13. Production untouched confirmation
+14. Remaining blockers, if ANY
+
+IMPORTANT:
+
+If ANY blocker remains, explicitly say:
+
+NOT READY TO PUBLISH
+
+Do not claim production readiness merely because accounting tests pass.
+
+Only state READY TO PUBLISH after every applicable acceptance criterion above has a fresh PASS.
