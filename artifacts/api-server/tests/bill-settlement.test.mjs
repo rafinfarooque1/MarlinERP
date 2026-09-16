@@ -13,8 +13,9 @@
  *     or target a cancelled sale.
  *   A sale/purchase created with `useAdvance:true` auto-adjusts the party's
  *     available advance, capped at min(available, bill total).
- *   Settlement vouchers are locked for edit; deletable with a full unwind —
- *     refused 409 once the advance slice has been consumed by a later bill.
+ *   Settlement vouchers are editable as one receipt (their bill rows are
+ *     rebuilt atomically), and deletable with a full unwind — refused 409 once
+ *     the advance slice has been consumed by a later bill.
  *   Purchase bills with allocations refuse deletion (BILL_HAS_ALLOCATIONS).
  *   The ageing reports expose each party's advance; the Trial Balance stays
  *     balanced throughout and returns to baseline after cleanup.
@@ -233,8 +234,52 @@ let R1;
 
   const list = (await get('/accounts/receipts')).data ?? [];
   const mine = list.find(r => r.id === R1.id);
-  assert('Receipt listed as system-locked (origin=system, not editable)',
-    !!mine && mine.origin === 'system' && mine.editable === false, JSON.stringify(mine ?? {}).slice(0, 150));
+  assert('Receipt exposes settlement details and is editable',
+    !!mine && mine.allocations?.length === 1 && mine.origin === 'manual' && mine.editable === true,
+    JSON.stringify(mine ?? {}).slice(0, 220));
+}
+
+console.log('\n[B2] One receipt across bills stays one customer-ledger transaction');
+let S4, RMulti;
+{
+  S4 = (await mkSale(2, { saleDate: OPEN_8 })).data; // ₹200
+  const res = await post('/accounts/receipts', {
+    receiptDate: OPEN_7, receivedInLedgerId: cashLeaf, receivedFromLedgerId: fx.custLedger,
+    amount: 501, allocations: [{ saleId: S2.id, amount: 300 }, { saleId: S4.id, amount: 200 }],
+  });
+  RMulti = res.data;
+  if (res.status === 201) made.receipts.push(RMulti.id);
+  assert('Multi-bill receipt accepted', res.status === 201 && RMulti?.allocations?.length === 2,
+    JSON.stringify(res.data).slice(0, 220));
+  const ledger = (await get(`/customers/${fx.custId}/ledger`)).data;
+  const receiptEntries = (ledger.entries ?? []).filter(e => e.voucherNumber === RMulti?.voucherNumber);
+  assert('Customer ledger has one receipt credit row',
+    receiptEntries.length === 1 && near(receiptEntries[0].credit, 501),
+    JSON.stringify(receiptEntries));
+
+  const edit = await apiReq('PATCH', `/accounts/receipts/${RMulti.id}`, {
+    amount: 601, narration: 'Edited customer receipt',
+  });
+  assert('Allocation receipt edit keeps one receipt and parks the increase as advance',
+    edit.status === 200 && near(edit.data?.amount, 601) && near(edit.data?.advanceAmount, 101),
+    JSON.stringify(edit.data).slice(0, 220));
+  const editedList = (await get('/accounts/receipts')).data ?? [];
+  const edited = editedList.find(r => r.id === RMulti.id);
+  assert('Edited receipt list returns both bill allocations',
+    edited?.allocations?.length === 2 && near(edited.advanceAmount, 101),
+    JSON.stringify(edited ?? {}).slice(0, 220));
+  const afterEditLedger = (await get(`/customers/${fx.custId}/ledger`)).data;
+  const afterEditRows = (afterEditLedger.entries ?? []).filter(e => e.voucherNumber === RMulti?.voucherNumber);
+  assert('Edited customer ledger still has one receipt credit row',
+    afterEditRows.length === 1 && near(afterEditRows[0].credit, 601),
+    JSON.stringify(afterEditRows));
+  const undone = await del(`/accounts/receipts/${RMulti.id}`);
+  assert('Deleting the edited receipt restores both bill balances', undone.status === 204, `status ${undone.status}`);
+  made.receipts = made.receipts.filter(id => id !== RMulti.id);
+  const cancelledS4 = await post(`/sales/${S4.id}/cancel`, {});
+  assert('Multi-bill fixture cleanup cancels its second invoice',
+    cancelledS4.status === 200 || cancelledS4.status === 201 || cancelledS4.status === 204,
+    `status ${cancelledS4.status}`);
 }
 
 console.log('\n[C] Refusals: over-allocation, over-bill, cancelled sale');

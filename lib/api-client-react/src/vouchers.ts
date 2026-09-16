@@ -51,6 +51,14 @@ export interface Receipt {
   /** 'system' rows are raised by sales and locked. */
   origin?: 'manual' | 'system';
   editable?: boolean;
+  allocations?: {
+    saleId: number;
+    invoiceNumber: string | null;
+    originalDue: number;
+    allocated: number;
+    remaining: number;
+  }[];
+  advanceAmount?: number;
 }
 
 // ── Bill-wise settlement ──────────────────────────────────────────────────────
@@ -206,13 +214,20 @@ export function useCreateReceipt() {
 export function useUpdateReceipt() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, ...data }: { id: number } & Partial<Omit<Receipt, 'id' | 'voucherNumber'>>) =>
+    mutationFn: ({ id, ...data }: { id: number } & Partial<Omit<Receipt, 'id' | 'voucherNumber'>> & {
+      allocations?: SaleAllocationInput[];
+      advanceAmount?: number;
+    }) =>
       customFetch<Receipt>(`/api/accounts/receipts/${id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data),
       }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: getReceiptsQueryKey() }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: getReceiptsQueryKey() });
+      qc.invalidateQueries({ queryKey: ['/api/accounts/settlement-context'] });
+      qc.invalidateQueries({ queryKey: ['/api/accounts/party-advance'] });
+    },
   });
 }
 

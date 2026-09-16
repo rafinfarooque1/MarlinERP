@@ -903,7 +903,8 @@ async function loadManualPayment(client: { query: Function }, id: number, scopeW
   return { row };
 }
 
-/** Same rule for receipts; only 'manual' rows are editable. */
+/** Manual receipts are handled by the shared edit path; allocation receipts
+ * are rebuilt by the allocation branch in the PATCH route before this loader. */
 async function loadManualReceipt(client: { query: Function }, id: number, scopeWhere: string, params: unknown[], forUpdate = false) {
   const { rows: [row] } = await client.query(
     `SELECT r.*,
@@ -1563,7 +1564,22 @@ router.get("/accounts/receipts", requireModuleView(["page:/accounts/vouchers", "
       rf.name AS received_from_name,
       ri.name AS received_in_name,
       EXISTS(SELECT 1 FROM sale_payments sp WHERE sp.clearing_receipt_id = r.id) AS is_clearing,
-      EXISTS(SELECT 1 FROM sales s WHERE s.invoice_number = r.voucher_number) AS is_sale_receipt
+       EXISTS(SELECT 1 FROM sales s WHERE s.invoice_number = r.voucher_number) AS is_sale_receipt,
+       COALESCE((
+         SELECT json_agg(json_build_object(
+           'saleId', sp.sale_id,
+           'invoiceNumber', s.invoice_number,
+           'originalDue', s.total_amount::numeric,
+           'allocated', sp.amount::numeric,
+           'remaining', GREATEST(
+             0,
+             s.total_amount::numeric - s.amount_paid::numeric
+           )
+         ) ORDER BY s.sale_date ASC, s.id ASC)
+           FROM sale_payments sp
+           JOIN sales s ON s.id = sp.sale_id
+          WHERE sp.clearing_receipt_id = r.id
+       ), '[]'::json) AS allocations
     FROM receipts r
     LEFT JOIN account_ledgers rf ON r.received_from_ledger_id = rf.id
     LEFT JOIN account_ledgers ri ON r.received_in_ledger_id = ri.id
@@ -1574,7 +1590,8 @@ router.get("/accounts/receipts", requireModuleView(["page:/accounts/vouchers", "
   res.json(result.rows.map(r => {
     // Sale-linked rows belong to the sales flow; any non-manual (or unstamped)
     // source is likewise locked — same verdict as loadManualReceipt.
-    const isSystem = Boolean(r.is_clearing) || Boolean(r.is_sale_receipt) || r.source !== 'manual';
+    const isAllocation = r.source === 'allocation';
+    const isSystem = (Boolean(r.is_clearing) && !isAllocation) || Boolean(r.is_sale_receipt) || (r.source !== 'manual' && !isAllocation);
     return {
       id: r.id,
       voucherNumber: r.voucher_number,
@@ -1589,7 +1606,15 @@ router.get("/accounts/receipts", requireModuleView(["page:/accounts/vouchers", "
       referenceNumber: r.reference_number ?? null,
       createdBy: r.created_by ?? null,
       origin: isSystem ? 'system' : 'manual',
-      editable: !isSystem,
+      editable: !isSystem || isAllocation,
+      allocations: Array.isArray(r.allocations) ? r.allocations.map((a: any) => ({
+        saleId: Number(a.saleId),
+        invoiceNumber: a.invoiceNumber ?? null,
+        originalDue: Number(a.originalDue),
+        allocated: Number(a.allocated),
+        remaining: Number(a.remaining),
+      })) : [],
+      advanceAmount: Number(r.advance_amount ?? 0),
       // Server verdict for the admin-only system delete: only sale-sourced
       // receipts qualify, and only a level-1 Administrator sees the button.
       // The endpoints re-check both — this flag is display routing, not a guard.
@@ -1876,6 +1901,203 @@ router.patch("/accounts/receipts/:id", requireModuleAction(["page:/accounts/vouc
     await client.query("BEGIN");
     const params: unknown[] = [id];
     const where = scopeMoneyWhere(scope, ledgerIds, params, 'r', ['received_in_ledger_id', 'received_from_ledger_id']);
+    const { rows: [rawReceipt] } = await client.query(
+      `SELECT r.* FROM receipts r WHERE r.id = $1 AND ${where} FOR UPDATE OF r`, params,
+    );
+    if (rawReceipt?.source === "allocation") {
+      // Allocation vouchers are still one financial receipt, but their
+      // sale_payments rows are settlement metadata that must be rebuilt
+      // atomically when the amount/date/details change.
+      const row = rawReceipt;
+      const newDate = b.receiptDate !== undefined ? String(b.receiptDate) : row.receipt_date;
+      for (const d of [row.receipt_date, newDate]) {
+        const ym = ymOfDate(d);
+        if (ym && await isMonthLocked(client, ym.year, ym.month)) {
+          await client.query("ROLLBACK");
+          res.status(423).json(monthLockedBody(ym.year, ym.month));
+          return;
+        }
+      }
+      const newFrom = b.receivedFromLedgerId !== undefined ? Number(b.receivedFromLedgerId) : Number(row.received_from_ledger_id);
+      const newIn = b.receivedInLedgerId !== undefined ? Number(b.receivedInLedgerId) : Number(row.received_in_ledger_id);
+      if (newFrom !== Number(row.received_from_ledger_id) || newIn !== Number(row.received_in_ledger_id)) {
+        await client.query("ROLLBACK");
+        res.status(400).json({ error: "Allocation receipts cannot change their accounts; create a new receipt instead." });
+        return;
+      }
+      if (b.locationType !== undefined || b.locationId !== undefined) {
+        await client.query("ROLLBACK");
+        res.status(400).json({ error: "Allocation receipts cannot change location." });
+        return;
+      }
+      const { rows: [fromLedger] } = await client.query(
+        `SELECT id, code, name FROM account_ledgers WHERE id = $1`, [newFrom],
+      );
+      const party = parsePartyLedgerCode(fromLedger?.code);
+      if (!party || party.kind !== "customer") {
+        await client.query("ROLLBACK");
+        res.status(400).json({ error: "Allocation receipt must remain attached to a customer ledger." });
+        return;
+      }
+
+      const { rows: oldLegs } = await client.query(
+        `SELECT sp.id, sp.sale_id, sp.amount, s.invoice_number
+           FROM sale_payments sp
+           JOIN sales s ON s.id = sp.sale_id
+          WHERE sp.clearing_receipt_id = $1
+          ORDER BY s.sale_date ASC, s.id ASC
+          FOR UPDATE OF sp, s`,
+        [id],
+      );
+      if (Number(row.advance_amount ?? 0) > 0.004) {
+        await takeAdvanceLock(client, party.kind, party.partyId);
+        const consumed = await voucherAdvanceConsumed(client, "receipt", id);
+        if (consumed > 0.004) {
+          await client.query("ROLLBACK");
+          res.status(409).json({ error: `₹${money2(consumed).toFixed(2)} of this receipt's advance has already been adjusted against invoices. Cancel those adjustments first.` });
+          return;
+        }
+      }
+
+      // Remove the old settlement slices first, restoring each invoice's
+      // pre-receipt position under the same row locks.
+      const oldBySale = new Map<number, number>();
+      const creditAdjustmentsBySale = new Map<number, number>();
+      for (const leg of oldLegs) {
+        oldBySale.set(Number(leg.sale_id), money2((oldBySale.get(Number(leg.sale_id)) ?? 0) + Number(leg.amount)));
+      }
+      for (const [saleId, oldAmount] of oldBySale) {
+        const { rows: [sale] } = await client.query(
+          `SELECT id, total_amount::numeric AS total_amount, amount_paid::numeric AS amount_paid, cancelled_at
+             FROM sales WHERE id = $1 FOR UPDATE`, [saleId],
+        );
+        if (!sale) continue;
+        const before = await loadPaymentPosition(client, saleId);
+        creditAdjustmentsBySale.set(saleId, before?.creditAdjustments ?? 0);
+        const restoredPaid = money2(Math.max(0, Number(sale.amount_paid) - oldAmount));
+        const pos = computePaymentPosition({
+          totalAmount: Number(sale.total_amount), amountReceived: restoredPaid,
+          creditAdjustments: before?.creditAdjustments ?? 0, cancelledAt: sale.cancelled_at,
+        });
+        await client.query(`UPDATE sales SET amount_paid = $1, payment_status = $2 WHERE id = $3`, [restoredPaid, pos.status, saleId]);
+      }
+      await client.query(`DELETE FROM sale_payments WHERE clearing_receipt_id = $1`, [id]);
+
+      const newAmount = av.amount !== undefined ? av.amount : Number(row.amount);
+      let nextAllocations: { id: number; amount: number }[];
+      if (Array.isArray(b.allocations)) {
+        const parsed = parseAllocations(b.allocations, "saleId", newAmount, b.advanceAmount);
+        if ("error" in parsed) {
+          await client.query("ROLLBACK");
+          res.status(400).json({ error: parsed.error });
+          return;
+        }
+        nextAllocations = parsed.rows;
+      } else {
+        // Amount-only edits retain the existing bill order and recalculate the
+        // split. Extra money becomes the same receipt's customer credit.
+        let left = money2(newAmount);
+        nextAllocations = [];
+        for (const leg of oldLegs) {
+          const take = money2(Math.min(left, Number(leg.amount)));
+          if (take > 0.004) nextAllocations.push({ id: Number(leg.sale_id), amount: take });
+          left = money2(left - take);
+          if (left <= 0.004) break;
+        }
+      }
+      const uniqueNext = new Map<number, number>();
+      for (const a of nextAllocations) uniqueNext.set(a.id, money2((uniqueNext.get(a.id) ?? 0) + a.amount));
+
+      const method = (await isCashFamilyLedger(client, newIn)) ? "cash" : "bank";
+      const applied: { saleId: number; invoiceNumber: string | null; amount: number }[] = [];
+      for (const [saleId, allocationAmount] of [...uniqueNext.entries()].sort((a, b) => a[0] - b[0])) {
+        const { rows: [sale] } = await client.query(
+          `SELECT id, invoice_number, customer_id, outlet_id, location_type, location_id,
+                  cancelled_at, branch_transfer_id,
+                  total_amount::numeric AS total_amount, amount_paid::numeric AS amount_paid
+             FROM sales WHERE id = $1 FOR UPDATE`, [saleId],
+        );
+        if (!sale) {
+          await client.query("ROLLBACK");
+          res.status(404).json({ error: `Invoice not found (sale #${saleId}).` });
+          return;
+        }
+        if (Number(sale.customer_id) !== party.partyId || sale.cancelled_at || sale.branch_transfer_id) {
+          await client.query("ROLLBACK");
+          res.status(400).json({ error: `Invoice ${sale.invoice_number ?? `#${saleId}`} cannot be settled by this receipt.` });
+          return;
+        }
+        const caller = callerLocation((req as any).employee);
+        const saleLocationType = sale.location_type ?? "outlet";
+        const saleLocationId = Number(sale.location_id ?? sale.outlet_id);
+        if (caller.locationType !== "headoffice"
+          && (saleLocationType !== caller.locationType || saleLocationId !== caller.locationId)) {
+          await client.query("ROLLBACK");
+          res.status(403).json({ error: `Invoice ${sale.invoice_number ?? `#${saleId}`} was raised at another location — its collections are recorded there.` });
+          return;
+        }
+        const position = await loadPaymentPosition(client, saleId);
+        if (!position || allocationAmount > position.outstanding + 0.005) {
+          await client.query("ROLLBACK");
+          res.status(400).json({ error: `₹${allocationAmount.toFixed(2)} against ${sale.invoice_number ?? `#${saleId}`} exceeds its balance due.` });
+          return;
+        }
+        await client.query(
+          `INSERT INTO sale_payments (sale_id, payment_date, method, amount, reference_number, notes, reconciliation_status, clearing_receipt_id, outlet_id, created_by)
+           VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, $8, $9)`,
+          [saleId, newDate, method, allocationAmount, b.referenceNumber !== undefined ? (String(b.referenceNumber).trim() || null) : row.reference_number,
+           `Receipt voucher ${row.voucher_number}`, id, sale.outlet_id, (req as any).employee?.username ?? row.created_by ?? null],
+        );
+        const newPaid = money2(Number(sale.amount_paid) + allocationAmount);
+        const newPos = computePaymentPosition({
+          totalAmount: Number(sale.total_amount), amountReceived: newPaid,
+          creditAdjustments: creditAdjustmentsBySale.get(saleId) ?? 0, cancelledAt: null,
+        });
+        await client.query(`UPDATE sales SET amount_paid = $1, payment_status = $2 WHERE id = $3`, [newPaid, newPos.status, saleId]);
+        applied.push({ saleId, invoiceNumber: sale.invoice_number ?? null, amount: allocationAmount });
+      }
+      const allocated = money2(applied.reduce((sum, a) => sum + a.amount, 0));
+      const advance = money2(Math.max(0, newAmount - allocated));
+      if (b.advanceAmount !== undefined && Math.abs(Number(b.advanceAmount) - advance) > 0.011) {
+        await client.query("ROLLBACK");
+        res.status(400).json({ error: "The advance amount no longer matches the allocations — refresh and try again." });
+        return;
+      }
+      const updated = await client.query(
+        `UPDATE receipts SET receipt_date = $2, amount = $3, narration = $4,
+                reference_number = $5, advance_amount = $6
+          WHERE id = $1 RETURNING *`,
+        [id, newDate, newAmount,
+         b.narration !== undefined ? (String(b.narration).trim() || null) : row.narration,
+         b.referenceNumber !== undefined ? (String(b.referenceNumber).trim() || null) : row.reference_number,
+         advance],
+      );
+      await logActivityInTransaction(client, {
+        action: "UPDATE", module: "accounts", entityType: "receipt_voucher", entityId: id,
+        description: `Allocation receipt ${row.voucher_number} edited`,
+        metadata: {
+          old: { date: row.receipt_date, amount: Number(row.amount), advanceAmount: Number(row.advance_amount ?? 0) },
+          new: { date: newDate, amount: newAmount, advanceAmount: advance, allocations: applied },
+        },
+        user: (req as any).employee?.username,
+      });
+      await client.query("COMMIT");
+      res.json({
+        id: updated.rows[0].id, voucherNumber: updated.rows[0].voucher_number,
+        receiptDate: updated.rows[0].receipt_date,
+        receivedFromLedgerId: updated.rows[0].received_from_ledger_id,
+        receivedFromName: fromLedger.name,
+        receivedInLedgerId: updated.rows[0].received_in_ledger_id,
+        amount: Number(updated.rows[0].amount), narration: updated.rows[0].narration,
+        referenceNumber: updated.rows[0].reference_number,
+        createdBy: updated.rows[0].created_by,
+        locationType: updated.rows[0].location_type ?? "headoffice",
+        locationId: updated.rows[0].location_id ?? 0,
+        allocations: applied, advanceAmount: advance,
+        createdAt: updated.rows[0].created_at,
+      });
+      return;
+    }
     const loaded = await loadManualReceipt(client, id, where, params, true);
     if ('error' in loaded) {
       await client.query("ROLLBACK");
@@ -1992,8 +2214,8 @@ router.delete("/accounts/receipts/:id", requireModuleAction(["page:/accounts/vou
   const params: unknown[] = [id];
   const where = scopeMoneyWhere(scope, ledgerIds, params, 'r', ['received_in_ledger_id', 'received_from_ledger_id']);
 
-  // Settlement vouchers are locked for EDIT but deletable: deletion unwinds
-  // every bill allocation (sale_payments + amount_paid) in one transaction,
+  // Settlement vouchers are deletable: deletion unwinds every bill allocation
+  // (sale_payments + amount_paid) in one transaction,
   // and refuses when the advance slice has already been adjusted against a
   // later invoice — deleting it then would drive the advance negative.
   {

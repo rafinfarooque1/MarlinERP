@@ -1216,9 +1216,9 @@ export async function buildDerivedPostings(opts: { toDate?: string; q?: Q } = {}
     }
     if (adv > 0.004) {
       push({ entryId: eid, date: r.date, ledgerId: elecClr, debit: adv, credit: 0, source: "receipt", voucherNumber: r.voucher_number, description: `Advance received — ${desc}`, ...loc });
-      // The excess credits the customer's OWN ledger; their advance is simply
-      // that ledger's credit balance.
-      push({ entryId: eid, date: r.date, ledgerId: Number(r.f), debit: 0, credit: adv, source: "receipt", voucherNumber: r.voucher_number, description: `Advance received — ${desc}`, ...loc });
+      // The excess is included in the one receipt-level customer credit
+      // emitted with the allocation settlement below. Keeping it out here
+      // prevents a single receipt from becoming an extra customer-ledger row.
     }
   }
 
@@ -1316,10 +1316,14 @@ export async function buildDerivedPostings(opts: { toDate?: string; q?: Q } = {}
     // that account's ledger instead of Electronic Clearing, and the books must
     // debit what the receipt actually says.
     `SELECT sp.id AS sale_payment_id, sp.sale_id, sp.payment_date, sp.method, sp.amount,
-            rc.voucher_number AS receipt_vno,
+             rc.voucher_number AS receipt_vno,
+             rc.receipt_date AS receipt_date,
+             rc.narration AS receipt_narration,
              sp.clearing_receipt_id AS clearing_receipt_id,
             CASE WHEN rc.source = 'allocation' THEN rc.received_in_ledger_id END AS alloc_in,
-            CASE WHEN rc.source = 'sale'       THEN rc.received_in_ledger_id END AS sale_in
+             CASE WHEN rc.source = 'sale'       THEN rc.received_in_ledger_id END AS sale_in,
+             CASE WHEN rc.source = 'allocation' THEN rc.location_type END AS receipt_location_type,
+             CASE WHEN rc.source = 'allocation' THEN rc.location_id END AS receipt_location_id
      FROM sale_payments sp
      LEFT JOIN receipts rc ON rc.id = sp.clearing_receipt_id AND rc.source IN ('allocation', 'sale')
      WHERE 1=1${upTo("sp.payment_date", spp)}`, spp
@@ -1339,6 +1343,34 @@ export async function buildDerivedPostings(opts: { toDate?: string; q?: Q } = {}
     const arr = spBySale.get(r.sale_id) ?? [];
     arr.push(r);
     spBySale.set(r.sale_id, arr);
+  }
+  // Bill allocations are settlement metadata, not separate customer-ledger
+  // transactions. Keep the clearing/bank debits per bill so the invoice
+  // position remains exact, but collapse the customer credit for one receipt
+  // into one receipt-level posting after all sales have been walked.
+  const allocationCustomerCredits = new Map<string, {
+    entryId: string;
+    date: string;
+    ledgerId: number;
+    amount: number;
+    voucherNumber: string | null;
+    description: string;
+    locationType: string | null;
+    locationId: number | null;
+  }>();
+  for (const r of allocRecs) {
+    const amount = round2(Number(r.amount));
+    if (amount <= 0.004) continue;
+    allocationCustomerCredits.set(`${r.id}:${Number(r.f)}`, {
+      entryId: `receipt:${r.id}`,
+      date: r.date,
+      ledgerId: Number(r.f),
+      amount,
+      voucherNumber: r.voucher_number || null,
+      description: r.narration || "Receipt Received",
+      locationType: r.location_type ?? "headoffice",
+      locationId: r.location_id ?? 0,
+    });
   }
 
   for (const s of sales) {
@@ -1480,12 +1512,32 @@ export async function buildDerivedPostings(opts: { toDate?: string; q?: Q } = {}
         drLedger = p.method === "cash" ? cashLedger : elecClr;
         legDesc = `${p.method === "cash" ? "Cash" : "Electronic"} received — ${inv}`;
       }
-      push({ entryId: collectionEid, date: p.payment_date, ledgerId: drLedger, debit: amt, credit: 0, source: "sale", voucherNumber: p.receipt_vno || s.invoice_number, description: legDesc, ...sLoc });
-      // Keep the debtor/customer credit with the actual collection identity.
-      // For allocation receipts this makes one receipt spread across several
-      // invoices a single balanced financial event; the invoice entry itself
-      // remains the balanced Dr party / Cr revenue+tax document.
-      push({ entryId: collectionEid, date: p.payment_date, ledgerId: partyLedgerId, debit: 0, credit: amt, source: "sale", voucherNumber: p.receipt_vno || s.invoice_number, description: p.method === "advance" ? `Advance adjusted — ${inv}` : `Payment received — ${inv}`, ...sLoc });
+      const collectionLoc = p.alloc_in != null
+        ? locOf(p.receipt_location_type ?? "headoffice", p.receipt_location_id ?? 0)
+        : sLoc;
+      push({ entryId: collectionEid, date: p.payment_date, ledgerId: drLedger, debit: amt, credit: 0, source: "sale", voucherNumber: p.receipt_vno || s.invoice_number, description: legDesc, ...collectionLoc });
+      if (p.alloc_in != null && p.clearing_receipt_id != null) {
+        const key = `${p.clearing_receipt_id}:${partyLedgerId}`;
+        const prior = allocationCustomerCredits.get(key);
+        if (prior) {
+          // The receipt row already owns the full customer credit, including
+          // its advance slice. This bill row only supplies settlement detail.
+        } else {
+          allocationCustomerCredits.set(key, {
+            entryId: collectionEid,
+            date: p.receipt_date || p.payment_date,
+            ledgerId: partyLedgerId,
+            amount: round2(amt),
+            voucherNumber: p.receipt_vno || null,
+            description: p.receipt_narration || "Receipt Received",
+            locationType: p.receipt_location_type ?? "headoffice",
+            locationId: p.receipt_location_id ?? 0,
+          });
+        }
+      } else {
+        // Non-allocation collections remain bill/payment-level postings.
+        push({ entryId: collectionEid, date: p.payment_date, ledgerId: partyLedgerId, debit: 0, credit: amt, source: "sale", voucherNumber: p.receipt_vno || s.invoice_number, description: p.method === "advance" ? `Advance adjusted — ${inv}` : `Payment received — ${inv}`, ...collectionLoc });
+      }
     }
 
     const amountPaid = Number(s.amount_paid ?? 0);
@@ -1507,6 +1559,21 @@ export async function buildDerivedPostings(opts: { toDate?: string; q?: Q } = {}
 
     // The party ledger's net after the invoice debit and dated collection
     // credits is the outstanding balance (or a customer advance).
+  }
+
+  for (const credit of allocationCustomerCredits.values()) {
+    if (credit.amount <= 0.004) continue;
+    push({
+      entryId: credit.entryId,
+      date: credit.date,
+      ledgerId: credit.ledgerId,
+      debit: 0,
+      credit: credit.amount,
+      source: "receipt",
+      voucherNumber: credit.voucherNumber,
+      description: credit.description,
+      ...locOf(credit.locationType, credit.locationId),
+    });
   }
 
   // 6. Purchases: Dr Purchases (taxable + round-off) + Dr Input GST / Cr vendor.

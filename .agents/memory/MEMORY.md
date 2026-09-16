@@ -152,3 +152,4 @@
 - [Location-authoritative inventory costing](location-cost-checkpoints.md) — global product average changes must not revalue unchanged branch stock or create artificial Gross Profit
 - [Release-gate browser verification](release-gate-browser.md) — use the preview proxy for authenticated checks; report drill-down query removal is intentional and must be verified in rendered state
 - [Report cache 304 handling](report-cache-304.md) — report fetches must bypass 304 revalidation when the client cannot recover the cached response body
+- [Customer receipt ledger aggregation](receipt-ledger-aggregation.md) — allocation rows are settlement metadata; one receipt posts one customer credit for its full amount
