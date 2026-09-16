@@ -1,0 +1,242 @@
+FINAL RELEASE CLOSURE — COMPLETE ONLY THE 4 REMAINING NOT-PROVEN ITEMS
+
+The current release-gate report is broadly PASS, but production publishing is still blocked.
+
+DO NOT publish.
+DO NOT modify production data.
+DO NOT create production test transactions.
+DO NOT restart the entire accounting audit.
+
+Complete ONLY these remaining release blockers:
+
+==================================================
+1. CALICUT ₹3,062.95 — FORMALLY CLOSE THE FINDING
+==================================================
+
+Current finding:
+
+Historical Calicut ₹3,062.95 discrepancy = NOT PROVEN.
+
+Current Calicut authoritative valuation is:
+
+On-hand checkpoint = ₹186,757.67
+Active in-transit = ₹714.96
+Authoritative total = ₹187,472.63
+
+Current master-average comparison = ₹3,039.60 difference, not ₹3,062.95.
+
+The current report says the difference is explained by location checkpoints versus product master averages, but the historical ₹3,062.95 cannot be exactly reproduced.
+
+Perform one final forensic check:
+
+- Identify the exact location checkpoint records.
+- Identify the exact product/master average records.
+- Identify every item contributing to the current ₹3,039.60 comparison.
+- Determine whether the historical ₹3,062.95 could have originated from the same valuation mechanism.
+- Check whether any current code path can generate an unexplained stock-value difference into Gross Profit.
+- Confirm that current accounting tests prevent this behavior.
+
+IMPORTANT:
+
+Do NOT fabricate the historical ₹3,062.95.
+
+If the original historical snapshot genuinely cannot be reconstructed, formally close this as:
+
+NOT PROVEN — historical evidence unavailable.
+
+But document why the CURRENT valuation/accounting engine is safe.
+
+Do not keep searching indefinitely.
+
+==================================================
+2. DASHBOARD — ACTUAL BROWSER DRILL-DOWN
+==================================================
+
+Perform a real authenticated browser verification.
+
+From Dashboard click all six relevant report destinations:
+
+1. Day Book
+2. Cash Book
+3. Bank Book
+4. Trial Balance
+5. P&L / Trading Account
+6. Balance Sheet
+
+Verify for each:
+
+- destination loads
+- correct report opens
+- location is preserved
+- date range is preserved
+- permission scope is preserved
+- All Locations behaves correctly
+- specific warehouse behaves correctly
+
+This must be actual browser/UI verification.
+
+Mark PASS only after successful authenticated click-through.
+
+==================================================
+3. COMPLETE PDF/XLSX NUMERICAL PARITY
+==================================================
+
+Do a representative end-to-end parity test across the report set.
+
+For each report type that supports export:
+
+Screen/API authoritative data
+=
+PDF data
+=
+XLSX data
+
+Verify actual numeric values, not just file generation.
+
+At minimum cover:
+
+- Day Book
+- Cash Book
+- Bank Book
+- Trial Balance
+- General Ledger
+- P&L
+- Balance Sheet
+- Stock report
+- Receivables
+- Payables
+- GST
+- Fixed Assets
+- Bank Reconciliation
+
+Use identical:
+
+location
+date range
+filters
+
+Do not modify the authoritative calculation just to make exports match.
+
+==================================================
+4. FULL DEVELOPMENT BACKUP/RESTORE REHEARSAL
+==================================================
+
+Perform a complete DEVELOPMENT-ONLY backup/restore rehearsal.
+
+Do NOT touch production.
+
+Use an isolated/disposable development database.
+
+Backup:
+
+- PostgreSQL database
+- schema
+- accounting data
+- inventory
+- batches
+- transfers
+- customers
+- vendors
+- employees
+- fixed assets
+- GST
+- audit data
+- attachments/files
+- relevant application configuration
+
+Restore into a fresh isolated development environment.
+
+After restore verify:
+
+- application starts
+- login works
+- schema intact
+- customer/vendor counts preserved
+- sales preserved
+- purchases preserved
+- stock preserved
+- batches preserved
+- transfers preserved
+- vouchers preserved
+- journal lines preserved
+- fixed assets preserved
+- depreciation preserved
+- GST preserved
+- files/attachments preserved
+- Trial Balance balances
+- Balance Sheet balances
+- P&L matches
+- stock valuation matches
+
+Also verify no orphan records.
+
+Record backup version, restore result and verification result.
+
+==================================================
+5. DO NOT REOPEN ALREADY-PASSED WORK
+==================================================
+
+The following are already PASS and should only be regression-checked if necessary:
+
+- P&L / COGS / GP
+- Trial Balance
+- Balance Sheet
+- stock continuity
+- transfer neutrality
+- dashboard KPI parity
+- RBAC/LBAC
+- API typecheck
+- Web typecheck
+- Web production build
+- Employee app packaging
+- Reservation 18 / Transfer 9
+- production read-only safety
+
+Do not spend time redoing these unless one of the four remaining checks exposes a regression.
+
+==================================================
+6. FINAL RELEASE DECISION
+==================================================
+
+After completing the four items, produce a final table:
+
+CHECK | STATUS | EVIDENCE | RISK
+
+Use only:
+
+PASS
+FAIL
+NOT PROVEN
+
+The final critical items are:
+
+1. Calicut historical discrepancy
+2. Dashboard browser drill-down
+3. PDF/XLSX parity
+4. Backup/restore
+
+Historical Ecity ₹5,793.72 can remain NOT PROVEN if its original database snapshot genuinely does not exist.
+
+Historical Calicut ₹3,062.95 can also remain NOT PROVEN ONLY if the original historical snapshot cannot be recovered, but the current accounting engine must be proven safe.
+
+There must be ZERO current accounting/reporting FAIL findings.
+
+==================================================
+7. FINAL OUTPUT
+==================================================
+
+At the end report:
+
+- Total PASS
+- Total FAIL
+- Total NOT PROVEN
+- Exact remaining risks
+- Exact files/code changed during this final phase
+- Whether production remained untouched
+- Whether production is ready to publish
+
+If all critical current-system checks PASS and only unrecoverable historical cases remain NOT PROVEN, state that clearly.
+
+Do NOT publish automatically.
+
+Wait for my approval before production publishing.
