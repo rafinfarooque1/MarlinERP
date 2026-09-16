@@ -1,0 +1,792 @@
+CUSTOMER RECEIPT — SINGLE AMOUNT LEDGER + BACKEND BILL CLEARING
+===============================================================
+
+Implement a correction to Customer Receipt accounting and Customer Ledger.
+
+IMPORTANT BUSINESS REQUIREMENT:
+
+When a customer pays a SINGLE amount, the Customer Ledger must show that receipt as ONE SINGLE FINANCIAL TRANSACTION.
+
+Example:
+
+Customer pays ₹10,000.
+
+Customer Ledger MUST show:
+
+Date        Narration          Debit    Credit     Balance
+16/09/2026  Receipt Received     —      ₹10,000    ₹XX,XXX
+
+It MUST NOT show the receipt in the ledger as separate bill-wise receipt lines such as:
+
+Invoice A     ₹3,000
+Invoice B     ₹4,000
+Invoice C     ₹3,000
+
+However, the backend MUST still be able to clear/settle the customer's outstanding invoices using bill allocations.
+
+Therefore:
+
+FINANCIAL RECEIPT
+        ↓
+ONE ₹10,000 RECEIPT TRANSACTION
+        ↓
+CUSTOMER LEDGER = ONE ₹10,000 CREDIT
+        ↓
+BACKEND BILL ALLOCATIONS = ₹10,000 distributed across outstanding bills
+        ↓
+POS / Customer Outstanding = bills correctly cleared
+
+
+===============================================================
+1. SEPARATE FINANCIAL RECEIPT FROM BILL ALLOCATION
+===============================================================
+
+Treat these as two different concepts.
+
+A. FINANCIAL RECEIPT
+
+This is the actual money received from the customer.
+
+Example:
+
+Receipt No: RV-00125
+Customer: ABC Customer
+Amount: ₹10,000
+Payment Mode: Bank
+Bank Account: HDFC Bank
+Date: 16/09/2026
+
+This creates exactly ONE financial receipt.
+
+The accounting entry must contain:
+
+Bank/Cash        Dr ₹10,000
+Customer         Cr ₹10,000
+
+There must be only ONE customer ledger financial entry for this receipt.
+
+
+B. BILL ALLOCATION
+
+Bill allocation is settlement metadata.
+
+Example:
+
+Receipt ₹10,000
+
+Invoice INV-101 outstanding ₹3,000
+Invoice INV-102 outstanding ₹4,000
+Invoice INV-103 outstanding ₹3,000
+
+Backend allocation:
+
+INV-101 → ₹3,000
+INV-102 → ₹4,000
+INV-103 → ₹3,000
+
+These allocations are NOT separate financial receipt transactions.
+
+They must NOT create separate customer ledger receipt rows.
+
+They exist only to determine which invoices are settled.
+
+
+===============================================================
+2. CUSTOMER LEDGER DISPLAY
+===============================================================
+
+Customer Ledger must display financial transactions, not bill-allocation rows.
+
+For the above example:
+
+CORRECT:
+
+16/09/2026
+Receipt Received
+Credit ₹10,000
+Balance ₹XX,XXX
+
+ONE ROW ONLY.
+
+Do NOT render:
+
+Receipt INV-101 ₹3,000
+Receipt INV-102 ₹4,000
+Receipt INV-103 ₹3,000
+
+in the Customer Ledger.
+
+The bill allocation information may be available through:
+
+- receipt details
+- expandable receipt row
+- View Receipt
+- Allocation Details
+
+but must not create additional financial ledger rows.
+
+
+===============================================================
+3. RECEIPT VOUCHER
+===============================================================
+
+Receipt Voucher should show:
+
+Customer:
+ABC Customer
+
+Receipt Amount:
+₹10,000
+
+Payment Mode:
+Bank
+
+Bank Account:
+HDFC Bank
+
+Narration:
+Payment received
+
+The receipt remains one ₹10,000 transaction.
+
+If bill allocations exist, show them separately under:
+
+"Bill Allocation / Settlement Details"
+
+Example:
+
+Invoice       Original Due     Allocated     Remaining
+INV-101       ₹3,000           ₹3,000        ₹0
+INV-102       ₹4,000           ₹4,000        ₹0
+INV-103       ₹5,000           ₹3,000        ₹2,000
+
+This is settlement detail only.
+
+
+===============================================================
+4. BACKEND BILL CLEARING
+===============================================================
+
+When a single receipt is entered without manually selecting individual bills:
+
+The backend may automatically allocate the receipt against outstanding customer invoices according to the existing settlement policy.
+
+Preferred default:
+
+FIFO by invoice due date / invoice date.
+
+Example:
+
+Receipt = ₹10,000
+
+Outstanding:
+
+INV-101 = ₹3,000
+INV-102 = ₹4,000
+INV-103 = ₹5,000
+
+Backend allocation:
+
+INV-101 = ₹3,000
+INV-102 = ₹4,000
+INV-103 = ₹3,000
+
+Remaining:
+
+INV-103 = ₹2,000
+
+BUT:
+
+Customer Ledger still contains:
+
+Receipt Received = ₹10,000
+
+NOT three separate receipt entries.
+
+
+===============================================================
+5. POS OUTSTANDING / BILL STATUS
+===============================================================
+
+The POS/customer outstanding system must use the bill allocation table to determine bill settlement.
+
+Therefore:
+
+INV-101 → Cleared
+INV-102 → Cleared
+INV-103 → Partially Cleared ₹2,000 outstanding
+
+The POS must therefore correctly show the remaining bill balance.
+
+Do NOT change the POS's ability to determine bill-wise outstanding.
+
+The change is only:
+
+LEDGER PRESENTATION
+≠
+BILL ALLOCATION
+
+Ledger = financial transactions.
+
+POS outstanding = bill settlement state.
+
+
+===============================================================
+6. IF USER EXPLICITLY SELECTS BILL-WISE RECEIPT
+===============================================================
+
+The system must support two receipt modes.
+
+MODE 1 — SINGLE AMOUNT RECEIPT
+
+Example:
+
+Customer pays ₹10,000.
+
+User does NOT select bills.
+
+Receipt is recorded as:
+
+₹10,000 single receipt.
+
+Backend may automatically allocate it against outstanding invoices.
+
+Ledger:
+
+ONE ₹10,000 receipt.
+
+MODE 2 — BILL-WISE RECEIPT
+
+User explicitly selects invoices and enters allocations.
+
+Example:
+
+INV-101 → ₹3,000
+INV-102 → ₹4,000
+INV-103 → ₹3,000
+
+Financial accounting must STILL remain:
+
+ONE ₹10,000 receipt.
+
+Ledger must STILL show:
+
+ONE ₹10,000 receipt.
+
+The bill-wise information is shown only in the receipt allocation/details section.
+
+Do NOT create multiple financial receipt ledger rows even in bill-wise mode.
+
+
+===============================================================
+7. IMPORTANT — DO NOT CREATE DUPLICATE ACCOUNTING
+===============================================================
+
+This is critical.
+
+A receipt of ₹10,000 must create:
+
+Bank/Cash Dr ₹10,000
+Customer Cr ₹10,000
+
+ONLY ONCE.
+
+Do NOT create:
+
+Customer Cr ₹3,000
+Customer Cr ₹4,000
+Customer Cr ₹3,000
+
+as separate financial postings.
+
+Bill allocation records must not generate additional customer control-account postings.
+
+The receipt itself is the accounting event.
+
+The allocation only settles invoices.
+
+
+===============================================================
+8. CUSTOMER OUTSTANDING CALCULATION
+===============================================================
+
+Customer outstanding must remain mathematically correct.
+
+Use:
+
+Opening Receivable
++ Sales
++ Valid Charges
+- Sales Returns / Credit Notes
+- Customer Receipts
+± Valid Adjustments
+= Closing Receivable
+
+A ₹10,000 receipt reduces customer outstanding by exactly ₹10,000.
+
+Bill allocations determine which individual invoices are reduced.
+
+Do not subtract the receipt again through allocations.
+
+Avoid double counting.
+
+
+===============================================================
+9. POS BILL-WISE CLEARING
+===============================================================
+
+The user specifically needs the backend bill-wise clearing so that POS can correctly identify cleared invoices.
+
+Therefore maintain:
+
+Receipt Header
+    receipt_id
+    customer_id
+    date
+    amount
+    payment_mode
+    cash/bank_account
+    location
+    narration
+
+AND separately:
+
+Receipt Allocation
+    receipt_id
+    invoice_id
+    allocated_amount
+
+Example:
+
+Receipt R-100
+Amount = ₹10,000
+
+Allocations:
+
+R-100 → INV-101 → ₹3,000
+R-100 → INV-102 → ₹4,000
+R-100 → INV-103 → ₹3,000
+
+This means:
+
+Financial transaction count = 1
+Allocation count = 3
+
+Do not confuse the two.
+
+
+===============================================================
+10. CUSTOMER LEDGER QUERY
+===============================================================
+
+Audit the Customer Ledger API.
+
+Find out why bill allocation rows are currently appearing as separate ledger transactions.
+
+The Customer Ledger API must return the actual financial transaction:
+
+Receipt R-100 = ₹10,000
+
+It must NOT expand receipt allocations into separate ledger transactions.
+
+If the API currently joins receipt allocations and duplicates the receipt amount, fix the query.
+
+Do NOT solve this only by hiding rows in React.
+
+The backend response itself should have correct financial transaction semantics.
+
+
+===============================================================
+11. LEDGER BALANCE
+===============================================================
+
+The running balance must use:
+
+Opening Balance
++ Debits
+- Credits
+
+A single ₹10,000 receipt must change the balance exactly once by ₹10,000.
+
+Example:
+
+Opening:
+₹20,000
+
+Receipt:
+₹10,000
+
+Closing:
+₹10,000
+
+Not:
+
+₹20,000
+-₹3,000
+-₹4,000
+-₹3,000
+
+even though the three bills were allocated internally.
+
+
+===============================================================
+12. RECEIPT EDIT
+===============================================================
+
+When editing a receipt:
+
+Example:
+
+Old receipt:
+₹10,000
+
+New receipt:
+₹12,000
+
+The system must:
+
+1. Reverse/recalculate the old receipt accounting safely.
+2. Recalculate allocations.
+3. Create/update the single financial receipt.
+4. Ensure customer ledger shows only the final single receipt amount.
+5. Ensure POS bill outstanding is correct.
+6. Ensure no duplicate accounting postings remain.
+
+Do not leave old allocation postings as financial ledger entries.
+
+
+===============================================================
+13. RECEIPT DELETE / CANCEL
+===============================================================
+
+If a receipt is cancelled/deleted according to the existing ERP policy:
+
+- Reverse the single financial receipt.
+- Remove/reverse its settlement allocations.
+- Reopen affected invoices appropriately.
+- Keep audit trail.
+- Do not leave orphan bill allocations.
+- Do not leave duplicate customer ledger transactions.
+
+
+===============================================================
+14. OVERPAYMENT / CUSTOMER ADVANCE
+===============================================================
+
+If receipt amount is greater than total outstanding invoices:
+
+Example:
+
+Outstanding:
+₹7,000
+
+Receipt:
+₹10,000
+
+Allocation:
+
+Bills = ₹7,000
+Customer Advance = ₹3,000
+
+Ledger:
+
+ONE receipt:
+₹10,000
+
+Customer advance remains ₹3,000.
+
+Do not create a separate ₹3,000 receipt transaction.
+
+The ₹3,000 is a customer advance/credit balance derived from the same receipt.
+
+
+===============================================================
+15. LOCATION CONTROL
+===============================================================
+
+Receipt must remain location-scoped.
+
+Customer receipt must use the current authorized location.
+
+Warehouse user:
+
+Only their warehouse's customers/receipts.
+
+Head Office specific warehouse:
+
+Only selected warehouse.
+
+Head Office All Locations:
+
+Consolidated authorized data.
+
+Do not allow receipt allocations to invoices from unauthorized locations.
+
+
+===============================================================
+16. BANK/CASH ACCOUNTING
+===============================================================
+
+If payment mode is Bank:
+
+Bank account Dr ₹10,000
+Customer Cr ₹10,000
+
+If payment mode is Cash:
+
+Cash account Dr ₹10,000
+Customer Cr ₹10,000
+
+The bank/cash ledger must also contain ONE ₹10,000 receipt transaction.
+
+Receipt allocation must never create additional bank/cash transactions.
+
+
+===============================================================
+17. REPORTS
+===============================================================
+
+Verify all of these after the change:
+
+Customer Ledger
+Customer Outstanding
+Receivables Report
+Day Book
+Cash Book
+Bank Book
+Trial Balance
+General Ledger
+Receipt Voucher
+POS Customer Outstanding
+Customer Statement
+
+A ₹10,000 receipt must not be counted multiple times in financial reports.
+
+Expected:
+
+Customer financial receipt total = ₹10,000
+Cash/Bank receipt total = ₹10,000
+Customer outstanding reduction = ₹10,000
+
+Bill allocations total = ₹10,000
+
+But:
+
+Financial transaction count = 1
+
+
+===============================================================
+18. REQUIRED TEST SCENARIOS
+===============================================================
+
+Create/run tests for all scenarios.
+
+TEST 1 — SINGLE RECEIPT
+
+Invoice A = ₹3,000
+Invoice B = ₹4,000
+Invoice C = ₹5,000
+
+Receipt = ₹10,000
+
+Expected:
+
+Ledger receipt rows = 1
+Receipt amount = ₹10,000
+Allocation total = ₹10,000
+A outstanding = ₹0
+B outstanding = ₹0
+C outstanding = ₹2,000
+Customer outstanding reduced = ₹10,000
+
+
+TEST 2 — BILL-WISE USER SELECTION
+
+Same invoices.
+
+User explicitly allocates:
+
+A = ₹3,000
+B = ₹4,000
+C = ₹3,000
+
+Expected:
+
+Ledger receipt rows = 1
+Ledger receipt = ₹10,000
+Allocation rows = 3
+Allocation total = ₹10,000
+
+
+TEST 3 — PARTIAL RECEIPT
+
+Invoice A = ₹10,000
+
+Receipt = ₹4,000
+
+Expected:
+
+Ledger = one ₹4,000 receipt
+Invoice outstanding = ₹6,000
+
+
+TEST 4 — OVERPAYMENT
+
+Outstanding = ₹7,000
+Receipt = ₹10,000
+
+Expected:
+
+Ledger = one ₹10,000 receipt
+Invoice settlement = ₹7,000
+Customer advance = ₹3,000
+
+
+TEST 5 — MULTIPLE RECEIPTS
+
+Receipt 1 = ₹4,000
+Receipt 2 = ₹6,000
+
+Expected:
+
+Ledger:
+
+Receipt 1 ₹4,000
+Receipt 2 ₹6,000
+
+Total = ₹10,000
+
+Do not merge separate financial receipts.
+
+
+TEST 6 — EDIT RECEIPT
+
+₹10,000 → edit → ₹12,000
+
+Expected:
+
+One final receipt = ₹12,000
+Correct allocations
+No duplicate accounting
+Correct POS outstanding
+Correct ledger balance
+
+
+TEST 7 — LOCATION ISOLATION
+
+Receipt belongs to Calicut.
+
+Calicut user:
+visible.
+
+Other warehouse:
+not visible.
+
+All Locations:
+included in consolidated result.
+
+
+===============================================================
+19. UI REQUIREMENT
+===============================================================
+
+In Customer Ledger:
+
+Receipt should appear as:
+
+Payment Received
+₹10,000
+
+Optionally provide:
+
+View Allocation
+
+which opens:
+
+Receipt ₹10,000
+
+Allocated to:
+INV-101 ₹3,000
+INV-102 ₹4,000
+INV-103 ₹3,000
+
+This gives users bill-wise information without corrupting the financial ledger presentation.
+
+
+===============================================================
+20. DO NOT BREAK EXISTING ACCOUNTING
+===============================================================
+
+Do NOT modify unrelated:
+
+- Sales accounting
+- Purchase accounting
+- COGS
+- Inventory valuation
+- GST
+- Payroll
+- Fixed assets
+- Bank reconciliation
+- P&L
+- Balance Sheet
+
+unless directly required by this receipt correction.
+
+The purpose is to separate:
+
+FINANCIAL RECEIPT
+
+from
+
+BILL SETTLEMENT ALLOCATION.
+
+
+===============================================================
+21. FINAL ACCEPTANCE CRITERIA
+===============================================================
+
+The implementation is complete only when:
+
+[ ] Single ₹10,000 receipt creates ONE financial receipt
+[ ] Customer Ledger shows ONE ₹10,000 entry
+[ ] Bank/Cash Ledger shows ONE ₹10,000 transaction
+[ ] Customer control account is credited exactly ₹10,000
+[ ] Bill allocations total ₹10,000
+[ ] POS correctly clears the allocated bills
+[ ] No duplicate accounting from allocations
+[ ] Customer outstanding decreases exactly ₹10,000
+[ ] Overpayment becomes customer advance
+[ ] Bill-wise allocation details remain available
+[ ] Explicit bill-wise receipt still displays as one financial receipt
+[ ] Receipt edit works correctly
+[ ] Receipt cancellation works correctly
+[ ] Location isolation passes
+[ ] Day Book remains correct
+[ ] Customer Ledger remains correct
+[ ] Receivables remains correct
+[ ] Trial Balance remains balanced
+[ ] Bank/Cash balances remain correct
+[ ] Existing accounting regression tests pass
+[ ] API typecheck passes
+[ ] Web typecheck passes
+[ ] Production build passes
+[ ] git diff --check passes
+[ ] Production remains untouched
+
+
+FINAL OUTPUT:
+
+Report:
+
+1. Root cause
+2. Files changed
+3. Database/schema changes, if any
+4. Financial receipt behavior
+5. Bill allocation behavior
+6. Customer Ledger behavior
+7. POS outstanding behavior
+8. Accounting verification
+9. Test results
+10. Any remaining blockers
+
+Do not claim completion if any accounting duplication or bill-settlement inconsistency remains.
