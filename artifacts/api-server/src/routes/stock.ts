@@ -1195,7 +1195,26 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction("page:/transfer
         if (dstExisting) {
           const existingQty = Number(dstExisting.quantity ?? 0);
           const inboundQty = Number(li.quantity);
-          const existingCost = Number(dstExisting.cost_price ?? 0);
+          // stock_entries.cost_price is the legacy two-decimal mirror. The
+          // valuation engine may have a more precise location checkpoint, and
+          // blending from the rounded mirror would permanently lose the
+          // difference when the receipt lands. Preserve the value represented
+          // by the latest checkpoint, falling back to the mirror for legacy
+          // rows that predate checkpointing.
+          const { rows: [latestCheckpoint] } = await client.query(
+            `SELECT unit_cost::numeric AS unit_cost
+               FROM stock_cost_snapshots
+              WHERE material_type = 'item'
+                AND ref_id = $1
+                AND branch_type = $2
+                AND branch_id = $3
+              ORDER BY as_of_date DESC, id DESC
+              LIMIT 1`,
+            [li.itemId, destType, destId],
+          );
+          const existingCost = Number(
+            latestCheckpoint?.unit_cost ?? dstExisting.cost_price ?? 0,
+          );
           const inboundCost = Number(li.costPrice ?? 0);
           const combinedCost = paiseConservativeBlendCost(
             existingQty, existingCost, inboundQty, inboundCost,
