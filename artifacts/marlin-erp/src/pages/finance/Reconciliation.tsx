@@ -25,6 +25,7 @@ import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
 import { EmptyState } from '@/components/app/empty-state';
 import { TableSkeleton } from '@/components/app/loading-skeletons';
 import { TablePager, useClientPage } from '@/components/ui/table-pager';
+import { ExportButtons, type ReportDoc, pdfMoney } from '@/pages/reports/shared';
 
 const SOURCE_LABEL: Record<string, string> = {
   payment: 'Payment',
@@ -142,6 +143,30 @@ export default function Reconciliation() {
   const selectedGross = selectedTransactions.reduce((sum, t) => sum + Number(t.amount || 0), 0);
   const selectedAccountId = selectedTransactions[0]?.accountId ?? null;
   const selectedMixedAccounts = selectedTransactions.some(t => t.accountId !== selectedAccountId);
+  const reconciliationDoc = (): ReportDoc => ({
+    title: 'Bank Reconciliation',
+    subtitle: `${fromDate || 'All dates'} to ${toDate || 'All dates'}`,
+    orientation: 'landscape',
+    metaRows: [
+      ['Transactions', String(visibleTransactions.length)],
+      ['Unreconciled', pdfMoney(unreconciledAmount)],
+      ['Reconciled', pdfMoney(reconciledAmount)],
+    ],
+    sections: [{
+      columns: [
+        { label: 'Date' }, { label: 'Account', width: 1.5 }, { label: 'Source' },
+        { label: 'Voucher', width: 1.2 }, { label: 'Description', width: 2.2 },
+        { label: 'Location', width: 1.3 }, { label: 'Debit', align: 'right' },
+        { label: 'Credit', align: 'right' }, { label: 'Amount', align: 'right' }, { label: 'Status' },
+      ],
+      rows: visibleTransactions.map((t) => [
+        t.date, t.accountName, SOURCE_LABEL[t.source] ?? t.source, t.voucherNumber ?? '-',
+        t.description || t.counterpartyName || '-', t.accountLocationName,
+        Number(t.debit), Number(t.credit), Number(t.amount), t.reconciliationStatus,
+      ]),
+      totalsRow: ['', '', '', '', '', 'TOTAL', '', '', Number(visibleTransactions.reduce((s, t) => s + Number(t.amount || 0), 0)), ''],
+    }],
+  });
 
   function toggleSelected(entry: typeof transactions[number], checked: boolean) {
     if (!entry.reconciliationEligible
@@ -350,6 +375,11 @@ export default function Reconciliation() {
               {resetMutation.isPending ? 'Resetting…' : 'Reset review state'}
             </Button>
           ) : null}
+          <ExportButtons
+            canDownload={perm.canDownload}
+            disabled={transactionsLoading || visibleTransactions.length === 0}
+            doc={reconciliationDoc}
+          />
         </div>
 
         {audit?.undetermined?.length ? (

@@ -198,6 +198,7 @@ export interface StockValuationParams {
   branchType?: string;
   branchId?: number;
   materialType?: StockProductKind;
+  asOf?: string;
 }
 
 // ── Movement analysis (dead / slow-moving stock) ──────────────────────────────

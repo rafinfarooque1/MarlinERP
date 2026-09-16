@@ -292,7 +292,10 @@ router.get("/stock/expiry-report", requireModuleView("page:/headoffice/inventory
 // are now included, as is stock dispatched but not yet received (valued as the
 // sender's until it lands, because it belongs to nobody else).
 router.get("/stock/valuation", requireModuleView("page:/headoffice/inventory-reports"), async (req, res): Promise<void> => {
-  const { branchType, branchId, materialType } = req.query as Record<string, string | undefined>;
+  const { branchType, branchId, materialType, asOf } = req.query as Record<string, string | undefined>;
+  if (asOf && !isIsoDate(asOf)) {
+    res.status(400).json({ error: "asOf must be a valid YYYY-MM-DD date" }); return;
+  }
   if (materialType && !BATCH_KINDS.includes(materialType as any)) {
     res.status(400).json({ error: `materialType must be one of: ${BATCH_KINDS.join(", ")}` }); return;
   }
@@ -305,6 +308,8 @@ router.get("/stock/valuation", requireModuleView("page:/headoffice/inventory-rep
       branchType: branchType || undefined,
       branchId: branchId != null && branchId !== "" ? Number(branchId) : undefined,
       materialType: (materialType as ProductKind | undefined) || undefined,
+      asOf,
+      includeInTransit: !asOf,
       dataScope,
     }),
     buildBranchMaps(),

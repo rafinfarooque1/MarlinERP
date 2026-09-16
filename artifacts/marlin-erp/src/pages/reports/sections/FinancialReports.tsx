@@ -146,7 +146,10 @@ function qs(range: RangeState, extra: Record<string, string | number | undefined
 function useReport<T>(path: string, query: string) {
   return useQuery({
     queryKey: [path, query],
-    queryFn: () => customFetch<T>(`${path}${query ? `?${query}` : ''}`),
+    // Report responses are frequently served with a validated HTTP cache
+    // response. customFetch cannot reconstruct a 304 body, so a report query
+    // must ask the server for the authoritative payload every time.
+    queryFn: () => customFetch<T>(`${path}${query ? `?${query}` : ''}`, { cache: 'no-store' }),
   });
 }
 
@@ -653,7 +656,7 @@ function BalanceSheetReport({ range, loc, canDownload }: { range: RangeState; lo
       ['As at', asAt],
       ['Total Liabilities', pdfMoney(bs?.liabilities.total)],
       ['Total Assets', pdfMoney(bs?.assets.total)],
-      ['Balanced', data?.integrity.balanced ? 'Yes' : `No — out by ${pdfMoney(data?.integrity.difference)}`],
+      ['Balanced', Math.abs(Number(data?.integrity.difference ?? 0)) < 0.005 ? 'Yes' : `No — out by ${pdfMoney(data?.integrity.difference)}`],
     ],
     sections: [
       {
