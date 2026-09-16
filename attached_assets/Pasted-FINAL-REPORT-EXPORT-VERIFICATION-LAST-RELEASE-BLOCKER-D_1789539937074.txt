@@ -1,0 +1,202 @@
+FINAL REPORT EXPORT VERIFICATION — LAST RELEASE BLOCKER
+
+Do NOT publish yet.
+Do NOT modify production.
+Do NOT change accounting logic.
+
+The current release gate has only one explicit remaining NOT PROVEN item:
+
+PDF/XLSX numerical parity.
+
+Complete ONLY this final verification.
+
+==================================================
+1. GENERATE FRESH REPORTS
+==================================================
+
+Using the development environment, generate fresh PDF and XLSX exports for:
+
+1. Day Book
+2. Cash Book
+3. Bank Book
+4. Trial Balance
+5. General Ledger
+6. Trading Account / P&L
+7. Balance Sheet
+8. Stock Report
+9. Receivables
+10. Payables
+11. GST
+12. Fixed Assets
+13. Bank Reconciliation
+
+Use identical:
+
+- location
+- date range
+- report filters
+
+==================================================
+2. NUMERICAL PARITY
+==================================================
+
+For every report:
+
+AUTHORITATIVE API DATA
+=
+SCREEN DATA
+=
+PDF DATA
+=
+XLSX DATA
+
+Compare actual numerical values.
+
+Do not merely verify that:
+
+- PDF downloads
+- XLSX downloads
+- file is non-empty
+- file opens successfully
+
+The actual numbers must be compared.
+
+Pay special attention to:
+
+- totals
+- subtotals
+- opening balances
+- closing balances
+- debit
+- credit
+- tax
+- inventory values
+- GP
+- NP
+- outstanding balances
+- reconciliation totals
+
+==================================================
+3. P&L SPECIFIC CHECK
+==================================================
+
+Verify:
+
+Revenue = ₹21,71,315.23
+COGS = ₹41,00,078.74
+Gross Profit = -₹19,28,763.51
+Net Profit = -₹28,94,155.27
+
+Do not alter these values simply because they are negative.
+
+Verify that:
+
+Revenue - COGS = Gross Profit
+
+and that the P&L / Balance Sheet / Trial Balance relationship remains correct.
+
+==================================================
+4. LOCATION CHECK
+==================================================
+
+Run at least:
+
+All Locations
+
+and:
+
+Frozen Hub – Calicut
+
+Verify that PDF/XLSX exports preserve the selected location.
+
+Verify that warehouse exports do not contain another warehouse's data.
+
+==================================================
+5. DATE RANGE CHECK
+==================================================
+
+Use the same controlled date range used in the final browser test:
+
+1 September 2026
+through
+15 September 2026
+
+Verify that the exported reports preserve the exact period.
+
+==================================================
+6. IF A PARITY FAILURE OCCURS
+==================================================
+
+Do NOT modify the accounting source merely to make the export match.
+
+Identify whether the problem is:
+
+- export transformation
+- formatting
+- rounding
+- missing rows
+- filtering
+- location scope
+- date scope
+- aggregation
+- PDF renderer
+- XLSX renderer
+
+Fix the export layer only if the export is wrong.
+
+Add a regression test.
+
+==================================================
+7. FINAL RELEASE GATE
+==================================================
+
+After completion, provide:
+
+REPORT | SCREEN/API TOTAL | PDF TOTAL | XLSX TOTAL | STATUS
+
+Then provide:
+
+PASS
+FAIL
+NOT PROVEN
+
+for PDF/XLSX parity.
+
+If all reports match:
+
+Mark:
+
+PDF/XLSX NUMERICAL PARITY = PASS
+
+Then rerun:
+
+git diff --check
+
+and confirm production remains untouched.
+
+==================================================
+8. FINAL RECOMMENDATION
+==================================================
+
+If:
+
+- PDF/XLSX parity = PASS
+- Current accounting engine = 0 FAIL
+- Trial Balance = PASS
+- Balance Sheet = PASS
+- P&L = PASS
+- Stock continuity = PASS
+- Transfer neutrality = PASS
+- Dashboard drill-down = PASS
+- Backup/restore = PASS
+- RBAC/LBAC = PASS
+- Build/typechecks = PASS
+- Production untouched = PASS
+
+then report:
+
+READY FOR PRODUCTION PUBLISH
+
+Do NOT publish automatically.
+
+Wait for my confirmation.
