@@ -692,8 +692,12 @@ export interface Sale {
   customerId?: number | null;
   /** @nullable */
   customerName?: string | null;
-  /** Name snapshotted when the invoice was saved. */
+  /**
+     * Name snapshotted when the invoice was saved.
+     * @nullable
+     */
   salesperson?: string | null;
+  /** @nullable */
   salespersonEmployeeId?: number | null;
   saleDate: string;
   lineItems: SaleLineItem[];
@@ -721,11 +725,21 @@ export interface Sale {
      * @nullable
      */
   quotationNumber?: string | null;
+  /**
+     * Optional plain-text transaction note. Empty notes are omitted from document output.
+     * @maxLength 2000
+     * @nullable
+     */
+  notes?: string | null;
 }
 
 export interface SaleInput {
   outletId: number;
   customerId?: number;
+  /**
+     * Active employee selected as the salesman; the server snapshots the employee name on the invoice.
+     * @nullable
+     */
   salespersonEmployeeId?: number | null;
   saleDate: string;
   lineItems: SaleLineItem[];
@@ -735,6 +749,11 @@ export interface SaleInput {
   billDiscount?: number;
   /** Customer recoveries added after goods and GST. Every ledger must be a postable Direct Income ledger; charges carry no GST. */
   otherCharges?: SaleOtherCharge[];
+  /**
+     * Optional plain-text transaction note.
+     * @maxLength 2000
+     */
+  notes?: string;
   /** When present, completing this sale converts the quotation: inside the sale transaction the quotation row is locked, a second conversion is refused, and the two documents are stamped with each other's numbers. Exactly one sale can ever result from a quotation. */
   quotationId?: number;
 }
@@ -803,7 +822,10 @@ export interface Quotation {
      * @nullable
      */
   salespersonEmployeeId?: number | null;
-  /** @nullable */
+  /**
+     * @maxLength 2000
+     * @nullable
+     */
   notes?: string | null;
   /** @nullable */
   termsConditions?: string | null;
@@ -851,6 +873,7 @@ export interface QuotationInput {
      * @nullable
      */
   salespersonEmployeeId?: number | null;
+  /** @maxLength 2000 */
   notes?: string;
   termsConditions?: string;
 }

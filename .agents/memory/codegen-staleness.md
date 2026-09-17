@@ -11,6 +11,12 @@ The committed generated code (`lib/api-zod`, `lib/api-client-react`) can be **st
 
 **How to apply:** After any codegen run, `git diff` the generated packages for fields that changed from `.optional()` to required (or newly-added required fields), then verify the UI forms/payloads that hit those endpoints actually send them. Browser-level E2E after codegen is the reliable net — request-level tests mask client payload gaps.
 
+Regeneration can also remove fields that are present in committed generated output but missing from the OpenAPI schema. Treat the current generated diff as an inventory of compatibility fields: before adding a schema field, confirm existing response/input fields are declared in the spec, or codegen may erase them and break server typechecks and consumers.
+
+**Why:** adding sale notes exposed that salesperson fields had drifted into generated Sale types without corresponding OpenAPI declarations; the first regeneration removed them until the schema was corrected.
+
+**How to apply:** after any spec edit, inspect the generated diff for deletions as well as stricter validators, and restore missing declarations in `lib/api-spec/openapi.yaml` rather than hand-editing generated files.
+
 ## openapi.yaml GATES the write path — a column + drizzle mapping is not enough
 
 A field can exist end to end — real DB column, mapped in the drizzle table, read back

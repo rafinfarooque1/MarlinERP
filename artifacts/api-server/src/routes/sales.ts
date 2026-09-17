@@ -100,6 +100,11 @@ function computeLineTax(
 
 const round2 = (n: number): number => Math.round(n * 100) / 100;
 
+function optionalTransactionNote(value: unknown): string | null {
+  if (typeof value !== "string" || value.trim() === "") return null;
+  return value;
+}
+
 type SaleSalesperson = {
   employeeId: number | null;
   name: string | null;
@@ -185,6 +190,7 @@ async function buildSaleReplayResponse(
     couponCode: row.coupon_code,
     otherCharges: charges,
     otherChargesTotal: otherChargesTotal(charges),
+    notes: row.notes ?? null,
     createdAt: row.created_at,
     quotationId: row.quotation_id ?? null,
     quotationNumber: row.quotation_number ?? null,
@@ -674,6 +680,7 @@ router.get("/sales", requireModuleView(["page:/sales/pos", "page:/returns", "pag
       couponCode: r.coupon_code,
       otherCharges: parseStoredOtherCharges(r.other_charges),
       otherChargesTotal: otherChargesTotal(parseStoredOtherCharges(r.other_charges)),
+      notes: r.notes ?? null,
       createdAt: r.created_at,
       paymentStatus: position.status,
       amountPaid,
@@ -1317,8 +1324,8 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
     const outletIdForInsert = locationType === 'outlet' ? locationId : null;
     ({ rows: [row] } = await txClient.query<any>(
        `INSERT INTO sales (invoice_number, outlet_id, location_type, location_id, customer_id, salesperson_employee_id, salesperson, sale_date, line_items, subtotal, tax_total, discount_total, bill_discount, total_amount, payment_mode, coupon_code, amount_paid, payment_status,
-                           number_scope, invoice_series, invoice_fy, invoice_serial, other_charges, client_request_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23::jsonb, $24) RETURNING *`,
+                            number_scope, invoice_series, invoice_fy, invoice_serial, other_charges, client_request_id, notes)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23::jsonb, $24, $25) RETURNING *`,
       [invoiceNumber, outletIdForInsert, locationType, locationId,
         parsed.data.customerId ?? null, createSalesperson.value.employeeId, createSalesperson.value.name, parsed.data.saleDate,
        // Stored WITH the batch trail already resolved above, so the served lots
@@ -1338,7 +1345,7 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
            ? 'paid'
            : computePaymentPosition({ totalAmount, amountReceived: appliedAdvance, cancelledAt: null }).status,
         numberAlloc.numberScope, numberAlloc.seriesPrefix, numberAlloc.fyLabel, numberAlloc.serial,
-        JSON.stringify(otherCharges), clientRequestId]
+         JSON.stringify(otherCharges), clientRequestId, optionalTransactionNote(parsed.data.notes)]
     ));
 
     // ── Counter-settlement payment history (audit F-1) ───────────────────────
@@ -1540,6 +1547,7 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
     couponCode: row.coupon_code,
     otherCharges,
     otherChargesTotal: otherChargesTot,
+    notes: row.notes ?? null,
     createdAt: row.created_at,
     quotationId: row.quotation_id ?? null,
     quotationNumber: row.quotation_number ?? null,
@@ -2122,16 +2130,17 @@ router.put("/sales/:id", requireModuleAction("page:/sales/pos", "edit"), async (
     //    leaving a stale identity behind.
     const editedNumberScope = await salesCounterScope(editTx, { type: newLocationType, id: newLocationId });
     ({ rows: [updated] } = await editTx.query<any>(
-      `UPDATE sales SET outlet_id=$1, location_type=$2, location_id=$3, customer_id=$4, sale_date=$5,
+       `UPDATE sales SET outlet_id=$1, location_type=$2, location_id=$3, customer_id=$4, sale_date=$5,
        line_items=$6::jsonb, subtotal=$7, tax_total=$8, discount_total=$9, bill_discount=$10, total_amount=$11,
        payment_mode=$12, coupon_code=$13, amount_paid=$14, payment_status=$15,
-       salesperson_employee_id=$16, salesperson=$17, number_scope=$19, other_charges=$20::jsonb
+       salesperson_employee_id=$16, salesperson=$17, number_scope=$19, other_charges=$20::jsonb,
+       notes=$21
        WHERE id=$18 RETURNING *`,
       [newOutletId, newLocationType, newLocationId, parsed.data.customerId ?? null,
        parsed.data.saleDate, JSON.stringify(newLineItemsWithBatches), subtotal, taxTotal, discountTotal, billDiscount, totalAmount,
         newPaymentMode, parsed.data.couponCode ?? null, newAmountPaid, newPaymentStatus,
         editSalesperson.value.employeeId, editSalesperson.value.name, id, editedNumberScope,
-        JSON.stringify(otherCharges)]
+        JSON.stringify(otherCharges), optionalTransactionNote(parsed.data.notes)]
     ));
 
     // 3b. Restate the counter-settlement history to the edited bill. The old
@@ -2283,6 +2292,7 @@ router.put("/sales/:id", requireModuleAction("page:/sales/pos", "edit"), async (
     couponCode: updated.coupon_code,
     otherCharges,
     otherChargesTotal: otherChargesTot,
+    notes: updated.notes ?? null,
     createdAt: updated.created_at,
     paymentStatus: editedPosition?.status ?? updated.payment_status ?? 'paid',
     amountPaid: Number(updated.amount_paid ?? 0),
@@ -2822,6 +2832,7 @@ router.get("/sales/:id", requireModuleView(["page:/sales/pos", "page:/operations
     customerName,
     quotationId: row.quotation_id ?? null,
     quotationNumber: row.quotation_number ?? null,
+    notes: row.notes ?? null,
   });
 });
 

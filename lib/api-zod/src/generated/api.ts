@@ -1049,6 +1049,10 @@ export const ListSalesQueryParams = zod.object({
   "outletId": zod.coerce.number().optional()
 })
 
+export const listSalesResponseNotesMax = 2000;
+
+
+
 export const ListSalesResponseItem = zod.object({
   "id": zod.number(),
   "invoiceNumber": zod.string().optional(),
@@ -1056,7 +1060,7 @@ export const ListSalesResponseItem = zod.object({
   "outletName": zod.string().optional(),
   "customerId": zod.number().nullish(),
   "customerName": zod.string().nullish(),
-  "salesperson": zod.string().nullish(),
+  "salesperson": zod.string().nullish().describe('Name snapshotted when the invoice was saved.'),
   "salespersonEmployeeId": zod.number().nullish(),
   "saleDate": zod.string(),
   "lineItems": zod.array(zod.object({
@@ -1085,7 +1089,8 @@ export const ListSalesResponseItem = zod.object({
   "couponCode": zod.string().nullish(),
   "createdAt": zod.string(),
   "quotationId": zod.number().nullish().describe('Set when this sale was converted from a quotation.'),
-  "quotationNumber": zod.string().nullish().describe('The quotation this sale was converted from (QTN\/…).')
+  "quotationNumber": zod.string().nullish().describe('The quotation this sale was converted from (QTN\/…).'),
+  "notes": zod.string().max(listSalesResponseNotesMax).nullish().describe('Optional plain-text transaction note. Empty notes are omitted from document output.')
 })
 export const ListSalesResponse = zod.array(ListSalesResponseItem)
 
@@ -1093,6 +1098,10 @@ export const ListSalesResponse = zod.array(ListSalesResponseItem)
 /**
  * @summary Create sale (auto-fills price from outlet price)
  */
+export const createSaleBodyNotesMax = 2000;
+
+
+
 export const CreateSaleBody = zod.object({
   "outletId": zod.number(),
   "customerId": zod.number().optional(),
@@ -1117,8 +1126,13 @@ export const CreateSaleBody = zod.object({
   "ledgerName": zod.string().optional().describe('Server-enriched on reads; ignored on writes.'),
   "amount": zod.number().describe('Positive amount in rupees, to paise precision.')
 })).optional().describe('Customer recoveries added after goods and GST. Every ledger must be a postable Direct Income ledger; charges carry no GST.'),
+  "notes": zod.string().max(createSaleBodyNotesMax).optional().describe('Optional plain-text transaction note.'),
   "quotationId": zod.number().optional().describe('When present, completing this sale converts the quotation: inside the sale transaction the quotation row is locked, a second conversion is refused, and the two documents are stamped with each other\'s numbers. Exactly one sale can ever result from a quotation.\n')
 })
+
+export const createSaleResponseNotesMax = 2000;
+
+
 
 export const CreateSaleResponse = zod.object({
   "id": zod.number(),
@@ -1127,7 +1141,7 @@ export const CreateSaleResponse = zod.object({
   "outletName": zod.string().optional(),
   "customerId": zod.number().nullish(),
   "customerName": zod.string().nullish(),
-  "salesperson": zod.string().nullish(),
+  "salesperson": zod.string().nullish().describe('Name snapshotted when the invoice was saved.'),
   "salespersonEmployeeId": zod.number().nullish(),
   "saleDate": zod.string(),
   "lineItems": zod.array(zod.object({
@@ -1156,13 +1170,18 @@ export const CreateSaleResponse = zod.object({
   "couponCode": zod.string().nullish(),
   "createdAt": zod.string(),
   "quotationId": zod.number().nullish().describe('Set when this sale was converted from a quotation.'),
-  "quotationNumber": zod.string().nullish().describe('The quotation this sale was converted from (QTN\/…).')
+  "quotationNumber": zod.string().nullish().describe('The quotation this sale was converted from (QTN\/…).'),
+  "notes": zod.string().max(createSaleResponseNotesMax).nullish().describe('Optional plain-text transaction note. Empty notes are omitted from document output.')
 })
 
 
 export const GetSaleParams = zod.object({
   "id": zod.coerce.number()
 })
+
+export const getSaleResponseNotesMax = 2000;
+
+
 
 export const GetSaleResponse = zod.object({
   "id": zod.number(),
@@ -1171,7 +1190,7 @@ export const GetSaleResponse = zod.object({
   "outletName": zod.string().optional(),
   "customerId": zod.number().nullish(),
   "customerName": zod.string().nullish(),
-  "salesperson": zod.string().nullish(),
+  "salesperson": zod.string().nullish().describe('Name snapshotted when the invoice was saved.'),
   "salespersonEmployeeId": zod.number().nullish(),
   "saleDate": zod.string(),
   "lineItems": zod.array(zod.object({
@@ -1200,7 +1219,8 @@ export const GetSaleResponse = zod.object({
   "couponCode": zod.string().nullish(),
   "createdAt": zod.string(),
   "quotationId": zod.number().nullish().describe('Set when this sale was converted from a quotation.'),
-  "quotationNumber": zod.string().nullish().describe('The quotation this sale was converted from (QTN\/…).')
+  "quotationNumber": zod.string().nullish().describe('The quotation this sale was converted from (QTN\/…).'),
+  "notes": zod.string().max(getSaleResponseNotesMax).nullish().describe('Optional plain-text transaction note. Empty notes are omitted from document output.')
 })
 
 
@@ -1233,6 +1253,10 @@ export const ListQuotationsQueryParams = zod.object({
   "customerId": zod.coerce.number().optional(),
   "salesperson": zod.coerce.string().optional()
 })
+
+export const listQuotationsResponseNotesMax = 2000;
+
+
 
 export const ListQuotationsResponseItem = zod.object({
   "id": zod.number(),
@@ -1276,7 +1300,7 @@ export const ListQuotationsResponseItem = zod.object({
   "placeOfSupply": zod.string().nullish(),
   "salesperson": zod.string().nullish().describe('Display name. For quotations saved with salespersonEmployeeId this is the employee\'s name snapshotted at save time; older quotations carry the free text that was typed (grandfathered).\n'),
   "salespersonEmployeeId": zod.number().nullish().describe('Reference to the employee chosen from the salesperson master. Null on quotations saved before the master existed (their free-text salesperson still renders).\n'),
-  "notes": zod.string().nullish(),
+  "notes": zod.string().max(listQuotationsResponseNotesMax).nullish(),
   "termsConditions": zod.string().nullish(),
   "convertedSaleId": zod.number().nullish(),
   "convertedInvoiceNumber": zod.string().nullish(),
@@ -1284,6 +1308,10 @@ export const ListQuotationsResponseItem = zod.object({
   "updatedAt": zod.string().nullish()
 })
 export const ListQuotationsResponse = zod.array(ListQuotationsResponseItem)
+
+
+export const createQuotationBodyNotesMax = 2000;
+
 
 
 export const CreateQuotationBody = zod.object({
@@ -1318,9 +1346,13 @@ export const CreateQuotationBody = zod.object({
   "placeOfSupply": zod.string().optional(),
   "salesperson": zod.string().optional().describe('Free-text fallback for legacy quotations only. Ignored when salespersonEmployeeId is provided (the server snapshots the employee\'s name instead).\n'),
   "salespersonEmployeeId": zod.number().nullish().describe('Employee chosen from the salesperson dropdown. Must be an active employee at the quotation\'s location or Head Office. Null\/absent keeps the free-text salesperson value.\n'),
-  "notes": zod.string().optional(),
+  "notes": zod.string().max(createQuotationBodyNotesMax).optional(),
   "termsConditions": zod.string().optional()
 })
+
+export const createQuotationResponseNotesMax = 2000;
+
+
 
 export const CreateQuotationResponse = zod.object({
   "id": zod.number(),
@@ -1364,7 +1396,7 @@ export const CreateQuotationResponse = zod.object({
   "placeOfSupply": zod.string().nullish(),
   "salesperson": zod.string().nullish().describe('Display name. For quotations saved with salespersonEmployeeId this is the employee\'s name snapshotted at save time; older quotations carry the free text that was typed (grandfathered).\n'),
   "salespersonEmployeeId": zod.number().nullish().describe('Reference to the employee chosen from the salesperson master. Null on quotations saved before the master existed (their free-text salesperson still renders).\n'),
-  "notes": zod.string().nullish(),
+  "notes": zod.string().max(createQuotationResponseNotesMax).nullish(),
   "termsConditions": zod.string().nullish(),
   "convertedSaleId": zod.number().nullish(),
   "convertedInvoiceNumber": zod.string().nullish(),
@@ -1376,6 +1408,10 @@ export const CreateQuotationResponse = zod.object({
 export const GetQuotationParams = zod.object({
   "id": zod.coerce.number()
 })
+
+export const getQuotationResponseNotesMax = 2000;
+
+
 
 export const GetQuotationResponse = zod.object({
   "id": zod.number(),
@@ -1419,7 +1455,7 @@ export const GetQuotationResponse = zod.object({
   "placeOfSupply": zod.string().nullish(),
   "salesperson": zod.string().nullish().describe('Display name. For quotations saved with salespersonEmployeeId this is the employee\'s name snapshotted at save time; older quotations carry the free text that was typed (grandfathered).\n'),
   "salespersonEmployeeId": zod.number().nullish().describe('Reference to the employee chosen from the salesperson master. Null on quotations saved before the master existed (their free-text salesperson still renders).\n'),
-  "notes": zod.string().nullish(),
+  "notes": zod.string().max(getQuotationResponseNotesMax).nullish(),
   "termsConditions": zod.string().nullish(),
   "convertedSaleId": zod.number().nullish(),
   "convertedInvoiceNumber": zod.string().nullish(),
@@ -1431,6 +1467,10 @@ export const GetQuotationResponse = zod.object({
 export const UpdateQuotationParams = zod.object({
   "id": zod.coerce.number()
 })
+
+export const updateQuotationBodyNotesMax = 2000;
+
+
 
 export const UpdateQuotationBody = zod.object({
   "locationType": zod.enum(['warehouse', 'outlet']),
@@ -1464,9 +1504,13 @@ export const UpdateQuotationBody = zod.object({
   "placeOfSupply": zod.string().optional(),
   "salesperson": zod.string().optional().describe('Free-text fallback for legacy quotations only. Ignored when salespersonEmployeeId is provided (the server snapshots the employee\'s name instead).\n'),
   "salespersonEmployeeId": zod.number().nullish().describe('Employee chosen from the salesperson dropdown. Must be an active employee at the quotation\'s location or Head Office. Null\/absent keeps the free-text salesperson value.\n'),
-  "notes": zod.string().optional(),
+  "notes": zod.string().max(updateQuotationBodyNotesMax).optional(),
   "termsConditions": zod.string().optional()
 })
+
+export const updateQuotationResponseNotesMax = 2000;
+
+
 
 export const UpdateQuotationResponse = zod.object({
   "id": zod.number(),
@@ -1510,7 +1554,7 @@ export const UpdateQuotationResponse = zod.object({
   "placeOfSupply": zod.string().nullish(),
   "salesperson": zod.string().nullish().describe('Display name. For quotations saved with salespersonEmployeeId this is the employee\'s name snapshotted at save time; older quotations carry the free text that was typed (grandfathered).\n'),
   "salespersonEmployeeId": zod.number().nullish().describe('Reference to the employee chosen from the salesperson master. Null on quotations saved before the master existed (their free-text salesperson still renders).\n'),
-  "notes": zod.string().nullish(),
+  "notes": zod.string().max(updateQuotationResponseNotesMax).nullish(),
   "termsConditions": zod.string().nullish(),
   "convertedSaleId": zod.number().nullish(),
   "convertedInvoiceNumber": zod.string().nullish(),
@@ -1538,6 +1582,10 @@ export const SetQuotationStatusParams = zod.object({
 export const SetQuotationStatusBody = zod.object({
   "status": zod.enum(['draft', 'sent', 'accepted', 'rejected', 'expired'])
 })
+
+export const setQuotationStatusResponseNotesMax = 2000;
+
+
 
 export const SetQuotationStatusResponse = zod.object({
   "id": zod.number(),
@@ -1581,7 +1629,7 @@ export const SetQuotationStatusResponse = zod.object({
   "placeOfSupply": zod.string().nullish(),
   "salesperson": zod.string().nullish().describe('Display name. For quotations saved with salespersonEmployeeId this is the employee\'s name snapshotted at save time; older quotations carry the free text that was typed (grandfathered).\n'),
   "salespersonEmployeeId": zod.number().nullish().describe('Reference to the employee chosen from the salesperson master. Null on quotations saved before the master existed (their free-text salesperson still renders).\n'),
-  "notes": zod.string().nullish(),
+  "notes": zod.string().max(setQuotationStatusResponseNotesMax).nullish(),
   "termsConditions": zod.string().nullish(),
   "convertedSaleId": zod.number().nullish(),
   "convertedInvoiceNumber": zod.string().nullish(),

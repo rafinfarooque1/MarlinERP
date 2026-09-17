@@ -211,6 +211,7 @@ const schema = z.object({
   saleDate: z.string().min(1, 'Date required'),
   paymentMode: z.enum(STORED_SALE_MODES).default('cash'),
   couponCode: z.string().optional(),
+  notes: z.string().max(2000, 'Notes must be 2000 characters or fewer').optional(),
   // ONE pre-tax discount on the whole invoice, allocated across lines by the
   // server (proportional to each line's post-item-discount value). Separate
   // from the coupon, which is a post-tax deduction off the grand total.
@@ -227,6 +228,7 @@ const defaultFormValues: FormValues = {
   salespersonEmployeeId: undefined,
   paymentMode: 'cash',
   couponCode: '',
+  notes: '',
   billDiscount: 0,
   lineItems: [{ itemId: 0, quantity: 1, unitPrice: 0, unitDiscount: 0, taxable: false, taxableTouched: false }],
   otherCharges: [],
@@ -548,6 +550,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
       // Bank, so opening and saving an old invoice does not break reconciliation.
       paymentMode: editableSaleMode(sale.paymentMode) as FormValues['paymentMode'],
       couponCode: sale.couponCode ?? '',
+      notes: sale.notes ?? '',
       billDiscount: Number((sale as any).billDiscount ?? 0),
       // List rows may be raw snake_case while detail reads map camelCase —
       // read both so an edit never silently drops the stored charges.
@@ -792,6 +795,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
         // A converted quotation is a NEW sale — it opens on the company's
         // default payment mode (already in effectiveDefaultValues) like any other.
         couponCode: q.couponCode ?? '',
+        notes: q.notes ?? '',
         billDiscount: Number(q.billDiscount ?? 0),
         otherCharges: (Array.isArray(q.otherCharges) ? q.otherCharges : []).map((c: any) => ({
           ledgerId: Number(c.ledgerId),
@@ -2009,6 +2013,24 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                 )} />
               </div>
 
+              <FormField control={form.control} name="notes" render={({ field }) => (
+                <FormItem className="mt-4">
+                  <FormLabel>Notes <span className="text-xs text-muted-foreground font-normal">(optional, up to 2000 characters)</span></FormLabel>
+                  <FormControl>
+                    <Textarea
+                      {...field}
+                      value={field.value ?? ''}
+                      maxLength={2000}
+                      rows={3}
+                      placeholder="Add a note for the customer or your team"
+                      data-testid="input-sale-notes"
+                    />
+                  </FormControl>
+                  <p className="text-xs text-muted-foreground text-right">{(field.value ?? '').length}/2000</p>
+                  <FormMessage />
+                </FormItem>
+              )} />
+
               {/* Receive Into at billing — create mode, non-credit, only when
                   the location has assigned Cash & Bank accounts (locations
                   without them keep the legacy plain-cash submit). The picked
@@ -2727,6 +2749,13 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                   </div>
                 ))}
               </div>
+
+              {!!String(viewItem.notes ?? '').trim() && (
+                <div className="rounded-lg border border-border bg-muted/20 p-3">
+                  <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Notes</p>
+                  <p className="text-sm whitespace-pre-line break-words">{viewItem.notes}</p>
+                </div>
+              )}
 
               {/* Line items */}
               <div>

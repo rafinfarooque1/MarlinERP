@@ -57,6 +57,7 @@ async function runMigrations() {
     ALTER TABLE item_prices ADD COLUMN IF NOT EXISTS location_type text NOT NULL DEFAULT 'outlet';
     ALTER TABLE account_ledgers ADD COLUMN IF NOT EXISTS code text;
     ALTER TABLE sales ADD COLUMN IF NOT EXISTS bill_discount numeric(12,2) NOT NULL DEFAULT 0;
+    ALTER TABLE sales ADD COLUMN IF NOT EXISTS notes text;
     ALTER TABLE purchases ADD COLUMN IF NOT EXISTS tax_total numeric(12,2) DEFAULT 0;
     ALTER TABLE purchases ADD COLUMN IF NOT EXISTS discount_total numeric(12,2) DEFAULT 0;
     ALTER TABLE purchases ADD COLUMN IF NOT EXISTS round_off numeric(12,2) DEFAULT 0;

@@ -11,6 +11,11 @@ import type { SaleOtherCharge } from './saleOtherCharge';
 export interface SaleInput {
   outletId: number;
   customerId?: number;
+  /**
+     * Active employee selected as the salesman; the server snapshots the employee name on the invoice.
+     * @nullable
+     */
+  salespersonEmployeeId?: number | null;
   saleDate: string;
   lineItems: SaleLineItem[];
   paymentMode: string;
@@ -19,6 +24,11 @@ export interface SaleInput {
   billDiscount?: number;
   /** Customer recoveries added after goods and GST. Every ledger must be a postable Direct Income ledger; charges carry no GST. */
   otherCharges?: SaleOtherCharge[];
+  /**
+     * Optional plain-text transaction note.
+     * @maxLength 2000
+     */
+  notes?: string;
   /** When present, completing this sale converts the quotation: inside the sale transaction the quotation row is locked, a second conversion is refused, and the two documents are stamped with each other's numbers. Exactly one sale can ever result from a quotation. */
   quotationId?: number;
 }

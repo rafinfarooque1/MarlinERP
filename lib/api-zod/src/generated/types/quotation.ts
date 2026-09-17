@@ -58,7 +58,10 @@ export interface Quotation {
      * @nullable
      */
   salespersonEmployeeId?: number | null;
-  /** @nullable */
+  /**
+     * @maxLength 2000
+     * @nullable
+     */
   notes?: string | null;
   /** @nullable */
   termsConditions?: string | null;

@@ -17,6 +17,13 @@ export interface Sale {
   customerId?: number | null;
   /** @nullable */
   customerName?: string | null;
+  /**
+     * Name snapshotted when the invoice was saved.
+     * @nullable
+     */
+  salesperson?: string | null;
+  /** @nullable */
+  salespersonEmployeeId?: number | null;
   saleDate: string;
   lineItems: SaleLineItem[];
   subtotal?: number;
@@ -43,4 +50,10 @@ export interface Sale {
      * @nullable
      */
   quotationNumber?: string | null;
+  /**
+     * Optional plain-text transaction note. Empty notes are omitted from document output.
+     * @maxLength 2000
+     * @nullable
+     */
+  notes?: string | null;
 }
