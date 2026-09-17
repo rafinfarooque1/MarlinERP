@@ -45,6 +45,11 @@ turned POS coupons off — every suite that asserted the old QA identities broke
   read, and the fallback is 'admin', which collects lockout strikes in
   `login_lockouts` (that's the lockout table; `login_attempts` is just the
   audit log).
+- Treat hard-coded report snapshots and invoice-number expectations as
+  assertions about mutable development business rows and configuration, not
+  universal invariants. Before changing report logic, reconcile the expected
+  rows, payment records, active locks, and location format overrides; do not
+  delete or rewrite real rows to make the snapshot pass.
 - Cleanup matchers on `line_items::text` (jsonb) must account for jsonb's
   canonical rendering: `"itemId": 206` has a space after the colon, so
   `LIKE '%"itemId":206%'` matches NOTHING and the suite silently leaks its
