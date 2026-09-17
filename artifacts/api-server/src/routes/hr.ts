@@ -4181,6 +4181,7 @@ router.put("/hr/attendance", requireModuleAction("page:/hr/attendance", "edit"),
   if (!ATTENDANCE_CORRECTION_STATUSES.includes(status as AttendanceCorrectionStatus)) {
     res.status(400).json({ error: `status must be one of ${ATTENDANCE_CORRECTION_STATUSES.join(", ")}` }); return;
   }
+  if (await respondIfMonthLocked(res, pool, [date], "attendance correction")) return;
   // Leave now has a type — sick draws on the sick allowance, casual on the
   // casual one. Only meaningful with status 'leave'; stored NULL otherwise.
   const leaveTypeRaw = body?.leaveType;
@@ -4280,6 +4281,7 @@ router.put("/hr/attendance/bulk", requireModuleAction("page:/hr/attendance", "ed
     res.status(400).json({ error: `status must be one of ${ATTENDANCE_CORRECTION_STATUSES.join(", ")}` });
     return;
   }
+  if (await respondIfMonthLocked(res, pool, [date], "bulk attendance correction")) return;
   const leaveType = status === "leave"
     ? (body?.leaveType === "sick" ? "sick" : "casual")
     : null;
