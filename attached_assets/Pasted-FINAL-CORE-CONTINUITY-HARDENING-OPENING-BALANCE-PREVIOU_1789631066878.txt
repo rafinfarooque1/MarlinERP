@@ -1,0 +1,994 @@
+FINAL CORE CONTINUITY HARDENING
+OPENING BALANCE = PREVIOUS CLOSING BALANCE
+OPENING STOCK = PREVIOUS CLOSING STOCK
+===============================================================
+
+This is a critical accounting and inventory continuity requirement.
+
+Do NOT publish production.
+Do NOT modify production data.
+Do NOT create production transactions.
+
+We need to guarantee that daily and period reporting is mathematically
+continuous.
+
+CORE RULE:
+
+For every location, account, customer/vendor ledger where applicable,
+and inventory item:
+
+                TODAY CLOSING
+                     =
+             TOMORROW OPENING
+
+For inventory:
+
+                TODAY CLOSING STOCK
+                     =
+             TOMORROW OPENING STOCK
+
+There must never be a gap, overlap, or recalculation drift between
+consecutive business dates.
+
+
+===============================================================
+1. BUSINESS DATE MUST BE THE AUTHORITATIVE DATE
+===============================================================
+
+Use the ERP/company business timezone already configured.
+
+Do NOT use server UTC date directly for daily accounting/reporting.
+
+All opening/closing calculations must use the same business-date logic.
+
+Example:
+
+16/09/2026 closing
+        ↓
+17/09/2026 opening
+
+The transition must happen according to the company's business date,
+not server UTC midnight.
+
+
+===============================================================
+2. CASH BALANCE CONTINUITY
+===============================================================
+
+For every Cash account and location:
+
+Opening Balance for date D
+=
+Closing Balance for date D-1
+
+Example:
+
+15 Sep Closing Cash = ₹73,221.20
+
+16 Sep Opening Cash MUST be:
+
+₹73,221.20
+
+If there are no transactions on 16 Sep:
+
+16 Sep Closing Cash MUST also be:
+
+₹73,221.20
+
+Do not recompute the opening balance from an unrelated current balance.
+
+Opening balance must be derived from the previous authoritative closing
+position.
+
+
+===============================================================
+3. BANK BALANCE CONTINUITY
+===============================================================
+
+For every bank account and location:
+
+Opening Bank Balance for date D
+=
+Closing Bank Balance for date D-1
+
+Example:
+
+15 Sep Closing Bank = ₹22,393.16
+
+16 Sep Opening Bank = ₹22,393.16
+
+If no transactions occur:
+
+16 Sep Closing Bank = ₹22,393.16
+
+
+Do not use:
+
+- current bank balance
+- today's balance
+- reconciliation status
+- current account master balance
+
+as a substitute for the historical opening balance.
+
+
+===============================================================
+4. CUSTOMER LEDGER CONTINUITY
+===============================================================
+
+For every customer and location:
+
+Opening Customer Balance on date D
+=
+Closing Customer Balance on date D-1
+
+Example:
+
+15 Sep closing customer receivable = ₹10,000
+
+16 Sep opening customer receivable = ₹10,000
+
+Then transactions on 16 Sep produce the new closing balance.
+
+Do not double-count receipts, bill allocations, credit notes, advances,
+or sales.
+
+Remember the existing receipt architecture:
+
+Financial Receipt
+=
+ONE financial transaction
+
+Bill allocations
+=
+settlement metadata
+
+Bill allocations must NOT independently alter opening/closing ledger
+balances.
+
+
+===============================================================
+5. VENDOR LEDGER CONTINUITY
+===============================================================
+
+For every vendor and location:
+
+Opening Vendor Payable on date D
+=
+Closing Vendor Payable on date D-1
+
+Purchases, purchase returns, payments, advances and adjustments occurring
+on date D change the closing balance.
+
+Do not recalculate the opening balance from today's vendor master data.
+
+
+===============================================================
+6. GENERAL LEDGER CONTINUITY
+===============================================================
+
+For every ledger account:
+
+Opening Balance(D)
+=
+Closing Balance(D-1)
+
+This must work for:
+
+- Cash
+- Bank
+- Customers
+- Vendors
+- Sales
+- Purchases
+- Inventory
+- COGS
+- Expenses
+- Income
+- Fixed Assets
+- Accumulated Depreciation
+- Equity
+- Other accounting accounts
+
+Do not allow different reports to calculate opening balances using
+different formulas.
+
+
+===============================================================
+7. INVENTORY OPENING STOCK
+===============================================================
+
+This is especially important.
+
+For every:
+
+Location
++
+Item
++
+Batch where applicable
+
+the rule is:
+
+Opening Stock(D)
+=
+Closing Stock(D-1)
+
+Example:
+
+15 Sep:
+
+Opening Qty = 100 kg
+Stock In = 20 kg
+Stock Out = 30 kg
+Closing Qty = 90 kg
+
+Then:
+
+16 Sep Opening Qty MUST = 90 kg
+
+
+If there are no transactions on 16 Sep:
+
+16 Sep Closing Qty MUST = 90 kg.
+
+
+===============================================================
+8. INVENTORY VALUE CONTINUITY
+===============================================================
+
+Quantity continuity alone is not enough.
+
+For inventory valuation:
+
+Closing inventory value(D-1)
+must become
+Opening inventory value(D)
+
+using the authoritative historical stock-cost checkpoint.
+
+Do NOT use today's mutable item master average cost to reconstruct
+historical opening stock.
+
+Use the existing:
+
+stock_cost_snapshots
+
+and authoritative stock movement valuation architecture.
+
+The existing precise location cost checkpoint must remain authoritative.
+
+
+===============================================================
+9. BATCH / FIFO / FEFO CONTINUITY
+===============================================================
+
+For batch-controlled inventory:
+
+Closing batches on date D
+=
+Opening batches on date D+1
+
+Preserve:
+
+- batch number
+- expiry date
+- quantity
+- cost
+- location
+
+FIFO/FEFO layers must not disappear or be recreated differently simply
+because the reporting date changed.
+
+A historical report must not use today's batch state as historical state.
+
+
+===============================================================
+10. STOCK TRANSFER CONTINUITY
+===============================================================
+
+Internal stock transfers must maintain continuity.
+
+Example:
+
+Warehouse A:
+
+15 Sep closing:
+100 kg
+
+Transfer out:
+20 kg
+
+Warehouse B receives:
+20 kg
+
+Result:
+
+Warehouse A closing:
+80 kg
+
+Warehouse B closing:
+120 kg
+
+Next day:
+
+Warehouse A opening:
+80 kg
+
+Warehouse B opening:
+120 kg
+
+
+Transfers must remain P&L neutral.
+
+Do not create artificial:
+
+- Sales
+- Purchases
+- Revenue
+- Profit
+- COGS
+
+for same-GST internal inventory movements.
+
+Different-GST statutory handling must still follow the existing ERP rules,
+but company-level inventory continuity and profitability must remain
+correct.
+
+
+===============================================================
+11. IN-TRANSIT STOCK
+===============================================================
+
+Be extremely careful with in-transit inventory.
+
+If stock is dispatched on date D but received on date D+1:
+
+At D closing:
+
+Source:
+decreased appropriately
+
+Destination:
+stock remains in transit until receipt according to existing model
+
+At D+1 when received:
+
+Destination:
+receiving transaction increases stock
+
+The historical opening/closing values must reflect the actual transfer
+lifecycle.
+
+Do not allow current transfer status to contaminate historical reports.
+
+
+===============================================================
+12. DATE-RANGE REPORTS
+===============================================================
+
+For a report from:
+
+01/09/2026 → 15/09/2026
+
+Opening Stock MUST be:
+
+Closing Stock as of:
+31/08/2026
+
+NOT:
+
+current stock
+NOT:
+01/09 current stock
+NOT:
+today's stock
+
+Likewise:
+
+Opening Cash
+=
+31/08 closing cash
+
+Opening Bank
+=
+31/08 closing bank
+
+Opening Customer Receivable
+=
+31/08 closing customer receivable
+
+Opening Vendor Payable
+=
+31/08 closing vendor payable
+
+
+===============================================================
+13. REPORT FORMULAS
+===============================================================
+
+For a date range:
+
+Opening
++
+Period Inflows
+-
+Period Outflows
+=
+Closing
+
+This must hold for every applicable report.
+
+For inventory:
+
+Opening Stock
++
+Purchases / Stock In
++
+Valid Transfers In
+-
+Sales / Stock Out
+-
+Valid Transfers Out
+± Adjustments
+=
+Closing Stock
+
+Transfers must not change company-wide stock quantity/value.
+
+
+===============================================================
+14. P&L STOCK CONTINUITY
+===============================================================
+
+For P&L / Trading Account:
+
+Opening Stock
+must be the previous period's closing stock.
+
+Closing Stock
+must be the authoritative stock valuation at the report end date.
+
+COGS must be derived consistently:
+
+Opening Stock
++
+Net Purchases
++
+Applicable Direct Costs
+-
+Closing Stock
+=
+COGS
+
+or equivalent authoritative accounting implementation.
+
+Do not allow:
+
+Closing Stock(D)
+≠
+Opening Stock(D+1)
+
+This is a hard invariant.
+
+
+===============================================================
+15. BALANCE SHEET INVENTORY
+===============================================================
+
+At any report date:
+
+Balance Sheet Inventory
+=
+Authoritative Closing Stock for that date
+
+Therefore:
+
+31 Aug BS Inventory
+=
+31 Aug Closing Stock
+
+01 Sep Opening Stock
+=
+31 Aug Closing Stock
+
+15 Sep Closing Stock
+=
+15 Sep BS Inventory
+
+Do not allow P&L, Stock Report and Balance Sheet to use different
+historical inventory valuation sources.
+
+
+===============================================================
+16. ZERO-ACTIVITY DAYS
+===============================================================
+
+Test days with no transactions.
+
+Example:
+
+15 Sep closing:
+Cash ₹50,000
+Bank ₹100,000
+Stock ₹500,000
+
+16 Sep:
+NO transactions
+
+Expected:
+
+16 Sep opening:
+Cash ₹50,000
+Bank ₹100,000
+Stock ₹500,000
+
+16 Sep closing:
+Cash ₹50,000
+Bank ₹100,000
+Stock ₹500,000
+
+
+This must work for every location.
+
+
+===============================================================
+17. LOCATION ISOLATION
+===============================================================
+
+Continuity must be calculated independently for every location.
+
+Warehouse A:
+
+15 Sep closing → 16 Sep opening
+
+Warehouse B:
+
+15 Sep closing → 16 Sep opening
+
+Do NOT calculate Warehouse B opening from company-wide closing balance.
+
+For Head Office:
+
+All Locations is a consolidated view.
+
+When a specific warehouse is selected, only that warehouse's
+authoritative balances are used.
+
+
+===============================================================
+18. ALL LOCATIONS
+===============================================================
+
+All Locations opening/closing values must equal the sum of the
+authorized individual location positions where the accounting model
+requires additive consolidation.
+
+Example:
+
+Warehouse A closing stock = ₹100,000
+Warehouse B closing stock = ₹200,000
+
+All Locations closing stock:
+
+₹300,000
+
+Next day All Locations opening stock:
+
+₹300,000
+
+Do not use a separate independently calculated value that can drift from
+the location totals.
+
+
+===============================================================
+19. HISTORICAL CHECKPOINTS
+===============================================================
+
+Audit the existing historical checkpoint system.
+
+For each day/location/item where sufficient historical evidence exists,
+ensure:
+
+Opening(D)
+=
+Closing(D-1)
+
+If historical evidence does NOT exist:
+
+DO NOT fabricate a value.
+
+Flag the historical position as unreliable/unsupported according to the
+existing historical reliability mechanism.
+
+Do not silently substitute current item master average cost.
+
+
+===============================================================
+20. OPENING BALANCE STORAGE VS CALCULATION
+===============================================================
+
+Inspect the existing implementation.
+
+If opening balances are stored:
+
+Ensure the stored opening balance is correctly rolled forward.
+
+If opening balances are calculated:
+
+Ensure the calculation references the previous authoritative closing
+position.
+
+Avoid two competing sources of truth.
+
+There must be ONE authoritative mechanism.
+
+
+===============================================================
+21. DAILY CLOSING SNAPSHOT
+===============================================================
+
+If the ERP architecture supports or requires daily closing snapshots,
+make them deterministic and idempotent.
+
+A closing snapshot must include, as applicable:
+
+- business date
+- location
+- account
+- opening balance
+- debit movement
+- credit movement
+- closing balance
+- inventory quantity
+- inventory value
+- batch quantities/costs
+- calculation/source metadata
+
+Running the closing process twice must NOT create duplicate accounting
+entries or change the financial result.
+
+
+===============================================================
+22. BACKDATED TRANSACTION HANDLING
+===============================================================
+
+This is critical.
+
+If a transaction is entered later with an earlier business date:
+
+Example:
+
+15 Sep closing was already calculated.
+
+On 17 Sep a valid transaction dated 15 Sep is entered.
+
+The system must either:
+
+A. Rebuild/recalculate affected historical closing checkpoints and all
+subsequent opening balances safely,
+
+OR
+
+B. Prevent the backdated mutation after the relevant period is locked.
+
+Do NOT allow:
+
+15 Sep closing = ₹100,000
+16 Sep opening = ₹100,000
+
+while a backdated 15 Sep transaction causes the true closing to become
+₹90,000.
+
+The continuity chain must remain intact.
+
+
+===============================================================
+23. EDIT / DELETE / CANCEL TRANSACTIONS
+===============================================================
+
+When an existing transaction is edited/cancelled according to ERP rules:
+
+Recalculate all affected balances/checkpoints.
+
+Never leave:
+
+Closing(D) != Opening(D+1)
+
+Do not fix this by modifying unrelated transactions.
+
+
+===============================================================
+24. REPORT CONSISTENCY
+===============================================================
+
+Verify the same date range in:
+
+- Dashboard
+- P&L
+- Trading Account
+- Balance Sheet
+- Trial Balance
+- Cash Book
+- Bank Book
+- Customer Ledger
+- Vendor Ledger
+- Stock Report
+- Stock Valuation
+- Receivables
+- Payables
+- General Ledger
+
+The opening/closing figures must reconcile across reports according to
+their accounting definitions.
+
+
+===============================================================
+25. REQUIRED AUTOMATED INVARIANT TESTS
+===============================================================
+
+Create a reusable continuity test.
+
+For every consecutive date:
+
+ASSERT:
+
+closing(D) == opening(D+1)
+
+For inventory:
+
+closingStockQty(D) == openingStockQty(D+1)
+
+closingStockValue(D) == openingStockValue(D+1)
+
+within the explicitly defined currency/valuation precision.
+
+Run for:
+
+- All Locations
+- Calicut
+- every active warehouse
+- multiple items
+- multiple batches
+- cash accounts
+- bank accounts
+- customers
+- vendors
+
+
+===============================================================
+26. MULTI-DAY TEST
+===============================================================
+
+Create a controlled test:
+
+1 Sep:
+Opening Stock ₹100,000
+Purchase ₹20,000
+Sale/COGS ₹10,000
+Closing Stock = ₹110,000
+
+2 Sep:
+Opening Stock MUST = ₹110,000
+
+Purchase ₹30,000
+Sale/COGS ₹20,000
+
+Closing = ₹120,000
+
+3 Sep:
+Opening MUST = ₹120,000
+
+No transactions.
+
+Closing MUST = ₹120,000
+
+
+Verify every transition.
+
+
+===============================================================
+27. DATE-RANGE TEST
+===============================================================
+
+For:
+
+01 Sep → 15 Sep
+
+Verify:
+
+Opening on 01 Sep
+=
+Closing on 31 Aug
+
+Closing on 15 Sep
+=
+Opening on 16 Sep
+
+
+Then run:
+
+02 Sep → 15 Sep
+
+Expected opening:
+Closing on 01 Sep
+
+Then:
+
+03 Sep → 15 Sep
+
+Expected opening:
+Closing on 02 Sep
+
+The opening value must change exactly according to the selected
+start date.
+
+
+===============================================================
+28. P&L / COGS TEST
+===============================================================
+
+Verify:
+
+Opening Stock
++
+Net Purchases
+-
+Closing Stock
+=
+COGS
+
+using the existing authoritative accounting model.
+
+Then verify:
+
+Gross Profit
+=
+Net Sales
+-
+COGS
+
+No artificial profit/loss may be generated simply because the report
+start date changed.
+
+
+===============================================================
+29. BALANCE SHEET TEST
+===============================================================
+
+For each tested date:
+
+Assets
+=
+Liabilities + Equity
+
+and:
+
+Balance Sheet Inventory
+=
+Closing Stock
+
+and:
+
+Next day Opening Stock
+=
+that closing inventory
+
+
+===============================================================
+30. DO NOT FIX BY HARD-CODING
+===============================================================
+
+Absolutely do NOT:
+
+- hard-code yesterday's closing
+- hard-code today's opening
+- copy current stock into historical dates
+- use mutable master average cost for historical valuation
+- force reports to visually match
+- alter journal entries merely to fix presentation
+- delete transactions
+- rewrite historical transactions without cause
+- create artificial adjustment vouchers
+
+
+===============================================================
+31. FINAL CONTINUITY AUDIT
+===============================================================
+
+Produce a table:
+
+DATE | LOCATION | OPENING | MOVEMENTS | CLOSING | NEXT OPENING | DIFFERENCE
+
+For inventory:
+
+DATE | LOCATION | ITEM | OPENING QTY | IN | OUT | CLOSING QTY |
+NEXT OPENING QTY | QTY DIFFERENCE |
+OPENING VALUE | CLOSING VALUE | NEXT OPENING VALUE | VALUE DIFFERENCE
+
+Every difference must be:
+
+₹0.00 / 0 quantity
+
+subject only to explicitly documented precision rules.
+
+
+===============================================================
+32. RELEASE ACCEPTANCE CRITERIA
+===============================================================
+
+The task is PASS only if:
+
+[ ] Cash closing(D) = opening(D+1)
+[ ] Bank closing(D) = opening(D+1)
+[ ] Customer closing(D) = opening(D+1)
+[ ] Vendor closing(D) = opening(D+1)
+
+[ ] Stock quantity closing(D) = opening(D+1)
+[ ] Stock value closing(D) = opening(D+1)
+[ ] Batch closing(D) = opening(D+1)
+
+[ ] P&L opening stock uses previous closing stock
+[ ] Balance Sheet inventory equals authoritative closing stock
+[ ] Date-range reports use the correct previous-day opening
+[ ] Zero-activity days preserve balances
+[ ] All Locations consolidates correctly
+[ ] Warehouse locations remain isolated
+[ ] Backdated transactions cannot break continuity
+[ ] Edit/cancel cannot break continuity
+[ ] Transfers cannot create artificial profit/loss
+[ ] Historical valuation does not use mutable current master average
+[ ] No duplicate accounting entries
+[ ] No fabricated historical values
+
+[ ] Automated consecutive-day continuity tests PASS
+[ ] Multi-day tests PASS
+[ ] Date-range tests PASS
+[ ] P&L/COGS tests PASS
+[ ] Balance Sheet tests PASS
+[ ] API typecheck PASS
+[ ] Web typecheck PASS
+[ ] Production builds PASS
+[ ] git diff --check PASS
+
+[ ] Production untouched
+[ ] No production migration
+[ ] No production transaction
+[ ] No publishing
+
+
+===============================================================
+FINAL RESPONSE FORMAT
+===============================================================
+
+Return:
+
+1. Root cause of any continuity issue found
+2. Exact code/database changes
+3. Opening/closing calculation design
+4. Stock continuity design
+5. Historical valuation handling
+6. Backdated transaction handling
+7. Location isolation verification
+8. Consecutive-day test results
+9. Date-range test results
+10. P&L/COGS results
+11. Balance Sheet results
+12. Full continuity audit table
+13. Build/typecheck results
+14. git diff --check
+15. Production untouched confirmation
+
+IMPORTANT:
+
+Do not claim PASS simply because today's opening and closing look correct.
+
+Prove:
+
+CLOSING(D) = OPENING(D+1)
+
+across consecutive dates and locations.
+
+If any unexplained difference remains:
+
+NOT READY TO PUBLISH
