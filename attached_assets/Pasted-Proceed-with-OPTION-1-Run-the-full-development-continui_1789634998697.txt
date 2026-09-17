@@ -1,0 +1,118 @@
+Proceed with OPTION 1.
+
+Run the full development continuity audit and implement any required fixes
+from the attached FINAL CORE CONTINUITY HARDENING specification.
+
+STRICT SAFETY:
+
+- Development environment/database only.
+- Do NOT connect to production.
+- Do NOT modify production data.
+- Do NOT run production migrations.
+- Do NOT publish/deploy.
+- Do NOT delete business transactions.
+- Do NOT fabricate historical balances.
+- Do NOT change accounting merely to make tests pass.
+
+The required core invariant is:
+
+CLOSING(D) = OPENING(D+1)
+
+For inventory:
+
+CLOSING STOCK(D) = OPENING STOCK(D+1)
+
+Prove this for:
+
+- Cash
+- Bank
+- Customer ledgers
+- Vendor ledgers
+- General Ledger
+- Stock quantity
+- Stock valuation
+- Batches
+- P&L / COGS
+- Balance Sheet
+- All Locations
+- Individual warehouses
+
+Also test:
+
+- zero-activity days
+- date-range reports
+- stock transfers
+- in-transit stock
+- backdated transactions
+- edits
+- cancellations
+- historical valuation
+- location isolation
+- business-date/timezone boundaries
+
+Use the existing authoritative historical stock-cost checkpoint system.
+Do NOT fall back to mutable current item-master average cost for historical
+valuation.
+
+Before changing code:
+
+1. Inspect the existing implementation.
+2. Identify the actual source of truth.
+3. Run the continuity tests against development.
+4. Record every failure with exact expected vs actual values.
+5. Fix only genuine defects.
+6. Re-run the complete relevant test suites.
+
+For every consecutive date, produce:
+
+DATE | LOCATION | OPENING | MOVEMENTS | CLOSING |
+NEXT OPENING | DIFFERENCE
+
+For inventory also produce:
+
+DATE | LOCATION | ITEM | OPENING QTY | STOCK IN | STOCK OUT |
+CLOSING QTY | NEXT OPENING QTY | QTY DIFFERENCE |
+OPENING VALUE | CLOSING VALUE | NEXT OPENING VALUE |
+VALUE DIFFERENCE
+
+Every unexplained difference must be investigated.
+
+Do not claim PASS from visual similarity alone.
+
+At the end, provide:
+
+1. Continuity audit results
+2. Issues discovered
+3. Root cause of each issue
+4. Fixes implemented
+5. Files changed
+6. Database/migration changes, if any
+7. Consecutive-day test results
+8. Multi-day test results
+9. Date-range test results
+10. Stock valuation results
+11. P&L/COGS results
+12. Balance Sheet results
+13. Cash/Bank results
+14. Customer/Vendor ledger results
+15. Transfer/in-transit results
+16. Backdated transaction results
+17. Location isolation results
+18. API typecheck
+19. Web typecheck
+20. Production builds
+21. git diff --check
+22. Confirmation that production was completely untouched
+
+FINAL GATE:
+
+If all continuity invariants pass:
+
+CONTINUITY HARDENING: PASS
+
+If any unexplained continuity difference remains:
+
+CONTINUITY HARDENING: FAIL
+NOT READY TO PUBLISH
+
+Do not publish under any circumstance.
