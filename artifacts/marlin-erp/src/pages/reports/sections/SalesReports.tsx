@@ -528,17 +528,21 @@ function ByItemReport({ range, canDownload }: { range: RangeState; canDownload: 
           disabled={isLoading || rows.length === 0}
           onCSV={() => downloadCSV('sales-by-item.csv', rows.map((r) => ({
             Item: r.itemName, Unit: r.unit, Invoices: r.invoices, Qty: r.qty,
-            'Taxable (₹)': r.taxable.toFixed(2), 'Tax (₹)': r.tax.toFixed(2), 'Total (₹)': r.total.toFixed(2),
+            'Taxable (₹)': r.taxable.toFixed(2), 'Tax (₹)': r.tax.toFixed(2), 'Item total incl. tax (₹)': r.total.toFixed(2),
           })))}
           onPDF={() => exportReportPdf({
             title: 'Sales by Item',
             subtitle: `Period: ${periodLabel(range.from, range.to)}`,
-            metaRows: [['Period', periodLabel(range.from, range.to)], ['Items', String(t?.items ?? 0)]],
+            metaRows: [
+              ['Period', periodLabel(range.from, range.to)],
+              ['Items', String(t?.items ?? 0)],
+              ['Definition', 'Item line totals only; invoice-level charges excluded'],
+            ],
             sections: [{
               columns: [
                 { label: 'Item', width: 2.4 }, { label: 'Unit' }, { label: 'Invoices', align: 'center' },
                 { label: 'Qty', align: 'right' }, { label: 'Taxable', align: 'right', width: 1.4 },
-                { label: 'Tax', align: 'right', width: 1.2 }, { label: 'Total', align: 'right', width: 1.4 },
+                { label: 'Tax', align: 'right', width: 1.2 }, { label: 'Item total', align: 'right', width: 1.4 },
               ],
               rows: rows.map((r) => [r.itemName, r.unit, r.invoices, num(r.qty), pdfMoney(r.taxable), pdfMoney(r.tax), pdfMoney(r.total)]),
               totalsRow: ['TOTAL', '', '', num(t?.qty), pdfMoney(t?.taxable), pdfMoney(t?.tax), pdfMoney(t?.total)],
@@ -547,11 +551,18 @@ function ByItemReport({ range, canDownload }: { range: RangeState; canDownload: 
         />
       </RangeBar>
 
+      <div className="rounded-lg border border-amber-200/70 bg-amber-50/60 px-3 py-2 text-xs text-amber-950 dark:border-amber-900/60 dark:bg-amber-950/20 dark:text-amber-100">
+        <span className="font-semibold">Item-line total only.</span>{' '}
+        This report sums merchandise line values after tax. Invoice-level amounts such as other charges,
+        freight, delivery, or rounding are excluded because they cannot be attributed to an item; compare
+        complete invoice value in Sales Register.
+      </div>
+
       <SummaryCards cards={[
         { label: 'Items Sold', value: t?.items ?? 0 },
         { label: 'Quantity', value: num(t?.qty) },
         { label: 'Taxable Value', value: fmt(t?.taxable), tone: 'accent' },
-        { label: 'Total (incl. tax)', value: fmt(t?.total), tone: 'pos' },
+        { label: 'Item total (incl. tax)', value: fmt(t?.total), tone: 'pos' },
       ]} />
 
       <RTable
@@ -562,7 +573,7 @@ function ByItemReport({ range, canDownload }: { range: RangeState; canDownload: 
           { key: 'qty', label: 'Qty', align: 'right', render: (r) => num(r.qty) },
           { key: 'taxable', label: 'Taxable', align: 'right', render: (r) => fmt(r.taxable) },
           { key: 'tax', label: 'Tax', align: 'right', render: (r) => fmt(r.tax) },
-          { key: 'total', label: 'Total', align: 'right', render: (r) => <b>{fmt(r.total)}</b> },
+          { key: 'total', label: 'Item total', align: 'right', render: (r) => <b>{fmt(r.total)}</b> },
         ] satisfies Col<(typeof rows)[number]>[]}
         rows={rows} loading={isLoading} rowKey={(r) => r.itemId}
         footer={['TOTAL', '', '', num(t?.qty), fmt(t?.taxable), fmt(t?.tax), fmt(t?.total)]}

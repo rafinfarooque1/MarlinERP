@@ -154,3 +154,4 @@
 - [Report cache 304 handling](report-cache-304.md) — report fetches must bypass 304 revalidation when the client cannot recover the cached response body
 - [Customer receipt ledger aggregation](receipt-ledger-aggregation.md) — allocation rows are settlement metadata; one receipt posts one customer credit for its full amount
 - [Report parity gates](report-parity-gates.md) — verify API-derived screen anchors against parsed PDF/XLSX content; a missing UI export action is a real failure
+- [Sales report definitions](sales-report-definitions.md) — Sales Register includes invoice-level charges; By Item is explicitly merchandise-line-only
