@@ -17,7 +17,7 @@ import { downloadCSV } from '@/lib/download';
 import {
   fmt, num, pdfMoney, fmtDate, titleCase,
   useDateRange, RangeBar, ReportPicker, SummaryCards, LocationBadge, RTable, ExportButtons, exportReportPdf, reportViewFromUrl,
-  periodLabel, type Col,
+  periodLabel, type Col, type ReportDoc,
 } from '../shared';
 
 type InvReport = 'valuation' | 'near_expiry' | 'expired' | 'movement' | 'reorder' | 'transfers' | 'gst_transfers';
@@ -63,6 +63,42 @@ function ValuationReport({ canDownload }: { canDownload: boolean }) {
 
   const branchOptions = branchType === 'warehouse' ? warehouses : [];
 
+  const stockValuationDoc = (): ReportDoc => ({
+    title: 'Stock Valuation',
+    subtitle: `Snapshot as of ${asOf}`,
+    metaRows: [
+      ['As of', asOf],
+      ['Locations', String(byLocation.length)],
+      ['On-hand value', pdfMoney(onHandValue)],
+      ['In-transit value', pdfMoney(inTransitValue)],
+      ['Grand total', pdfMoney(grandTotal)],
+    ],
+    sections: [
+      {
+        heading: 'Value by Location',
+        columns: [
+          { label: 'Location', width: 2 }, { label: 'Type' }, { label: 'Lines', align: 'center' },
+          { label: 'Total Qty', align: 'right' }, { label: 'On-hand', align: 'right', width: 1.3 },
+          { label: 'In-transit', align: 'right', width: 1.3 }, { label: 'Total', align: 'right', width: 1.3 },
+        ],
+        rows: byLocation.map((l) => [l.branchName, titleCase(l.branchType), l.skus, num(l.totalQty), pdfMoney(l.onHand), pdfMoney(l.transit), pdfMoney(l.value)]),
+        totalsRow: ['TOTAL', '', '', '', pdfMoney(onHandValue), pdfMoney(inTransitValue), pdfMoney(grandTotal)],
+      },
+      {
+        heading: 'Detail by Item & Location',
+        columns: [
+          { label: 'Type' }, { label: 'Item', width: 2 }, { label: 'Location', width: 1.4 },
+          { label: 'Qty', align: 'right' }, { label: 'Rsvd', align: 'right' }, { label: 'Avail', align: 'right' },
+          { label: 'Avg Cost', align: 'right', width: 1.1 }, { label: 'Value', align: 'right', width: 1.2 },
+        ],
+        rows: rows.map((r) => [
+          r.typeLabel, r.itemName, r.branchName + (r.inTransit ? ' (transit)' : ''),
+          num(r.quantity), num(r.reserved), num(r.available), pdfMoney(r.avgCost), pdfMoney(r.value),
+        ]),
+      },
+    ],
+  });
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
@@ -106,41 +142,7 @@ function ValuationReport({ canDownload }: { canDownload: boolean }) {
             Qty: r.quantity, Reserved: r.reserved, Available: r.available,
             'Avg Cost (₹)': r.avgCost.toFixed(2), 'Value (₹)': r.value.toFixed(2),
           })))}
-          onPDF={() => exportReportPdf({
-            title: 'Stock Valuation',
-            subtitle: `Snapshot as of ${asOf}`,
-            metaRows: [
-              ['As of', asOf],
-              ['Locations', String(byLocation.length)],
-              ['On-hand value', pdfMoney(onHandValue)],
-              ['In-transit value', pdfMoney(inTransitValue)],
-              ['Grand total', pdfMoney(grandTotal)],
-            ],
-            sections: [
-              {
-                heading: 'Value by Location',
-                columns: [
-                  { label: 'Location', width: 2 }, { label: 'Type' }, { label: 'Lines', align: 'center' },
-                  { label: 'Total Qty', align: 'right' }, { label: 'On-hand', align: 'right', width: 1.3 },
-                  { label: 'In-transit', align: 'right', width: 1.3 }, { label: 'Total', align: 'right', width: 1.3 },
-                ],
-                rows: byLocation.map((l) => [l.branchName, titleCase(l.branchType), l.skus, num(l.totalQty), pdfMoney(l.onHand), pdfMoney(l.transit), pdfMoney(l.value)]),
-                totalsRow: ['TOTAL', '', '', '', pdfMoney(onHandValue), pdfMoney(inTransitValue), pdfMoney(grandTotal)],
-              },
-              {
-                heading: 'Detail by Item & Location',
-                columns: [
-                  { label: 'Type' }, { label: 'Item', width: 2 }, { label: 'Location', width: 1.4 },
-                  { label: 'Qty', align: 'right' }, { label: 'Rsvd', align: 'right' }, { label: 'Avail', align: 'right' },
-                  { label: 'Avg Cost', align: 'right', width: 1.1 }, { label: 'Value', align: 'right', width: 1.2 },
-                ],
-                rows: rows.map((r) => [
-                  r.typeLabel, r.itemName, r.branchName + (r.inTransit ? ' (transit)' : ''),
-                  num(r.quantity), num(r.reserved), num(r.available), pdfMoney(r.avgCost), pdfMoney(r.value),
-                ]),
-              },
-            ],
-          })}
+          doc={stockValuationDoc}
         />
       </div>
 
