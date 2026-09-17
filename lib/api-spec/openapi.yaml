@@ -2677,6 +2677,11 @@ components:
           type: ["integer", "null"]
         customerName:
           type: ["string", "null"]
+        salesperson:
+          type: ["string", "null"]
+          description: Name snapshotted when the invoice was saved.
+        salespersonEmployeeId:
+          type: ["integer", "null"]
         saleDate:
           type: string
         lineItems:
@@ -2719,6 +2724,10 @@ components:
         quotationNumber:
           type: ["string", "null"]
           description: The quotation this sale was converted from (QTN/…).
+        notes:
+          type: ["string", "null"]
+          maxLength: 2000
+          description: Optional plain-text transaction note. Empty notes are omitted from document output.
 
     SaleInput:
       type: object
@@ -2728,6 +2737,9 @@ components:
           type: integer
         customerId:
           type: integer
+        salespersonEmployeeId:
+          type: ["integer", "null"]
+          description: Active employee selected as the salesman; the server snapshots the employee name on the invoice.
         saleDate:
           type: string
         lineItems:
@@ -2748,6 +2760,10 @@ components:
             a postable Direct Income ledger; charges carry no GST.
           items:
             $ref: "#/components/schemas/SaleOtherCharge"
+        notes:
+          type: string
+          maxLength: 2000
+          description: Optional plain-text transaction note.
         quotationId:
           type: integer
           description: >
@@ -2869,6 +2885,7 @@ components:
             free-text salesperson still renders).
         notes:
           type: ["string", "null"]
+          maxLength: 2000
         termsConditions:
           type: ["string", "null"]
         convertedSaleId:
@@ -2937,6 +2954,7 @@ components:
             keeps the free-text salesperson value.
         notes:
           type: string
+          maxLength: 2000
         termsConditions:
           type: string
 

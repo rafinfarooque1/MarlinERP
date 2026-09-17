@@ -84,6 +84,8 @@ export interface InvoiceData {
      * rows — the renderer never computes them.
      */
     otherCharges?: Array<{ name: string; amount: number }>;
+    /** Optional plain-text transaction note. */
+    notes?: string | null;
   };
   /**
    * Which document this is. The ONE renderer draws both: 'quotation' swaps the
@@ -154,6 +156,7 @@ export async function assembleInvoiceData(saleId: number): Promise<InvoiceData |
   const { rows: [locRow] } = await pool.query<{
     cancelled_at: Date | null;
     quotation_number: string | null;
+    notes: string | null;
     other_charges: unknown;
     party_name: string | null;
     party_gstin: string | null;
@@ -161,7 +164,7 @@ export async function assembleInvoiceData(saleId: number): Promise<InvoiceData |
     transfer_to_type: string | null;
     transfer_to_id: number | null;
   }>(
-    `SELECT s.cancelled_at, s.quotation_number, s.other_charges,
+    `SELECT s.cancelled_at, s.quotation_number, s.other_charges, s.notes,
             s.party_name, s.party_gstin, s.party_state,
             t.to_type AS transfer_to_type, t.to_id AS transfer_to_id
        FROM sales s
@@ -290,6 +293,7 @@ export async function assembleInvoiceData(saleId: number): Promise<InvoiceData |
       cancelledAt: locRow?.cancelled_at ? new Date(locRow.cancelled_at).toISOString() : null,
       quotationNumber: locRow?.quotation_number ?? null,
       otherCharges,
+      notes: (locRow?.notes ?? (sale as any).notes ?? null),
     },
     issuer,
     outletName: issuer.locationName,
@@ -584,7 +588,10 @@ export async function renderInvoicePdf(data: InvoiceData): Promise<{ buffer: Buf
   const wrap = (s: string, w: number, size: number, bold = false): string[] => {
     doc.setFont(FONT, bold ? "bold" : "normal");
     doc.setFontSize(size);
-    return doc.splitTextToSize(s || "", w) as string[];
+    return (s || "").split(/\r?\n/).flatMap((line) => {
+      const wrapped = doc.splitTextToSize(line, w) as string[];
+      return wrapped.length > 0 ? wrapped : [""];
+    });
   };
   /**
    * Shrink a single line until it fits, then ellipsize.
@@ -1400,6 +1407,19 @@ export async function renderInvoicePdf(data: InvoiceData): Promise<{ buffer: Buf
       bodyLines.forEach((t, i) => txt(t, M + 4.5, y + 9.6 + i * 3.4, { size: 6.8, color: INK }));
       y += panelH + 3;
     }
+  }
+
+  // Transaction notes are metadata only. Keep the section out entirely for
+  // empty/whitespace-only values and preserve explicit line breaks in the
+  // renderer's wrapped text.
+  if (!isQuotation && typeof sale.notes === "string" && sale.notes.trim()) {
+    const noteLines = wrap(sale.notes.trim(), CW - 9, 6.8).slice(0, 24);
+    const notesH = 9 + noteLines.length * 3.4;
+    if (y + notesH > BOT) { doc.addPage(); y = M; }
+    bx(M, y, CW, notesH, BORDER, 1.2);
+    txt("NOTES", M + 4.5, y + 5.2, { bold: true, size: 7.2, color: NAVY });
+    noteLines.forEach((t, i) => txt(t, M + 4.5, y + 9.6 + i * 3.4, { size: 6.8, color: INK }));
+    y += notesH + 3;
   }
 
   // ══════════════════════════════════════════════════════════════════════════

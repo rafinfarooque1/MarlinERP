@@ -36,6 +36,7 @@ export interface QuotationInput {
      * @nullable
      */
   salespersonEmployeeId?: number | null;
+  /** @maxLength 2000 */
   notes?: string;
   termsConditions?: string;
 }

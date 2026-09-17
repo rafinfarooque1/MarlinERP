@@ -161,7 +161,7 @@ const schema = z.object({
   // legacy free text so pre-master quotations round-trip edits unchanged.
   salespersonEmployeeId: z.coerce.number().optional(),
   salesperson: z.string().optional(),
-  notes: z.string().optional(),
+  notes: z.string().max(2000, 'Notes must be 2000 characters or fewer').optional(),
   termsConditions: z.string().optional(),
   otherCharges: z.array(quoteChargeSchema).default([]),
   lineItems: z.array(quoteLineSchema).min(1, 'Add at least one item'),
@@ -1349,9 +1349,27 @@ export default function Quotations() {
               </div>
               )}
 
-              </div>{/* /header card */}
+               </div>{/* /header card */}
 
-              {/* ── Quoted Items — the master's line-item table; stock shown
+               <FormField control={form.control} name="notes" render={({ field }) => (
+                 <FormItem className={TXN_CARD}>
+                   <FormLabel>Notes <span className="text-xs text-muted-foreground font-normal">(optional, up to 2000 characters)</span></FormLabel>
+                   <FormControl>
+                     <Textarea
+                       {...field}
+                       value={field.value ?? ''}
+                       maxLength={2000}
+                       rows={3}
+                       placeholder="Add a note for the customer or your team"
+                       data-testid="input-quotation-notes"
+                     />
+                   </FormControl>
+                   <p className="text-xs text-muted-foreground text-right">{(field.value ?? '').length}/2000</p>
+                   <FormMessage />
+                 </FormItem>
+               )} />
+
+               {/* ── Quoted Items — the master's line-item table; stock shown
                   for information only, quoting never blocks on it. ── */}
               <div className={TXN_CARD}>
                 {!watchLocationId || watchLocationId === 0 ? (
@@ -1982,15 +2000,15 @@ export default function Quotations() {
                 )}
               </div>
 
-              {(viewItem.notes || viewItem.termsConditions) && (
+              {(String(viewItem.notes ?? '').trim() || String(viewItem.termsConditions ?? '').trim()) && (
                 <div className="space-y-3 text-sm">
-                  {viewItem.notes && (
+                  {String(viewItem.notes ?? '').trim() && (
                     <div>
                       <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Notes</p>
                       <p className="whitespace-pre-line">{viewItem.notes}</p>
                     </div>
                   )}
-                  {viewItem.termsConditions && (
+                  {String(viewItem.termsConditions ?? '').trim() && (
                     <div>
                       <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Terms &amp; Conditions</p>
                       <p className="whitespace-pre-line">{viewItem.termsConditions}</p>
