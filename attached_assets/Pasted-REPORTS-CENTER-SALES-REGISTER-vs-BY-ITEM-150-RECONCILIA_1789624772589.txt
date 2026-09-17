@@ -1,0 +1,287 @@
+REPORTS CENTER — SALES REGISTER vs BY ITEM ₹150 RECONCILIATION
+===============================================================
+
+There is a visible discrepancy between two Sales Reports for the same
+selected location/date filter.
+
+SCREEN 1 — SALES REGISTER:
+Invoices: 15
+Total Billed: ₹20,020.00
+Collected: ₹11,405.00
+Outstanding: ₹8,235.00
+
+SCREEN 2 — SALES → BY ITEM:
+Items Sold: 12
+Quantity: 67
+Taxable Value: ₹18,923.77
+Total incl. tax: ₹19,870.00
+
+Primary discrepancy:
+
+₹20,020.00 - ₹19,870.00 = ₹150.00
+
+Do NOT hard-code either value.
+Do NOT simply change one report to make the totals equal.
+Trace the underlying invoices and accounting/report query logic.
+
+===============================================================
+1. IDENTIFY EXACT SOURCE OF ₹150
+===============================================================
+
+Use the exact same:
+
+- location
+- date range
+- report filters
+- authorized scope
+
+from the screenshots.
+
+Retrieve all 15 invoices included in Sales Register.
+
+For every invoice calculate:
+
+Invoice total
+- item taxable amount
+- item tax
+- discounts
+- invoice-level charges
+- other charges
+- rounding
+- shipping/delivery charges
+- adjustments
+- returns/credits if applicable
+
+Then reconcile:
+
+Sales Register Total
+vs
+Sum of invoice item totals
+vs
+By Item Total
+
+Produce an invoice-level reconciliation table:
+
+Invoice
+Item Total
+Tax
+Discount
+Other Charges
+Rounding
+Invoice Total
+Difference
+
+Find exactly which invoice(s) contribute to the ₹150.
+
+
+===============================================================
+2. DO NOT ASSUME THE CAUSE
+===============================================================
+
+The ₹150 may be:
+
+- invoice-level charge
+- Other Charge
+- rounding
+- discount treatment
+- tax treatment
+- excluded non-stock/service line
+- cancelled/returned line
+- report query mismatch
+- duplicate/missing item line
+- another legitimate invoice component
+
+Determine the actual database source.
+
+===============================================================
+3. DEFINE WHAT "BY ITEM TOTAL" MEANS
+===============================================================
+
+Audit the By Item report.
+
+Determine whether its Total incl. tax is intended to represent:
+
+A. Sum of item line totals only
+
+OR
+
+B. Complete sales invoice value
+
+The report must have a clearly defined accounting meaning.
+
+If By Item is intended to represent complete sales value, it MUST include
+all applicable invoice-level amounts.
+
+If it is intentionally item-only, the UI must clearly label it as such
+and the Reports Center must not misleadingly present it as equivalent to
+Sales Register Total.
+
+===============================================================
+4. ACCOUNTING SOURCE OF TRUTH
+===============================================================
+
+Do not create separate financial calculations for:
+
+Sales Register
+By Item
+P&L
+Day Book
+Customer Ledger
+
+Use the authoritative sales/document accounting data.
+
+The reports may have different dimensions, but their totals must reconcile
+when they are supposed to represent the same sales population.
+
+===============================================================
+5. CHECK PAYMENT TOTALS TOO
+===============================================================
+
+The screenshot shows:
+
+Total Billed = ₹20,020
+Collected = ₹11,405
+Outstanding = ₹8,235
+
+Verify:
+
+Collected + Outstanding
+against
+Total Billed
+
+Calculate the exact difference:
+
+₹20,020
+- ₹11,405
+- ₹8,235
+= ₹380
+
+Investigate this ₹380 as well.
+
+Determine whether it represents:
+
+- customer advance
+- credit balance
+- overpayment
+- receipt allocation difference
+- credit note
+- sales return
+- adjustment
+- rounding
+- report calculation error
+
+Do not change the formula until the underlying transaction is identified.
+
+===============================================================
+6. CUSTOMER OUTSTANDING MUST REMAIN CORRECT
+===============================================================
+
+Do not force:
+
+Collected + Outstanding = Total Billed
+
+unless the business definition requires it.
+
+If the ₹380 is a legitimate customer credit/advance, preserve it and
+represent it correctly.
+
+The existing customer outstanding architecture must not be broken.
+
+===============================================================
+7. REPORT CONSISTENCY
+===============================================================
+
+After identifying the source, verify:
+
+Sales Register
+By Item
+By Salesman
+By Location
+Discounts
+Sales & Stock Summary
+P&L
+Day Book
+Customer Ledger
+Receivables
+
+Use the same sales population and location/date scope.
+
+Determine which reports should reconcile exactly and which legitimately
+have different dimensions.
+
+===============================================================
+8. REQUIRED FIX
+===============================================================
+
+Fix the actual root cause.
+
+Do NOT:
+
+- hard-code ₹150
+- add an arbitrary adjustment
+- modify accounting journals to make reports match
+- delete invoices
+- modify historical sales
+- alter customer receipts
+- change COGS
+- change GST
+- change stock valuation
+
+The fix must be in the report/data aggregation logic if the underlying
+transactions are correct.
+
+If the underlying data contains a legitimate ₹150 invoice-level amount,
+make sure the report definition correctly includes or excludes it.
+
+===============================================================
+9. REGRESSION TEST
+===============================================================
+
+Create a regression test using this exact scenario:
+
+15 invoices
+Sales Register = ₹20,020
+By Item currently = ₹19,870
+
+The test must verify that the final report behavior matches the documented
+report definition.
+
+Also test invoices containing:
+
+- Other Charges
+- discounts
+- tax
+- rounding
+- partial payments
+- customer advances
+- returns/credit notes
+- multiple items
+- single-item invoices
+
+===============================================================
+10. FINAL OUTPUT
+===============================================================
+
+Return:
+
+1. Exact invoice(s) causing ₹150
+2. Exact transaction/component causing ₹150
+3. Exact source of ₹380 payment/outstanding discrepancy
+4. Current Sales Register calculation
+5. Current By Item calculation
+6. Root cause
+7. Fix applied
+8. Before/after totals
+9. Regression tests
+10. API typecheck
+11. Web typecheck
+12. Production build
+13. git diff --check
+14. Confirmation production was untouched
+
+IMPORTANT:
+
+Do not report PASS merely because the two numbers were made equal.
+
+The final report must explain WHY they are equal or WHY they are legitimately
+different according to the report definition.
