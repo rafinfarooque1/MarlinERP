@@ -1,0 +1,440 @@
+ADD CUSTOMER NOTE TO QUOTATION AND POINT OF SALE
+================================================
+
+Add a "Note" field to both:
+
+1. Quotation
+2. Point of Sale (POS)
+
+The note is a transaction-level note for the customer/order.
+
+================================================
+1. QUOTATION — ADD NOTE
+================================================
+
+Add a clearly visible field:
+
+Note
+
+Recommended UI:
+- Place below customer/details section or below item section before totals.
+- Use a multiline textarea.
+- Optional field.
+- Allow normal text.
+- Do not make it mandatory.
+
+Example:
+
+Note
+[ Customer requested delivery after 5 PM.                 ]
+[ Please use frozen packaging.                            ]
+
+The note must be saved with the quotation.
+
+================================================
+2. QUOTATION LIST / VIEW
+================================================
+
+Do not add a large Note column to the main quotation table.
+
+Instead, when opening/viewing a quotation:
+
+Show:
+
+Note:
+<Customer note>
+
+If there is no note:
+
+Do not show an empty large section.
+
+================================================
+3. QUOTATION EDIT
+================================================
+
+When editing an existing quotation:
+
+- Load the saved note.
+- Allow the user to edit it.
+- Save the updated note correctly.
+
+Do not lose the note during quotation edits.
+
+================================================
+4. QUOTATION PDF / PRINT / SHARE
+================================================
+
+Include the Note in:
+
+- Quotation PDF
+- Quotation Print
+- Quotation preview
+- Quotation share/download where applicable
+
+Position it clearly near the bottom of the quotation, preferably:
+
+Notes:
+<Customer note>
+
+Do not interfere with:
+
+- Item table
+- Subtotal
+- Tax
+- Other Charges
+- Grand Total
+- Terms & Conditions
+- Signature section
+
+If no note exists, do not display an empty Notes section.
+
+================================================
+5. QUOTATION → POS / SALE CONVERSION
+================================================
+
+IMPORTANT:
+
+If a quotation is converted into a POS sale:
+
+Quotation Note
+        ↓
+POS Sale Note
+
+The note must automatically carry forward.
+
+Example:
+
+Quotation:
+
+Customer: ABC
+Items: ...
+Note:
+"Deliver to warehouse gate 2 after 5 PM."
+
+When converted to POS:
+
+Sale Note:
+"Deliver to warehouse gate 2 after 5 PM."
+
+The user must still be able to edit the note before completing the sale.
+
+Do NOT create a second duplicate note.
+
+================================================
+6. POINT OF SALE — ADD NOTE
+================================================
+
+Add a "Note" field in POS.
+
+Recommended placement:
+
+Customer / Sale Details
+        ↓
+Items
+        ↓
+Discount / Other Charges
+        ↓
+Note
+        ↓
+Totals
+        ↓
+Payment
+
+The field should be a multiline textarea.
+
+Example:
+
+Note
+[ Customer requested delivery tomorrow morning. ]
+
+Optional.
+
+A POS sale can be completed without entering a note.
+
+================================================
+7. POS NOTE SAVE
+================================================
+
+When the POS sale is completed:
+
+Save the note with the sale.
+
+The note must remain available when:
+
+- Viewing the sale
+- Editing where editing is permitted
+- Opening the invoice
+- Printing
+- Downloading PDF
+- Sharing invoice
+- Viewing sale details
+
+================================================
+8. POS INVOICE PDF
+================================================
+
+Show the note on the sales invoice PDF.
+
+Example:
+
+Notes:
+Customer requested delivery tomorrow morning.
+
+Place it in a clean location that does not disturb the invoice layout.
+
+If there is no note:
+
+Do not show an empty Notes box.
+
+================================================
+9. DATABASE
+================================================
+
+Inspect the existing quotation and sales schema before making changes.
+
+Prefer adding:
+
+quotation.note
+sale.note
+
+or equivalent existing fields if the schema already has a suitable field.
+
+Use the existing database conventions and migrations.
+
+Do NOT duplicate an existing note field.
+
+Do NOT store the note only in frontend state.
+
+The note must persist in PostgreSQL.
+
+================================================
+10. API
+================================================
+
+Update the relevant APIs for:
+
+Quotation:
+- Create
+- Update
+- Get
+- Convert to sale
+
+POS/Sale:
+- Create
+- Get
+- Update where supported
+
+The note must be included in the request/response schema.
+
+Validate:
+
+- string
+- optional/null
+- reasonable maximum length
+
+Suggested maximum:
+2000 characters.
+
+Do not allow uncontrolled unlimited text.
+
+================================================
+11. LOCATION / PERMISSION
+================================================
+
+The note follows the quotation/sale's existing location and permission rules.
+
+Do not create a separate permission system for notes.
+
+Warehouse users can only access notes belonging to sales/quotations they are authorized to access.
+
+Head Office follows existing location rules.
+
+================================================
+12. ACCOUNTING
+================================================
+
+IMPORTANT:
+
+The Note is NON-FINANCIAL metadata.
+
+It must NOT affect:
+
+- Sale total
+- Tax
+- GST
+- COGS
+- Stock
+- Customer outstanding
+- Receipt
+- Payment
+- P&L
+- Balance Sheet
+- Trial Balance
+
+Adding or changing a note must never create a journal entry.
+
+================================================
+13. SEARCH / DISPLAY
+================================================
+
+Do not change existing report totals.
+
+Optionally make the note available in the sale/quotation details.
+
+Do not include notes in financial report calculations.
+
+================================================
+14. SECURITY
+================================================
+
+Escape/safely render note text.
+
+Do not allow HTML/script injection.
+
+The note is plain text.
+
+Line breaks should be preserved in PDF/print where appropriate.
+
+================================================
+15. TESTS
+================================================
+
+Add regression tests:
+
+TEST 1:
+Create quotation with note.
+
+Expected:
+Note saved correctly.
+
+TEST 2:
+Edit quotation note.
+
+Expected:
+Updated note persists.
+
+TEST 3:
+Quotation without note.
+
+Expected:
+Quotation saves normally.
+
+TEST 4:
+Convert quotation with note to POS.
+
+Expected:
+POS receives exact quotation note.
+
+TEST 5:
+Edit POS note before completing sale.
+
+Expected:
+Edited POS note is saved.
+
+TEST 6:
+Complete POS sale with note.
+
+Expected:
+Note persists on sale.
+
+TEST 7:
+Quotation PDF.
+
+Expected:
+Note appears.
+
+TEST 8:
+POS invoice PDF.
+
+Expected:
+Note appears.
+
+TEST 9:
+No note.
+
+Expected:
+No empty Notes section.
+
+TEST 10:
+Change note.
+
+Expected:
+No accounting transaction is generated.
+
+Verify:
+
+Journal count unchanged
+Sale total unchanged
+GST unchanged
+Stock unchanged
+Customer outstanding unchanged
+
+================================================
+16. UI QUALITY
+================================================
+
+Use the existing ERP design system.
+
+The Note field should:
+
+- look native to the current ERP
+- be compact
+- support multiline text
+- have a clear label
+- not unnecessarily increase POS screen height
+- work on desktop and mobile layouts
+
+Suggested placeholder:
+
+Quotation:
+"Add a note for this quotation..."
+
+POS:
+"Add a note for this sale..."
+
+================================================
+17. FINAL ACCEPTANCE
+================================================
+
+The feature is complete only when:
+
+[ ] Quotation has Note field
+[ ] Quotation note saves
+[ ] Quotation note edits correctly
+[ ] Quotation view displays note
+[ ] Quotation PDF displays note
+[ ] POS has Note field
+[ ] POS note saves
+[ ] POS view displays note
+[ ] POS invoice PDF displays note
+[ ] Quotation → POS carries note automatically
+[ ] POS user can edit carried-forward note
+[ ] Empty note works normally
+[ ] Note does not affect accounting
+[ ] Note does not affect GST
+[ ] Note does not affect stock
+[ ] Note does not affect customer outstanding
+[ ] Location permissions remain intact
+[ ] Plain-text/XSS-safe rendering
+[ ] API typecheck passes
+[ ] Web typecheck passes
+[ ] Production build passes
+[ ] Existing accounting tests remain passing
+[ ] Existing sales tests remain passing
+[ ] git diff --check passes
+[ ] Production database untouched
+[ ] Nothing published
+
+FINAL RESPONSE:
+
+Give:
+1. Files changed
+2. Database migration, if required
+3. UI changes
+4. API changes
+5. Quotation → POS behavior
+6. PDF/print behavior
+7. Test results
+8. Build results
+9. Confirmation that accounting values were not changed
+10. Confirmation production was untouched
