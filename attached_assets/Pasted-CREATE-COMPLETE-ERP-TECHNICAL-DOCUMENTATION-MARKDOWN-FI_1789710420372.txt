@@ -1,0 +1,1005 @@
+CREATE COMPLETE ERP TECHNICAL DOCUMENTATION MARKDOWN FILE
+===========================================================
+
+I need a complete, current technical documentation file for this ERP.
+
+DO NOT MODIFY PRODUCTION.
+DO NOT PUBLISH.
+DO NOT CHANGE BUSINESS DATA.
+DO NOT CHANGE ACCOUNTING LOGIC.
+DO NOT CHANGE DATABASE STRUCTURE.
+
+This task is DOCUMENTATION ONLY.
+
+Create a single Markdown file:
+
+ERP_COMPLETE_DOCUMENTATION.md
+
+The documentation must describe the ACTUAL CURRENT IMPLEMENTATION
+in the repository, not what the ERP is supposed to do.
+
+IMPORTANT:
+
+Before writing the document, inspect the entire codebase.
+
+This is a React/Vite + Express + PostgreSQL/Drizzle ERP with multiple
+modules and existing accounting/inventory/reporting logic.
+
+Do not rely only on existing README files.
+
+Inspect:
+
+- frontend source
+- backend source
+- database schema
+- migrations
+- API routes
+- services
+- utilities
+- accounting logic
+- inventory logic
+- stock valuation
+- reports
+- PDF generation
+- XLSX/CSV exports
+- authentication
+- permissions
+- location filtering
+- dashboard
+- POS
+- quotations
+- customers
+- vendors
+- purchases
+- sales
+- receipts
+- payments
+- journal vouchers
+- cash/bank
+- bank reconciliation
+- GST
+- fixed assets
+- depreciation
+- HR/payroll
+- attendance
+- expenses
+- transfers
+- reservations
+- batch/expiry
+- backup/restore
+- mobile app
+- workflows/configuration
+- environment configuration
+
+Trace important functionality from UI → API → database and document
+the actual implementation.
+
+
+============================================================
+1. SYSTEM OVERVIEW
+============================================================
+
+Document:
+
+- ERP name
+- Application architecture
+- Repository structure
+- Monorepo/workspaces
+- Frontend technology
+- Backend technology
+- Database
+- ORM
+- Authentication
+- Authorization
+- Location model
+- Deployment architecture
+- Development vs production separation
+- Build commands
+- Workflow commands
+- Important environment variables WITHOUT exposing secrets
+
+
+============================================================
+2. COMPLETE PROJECT STRUCTURE
+============================================================
+
+Document the relevant directory/file structure.
+
+For important files explain:
+
+- purpose
+- responsibility
+- dependencies
+- important functions
+- important routes/components
+
+Do not dump every trivial file.
+
+Focus on business-critical files.
+
+
+============================================================
+3. USER / AUTHENTICATION SYSTEM
+============================================================
+
+Document:
+
+- login
+- logout
+- sessions/tokens
+- password handling
+- user roles
+- employee linkage
+- permissions
+- authorization middleware
+- location access
+- Head Office behavior
+- warehouse behavior
+
+Explain actual implementation.
+
+
+============================================================
+4. LOCATION / BRANCH ARCHITECTURE
+============================================================
+
+Document the actual location hierarchy.
+
+Current business model:
+
+- Head Office
+- Warehouse
+
+Outlets are being phased out unless still present in code.
+
+Document:
+
+- location table
+- location types
+- GST registration
+- location assignment
+- user-location relationship
+- location filtering
+- All Locations behavior
+- specific warehouse behavior
+- server-side location authorization
+
+Identify any inconsistencies between frontend and backend.
+
+
+============================================================
+5. DATABASE
+============================================================
+
+Document all important tables.
+
+For each table include:
+
+- table name
+- purpose
+- important columns
+- primary key
+- foreign keys
+- relationships
+- location relationship
+- accounting relationship
+- important indexes if present
+
+Include:
+
+Users
+Employees
+Customers
+Vendors
+Items
+Products
+Locations
+Sales
+Sale items
+Sales payments
+Sales returns
+Receipts
+Receipt allocations
+Purchases
+Purchase items
+Purchase returns
+Payments
+Journal vouchers
+Journal lines
+Cash accounts
+Bank accounts
+Bank reconciliation
+Stock
+Stock ledger
+Stock batches
+Stock transfers
+Stock transfer items
+Reservations
+Stock cost snapshots
+Fixed assets
+Depreciation
+Expenses
+Attendance
+Payroll
+Quotations
+Quotation items
+Other charges
+and all other business-critical tables actually present.
+
+Do not invent tables that do not exist.
+
+
+============================================================
+6. ACCOUNTING ENGINE
+============================================================
+
+Document exactly how accounting works.
+
+Include:
+
+- Chart of Accounts
+- Journal Voucher
+- Journal lines
+- debit/credit rules
+- Trial Balance
+- P&L
+- Balance Sheet
+- ledger balances
+- opening balances
+- closing balances
+- accounting periods
+- location accounting
+- customer control accounts
+- vendor control accounts
+- cash
+- bank
+- sales
+- purchases
+- GST
+- COGS
+- inventory
+- fixed assets
+- depreciation
+- advances
+- credit notes
+- returns
+
+For each operational transaction explain:
+
+SOURCE TRANSACTION
+→ ACCOUNTING POSTING
+→ LEDGER EFFECT
+→ REPORT EFFECT
+
+
+============================================================
+7. OPENING / CLOSING BALANCE LOGIC
+============================================================
+
+Document the ACTUAL implementation.
+
+Specifically explain:
+
+Opening Balance(D)
+Closing Balance(D)
+
+and whether:
+
+Closing(D) = Opening(D+1)
+
+is currently enforced, calculated, stored, or inferred.
+
+Cover:
+
+- cash
+- bank
+- customers
+- vendors
+- GL accounts
+- inventory
+
+Document business-date/timezone handling.
+
+Document backdated transaction behavior.
+
+Document period locking if present.
+
+
+============================================================
+8. INVENTORY ENGINE
+============================================================
+
+Document:
+
+- stock entries
+- stock ledger
+- stock batches
+- stock quantity
+- stock cost
+- weighted average
+- FIFO/FEFO
+- stock cost snapshots
+- historical valuation
+- stock opening
+- stock closing
+- stock transfers
+- in-transit stock
+- receiving
+- reservations
+- negative stock prevention
+- location stock
+
+Explain the exact valuation flow.
+
+Especially document how historical stock is valued.
+
+
+============================================================
+9. STOCK TRANSFERS
+============================================================
+
+Document:
+
+- transfer creation
+- dispatch
+- receiving
+- rejection/cancellation
+- source stock
+- destination stock
+- in-transit stock
+- batch movement
+- cost movement
+- same-GST behavior
+- different-GST behavior
+- accounting treatment
+- P&L neutrality
+- transfer reservations
+
+
+============================================================
+10. SALES / POS
+============================================================
+
+Document complete POS flow:
+
+Customer
+→ Items
+→ Discounts
+→ Other Charges
+→ Tax
+→ Total
+→ Payment
+→ Receipt
+→ Stock
+→ Accounting
+→ Customer Ledger
+
+Include:
+
+- split payments
+- payment modes
+- customer advances
+- receipts
+- bill settlement
+- sales returns
+- credit notes
+- cancellation
+- invoice numbering
+- location
+
+Document the current customer receipt architecture.
+
+IMPORTANT CURRENT RULE:
+
+A single customer payment must appear as ONE financial receipt in the
+customer ledger.
+
+Bill allocations are settlement metadata.
+
+Explain exactly how receipt allocations are stored and used by POS.
+
+
+============================================================
+11. QUOTATION
+============================================================
+
+Document:
+
+- quotation creation
+- items
+- discounts
+- Other Charges
+- taxes
+- totals
+- notes
+- editing
+- PDF
+- print
+- conversion to sale/POS
+
+Document quotation → sale conversion.
+
+
+============================================================
+12. CUSTOMER MANAGEMENT
+============================================================
+
+Document:
+
+- customer master
+- location scope
+- opening balance
+- sales
+- receipts
+- allocations
+- credit notes
+- advances
+- outstanding
+- ageing
+- customer ledger
+- customer statement
+
+
+============================================================
+13. VENDOR MANAGEMENT
+============================================================
+
+Document:
+
+- vendor master
+- location scope
+- purchases
+- payments
+- advances
+- purchase returns
+- allocations
+- outstanding
+- ageing
+- vendor ledger
+
+
+============================================================
+14. PURCHASES
+============================================================
+
+Document complete purchase lifecycle:
+
+Purchase
+→ Stock
+→ GST
+→ Vendor payable
+→ Payment
+→ Ledger
+
+Include purchase returns and accounting.
+
+
+============================================================
+15. CASH / BANK
+============================================================
+
+Document:
+
+- cash accounts
+- bank accounts
+- location assignment
+- receipts
+- payments
+- bank ledger
+- cash book
+- bank book
+- reconciliation
+
+Document the rule that bank/cash accounts belong to a single location
+if that is the current implementation.
+
+
+============================================================
+16. BANK RECONCILIATION
+============================================================
+
+Document:
+
+- eligible transaction selection
+- reconciliation
+- batches
+- processing charges
+- reset
+- source transaction preservation
+- location
+- bank account filtering
+- exports
+
+
+============================================================
+17. GST
+============================================================
+
+Document:
+
+- CGST
+- SGST
+- IGST
+- input GST
+- output GST
+- GST on sales
+- GST on purchases
+- returns
+- credit notes
+- transfers
+- GST reports
+- GST calculation utilities
+- GST reconciliation
+
+Identify whether multiple GST calculation/reporting streams exist.
+
+
+============================================================
+18. FIXED ASSETS
+============================================================
+
+Document:
+
+- asset acquisition
+- vendor linkage
+- fixed asset ledger
+- depreciation
+- accumulated depreciation
+- disposal
+- disposal loss
+- journal posting
+- Balance Sheet treatment
+- location
+- historical/as-of-date behavior
+- depreciation idempotency
+
+
+============================================================
+19. HR / PAYROLL
+============================================================
+
+Document:
+
+- employees
+- attendance
+- salary
+- advances
+- payroll
+- PF
+- ESI
+- deductions
+- salary accrual
+- payment
+- accounting
+- business-date handling
+
+
+============================================================
+20. EXPENSES
+============================================================
+
+Document:
+
+- expense entry
+- expense categories
+- cash/bank
+- location
+- accounting
+- reports
+
+
+============================================================
+21. REPORTS CENTER
+============================================================
+
+Create a complete report inventory.
+
+For each report document:
+
+- screen route
+- API endpoint
+- data source
+- filters
+- location behavior
+- date behavior
+- calculations
+- PDF
+- XLSX
+- CSV
+- Print
+- permissions
+
+Include:
+
+Day Book
+Cash Book
+Bank Book
+Trial Balance
+General Ledger
+Trading Account
+P&L
+Balance Sheet
+Stock Valuation
+Receivables
+Payables
+GST
+Fixed Assets
+Bank Reconciliation
+Sales Register
+By Item
+By Salesperson
+By Location
+Sales & Stock Summary
+and all other reports actually present.
+
+
+============================================================
+22. REPORT DATA FLOW
+============================================================
+
+For each major report document:
+
+UI
+→ API
+→ service/query
+→ database
+→ transformation
+→ screen
+→ PDF
+→ XLSX
+
+Identify whether PDF/XLSX use the same authoritative payload.
+
+Document any known report-specific differences.
+
+
+============================================================
+23. PDF / XLSX EXPORT ENGINE
+============================================================
+
+Document:
+
+- PDF generators
+- XLSX generators
+- export utilities
+- common payloads
+- formatting
+- location information
+- dates
+- totals
+- permissions
+
+
+============================================================
+24. DASHBOARD
+============================================================
+
+Document every KPI.
+
+For each KPI explain:
+
+- source
+- formula
+- location behavior
+- All Locations behavior
+- date behavior
+- relationship to P&L/Balance Sheet
+
+Identify whether dashboard values use authoritative accounting/report
+services or separate calculations.
+
+
+============================================================
+25. PERMISSIONS / RBAC / LBAC
+============================================================
+
+Create a permission matrix.
+
+Include:
+
+Module
+Head Office
+Warehouse
+Location restriction
+Backend enforcement
+Frontend enforcement
+
+Document all modules actually present.
+
+Pay special attention to:
+
+- report access
+- customer access
+- vendor access
+- sales
+- purchases
+- stock
+- transfers
+- cash
+- bank
+- payroll
+- exports
+
+
+============================================================
+26. AUDIT LOGGING
+============================================================
+
+Document:
+
+- audit table
+- audit writer
+- transaction-bound audit
+- best-effort audit if any
+- events recorded
+- user
+- timestamp
+- location
+- before/after where applicable
+
+
+============================================================
+27. BACKUP / RESTORE
+============================================================
+
+Document:
+
+- backup format
+- database backup
+- file backup
+- manifest
+- checksums
+- signatures
+- version
+- retention
+- restore
+- restore validation
+- production safety
+
+
+============================================================
+28. MOBILE APP
+============================================================
+
+Document:
+
+- Expo/React Native architecture
+- authentication
+- API
+- build process
+- APK
+- EAS
+- EXPO_TOKEN
+- distribution
+- current supported functionality
+
+
+============================================================
+29. CURRENT KNOWN ISSUES
+============================================================
+
+Inspect code/tests and document ONLY issues that are actually supported
+by current evidence.
+
+Separate:
+
+CRITICAL
+HIGH
+MEDIUM
+LOW
+TEST GAPS
+NON-BLOCKING WARNINGS
+
+Do not carry forward obsolete issues that have already been fixed.
+
+For each issue:
+
+- description
+- affected module
+- root cause if known
+- current status
+- evidence/test
+
+
+============================================================
+30. RECENT HARDENING / FIX HISTORY
+============================================================
+
+Document the important fixes already implemented, including:
+
+- historical stock cost checkpoints
+- precise transfer receiving cost
+- depreciation
+- disposal accounting
+- customer receipt/bill allocation separation
+- report export fixes
+- Day Book cache behavior
+- location isolation
+- Balance Sheet balanced status
+- Stock Valuation XLSX
+- Receivables/Payables XLSX
+- Bank Reconciliation exports
+- other important verified fixes
+
+Do not invent commit IDs unless found in git history.
+
+
+============================================================
+31. TEST SUITES
+============================================================
+
+Inspect the repository and document existing test suites.
+
+For each:
+
+- test command
+- scope
+- important assertions
+
+Include current known results where available from repository/test output.
+
+
+============================================================
+32. BUILD / DEPLOYMENT
+============================================================
+
+Document:
+
+- development startup
+- API workflow
+- web workflow
+- production build
+- required PORT
+- BASE_PATH
+- deployment
+- publishing
+
+Do not expose secrets.
+
+
+============================================================
+33. ACCOUNTING INVARIANTS
+============================================================
+
+Create a section of hard invariants.
+
+Include:
+
+Debit = Credit
+
+Assets = Liabilities + Equity
+
+Closing(D) = Opening(D+1)
+
+Closing Stock(D) = Opening Stock(D+1)
+
+Customer receipt accounting = actual money received exactly once
+
+Bill allocations do not create duplicate financial postings
+
+Transfers are P&L neutral where applicable
+
+Historical valuation does not use mutable current master cost
+
+Bank/Cash balances reconcile to accounting books
+
+Inventory quantity/value agrees with authoritative stock records
+
+
+============================================================
+34. SOURCE-OF-TRUTH MAP
+============================================================
+
+Create a table:
+
+BUSINESS CONCEPT
+AUTHORITATIVE TABLE/SERVICE
+SECONDARY VIEWS
+REPORTS USING IT
+
+Include:
+
+Sales
+Purchases
+Receipts
+Payments
+Customer balance
+Vendor balance
+Inventory quantity
+Inventory valuation
+GST
+P&L
+Balance Sheet
+Trial Balance
+Cash
+Bank
+Fixed Assets
+Depreciation
+Stock Transfers
+
+
+============================================================
+35. DO NOT DOCUMENT ASSUMPTIONS
+============================================================
+
+If the implementation cannot be determined from code:
+
+Write:
+
+"NOT DETERMINED FROM CURRENT CODE"
+
+Do not guess.
+
+Clearly separate:
+
+IMPLEMENTED
+PARTIALLY IMPLEMENTED
+NOT IMPLEMENTED
+TEST GAP
+UNKNOWN
+
+
+============================================================
+36. FINAL DOCUMENT QUALITY
+============================================================
+
+The Markdown must be useful for a future AI coding agent.
+
+Another AI should be able to read:
+
+ERP_COMPLETE_DOCUMENTATION.md
+
+and understand:
+
+- architecture
+- database
+- accounting
+- inventory
+- reports
+- permissions
+- workflows
+- source of truth
+- business rules
+- known issues
+- tests
+- deployment
+
+without needing to guess.
+
+Use clear headings, tables, diagrams using Markdown text where useful,
+and concise technical explanations.
+
+Do not paste huge source files.
+
+Reference source files by path and explain their purpose.
+
+
+============================================================
+37. IMPORTANT FINAL STEP
+============================================================
+
+After creating:
+
+ERP_COMPLETE_DOCUMENTATION.md
+
+DO NOT modify application code.
+
+Run only documentation validation:
+
+- confirm file exists
+- confirm Markdown is readable
+- confirm no secrets were included
+- confirm no production connection
+- confirm no database changes
+- confirm no application behavior changed
+- confirm git diff --check
+
+Then return:
+
+1. Documentation file path
+2. Number of sections
+3. Files/modules inspected
+4. Any areas that could not be determined
+5. Confirmation that application code was not changed
+6. Confirmation that production was untouched
+7. git diff --check result
