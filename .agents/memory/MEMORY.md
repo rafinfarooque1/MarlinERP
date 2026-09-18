@@ -35,6 +35,7 @@
 - [Inventory valuation & ageing](inventory-valuation-ageing.md) — ONE at-cost valuation (3 kinds + in-transit, sender-owned) feeds report+dashboard+P&L; movement class = last OUTBOUND only.
 - [Salary accrual](salary-accrual-attendance.md) + [Employment status & LWD](employment-status-lwd.md) + [Statutory payroll](statutory-payroll.md) — approval re-checks attendance under the lock; LWD bounds accrual; rates snapshotted per run, corrections are reversals.
 - [Historical stock dating](historical-stock-dating.md) — stock_ledger.created_at is an INSERT time, not a business date; past-date stock is mostly not derivable; anchor "held nothing" on document dates.
+- [Zero-transfer integrity](zero-transfer-integrity.md) — no transfer movements means zero transfer adjustment; do not inherit unrelated historical checkpoint warnings.
 - [Sale location resolution](sale-location-resolution.md) — resolve via location_type+location_id; sale_payments.outlet_id is legacy+NULL for warehouse sales so joining it silently deletes rows; warehouses holds outlet rows too
 - [Attachment ACL](attachment-acl.md) — "signed in" is not authorisation in a location-scoped app; readable only if you uploaded it (id in path) or may see the record; 404 not 403; presigned PUT can't bind content-type.
 - [Invoice numbering](invoice-numbering-sequence.md) + [per-location](per-location-invoice-numbering.md) + [format override](sales-number-format-override.md) — EVERY producer uses the allocator + stamps 4 identity cols; scope lock protocol; renumber once, trail in same txn.
