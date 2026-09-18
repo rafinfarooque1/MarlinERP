@@ -2115,8 +2115,16 @@ async function runMigrations() {
   // that is merely believed to be safe has no place running unattended against
   // real business data on every single boot; the test rows it targets only ever
   // existed in development.
-  if (process.env.NODE_ENV === "production") {
-    console.error("[migration] test_data_cleanup: skipped (production never deletes rows)");
+  const { rows: [testCleanupDone] } = await pool.query(
+    `SELECT 1 FROM migration_log WHERE name = 'test_data_cleanup_v1'`,
+  );
+  if (testCleanupDone) {
+    console.log("[migration] test_data_cleanup: already applied");
+  } else if (
+    process.env.NODE_ENV === "production"
+    || process.env.RUN_DEV_TEST_DATA_CLEANUP !== "true"
+  ) {
+    console.error("[migration] test_data_cleanup: skipped (explicit opt-in required; no rows deleted)");
   } else {
     const custIds = Array.from({ length: 15 }, (_, i) => i + 5); // 5..19
     // A customer is safe to remove only if NOTHING points at it.
@@ -2170,6 +2178,10 @@ async function runMigrations() {
     } catch (e) {
       console.error(`[migration] test_data_cleanup: item 12 check FAILED (${(e as Error).message}) — will retry next boot`);
     }
+    // The marker is written only after the guarded cleanup has completed. A
+    // failed query above leaves it absent so the next development boot can
+    // retry; production never writes this marker because it never deletes.
+    await pool.query(`INSERT INTO migration_log (name) VALUES ('test_data_cleanup_v1')`);
   }
 
   // ── (2) Fill missing HSN codes for frozen-fruit items ──────────────────────
@@ -3028,6 +3040,9 @@ app.listen(port, (err?: Error) => {
   logger.info({ port }, "Server listening");
 });
 
+let bootstrapError: string | null = null;
+let migrationsError: string | null = null;
+
 // ── Bootstrap: apply drizzle base schema to empty databases ──────────────────
 // On a fresh Replit (or any empty PostgreSQL database) the base tables don't
 // exist yet.  drizzle-orm/migrator applies every SQL file in lib/db/drizzle/
@@ -3081,11 +3096,11 @@ try {
 } catch (bootstrapErr) {
   // Log loudly but don't abort: runMigrations() uses CREATE TABLE IF NOT EXISTS
   // throughout and is survivable even without a perfect bootstrap.
-  console.error("[bootstrap] drizzle migrate FAILED:", (bootstrapErr as Error).message);
+  bootstrapError = (bootstrapErr as Error).message;
+  console.error("[bootstrap] drizzle migrate FAILED:", bootstrapError);
 }
 
 // ── Run core migrations first so all tables exist before the top-level awaits ──
-let migrationsError: string | null = null;
 try {
   await runMigrations();
 } catch (err) {
@@ -4731,75 +4746,27 @@ await pool.query(`
   }
 }
 
-// Cash & Bank ownership is now one account → one location. Canonicalize old
-// multi-location availability without touching any transaction or journal
-// stamps. The scalar owner is preferred when it still points at a real
-// location; otherwise the oldest legacy membership is retained.
-{
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    const { rows: [done] } = await client.query(
-      `SELECT 1 FROM migration_log WHERE name = 'cash_bank_single_location_v2' FOR UPDATE`,
+// Cash & Bank ownership is one account → one location. Do not silently
+// canonicalize legacy multi-location memberships at boot: choosing a member
+// changes the meaning of future vouchers and can make historical ownership
+// appear to move. The account routes reject ambiguous writes and the remaining
+// rows are reported for an explicit, reviewed data migration.
+try {
+  const { rows } = await pool.query(`
+    SELECT account_id, COUNT(*)::int AS memberships
+      FROM cash_bank_account_locations
+     GROUP BY account_id
+    HAVING COUNT(*) > 1
+    ORDER BY account_id
+    LIMIT 50
+  `);
+  if (rows.length > 0) {
+    console.error(
+      `[migration] cash_bank_single_location_v2 NOT APPLIED: ${rows.length} account(s) still have multiple memberships; no existing data was reassigned`,
     );
-    if (!done) {
-      const { rows: accounts } = await client.query(`
-        SELECT id, location_type, location_id
-          FROM cash_bank_accounts
-         FOR UPDATE
-      `);
-      for (const account of accounts) {
-        const scalarType = account.location_type == null ? null : String(account.location_type);
-        const scalarId = account.location_id == null ? null : Number(account.location_id);
-        let validScalar = scalarType === "headoffice";
-        if (scalarType === "warehouse" || scalarType === "outlet") {
-          const table = scalarType === "warehouse" ? "warehouses" : "outlets";
-          const { rows } = await client.query(`SELECT 1 FROM ${table} WHERE id = $1`, [scalarId]);
-          validScalar = Number.isInteger(scalarId) && rows.length > 0;
-        }
-        let locationType = validScalar ? scalarType! : "headoffice";
-        let locationId = validScalar && scalarType !== "headoffice" ? scalarId : 0;
-        if (!validScalar) {
-          const { rows: [legacy] } = await client.query(
-            `SELECT location_type, location_id
-               FROM cash_bank_account_locations
-              WHERE account_id = $1
-                AND (
-                  location_type = 'headoffice'
-                  OR (location_type = 'warehouse' AND EXISTS (SELECT 1 FROM warehouses WHERE id = location_id))
-                  OR (location_type = 'outlet' AND EXISTS (SELECT 1 FROM outlets WHERE id = location_id))
-                )
-              ORDER BY id
-              LIMIT 1`,
-            [Number(account.id)],
-          );
-          if (legacy) {
-            locationType = String(legacy.location_type);
-            locationId = locationType === "headoffice" ? 0 : Number(legacy.location_id);
-          }
-        }
-        await client.query(
-          `UPDATE cash_bank_accounts SET location_type = $1, location_id = $2 WHERE id = $3`,
-          [locationType, locationId, Number(account.id)],
-        );
-        // Keep the old table as a compatibility shadow with one row only;
-        // application ownership reads use the scalar columns.
-        await client.query(`DELETE FROM cash_bank_account_locations WHERE account_id = $1`, [Number(account.id)]);
-        await client.query(
-          `INSERT INTO cash_bank_account_locations (account_id, location_type, location_id)
-           VALUES ($1, $2, $3)`,
-          [Number(account.id), locationType, locationId],
-        );
-      }
-      await client.query(`INSERT INTO migration_log (name) VALUES ('cash_bank_single_location_v2')`);
-    }
-    await client.query("COMMIT");
-  } catch (e) {
-    await client.query("ROLLBACK").catch(() => {});
-    throw e;
-  } finally {
-    client.release();
   }
+} catch (e) {
+  console.error(`[migration] cash_bank_single_location_v2 diagnostic unavailable: ${(e as Error).message}`);
 }
 
 // One-time: seed a ready-to-use "Packing & Delivery Recovery" ledger under
@@ -4933,13 +4900,9 @@ await addMaterialBatches(pool);
 // per-warehouse rent ledgers can be provisioned.
 await addWarehouseRent(pool);
 
-// Catch up any rent days missed while the server was down, then keep accruing.
-startRentAccrualScheduler(pool);
-
 // Daily salary accrual. Runs after the ledger tables exist so the per-employee
 // salary ledgers can be provisioned on an employee's first accrued day.
 await addSalaryAccrual(pool);
-startSalaryAccrualScheduler(pool);
 
 // Invoice share links: the stateful layer behind customer-facing invoice URLs.
 await addInvoiceShareLinks(pool);
@@ -5086,10 +5049,20 @@ try {
   console.error("[migration] stock_master_guard_trigger FAILED (non-fatal):", (err as Error).message);
 }
 
+// Start financial schedulers only after every schema and repair step above has
+// completed. Starting them inside runMigrations allowed a later migration
+// failure to leave money-writing jobs active against a partial schema.
+if (!bootstrapError && !migrationsError) {
+  startRentAccrualScheduler(pool);
+  startSalaryAccrualScheduler(pool);
+} else {
+  console.error("[startup] financial schedulers disabled because boot is not ready");
+}
+
 // Automatic backups and retention. Starts after the migrations above so a
 // scheduled backup can never capture a half-upgraded schema.
 startBackupScheduler();
 
 // All migrations and startup tasks complete — mark the server as ready.
 // /healthz starts returning 200 from this point.
-app.locals.migrationsReady = true;
+app.locals.migrationsReady = !bootstrapError && !migrationsError;

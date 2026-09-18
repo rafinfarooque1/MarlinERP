@@ -33,6 +33,20 @@ export interface BatchBreakdownEntry {
 const r3 = (n: number) => Math.round(n * 1000) / 1000;
 const r2 = (n: number) => Math.round(n * 100) / 100;
 
+/** Allocate only evidenced lots. A legacy untracked remainder stays untracked. */
+export function allocateReceived(breakdown: BatchBreakdownEntry[], receivedQty: number): BatchBreakdownEntry[] {
+  if (!Number.isFinite(receivedQty) || receivedQty < 0) throw new Error("Invalid received quantity");
+  const out: BatchBreakdownEntry[] = [];
+  let remaining = r3(receivedQty);
+  for (const b of breakdown) {
+    if (remaining <= 0) break;
+    const take = r3(Math.min(Math.max(0, Number(b.quantity)), remaining));
+    if (take > 0) out.push({ ...b, quantity: take });
+    remaining = r3(remaining - take);
+  }
+  return out;
+}
+
 /** Upsert (credit) quantity into a batch at a location. No-op for qty <= 0. */
 export async function creditBatch(c: Queryable, args: {
   itemId: number; branchType: string; branchId: number;
@@ -73,7 +87,8 @@ export async function planFEFO(c: Queryable, itemId: number, branchType: string,
   shortfall: number;
 }> {
   const { rows } = await c.query(
-    `SELECT id, batch_number, mfg_date, expiry_date, quantity, unit_cost
+     `SELECT id, batch_number, mfg_date, expiry_date, quantity, unit_cost,
+             ${batchReservedSql("stock_batches")} AS reserved
      FROM stock_batches
      WHERE item_id = $1 AND material_type = $4 AND branch_type = $2 AND branch_id = $3 AND quantity > 0
      ORDER BY expiry_date ASC NULLS LAST, id ASC${lock ? " FOR UPDATE" : ""}`,
@@ -83,7 +98,7 @@ export async function planFEFO(c: Queryable, itemId: number, branchType: string,
   let remaining = quantity;
   for (const b of rows) {
     if (remaining <= 0) break;
-    const avail = Number(b.quantity);
+    const avail = r3(Math.max(0, Number(b.quantity) - Number(b.reserved ?? 0)));
     const take = Math.min(avail, remaining);
     if (take <= 0) continue;
     plan.push({
@@ -101,12 +116,13 @@ export async function planFEFO(c: Queryable, itemId: number, branchType: string,
  *  transactional callers. */
 async function takeFromBatch(c: Queryable, batchRowId: number, want: number, owner: { itemId: number; branchType: string; branchId: number; materialType: BatchKind }): Promise<BatchBreakdownEntry | null> {
   const { rows: [b] } = await c.query(
-    `SELECT id, batch_number, mfg_date, expiry_date, quantity, unit_cost FROM stock_batches
+    `SELECT id, batch_number, mfg_date, expiry_date, quantity, unit_cost,
+            ${batchReservedSql("stock_batches")} AS reserved FROM stock_batches
      WHERE id = $1 AND item_id = $2 AND material_type = $5 AND branch_type = $3 AND branch_id = $4 FOR UPDATE`,
     [batchRowId, owner.itemId, owner.branchType, owner.branchId, owner.materialType]
   );
   if (!b) return null;
-  const take = r3(Math.min(Number(b.quantity), want));
+  const take = r3(Math.min(Math.max(0, Number(b.quantity) - Number(b.reserved ?? 0)), want));
   if (take <= 0) return null;
   await c.query(`UPDATE stock_batches SET quantity = GREATEST(0, quantity - $1), updated_at = now() WHERE id = $2`, [take, b.id]);
   return { batchId: b.id, batchNumber: b.batch_number, mfgDate: b.mfg_date, expiryDate: b.expiry_date, quantity: take, unitCost: Number(b.unit_cost) };
@@ -167,7 +183,7 @@ export async function validateBatchOverride(c: Queryable, args: {
   for (const ov of ordered) {
     const batchId = Number(ov?.batchId);
     const qty = Number(ov?.quantity);
-    if (!Number.isInteger(batchId) || batchId <= 0 || !(qty > 0)) {
+    if (!Number.isInteger(batchId) || batchId <= 0 || !Number.isFinite(qty) || !(qty > 0)) {
       return { ok: false, error: "Invalid batch override entry" };
     }
     if (seen.has(batchId)) return { ok: false, error: "Duplicate batch in override" };

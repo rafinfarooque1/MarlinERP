@@ -34,7 +34,7 @@ export function isLocationInScope(
   locationId: number | null | undefined,
 ): boolean {
   if (scope.isHeadOffice) return true;
-  if (!Number.isInteger(Number(locationId))) return false;
+  if (locationId == null || !Number.isSafeInteger(Number(locationId)) || Number(locationId) <= 0) return false;
   if (locationType === "warehouse") return scope.warehouseIds.includes(Number(locationId));
   if (locationType === "outlet") return scope.outletIds.includes(Number(locationId));
   return false;
@@ -73,6 +73,10 @@ export async function getUserDataScope(employee: {
     return { isHeadOffice: true, warehouseIds: [], outletIds: [] };
   }
 
+  if (!["warehouse", "outlet"].includes(branchType) || !Number.isSafeInteger(Number(branchId)) || Number(branchId) <= 0) {
+    return { isHeadOffice: false, warehouseIds: [], outletIds: [] };
+  }
+
   if (branchType === "warehouse") {
     const { rows } = await pool.query<{ id: number }>(
       `SELECT id FROM outlets WHERE warehouse_id = $1 ORDER BY id`,
@@ -80,7 +84,7 @@ export async function getUserDataScope(employee: {
     );
     return {
       isHeadOffice: false,
-      warehouseIds: [branchId],
+      warehouseIds: [Number(branchId)],
       outletIds: rows.map((r) => Number(r.id)),
     };
   }
@@ -89,7 +93,7 @@ export async function getUserDataScope(employee: {
   return {
     isHeadOffice: false,
     warehouseIds: [],
-    outletIds: [branchId],
+    outletIds: [Number(branchId)],
   };
 }
 

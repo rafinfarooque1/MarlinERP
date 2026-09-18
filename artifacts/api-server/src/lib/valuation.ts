@@ -27,6 +27,7 @@
 
 import { activeInTransit, reservedSql, type ReservationProductKind } from "./reservations";
 import { scopeBranchWhere, type DataScope } from "./dataScope";
+import { isIsoDate } from "./dateInput";
 
 type Queryable = {
   query: (sql: string, params?: unknown[]) => Promise<{ rows: any[] }>;
@@ -50,7 +51,8 @@ export const PRODUCT_UNIT_COST_SQL = `
 /** Latest authoritative dated cost for the exact product/location key. */
 export const LATEST_STOCK_COST_SNAPSHOT_JOIN = `
    LEFT JOIN LATERAL (
-     SELECT scs.unit_cost
+     SELECT CASE WHEN scs.quantity > 0 THEN scs.value::numeric / scs.quantity::numeric
+                 ELSE scs.unit_cost::numeric END AS unit_cost
        FROM stock_cost_snapshots scs
       WHERE scs.material_type = se.material_type
         AND scs.ref_id = se.item_id
@@ -127,6 +129,10 @@ function locationInScope(scope: DataScope | undefined, branchType: string, branc
 }
 
 export interface ValuationSummary {
+  /** False means totals cover evidenced rows only, not a complete valuation. */
+  reliable: boolean;
+  note: string | null;
+  issues: ValuationIssue[];
   rows: ValuationRow[];
   byLocation: Array<{
     branchType: string; branchId: number; lines: number;
@@ -143,12 +149,37 @@ export interface ValuationSummary {
   grandTotal: number;
 }
 
+export interface ValuationIssue {
+  code: string;
+  materialType: string;
+  refId: number;
+  branchType: string;
+  branchId: number;
+  asOf?: string;
+  quantity?: number;
+  message: string;
+}
+
 /**
  * Per (product, location) closing stock valued at cost, across every location
  * and all three product kinds, plus in-transit rows when asked for.
  */
 export async function stockValuationRows(q: Queryable, scope: ValuationScope = {}): Promise<ValuationRow[]> {
-  const conds = ["se.quantity::numeric > 0"];
+  const issues: ValuationIssue[] = [];
+  const rows = await buildStockValuationRows(q, scope, issues);
+  // Row-only consumers cannot display summary warnings. Refuse a partial
+  // answer instead of silently turning absent evidence into zero inventory.
+  if (issues.length) throw Object.assign(new Error(issues.map(i => i.message).join(" ")), {
+    code: "INVENTORY_HISTORY_INCOMPLETE", issues,
+  });
+  return rows;
+}
+
+async function buildStockValuationRows(q: Queryable, scope: ValuationScope, issues: ValuationIssue[]): Promise<ValuationRow[]> {
+  if (scope.asOf != null && !isIsoDate(scope.asOf)) throw new Error("Invalid stock valuation cutoff date");
+  const conds = [scope.asOf
+    ? "(se.quantity::numeric <> 0 OR se.evidence_issue IS NOT NULL)"
+    : "se.quantity::numeric > 0"];
   const params: unknown[] = [];
   if (scope.asOf) params.push(scope.asOf);
   if (scope.branchPairs && scope.branchPairs.length > 0) {
@@ -167,16 +198,44 @@ export async function stockValuationRows(q: Queryable, scope: ValuationScope = {
   }
 
   const source = scope.asOf
-    ? `(SELECT DISTINCT ON (material_type, ref_id, branch_type, branch_id)
-          ref_id AS item_id, material_type, branch_type, branch_id,
-          quantity, unit_cost
-          FROM stock_cost_snapshots
-         WHERE as_of_date <= $1::date
-         ORDER BY material_type, ref_id, branch_type, branch_id, as_of_date DESC, id DESC) se`
+    ? `(WITH inventory_keys AS (
+          SELECT item_id AS ref_id, material_type, branch_type, branch_id FROM stock_entries
+          UNION SELECT ref_id, material_type, branch_type, branch_id FROM stock_ledger
+          UNION SELECT ref_id, material_type, branch_type, branch_id FROM stock_cost_snapshots
+        )
+        SELECT k.ref_id AS item_id, k.material_type, k.branch_type, k.branch_id,
+               COALESCE(s.quantity, COALESCE(current_stock.quantity, 0) - movement.after_cutoff) AS quantity,
+               CASE WHEN s.quantity > 0 THEN s.value::numeric / s.quantity::numeric
+                    ELSE s.unit_cost::numeric END AS unit_cost,
+               s.value AS checkpoint_value,
+               CASE
+                 WHEN s.id IS NULL AND ABS(COALESCE(current_stock.quantity, 0) - movement.after_cutoff) > 0.0001
+                   THEN 'MISSING_COST_CHECKPOINT'
+                 WHEN s.id IS NOT NULL AND ABS(s.quantity - (COALESCE(current_stock.quantity, 0) - movement.after_checkpoint)) > 0.0001
+                   THEN 'CHECKPOINT_QUANTITY_MISMATCH'
+                 ELSE NULL END AS evidence_issue
+          FROM inventory_keys k
+          LEFT JOIN stock_entries current_stock ON current_stock.item_id = k.ref_id
+           AND current_stock.material_type = k.material_type AND current_stock.branch_type = k.branch_type
+           AND current_stock.branch_id = k.branch_id
+          LEFT JOIN LATERAL (
+            SELECT * FROM stock_cost_snapshots scs
+             WHERE scs.ref_id = k.ref_id AND scs.material_type = k.material_type
+               AND scs.branch_type = k.branch_type AND scs.branch_id = k.branch_id
+               AND scs.as_of_date <= $1::date
+             ORDER BY scs.as_of_date DESC, scs.id DESC LIMIT 1
+          ) s ON TRUE
+          LEFT JOIN LATERAL (
+            SELECT COALESCE(SUM(sl.qty_change) FILTER (WHERE COALESCE(sl.txn_date, sl.created_at::date) > $1::date), 0) AS after_cutoff,
+                   COALESCE(SUM(sl.qty_change) FILTER (WHERE COALESCE(sl.txn_date, sl.created_at::date) > s.as_of_date), 0) AS after_checkpoint
+              FROM stock_ledger sl
+             WHERE sl.ref_id = k.ref_id AND sl.material_type = k.material_type
+               AND sl.branch_type = k.branch_type AND sl.branch_id = k.branch_id
+          ) movement ON TRUE
+        ) se`
     : `stock_entries se`;
   const costSql = scope.asOf
-    ? `COALESCE(se.unit_cost::numeric, COALESCE(i.avg_cost, m.avg_cost, rm.avg_cost, 0)::numeric,
-                COALESCE(i.cost, m.cost, rm.cost, 0)::numeric)`
+    ? `se.unit_cost::numeric`
     : PRODUCT_UNIT_COST_SQL;
   const reservedSqlForScope = scope.asOf ? "0::numeric" : reservedSql("se");
   const snapshotJoin = scope.asOf ? "" : LATEST_STOCK_COST_SNAPSHOT_JOIN;
@@ -188,7 +247,9 @@ export async function stockValuationRows(q: Queryable, scope: ValuationScope = {
             se.branch_type, se.branch_id::int           AS branch_id,
             se.quantity::numeric                        AS quantity,
             ${reservedSqlForScope}                       AS reserved,
-            ${costSql}                                  AS unit_cost
+            ${costSql}                                  AS unit_cost,
+            ${scope.asOf ? "se.checkpoint_value" : "NULL::numeric"} AS checkpoint_value,
+            ${scope.asOf ? "se.evidence_issue" : "NULL::text"} AS evidence_issue
        FROM ${source}
        ${PRODUCT_MASTER_JOINS}
         ${snapshotJoin}
@@ -197,12 +258,23 @@ export async function stockValuationRows(q: Queryable, scope: ValuationScope = {
     params,
   );
 
-  const onHand: ValuationRow[] = rows.map((r: any) => {
+  const onHand: ValuationRow[] = rows.flatMap((r: any) => {
     const quantity = r3(Number(r.quantity));
+    if (r.evidence_issue || (scope.asOf && r.unit_cost == null) || quantity < 0) {
+      issues.push({
+        code: r.evidence_issue ?? (quantity < 0 ? "NEGATIVE_HISTORICAL_STOCK" : "MISSING_COST_CHECKPOINT"),
+        materialType: r.material_type, refId: Number(r.ref_id), branchType: r.branch_type,
+        branchId: Number(r.branch_id), asOf: scope.asOf, quantity,
+        message: `Inventory evidence is incomplete for ${r.material_type}:${r.ref_id} at ${r.branch_type}:${r.branch_id}`
+          + `${scope.asOf ? ` on ${scope.asOf}` : ""} (${r.evidence_issue ?? "missing cost or negative quantity"}). `
+          + "This position is excluded from the partial total; no current master cost has been substituted.",
+      });
+      return [];
+    }
     const reserved = r3(Number(r.reserved ?? 0));
     const rawUnitCost = Number(r.unit_cost ?? 0);
     const unitCost = r2(rawUnitCost);
-    return {
+    return [{
       materialType: (r.material_type ?? "item") as ProductKind,
       refId: Number(r.ref_id),
       itemName: r.item_name ?? "",
@@ -216,20 +288,19 @@ export async function stockValuationRows(q: Queryable, scope: ValuationScope = {
       // Keep checkpoint precision through the value calculation. The display
       // unit cost may be rounded to paise, but rounding it before multiplying
       // can turn a conserved blended receipt into a one-paise inventory gain.
-      value: r2(quantity * rawUnitCost),
+      value: scope.asOf && r.checkpoint_value != null ? r2(Number(r.checkpoint_value)) : r2(quantity * rawUnitCost),
       inTransit: false,
-    };
+    }];
   });
 
   if (scope.includeInTransit === false) return onHand;
 
-  // In-transit rows carry the cost they were dispatched at. A dispatch that
-  // predates cost stamping falls back to the product's current cost rather than
-  // valuing the shipment at zero.
+  // In-transit rows carry their dispatched cost, never mutable master cost.
   const transit = (await activeInTransit(q, {
     branchType: scope.branchPairs?.length ? undefined : scope.branchType,
     branchId: scope.branchPairs?.length ? undefined : scope.branchId,
     materialType: scope.materialType,
+    asOf: scope.asOf,
   }))
     .filter((t) => locationInScope(scope.dataScope, t.branchType, t.branchId))
     .filter((t) => !scope.branchPairs?.length
@@ -241,7 +312,16 @@ export async function stockValuationRows(q: Queryable, scope: ValuationScope = {
   for (const t of transit) {
     const key = `${t.materialType}:${t.refId}:${t.branchType}:${t.branchId}`;
     const meta = names.get(`${t.materialType}:${t.refId}`);
-    const unitCost = t.unitCost > 0 ? t.unitCost : Number(meta?.unitCost ?? 0);
+    if (!(t.unitCost > 0)) {
+      issues.push({
+        code: "MISSING_TRANSIT_COST", materialType: t.materialType, refId: t.refId,
+        branchType: t.branchType, branchId: t.branchId, asOf: scope.asOf, quantity: t.quantity,
+        message: `Transfer ${t.docId} has no positive evidenced dispatch cost for ${t.materialType}:${t.refId}. `
+          + "Its value is unknown and excluded from this partial valuation.",
+      });
+      continue;
+    }
+    const unitCost = t.unitCost;
     const existing = grouped.get(key);
     if (existing) {
       const quantity = r3(existing.quantity + t.quantity);
@@ -306,7 +386,8 @@ export async function resolveProductNames(
 
 /** Rows plus every roll-up a report, statement or dashboard needs. */
 export async function stockValuation(q: Queryable, scope: ValuationScope = {}): Promise<ValuationSummary> {
-  const rows = await stockValuationRows(q, scope);
+  const issues: ValuationIssue[] = [];
+  const rows = await buildStockValuationRows(q, scope, issues);
 
   const locMap = new Map<string, ValuationSummary["byLocation"][number]>();
   const typeMap = new Map<ProductKind, ValuationSummary["byType"][number]>();
@@ -354,6 +435,9 @@ export async function stockValuation(q: Queryable, scope: ValuationScope = {}): 
   }
 
   return {
+    reliable: issues.length === 0,
+    note: issues.length ? issues.map(i => i.message).join(" ") : null,
+    issues,
     rows,
     byLocation: [...locMap.values()].sort((a, b) => b.value - a.value),
     byType: [...typeMap.values()].sort((a, b) => b.value - a.value),

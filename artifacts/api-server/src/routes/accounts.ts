@@ -4,6 +4,7 @@ import { db, pool, accountLedgersTable, cashBankAccountsTable, expensesTable, sa
 import { requireModuleView, requireModuleAction } from "../middleware/permissions";
 import { isIsoDate } from "../lib/dateInput";
 import { optionalMoney } from "../lib/numericInput";
+import { parseCashBankLocation, diagnoseCashBankLocation, CASH_BANK_LOCATION_CONFLICT } from "../lib/cashBankLedgers";
 import { validationMessage } from "../lib/validationMessage";
 import { eq, and, sql, gte, lte } from "drizzle-orm";
 import {
@@ -2636,6 +2637,10 @@ router.get("/accounts/ledger-statement", requireModuleView("page:/accounts/ledge
  * columns — invisible to drizzle, so this section uses raw SQL throughout.
  */
 router.get("/accounts/cash-bank", requireModuleView("page:/accounts/cash-bank"), async (req, res): Promise<void> => {
+  const scope = ownLocationScope((req as any).employee);
+  if (!scope.isHeadOffice && scope.warehouseIds.length === 0 && scope.outletIds.length === 0) {
+    res.status(403).json({ error: "A valid authenticated location is required." }); return;
+  }
   const { currentBalanceIndex } = await import("../lib/ledgerBalances");
   const idx = await currentBalanceIndex();
   const parseLocationKeys = (value: unknown): Set<string> => {
@@ -2645,7 +2650,6 @@ router.get("/accounts/cash-bank", requireModuleView("page:/accounts/cash-bank"),
     ));
   };
   const requestedKeys = parseLocationKeys(req.query.locationKeys);
-  const scope = ownLocationScope((req as any).employee);
   const allowedKeys = scope.isHeadOffice
     ? null
     : new Set([
@@ -2677,7 +2681,10 @@ router.get("/accounts/cash-bank", requireModuleView("page:/accounts/cash-bank"),
   }
 
   const [{ rows: accounts }, { rows: whs }, { rows: outs }, { rows: tree }] = await Promise.all([
-    pool.query(`SELECT * FROM cash_bank_accounts ORDER BY id`),
+    pool.query(`SELECT c.*,
+      COALESCE((SELECT json_agg(json_build_object('location_type', l.location_type, 'location_id', l.location_id))
+                FROM cash_bank_account_locations l WHERE l.account_id = c.id), '[]'::json) AS memberships
+      FROM cash_bank_accounts c ORDER BY c.id`),
     pool.query(`SELECT id, name, cash_ledger_id FROM warehouses`),
     pool.query(`SELECT id, name, cash_ledger_id FROM outlets`),
     pool.query(`
@@ -2711,7 +2718,8 @@ router.get("/accounts/cash-bank", requireModuleView("page:/accounts/cash-bank"),
     };
     if (selectedKeys.size > 0 && !selectedKeys.has(`${accountLocation.locationType}:${accountLocation.locationId}`)) continue;
     if (!scope.isHeadOffice && !allowedKeys?.has(`${accountLocation.locationType}:${accountLocation.locationId}`)) continue;
-    const balance = lid ? (selectedNet?.get(lid) ?? 0) : null;
+    const balance = lid && selectedNet ? (selectedNet.get(lid) ?? 0) : null;
+    const ownership = diagnoseCashBankLocation(c, c.memberships);
     out.push({
       id: Number(c.id), name: c.name, accountType: c.account_type,
       bankName: c.bank_name ?? null, accountNumber: c.account_number ?? null, ifscCode: c.ifsc_code ?? null,
@@ -2721,7 +2729,8 @@ router.get("/accounts/cash-bank", requireModuleView("page:/accounts/cash-bank"),
       locationType: accountLocation.locationType,
       locationId: accountLocation.locationId,
       locationName: accountLocation.locationName,
-      source: "module", readOnly: false,
+      source: "module", readOnly: !ownership.ok,
+      ...(!ownership.ok ? { locationError: ownership.error, locationErrorCode: CASH_BANK_LOCATION_CONFLICT } : {}),
       requiresReconciliation: c.account_type !== "cash" && c.requires_reconciliation === true,
     });
   }
@@ -2776,28 +2785,16 @@ async function resolveCashBankLocation(body: any): Promise<
   { ok: true; locationType: string; locationId: number | null }
   | { ok: false; status: number; error: string; code?: string }
 > {
-  let locationType = "headoffice";
-  let locationId: number | null = null;
-  const rawLt = body?.locationType;
-  if (rawLt !== undefined && rawLt !== null && String(rawLt).trim() !== "") {
-    locationType = String(rawLt).trim();
-    if (!["headoffice", "warehouse", "outlet"].includes(locationType)) {
-      return { ok: false, status: 400, error: "locationType must be headoffice, warehouse or outlet" };
-    }
-    if (locationType !== "headoffice") {
-      locationId = Number(body?.locationId);
-      if (!Number.isInteger(locationId) || locationId <= 0) {
-        return { ok: false, status: 400, error: "Pick the location this account belongs to." };
-      }
+  const parsed = parseCashBankLocation(body ?? {});
+  if (!parsed.ok) return { ...parsed, status: 400 };
+  const { locationType, locationId } = parsed.location;
+  if (locationType !== "headoffice") {
       const table = locationType === "warehouse" ? "warehouses" : "outlets";
       const { rows: [loc] } = await pool.query(`SELECT id FROM ${table} WHERE id = $1`, [locationId]);
       if (!loc) return { ok: false, status: 400, error: `No such ${locationType}` };
       if (locationType === "outlet" && await outletWritesBlocked(pool)) {
         return { ok: false, status: 409, error: OUTLETS_DISABLED_MESSAGE, code: OUTLETS_DISABLED_CODE };
       }
-    } else {
-      locationId = 0;
-    }
   }
   return { ok: true, locationType, locationId };
 }
@@ -2889,6 +2886,12 @@ router.post("/accounts/cash-bank", requireModuleAction("page:/accounts/cash-bank
        VALUES ($1, $2, $3)`,
       [accountId, loc.locationType, loc.locationId ?? 0],
     );
+    await logActivityInTransaction(client, {
+      action: "CREATE", module: "accounts", entityType: "cash_bank_account", entityId: accountId,
+      description: `Created ${parsed.data.accountType} account "${name}" (ledger #${ledgerId})`,
+      user: (req as any).employee?.username ?? "system",
+      metadata: { after: { locationType: loc.locationType, locationId: loc.locationId } },
+    });
     await client.query("COMMIT");
   } catch (e) {
     await client.query("ROLLBACK");
@@ -2913,12 +2916,6 @@ router.post("/accounts/cash-bank", requireModuleAction("page:/accounts/cash-bank
     await rebalanceCashBankOpeningEquity(pool);
   }
 
-  await logActivity({
-    action: "CREATE", module: "accounts", entityType: "cash_bank_account", entityId: accountId,
-    description: `Created ${parsed.data.accountType} account "${name}" (ledger #${ledgerId})`,
-    user: (req as any).employee?.username ?? "system",
-  });
-
   res.status(201).json({
     id: accountId, name, accountType: parsed.data.accountType,
     bankName: parsed.data.bankName ?? null, accountNumber: parsed.data.accountNumber ?? null, ifscCode: ifsc ?? null,
@@ -2940,6 +2937,10 @@ router.patch("/accounts/cash-bank/:id", requireModuleAction("page:/accounts/cash
   if (!acc) { res.status(404).json({ error: "Account not found" }); return; }
 
   const body = (req.body ?? {}) as Record<string, unknown>;
+  const openingMoney = body.openingBalance !== undefined ? optionalMoney(body.openingBalance) : null;
+  if (openingMoney && (!openingMoney.ok || openingMoney.value < 0)) {
+    res.status(400).json({ error: !openingMoney.ok ? `Opening Balance ${openingMoney.reason}.` : "Opening Balance cannot be negative." }); return;
+  }
 
   // The account type decides which head the ledger lives under; changing it
   // would mean moving history between Cash and Bank Accounts. Delete-and-
@@ -2982,8 +2983,8 @@ router.patch("/accounts/cash-bank/:id", requireModuleAction("page:/accounts/cash
     return;
   } else if (body.locationType !== undefined || body.locationId !== undefined) {
     const resolved = await resolveCashBankLocation({
-      locationType: body.locationType ?? acc.location_type ?? "headoffice",
-      locationId: body.locationId ?? acc.location_id,
+      locationType: body.locationType === undefined ? acc.location_type : body.locationType,
+      locationId: body.locationId === undefined ? acc.location_id : body.locationId,
     });
     if (!resolved.ok) { res.status(resolved.status).json({ error: resolved.error, ...(resolved.code ? { code: resolved.code } : {}) }); return; }
     locationToSet = resolved;
@@ -2999,6 +3000,23 @@ router.patch("/accounts/cash-bank/:id", requireModuleAction("page:/accounts/cash
   const write = await pool.connect();
   try {
     await write.query("BEGIN");
+    const { rows: [locked] } = await write.query(`SELECT * FROM cash_bank_accounts WHERE id = $1 FOR UPDATE`, [id]);
+    if (!locked) {
+      await write.query("ROLLBACK");
+      res.status(404).json({ error: "Account not found" }); return;
+    }
+    const { rows: memberships } = await write.query(
+      `SELECT location_type, location_id FROM cash_bank_account_locations WHERE account_id = $1 FOR UPDATE`, [id],
+    );
+    const ownership = diagnoseCashBankLocation(locked, memberships);
+    if (!ownership.ok) {
+      await write.query("ROLLBACK");
+      res.status(409).json({ error: ownership.error, code: CASH_BANK_LOCATION_CONFLICT }); return;
+    }
+    if (locked.location_type !== acc.location_type || locked.location_id !== acc.location_id) {
+      await write.query("ROLLBACK");
+      res.status(409).json({ error: "Account location changed while editing. Refresh and try again." }); return;
+    }
     if (sets.length > 0) {
       vals.push(id);
       await write.query(`UPDATE cash_bank_accounts SET ${sets.join(", ")} WHERE id = $${vals.length}`, vals);
@@ -3014,6 +3032,15 @@ router.patch("/accounts/cash-bank/:id", requireModuleAction("page:/accounts/cash
         [id, locationToSet.locationType, locationToSet.locationId ?? 0],
       );
     }
+    await logActivityInTransaction(write, {
+      action: "UPDATE", module: "accounts", entityType: "cash_bank_account", entityId: id,
+      description: `Updated cash/bank account "${newName ?? acc.name}"`,
+      user: (req as any).employee?.username ?? "system",
+      metadata: {
+        before: { locationType: locked.location_type, locationId: locked.location_id },
+        after: locationToSet ?? ownership.location,
+      },
+    });
     await write.query("COMMIT");
   } catch (e) {
     await write.query("ROLLBACK").catch(() => {});
@@ -3024,9 +3051,8 @@ router.patch("/accounts/cash-bank/:id", requireModuleAction("page:/accounts/cash
 
   // Opening balance correction goes through the same single write path.
   if (body.openingBalance !== undefined && acc.ledger_id != null) {
-    const money = optionalMoney(body.openingBalance);
-    if (!money.ok) { res.status(400).json({ error: `Opening Balance ${money.reason}.` }); return; }
-    if (money.value < 0) { res.status(400).json({ error: "Opening Balance cannot be negative." }); return; }
+    const money = openingMoney!;
+    if (!money.ok) return; // Validated before any master or ledger mutation.
     const { upsertOpeningBalance, currentFinancialYear } = await import("../lib/openingBalances");
     const { rebalanceCashBankOpeningEquity } = await import("../lib/cashBankLedgers");
     const fy = await currentFinancialYear();
@@ -3038,12 +3064,6 @@ router.patch("/accounts/cash-bank/:id", requireModuleAction("page:/accounts/cash
     });
     await rebalanceCashBankOpeningEquity(pool);
   }
-
-  await logActivity({
-    action: "UPDATE", module: "accounts", entityType: "cash_bank_account", entityId: id,
-    description: `Updated cash/bank account "${newName ?? acc.name}"`,
-    user: (req as any).employee?.username ?? "system",
-  });
 
   const { rows: [fresh] } = await pool.query(`SELECT * FROM cash_bank_accounts WHERE id = $1`, [id]);
   // The response carries the DERIVED balance (postings + openings), same as the

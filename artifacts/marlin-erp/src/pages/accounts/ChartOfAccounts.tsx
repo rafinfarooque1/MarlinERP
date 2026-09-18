@@ -27,6 +27,7 @@ import {
 } from './chartCommon';
 import { ChartHierarchy } from './ChartHierarchy';
 import { PageHeader } from '@/components/app/page-header';
+import { FinancialIntegrityPanel } from './FinancialIntegrityPanel';
 
 /* The checkbox is presentation-only. This context lets normal, month-wise and
  * recursive rows apply the same filter without changing the books payload or
@@ -1665,6 +1666,14 @@ export default function ChartOfAccounts() {
             onTotal: onViewStatement,
           } : undefined}
         />
+        <div className="mt-4">
+          <FinancialIntegrityPanel
+            fromDate={fromDate}
+            toDate={toDate}
+            locationType={effLoc.locationType}
+            locationId={effLoc.locationId}
+          />
+        </div>
       </div>
 
       {/* ── Manage Chart of Accounts ──

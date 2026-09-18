@@ -136,7 +136,15 @@ export async function creditMaterialAt(
     [refId, kind, branchType, branchId],
   );
   const existingQty = Number(existing?.quantity ?? 0);
-  const existingCost = Number(existing?.cost_price ?? 0);
+  const { rows: [checkpoint] } = existing ? await c.query(
+    `SELECT CASE WHEN quantity > 0 THEN value::numeric / quantity::numeric
+                 ELSE unit_cost::numeric END AS unit_cost
+       FROM stock_cost_snapshots
+      WHERE ref_id = $1 AND material_type = $2 AND branch_type = $3 AND branch_id = $4
+      ORDER BY as_of_date DESC, id DESC LIMIT 1`,
+    [refId, kind, branchType, branchId],
+  ) : { rows: [] };
+  const existingCost = Number(checkpoint?.unit_cost ?? existing?.cost_price ?? 0);
   const blendedCost = existing
     ? paiseConservativeBlendCost(existingQty, existingCost, qty, unitCost)
     : unitCost;

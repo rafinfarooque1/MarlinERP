@@ -29,6 +29,8 @@
  * Reserve, release and the movement they accompany must share one transaction.
  */
 
+import { isIsoDate } from "./dateInput";
+
 export type Queryable = { query: (sql: string, params?: unknown[]) => Promise<{ rows: any[] }> };
 
 /** Discriminator shared with stock_entries, stock_batches and stock_ledger. */
@@ -204,9 +206,27 @@ export interface InTransitRow {
  */
 export async function activeInTransit(c: Queryable, opts: {
   branchType?: string; branchId?: number; materialType?: ReservationProductKind; refId?: number;
+  /** End-of-business-day position, including reservations released later. */
+  asOf?: string;
 } = {}): Promise<InTransitRow[]> {
-  const conds = ["r.status = 'active'", "r.kind = 'in_transit'"];
+  const conds = ["r.kind = 'in_transit'"];
   const params: unknown[] = [];
+  if (opts.asOf != null) {
+    if (!isIsoDate(opts.asOf)) throw new Error("Invalid in-transit cutoff date");
+    params.push(opts.asOf);
+    // Original/backfilled reservations begin on the dispatch business date.
+    // Replacement short-receipt reservations begin when the receipt occurred,
+    // not at dispatch, or the original quantity and its shortfall count twice.
+    conds.push(`(CASE WHEN r.created_at = (
+      SELECT MIN(first_r.created_at) FROM stock_reservations first_r
+       WHERE first_r.doc_type = r.doc_type AND first_r.doc_id = r.doc_id
+         AND first_r.kind = 'in_transit'
+    ) THEN COALESCE(t.transfer_date::date, r.created_at::date)
+      ELSE r.created_at::date END) <= $1::date`);
+    conds.push(`(r.released_at::date > $1::date OR (r.status = 'active' AND r.released_at IS NULL))`);
+  } else {
+    conds.push("r.status = 'active'");
+  }
   if (opts.branchType) { params.push(opts.branchType); conds.push(`r.branch_type = $${params.length}`); }
   if (opts.branchId != null) { params.push(opts.branchId); conds.push(`r.branch_id = $${params.length}`); }
   if (opts.materialType) { params.push(opts.materialType); conds.push(`r.material_type = $${params.length}`); }
@@ -217,6 +237,7 @@ export async function activeInTransit(c: Queryable, opts: {
             r.quantity::numeric AS quantity, r.unit_cost::numeric AS unit_cost,
             r.doc_type, r.doc_id
        FROM stock_reservations r
+       ${opts.asOf ? "LEFT JOIN stock_transfers t ON r.doc_type = 'stock_transfer' AND t.id = r.doc_id" : ""}
       WHERE ${conds.join(" AND ")}
       ORDER BY r.doc_id, r.id`,
     params,

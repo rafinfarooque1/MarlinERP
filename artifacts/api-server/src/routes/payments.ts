@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { requireModuleAction, requireModuleView } from "../middleware/permissions";
 import { pool } from "@workspace/db";
-import { logActivity, logActivityInTransaction } from "../lib/audit";
+import { logActivityInTransaction } from "../lib/audit";
 import { resolveReceiveIntoAccount, postSaleCollectionReceipt, type ReceiveIntoAccount } from "../lib/saleCollection";
 import { optionalIsoDate } from "../lib/dateInput";
 import { respondIfMonthLocked } from "../lib/periodLock";

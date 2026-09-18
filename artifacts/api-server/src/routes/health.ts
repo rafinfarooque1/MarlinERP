@@ -5,6 +5,11 @@ import { censusDateColumns } from "../lib/dateColumns";
 
 const router: IRouter = Router();
 
+router.get("/healthz/live", (_req, res) => {
+  // Liveness is intentionally independent of schema/bootstrap readiness.
+  res.json({ status: "ok" });
+});
+
 router.get("/healthz", (req, res) => {
   // Return 503 while startup migrations are still running so the deployment
   // startup probe keeps retrying rather than accepting a half-initialised server.

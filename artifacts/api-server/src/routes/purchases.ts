@@ -4,7 +4,7 @@ import { requireModuleAction, requireModuleView } from "../middleware/permission
 import { db, pool, purchasesTable, vendorsTable, materialsTable, rawMaterialsTable, itemsTable } from "@workspace/db";
 import { eq, sql } from "drizzle-orm";
 import { CreatePurchaseBody, GetPurchaseParams } from "@workspace/api-zod";
-import { logActivity } from "../lib/audit";
+import { logActivityInTransaction } from "../lib/audit";
 import { isValidGstSlab, gstSlabErrorMessage } from "../lib/gst";
 import { creditBatch, debitBatchByNumber, updateAvgCostOnInbound, updateAvgCostOnReversal, type BatchKind } from "../lib/batches";
 import { productBatchIdentity, blockedByInactiveProducts, INACTIVE_PRODUCT_CODE, isProductKind } from "../lib/productIdentity";
@@ -915,6 +915,18 @@ router.post("/purchases", requireModuleAction("page:/production/purchase", "add"
       };
     }));
 
+    await logActivityInTransaction(client, {
+      action: "CREATE", module: "purchases", entityType: "purchase", entityId: newId,
+      user: (req as any).employee?.username,
+      description: `New purchase at ${locName} — ₹${totalAmount.toFixed(2)}${parsed.data.invoiceNumber ? ` (Ref: ${parsed.data.invoiceNumber})` : ""}`,
+      metadata: { after: {
+        vendorId: parsed.data.vendorId, totalAmount, lineCount: enriched.length,
+        invoiceNumber: parsed.data.invoiceNumber, locationType: loc.type, locationId: loc.id,
+        priceMode, taxableTotal, taxTotal, discountTotal,
+        otherChargesTotal: otherChargesTot,
+        batchNumbers: (enriched as any[]).map(l => l.batchNumber),
+      } },
+    });
     await client.query("COMMIT");
   } catch (e) {
     await client.query("ROLLBACK").catch(() => {});
@@ -936,18 +948,6 @@ router.post("/purchases", requireModuleAction("page:/production/purchase", "add"
 
   const [row] = await db.select().from(purchasesTable).where(eq(purchasesTable.id, newId)).limit(1);
   const [vendor] = await db.select().from(vendorsTable).where(eq(vendorsTable.id, row.vendorId)).limit(1);
-
-  logActivity({
-    action: "CREATE", module: "purchases", entityType: "purchase", entityId: row.id,
-    description: `New purchase from ${vendor?.name ?? "Vendor"} at ${locName} — ₹${totalAmount.toFixed(2)}${row.invoiceNumber ? ` (Ref: ${row.invoiceNumber})` : ""}`,
-    metadata: { after: {
-      vendorId: row.vendorId, vendorName: vendor?.name, totalAmount, lineCount: enriched.length,
-      invoiceNumber: row.invoiceNumber, locationType: loc.type, locationId: loc.id,
-      priceMode, taxableTotal, taxTotal, discountTotal,
-      otherChargesTotal: otherChargesTot,
-      batchNumbers: (enriched as any[]).map(l => l.batchNumber),
-    } },
-  }).catch(() => {});
 
   res.status(201).json({
     ...row, vendorName: vendor?.name ?? "", totalAmount,
@@ -1740,6 +1740,13 @@ router.patch("/purchases/:id", requireModuleAction("page:/production/purchase", 
          vendorInvoiceDateNew !== undefined ? vendorInvoiceDateNew : (locked.vendor_invoice_date ?? null)],
       );
 
+      await logActivityInTransaction(client, {
+        action: "UPDATE", module: "purchases", entityType: "purchase", entityId: id,
+        user: (req as any).employee?.username,
+        description: `Purchase Bill #${id} fully edited at ${newLocName}`
+          + (isMove ? ` (moved from ${locName})` : '') + ` — ₹${totalAmount.toFixed(2)}`,
+        metadata: { before: { totalAmount: beforeTotal, locationType: loc.type, locationId: loc.id }, after: { totalAmount, otherChargesTotal: newOtherTot, lineCount: enriched.length, locationType: newLoc.type, locationId: newLoc.id, priceMode, taxableTotal, taxTotal } },
+      });
       await client.query("COMMIT");
     } catch (e) {
       await client.query("ROLLBACK").catch(() => {});
@@ -1756,13 +1763,6 @@ router.patch("/purchases/:id", requireModuleAction("page:/production/purchase", 
     }
 
     const [row] = await db.select().from(purchasesTable).where(eq(purchasesTable.id, id)).limit(1);
-
-    logActivity({
-      action: "UPDATE", module: "purchases", entityType: "purchase", entityId: id,
-      description: `Purchase Bill #${id} fully edited at ${newLocName}`
-        + (isMove ? ` (moved from ${locName})` : '') + ` — ₹${totalAmount.toFixed(2)}`,
-      metadata: { before: { totalAmount: beforeTotal, locationType: loc.type, locationId: loc.id }, after: { totalAmount, otherChargesTotal: newOtherTot, lineCount: enriched.length, locationType: newLoc.type, locationId: newLoc.id, priceMode, taxableTotal, taxTotal } },
-    }).catch(() => {});
 
     const [vendor] = await db.select().from(vendorsTable).where(eq(vendorsTable.id, row.vendorId)).limit(1);
     // Raw-migration column: re-read what the UPDATE just stored.
@@ -1815,26 +1815,27 @@ router.patch("/purchases/:id", requireModuleAction("page:/production/purchase", 
     res.status(400).json({ error: "No fields to update" }); return;
   }
 
-  // vendor_invoice_date is a raw-migration column — a drizzle .set() cannot
-  // carry it, so it is written with explicit SQL like other_charges below.
-  if (vendorInvoiceDateNew !== undefined) {
-    await pool.query(
-      `UPDATE purchases SET vendor_invoice_date = $2::date WHERE id = $1`,
-      [id, vendorInvoiceDateNew],
-    );
-  }
-  if (chargesOnly) {
-    // Raw column — a drizzle .set() cannot carry it (see raw-migration columns).
-    // Written under the same row lock the payment-allocation path takes, and
-    // the settled floor re-checked there: a payment recorded between the
-    // fast-fail check above and this write must not be stranded above a
-    // shrunken total.
-    const c2 = await pool.connect();
-    try {
-      await c2.query("BEGIN");
-      const { rows: [lk] } = await c2.query(
-        `SELECT total_amount FROM purchases WHERE id = $1 FOR UPDATE`, [id]);
-      if (!lk) { await c2.query("ROLLBACK"); res.status(404).json({ error: "Not found" }); return; }
+  // Metadata changes can change books and stock business dates too. Keep the
+  // header, raw-migration fields, stock dates and audit on ONE locked client.
+  const c2 = await pool.connect();
+  try {
+    await c2.query("BEGIN");
+    const { rows: [lk] } = await c2.query(
+      `SELECT *, to_char(purchase_date, 'YYYY-MM-DD') AS business_date
+         FROM purchases WHERE id = $1 FOR UPDATE`, [id]);
+    if (!lk) { await c2.query("ROLLBACK"); res.status(404).json({ error: "Not found" }); return; }
+    if ((lk.location_type ?? "headoffice") !== loc.type || Number(lk.location_id ?? 1) !== loc.id) {
+      await c2.query("ROLLBACK");
+      res.status(409).json({ error: "This bill was changed by someone else. Reload and try again." }); return;
+    }
+    for (const d of [lk.business_date, purchaseDate]) {
+      const ym = ymOfDate(d);
+      if (ym && await isMonthLocked(c2, ym.year, ym.month)) {
+        await c2.query("ROLLBACK");
+        res.status(423).json(monthLockedBody(ym.year, ym.month)); return;
+      }
+    }
+    if (chargesOnly) {
       const { rows: [s2] } = await c2.query(
         `SELECT COALESCE((SELECT SUM(amount)::numeric FROM payment_bill_allocations WHERE purchase_id = $1), 0) AS alloc_total,
                 COALESCE((SELECT SUM(amount)::numeric FROM purchase_advance_applications WHERE purchase_id = $1), 0) AS adv_applied`,
@@ -1851,31 +1852,43 @@ router.patch("/purchases/:id", requireModuleAction("page:/production/purchase", 
         return;
       }
       await c2.query(`UPDATE purchases SET other_charges = $2::jsonb WHERE id = $1`, [id, JSON.stringify(chargesOnly.charges)]);
-      await c2.query("COMMIT");
-    } catch (e) {
-      await c2.query("ROLLBACK").catch(() => {});
-      throw e;
-    } finally {
-      c2.release();
     }
-  }
-  // An empty drizzle SET throws — fall back to a plain read when every field
-  // that changed was the raw jsonb column.
-  const [row] = Object.keys(updateData).length > 0
-    ? await db.update(purchasesTable).set(updateData).where(eq(purchasesTable.id, id)).returning()
-    : await db.select().from(purchasesTable).where(eq(purchasesTable.id, id)).limit(1);
-  if (!row) { res.status(404).json({ error: "Not found" }); return; }
-  // A date-only edit re-dates the bill — its stock movements must follow, or
-  // date-based stock reports keep the goods on the old day. txn_date is the
-  // movement's BUSINESS date, not audit information (created_at is untouched),
-  // so restating it here is the correction, not a rewrite of the trail. Every
-  // row of the bill moves together, so reversal pairs still cancel on any day.
-  if (purchaseDate !== undefined) {
-    await pool.query(
-      `UPDATE stock_ledger SET txn_date = $2::date WHERE doc_type = 'purchase' AND doc_id = $1`,
-      [id, purchaseDate],
+    await c2.query(
+      `UPDATE purchases SET purchase_date = $2, invoice_number = $3, notes = $4,
+                            vendor_invoice_date = $5::date WHERE id = $1`,
+      [id, purchaseDate !== undefined ? purchaseDate : lk.business_date,
+       invoiceNumber !== undefined ? invoiceNumber : lk.invoice_number,
+       notes !== undefined ? notes : lk.notes,
+       vendorInvoiceDateNew !== undefined ? vendorInvoiceDateNew : lk.vendor_invoice_date],
     );
+    if (purchaseDate !== undefined) {
+      await c2.query(
+        `UPDATE stock_ledger SET txn_date = $2::date WHERE doc_type = 'purchase' AND doc_id = $1`,
+        [id, purchaseDate],
+      );
+    }
+    await logActivityInTransaction(c2, {
+      action: "UPDATE", module: "purchases", entityType: "purchase", entityId: id,
+      user: (req as any).employee?.username,
+      description: `Purchase Bill #${id} metadata edited at ${locName}`,
+      metadata: {
+        before: { purchaseDate: lk.business_date, invoiceNumber: lk.invoice_number, notes: lk.notes, vendorInvoiceDate: lk.vendor_invoice_date, otherCharges: lk.other_charges },
+        after: { ...updateData, vendorInvoiceDate: vendorInvoiceDateNew !== undefined ? vendorInvoiceDateNew : lk.vendor_invoice_date, otherCharges: chargesOnly?.charges ?? lk.other_charges },
+        locationType: loc.type, locationId: loc.id,
+      },
+    });
+    await c2.query("COMMIT");
+  } catch (e) {
+    await c2.query("ROLLBACK").catch(() => {});
+    if ((e as any)?.code === "23505" && String((e as any)?.constraint ?? "").includes("purchases_vendor_invoice")) {
+      res.status(409).json({ error: `Invoice "${invoiceNumber}" is already recorded for this vendor.`, code: "DUPLICATE_PURCHASE_INVOICE" });
+      return;
+    }
+    throw e;
+  } finally {
+    c2.release();
   }
+  const [row] = await db.select().from(purchasesTable).where(eq(purchasesTable.id, id)).limit(1);
   const [vendor] = await db.select().from(vendorsTable).where(eq(vendorsTable.id, row.vendorId)).limit(1);
   // other_charges / vendor_invoice_date are raw-migration columns drizzle
   // cannot see — read them back explicitly so the response carries what was
@@ -2037,6 +2050,12 @@ router.delete("/purchases/:id", requireModuleAction("page:/production/purchase",
       await client.query("ROLLBACK");
       res.status(404).json({ error: "Not found" }); return;
     }
+    await logActivityInTransaction(client, {
+      action: "DELETE", module: "purchases", entityType: "purchase", entityId: id,
+      user: (req as any).employee?.username,
+      description: `Purchase Bill #${id} deleted at ${locName} (stock reversed)`,
+      metadata: { before: { vendorId: vendorIdBefore, totalAmount: totalBefore, locationType: loc.type, locationId: loc.id } },
+    });
     await client.query("COMMIT");
   } catch (e) {
     await client.query("ROLLBACK").catch(() => {});
@@ -2045,11 +2064,6 @@ router.delete("/purchases/:id", requireModuleAction("page:/production/purchase",
     client.release();
   }
 
-  logActivity({
-    action: "DELETE", module: "purchases", entityType: "purchase", entityId: id,
-    description: `Purchase Bill #${id} deleted at ${locName} (stock reversed)`,
-    metadata: { before: { vendorId: vendorIdBefore, totalAmount: totalBefore, locationType: loc.type, locationId: loc.id } },
-  }).catch(() => {});
   res.status(204).send();
 });
 

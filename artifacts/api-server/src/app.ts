@@ -71,7 +71,7 @@ app.use(express.urlencoded({ extended: true, limit: "1mb" }));
 app.use("/api", (req, res, next) => {
   // Exact matches only — a startsWith("/health") bypass would also open every
   // future /health* route, which is how an unintended hole was opened before.
-  if (req.path === "/health" || req.path === "/healthz") { next(); return; }
+  if (req.path === "/health" || req.path === "/healthz" || req.path === "/healthz/live") { next(); return; }
   // Column names and their live types only; no business data. Lets a publish be
   // verified from outside without reading boot logs production throws away.
   if (req.method === "GET" && req.path === "/healthz/schema") { next(); return; }

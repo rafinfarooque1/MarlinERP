@@ -35,6 +35,74 @@ type PoolClient = Queryable & { release(): void };
 export const CASH_ROOT_CODE = "STD-CASH";
 export const BANK_ROOT_CODE = "STD-BANK";
 
+export type CashBankLocation = { locationType: "headoffice" | "warehouse" | "outlet"; locationId: number };
+type LocationResult = { ok: true; location: CashBankLocation } | { ok: false; error: string };
+export const CASH_BANK_LOCATION_CONFLICT = "CASH_BANK_LOCATION_CONFLICT";
+
+/** Explicit single-owner input only. Never turn blank or malformed input into HO. */
+export function parseCashBankLocation(body: Record<string, unknown>): LocationResult {
+  if (Object.prototype.hasOwnProperty.call(body, "locations")) {
+    return { ok: false, error: "Cash & Bank accounts require exactly one location; multiple-location input is not supported." };
+  }
+  const type = body.locationType;
+  if (type !== "headoffice" && type !== "warehouse" && type !== "outlet") {
+    return { ok: false, error: "Select exactly one location (headoffice, warehouse or outlet)." };
+  }
+  const rawId = body.locationId;
+  const id = typeof rawId === "number" || (typeof rawId === "string" && /^\d+$/.test(rawId))
+    ? Number(rawId) : NaN;
+  if (type === "headoffice") {
+    if (rawId != null && id !== 0) return { ok: false, error: "Head Office locationId must be 0." };
+    return { ok: true, location: { locationType: type, locationId: 0 } };
+  }
+  if (!Number.isSafeInteger(id) || id <= 0) {
+    return { ok: false, error: "Pick the location this account belongs to." };
+  }
+  return { ok: true, location: { locationType: type, locationId: id } };
+}
+
+/**
+ * Diagnose legacy ownership without selecting an arbitrary membership or
+ * repairing data. A missing shadow is compatible with an unambiguous scalar;
+ * multiple, invalid, or disagreeing memberships require explicit review.
+ */
+export function diagnoseCashBankLocation(
+  account: { location_type?: unknown; location_id?: unknown },
+  memberships: Array<{ location_type?: unknown; location_id?: unknown }>,
+): LocationResult {
+  const owner = parseCashBankLocation({ locationType: account.location_type, locationId: account.location_id });
+  const conflict = {
+    ok: false as const,
+    error: "Cash/Bank account has ambiguous or invalid location ownership. Writes are blocked; Head Office must review the scalar owner and legacy memberships. No locations have been reassigned.",
+  };
+  if (!owner.ok || memberships.length > 1) return conflict;
+  if (memberships.length === 1) {
+    const member = parseCashBankLocation({ locationType: memberships[0].location_type, locationId: memberships[0].location_id });
+    if (!member.ok || member.location.locationType !== owner.location.locationType
+      || member.location.locationId !== owner.location.locationId) return conflict;
+  }
+  return owner;
+}
+
+/** Pure diagnosis above is shared by account edits and money-voucher guards. */
+export async function cashBankLedgerLocationError(q: Queryable, ledgerIds: number[]): Promise<string | null> {
+  const { rows } = await q.query(
+    `SELECT c.id, c.ledger_id, c.location_type, c.location_id,
+            COALESCE((SELECT json_agg(json_build_object('location_type', l.location_type, 'location_id', l.location_id))
+                      FROM cash_bank_account_locations l WHERE l.account_id = c.id), '[]'::json) AS memberships
+       FROM cash_bank_accounts c WHERE c.ledger_id = ANY($1::int[])`,
+    [ledgerIds],
+  );
+  const seen = new Set<number>();
+  for (const row of rows) {
+    if (seen.has(Number(row.ledger_id))) return "Cash/Bank ledger is linked to multiple accounts. Writes are blocked pending Head Office review.";
+    seen.add(Number(row.ledger_id));
+    const result = diagnoseCashBankLocation(row, row.memberships);
+    if (!result.ok) return result.error;
+  }
+  return null;
+}
+
 /** Which head a Cash & Bank account's ledger lives under. Cash in hand goes
  *  under Cash; everything that is a claim on an institution (bank, upi
  *  wallets, "other") goes under Bank Accounts. No exceptions. */

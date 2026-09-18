@@ -8,7 +8,7 @@ import { logActivity, logActivityInTransaction } from "../lib/audit";
 import { pool } from "@workspace/db";
 import {
   consumeBatches, restoreBatches, creditBatch,
-  validateBatchOverride, type BatchBreakdownEntry,
+  validateBatchOverride, allocateReceived, type BatchBreakdownEntry,
 } from "../lib/batches";
 import { writeStockLedger, batchResolveMeta, toTxnDate } from "../lib/stockLedger";
 import { isIsoDate } from "../lib/dateInput";
@@ -70,7 +70,8 @@ async function authoritativeTransferCost(
                  ELSE COALESCE(master.cost, 0)::numeric END AS unit_cost
        FROM ${table} master
        LEFT JOIN LATERAL (
-         SELECT scs.unit_cost
+          SELECT CASE WHEN scs.quantity > 0 THEN scs.value::numeric / scs.quantity::numeric
+                      ELSE scs.unit_cost::numeric END AS unit_cost
            FROM stock_cost_snapshots scs
           WHERE scs.material_type = $2
             AND scs.ref_id = $1
@@ -991,23 +992,6 @@ router.post("/stock/transfers", requireModuleAction("page:/transfers", "add"), a
   });
 });
 
-/** Allocate a received quantity over the dispatched batch breakdown, in FEFO
- *  dispatch order. Non-final entries cap at their dispatched quantity; the
- *  final entry absorbs any excess (receiver counted more than dispatched). */
-function allocateReceived(breakdown: BatchBreakdownEntry[], receivedQty: number): BatchBreakdownEntry[] {
-  const out: BatchBreakdownEntry[] = [];
-  let remaining = receivedQty;
-  for (let i = 0; i < breakdown.length; i++) {
-    if (remaining <= 0) break;
-    const b = breakdown[i];
-    const isLast = i === breakdown.length - 1;
-    const take = isLast ? remaining : Math.min(Number(b.quantity), remaining);
-    if (take > 0) out.push({ ...b, quantity: r3(take) });
-    remaining = r3(remaining - take);
-  }
-  return out;
-}
-
 // Approve a transfer — receiver verifies physical stock and enters actual received quantities
 router.patch("/stock/transfers/:id/approve", requireModuleAction("page:/transfers", "edit"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
@@ -1043,7 +1027,7 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction("page:/transfer
        WHERE id = $2 AND status = 'in_transit'
        RETURNING id, from_type, from_id, to_type, to_id, line_items, challan_number,
                  transfer_type, tax_type, transfer_date, transfer_value, gst_amount,
-                 document_mode, transfer_invoice_number`,
+                  document_mode, transfer_invoice_number, approved_at::date::text AS receipt_date`,
        [approvedBy || 'admin', id]
     );
     row = claim.rows[0];
@@ -1055,11 +1039,9 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction("page:/transfer
       return;
     }
 
-    // Month lock: receiving posts the destination credit and JV on the
-    // transfer's own business date (transfer_date, see the postings below) —
-    // frozen once that month is locked.
+    // Receipt is a new event, not a restatement of dispatch.
     {
-      const ym = ymOfDate(row.transfer_date);
+      const ym = ymOfDate(row.receipt_date);
       if (ym && await isMonthLocked(client, ym.year, ym.month)) {
         await client.query("ROLLBACK");
         res.status(423).json(monthLockedBody(ym.year, ym.month)); return;
@@ -1202,7 +1184,8 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction("page:/transfer
           // by the latest checkpoint, falling back to the mirror for legacy
           // rows that predate checkpointing.
           const { rows: [latestCheckpoint] } = await client.query(
-            `SELECT unit_cost::numeric AS unit_cost
+            `SELECT CASE WHEN quantity > 0 THEN value::numeric / quantity::numeric
+                         ELSE unit_cost::numeric END AS unit_cost
                FROM stock_cost_snapshots
               WHERE material_type = 'item'
                 AND ref_id = $1
@@ -1271,9 +1254,7 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction("page:/transfer
     let receiveVoucherId: number | null = null;
     let purchaseInvoiceId: number | null = null;
     if (row.transfer_type && row.transfer_type !== 'internal' && Number(row.transfer_value ?? 0) > 0) {
-      const txnDate = row.transfer_date
-        ? new Date(row.transfer_date).toISOString().slice(0, 10)
-        : new Date().toISOString().slice(0, 10);
+      const txnDate = row.receipt_date;
       const taxType = (row.tax_type ?? 'none') as TaxType;
 
       if (String(row.document_mode ?? 'voucher') === 'invoice' && row.transfer_invoice_number) {
@@ -1387,7 +1368,7 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction("page:/transfer
           snapshotUnitCost: snapshotUnitCosts.get(`${mt}:${Number(l.itemId)}`) ?? null,
           docType: 'stock_transfer',
           docId: id,
-          txnDate: toTxnDate(row.transfer_date),
+          txnDate: row.receipt_date,
         };
       }));
     }
