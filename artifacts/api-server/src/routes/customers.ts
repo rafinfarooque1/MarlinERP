@@ -153,7 +153,7 @@ async function resolveRelocation(
     return { error: "locationType must be headoffice, warehouse or outlet", status: 400 };
   }
   const id = Number(body.locationId);
-  if (!Number.isFinite(id) || id <= 0) {
+  if (!Number.isSafeInteger(id) || id <= 0) {
     return { error: "locationId is required for a warehouse or outlet", status: 400 };
   }
   const table = type === "warehouse" ? "warehouses" : "outlets";
@@ -166,7 +166,7 @@ async function resolveRelocation(
 }
 
 /**
- * LBAC gate for single-party routes (mutations and the ledger statement).
+ * LBAC gate for all single-party routes, including detail GETs.
  *
  * The list endpoints scope by the stored location stamp, but /:id routes
  * address a row directly — without this check a branch user could read or
@@ -181,7 +181,10 @@ async function partyScopeCheck(
   id: number,
 ): Promise<"ok" | "not_found"> {
   const emp = req.employee as { branchType?: string; branchId?: number } | undefined;
-  if ((emp?.branchType ?? "headoffice") === "headoffice") return "ok";
+  if (!Number.isSafeInteger(id) || id <= 0 || !emp?.branchType) return "not_found";
+  if (emp.branchType === "headoffice") return "ok";
+  if (!["warehouse", "outlet"].includes(emp.branchType)
+    || !Number.isSafeInteger(Number(emp.branchId)) || Number(emp.branchId) <= 0) return "not_found";
   const table = kind === "customer" ? "customers" : "vendors";
   const { rows: [row] } = await pool.query<{ lt: string; lid: number }>(
     `SELECT COALESCE(location_type, 'headoffice') AS lt, COALESCE(location_id, 0) AS lid

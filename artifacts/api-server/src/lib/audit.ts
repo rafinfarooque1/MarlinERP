@@ -1,8 +1,7 @@
 /**
- * Lightweight fire-and-forget audit logging helper.
- * Call this after every successful mutation — never await in the hot path
- * (unless you explicitly want to block). Errors are swallowed so a logging
- * failure never breaks the request.
+ * Financial mutations MUST await logActivityInTransaction on their own pg
+ * transaction client before COMMIT. An audit failure then rolls back with the
+ * mutation. logActivity is only a best-effort helper for non-critical events.
  */
 import { db, activityLogTable } from "@workspace/db";
 
@@ -24,7 +23,9 @@ export interface AuditOptions {
 
 type AuditQuery = { query: (sql: string, params?: unknown[]) => Promise<unknown> };
 
-/** Durable variant for callers that already own a transaction. */
+/** Caller must supply its open transaction client and await before COMMIT.
+ * Errors deliberately propagate; do not catch them outside the rollback path.
+ */
 export async function logActivityInTransaction(q: AuditQuery, opts: AuditOptions): Promise<void> {
   await q.query(
     `INSERT INTO activity_log
@@ -40,7 +41,7 @@ export async function logActivityInTransaction(q: AuditQuery, opts: AuditOptions
 
 /**
  * Log an audit event. Returns a promise that resolves once the insert
- * completes, but callers should generally fire-and-forget with `.catch(()=>{})`.
+ * completes. Non-critical events only: failures are logged, not propagated.
  */
 export async function logActivity(opts: AuditOptions): Promise<void> {
   try {

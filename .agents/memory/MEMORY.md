@@ -78,6 +78,7 @@
 - [Leave approval workflow](leave-approval-workflow.md) — pending = zero pay; stamp at approval under the attendance lock; rejection must NOT take it (signed-off months); revert = DELETE, never 'absent'.
 - [drizzle push destroys raw schema](drizzle-push-destroys-raw-schema.md) — NEVER run drizzle-kit push here: schema.ts is a partial view; push --force dropped 27 raw-migration tables. DDL ships via boot migrations only.
 - [Destructive boot cleanups](destructive-boot-cleanups.md) — one-time DELETE blocks guarded only by data-shape probes re-fire when columns are re-added empty; guard on migration_log instead.
+- [Financial integrity diagnostics](financial-integrity-diagnostics.md) — PASS requires authoritative evidence and a performed comparison; unknown history or untested atomicity is WARN, never zero-valued green.
 - [Orphan party ledgers & dropdown sources](orphan-party-ledgers.md) — voucher/receipt/payment pickers read the chart of accounts, not masters; hand-deleted parties leave VEND-/CUST- ledgers; boot sweep heals.
 - [Company reset & ghost rows](company-reset-ghosts.md) — reset endpoints must share ONE table list; RESTART IDENTITY re-attaches surviving rows to new ids; batch coverage may undershoot entries, never exceed.
 - [System audit doc](../../docs/ERP_SYSTEM_AUDIT.md) — Aug 2026 full audit lives in-repo: architecture, 62-table catalog, all flows, scores, risks; keep it current when modules change.

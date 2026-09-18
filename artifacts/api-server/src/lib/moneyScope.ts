@@ -23,6 +23,7 @@
 import { pool } from "@workspace/db";
 import type { DataScope } from "./dataScope.js";
 import type { ParsedLocationFilter } from "./queryFilters.js";
+import { cashBankLedgerLocationError } from "./cashBankLedgers";
 
 export interface CallerLocation {
   locationType: string;
@@ -59,10 +60,13 @@ export function ownLocationScope(employee?: {
   branchId?: number;
 }): DataScope {
   const branchType = employee?.branchType;
-  if (!branchType || branchType === "headoffice") {
+  if (branchType === "headoffice") {
     return { isHeadOffice: true, warehouseIds: [], outletIds: [] };
   }
   const id = Number(employee?.branchId ?? 0);
+  if (!["warehouse", "outlet"].includes(branchType ?? "") || !Number.isSafeInteger(id) || id <= 0) {
+    return { isHeadOffice: false, warehouseIds: [], outletIds: [] };
+  }
   return branchType === "warehouse"
     ? { isHeadOffice: false, warehouseIds: [id], outletIds: [] }
     : { isHeadOffice: false, warehouseIds: [], outletIds: [id] };
@@ -200,6 +204,8 @@ export async function checkVoucherLegs(
   otherLeg: number,
   ownLegLabel: string,
 ): Promise<LegCheckResult> {
+  const ownershipError = await cashBankLedgerLocationError(pool, [ownLeg, otherLeg]);
+  if (ownershipError) return { ok: false, error: ownershipError };
   if (scope.isHeadOffice) return { ok: true };
 
   const cashIds = await scopeCashLedgerIds(scope);
@@ -454,6 +460,11 @@ export async function resolveMoneyVoucherLocation(
   tillLedgerId: number,
   fallback?: CallerLocation | null,
 ): Promise<{ ok: true; loc: CallerLocation } | { ok: false; status: number; error: string }> {
+  if (!employee?.branchType || !["headoffice", "warehouse", "outlet"].includes(employee.branchType)) {
+    return { ok: false, status: 403, error: "A valid authenticated location is required." };
+  }
+  const ownershipError = await cashBankLedgerLocationError(pool, [tillLedgerId]);
+  if (ownershipError) return { ok: false, status: 409, error: ownershipError };
   const owned = await locationOwnedLedgerMap();
   const legacyOwners = owned.get(Number(tillLedgerId)) ?? [];
   // The account's scalar owner is authoritative for account-backed ledgers.

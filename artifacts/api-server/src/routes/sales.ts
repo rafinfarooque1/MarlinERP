@@ -4,7 +4,7 @@ import { requireModuleAction, requireModuleView, hasModuleAction } from "../midd
 import { db, salesTable, outletsTable, customersTable, stockEntriesTable, itemsTable, itemPricesTable, companySettingsTable } from "@workspace/db";
 import { eq, and, inArray, sql } from "drizzle-orm";
 import { CreateSaleBody, GetSaleParams, SetItemPriceBody, ListItemPricesQueryParams } from "@workspace/api-zod";
-import { logActivity, logActivityInTransaction } from "../lib/audit";
+import { logActivityInTransaction } from "../lib/audit";
 import { createInvoiceShareToken } from "../lib/shareToken";
 import { assembleInvoiceData, renderInvoicePdf } from "../services/invoicePdf";
 import { pool } from "@workspace/db";
@@ -2251,6 +2251,12 @@ router.put("/sales/:id", requireModuleAction("page:/sales/pos", "edit"), async (
       }
     }
 
+    await logActivityInTransaction(editTx, {
+      action: "UPDATE", module: "sales", entityType: "sale", entityId: id,
+      user: (req as any).employee?.username,
+      description: `Sale ${existingRaw.invoice_number} updated — ₹${totalAmount.toFixed(2)}`,
+      metadata: { before: { totalAmount: oldTotal }, after: { totalAmount, locationType: newLocationType, locationId: newLocationId } },
+    });
     await editTx.query('COMMIT');
   } catch (txErr) {
     try { await editTx.query('ROLLBACK'); } catch { /* already rolled back */ }
@@ -2262,12 +2268,6 @@ router.put("/sales/:id", requireModuleAction("page:/sales/pos", "edit"), async (
   const customerName = parsed.data.customerId
     ? (await db.select().from(customersTable).where(eq(customersTable.id, parsed.data.customerId)).limit(1))[0]?.name ?? null
     : null;
-
-  logActivity({
-    action: "UPDATE", module: "sales", entityType: "sale", entityId: id,
-    description: `Sale ${existingRaw.invoice_number} updated — ₹${totalAmount.toFixed(2)}`,
-    metadata: { before: { totalAmount: oldTotal }, after: { totalAmount } },
-  }).catch(() => {});
 
   // Re-read the shared position after the edit: the new total may have changed
   // what is owed, and credit notes raised against this invoice still count.

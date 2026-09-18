@@ -27,7 +27,7 @@
  */
 
 import { pool } from "@workspace/db";
-import { closingStockValuation, stockValuation, resolveProductNames, type ValuedItem } from "./valuation";
+import { stockValuation, resolveProductNames, type ValuedItem } from "./valuation";
 
 /** A queryable database handle (pg pool or PoolClient), per lib/importVouchers.ts. */
 type Q = { query: Function };
@@ -195,6 +195,8 @@ export interface StockTransferOpeningAdjustmentLine {
 export interface StockTransferOpeningAdjustment {
   total: number;
   lines: StockTransferOpeningAdjustmentLine[];
+  reliable?: boolean;
+  note?: string | null;
 }
 
 /**
@@ -244,71 +246,23 @@ export async function stockTransferOpeningAdjustment(
   }
 
   const { rows } = await q.query(
-    `WITH active_transit AS (
-       SELECT doc_type, doc_id, material_type, ref_id, branch_type, branch_id,
-              SUM(quantity::numeric) AS qty
-         FROM stock_reservations
-        WHERE status = 'active' AND kind = 'in_transit'
-        GROUP BY doc_type, doc_id, material_type, ref_id, branch_type, branch_id
-     )
-     SELECT sl.material_type, sl.ref_id::int AS ref_id,
+    `SELECT sl.material_type, sl.ref_id::int AS ref_id,
             sl.qty_change::numeric AS qty_change,
-            sl.unit_cost::numeric AS unit_cost,
-            COALESCE(at.qty, 0)::numeric AS active_transit_qty
+             sl.unit_cost::numeric AS unit_cost
        FROM stock_ledger sl
-       LEFT JOIN active_transit at
-         ON sl.txn_type = 'transfer_out'
-        AND at.doc_type = sl.doc_type
-        AND at.doc_id = sl.doc_id
-        AND at.material_type = sl.material_type
-        AND at.ref_id = sl.ref_id
-        AND at.branch_type = sl.branch_type
-        AND at.branch_id = sl.branch_id
       WHERE ${conds.join(" AND ")}
       ORDER BY sl.id`,
     params,
   );
-  let priorTransitRows: any[] = [];
-  if (fromDate) {
-    const priorParams: unknown[] = [fromDate];
-    const priorConds = [
-      `sr.status = 'active'`,
-      `sr.kind = 'in_transit'`,
-      `sr.doc_type = 'stock_transfer'`,
-      `st.transfer_date < $1::date`,
-    ];
-    if (scope) {
-      if (scope.branchPairs?.length) {
-        const parts = scope.branchPairs.map((p) => {
-          priorParams.push(p.type, p.id);
-          return `(sr.branch_type = $${priorParams.length - 1} AND sr.branch_id = $${priorParams.length})`;
-        });
-        priorConds.push(`(${parts.join(" OR ")})`);
-      } else {
-        priorParams.push(scope.branchType);
-        priorConds.push(`sr.branch_type = $${priorParams.length}`);
-        if (scope.branchId != null) {
-          priorParams.push(scope.branchId);
-          priorConds.push(`sr.branch_id = $${priorParams.length}`);
-        }
-      }
-    }
-    const prior = await q.query(
-      `SELECT sr.material_type, sr.ref_id::int AS ref_id,
-              SUM(sr.quantity::numeric) AS qty_change,
-              SUM(sr.quantity::numeric * sr.unit_cost::numeric) AS transit_value,
-              NULL::numeric AS unit_cost
-         FROM stock_reservations sr
-         JOIN stock_transfers st ON st.id = sr.doc_id
-        WHERE ${priorConds.join(" AND ")}
-        GROUP BY sr.material_type, sr.ref_id`,
-      priorParams,
-    );
-    priorTransitRows = prior.rows;
-  }
-  if (rows.length === 0 && priorTransitRows.length === 0) return { total: 0, lines: [] };
-
-  const refs = [...rows, ...priorTransitRows].map((r: any) => ({
+  // Sender-owned transit is part of BOTH physical boundary valuations.
+  // Neutral adjustment = physical transfer movement + closing transit - opening
+  // transit. Current reservation status cannot answer a historical question.
+  const valuationScope = stockValuationScope(scope);
+  const [openingTransit, closingTransit] = await Promise.all([
+    fromDate ? stockValuation(q as any, { ...valuationScope, asOf: previousDay(fromDate) }) : null,
+    stockValuation(q as any, { ...valuationScope, ...(toDate ? { asOf: toDate } : {}) }),
+  ]);
+  const refs = rows.map((r: any) => ({
     materialType: String(r.material_type) as ValuedItem["materialType"],
     refId: Number(r.ref_id),
   }));
@@ -335,50 +289,37 @@ export async function stockTransferOpeningAdjustment(
     byKey.set(key, line);
   };
 
+  let missingCost = 0;
   for (const row of rows) {
     const materialType = String(row.material_type) as ValuedItem["materialType"];
     const refId = Number(row.ref_id);
     const rawQty = Number(row.qty_change ?? 0);
-    // Older transfer rows were written with a non-null zero cost when the
-    // source batch had no stamped cost. Zero is not a real cost here: the
-    // authoritative closing valuation uses the product's weighted average
-    // (with manual cost fallback), so the opening-side transfer adjustment
-    // must use the same fallback or an internal transfer creates a false P&L
-    // delta. Positive movement costs remain the traceable document basis.
     const recordedUnitCost = Number(row.unit_cost ?? 0);
-    const fallbackUnitCost = Number(meta.get(`${materialType}:${refId}`)?.unitCost ?? 0);
-    const rawUnitCost = recordedUnitCost > 0 ? recordedUnitCost : fallbackUnitCost;
-    // An active in-transit reservation is already included in the sender's
-    // closing valuation. Remove that part of transfer_out from the opening
-    // adjustment; otherwise an unreceived shipment creates artificial profit
-    // (or loss) even though it remains sender-owned.
-    const transitQty = Number(row.active_transit_qty ?? 0);
-    const qty = rawQty < 0 ? rawQty + transitQty : rawQty;
-    // Match the transfer ledger's own traceable cost basis. Reservations use
-    // the weighted-average cost needed by current in-transit valuation, which
-    // can differ from the FEFO/line cost recorded on this movement. Using that
-    // reservation value here would leave a false P&L delta on dispatch.
-    const value = r2(rawQty * rawUnitCost + (rawQty < 0 ? transitQty * rawUnitCost : 0));
-    const unitCost = Math.abs(qty) > 0.001 ? r2(value / qty) : rawUnitCost;
-    addLine(materialType, refId, qty, value, unitCost);
+    // A missing dated cost cannot be reconstructed from today's mutable master.
+    // Keep the missing amount explicit via reliability, never fabricate it.
+    if (!(recordedUnitCost > 0) && rawQty !== 0) missingCost++;
+    const unitCost = recordedUnitCost > 0 ? recordedUnitCost : 0;
+    addLine(materialType, refId, rawQty, r2(rawQty * unitCost), unitCost);
   }
 
-  // A shipment that was already in flight at the start of this period is in
-  // the sender's current closing valuation but is absent from stockAsOf(),
-  // whose historical rewind has no receipt-date information. Carry that
-  // sender-owned value into the opening side so month rollover remains neutral.
-  for (const row of priorTransitRows) {
-    const materialType = String(row.material_type) as ValuedItem["materialType"];
-    const refId = Number(row.ref_id);
-    const qty = Number(row.qty_change ?? 0);
-    const value = Number(row.transit_value ?? 0);
-    addLine(materialType, refId, qty, r2(value), Math.abs(qty) > 0.001 ? r2(value / qty) : 0);
+  for (const [valuation, sign] of [[openingTransit, -1], [closingTransit, 1]] as const) {
+    for (const row of valuation?.rows ?? []) {
+      if (!row.inTransit) continue;
+      addLine(row.materialType, row.refId, sign * row.quantity, sign * row.value, row.unitCost);
+    }
   }
 
   const lines = [...byKey.values()].filter((line) => Math.abs(line.value) > 0.005 || Math.abs(line.qty) > 0.001);
+  const notes = [
+    missingCost ? `${missingCost} transfer movement(s) have no recorded positive cost; their value is unknown, not zero-cost stock.` : null,
+    openingTransit ? valuationReliability(openingTransit).note : null,
+    valuationReliability(closingTransit).note,
+  ].filter(Boolean);
   return {
     total: r2(lines.reduce((sum, line) => sum + line.value, 0)),
     lines,
+    reliable: notes.length === 0,
+    note: notes.length ? notes.join(" ") : null,
   };
 }
 
@@ -387,7 +328,11 @@ export function applyStockTransferOpeningAdjustment(
   opening: StockAtDate,
   adjustment: StockTransferOpeningAdjustment,
 ): StockAtDate {
-  if (adjustment.lines.length === 0) return opening;
+  const reliability = {
+    reliable: opening.reliable && adjustment.reliable !== false,
+    note: [opening.note, adjustment.note].filter(Boolean).join(" ") || null,
+  };
+  if (adjustment.lines.length === 0) return { ...opening, ...reliability };
 
   const byKey = new Map<string, ValuedItem>(
     opening.items.map((item) => [`${item.materialType}:${item.id}`, { ...item }]),
@@ -418,6 +363,7 @@ export function applyStockTransferOpeningAdjustment(
 
   return {
     ...opening,
+    ...reliability,
     total: r2(opening.total + adjustment.total),
     items: [...byKey.values()]
       .filter((item) => Math.abs(item.total) > 0.005 || Math.abs(item.stock) > 0.001)
@@ -438,15 +384,35 @@ export interface StockBranchScope {
   branchPairs?: Array<{ type: string; id: number }>;
 }
 
+function stockValuationScope(scope?: StockBranchScope | null) {
+  return scope?.branchPairs?.length ? { branchPairs: scope.branchPairs } : scope ? {
+    branchType: scope.branchType,
+    ...(scope.branchId != null ? { branchId: scope.branchId } : {}),
+  } : {};
+}
+
+/** Forward additive valuation diagnostics without inventing certainty. */
+function valuationReliability(value: { reliable?: boolean; note?: string | null; warnings?: string[] }) {
+  const note = value.note || value.warnings?.join(" ") || null;
+  return { reliable: value.reliable !== false && !note, note };
+}
+
+function stockPosition(value: Awaited<ReturnType<typeof stockValuation>>): StockAtDate {
+  return {
+    total: value.grandTotal, inTransit: value.inTransitValue,
+    items: value.byProduct.map((p) => ({
+      id: p.refId, name: p.itemName, unit: p.unit, stock: p.quantity,
+      unitCost: p.unitCost, total: p.value, materialType: p.materialType,
+      typeLabel: p.materialType === "item" ? "Finished Good"
+        : p.materialType === "material" ? "Raw Material" : "Packing Material",
+    })),
+    ...valuationReliability(value as typeof value & { reliable?: boolean; note?: string | null }),
+  };
+}
+
 /** Closing stock: every product kind, in-transit included; optionally one branch. */
 export async function closingStockAt(scope?: StockBranchScope | null, q: Q = pool): Promise<StockAtDate> {
-  const v = await closingStockValuation(q as any, scope ? (
-    scope.branchPairs?.length ? { branchPairs: scope.branchPairs } : {
-      branchType: scope.branchType,
-      ...(scope.branchId != null ? { branchId: scope.branchId } : {}),
-    }
-  ) : {});
-  return { total: v.total, inTransit: v.inTransit, items: v.items, reliable: true, note: null };
+  return stockPosition(await stockValuation(q as any, stockValuationScope(scope)));
 }
 
 /**

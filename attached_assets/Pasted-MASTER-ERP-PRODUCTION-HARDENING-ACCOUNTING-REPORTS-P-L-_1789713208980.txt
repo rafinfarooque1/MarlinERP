@@ -1,0 +1,2008 @@
+MASTER ERP PRODUCTION HARDENING + ACCOUNTING + REPORTS + P&L + INVENTORY + RBAC + AUDIT + BACKUP PROMPT
+
+PROJECT:
+Frozen Fruits ERP
+
+IMPORTANT:
+This is a production-grade ERP hardening task.
+
+The complete ERP documentation file is:
+ERP_COMPLETE_DOCUMENTATION.md
+
+READ THIS FILE FIRST, COMPLETELY, BEFORE CHANGING ANY CODE.
+
+The documentation describes the current architecture, modules, business rules, accounting source-of-truth, known limitations, reports, permissions, database, APIs, background jobs, and current implementation.
+
+============================================================
+0. PRIMARY OBJECTIVE
+============================================================
+
+Make the ERP internally consistent, accounting-safe, location-safe, report-safe and production-ready.
+
+The most important requirement is:
+
+THE SAME AUTHORITATIVE DATA AND ACCOUNTING LOGIC MUST DRIVE:
+
+Operational transactions
+        ↓
+Accounting postings
+        ↓
+Trial Balance
+        ↓
+Profit & Loss
+        ↓
+Trading / COGS
+        ↓
+Balance Sheet
+        ↓
+Inventory valuation
+        ↓
+Dashboard financial KPIs
+        ↓
+Screen reports
+        ↓
+PDF
+        ↓
+XLSX
+        ↓
+CSV
+
+There must not be multiple independent calculations producing different financial answers.
+
+Do NOT redesign the ERP unnecessarily.
+
+Do NOT replace working architecture simply for style.
+
+Preserve all existing functionality that already passes tests.
+
+Fix the documented limitations and inconsistencies systematically.
+
+============================================================
+1. ABSOLUTE SAFETY RULES
+============================================================
+
+1. NEVER modify production data.
+
+2. NEVER run destructive migration against production.
+
+3. NEVER delete production transactions.
+
+4. NEVER rewrite historical financial transactions merely to make totals look correct.
+
+5. NEVER fabricate historical accounting data.
+
+6. NEVER silently change accounting results without identifying the source.
+
+7. Development/test database may be used for migration and regression testing.
+
+8. Production may only be read for verification if required.
+
+9. Keep development DB and production DB completely separate.
+
+10. Before any schema change:
+    - inspect current schema
+    - inspect migrations
+    - inspect Drizzle schema
+    - inspect raw SQL migrations
+    - inspect startup repair/migration logic
+    - identify existing migration history
+    - create a proper idempotent migration
+
+11. Do NOT use blind `drizzle-kit push` for production schema changes.
+
+12. Do not change UI appearance unless required for correctness.
+
+13. Do not remove existing working modules.
+
+14. Do not weaken existing permissions.
+
+15. Do not bypass accounting validation.
+
+16. Do not solve accounting problems by hiding values in the UI.
+
+17. Every financial mutation must remain auditable.
+
+18. If historical evidence genuinely does not exist, mark that historical result as unreliable/limited instead of inventing a value.
+
+============================================================
+2. READ AND MAP THE COMPLETE SYSTEM FIRST
+============================================================
+
+Before implementation, inspect:
+
+- ERP_COMPLETE_DOCUMENTATION.md
+- complete repository
+- package.json files
+- pnpm workspace configuration
+- API
+- React frontend
+- database schema
+- migrations
+- accounting services
+- posting engine
+- inventory valuation
+- stock ledger
+- stock batches
+- sales
+- purchases
+- sales returns
+- purchase returns
+- receipts
+- payments
+- journal vouchers
+- expenses
+- cash
+- bank
+- reconciliation
+- customers
+- vendors
+- payroll
+- attendance
+- advances
+- fixed assets
+- depreciation
+- GST
+- quotations
+- POS
+- dashboard
+- reports
+- PDF generators
+- XLSX/CSV exporters
+- permissions
+- RBAC
+- location filtering
+- audit logging
+- backups
+- restore
+- background jobs
+- mobile packaging
+
+Create an internal source-of-truth map before modifying code.
+
+Do not guess.
+
+============================================================
+3. ACCOUNTING SOURCE OF TRUTH
+============================================================
+
+Establish and enforce these canonical sources:
+
+P&L:
+    buildDerivedPostings + authoritative financial report summary
+
+Balance Sheet:
+    authoritative accounting postings + ledger balances + authoritative closing inventory valuation
+
+Trial Balance:
+    authoritative journal/posting set
+
+Inventory valuation:
+    dated stock movements + cost checkpoints/snapshots + batch/location valuation
+
+Customer balance:
+    authoritative customer financial postings/settlements
+
+Vendor balance:
+    authoritative vendor financial postings/settlements
+
+Cash:
+    authoritative cash ledger/account postings
+
+Bank:
+    authoritative bank ledger/account postings
+
+GST:
+    authoritative transaction tax calculation + accounting tax postings + GST register reconciliation
+
+Dashboard financial KPIs:
+    must consume the same authoritative report/accounting service used by reports.
+
+No independent dashboard arithmetic.
+
+No independent export arithmetic.
+
+No duplicated accounting formulas in unrelated modules.
+
+============================================================
+4. PROFIT & LOSS — CRITICAL
+============================================================
+
+Audit and correct P&L completely.
+
+P&L must explicitly follow a deterministic accounting definition.
+
+At minimum:
+
+NET SALES
+    = Gross Sales
+      - Sales Returns
+      - Sales Discounts/Credit Notes
+      ± valid sales adjustments
+
+COGS
+    = Opening Inventory
+      + Net Purchases/Inventory Cost Additions
+      + applicable direct inventory costs
+      - Closing Inventory
+
+GROSS PROFIT
+    = Net Sales - COGS
+
+NET PROFIT
+    = Gross Profit
+      + Other/Direct Income where applicable
+      - Indirect Expenses
+      - Depreciation
+      ± other valid P&L items
+
+IMPORTANT:
+
+Do not double count:
+
+- production consumption
+- production output
+- purchase cost
+- stock transfers
+- inventory adjustments
+- direct expenses
+- indirect expenses
+- depreciation
+- sales returns
+- purchase returns
+
+Production must not create artificial profit.
+
+Internal warehouse transfers must not create revenue.
+
+Internal stock transfers must not create COGS.
+
+Inventory movements must not themselves create profit.
+
+Purchase of inventory does not become expense immediately if the accounting model uses inventory capitalization.
+
+Only consumed/sold inventory becomes COGS according to the ERP's inventory accounting model.
+
+============================================================
+5. P&L / COGS / STOCK CONSISTENCY
+============================================================
+
+For every report date and location:
+
+P&L closing inventory
+=
+Inventory valuation closing inventory
+=
+Balance Sheet inventory
+
+For the same:
+
+- location
+- date
+- company
+- GST registration where applicable
+- item scope
+- batch scope
+
+Enforce automated reconciliation.
+
+If:
+
+P&L Closing Stock != Inventory Valuation Closing Stock
+
+or
+
+Inventory Valuation Closing Stock != Balance Sheet Inventory
+
+the integrity diagnostic must show the exact difference and source.
+
+Do not hide the difference.
+
+============================================================
+6. OPENING / CLOSING STOCK CONTINUITY — CRITICAL
+============================================================
+
+Implement a reliable stock continuity mechanism.
+
+Required invariant:
+
+Closing(D) = Opening(D+1)
+
+For:
+
+- company
+- location
+- item
+- batch where applicable
+- quantity
+- valuation
+
+For a report range:
+
+Opening Stock(Start Date)
+=
+Closing Stock(Start Date - 1 day)
+
+Example:
+
+Report:
+01-Sep-2026 → 15-Sep-2026
+
+Opening stock must be:
+
+31-Aug-2026 closing stock.
+
+Changing the report range must automatically recalculate opening stock.
+
+Do not anchor opening stock to "today".
+
+Do not use current stock multiplied by current master average cost for historical valuation.
+
+If dated checkpoints exist, use them.
+
+If historical evidence is unavailable, mark the historical result as limited/unreliable.
+
+============================================================
+7. ZERO-ACTIVITY DAYS
+============================================================
+
+If a location has:
+
+- no sales
+- no purchases
+- no stock adjustment
+- no transfer
+- no production movement
+- no inventory movement
+
+then:
+
+Opening Stock = Closing Stock
+
+COGS = 0
+
+Gross Profit = 0
+
+assuming there is no other P&L activity.
+
+This must be tested across multiple consecutive days.
+
+============================================================
+8. BACKDATED TRANSACTIONS
+============================================================
+
+Handle backdated stock/accounting transactions correctly.
+
+If a transaction is entered for an earlier unlocked date:
+
+either:
+
+A. recompute all affected subsequent stock/accounting checkpoints
+
+OR
+
+B. prevent the backdated transaction with a clear period-lock rule.
+
+Never allow historical reports to silently become incorrect.
+
+Locked periods must reject writes.
+
+============================================================
+9. HISTORICAL INVENTORY VALUATION
+============================================================
+
+Completely audit:
+
+lib/valuation.ts
+
+stock ledger
+
+cost snapshots
+
+cost checkpoints
+
+stock batches
+
+movement dates
+
+location valuation
+
+transfer valuation
+
+production valuation
+
+purchase valuation
+
+sales COGS valuation
+
+Requirements:
+
+NEVER calculate historical stock as:
+
+historical quantity × current mutable master average cost
+
+Instead use:
+
+dated movements
++
+persisted valuation checkpoints/snapshots
++
+batch/FIFO/FEFO evidence where applicable
++
+location-specific cost
+
+Current master cost must not rewrite historical financial statements.
+
+Historical reports must be deterministic.
+
+============================================================
+10. FIFO / FEFO / BATCH / EXPIRY
+============================================================
+
+Verify and harden:
+
+- batch quantities
+- batch cost
+- manufacturing date
+- expiry date
+- stock movement
+- sales consumption
+- production consumption
+- transfers
+- returns
+
+FEFO/FIFO must use the intended documented business rule.
+
+Ensure:
+
+sum(batch quantity)
+=
+item/location stock quantity
+
+Ensure batch cost and stock valuation reconcile.
+
+Expired/near-expiry reporting must not alter accounting.
+
+============================================================
+11. INTERNAL STOCK TRANSFERS
+============================================================
+
+Internal transfers must remain P&L neutral.
+
+For:
+
+Warehouse A → Warehouse B
+
+same GST registration:
+
+inventory movement only.
+
+Different GST registrations:
+
+backend may require statutory sale/purchase/tax treatment according to documented business rules, but company-level management reporting must not artificially inflate operating profit merely because stock moved between own registrations.
+
+Ensure:
+
+Source stock decreases.
+
+Destination stock increases.
+
+Company total inventory remains consistent.
+
+No artificial sales.
+
+No artificial profit.
+
+No duplicate COGS.
+
+FIFO/FEFO/batch information moves correctly.
+
+In-transit stock must be handled correctly.
+
+============================================================
+12. IN-TRANSIT STOCK
+============================================================
+
+Historical report on date D must not include a transfer receipt that happened after D.
+
+Example:
+
+Dispatch = 10-Sep
+Receipt = 13-Sep
+
+Report as of 11-Sep:
+
+source stock:
+    reduced according to documented transfer lifecycle
+
+destination:
+    must not show received stock yet
+
+in-transit:
+    must be represented correctly
+
+Report as of 14-Sep:
+
+destination:
+    includes received stock
+
+Make this date-correct.
+
+============================================================
+13. SALES / RECEIVABLES
+============================================================
+
+Verify:
+
+Sales
+Sales Returns
+Credit Notes
+Receipts
+Advance Receipts
+Customer Allocations
+Customer Ledger
+Outstanding
+Ageing
+
+Customer outstanding must be mathematically consistent:
+
+Opening Receivable
++ Sales
++ valid charges
+- Sales Returns/Credit Notes
+- Receipts
+± adjustments
+=
+Closing Receivable
+
+Preserve:
+
+ONE FINANCIAL RECEIPT
+for ONE CUSTOMER PAYMENT.
+
+Bill allocations are settlement metadata.
+
+Do not create duplicate financial receipts because one receipt is allocated to multiple invoices.
+
+Advance-only receipt must:
+
+- create the correct customer advance liability/credit
+- create cash/bank debit
+- not create fake sales
+- not create fake sales-payment settlement
+- remain visible in customer ledger
+
+Prevent over-allocation.
+
+============================================================
+14. VENDOR PAYABLES
+============================================================
+
+Verify:
+
+Opening Payable
++ Purchases
+- Purchase Returns
+- Payments
+± advances/credits/adjustments
+=
+Closing Payable
+
+Ensure invoice allocations cannot exceed invoice amount unless explicitly modeled as advance.
+
+Existing previously identified allocation issue must remain corrected:
+
+Invoice 5052:
+    allocation = bill total, no excess
+
+Invoice 5408:
+    allocation = bill total, no excess
+
+Advance remains separately represented.
+
+============================================================
+15. PURCHASES
+============================================================
+
+Verify:
+
+purchase invoice
+GST
+inventory capitalization
+vendor payable
+payment
+allocation
+purchase return
+stock effect
+accounting effect
+location
+
+Purchase of inventory must not be incorrectly treated as immediate P&L expense.
+
+Purchase return must reverse the correct:
+
+inventory
+GST
+vendor payable
+
+and must be reflected in reports.
+
+============================================================
+16. SALES RETURNS
+============================================================
+
+Verify:
+
+sale return
+credit note
+inventory return
+GST reversal
+customer balance
+cash refund where applicable
+COGS reversal
+
+Do not double reverse accounting.
+
+============================================================
+17. QUOTATION / POS / NOTES
+============================================================
+
+Quotation must remain non-accounting until converted into the relevant transaction.
+
+Verify:
+
+Quotation
+→ Sale/POS
+
+Other Charges:
+
+- multiple rows supported
+- persist on create
+- persist on edit
+- included in totals
+- correct tax/accounting treatment
+- carried into sale/POS where intended
+- shown in PDF
+- shown in print
+- shown in share output
+
+Notes:
+
+- save correctly
+- survive edit
+- survive conversion where intended
+- appear in screen
+- appear in print/PDF
+- must not affect accounting
+- must not affect stock
+- must not affect GST unless explicitly defined as taxable financial content
+
+============================================================
+18. EXPENSES
+============================================================
+
+Verify all expenses are classified correctly.
+
+Do not mix:
+
+- direct inventory cost
+- COGS
+- indirect expense
+- fixed asset acquisition
+
+A fixed asset purchase must not be treated as ordinary expense.
+
+Expense must affect:
+
+P&L
++
+cash/bank
++
+ledger
+
+according to payment mode.
+
+Location must be enforced.
+
+============================================================
+19. FIXED ASSETS
+============================================================
+
+Verify:
+
+Asset Cost
+- Accumulated Depreciation
+=
+Net Book Value
+
+Balance Sheet fixed assets
+=
+Gross asset cost
+- accumulated depreciation
+± valid disposal adjustments
+
+Depreciation Expense
+=
+P&L depreciation
+
+Depreciation payable/accounting:
+    use correct accumulated depreciation account.
+
+Depreciation must be:
+
+- monthly
+- deterministic
+- idempotent
+- location aware
+- period-lock aware
+- transaction audited
+
+Rerunning depreciation must NOT duplicate postings.
+
+Disposal must correctly account for:
+
+gross asset
+accumulated depreciation
+NBV
+sale proceeds if applicable
+gain/loss
+
+============================================================
+20. PAYROLL / HR
+============================================================
+
+Verify:
+
+Attendance
+LOP
+Salary
+Advances
+Payroll
+Employee payable
+Cash/bank payment
+P&L salary expense
+
+Correct business/local date handling.
+
+Do not use server UTC date when company business date is required.
+
+Cumulative paise-accurate salary calculation must remain intact.
+
+Salary expense must appear in P&L.
+
+Unpaid salary must remain liability/payable.
+
+Advance salary must not be double counted as salary expense.
+
+Payroll posting must be idempotent.
+
+============================================================
+21. CASH & BANK
+============================================================
+
+Cash and bank must reconcile to accounting books.
+
+Bank reconciliation:
+
+- eligible bank ledger transactions only
+- bank receipts included
+- cash receipts never included as bank transactions
+- bank account must belong to selected location
+- multiple selection supported
+- selected count/total visible
+- reconciliation date
+- processing charge
+- one reconciliation batch
+- atomic processing
+- no duplicate original transaction
+- reset only reconciliation state/batches
+- never delete original financial transactions
+
+Cash reconciliation must not expose inappropriate bank reconciliation controls.
+
+============================================================
+22. BANK ACCOUNT LOCATION RULE
+============================================================
+
+Each Cash & Bank account must belong to exactly ONE location.
+
+No account may be assigned to multiple locations.
+
+Server-side enforcement required.
+
+UI restriction alone is insufficient.
+
+============================================================
+23. GST
+============================================================
+
+There are currently multiple GST/reporting streams.
+
+Unify or reconcile them.
+
+The following must agree:
+
+transaction GST calculation
+accounting tax posting
+GST summary
+GST register
+financial reports
+tax reports
+
+For each transaction verify:
+
+CGST
+SGST
+IGST
+taxable value
+total tax
+invoice total
+location/GST registration
+
+For interstate warehouse transfers:
+
+IGST must be handled according to the documented statutory flow.
+
+Create a GST reconciliation diagnostic:
+
+calculated tax
+vs
+posted tax
+vs
+register tax
+
+Any difference must be explicitly reported.
+
+Do not silently normalize tax values.
+
+============================================================
+24. LOCATION / RBAC / LBAC — CRITICAL
+============================================================
+
+Permissions must be enforced at SERVER level.
+
+Never rely only on UI hiding.
+
+Rules:
+
+HEAD OFFICE:
+    can access all locations when explicitly selecting All Locations.
+
+HEAD OFFICE selected as a specific location:
+    behaves as a normal location.
+
+WAREHOUSE USER:
+    only assigned warehouse/location data.
+
+Warehouse user must never gain access to another warehouse by:
+
+- URL manipulation
+- ID manipulation
+- query parameter modification
+- All Locations selector
+- API direct call
+- report export
+- PDF endpoint
+- XLSX endpoint
+- dashboard endpoint
+- customer endpoint
+- vendor endpoint
+- ledger endpoint
+- stock endpoint
+
+Customer/vendor records must be location scoped.
+
+GET /customers/:id
+GET /vendors/:id
+
+must enforce party/location scope.
+
+The earlier identified missing partyScopeCheck must be fixed.
+
+All report APIs must enforce location scope server-side.
+
+All exports must enforce the same scope.
+
+============================================================
+25. ALL LOCATIONS
+============================================================
+
+All Locations is an aggregation mode.
+
+It must NOT grant authorization to a warehouse user.
+
+For authorized Head Office:
+
+All Locations:
+    consolidated totals
+    + location breakdown where applicable
+
+Specific location:
+    only that location
+
+Dashboard and reports must use the same rule.
+
+============================================================
+26. DASHBOARD
+============================================================
+
+Dashboard must NOT independently calculate financial values.
+
+Financial KPIs must come from authoritative services.
+
+At minimum:
+
+Sales
+Net Sales
+COGS
+Gross Profit
+Other Income
+Expenses
+Depreciation
+Net Profit
+Closing Stock
+Cash
+Bank
+Receivables
+Payables
+
+Dashboard GP must equal P&L GP.
+
+Dashboard NP must equal P&L NP.
+
+Dashboard closing stock must equal authoritative inventory valuation.
+
+Dashboard inventory must equal Balance Sheet inventory where applicable.
+
+For All Locations:
+    consolidated value must equal sum of authorized location values.
+
+For specific location:
+    only that location.
+
+============================================================
+27. REPORTS
+============================================================
+
+All reports must have a single authoritative payload.
+
+Architecture:
+
+screen
+ ↓
+API/service
+ ↓
+authoritative payload
+ ↓
+screen rendering
+ ↓
+PDF
+ ↓
+XLSX
+ ↓
+CSV
+
+Do NOT allow PDF/XLSX/CSV to independently reconstruct financial data.
+
+Reports to verify comprehensively include all existing reports documented in the MD, especially:
+
+- Dashboard
+- Profit & Loss
+- Trading Account
+- Balance Sheet
+- Trial Balance
+- Day Book
+- Cash Book
+- Bank Book
+- Customer Ledger
+- Vendor Ledger
+- Receivable Ageing
+- Payable Ageing
+- Sales Register
+- Purchase Register
+- Sales Return
+- Purchase Return
+- Stock
+- Inventory Valuation
+- Inventory Ageing
+- GST reports
+- Expense reports
+- Fixed Asset reports
+- Payroll reports
+- Production reports
+- Transfer reports
+- Reconciliation reports
+
+For every report:
+
+same date filter
+same location
+same company
+same permissions
+same accounting definition
+same values
+
+across:
+
+Screen
+API
+PDF
+XLSX
+CSV
+
+============================================================
+28. REPORT DATE FILTERS
+============================================================
+
+Date range logic must be deterministic.
+
+For:
+
+01-Sep → 15-Sep
+
+Opening =
+31-Aug closing.
+
+Closing =
+15-Sep closing.
+
+If user changes:
+
+01-Sep → 10-Sep
+
+the report must recalculate correctly.
+
+Do not retain stale cached values.
+
+Audit Day Book and report cache behavior, including HTTP 304/cache-related stale payload issues.
+
+Use correct cache invalidation/versioning where necessary.
+
+============================================================
+29. PDF / PRINT
+============================================================
+
+PDF must reproduce the exact report state.
+
+Must preserve:
+
+- selected location
+- All Locations
+- date range
+- report filters
+- account filters
+- expanded/collapsed state where relevant
+- Month Wise mode where applicable
+- authoritative totals
+- opening stock
+- closing stock
+- COGS
+- GP
+- NP
+
+Warehouse PDF must use the warehouse's own profile/logo/details.
+
+Head Office PDF must use Head Office profile.
+
+No PDF should independently calculate a different value.
+
+============================================================
+30. XLSX / CSV
+============================================================
+
+Exports must use the same authoritative payload.
+
+Do not trust arbitrary client-provided prepared financial rows.
+
+Server must:
+
+- validate request
+- apply permissions
+- fetch authoritative data
+- calculate/reuse canonical report payload
+- export that payload
+
+Prevent manipulated client rows from becoming official financial exports.
+
+============================================================
+31. VOUCHERS
+============================================================
+
+Payment Voucher
+Receipt Voucher
+Journal Voucher
+
+Verify:
+
+- accounting correctness
+- location
+- permissions
+- numbering
+- audit
+- PDF
+- print
+
+Existing A4 landscape requirement:
+
+one voucher on right half
+left half blank
+center cut line
+no duplicate voucher
+
+Do not reintroduce:
+
+"computer-generated voucher"
+
+or unnecessary bottom line where previously removed.
+
+============================================================
+32. AUDIT LOGGING — CRITICAL
+============================================================
+
+Critical financial mutations must have transaction-bound audit durability.
+
+At minimum:
+
+- sales creation
+- sale cancellation
+- sale payment
+- sale cancellation receipt deletion
+- purchase creation
+- purchase return
+- receipt creation
+- receipt edit
+- payment creation
+- payment edit
+- journal creation
+- journal edit
+- journal deletion
+- expense creation/edit/delete
+- allocation changes
+- stock transfer dispatch
+- transfer approval
+- transfer rejection
+- reconciliation creation
+- reconciliation status
+- reconciliation reset
+- bank account changes
+- settlement changes
+- processor charges
+- payroll posting
+- depreciation
+- asset disposal
+- important master changes
+
+Do NOT use fire-and-forget audit logging for critical mutations.
+
+Audit event must commit in the same database transaction as the financial mutation.
+
+If audit write fails:
+    entire critical mutation must fail/rollback.
+
+Add tests proving this.
+
+============================================================
+33. DATABASE / MIGRATIONS
+============================================================
+
+Review current architecture because documentation says:
+
+Drizzle schema is partial.
+
+Raw boot migrations exist.
+
+Do not blindly replace this.
+
+Create a coherent migration strategy.
+
+Requirements:
+
+- idempotent migrations
+- schema verification
+- migration version tracking
+- no duplicate columns
+- no duplicate indexes
+- no destructive accidental changes
+- startup must not repeatedly mutate data
+- repair jobs must be explicit and idempotent
+
+Separate:
+
+schema migration
+from
+data repair
+from
+background processing
+
+Do not run heavy repair automatically at every application startup.
+
+============================================================
+34. STARTUP / BACKGROUND JOBS
+============================================================
+
+Audit all startup tasks.
+
+Startup should not unexpectedly:
+
+- rewrite accounting
+- repair historical financial data
+- duplicate postings
+- alter stock
+- recreate audit entries
+
+Background jobs must be:
+
+- idempotent
+- observable
+- failure-safe
+- transaction-safe
+- lock-safe
+
+If multiple workers/processes can execute a job, add appropriate distributed locking or database advisory locking where required.
+
+Do not allow duplicate financial posting.
+
+============================================================
+35. BACKUP / RESTORE
+============================================================
+
+Keep and harden current backup system.
+
+Backup must contain:
+
+- PostgreSQL data
+- schema
+- migrations/version information
+- required files
+- metadata
+- manifest
+- checksums
+- application version
+- git commit if available
+
+Restore validation must verify:
+
+- archive integrity
+- checksum
+- signature where used
+- manifest
+- schema
+- row counts
+- journal balance
+- Trial Balance
+- Balance Sheet
+- stock quantities
+- stock valuation
+- batches
+- critical files
+
+Restore MUST be performed only against isolated development/test DB during automated validation.
+
+Never restore over production as part of testing.
+
+============================================================
+36. FINANCIAL INTEGRITY CENTER
+============================================================
+
+Create or improve an internal Financial Integrity diagnostic.
+
+It should verify at minimum:
+
+1. Trial Balance
+    Dr = Cr
+
+2. Balance Sheet
+    Assets = Liabilities + Equity
+
+3. P&L
+    Net Sales - COGS = GP
+
+4. P&L
+    GP + other income - expenses - depreciation = NP
+
+5. P&L closing stock
+    = Inventory valuation
+
+6. Inventory valuation
+    = Balance Sheet inventory
+
+7. Daily stock continuity
+
+8. Opening/closing continuity
+
+9. Customer balances
+
+10. Vendor balances
+
+11. Cash
+
+12. Bank
+
+13. GST
+
+14. Fixed assets
+
+15. Depreciation
+
+16. Payroll
+
+17. Transfer neutrality
+
+18. Batch quantity reconciliation
+
+19. Orphan journal lines
+
+20. Orphan stock references
+
+21. Negative stock
+
+22. Negative batches
+
+23. Over-allocation
+
+24. Duplicate settlement
+
+25. Location isolation
+
+26. Audit durability
+
+27. Report Screen/API/PDF/XLSX parity
+
+Every check must return:
+
+PASS
+WARN
+FAIL
+
+with:
+
+- exact amount difference
+- affected location
+- affected date
+- affected transaction/source
+- diagnostic explanation
+
+Never hide discrepancies.
+
+============================================================
+37. REPORT PARITY TEST FRAMEWORK
+============================================================
+
+Build automated report parity tests.
+
+For each major report:
+
+Generate:
+
+SCREEN/API payload
+PDF data
+XLSX data
+CSV data
+
+Compare canonical financial fields.
+
+Test at least:
+
+A. All Locations
+
+B. Each warehouse/location
+
+C. Current date range
+
+D. Custom date range
+
+E. Month Wise
+
+F. account filters
+
+G. location filters
+
+H. zero-activity range
+
+I. range containing sales
+
+J. range containing purchase
+
+K. range containing transfer
+
+L. range containing return
+
+M. range containing expense
+
+N. range containing payroll
+
+O. range containing depreciation
+
+No unexplained difference is acceptable.
+
+============================================================
+38. TEST THE ACTUAL BUSINESS FLOWS
+============================================================
+
+Create isolated development test data and test end-to-end.
+
+Scenario 1:
+No activity.
+
+Expected:
+
+Opening = Closing
+COGS = 0
+GP = 0
+NP = 0 if no other activity.
+
+Scenario 2:
+Purchase-only.
+
+Expected:
+
+Inventory increases.
+Cash/bank/payable changes.
+Revenue = 0.
+COGS = 0.
+GP = 0.
+
+Scenario 3:
+Sale from purchased stock.
+
+Expected:
+
+Revenue increases.
+COGS increases by correct inventory cost.
+GP = Net Sales - COGS.
+Inventory decreases.
+Customer/cash/bank changes correctly.
+
+Scenario 4:
+Sale return.
+
+Expected:
+
+Revenue reversal.
+COGS reversal as applicable.
+Inventory increase.
+GST reversal.
+Customer/cash correction.
+
+Scenario 5:
+Purchase return.
+
+Expected:
+
+Inventory decrease.
+Vendor payable correction.
+GST correction.
+
+Scenario 6:
+Internal transfer.
+
+Expected:
+
+source decrease
+destination/in-transit increase
+P&L neutral
+
+Scenario 7:
+Backdated purchase.
+
+Expected:
+subsequent stock/report continuity remains correct.
+
+Scenario 8:
+Backdated sale.
+
+Expected:
+subsequent stock/COGS/checkpoints remain correct or transaction is rejected by lock.
+
+Scenario 9:
+Advance customer receipt.
+
+Expected:
+no fake sales.
+
+Scenario 10:
+Vendor advance.
+
+Expected:
+no fake purchase expense.
+
+Scenario 11:
+Expense.
+
+Expected:
+correct P&L and cash/bank.
+
+Scenario 12:
+Fixed asset.
+
+Expected:
+BS asset increase.
+No ordinary expense at acquisition.
+Depreciation later affects P&L.
+
+Scenario 13:
+Payroll.
+
+Expected:
+salary expense + employee payable/payment.
+
+Scenario 14:
+GST interstate.
+
+Expected:
+correct IGST.
+
+Scenario 15:
+Warehouse permission.
+
+Expected:
+cannot access another warehouse by any API/UI/export method.
+
+Scenario 16:
+All Locations.
+
+Expected:
+only authorized Head Office can use it.
+
+============================================================
+39. LOCATION ISOLATION TEST MATRIX
+============================================================
+
+Create users for:
+
+Head Office
+Warehouse A
+Warehouse B
+
+Test:
+
+Customers
+Vendors
+Sales
+Purchases
+Receipts
+Payments
+Expenses
+Stock
+Transfers
+Ledgers
+Reports
+Dashboard
+PDF
+XLSX
+CSV
+GST
+Payroll
+Assets
+Bank
+Cash
+
+Warehouse A must never see Warehouse B.
+
+Warehouse B must never see Warehouse A.
+
+Head Office must see permitted consolidated data.
+
+Manipulating IDs must not bypass authorization.
+
+============================================================
+40. CURRENT KNOWN ISSUES FROM DOCUMENTATION
+============================================================
+
+Specifically resolve/prove all items identified in:
+
+ERP_COMPLETE_DOCUMENTATION.md
+
+including:
+
+- opening/closing stock only partially implemented
+- historical valuation limitations
+- parallel report paths
+- dashboard dual generation paths
+- permission runtime test gap
+- audit atomicity gap
+- backup/restore operational limitations
+- historical orphan/posting risks
+- export payload trust issues
+- startup migration/repair behavior
+- GST multiple representations
+- legacy dashboard summary
+- legacy report/export paths
+- partial Drizzle schema/raw migration architecture
+
+Do not simply mark these "fixed" without tests.
+
+============================================================
+41. PRESERVE PREVIOUSLY PASSED HARDENING
+============================================================
+
+Do NOT regress existing successful fixes.
+
+Preserve:
+
+- stock_cost_snapshots
+- persisted valuation checkpoints
+- monthly depreciation
+- depreciation idempotency
+- asset disposal accounting
+- corrected vendor allocations
+- advance-only customer receipt accounting
+- authoritative dashboard expense source
+- cash book reconciliation UI restriction
+- transaction-bound audit fixes already implemented
+- sale cancellation protections
+- salary local-business-date fix
+- cumulative paise-accurate salary calculation
+- transfer lifecycle behavior
+- production safety controls
+- existing RBAC
+- existing report functionality
+
+Run regression tests after every major change.
+
+============================================================
+42. CODE QUALITY
+============================================================
+
+Do not solve problems with hacks.
+
+Prefer:
+
+- shared accounting services
+- canonical report builders
+- reusable location scope checks
+- transaction boundaries
+- typed interfaces
+- deterministic calculations
+- explicit reconciliation
+- server-side authorization
+
+Remove duplicate calculations only after confirming all consumers use the canonical implementation.
+
+Avoid unnecessary refactoring.
+
+============================================================
+43. REQUIRED VALIDATION
+============================================================
+
+Run:
+
+- API TypeScript check
+- frontend TypeScript check
+- production build
+- API tests
+- accounting tests
+- inventory tests
+- stock transfer tests
+- sales tests
+- purchase tests
+- returns tests
+- customer settlement tests
+- vendor settlement tests
+- GST tests
+- payroll tests
+- fixed asset tests
+- reconciliation tests
+- permissions tests
+- security/location isolation tests
+- dashboard tests
+- report tests
+- PDF tests
+- XLSX tests
+- CSV tests
+- backup/restore tests
+- audit durability tests
+
+Fix failures caused by this task.
+
+Do not ignore failures as "pre-existing" unless you prove they are unrelated.
+
+============================================================
+44. FINAL RELEASE GATE
+============================================================
+
+Do NOT declare READY until every critical item below is proven.
+
+[ ] Accounting engine zero unexplained failures
+
+[ ] Trial Balance balanced
+
+[ ] Balance Sheet balanced
+
+[ ] Assets = Liabilities + Equity
+
+[ ] P&L internally consistent
+
+[ ] Net Sales - COGS = Gross Profit
+
+[ ] Gross Profit + other income - expenses - depreciation = Net Profit
+
+[ ] P&L closing stock = Inventory valuation closing stock
+
+[ ] Inventory valuation = Balance Sheet inventory
+
+[ ] Opening(D) = Closing(D-1)
+
+[ ] Zero-activity days preserve continuity
+
+[ ] Backdated transaction handling verified
+
+[ ] Historical valuation does not use mutable current master average
+
+[ ] FIFO/FEFO/batch valuation verified
+
+[ ] In-transit stock date correctness verified
+
+[ ] Internal transfer P&L neutrality verified
+
+[ ] Customer balances verified
+
+[ ] Vendor balances verified
+
+[ ] No over-allocation
+
+[ ] No duplicate financial receipts
+
+[ ] Advance receipts verified
+
+[ ] Purchase returns verified
+
+[ ] Sales returns verified
+
+[ ] GST calculation/posting/register reconciliation verified
+
+[ ] Fixed assets verified
+
+[ ] Depreciation verified and idempotent
+
+[ ] Payroll verified
+
+[ ] Cash ledger verified
+
+[ ] Bank ledger verified
+
+[ ] Bank reconciliation verified
+
+[ ] All Locations permission verified
+
+[ ] Warehouse isolation verified
+
+[ ] Customer/vendor endpoint scope verified
+
+[ ] Export endpoint authorization verified
+
+[ ] Audit durability verified
+
+[ ] Startup migration idempotency verified
+
+[ ] Background jobs idempotent
+
+[ ] Backup integrity verified
+
+[ ] Restore verified in isolated DB
+
+[ ] Screen/API/PDF parity verified
+
+[ ] Screen/API/XLSX parity verified
+
+[ ] CSV parity verified
+
+[ ] Dashboard/P&L parity verified
+
+[ ] No stale report cache issue
+
+[ ] API TypeScript PASS
+
+[ ] Web TypeScript PASS
+
+[ ] Production build PASS
+
+[ ] Relevant automated tests PASS
+
+[ ] Production database untouched
+
+============================================================
+45. FINAL REPORT
+============================================================
+
+At the end, create:
+
+ERP_FINAL_HARDENING_REPORT.md
+
+Include:
+
+1. Executive status:
+   READY / NOT READY
+
+2. Every issue found.
+
+3. Every issue fixed.
+
+4. Every issue proven by automated test.
+
+5. Every remaining limitation.
+
+6. Exact files changed.
+
+7. Exact migrations created.
+
+8. Exact database changes.
+
+9. Exact accounting logic changes.
+
+10. P&L formula and source of truth.
+
+11. COGS formula and source of truth.
+
+12. Opening/closing stock implementation.
+
+13. Historical valuation implementation.
+
+14. Transfer handling.
+
+15. GST reconciliation.
+
+16. Payroll accounting.
+
+17. Fixed asset accounting.
+
+18. RBAC/LBAC test results.
+
+19. Audit durability test results.
+
+20. Report parity test results.
+
+21. PDF verification results.
+
+22. XLSX verification results.
+
+23. CSV verification results.
+
+24. Backup/restore test results.
+
+25. Complete test counts:
+    PASS
+    FAIL
+    WARN
+
+26. Any remaining WARN must explain exactly why it remains.
+
+27. Any remaining FAIL means:
+    NOT READY FOR PRODUCTION.
+
+============================================================
+46. VERY IMPORTANT IMPLEMENTATION ORDER
+============================================================
+
+Follow this order:
+
+PHASE 1
+Read documentation and inspect complete codebase.
+
+PHASE 2
+Map source-of-truth architecture.
+
+PHASE 3
+Fix accounting/posting inconsistencies.
+
+PHASE 4
+Fix stock valuation and opening/closing continuity.
+
+PHASE 5
+Fix P&L/COGS/Trading/Balance Sheet reconciliation.
+
+PHASE 6
+Fix transfers/in-transit/batches.
+
+PHASE 7
+Fix sales/purchases/returns/customer/vendor settlement.
+
+PHASE 8
+Fix GST.
+
+PHASE 9
+Fix fixed assets/depreciation/payroll.
+
+PHASE 10
+Fix location/RBAC/LBAC.
+
+PHASE 11
+Fix audit durability.
+
+PHASE 12
+Fix report architecture and remove duplicate calculations.
+
+PHASE 13
+Fix Dashboard source-of-truth.
+
+PHASE 14
+Fix PDF/XLSX/CSV parity.
+
+PHASE 15
+Fix cache/stale payload issues.
+
+PHASE 16
+Fix migrations/startup/background jobs.
+
+PHASE 17
+Run full test matrix.
+
+PHASE 18
+Run isolated backup/restore validation.
+
+PHASE 19
+Run final integrity diagnostics.
+
+PHASE 20
+Generate ERP_FINAL_HARDENING_REPORT.md.
+
+============================================================
+47. IMPORTANT: DO NOT STOP EARLY
+============================================================
+
+Do not stop after fixing the first issue.
+
+Do not stop after P&L.
+
+Do not stop after tests.
+
+Continue through the entire checklist.
+
+If one issue exposes another issue, follow the dependency and fix the root cause.
+
+If a test fails:
+
+1. inspect failure
+2. identify root cause
+3. fix root cause
+4. rerun affected tests
+5. rerun relevant regression suite
+
+Do not simply change expected test values to make tests pass.
+
+Tests must validate actual accounting invariants.
+
+============================================================
+48. PRODUCTION RULE
+============================================================
+
+DO NOT publish.
+
+DO NOT modify production database.
+
+DO NOT perform production migration.
+
+DO NOT delete production data.
+
+DO NOT run destructive repair against production.
+
+The objective of this task is to make the DEVELOPMENT version fully validated and ready for a later controlled publish.
+
+At the very end report clearly:
+
+DEVELOPMENT STATUS:
+READY FOR PRODUCTION PUBLISH
+
+or
+
+DEVELOPMENT STATUS:
+NOT READY
+
+Only use READY if every critical release-gate requirement is proven.
+
+============================================================
+START NOW
+============================================================
+
+First read ERP_COMPLETE_DOCUMENTATION.md completely.
+
+Then inspect the repository and map the implementation.
+
+Then implement the fixes in dependency order.
+
+Do not give me a plan only.
+
+Actually make the code changes, migrations, tests and diagnostics.
+
+Keep production untouched.
+
+Finish by generating ERP_FINAL_HARDENING_REPORT.md with exact results.

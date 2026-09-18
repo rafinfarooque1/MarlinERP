@@ -14,7 +14,7 @@ import { pool } from "@workspace/db";
 import { requireModuleView, requireModuleAction } from "../middleware/permissions";
 import { nextVoucherNumber, financialYearLabel } from "../lib/voucherNumber";
 import { restoreBatches, consumeBatches, debitBatchByNumber, type BatchBreakdownEntry } from "../lib/batches";
-import { logActivity } from "../lib/audit";
+import { logActivityInTransaction } from "../lib/audit";
 import { outletWritesBlocked, OUTLETS_DISABLED_MESSAGE, OUTLETS_DISABLED_CODE } from "../lib/featureFlags";
 import { writeStockLedger, batchResolveMeta } from "../lib/stockLedger";
 import {
@@ -527,14 +527,13 @@ router.post("/sales-returns", requireModuleAction(["page:/returns", "page:/sales
       }));
     }
 
-    await client.query("COMMIT");
-
-    logActivity({
+    await logActivityInTransaction(client, {
       action: "CREATE", module: "sales", entityType: "sales_return", entityId: ret.id,
       description: `Sales return ${returnNumber} against ${invoiceRef} — ₹${totalAmount.toFixed(2)} (${refundMode === "cash" ? "cash refund" : `credit note ${creditNoteNumber}`})`,
       user: userOf(req) ?? undefined,
       metadata: { after: { saleId, totalAmount, refundMode, creditNoteNumber, lines: lineItemsJson.length } },
-    }).catch(() => {});
+    });
+    await client.query("COMMIT");
 
     res.status(201).json({
       id: ret.id,
@@ -1024,9 +1023,7 @@ router.patch("/sales-returns/:id", requireModuleAction("page:/returns", "edit"),
       }));
     }
 
-    await client.query("COMMIT");
-
-    logActivity({
+    await logActivityInTransaction(client, {
       action: "UPDATE", module: "sales", entityType: "sales_return", entityId: id,
       description: `Sales return ${ret.return_number} against ${invoiceRef} edited — ₹${oldTotal.toFixed(2)} → ₹${totalAmount.toFixed(2)}`,
       user: userOf(req) ?? undefined,
@@ -1034,7 +1031,8 @@ router.patch("/sales-returns/:id", requireModuleAction("page:/returns", "edit"),
         before: { returnDate: dateOnly(ret.return_date), totalAmount: oldTotal, lines: oldLines.length },
         after: { returnDate, totalAmount, lines: lineItemsJson.length },
       },
-    }).catch(() => {});
+    });
+    await client.query("COMMIT");
 
     res.json({
       id,
@@ -1335,14 +1333,13 @@ router.post("/purchase-returns", requireModuleAction(["page:/returns", "page:/pr
       docType: 'purchase_return', docId: ret.id, txnDate: returnDate,
     })));
 
-    await client.query("COMMIT");
-
-    logActivity({
+    await logActivityInTransaction(client, {
       action: "CREATE", module: "purchases", entityType: "purchase_return", entityId: ret.id,
       description: `Purchase return ${returnNumber} against ${billRef} — ₹${totalAmount.toFixed(2)} (debit note ${dnNumber})`,
       user: userOf(req) ?? undefined,
       metadata: { after: { purchaseId, totalAmount, debitNoteNumber: dnNumber, lines: retLines.length } },
-    }).catch(() => {});
+    });
+    await client.query("COMMIT");
 
     res.status(201).json({
       id: ret.id,
@@ -1776,9 +1773,7 @@ router.patch("/purchase-returns/:id", requireModuleAction("page:/returns", "edit
       })));
     }
 
-    await client.query("COMMIT");
-
-    logActivity({
+    await logActivityInTransaction(client, {
       action: "UPDATE", module: "purchases", entityType: "purchase_return", entityId: id,
       description: `Purchase return ${ret.return_number} against ${billRef} edited — ₹${oldTotal.toFixed(2)} → ₹${totalAmount.toFixed(2)}`,
       user: userOf(req) ?? undefined,
@@ -1786,7 +1781,8 @@ router.patch("/purchase-returns/:id", requireModuleAction("page:/returns", "edit
         before: { returnDate: dateOnly(ret.return_date), totalAmount: oldTotal, lines: oldLines.length },
         after: { returnDate, totalAmount, lines: retLines.length },
       },
-    }).catch(() => {});
+    });
+    await client.query("COMMIT");
 
     res.json({
       id,

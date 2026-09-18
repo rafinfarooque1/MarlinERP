@@ -1,3 +1,5 @@
+import { isIsoDate } from "./dateInput";
+
 /**
  * Immutable Stock Ledger — every inventory movement writes one or more entries here.
  * Entries are append-only; no UPDATE or DELETE on this table, with ONE narrow,
@@ -41,6 +43,26 @@ export async function writeStockLedger(
   entries: LedgerEntry[],
 ): Promise<void> {
   if (!entries.length) return;
+  // Callers must pass their transaction client: refusing a non-replayable
+  // backdate must also roll back the quantity mutation preceding this writer.
+  // Validate the whole batch before appending any audit/checkpoint records.
+  for (const e of entries) {
+    if (e.txnDate != null && !isIsoDate(e.txnDate)) throw new Error("Invalid stock business date");
+    const result = await db.query(
+      `SELECT MAX(as_of_date)::text AS latest_date
+         FROM stock_cost_snapshots
+        WHERE material_type = $1 AND ref_id = $2 AND branch_type = $3 AND branch_id = $4
+          AND as_of_date > COALESCE($5::date, CURRENT_DATE)`,
+      [e.materialType, e.refId, e.branchType, e.branchId, e.txnDate ?? null],
+    ) as { rows: Array<{ latest_date: string | null }> };
+    if (result.rows[0]?.latest_date) {
+      throw Object.assign(new Error(
+        `Stock date ${e.txnDate ?? "today"} precedes the latest inventory checkpoint `
+        + `${result.rows[0].latest_date} for ${e.materialType}:${e.refId} at ${e.branchType}:${e.branchId}. `
+        + "Historical checkpoint replay is unavailable; use a current-date correction.",
+      ), { status: 409, statusCode: 409, code: "STOCK_CHECKPOINT_BACKDATE" });
+    }
+  }
   for (const e of entries) {
     await db.query(
       `INSERT INTO stock_ledger
@@ -66,10 +88,19 @@ export async function writeStockLedger(
           quantity, unit_cost, value, source, source_id)
        SELECT COALESCE($7::date, CURRENT_DATE), se.material_type, se.item_id,
               se.branch_type, se.branch_id, se.quantity::numeric,
-                COALESCE($8::numeric, se.cost_price::numeric),
-                (se.quantity::numeric * COALESCE($8::numeric, se.cost_price::numeric))::numeric,
+                 COALESCE($8::numeric, previous_cost.unit_cost, se.cost_price::numeric),
+                 (se.quantity::numeric * COALESCE($8::numeric, previous_cost.unit_cost, se.cost_price::numeric))::numeric,
               $1, $6
          FROM stock_entries se
+          LEFT JOIN LATERAL (
+            SELECT CASE WHEN scs.quantity > 0 THEN scs.value::numeric / scs.quantity::numeric
+                        ELSE scs.unit_cost::numeric END AS unit_cost
+              FROM stock_cost_snapshots scs
+             WHERE scs.material_type = se.material_type AND scs.ref_id = se.item_id
+               AND scs.branch_type = se.branch_type AND scs.branch_id = se.branch_id
+               AND $1 IN ('sale', 'transfer_out', 'production_consumption')
+             ORDER BY scs.as_of_date DESC, scs.id DESC LIMIT 1
+          ) previous_cost ON TRUE
         WHERE se.item_id = $2 AND se.material_type = $3
           AND se.branch_type = $4 AND se.branch_id = $5`,
        [
