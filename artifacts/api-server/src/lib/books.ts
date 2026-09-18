@@ -271,23 +271,22 @@ export async function stockTransferOpeningAdjustment(
     params,
   );
 
-  // A period with no transfer ledger movements has no transfer-neutrality
-  // adjustment to calculate. Do not run the historical on-hand valuation
-  // checks below in that case: those checks can legitimately surface stale
-  // checkpoints from unrelated stock lines and would incorrectly make an
-  // otherwise reliable opening position fail its integrity check.
-  if (rows.length === 0) {
-    return { total: 0, lines: [], reliable: true, note: null };
-  }
-
-  // Sender-owned transit is part of BOTH physical boundary valuations.
-  // Neutral adjustment = physical transfer movement + closing transit - opening
-  // transit. Current reservation status cannot answer a historical question.
+  // Sender-owned transit is part of the closing physical position. The normal
+  // opening rewind intentionally contains on-hand stock only, so the opening
+  // term needs the closing in-transit value as well as the period's transfer
+  // movement. This keeps transfers neutral:
+  //
+  //   adjusted opening = on-hand opening + transfer movement + closing transit
+  //
+  // An opening shipment that remains in flight is therefore included once;
+  // a shipment received during the period is represented by its transfer_in
+  // movement; and a completed dispatch has neither a closing transit value nor
+  // an extra closing term.
   const valuationScope = stockValuationScope(scope);
-  const [openingTransit, closingTransit] = await Promise.all([
-    fromDate ? stockValuation(q as any, { ...valuationScope, asOf: previousDay(fromDate) }) : null,
-    stockValuation(q as any, { ...valuationScope, ...(toDate ? { asOf: toDate } : {}) }),
-  ]);
+  const closingTransit = await stockValuation(q as any, {
+    ...valuationScope,
+    ...(toDate ? { asOf: toDate } : {}),
+  });
   const refs = rows.map((r: any) => ({
     materialType: String(r.material_type) as ValuedItem["materialType"],
     refId: Number(r.ref_id),
@@ -328,18 +327,18 @@ export async function stockTransferOpeningAdjustment(
     addLine(materialType, refId, rawQty, r2(rawQty * unitCost), unitCost);
   }
 
-  for (const [valuation, sign] of [[openingTransit, -1], [closingTransit, 1]] as const) {
-    for (const row of valuation?.rows ?? []) {
-      if (!row.inTransit) continue;
-      addLine(row.materialType, row.refId, sign * row.quantity, sign * row.value, row.unitCost);
-    }
+  for (const row of closingTransit.rows) {
+    if (!row.inTransit) continue;
+    addLine(row.materialType, row.refId, row.quantity, row.value, row.unitCost);
   }
 
+  const transitNotes = closingTransit.issues
+    .filter((issue) => issue.code === "MISSING_TRANSIT_COST")
+    .map((issue) => issue.message);
   const lines = [...byKey.values()].filter((line) => Math.abs(line.value) > 0.005 || Math.abs(line.qty) > 0.001);
   const notes = [
     missingCost ? `${missingCost} transfer movement(s) have no recorded positive cost; their value is unknown, not zero-cost stock.` : null,
-    openingTransit ? valuationReliability(openingTransit).note : null,
-    valuationReliability(closingTransit).note,
+    ...transitNotes,
   ].filter(Boolean);
   return {
     total: r2(lines.reduce((sum, line) => sum + line.value, 0)),
@@ -347,6 +346,39 @@ export async function stockTransferOpeningAdjustment(
     reliable: notes.length === 0,
     note: notes.length ? notes.join(" ") : null,
   };
+}
+
+/** Whether the stock ledger records any physical movement in a date range. */
+async function hasStockMovementInRange(
+  fromDate: string,
+  toDate: string,
+  scope: StockBranchScope | null | undefined,
+  q: Q = pool,
+): Promise<boolean> {
+  const params: unknown[] = [fromDate, toDate];
+  const conds = [
+    `COALESCE(sl.txn_date, sl.created_at::date) >= $1::date`,
+    `COALESCE(sl.txn_date, sl.created_at::date) <= $2::date`,
+  ];
+  if (scope?.branchPairs?.length) {
+    const parts = scope.branchPairs.map((pair) => {
+      params.push(pair.type, pair.id);
+      return `(sl.branch_type = $${params.length - 1} AND sl.branch_id = $${params.length})`;
+    });
+    conds.push(`(${parts.join(" OR ")})`);
+  } else if (scope) {
+    params.push(scope.branchType);
+    conds.push(`sl.branch_type = $${params.length}`);
+    if (scope.branchId != null) {
+      params.push(scope.branchId);
+      conds.push(`sl.branch_id = $${params.length}`);
+    }
+  }
+  const { rows } = await q.query(
+    `SELECT 1 FROM stock_ledger sl WHERE ${conds.join(" AND ")} LIMIT 1`,
+    params,
+  );
+  return rows.length > 0;
 }
 
 /** Apply the period's transfer adjustment without changing the stock position. */
@@ -970,12 +1002,28 @@ export async function buildBooks(
   const historicalClose = toDate !== null && toDate < todayISO();
   const closing = skipStock ? emptyStock
     : historicalClose ? await stockAsOf(toDate, stockScope, q) : await closingStockAt(stockScope, q);
-  const normalOpening = skipStock ? emptyStock
+  // A current-day period with no stock-ledger movement has one physical stock
+  // position at both boundaries. Use the current closing valuation for that
+  // opening boundary as well. This matters when an older checkpoint is stale
+  // because a backdated document was recorded after it, and also keeps
+  // sender-owned in-transit stock on both sides of a no-activity statement.
+  // It does not weaken historical statements: only today's same-day period can
+  // use the live closing position, and any current valuation issue still
+  // propagates into the statement.
+  const sameDayNoStockMovement = !skipStock
+    && fromDate !== null
+    && toDate !== null
+    && fromDate === toDate
+    && toDate === todayISO()
+    && !(await hasStockMovementInRange(fromDate, toDate, stockScope, q));
+  const normalOpening = skipStock || sameDayNoStockMovement ? emptyStock
     : fromDate ? await stockAsOf(previousDay(fromDate), stockScope, q) : await stockAsOf(null, undefined, q);
-  const transferOpeningAdjustment = skipStock
+  const transferOpeningAdjustment = skipStock || sameDayNoStockMovement
     ? { total: 0, lines: [] }
     : await stockTransferOpeningAdjustment(fromDate, toDate, stockScope, q);
-  const opening = applyStockTransferOpeningAdjustment(normalOpening, transferOpeningAdjustment);
+  const opening = sameDayNoStockMovement
+    ? { ...closing, note: closing.note }
+    : applyStockTransferOpeningAdjustment(normalOpening, transferOpeningAdjustment);
 
   // ── Group builders ────────────────────────────────────────────────────────
 
