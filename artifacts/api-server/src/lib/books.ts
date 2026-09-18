@@ -270,6 +270,16 @@ export async function stockTransferOpeningAdjustment(
       ORDER BY sl.id`,
     params,
   );
+
+  // A period with no transfer ledger movements has no transfer-neutrality
+  // adjustment to calculate. Do not run the historical on-hand valuation
+  // checks below in that case: those checks can legitimately surface stale
+  // checkpoints from unrelated stock lines and would incorrectly make an
+  // otherwise reliable opening position fail its integrity check.
+  if (rows.length === 0) {
+    return { total: 0, lines: [], reliable: true, note: null };
+  }
+
   // Sender-owned transit is part of BOTH physical boundary valuations.
   // Neutral adjustment = physical transfer movement + closing transit - opening
   // transit. Current reservation status cannot answer a historical question.
