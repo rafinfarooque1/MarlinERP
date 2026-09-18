@@ -1,0 +1,961 @@
+FINAL BLOCKER CLOSURE — DO NOT REDESIGN — DO NOT PUBLISH
+
+PROJECT: Frozen Fruits ERP
+
+The main production-hardening implementation is complete, but the latest
+ERP_FINAL_HARDENING_REPORT.md still says:
+
+DEVELOPMENT STATUS: NOT READY
+
+Your task now is ONLY to close and PROVE the remaining release blockers.
+
+IMPORTANT:
+Do not start another broad redesign.
+Do not undo already completed hardening.
+Do not modify production.
+Do not publish.
+Use isolated development/test databases for destructive/integration testing.
+
+============================================================
+1. READ CURRENT DOCUMENTATION
+============================================================
+
+Read completely:
+
+ERP_FINAL_HARDENING_REPORT.md
+ERP_COMPLETE_DOCUMENTATION.md
+
+Then inspect the current code and tests.
+
+Identify every item still marked:
+
+FAIL
+WARN due to missing verification
+NOT PROVEN
+NOT VERIFIED
+INCOMPLETE
+BLOCKER
+
+Do not assume an item is fixed just because the code exists.
+
+============================================================
+2. P&L / COGS — HIGHEST PRIORITY
+============================================================
+
+Fully verify and, if necessary, fix the complete P&L accounting chain.
+
+The canonical formulas must be:
+
+NET SALES
+= Gross Sales
+- Sales Returns
+- Credit Notes/valid sales adjustments
+
+COGS
+= Opening Inventory
++ applicable inventory cost additions / net purchases
++ applicable direct inventory costs
+- Closing Inventory
+
+GROSS PROFIT
+= Net Sales - COGS
+
+NET PROFIT
+= Gross Profit
++ Other/Direct Income
+- Indirect Expenses
+- Depreciation
+± other valid P&L items
+
+Do not double-count:
+
+- purchases
+- production
+- stock transfers
+- inventory adjustments
+- direct costs
+- indirect expenses
+- depreciation
+- sales returns
+- purchase returns
+
+Internal stock transfers must not create artificial sales or profit.
+
+Purchase-only scenario:
+
+Revenue = 0
+COGS = 0
+Gross Profit = 0
+
+unless another valid P&L transaction exists.
+
+Zero-activity scenario:
+
+Opening Stock = Closing Stock
+COGS = 0
+Gross Profit = 0
+
+provided there is no valid P&L activity.
+
+Sale scenario:
+
+Net Sales - COGS = Gross Profit
+
+Verify all of this using real PostgreSQL integration tests.
+
+============================================================
+3. STOCK / OPENING / CLOSING — CRITICAL
+============================================================
+
+Prove:
+
+Closing(D) = Opening(D+1)
+
+for:
+
+- quantity
+- valuation
+- item
+- location
+- batch where applicable
+
+For report:
+
+01-Sep-2026 → 15-Sep-2026
+
+Opening must equal:
+
+31-Aug-2026 closing.
+
+Changing the report start date must recalculate opening correctly.
+
+Do NOT use:
+
+historical quantity × current item master average cost
+
+for historical valuation.
+
+Use:
+
+dated stock movements
++
+cost checkpoints/snapshots
++
+batch/location cost evidence.
+
+Create a deterministic historical test.
+
+Change the current item's average cost AFTER creating historical transactions.
+
+The historical P&L and historical stock valuation must NOT change.
+
+============================================================
+4. P&L / INVENTORY / BALANCE SHEET MUST AGREE
+============================================================
+
+For the exact same:
+
+- company
+- location
+- date
+- report filters
+
+prove:
+
+P&L Closing Stock
+=
+Inventory Valuation Closing Stock
+=
+Balance Sheet Inventory
+
+If they differ, find and fix the root cause.
+
+Do not hide differences.
+
+Add an automated reconciliation test.
+
+============================================================
+5. BACKDATED TRANSACTIONS
+============================================================
+
+Test an unlocked historical period.
+
+Create a backdated purchase/sale.
+
+Verify subsequent stock and accounting checkpoints remain correct.
+
+If recalculation is not supported, enforce period locking so the inconsistent transaction cannot be entered.
+
+Test locked period rejection.
+
+There must never be silent historical inconsistency.
+
+============================================================
+6. IN-TRANSIT STOCK
+============================================================
+
+Create:
+
+Transfer dispatch = Day 10
+Transfer receipt = Day 13
+
+Test reports for:
+
+Day 10
+Day 11
+Day 12
+Day 13
+Day 14
+
+Before receipt:
+
+destination must NOT contain the received quantity.
+
+After receipt:
+
+destination must contain it.
+
+Historical reports must not include future receipts.
+
+Verify source, destination, in-transit stock and accounting.
+
+============================================================
+7. TRANSFER NEUTRALITY
+============================================================
+
+For same-GST internal warehouse transfers:
+
+source stock decreases
+destination stock increases
+company inventory remains consistent
+no artificial sales
+no artificial profit
+no duplicate COGS
+
+Verify with accounting integration tests.
+
+For different GST registrations, verify the documented statutory implementation without creating management-report profit inflation.
+
+============================================================
+8. GST END-TO-END VERIFICATION
+============================================================
+
+Using isolated PostgreSQL data, test:
+
+- local sale
+- interstate sale
+- CGST
+- SGST
+- IGST
+- purchase
+- sales return
+- purchase return
+- taxable Other Charges
+- same-GST transfer
+- different-GST transfer
+
+For every transaction compare:
+
+Source transaction GST
+=
+Accounting tax posting
+=
+GST register
+=
+GST report
+
+Verify:
+
+taxable value
+CGST
+SGST
+IGST
+total GST
+invoice total
+
+Any difference must be fixed or explicitly diagnosed.
+
+============================================================
+9. CUSTOMER / VENDOR SETTLEMENT
+============================================================
+
+CUSTOMER:
+
+Opening Receivable
++ Sales
++ valid charges
+- Sales Returns/Credit Notes
+- Receipts
+± adjustments
+=
+Closing Receivable
+
+Test:
+
+- full payment
+- partial payment
+- multiple invoice allocation
+- advance receipt
+- overpayment
+- sales return after payment
+- cancellation
+
+ONE customer payment must remain ONE financial receipt.
+
+Allocations must not create duplicate financial postings.
+
+VENDOR:
+
+Opening Payable
++ Purchases
+- Purchase Returns
+- Payments
+± advances/credits/adjustments
+=
+Closing Payable
+
+Prevent invoice allocation above invoice value unless explicitly represented as advance.
+
+============================================================
+10. PAYROLL
+============================================================
+
+Run isolated payroll integration tests.
+
+Verify:
+
+Attendance
+→ LOP
+→ Salary
+→ Salary Expense
+→ Employee Payable
+→ Payment
+→ Ledger
+→ P&L
+→ Balance Sheet
+
+Test:
+
+- normal salary
+- LOP
+- partial attendance
+- advance
+- unpaid salary
+- paid salary
+- local business date boundary
+- month boundary
+- rerun
+
+Salary must not be duplicated.
+
+Rerun must be idempotent.
+
+Preserve the already-fixed local business date and paise-accurate salary calculation.
+
+============================================================
+11. FIXED ASSETS / DEPRECIATION
+============================================================
+
+Test:
+
+Asset Purchase
+→ Fixed Asset
+→ Depreciation
+→ Balance Sheet
+→ P&L
+→ Disposal
+
+Prove:
+
+Gross Asset Cost
+- Accumulated Depreciation
+=
+Net Book Value
+
+Also:
+
+P&L Depreciation
+=
+Depreciation Expense Posting
+
+Balance Sheet Fixed Assets
+=
+Gross Asset Cost
+- Accumulated Depreciation
+± disposal adjustment
+
+Rerunning depreciation must create no duplicate posting.
+
+Test period lock and location scope.
+
+============================================================
+12. CASH / BANK / RECONCILIATION
+============================================================
+
+Verify:
+
+Cash Book
+=
+Cash ledger
+
+Bank Book
+=
+Bank ledger
+
+and both agree with accounting.
+
+Bank reconciliation must include eligible bank ledger entries.
+
+Cash receipts must never appear as bank transactions.
+
+Bank accounts must belong to exactly ONE location.
+
+Test reconciliation:
+
+- multi-select
+- selected total
+- processing charge
+- reconciliation date
+- batch creation
+- duplicate prevention
+- reset
+- audit
+
+Reset must never delete original financial transactions.
+
+============================================================
+13. AUDIT DURABILITY
+============================================================
+
+Perform fault-injection tests.
+
+For critical financial mutations:
+
+intentionally make audit writing fail.
+
+Verify the financial mutation rolls back.
+
+Test at minimum:
+
+- sale
+- purchase
+- receipt
+- payment
+- journal
+- expense
+- transfer
+- reconciliation
+- depreciation
+- payroll
+- asset disposal
+- settlement/allocation
+
+A critical financial mutation must never commit without its required audit event.
+
+No fire-and-forget audit for critical mutations.
+
+============================================================
+14. RBAC / LOCATION ISOLATION
+============================================================
+
+Create isolated test users:
+
+HEAD OFFICE
+WAREHOUSE A
+WAREHOUSE B
+
+Warehouse A must never access Warehouse B data.
+
+Test:
+
+- customers
+- vendors
+- sales
+- purchases
+- receipts
+- payments
+- expenses
+- stock
+- transfers
+- ledgers
+- reports
+- dashboard
+- GST
+- payroll
+- assets
+- cash
+- bank
+- PDF
+- XLSX
+- CSV
+
+Test direct ID manipulation.
+
+Test query parameters.
+
+Test URL manipulation.
+
+Test export endpoints.
+
+Test All Locations.
+
+Warehouse users must NEVER gain All Locations authority.
+
+Head Office may use All Locations.
+
+Also verify:
+
+GET /customers/:id
+GET /vendors/:id
+
+with server-side party/location scope.
+
+============================================================
+15. DASHBOARD / P&L PARITY
+============================================================
+
+Dashboard MUST use the authoritative financial report source.
+
+Prove:
+
+Dashboard Sales = P&L Net Sales
+
+Dashboard COGS = P&L COGS
+
+Dashboard GP = P&L GP
+
+Dashboard NP = P&L NP
+
+Dashboard Closing Stock
+=
+Inventory Valuation
+=
+Balance Sheet Inventory
+
+Test:
+
+- All Locations
+- each warehouse
+- date ranges
+- month-wise
+
+Remove/fix any legacy calculation that can override canonical values.
+
+============================================================
+16. REPORTS — SCREEN/API/PDF/XLSX/CSV
+============================================================
+
+This is a release blocker.
+
+Find EVERY official report export.
+
+Inventory all:
+
+PDF routes
+XLSX routes
+CSV routes
+print routes
+share/export endpoints
+
+Every official export must consume the canonical server-authoritative report payload.
+
+Architecture must be:
+
+DATABASE
+→ authoritative service
+→ canonical report payload
+→ SCREEN
+→ PDF
+→ XLSX
+→ CSV
+
+Do not independently recalculate financial values in exporters.
+
+Do not trust client-prepared financial rows.
+
+Server must apply:
+
+- permissions
+- location scope
+- date range
+- filters
+
+before producing the payload.
+
+============================================================
+17. ACTUAL EXPORT PARITY
+============================================================
+
+Do not only test that a file downloads.
+
+Inspect the actual contents.
+
+For each major report compare:
+
+SCREEN
+vs
+API
+vs
+PDF
+vs
+XLSX
+vs
+CSV
+
+At minimum:
+
+- P&L
+- Trading Account
+- Balance Sheet
+- Trial Balance
+- Day Book
+- Cash Book
+- Bank Book
+- Customer Ledger
+- Vendor Ledger
+- Receivable Ageing
+- Payable Ageing
+- Sales Register
+- Purchase Register
+- Sales Return
+- Purchase Return
+- Stock
+- Inventory Valuation
+- GST
+- Expenses
+- Fixed Assets
+- Payroll
+- Transfers
+- Reconciliation
+
+Compare actual numeric values.
+
+Especially verify:
+
+Opening Stock
+Purchases
+COGS
+Closing Stock
+Net Sales
+Gross Profit
+Expenses
+Depreciation
+Net Profit
+Assets
+Liabilities
+Equity
+Cash
+Bank
+Receivables
+Payables
+GST
+
+Test:
+
+All Locations
++
+each warehouse
+
+and multiple date ranges.
+
+============================================================
+18. CACHE / STALE DATA
+============================================================
+
+Test report data after changing underlying transactions.
+
+Verify that old cached/304 responses cannot return stale financial numbers.
+
+Test:
+
+P&L
+Balance Sheet
+Trial Balance
+Day Book
+Stock
+Dashboard
+
+Fix invalidation/versioning properly.
+
+Do not simply disable all caching unless required.
+
+============================================================
+19. BACKUP / RESTORE REHEARSAL
+============================================================
+
+Use ONLY an isolated development/test database.
+
+Create a full backup.
+
+Restore into a completely fresh isolated PostgreSQL database.
+
+Verify:
+
+- schema
+- migrations
+- manifest
+- checksums
+- files
+- table count
+- critical row counts
+- journal totals
+- Trial Balance
+- Balance Sheet
+- inventory quantity
+- inventory valuation
+- batch quantities
+- customers
+- vendors
+- sales
+- purchases
+
+Prove:
+
+restored database
+=
+source database
+
+financially and structurally.
+
+Never restore over production.
+
+============================================================
+20. DATABASE / STARTUP SAFETY
+============================================================
+
+Verify:
+
+migrations are idempotent.
+
+startup does not repeatedly modify financial data.
+
+startup cleanup is fail-closed.
+
+background jobs do not duplicate postings.
+
+scheduler starts only after required migrations.
+
+Do not introduce automatic production repair.
+
+============================================================
+21. FINANCIAL INTEGRITY CENTER
+============================================================
+
+Ensure FI-01 through FI-27 correctly report:
+
+PASS
+WARN
+FAIL
+
+Unknown evidence must remain WARN.
+
+Never fabricate PASS.
+
+Verify the integrity center against the actual database.
+
+============================================================
+22. COMPLETE TEST EXECUTION
+============================================================
+
+Run:
+
+- workspace typecheck
+- API typecheck
+- web typecheck
+- production build
+- accounting tests
+- inventory tests
+- transfer tests
+- sales tests
+- purchase tests
+- return tests
+- customer settlement tests
+- vendor settlement tests
+- GST tests
+- payroll tests
+- fixed asset tests
+- reconciliation tests
+- permission tests
+- location isolation tests
+- dashboard tests
+- report tests
+- PDF tests
+- XLSX tests
+- CSV tests
+- cache tests
+- audit fault-injection tests
+- backup/restore tests
+
+Do not change expected values simply to make tests pass.
+
+============================================================
+23. FINAL ACCOUNTING RELEASE GATE
+============================================================
+
+The following MUST be proven:
+
+[ ] Trial Balance Dr = Cr
+
+[ ] Balance Sheet balances
+
+[ ] Assets = Liabilities + Equity
+
+[ ] Net Sales - COGS = Gross Profit
+
+[ ] GP + income - expenses - depreciation = Net Profit
+
+[ ] P&L closing stock = Inventory valuation
+
+[ ] Inventory valuation = Balance Sheet inventory
+
+[ ] Closing(D) = Opening(D+1)
+
+[ ] Historical valuation independent of current master average cost
+
+[ ] Backdated transaction behavior proven
+
+[ ] In-transit historical behavior proven
+
+[ ] Transfer neutrality proven
+
+[ ] Customer balances proven
+
+[ ] Vendor balances proven
+
+[ ] No duplicate settlement
+
+[ ] No over-allocation
+
+[ ] GST proven
+
+[ ] Payroll proven
+
+[ ] Fixed assets proven
+
+[ ] Depreciation idempotent
+
+[ ] Cash proven
+
+[ ] Bank proven
+
+[ ] Bank reconciliation proven
+
+[ ] RBAC/LBAC proven
+
+[ ] Audit rollback/fault injection proven
+
+[ ] Backup/restore proven
+
+[ ] Dashboard = P&L
+
+[ ] Screen = API
+
+[ ] Screen = PDF
+
+[ ] Screen = XLSX
+
+[ ] Screen = CSV
+
+[ ] No stale report cache
+
+[ ] Production untouched
+
+============================================================
+24. FINAL REPORT
+============================================================
+
+Update:
+
+ERP_FINAL_HARDENING_REPORT.md
+
+Create:
+
+ERP_RELEASE_GATE_REPORT.md
+
+For every release gate include:
+
+STATUS:
+PASS / WARN / FAIL
+
+EVIDENCE:
+exact test or verification
+
+If FAIL:
+exact root cause
+
+If WARN:
+why it cannot currently be proven
+
+Do not call an item PASS merely because implementation exists.
+
+============================================================
+25. FINAL STATUS RULE
+============================================================
+
+Only report:
+
+DEVELOPMENT STATUS: READY FOR PRODUCTION PUBLISH
+
+if ALL CRITICAL RELEASE GATES are PASS.
+
+Otherwise report:
+
+DEVELOPMENT STATUS: NOT READY
+
+and list the exact blockers.
+
+============================================================
+26. ABSOLUTE PRODUCTION RULE
+============================================================
+
+DO NOT:
+
+- publish
+- migrate production
+- repair production
+- clean production
+- delete production data
+- restore production
+- modify production accounting
+
+Production must remain untouched.
+
+============================================================
+
+START NOW.
+
+Read the current ERP_FINAL_HARDENING_REPORT.md first.
+
+Close the remaining blockers one by one.
+
+Actually implement missing fixes where necessary.
+
+Actually run the integration and parity tests.
+
+Do not stop at "implemented".
+
+Do not stop at "build passed".
+
+Do not stop at "file downloaded".
+
+Verify the actual financial values.
+
+Most importantly, prove the complete:
+
+P&L
+→ COGS
+→ Gross Profit
+→ Net Profit
+→ Closing Stock
+→ Inventory Valuation
+→ Balance Sheet
+→ Dashboard
+→ PDF
+→ XLSX
+→ CSV
+
+chain.
+
+Do not publish.
+
+Finish with ERP_RELEASE_GATE_REPORT.md and the final READY/NOT READY status.
