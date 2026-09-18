@@ -57,3 +57,17 @@ mtime_ms = 1788590368289
 storage_uri = "gcs://replit-rams-assets-sisko/rams/assets/repl:bd7bcd33-774f-4b61-bf46-8afc6db19a81/0c8f8a24-b5cb-424b-a5d1-d091d5efb2bc/b9f9f673-244a-4fc8-9a92-fbefa50754e0"
 storage_version_token = "1788590378490660"
 content_type = "text/markdown"
+
+[[outputs]]
+id = "MBogEJ8cwcCM9zLrpCY6s"
+uri = "file://ERP_COMPLETE_DOCUMENTATION.md"
+type = "text"
+title = "ERP Complete Documentation"
+description = "Repository-derived technical documentation for the current Marlin Frozen Fruits ERP implementation."
+logical_id = "d280f81b-514c-43bb-9375-584d91c2cf3f"
+content_hash = "sha256:06ed5c47ff695f634437f1b3c7a55812fe9555c5bb5c4f157c36b3e6be599e08"
+size = 82226
+mtime_ms = 1789711762523
+storage_uri = "gcs://replit-rams-assets-sisko/rams/assets/repl:bd7bcd33-774f-4b61-bf46-8afc6db19a81/d280f81b-514c-43bb-9375-584d91c2cf3f/70f9b781-974f-479d-8f38-2bac2ba812ba"
+storage_version_token = "1789711787784769"
+content_type = "text/markdown"
