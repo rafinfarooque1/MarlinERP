@@ -16,6 +16,16 @@ description: How the recon drill-down decomposes head differences into documents
   or STD-DTX must either carry a `sale:`/`purchase:` entryId (attributed to the doc)
   or surface in `otherEntries` — never silently shift the ledger side.
 
+## GST note adjustments
+- Credit notes and debit notes are register documents, not unexplained journal
+  postings. Their signed GST reversal belongs on the register side of the
+  reconciliation and should remain visible as a drillable adjustment.
+- **Why:** a sales-return credit note legitimately debits output GST; leaving it
+  only on the ledger side makes a correct return appear as a mismatch.
+- **How to apply:** consume tax-bearing `credit_note`/`debit_note` entries from
+  `otherEntries`, add them to the matching outward/inward register heads, and
+  expose the adjustment in the UI/export. Keep unrelated JVs visible.
+
 ## Register-vs-fetch asymmetry (regression trap)
 - The recon fetch includes cancelled + branch-transfer docs (they still post until
   reversed), but the legacy aggregate fields (`rows`, `salesTaxTotal`…) are computed

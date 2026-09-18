@@ -151,6 +151,20 @@ export interface GstReconOtherEntry {
   amount: number;
 }
 
+/** A credit/debit note included on the GST register side of reconciliation. */
+export interface GstReconRegisterAdjustment {
+  entryId: string;
+  source: 'credit_note' | 'debit_note';
+  voucherNumber: string | null;
+  date: string;
+  description: string;
+  side: 'outward' | 'inward';
+  cgst: number;
+  sgst: number;
+  igst: number;
+  total: number;
+}
+
 export interface GstReconResponse {
   rows: GstReconRow[];
   dtxDirect: number;
@@ -159,6 +173,7 @@ export interface GstReconResponse {
   matched: boolean;
   note: string;
   mismatchDocs: { outward: GstReconMismatchDoc[]; inward: GstReconMismatchDoc[] };
+  registerAdjustments: GstReconRegisterAdjustment[];
   otherEntries: GstReconOtherEntry[];
   checked: {
     sales: number;

@@ -168,6 +168,7 @@ export default function GstReturns() {
     ...(recon.data?.mismatchDocs?.inward ?? []),
   ];
   const otherEntries = recon.data?.otherEntries ?? [];
+  const registerAdjustments = recon.data?.registerAdjustments ?? [];
   const reconChecked = recon.data?.checked;
 
   const b2bSort = useTableSort(b2b, {
@@ -226,6 +227,12 @@ export default function GstReturns() {
     voucher: r => r.voucherNumber ?? '',
     head: r => r.head,
     amount: r => Number(r.amount),
+  });
+  const adjustmentSort = useTableSort(registerAdjustments, {
+    date: r => r.date,
+    source: r => r.source,
+    voucher: r => r.voucherNumber ?? r.entryId,
+    total: r => Number(r.total),
   });
   const reconSort = useTableSort(reconRows, {
     head: r => r.head,
@@ -298,6 +305,12 @@ export default function GstReturns() {
         Section: 'Other GST-Ledger Entries', Head: r.head, Ledger: r.ledgerCode,
         Document: r.voucherNumber ?? r.entryId, Date: r.date, Party: r.description,
         'Ledger Amount': r.amount, 'Register Amount': '', Difference: r.amount, Reason: '',
+      })),
+      ...registerAdjustments.map(r => ({
+        Section: 'GST Register Adjustment', Head: r.side, Ledger: r.source,
+        Document: r.voucherNumber ?? r.entryId, Date: r.date, Party: r.description,
+        'Ledger Amount': r.total, 'Register Amount': r.total, Difference: 0,
+        Reason: 'Included on the register side as a credit/debit note',
       })),
     ]);
   };
@@ -438,6 +451,19 @@ export default function GstReturns() {
           { label: 'Head' }, { label: 'Amount', align: 'right' as const }, { label: 'Description' },
         ],
         rows: otherEntries.map(r => [r.date, r.source, r.voucherNumber ?? r.entryId, r.head, r.amount, r.description]),
+      }] : []),
+      ...(registerAdjustments.length ? [{
+        heading: 'GST Register Adjustments (credit/debit notes)',
+        columns: [
+          { label: 'Date' }, { label: 'Type' }, { label: 'Voucher' },
+          { label: 'CGST', align: 'right' as const }, { label: 'SGST', align: 'right' as const },
+          { label: 'IGST', align: 'right' as const }, { label: 'Total', align: 'right' as const },
+          { label: 'Description' },
+        ],
+        rows: registerAdjustments.map(r => [
+          r.date, r.side === 'outward' ? 'Credit note' : 'Debit note',
+          r.voucherNumber ?? r.entryId, r.cgst, r.sgst, r.igst, r.total, r.description,
+        ]),
       }] : []),
     ],
   });
@@ -796,6 +822,52 @@ export default function GstReturns() {
                           <Badge className="bg-red-500/15 text-red-600 hover:bg-red-500/15 border-0 font-mono">{r.differenceTotal > 0 ? '+' : '−'}{fmt(r.differenceTotal)}</Badge>
                         </TableCell>
                         <TableCell className="text-xs text-muted-foreground max-w-72">{r.reason}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+                </div>
+              </div>
+            )}
+
+            {registerAdjustments.length > 0 && (
+              <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
+                <div className="p-4 border-b border-border bg-muted/20">
+                  <h3 className="font-semibold text-sm">GST register adjustments ({registerAdjustments.length})</h3>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Credit and debit notes are included on the register side, so genuine returns do not appear as unexplained ledger postings.
+                  </p>
+                </div>
+                <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="bg-muted/10">
+                      <SortableHead k="date" sort={adjustmentSort.sort}>Date</SortableHead>
+                      <SortableHead k="source" sort={adjustmentSort.sort}>Type</SortableHead>
+                      <SortableHead k="voucher" sort={adjustmentSort.sort}>Voucher</SortableHead>
+                      <TableHead className="text-right">CGST</TableHead>
+                      <TableHead className="text-right">SGST</TableHead>
+                      <TableHead className="text-right">IGST</TableHead>
+                      <SortableHead k="total" sort={adjustmentSort.sort} className="text-right">Total</SortableHead>
+                      <TableHead>Description</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {adjustmentSort.sorted.map((r) => (
+                      <TableRow
+                        key={r.entryId}
+                        className="hover:bg-muted/10 cursor-pointer"
+                        onClick={() => openEntry(r.entryId, r.source)}
+                        title="Open voucher"
+                      >
+                        <TableCell className="text-xs">{r.date}</TableCell>
+                        <TableCell><Badge variant="secondary">{r.side === 'outward' ? 'Credit note' : 'Debit note'}</Badge></TableCell>
+                        <TableCell className="font-mono text-xs text-primary font-semibold">{r.voucherNumber ?? '—'}</TableCell>
+                        <TableCell className="text-right font-mono text-xs">{fmt(r.cgst)}</TableCell>
+                        <TableCell className="text-right font-mono text-xs">{fmt(r.sgst)}</TableCell>
+                        <TableCell className="text-right font-mono text-xs">{fmt(r.igst)}</TableCell>
+                        <TableCell className="text-right font-mono text-xs font-semibold">{fmt(r.total)}</TableCell>
+                        <TableCell className="text-xs text-muted-foreground max-w-96 truncate">{r.description}</TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
