@@ -22,9 +22,10 @@ Two consequences that look fine until you check them:
   log is younger than the data — which it is here, because the log was added
   after seeded/live stock already existed.
 
-Transfers make it worse: a transfer records a dispatch date but **no receipt
-date**, so which shipments were in transit on a past date is unrecoverable. Any
-historical closing stock therefore excludes in-transit goods.
+Transfers need both business dates: a transfer records dispatch and must persist
+the receiver's receipt date separately from the HTTP approval timestamp. Without
+that second date, a completed shipment remains historically in transit until the
+day it was approved, which corrupts dated opening stock and transfer neutrality.
 
 ## The rule
 
@@ -51,6 +52,18 @@ statements still balance while being wrong, so nothing catches it.
 figure (statements must balance) but mark it unreliable **and** raise a real
 integrity issue. Never substitute today's stock, and never substitute zero —
 both are fabrications that read as facts.
+
+**Transfer rule:** historical in-transit queries must use the persisted receipt
+business date for completed transfers and the dispatch date for the original
+reservation. Approval time is an audit timestamp, not a stock event date.
+
+**Why:** a receipt approved today can be a valid receipt from an earlier
+business day; using `approved_at` makes old-period opening stock and P&L appear
+to contain goods that had already arrived.
+
+**How to apply:** persist the validated receipt date in the transfer record,
+date the destination ledger/checkpoint event with it, and use it when deciding
+whether a released reservation existed at a historical cutoff.
 
 ## The zero-today trap (easy to miss, silently wrong)
 

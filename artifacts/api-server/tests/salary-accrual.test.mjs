@@ -2,7 +2,7 @@
  * §18 test cases A–N for attendance-driven salary accrual.
  * Disposable fixtures only — creates its own employee, cleans up at the end.
  */
-const BASE = "http://localhost:8080/api";
+const BASE = process.env.API_URL || "http://localhost:8080/api";
 let TOKEN = "";
 
 const results = [];

@@ -74,6 +74,7 @@ async function runMigrations() {
     ALTER TABLE stock_transfers ADD COLUMN IF NOT EXISTS approved_by text;
     ALTER TABLE stock_transfers ADD COLUMN IF NOT EXISTS approved_at timestamptz;
     ALTER TABLE stock_transfers ADD COLUMN IF NOT EXISTS received_line_items jsonb DEFAULT '[]'::jsonb;
+    ALTER TABLE stock_transfers ADD COLUMN IF NOT EXISTS received_date date;
     ALTER TABLE stock_transfers ADD COLUMN IF NOT EXISTS rejection_reason text;
     ALTER TABLE stock_transfers ALTER COLUMN status SET DEFAULT 'in_transit';
     ALTER TABLE warehouses ADD COLUMN IF NOT EXISTS upi_id text;

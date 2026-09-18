@@ -248,8 +248,24 @@ export async function stockTransferOpeningAdjustment(
   const { rows } = await q.query(
     `SELECT sl.material_type, sl.ref_id::int AS ref_id,
             sl.qty_change::numeric AS qty_change,
-             sl.unit_cost::numeric AS unit_cost
+            COALESCE(
+              NULLIF(sl.unit_cost::numeric, 0),
+              CASE WHEN checkpoint.quantity > 0
+                   THEN checkpoint.value::numeric / checkpoint.quantity::numeric
+                   ELSE checkpoint.unit_cost::numeric END
+            ) AS unit_cost
        FROM stock_ledger sl
+       LEFT JOIN LATERAL (
+         SELECT scs.quantity, scs.value, scs.unit_cost
+           FROM stock_cost_snapshots scs
+          WHERE scs.material_type = sl.material_type
+            AND scs.ref_id = sl.ref_id
+            AND scs.branch_type = sl.branch_type
+            AND scs.branch_id = sl.branch_id
+            AND scs.as_of_date <= COALESCE(sl.txn_date, sl.created_at::date)
+          ORDER BY scs.as_of_date DESC, scs.id DESC
+          LIMIT 1
+       ) checkpoint ON TRUE
       WHERE ${conds.join(" AND ")}
       ORDER BY sl.id`,
     params,

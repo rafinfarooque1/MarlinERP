@@ -9,7 +9,7 @@
  * Disposable fixtures only — creates its own employees/role, cleans up at
  * the end and checks the voucher book is still balanced.
  */
-const BASE = "http://localhost:8080/api";
+const BASE = process.env.API_URL || "http://localhost:8080/api";
 let TOKEN = "";
 
 const results = [];
