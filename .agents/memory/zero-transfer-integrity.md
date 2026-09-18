@@ -12,13 +12,14 @@ For a statement period with no stock-ledger transfer movements, the transfer-ope
 For a same-day statement ending today, if the scoped stock ledger has no movement
 on that date, use the live closing valuation for both stock boundaries. This is
 stronger than rewinding the prior-day checkpoint: late-recorded backdated
-documents can leave that checkpoint stale, and sender-owned in-transit stock is
-part of the live closing position.
+documents can leave that checkpoint stale. The statement closing valuation is
+on-hand only; in-transit quantities are not part of the P&L closing figure.
 
 **Why:** otherwise a stale prior-day checkpoint plus unchanged in-transit stock
-appears as gross profit even though the physical position did not change during
-the selected day.
+appears as gross profit even though the physical on-hand position did not
+change during the selected day.
 
 **How to apply:** limit this boundary substitution to today's same-day,
 no-stock-ledger-movement path; do not use it to make arbitrary historical
-periods appear reliable.
+periods appear reliable. Keep transfer movements as opening-stock adjustments;
+do not add them to closing stock.

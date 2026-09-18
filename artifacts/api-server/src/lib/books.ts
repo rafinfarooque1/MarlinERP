@@ -271,6 +271,10 @@ export async function stockTransferOpeningAdjustment(
     params,
   );
 
+  if (rows.length === 0) {
+    return { total: 0, lines: [], reliable: true, note: null };
+  }
+
   // Transfer value belongs in the opening term only. Closing stock is valued
   // independently from on-hand quantity; in-transit stock is intentionally not
   // part of the financial-statement closing figure.
@@ -446,9 +450,16 @@ function stockPosition(value: Awaited<ReturnType<typeof stockValuation>>): Stock
   };
 }
 
-/** Closing stock: every product kind, in-transit included; optionally one branch. */
-export async function closingStockAt(scope?: StockBranchScope | null, q: Q = pool): Promise<StockAtDate> {
-  return stockPosition(await stockValuation(q as any, stockValuationScope(scope)));
+/** Closing stock: every product kind; callers choose whether transit is included. */
+export async function closingStockAt(
+  scope?: StockBranchScope | null,
+  q: Q = pool,
+  options: { includeInTransit?: boolean } = {},
+): Promise<StockAtDate> {
+  return stockPosition(await stockValuation(q as any, {
+    ...stockValuationScope(scope),
+    includeInTransit: options.includeInTransit ?? true,
+  }));
 }
 
 /**
@@ -801,6 +812,7 @@ export interface Books {
       salesGroup: StatementGroup;
       closingStock: number;
       closingStockItems: ValuedItem[];
+      /** Always zero in statements: transfer value is opening-stock-only. */
       closingStockInTransit: number;
       /** false when the closing position is rewound from history rather than read. */
       closingStockReliable: boolean;
@@ -979,12 +991,12 @@ export async function buildBooks(
   const skipStock = location?.type === "company";
   const historicalClose = toDate !== null && toDate < todayISO();
   const closing = skipStock ? emptyStock
-    : historicalClose ? await stockAsOf(toDate, stockScope, q) : await closingStockAt(stockScope, q);
+    : historicalClose ? await stockAsOf(toDate, stockScope, q)
+      : await closingStockAt(stockScope, q, { includeInTransit: false });
   // A current-day period with no stock-ledger movement has one physical stock
-  // position at both boundaries. Use the current closing valuation for that
-  // opening boundary as well. This matters when an older checkpoint is stale
-  // because a backdated document was recorded after it, and also keeps
-  // sender-owned in-transit stock on both sides of a no-activity statement.
+  // position at both boundaries. Use the current on-hand closing valuation for
+  // that opening boundary as well. This matters when an older checkpoint is
+  // stale because a backdated document was recorded after it.
   // It does not weaken historical statements: only today's same-day period can
   // use the live closing position, and any current valuation issue still
   // propagates into the statement.
