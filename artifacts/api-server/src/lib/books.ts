@@ -271,22 +271,9 @@ export async function stockTransferOpeningAdjustment(
     params,
   );
 
-  // Sender-owned transit is part of the closing physical position. The normal
-  // opening rewind intentionally contains on-hand stock only, so the opening
-  // term needs the closing in-transit value as well as the period's transfer
-  // movement. This keeps transfers neutral:
-  //
-  //   adjusted opening = on-hand opening + transfer movement + closing transit
-  //
-  // An opening shipment that remains in flight is therefore included once;
-  // a shipment received during the period is represented by its transfer_in
-  // movement; and a completed dispatch has neither a closing transit value nor
-  // an extra closing term.
-  const valuationScope = stockValuationScope(scope);
-  const closingTransit = await stockValuation(q as any, {
-    ...valuationScope,
-    ...(toDate ? { asOf: toDate } : {}),
-  });
+  // Transfer value belongs in the opening term only. Closing stock is valued
+  // independently from on-hand quantity; in-transit stock is intentionally not
+  // part of the financial-statement closing figure.
   const refs = rows.map((r: any) => ({
     materialType: String(r.material_type) as ValuedItem["materialType"],
     refId: Number(r.ref_id),
@@ -327,18 +314,9 @@ export async function stockTransferOpeningAdjustment(
     addLine(materialType, refId, rawQty, r2(rawQty * unitCost), unitCost);
   }
 
-  for (const row of closingTransit.rows) {
-    if (!row.inTransit) continue;
-    addLine(row.materialType, row.refId, row.quantity, row.value, row.unitCost);
-  }
-
-  const transitNotes = closingTransit.issues
-    .filter((issue) => issue.code === "MISSING_TRANSIT_COST")
-    .map((issue) => issue.message);
   const lines = [...byKey.values()].filter((line) => Math.abs(line.value) > 0.005 || Math.abs(line.qty) > 0.001);
   const notes = [
     missingCost ? `${missingCost} transfer movement(s) have no recorded positive cost; their value is unknown, not zero-cost stock.` : null,
-    ...transitNotes,
   ].filter(Boolean);
   return {
     total: r2(lines.reduce((sum, line) => sum + line.value, 0)),
