@@ -535,11 +535,50 @@ router.get("/gst/reconciliation", requireModuleView("page:/accounts/gst-returns"
     }
   }
 
+  // Credit/debit notes are GST register documents in their own right. Their
+  // journal source is separate from the invoice/purchase entry, so treating
+  // them as anonymous postings makes every genuine return look like a
+  // reconciliation defect. Add their signed tax reversal to the register
+  // side and consume the entry from `otherEntries`; unrelated journal and
+  // transfer postings remain visible there.
+  const consumed = new Set<string>();
+  const registerAdjustments: any[] = [];
+  for (const [key, e] of byEntry) {
+    const noteSource = e.source === "credit_note" || e.source === "debit_note";
+    if (!noteSource) continue;
+    const isCreditNote = e.source === "credit_note";
+    const tax = isCreditNote ? e.out : e.inp;
+    const total = round2(tax.cgst + tax.sgst + tax.igst);
+    if (Math.abs(total) < 0.01) continue;
+    if (isCreditNote) {
+      regOutC = round2(regOutC + tax.cgst);
+      regOutS = round2(regOutS + tax.sgst);
+      regOutI = round2(regOutI + tax.igst);
+    } else {
+      regInpC = round2(regInpC + tax.cgst);
+      regInpS = round2(regInpS + tax.sgst);
+      regInpI = round2(regInpI + tax.igst);
+    }
+    consumed.add(key);
+    registerAdjustments.push({
+      entryId: key,
+      source: e.source,
+      voucherNumber: e.voucherNumber,
+      date: e.date,
+      description: e.description,
+      side: isCreditNote ? "outward" : "inward",
+      cgst: round2(tax.cgst),
+      sgst: round2(tax.sgst),
+      igst: round2(tax.igst),
+      total,
+    });
+  }
+  registerAdjustments.sort((a, b) => a.date.localeCompare(b.date) || a.entryId.localeCompare(b.entryId));
+
   // Diff each register document against its own ledger postings.
   const r2h = (h: { cgst: number; sgst: number; igst: number }) =>
     ({ cgst: round2(h.cgst), sgst: round2(h.sgst), igst: round2(h.igst) });
   const zero = { cgst: 0, sgst: 0, igst: 0 };
-  const consumed = new Set<string>();
   const mismatchOut: any[] = [];
   const mismatchIn: any[] = [];
   const attributeDoc = (
@@ -643,6 +682,7 @@ router.get("/gst/reconciliation", requireModuleView("page:/accounts/gst-returns"
     // postings) the head differences decompose into — plus explicit evidence
     // of how many documents were checked when everything matches.
     mismatchDocs: { outward: mismatchOut, inward: mismatchIn },
+    registerAdjustments,
     otherEntries,
     checked: {
       sales: salesChecked,

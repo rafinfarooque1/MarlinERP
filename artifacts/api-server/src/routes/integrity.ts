@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { pool } from "@workspace/db";
 import { requireModuleView } from "../middleware/permissions";
-import { buildBooks, previousDay, type Books } from "../lib/books";
+import { buildBooks, previousDay, todayISO, type Books } from "../lib/books";
 import { buildDerivedPostings, type Posting } from "./journal";
 import { openingBalancePostings } from "../lib/openingBalances";
 import { isIsoDate } from "../lib/dateInput";
@@ -147,7 +147,15 @@ router.get(
       (opts) => buildDerivedPostings(opts),
       { fromDate, toDate, location: loc },
     );
-    const valuation = await stockValuation(pool, { asOf: toDate, ...stockScope(loc) });
+    // Financial statements intentionally exclude stock in transit.  A current
+    // period should also use the live quantity truth rather than the historic
+    // rewind path, which can legitimately report incomplete pre-checkpoint
+    // history for today's date.
+    const valuation = await stockValuation(pool, {
+      ...(toDate === todayISO() ? {} : { asOf: toDate }),
+      includeInTransit: false,
+      ...stockScope(loc),
+    });
     const [derived, openings] = await Promise.all([
       buildDerivedPostings({ toDate }),
       openingBalancePostings({ toDate }),
@@ -164,10 +172,19 @@ router.get(
       explanation: close(debit, credit) ? "Total debits equal total credits." : "The selected posting stream is not balanced.",
     }));
     const bsDifference = Number(books.integrity.difference);
-    checks.push(check("FI-02", "Balance Sheet", books.integrity.balanced ? "PASS" : "FAIL", {
+    const bsBalances = close(books.balanceSheet.assets.total, books.balanceSheet.liabilities.total);
+    // `books.integrity.issues` also carries evidence-quality warnings (for
+    // example, an opening stock position that cannot be reconstructed). Those
+    // must not turn a balanced equation into a FAIL. FI-03 is the direct
+    // equation check; FI-02 reports a warning when the equation is sound but
+    // the statement has unresolved supporting evidence.
+    const bsStatus: Status = bsBalances ? (books.integrity.issues.length ? "WARN" : "PASS") : "FAIL";
+    checks.push(check("FI-02", "Balance Sheet", bsStatus, {
       actual: books.balanceSheet.assets.total, expected: books.balanceSheet.liabilities.total,
       difference: bsDifference, date: toDate, location: locJson, source: "buildBooks.integrity",
-      explanation: books.integrity.balanced ? "Assets equal liabilities and equity." : books.integrity.issues.join(" "),
+      explanation: bsBalances
+        ? books.integrity.issues.join(" ") || "Assets equal liabilities and equity."
+        : books.integrity.issues.join(" ") || "Assets and liabilities differ.",
     }));
     checks.push(check("FI-03", "Assets = Liabilities + Equity", close(books.balanceSheet.assets.total, books.balanceSheet.liabilities.total) ? "PASS" : "FAIL", {
       actual: books.balanceSheet.assets.total, expected: books.balanceSheet.liabilities.total,
