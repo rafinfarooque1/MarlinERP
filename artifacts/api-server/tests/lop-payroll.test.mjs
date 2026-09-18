@@ -7,7 +7,7 @@
  * books. Disposable fixtures only — creates its own employee, restores the
  * company settings it touches, cleans up at the end.
  */
-const BASE = "http://localhost:8080/api";
+const BASE = process.env.API_URL || "http://localhost:8080/api";
 let TOKEN = "";
 
 const results = [];
@@ -40,14 +40,15 @@ import { writeFileSync, unlinkSync } from "node:fs";
 const sql = new pg.Pool({ connectionString: process.env.DATABASE_URL });
 const q = async (text, params = []) => (await sql.query(text, params)).rows;
 
-const Y = 2026, M = 7; // fixture month: July 2026 (fully in the past)
+let Y = 2026, M = 7; // replaced at runtime with the latest open 31-day month
 const D = (d) => `${Y}-${String(M).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
 
-// Working-days basis = the payroll month's actual calendar length (Aug 2026
-// change — the payrollWorkingDays setting is retired). July 2026 has 31 days.
-const WD = new Date(Y, M, 0).getDate();
+// Working-days basis = the payroll month's actual calendar length (the
+// payrollWorkingDays setting is retired). The suite chooses an open 31-day
+// month so it never attempts to mutate a locked historical period.
+let WD = 31;
 const SALARY = 30000, ALLOW = 4;
-const PD = SALARY / WD; // per-day rate (unrounded, as the engine uses it)
+let PD = SALARY / WD; // per-day rate (unrounded, as the engine uses it)
 const r2 = (n) => Math.round(Number(n) * 100) / 100;
 
 // Attendance-driven accrual pricing has a cutover date (salary_accrual_config.
@@ -80,6 +81,31 @@ async function generate(empId) {
 }
 
 async function main() {
+  // July is intentionally locked in some development snapshots. Pick the
+  // latest prior 31-day month without bypassing the lock, keeping this
+  // destructive fixture safe and repeatable across snapshots.
+  const now = new Date();
+  let probe = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
+  let selected = false;
+  for (let i = 0; i < 24 && !selected; i++) {
+    const year = probe.getUTCFullYear();
+    const month = probe.getUTCMonth() + 1;
+    const days = new Date(Date.UTC(year, month, 0)).getUTCDate();
+    const [lock] = await q(
+      `SELECT 1 FROM accounting_period_locks WHERE year=$1 AND month=$2 LIMIT 1`,
+      [year, month],
+    );
+    if (days === 31 && !lock) {
+      Y = year;
+      M = month;
+      WD = days;
+      PD = SALARY / WD;
+      selected = true;
+    }
+    probe.setUTCMonth(probe.getUTCMonth() - 1);
+  }
+  if (!selected) throw new Error("No open 31-day fixture month is available");
+
   TOKEN = (await api("POST", "/auth/login", {
     username: process.env.TEST_ADMIN_USER || process.env.TEST_USERNAME || "admin",
     password: process.env.TEST_ADMIN_PASSWORD || process.env.TEST_PASSWORD || "marlin1458",

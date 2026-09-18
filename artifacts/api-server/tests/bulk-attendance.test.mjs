@@ -7,7 +7,7 @@
  * The fixture is isolated by a timestamped username and is removed in finally,
  * including any salary accrual/JV rows created by the correction.
  */
-const BASE = "http://localhost:8080/api";
+const BASE = process.env.API_URL || "http://localhost:8080/api";
 const PASSWORD = process.env.TEST_PASSWORD;
 const USERNAME = process.env.TEST_USERNAME;
 const TAG = `bulk_attendance_${Date.now()}`;

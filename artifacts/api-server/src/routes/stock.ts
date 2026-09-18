@@ -896,6 +896,15 @@ router.post("/stock/transfers", requireModuleAction("page:/transfers", "add"), a
       }
     }
     await writeStockLedger(client, dispatchLedgerEntries);
+    // The request's line items are not authoritative for later receive/reject
+    // operations. Persist the server-enriched lines so those operations carry
+    // the dispatch cost and exact batch breakdown instead of falling back to a
+    // client-omitted zero.
+    await client.query(
+      `UPDATE stock_transfers SET line_items = $1 WHERE id = $2`,
+      [JSON.stringify(enrichedLines), row.id],
+    );
+    row.line_items = enrichedLines;
 
     // ── Taxable inter-branch transfer: source-side document ─────────────────
     // Same GSTIN ('internal') is a delivery challan only — no supply, no tax,
@@ -995,7 +1004,20 @@ router.post("/stock/transfers", requireModuleAction("page:/transfers", "add"), a
 // Approve a transfer — receiver verifies physical stock and enters actual received quantities
 router.patch("/stock/transfers/:id/approve", requireModuleAction("page:/transfers", "edit"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
-  const { receivedLineItems, approvedBy } = req.body as { receivedLineItems?: Array<{ itemId: number; quantity: number; costPrice?: number }>; approvedBy?: string };
+  const {
+    receivedLineItems,
+    approvedBy,
+    receivedDate,
+  } = req.body as {
+    receivedLineItems?: Array<{ itemId: number; quantity: number; costPrice?: number }>;
+    approvedBy?: string;
+    /** Business date on which the destination actually received the goods. */
+    receivedDate?: string;
+  };
+  if (receivedDate != null && !isIsoDate(receivedDate)) {
+    res.status(400).json({ error: "receivedDate must be a valid YYYY-MM-DD date" });
+    return;
+  }
   const approveScope = await getUserDataScope((req as any).employee);
 
   const client = await pool.connect();
@@ -1027,7 +1049,8 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction("page:/transfer
        WHERE id = $2 AND status = 'in_transit'
        RETURNING id, from_type, from_id, to_type, to_id, line_items, challan_number,
                  transfer_type, tax_type, transfer_date, transfer_value, gst_amount,
-                  document_mode, transfer_invoice_number, approved_at::date::text AS receipt_date`,
+                  document_mode, transfer_invoice_number, transfer_date::text AS transfer_date,
+                  approved_at::date::text AS approved_date`,
        [approvedBy || 'admin', id]
     );
     row = claim.rows[0];
@@ -1040,8 +1063,16 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction("page:/transfer
     }
 
     // Receipt is a new event, not a restatement of dispatch.
+    // A historical receive is a distinct business event from the HTTP approval
+    // timestamp. Older clients do not send receivedDate, so retain the
+    // transfer's business date rather than silently booking the event today.
+    const receiptDate = receivedDate ?? String(row.transfer_date ?? '').slice(0, 10);
+    await client.query(
+      `UPDATE stock_transfers SET received_date = $1::date WHERE id = $2`,
+      [receiptDate, id],
+    );
     {
-      const ym = ymOfDate(row.receipt_date);
+      const ym = ymOfDate(receiptDate);
       if (ym && await isMonthLocked(client, ym.year, ym.month)) {
         await client.query("ROLLBACK");
         res.status(423).json(monthLockedBody(ym.year, ym.month)); return;
@@ -1254,7 +1285,7 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction("page:/transfer
     let receiveVoucherId: number | null = null;
     let purchaseInvoiceId: number | null = null;
     if (row.transfer_type && row.transfer_type !== 'internal' && Number(row.transfer_value ?? 0) > 0) {
-      const txnDate = row.receipt_date;
+      const txnDate = receiptDate;
       const taxType = (row.tax_type ?? 'none') as TaxType;
 
       if (String(row.document_mode ?? 'voucher') === 'invoice' && row.transfer_invoice_number) {
@@ -1368,7 +1399,7 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction("page:/transfer
           snapshotUnitCost: snapshotUnitCosts.get(`${mt}:${Number(l.itemId)}`) ?? null,
           docType: 'stock_transfer',
           docId: id,
-          txnDate: row.receipt_date,
+           txnDate: receiptDate,
         };
       }));
     }

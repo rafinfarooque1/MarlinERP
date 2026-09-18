@@ -1976,6 +1976,28 @@ router.delete("/purchases/:id", requireModuleAction("page:/production/purchase",
     }
 
     const lineItems = (locked.line_items ?? []) as Array<{ materialType: string; materialId: number; quantity: number; batchNumber?: string | null; materialName?: string | null; unit?: string | null }>;
+    // A historical reversal cannot be replayed once a newer dated checkpoint
+    // exists for the same product/location. In that case the stock mutation is
+    // still valid, but its audit/checkpoint event must be a current-date
+    // correction; otherwise the writer would reject the whole delete and the
+    // route would surface an avoidable 500.
+    const reversalDates = new Map<string, string | null>();
+    for (const li of lineItems) {
+      const kind = (li.materialType ?? 'item') as string;
+      const branchId = ledgerBranchId(loc, kind);
+      const { rows: [latest] } = await client.query(
+        `SELECT MAX(as_of_date)::text AS latest_date
+           FROM stock_cost_snapshots
+          WHERE material_type = $1 AND ref_id = $2
+            AND branch_type = $3 AND branch_id = $4`,
+        [kind, Number(li.materialId), loc.type, branchId],
+      );
+      const latestDate = latest?.latest_date ? String(latest.latest_date).slice(0, 10) : null;
+      reversalDates.set(`${kind}:${Number(li.materialId)}`,
+        latestDate && latestDate > String(locked.purchase_date).slice(0, 10)
+          ? null
+          : String(locked.purchase_date ?? '') || null);
+    }
   for (const li of lineItems) {
     if (li.materialType === "material") {
       await client.query(
@@ -2038,8 +2060,10 @@ router.delete("/purchases/:id", requireModuleAction("page:/production/purchase",
         branchType: loc.type, branchId: ledgerBranchId(loc, kind), branchName: locName,
         qtyChange: -Number(li.quantity), unitCost: 0,
         docType: 'purchase', docId: id,
-        txnDate: String(locked.purchase_date ?? '') || null,
-        notes: 'Purchase deleted — stock reversed',
+         txnDate: reversalDates.get(`${kind}:${Number(li.materialId)}`) ?? null,
+         notes: reversalDates.get(`${kind}:${Number(li.materialId)}`)
+           ? 'Purchase deleted — stock reversed'
+           : `Purchase deleted — current-date stock correction for historical bill dated ${locked.purchase_date}`,
       };
     }));
     const del = await client.query(`DELETE FROM purchases WHERE id = $1 RETURNING id`, [id]);

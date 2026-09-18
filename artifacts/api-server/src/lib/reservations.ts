@@ -222,8 +222,17 @@ export async function activeInTransit(c: Queryable, opts: {
        WHERE first_r.doc_type = r.doc_type AND first_r.doc_id = r.doc_id
          AND first_r.kind = 'in_transit'
     ) THEN COALESCE(t.transfer_date::date, r.created_at::date)
-      ELSE r.created_at::date END) <= $1::date`);
-    conds.push(`(r.released_at::date > $1::date OR (r.status = 'active' AND r.released_at IS NULL))`);
+      ELSE COALESCE(
+        CASE WHEN t.status = 'completed' THEN t.received_date::date END,
+        r.created_at::date
+      ) END) <= $1::date`);
+    conds.push(`(
+      CASE WHEN t.status = 'completed' AND t.received_date IS NOT NULL
+           THEN t.received_date::date
+           ELSE r.released_at::date
+      END > $1::date
+      OR (r.status = 'active' AND r.released_at IS NULL)
+    )`);
   } else {
     conds.push("r.status = 'active'");
   }

@@ -194,6 +194,18 @@ try {
              $4, 12, 100, 'test_fixture', NULL, $5, $6::date)`,
     [materialId, `${TAG} Material`, sourceId, `${TAG} Source`, `${TAG} opening`, '2026-08-18'],
   );
+  // A raw opening movement provides quantity evidence only. Pair it with the
+  // authoritative dated cost checkpoint required for historical valuation;
+  // missing cost evidence must remain WARN rather than acquire today's master
+  // cost implicitly.
+  await sql(
+    `INSERT INTO stock_cost_snapshots
+       (as_of_date, material_type, ref_id, branch_type, branch_id,
+        quantity, unit_cost, value, source, source_id)
+     VALUES ('2026-08-18', 'material', $1, 'warehouse', $2,
+             12, 100, 1200, 'test_opening', NULL)`,
+    [materialId, sourceId],
+  );
   assert('Created isolated source and destination fixtures', sourceId > 0 && destinationId > 0 && materialId > 0);
 
   console.log('\n[1] Pending transfer deducts only the source');

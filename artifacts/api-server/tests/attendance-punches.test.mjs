@@ -12,7 +12,7 @@
  * records "now" and cannot backdate; repricing is then triggered through the
  * public correction endpoint, so the pricing path under test is the real one.
  */
-const BASE = "http://localhost:8080/api";
+const BASE = process.env.API_URL || "http://localhost:8080/api";
 let TOKEN = "";
 
 const results = [];

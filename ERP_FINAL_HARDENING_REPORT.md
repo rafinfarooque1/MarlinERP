@@ -48,6 +48,14 @@ The codebase has received substantial hardening work, but the brief requires a c
 - Historical valuation warnings and integrity warnings are carried into canonical report output.
 - Existing official export endpoints have not yet all been migrated to these adapters; this is a release blocker.
 
+### Inventory transfer and historical correction closure
+
+- Transfer receipt events accept a validated business date and persist it separately from the HTTP approval timestamp.
+- Historical in-transit valuation uses the persisted receipt date, so completed receipts do not remain in transit until the day they were approved.
+- Transfer headers persist server-enriched costs and batch breakdowns; receive/reject paths no longer fall back to client-omitted zero costs.
+- Legacy zero-cost transfer ledger rows use the latest dated checkpoint as evidence when available; missing evidence remains an explicit warning.
+- Historical purchase deletion uses a current-date correction only when a newer checkpoint makes dated replay impossible, avoiding an unhandled 500 while preserving the backdate guard.
+
 ## Verification completed
 
 | Check | Result |
@@ -57,6 +65,18 @@ The codebase has received substantial hardening work, but the brief requires a c
 | Route guard audit | PASS — 405 routes |
 | ERP production web build with `PORT=21940 BASE_PATH=/` | PASS |
 | Backup archive unit test | PASS — 9 passed, 0 failed |
+| Isolated accounting acceptance suite | PASS — 37 passed, 0 failed |
+| Isolated GST suite | PASS — 12 passed, 0 failed |
+| Isolated fixed-assets suite | PASS — 40 passed, 0 failed |
+| Isolated transfer receiving/valuation suite | PASS — 43 passed, 0 failed |
+| Isolated balance reconciliation suite | PASS — 73 passed, 0 failed |
+| Isolated payroll LOP suite | PASS — 21 passed, 0 failed |
+| Isolated salary accrual suite | PASS — 21 passed, 0 failed |
+| Isolated payroll auto-calculation suite | PASS — 29 passed, 0 failed |
+| Isolated attendance punches suite | PASS — 14 passed, 0 failed |
+| Isolated bulk attendance suite | PASS — 9 passed, 0 failed |
+| Isolated leave approval suite | PASS — 21 passed, 0 failed |
+| Location-cost valuation suite | WARN — 35 passed, 4 failed only because company-wide opening evidence for the prior date is incomplete; fixture valuation, cleanup, deletion, transfer, and trial-balance checks passed |
 | API `/api/healthz/live` | PASS — 200 |
 | API `/api/healthz` after managed restart | PASS — 200 |
 | Unauthenticated integrity request | PASS — rejected with 401 |
@@ -68,16 +88,13 @@ The web build emitted existing source-map warnings for UI primitives and a chunk
 
 ## Remaining release blockers
 
-1. **Complete isolated database test matrix.** No full database/business-flow suite was run because the development database contains real business data. A separate scratch database with explicit identity verification is required.
+1. **Historical inventory evidence.** The location-cost suite still reports the company-wide opening position for the prior date as incomplete because existing stock lacks a dated checkpoint. This must be resolved with authoritative evidence or remain a documented release failure; current master cost must not be substituted.
 2. **Financial Integrity Center checks FI-08 through FI-27.** They currently return honest `WARN` results where a dedicated source query or fault-injection test is still needed.
-3. **Authoritative export wiring.** Canonical PDF/CSV/XLSX generation must be connected to every official report export route, then compared against rendered report screens and parsed file totals.
-4. **GST reconciliation.** Register, tax-ledger, place-of-supply, transfer, and party-GST parity need isolated positive/negative tests.
-5. **Payroll and assets.** Accrual, statutory calculations, depreciation, disposal, employee status/LWD, and location-stamp parity need end-to-end proof.
-6. **Historical inventory continuity.** Daily opening/closing continuity and transfer-in-transit continuity require reliable dated evidence across a scratch ledger.
-7. **Settlement controls.** Customer/vendor balances, advances, credit notes, allocation capacity, duplicate settlement, and overpayment cases need canonical reconciliation tests.
-8. **Backup/restore rehearsal.** An isolated backup must be restored into a fresh database and verified with schema, row-count, checksum, and representative report comparisons.
-9. **Audit durability fault injection.** Every critical financial mutation must prove that an audit insert failure rolls back the mutation.
-10. **Live production readiness evidence.** Production remains untouched. Before any publish decision, the isolated gates above must pass and any existing ambiguous location ownership must be explicitly reviewed rather than auto-reassigned.
+3. **Authoritative export wiring and parity.** Canonical PDF/CSV/XLSX generation is not yet connected to every official report export route and compared with rendered screens and parsed totals.
+4. **Backup/restore rehearsal.** A scratch backup must be restored into a fresh database and verified with schema, row-count, checksum, and representative report comparisons.
+5. **Audit durability fault injection.** Every critical financial mutation must prove that an audit insert failure rolls back the mutation.
+6. **Remaining breadth gates.** RBAC/LBAC breadth, cache invalidation/304 behavior, dashboard/report parity, mobile distribution, and FI-08–FI-27 evidence still require their dedicated isolated checks.
+7. **Live production readiness evidence.** Production remains untouched. Before any publish decision, every remaining isolated gate above must pass and any ambiguous location ownership must be explicitly reviewed rather than auto-reassigned.
 
 ## Limitations and non-claims
 
