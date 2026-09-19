@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { customFetch } from "@workspace/api-client-react";
 import { Button } from "@/components/ui/button";
-import { AlertTriangle, CheckCircle2, ChevronDown, Loader2, ShieldAlert } from "lucide-react";
+import { AlertTriangle, CheckCircle2, ChevronDown, Info, Loader2, ShieldAlert } from "lucide-react";
 
 type IntegrityProps = {
   fromDate?: string;
@@ -13,14 +13,14 @@ type IntegrityProps = {
 type Check = {
   id: string;
   title: string;
-  status: "PASS" | "WARN" | "FAIL";
+  status: "PASS" | "WARN" | "FAIL" | "UNVERIFIED";
   difference: number | null;
   unit: string;
   explanation: string;
   source: string;
 };
 type IntegrityResponse = {
-  summary: { PASS: number; WARN: number; FAIL: number };
+  summary: { PASS: number; WARN: number; FAIL: number; UNVERIFIED: number };
   checks: Check[];
   valuation?: { reliable: boolean; note: string | null };
 };
@@ -76,17 +76,20 @@ export function FinancialIntegrityPanel(props: IntegrityProps) {
       )}
       {open && query.data && (
         <div className="mt-4 space-y-3">
-          <div className="grid grid-cols-3 gap-2 text-center text-xs">
+            <div className="grid grid-cols-2 gap-2 text-center text-xs sm:grid-cols-4">
             <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-2"><div className="font-mono text-lg font-semibold">{query.data.summary.PASS}</div><div>PASS</div></div>
             <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-2"><div className="font-mono text-lg font-semibold">{query.data.summary.WARN}</div><div>WARN</div></div>
             <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-2"><div className="font-mono text-lg font-semibold">{query.data.summary.FAIL}</div><div>FAIL</div></div>
+              <div className="rounded-lg border border-sky-500/30 bg-sky-500/10 p-2"><div className="font-mono text-lg font-semibold">{query.data.summary.UNVERIFIED}</div><div>UNVERIFIED</div></div>
           </div>
           <div className="divide-y rounded-lg border">
             {query.data.checks.map((item) => {
               const isExpanded = expanded === item.id;
               const icon = item.status === "PASS"
                 ? <CheckCircle2 className="h-4 w-4 text-emerald-600" />
-                : <AlertTriangle className={`h-4 w-4 ${item.status === "FAIL" ? "text-red-600" : "text-amber-600"}`} />;
+                : item.status === "UNVERIFIED"
+                  ? <Info className="h-4 w-4 text-sky-600" />
+                  : <AlertTriangle className={`h-4 w-4 ${item.status === "FAIL" ? "text-red-600" : "text-amber-600"}`} />;
               return (
                 <button key={item.id} type="button" className="w-full p-3 text-left" onClick={() => setExpanded(isExpanded ? null : item.id)}>
                   <div className="flex items-start gap-2">
