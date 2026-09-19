@@ -33,3 +33,10 @@ and `document-renderers.md` (absent ≠ zero).
 
 ## Case: sale PUT location corruption (Aug 2026)
 `PUT /sales/:id` defaulted omitted `locationType`/`locationId` to `'outlet'`/`undefined`, silently wiping the sale's location. 35 rows (₹19,288.53) corrupted this way were the entire receivables-vs-TB drift. Fix: omitted location fields preserve the row's current values; recovery came from activity_log CREATE metadata (`metadata->'after'`). Corollary: cash-mode sales with `amount_paid < total` are a corruption signal — cash settles in full at creation.
+
+## Case: sale edits after inventory checkpoints
+An edit that changes only commercial fields (price, discount, customer, payment, note) must not reverse and re-apply unchanged stock. Compare stored and incoming stock identity (item, quantity, location, and business date); preserve the stored batch allocation and skip ledger writes when it is unchanged. Keep the guarded stock path for actual stock identity changes.
+
+**Why:** replaying an old sale against a newer inventory checkpoint rejects a harmless discount edit and can make the POS show a generic server error.
+
+**How to apply:** treat stock identity as separate from accounting/document state, and preserve the domain 409 response for genuine historical replay conflicts.

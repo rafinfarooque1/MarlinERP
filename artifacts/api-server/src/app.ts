@@ -124,6 +124,16 @@ app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
     res.status(409).json({ error: (err as any).message });
     return;
   }
+  // Historical stock edits are deliberately rejected when a newer valuation
+  // checkpoint exists. Preserve the domain conflict so the POS can explain
+  // what must change instead of reducing it to an opaque 500.
+  if ((err as any).code === "STOCK_CHECKPOINT_BACKDATE") {
+    res.status(409).json({
+      error: (err as any).message || "This historical stock edit cannot be replayed after a newer inventory checkpoint.",
+      code: (err as any).code,
+    });
+    return;
+  }
   logger.error({ err }, "Unhandled server error");
   res.status(500).json({ error: "An unexpected server error occurred" });
 });
