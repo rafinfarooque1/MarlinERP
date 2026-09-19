@@ -1833,7 +1833,35 @@ router.put("/sales/:id", requireModuleAction("page:/sales/pos", "edit"), async (
   // Every stock_entries row is locked before it is judged, in ascending item
   // order, so a concurrent bill for the same item waits rather than reading a
   // quantity that is about to change.
-  const oldLineItems = (existingRaw.line_items ?? []) as Array<{ itemId: number; quantity: number; batchBreakdown?: any[] }>;
+  const oldLineItems = ((): Array<{ itemId: number; quantity: number; batchBreakdown?: any[] }> => {
+    if (Array.isArray(existingRaw.line_items)) return existingRaw.line_items;
+    if (typeof existingRaw.line_items === 'string') {
+      try {
+        const parsedLines = JSON.parse(existingRaw.line_items);
+        return Array.isArray(parsedLines) ? parsedLines : [];
+      } catch {
+        return [];
+      }
+    }
+    return [];
+  })();
+  const stockSignature = (lines: Array<{ itemId: number; quantity: number }>) =>
+    lines
+      // stock quantities are stored to four decimal places; do not let a
+      // sub-paise display rounding turn a real quantity edit into a no-op.
+      .map(li => `${Number(li.itemId)}:${Math.round(Number(li.quantity) * 10000) / 10000}`)
+      .sort()
+      .join('|');
+  // A price/discount/customer/payment edit with the same stock identity does
+  // not change physical inventory. Replaying its old dated stock movement is
+  // both unnecessary and unsafe once a newer inventory checkpoint exists.
+  // Quantity, item, location, and business-date changes still take the full
+  // guarded reversal/re-apply path below.
+  const stockUnchanged =
+    oldLocationType === newLocationType
+    && Number(oldLocationId) === Number(newLocationId)
+    && toTxnDate(existingRaw.sale_date) === parsed.data.saleDate
+    && stockSignature(oldLineItems) === stockSignature(lineItems);
   const oldTotal = Number(existingRaw.total_amount);
   const oldCustomerId = existingRaw.customer_id as number | null;
   const newPaymentMode = effectivePaymentMode;
@@ -2033,94 +2061,115 @@ router.put("/sales/:id", requireModuleAction("page:/sales/pos", "edit"), async (
     //    Rows that do not exist yet cannot be locked here; the reversal pass
     //    inserts them, which is safe because a row nobody has can't be
     //    contended for its quantity.
-    const lockKeys = Array.from(new Set([
-      ...oldLineItems.map(li => `${Number(li.itemId)}|${oldLocationType}|${Number(oldLocationId)}`),
-      ...lineItems.map(li => `${Number(li.itemId)}|${newLocationType}|${Number(newLocationId)}`),
-    ]));
-    if (lockKeys.length > 0) {
-      await editTx.query(
-        `SELECT id FROM stock_entries
-          WHERE material_type = 'item'
-            AND (item_id::text || '|' || branch_type || '|' || branch_id::text) = ANY($1::text[])
-          ORDER BY item_id, branch_type, branch_id
-          FOR UPDATE`,
-        [lockKeys]
-      );
-    }
-
-    // 1. Reverse the old lines: credit the quantity back and restore the exact
-    //    lots the bill consumed. Legacy lines without a stored breakdown leave
-    //    batches untouched (the residual shows as untracked).
-    for (const li of [...oldLineItems].sort((a, b) => Number(a.itemId) - Number(b.itemId))) {
-      const { rows: [se] } = await editTx.query<{ id: number }>(
-        `SELECT id FROM stock_entries
-          WHERE item_id = $1 AND material_type = 'item' AND branch_type = $2 AND branch_id = $3
-          LIMIT 1 FOR UPDATE`,
-        [li.itemId, oldLocationType, oldLocationId]
-      );
-      if (se) {
-        await editTx.query(
-          `UPDATE stock_entries SET quantity = quantity::numeric + $1, updated_at = now() WHERE id = $2`,
-          [li.quantity, se.id]
-        );
-      } else {
-        await editTx.query(
-          `INSERT INTO stock_entries (item_id, material_type, branch_type, branch_id, quantity, cost_price)
-           VALUES ($1, 'item', $2, $3, $4, '0')`,
-          [li.itemId, oldLocationType, oldLocationId, li.quantity]
-        );
+    if (stockUnchanged) {
+      // Preserve the stored lot allocation while replacing the commercial
+      // fields (price, discount, tax, notes, etc.). Pair duplicate item lines
+      // in their stored order so legacy multi-line invoices remain stable.
+      const oldByItem = new Map<number, Array<{ batchBreakdown?: any[] }>>();
+      for (const li of oldLineItems) {
+        const bucket = oldByItem.get(Number(li.itemId)) ?? [];
+        bucket.push(li);
+        oldByItem.set(Number(li.itemId), bucket);
       }
-      await restoreBatches(editTx, li.itemId, oldLocationType, oldLocationId, li.batchBreakdown, "sale", id);
-    }
-
-    // 2. Apply the new lines against available stock (on hand − held). The old
-    //    lines are already back in stock above, so an edit that keeps the same
-    //    quantity always passes.
-    const editOrder = lineItems.map((_, i) => i).sort((a, b) => lineItems[a].itemId - lineItems[b].itemId);
-    const editBreakdowns: any[] = new Array(lineItems.length);
-    for (const idx of editOrder) {
-      const li = lineItems[idx];
-      const avail = await availabilityAt(editTx, {
-        refId: li.itemId, materialType: 'item',
-        branchType: newLocationType, branchId: newLocationId, lock: true,
-      });
-      if (avail.available + 0.001 < Number(li.quantity)) {
-        await editTx.query('ROLLBACK');
-        // Named only when refusing, so the happy path costs no extra query.
-        const { rows: [locRow] } = newLocationType === 'headoffice'
-          ? { rows: [{ name: 'Head Office' }] }
-          : await pgPool.query<{ name: string }>(
-              newLocationType === 'warehouse'
-                ? `SELECT name FROM warehouses WHERE id = $1`
-                : `SELECT name FROM outlets WHERE id = $1`,
-              [newLocationId]
-            );
-        res.status(400).json({
-          error: insufficientStockMessage({
-            productName: li.itemName || `Item #${li.itemId}`,
-            locationName: locRow?.name ?? null, unit: li.unit,
-            quantity: avail.quantity, reserved: avail.reserved,
-            requested: Number(li.quantity),
-          }),
-          code: 'INSUFFICIENT_STOCK',
-          itemId: li.itemId,
-          available: avail.available,
-          reserved: avail.reserved,
-          onHand: avail.quantity,
-          requested: Number(li.quantity),
+      for (const li of lineItems) {
+        const prior = oldByItem.get(Number(li.itemId))?.shift();
+        newLineItemsWithBatches.push({
+          ...li,
+          ...(prior && Object.prototype.hasOwnProperty.call(prior, 'batchBreakdown')
+            ? { batchBreakdown: prior.batchBreakdown }
+            : {}),
         });
-        return;
       }
-      await editTx.query(
-        `UPDATE stock_entries SET quantity = quantity::numeric - $1, updated_at = now() WHERE id = $2`,
-        [li.quantity, avail.entryId]
-      );
-      editBreakdowns[idx] = await consumeBatches(editTx, {
-        itemId: li.itemId, branchType: newLocationType, branchId: newLocationId, quantity: li.quantity,
-      });
-    }
-    for (let i = 0; i < lineItems.length; i++) {
-      newLineItemsWithBatches.push({ ...lineItems[i], batchBreakdown: editBreakdowns[i] ?? [] });
+    } else {
+      const lockKeys = Array.from(new Set([
+        ...oldLineItems.map(li => `${Number(li.itemId)}|${oldLocationType}|${Number(oldLocationId)}`),
+        ...lineItems.map(li => `${Number(li.itemId)}|${newLocationType}|${Number(newLocationId)}`),
+      ]));
+      if (lockKeys.length > 0) {
+        await editTx.query(
+          `SELECT id FROM stock_entries
+            WHERE material_type = 'item'
+              AND (item_id::text || '|' || branch_type || '|' || branch_id::text) = ANY($1::text[])
+            ORDER BY item_id, branch_type, branch_id
+            FOR UPDATE`,
+          [lockKeys]
+        );
+      }
+
+      // 1. Reverse the old lines: credit the quantity back and restore the exact
+      //    lots the bill consumed. Legacy lines without a stored breakdown leave
+      //    batches untouched (the residual shows as untracked).
+      for (const li of [...oldLineItems].sort((a, b) => Number(a.itemId) - Number(b.itemId))) {
+        const { rows: [se] } = await editTx.query<{ id: number }>(
+          `SELECT id FROM stock_entries
+            WHERE item_id = $1 AND material_type = 'item' AND branch_type = $2 AND branch_id = $3
+            LIMIT 1 FOR UPDATE`,
+          [li.itemId, oldLocationType, oldLocationId]
+        );
+        if (se) {
+          await editTx.query(
+            `UPDATE stock_entries SET quantity = quantity::numeric + $1, updated_at = now() WHERE id = $2`,
+            [li.quantity, se.id]
+          );
+        } else {
+          await editTx.query(
+            `INSERT INTO stock_entries (item_id, material_type, branch_type, branch_id, quantity, cost_price)
+             VALUES ($1, 'item', $2, $3, $4, '0')`,
+            [li.itemId, oldLocationType, oldLocationId, li.quantity]
+          );
+        }
+        await restoreBatches(editTx, li.itemId, oldLocationType, oldLocationId, li.batchBreakdown, "sale", id);
+      }
+
+      // 2. Apply the new lines against available stock (on hand − held). The old
+      //    lines are already back in stock above, so an edit that keeps the same
+      //    quantity always passes.
+      const editOrder = lineItems.map((_, i) => i).sort((a, b) => lineItems[a].itemId - lineItems[b].itemId);
+      const editBreakdowns: any[] = new Array(lineItems.length);
+      for (const idx of editOrder) {
+        const li = lineItems[idx];
+        const avail = await availabilityAt(editTx, {
+          refId: li.itemId, materialType: 'item',
+          branchType: newLocationType, branchId: newLocationId, lock: true,
+        });
+        if (avail.available + 0.001 < Number(li.quantity)) {
+          await editTx.query('ROLLBACK');
+          // Named only when refusing, so the happy path costs no extra query.
+          const { rows: [locRow] } = newLocationType === 'headoffice'
+            ? { rows: [{ name: 'Head Office' }] }
+            : await pgPool.query<{ name: string }>(
+                newLocationType === 'warehouse'
+                  ? `SELECT name FROM warehouses WHERE id = $1`
+                  : `SELECT name FROM outlets WHERE id = $1`,
+                [newLocationId]
+              );
+          res.status(400).json({
+            error: insufficientStockMessage({
+              productName: li.itemName || `Item #${li.itemId}`,
+              locationName: locRow?.name ?? null, unit: li.unit,
+              quantity: avail.quantity, reserved: avail.reserved,
+              requested: Number(li.quantity),
+            }),
+            code: 'INSUFFICIENT_STOCK',
+            itemId: li.itemId,
+            available: avail.available,
+            reserved: avail.reserved,
+            onHand: avail.quantity,
+            requested: Number(li.quantity),
+          });
+          return;
+        }
+        await editTx.query(
+          `UPDATE stock_entries SET quantity = quantity::numeric - $1, updated_at = now() WHERE id = $2`,
+          [li.quantity, avail.entryId]
+        );
+        editBreakdowns[idx] = await consumeBatches(editTx, {
+          itemId: li.itemId, branchType: newLocationType, branchId: newLocationId, quantity: li.quantity,
+        });
+      }
+      for (let i = 0; i < lineItems.length; i++) {
+        newLineItemsWithBatches.push({ ...lineItems[i], batchBreakdown: editBreakdowns[i] ?? [] });
+      }
     }
 
     // 3. The sale row, carrying the lots that now serve it. An edit may move
@@ -2174,34 +2223,36 @@ router.put("/sales/:id", requireModuleAction("page:/sales/pos", "edit"), async (
     //    out → back-in → out again, and the running balance stays truthful.
     //    Inside the transaction: an edit that moved stock but lost its movement
     //    rows leaves a ledger that can never be reconciled to the quantity.
-    await writeStockLedger(editTx, oldLineItems.map(li => {
-      const m = editMeta.get(`item:${li.itemId}`);
-      return {
-        txnType: 'sale_reversal', materialType: 'item' as const, refId: li.itemId,
-        itemName: m?.name ?? '', unit: m?.unit ?? '',
-        branchType: oldLocationType, branchId: oldLocationId,
-        branchName: editBranchNameOf(oldLocationType, oldLocationId),
-        qtyChange: Number(li.quantity),
-        unitCost: Number((li as any).unitPrice ?? 0),
-        docType: 'sale', docId: id,
-        txnDate: toTxnDate(existingRaw.sale_date),
-        notes: `${existingRaw.invoice_number} — reversed for edit`,
-      };
-    }));
-    await writeStockLedger(editTx, lineItems.map(li => {
-      const m = editMeta.get(`item:${li.itemId}`);
-      return {
-        txnType: 'sale', materialType: 'item' as const, refId: li.itemId,
-        itemName: m?.name ?? '', unit: m?.unit ?? '',
-        branchType: newLocationType, branchId: newLocationId,
-        branchName: editBranchNameOf(newLocationType, newLocationId),
-        qtyChange: -Number(li.quantity),
-        unitCost: Number(li.unitPrice ?? 0),
-        docType: 'sale', docId: id,
-        txnDate: parsed.data.saleDate,
-        notes: `${existingRaw.invoice_number} — re-applied after edit`,
-      };
-    }));
+    if (!stockUnchanged) {
+      await writeStockLedger(editTx, oldLineItems.map(li => {
+        const m = editMeta.get(`item:${li.itemId}`);
+        return {
+          txnType: 'sale_reversal', materialType: 'item' as const, refId: li.itemId,
+          itemName: m?.name ?? '', unit: m?.unit ?? '',
+          branchType: oldLocationType, branchId: oldLocationId,
+          branchName: editBranchNameOf(oldLocationType, oldLocationId),
+          qtyChange: Number(li.quantity),
+          unitCost: Number((li as any).unitPrice ?? 0),
+          docType: 'sale', docId: id,
+          txnDate: toTxnDate(existingRaw.sale_date),
+          notes: `${existingRaw.invoice_number} — reversed for edit`,
+        };
+      }));
+      await writeStockLedger(editTx, lineItems.map(li => {
+        const m = editMeta.get(`item:${li.itemId}`);
+        return {
+          txnType: 'sale', materialType: 'item' as const, refId: li.itemId,
+          itemName: m?.name ?? '', unit: m?.unit ?? '',
+          branchType: newLocationType, branchId: newLocationId,
+          branchName: editBranchNameOf(newLocationType, newLocationId),
+          qtyChange: -Number(li.quantity),
+          unitCost: Number(li.unitPrice ?? 0),
+          docType: 'sale', docId: id,
+          txnDate: parsed.data.saleDate,
+          notes: `${existingRaw.invoice_number} — re-applied after edit`,
+        };
+      }));
+    }
 
     // 5. Customer running totals: take the old bill off, put the new one on.
     if (oldCustomerId) {
