@@ -38,6 +38,7 @@ export function GstDocumentsTable({ title, icon, rows, loading }: {
     date: r => r.date,
     doc: r => r.documentNumber,
     party: r => r.partyName,
+    partyGstin: r => r.partyGstin,
     warehouse: r => r.warehouseName,
     taxable: r => Number(r.taxableValue),
     tax: r => Number(r.taxAmount),
@@ -52,7 +53,7 @@ export function GstDocumentsTable({ title, icon, rows, loading }: {
       </div>
       <div className="overflow-x-auto">
         {loading ? (
-          <TableSkeleton rows={4} cols={9} />
+          <TableSkeleton rows={4} cols={10} />
         ) : rows.length === 0 ? (
           <EmptyState icon={FileText} title="No documents in this period" compact />
         ) : (
@@ -62,6 +63,9 @@ export function GstDocumentsTable({ title, icon, rows, loading }: {
               <SortableHead k="date" sort={sort}>Date</SortableHead>
               <SortableHead k="doc" sort={sort}>{title.startsWith('Outward') ? 'Invoice No' : 'Purchase No'}</SortableHead>
               <SortableHead k="party" sort={sort}>Party</SortableHead>
+              <SortableHead k="partyGstin" sort={sort}>
+                {title.startsWith('Outward') ? 'Customer GST No.' : 'Vendor GST No.'}
+              </SortableHead>
               <SortableHead k="warehouse" sort={sort}>Warehouse</SortableHead>
               <SortableHead k="taxable" sort={sort} className="text-right">Taxable</SortableHead>
               <SortableHead k="tax" sort={sort} className="text-right">Tax</SortableHead>
@@ -79,6 +83,7 @@ export function GstDocumentsTable({ title, icon, rows, loading }: {
                   {r.isBranchTransfer && <Badge variant="outline" className="ml-1.5 text-[10px]">Transfer</Badge>}
                 </TableCell>
                 <TableCell className="text-xs">{r.partyName || '—'}</TableCell>
+                <TableCell className="font-mono text-xs whitespace-nowrap">{r.partyGstin || '—'}</TableCell>
                 <TableCell className="text-xs">{r.warehouseName}</TableCell>
                 <TableCell className="text-right font-mono text-xs">{fmt(r.taxableValue)}</TableCell>
                 <TableCell className="text-right font-mono text-xs">{fmt(r.taxAmount)}</TableCell>
@@ -89,7 +94,7 @@ export function GstDocumentsTable({ title, icon, rows, loading }: {
             ))}
             {rows.length > 1 && (
               <TableRow className="bg-muted/10 font-bold border-t-2">
-                <TableCell colSpan={4} className="text-xs uppercase tracking-wider">Total ({rows.length})</TableCell>
+                <TableCell colSpan={5} className="text-xs uppercase tracking-wider">Total ({rows.length})</TableCell>
                 <TableCell className="text-right font-mono text-xs">{fmt(rows.reduce((s, r) => s + r.taxableValue, 0))}</TableCell>
                 <TableCell className="text-right font-mono text-xs">{fmt(rows.reduce((s, r) => s + r.taxAmount, 0))}</TableCell>
                 <TableCell className="text-right font-mono text-xs">{fmt(rows.reduce((s, r) => s + r.invoiceValue, 0))}</TableCell>
@@ -109,6 +114,7 @@ export const docExportRow = (r: GstDocumentRow) => ({
   Date: r.date,
   'Document No': r.documentNumber || '—',
   Party: r.partyName || '—',
+  'GST No.': r.partyGstin || '—',
   Warehouse: r.warehouseName,
   Taxable: r.taxableValue,
   CGST: r.cgst,
@@ -121,13 +127,13 @@ export const docExportRow = (r: GstDocumentRow) => ({
 });
 
 export const DOC_PDF_COLUMNS = [
-  { label: 'Date' }, { label: 'Document No' }, { label: 'Party' }, { label: 'Warehouse' },
+  { label: 'Date' }, { label: 'Document No' }, { label: 'Party' }, { label: 'GST No.' }, { label: 'Warehouse' },
   { label: 'Taxable', align: 'right' as const }, { label: 'Total Tax', align: 'right' as const },
   { label: 'Total', align: 'right' as const }, { label: 'Payment Status' }, { label: 'Payment Mode' },
 ];
 
 export const docPdfRow = (r: GstDocumentRow): (string | number)[] => [
-  r.date, r.documentNumber || '—', r.partyName || '—', r.warehouseName,
+  r.date, r.documentNumber || '—', r.partyName || '—', r.partyGstin || '—', r.warehouseName,
   r.taxableValue, r.taxAmount, r.invoiceValue, payStatusLabel(r.paymentStatus), r.paymentModes,
 ];
 
