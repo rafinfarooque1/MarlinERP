@@ -12,7 +12,7 @@ const router = Router();
 const r2 = (n: number) => Math.round(n * 100) / 100;
 const close = (a: number, b: number) => Math.abs(a - b) <= 0.01;
 
-type Status = "PASS" | "WARN" | "FAIL";
+type Status = "PASS" | "WARN" | "FAIL" | "UNVERIFIED";
 type Evidence = {
   source: string;
   date: string | null;
@@ -197,26 +197,32 @@ router.get(
       date: toDate, location: locJson, source: "buildBooks.profitAndLoss.summary",
       explanation: "Gross profit uses the P&L's own net-sales and COGS values.",
     }));
-    checks.push(check("FI-05", "Gross Profit + other income - expenses - depreciation = Net Profit", "WARN", {
+    checks.push(check("FI-05", "Gross Profit + other income - expenses - depreciation = Net Profit", "UNVERIFIED", {
       date: toDate, location: locJson, source: "buildBooks.profitAndLoss.summary",
       explanation: "The current canonical statement exposes operating expenses as a combined group; it does not expose depreciation as a separately proven component for this diagnostic. No green result is claimed.",
     }));
     const stockValue = valuation.grandTotal;
     const stockDiff = r2(pl.incomes.closingStock - stockValue);
-    checks.push(check("FI-06", "P&L closing stock = inventory valuation", valuation.reliable && close(pl.incomes.closingStock, stockValue) ? "PASS" : "WARN", {
+    const stockPnlStatus: Status = !valuation.reliable
+      ? "UNVERIFIED"
+      : close(pl.incomes.closingStock, stockValue) ? "PASS" : "FAIL";
+    checks.push(check("FI-06", "P&L closing stock = inventory valuation", stockPnlStatus, {
       actual: pl.incomes.closingStock, expected: stockValue, difference: stockDiff, date: toDate, location: locJson,
       source: "buildBooks + stockValuation(asOf)",
       explanation: valuation.reliable ? "P&L closing stock is compared with the dated valuation service." : valuation.note ?? "Historical valuation evidence is incomplete.",
     }));
     const bsStockDiff = r2(books.balanceSheet.assets.closingStock - stockValue);
-    checks.push(check("FI-07", "Inventory valuation = Balance Sheet inventory", valuation.reliable && close(books.balanceSheet.assets.closingStock, stockValue) ? "PASS" : "WARN", {
+    const stockBsStatus: Status = !valuation.reliable
+      ? "UNVERIFIED"
+      : close(books.balanceSheet.assets.closingStock, stockValue) ? "PASS" : "FAIL";
+    checks.push(check("FI-07", "Inventory valuation = Balance Sheet inventory", stockBsStatus, {
       actual: books.balanceSheet.assets.closingStock, expected: stockValue, difference: bsStockDiff, date: toDate, location: locJson,
       source: "buildBooks.balanceSheet + stockValuation(asOf)",
       explanation: valuation.reliable ? "Balance-sheet inventory is compared with the same dated valuation service." : valuation.note ?? "Historical valuation evidence is incomplete.",
     }));
 
     const unavailable = (id: string, title: string, explanation: string) =>
-      checks.push(check(id, title, "WARN", { date: toDate, location: locJson, source: "diagnostic evidence not yet materialized", explanation }));
+      checks.push(check(id, title, "UNVERIFIED", { date: toDate, location: locJson, source: "diagnostic evidence not yet materialized", explanation }));
     unavailable("FI-08", "Daily stock continuity", "No persisted daily quantity closing table is currently authoritative for every product/location.");
     unavailable("FI-09", "Opening/closing continuity", "Universal Closing(D)=Opening(D+1) cannot be proven without a persisted daily closing ledger.");
     unavailable("FI-10", "Customer balances", "Customer control balances require a dedicated reconciliation query for all customer ledgers and settlement metadata.");
@@ -234,7 +240,7 @@ router.get(
     const negativeStock = await countQuery(
       `SELECT COUNT(*) FROM stock_entries WHERE quantity::numeric < 0`,
     ).catch(() => null);
-    checks.push(check("FI-22", "Negative stock", negativeStock == null ? "WARN" : negativeStock === 0 ? "PASS" : "FAIL", {
+    checks.push(check("FI-22", "Negative stock", negativeStock == null ? "UNVERIFIED" : negativeStock === 0 ? "PASS" : "FAIL", {
       actual: negativeStock, expected: 0, unit: "rows", date: toDate, location: locJson, source: "stock_entries",
       explanation: negativeStock == null ? "The stock quantity query could not be established." : negativeStock === 0 ? "No negative stock-entry quantities exist." : `${negativeStock} negative stock-entry quantities exist.`,
     }));
@@ -244,7 +250,7 @@ router.get(
     unavailable("FI-26", "Location isolation", "Location isolation requires the authenticated matrix tests; a read-only aggregate cannot prove ID-tampering resistance.");
     unavailable("FI-27", "Audit durability", "Audit durability requires fault-injection rollback tests; presence of audit rows alone cannot prove atomicity.");
 
-    const summary = checks.reduce((s, c) => ({ ...s, [c.status]: s[c.status] + 1 }), { PASS: 0, WARN: 0, FAIL: 0 });
+    const summary = checks.reduce((s, c) => ({ ...s, [c.status]: s[c.status] + 1 }), { PASS: 0, WARN: 0, FAIL: 0, UNVERIFIED: 0 });
     res.json({
       fromDate, toDate, location: locJson, readOnly: true,
       summary,
