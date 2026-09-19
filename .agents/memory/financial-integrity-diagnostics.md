@@ -10,3 +10,9 @@ description: Integrity checks must separate proven equality from unavailable evi
 **Why:** A balanced trial balance or a mathematically balanced statement can coexist with orphaned postings, fabricated historical stock, settlement duplication, or an audit write that was not atomic. Treating unavailable evidence as zero hides the exact failures the diagnostic is meant to find.
 
 **How to apply:** Return source, date, location, actual, expected, difference where measurable, and an explanation for every check. Keep the diagnostic read-only; repair paths require separate reviewed migrations and isolated tests.
+
+**Presentation rule:** Use `UNVERIFIED` for checks whose authoritative evidence/query is not materialized yet. Reserve `WARN` for a measured condition that deserves review, and `FAIL` for a proven contradiction.
+
+**Why:** Treating every unavailable check as WARN makes a healthy 0-FAIL result look like a P&L defect and encourages unsafe “fixes” that only turn unknowns green.
+
+**How to apply:** Keep the distinction in both the API summary and the integrity panel; a reliable inventory mismatch is FAIL, while an unreliable historical valuation is UNVERIFIED.
