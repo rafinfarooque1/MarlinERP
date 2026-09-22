@@ -1,0 +1,33 @@
+You are working on the production Marlin Frozen Fruits ERP codebase. This ERP is currently LIVE in production.
+
+STRICT CONSTRAINTS:
+1. ZERO TOUCH TO LIVE DATA: Do not execute DROP, TRUNCATE, destructive ALTER, or hard-delete queries. Do not run `drizzle-kit push` or modify stored production tables.
+2. PRESERVE DUAL-LAYER DATABASE ARCHITECTURE: The live schema relies on raw startup migrations in `artifacts/api-server/src/index.ts` and `artifacts/api-server/src/migrations/`. Do not assume Drizzle schema matches PostgreSQL 1:1. Use parameterized raw SQL where existing business logic does.
+3. INVARIANTS: Ensure Debits == Credits in all journal entries, 1 customer payment creates exactly 1 financial receipt (allocations are metadata only), and stock transfers remain P&L neutral.
+
+TASKS & FORMULA CORRECTIONS:
+
+1. Sales & Customer Ledger Settlement (artifacts/api-server/src/routes/sales.ts & lib/):
+- Verify customer dues formula:
+  Outstanding = (Invoices - Returns - Credit Notes) - (Receipts + Customer Credit/Advances)
+- Ensure `payment_bill_allocations` only updates settlement pointers; do not create duplicate journal lines or ledger credits when bills are settled.
+- Enforce paise-exact half-remainder logic for GST (CGST/SGST split without float drift).
+- Validate MRP floor check on new lines while grandfathering existing stored lines during sale edits.
+
+2. Purchase & Inventory Valuation Engine (artifacts/api-server/src/lib/valuation.ts & lib/purchase-pricing/):
+- Verify Purchase Inward Cost: Valuate received stock purely on net taxable goods value (excluding GST), factoring in line discounts.
+- Enforce Weighted Average Cost calculation:
+  New Avg Cost = (Existing Valuation + Inward Taxable Value) / (Existing Qty + Inward Qty)
+- For Stock Transfers: Ensure destination receiving cost adopts the precise source dispatch movement cost, not current master item cost.
+- Retain polymorphic product identification (`kind`: 'item' | 'material' | 'raw_material') across all queries in `stock_entries`.
+
+3. Attendance & Payroll Calculations (artifacts/api-server/src/routes/hr.ts):
+- Calculate attendance strictly by summing duration across closed sessions (`attendance_punches`), NOT `last_punch_out - first_punch_in`.
+- LOP (Loss of Pay) deduction formula must use actual calendar days of the month:
+  Daily Rate = Monthly Fixed Pay / Calendar Days in Month
+  LOP Deduction = Unapproved Absences * Daily Rate
+
+4. Verification & Clean Build:
+- Run route guard checks and permissions audit scripts without touching live DB tables.
+- Execute package typecheck and verify `artifacts/api-server/build.mjs` outputs without errors.
+- Confirm all changes are code-level fixes in calculation/routing logic.
