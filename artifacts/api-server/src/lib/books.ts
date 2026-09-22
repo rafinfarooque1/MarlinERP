@@ -28,6 +28,7 @@
 
 import { pool } from "@workspace/db";
 import { stockValuation, resolveProductNames, type ValuedItem } from "./valuation";
+import { activeInTransit } from "./reservations";
 
 /** A queryable database handle (pg pool or PoolClient), per lib/importVouchers.ts. */
 type Q = { query: Function };
@@ -35,6 +36,7 @@ import { isIsoDate } from "./dateInput";
 import { filterPostingsByLocation, type PostingLocationFilter } from "./postingLocation";
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
+const r3 = (n: number) => Math.round(n * 1000) / 1000;
 // Shape AND calendar validity (rejects 2026-02-30) — these values reach real
 // DATE columns, where an impossible date raises 22007 instead of storing text.
 const isDate = (s: unknown): s is string => isIsoDate(s);
@@ -208,7 +210,9 @@ export interface StockTransferOpeningAdjustment {
  *
  * This is deliberately period-scoped. A transfer is applied in the period
  * containing its stock-ledger movement, and the next period starts from the
- * previous period's closing position without applying it again.
+ * previous period's closing position without applying it again. A dispatch
+ * portion that is still in transit at the period end is excluded from the
+ * adjustment because that value remains in the sender-owned closing valuation.
  */
 export async function stockTransferOpeningAdjustment(
   fromDate: string | null,
@@ -247,6 +251,8 @@ export async function stockTransferOpeningAdjustment(
 
   const { rows } = await q.query(
     `SELECT sl.material_type, sl.ref_id::int AS ref_id,
+            sl.doc_type, sl.doc_id,
+            sl.branch_type, sl.branch_id,
             sl.qty_change::numeric AS qty_change,
             COALESCE(
               NULLIF(sl.unit_cost::numeric, 0),
@@ -275,9 +281,34 @@ export async function stockTransferOpeningAdjustment(
     return { total: 0, lines: [], reliable: true, note: null };
   }
 
+  // Active in-transit reservations are the authoritative end-of-period
+  // ownership record for dispatched goods that have not yet arrived. The
+  // sender's transfer_out ledger row is still present, but that active portion
+  // must not also reduce opening stock: closing valuation includes it as
+  // sender-owned in-transit stock.
+  const transitRows = await activeInTransit(q as any, toDate ? { asOf: toDate } : {});
+  const inScope = (branchType: string, branchId: number): boolean => {
+    if (!scope) return true;
+    if (scope.branchPairs?.length) {
+      return scope.branchPairs.some((pair) =>
+        pair.type === branchType && Number(pair.id) === Number(branchId));
+    }
+    return scope.branchType === branchType
+      && (scope.branchId == null || Number(scope.branchId) === Number(branchId));
+  };
+  const transitByMovement = new Map<string, { quantity: number; value: number }>();
+  for (const transit of transitRows) {
+    if (!inScope(transit.branchType, transit.branchId)) continue;
+    const key = `${transit.docType}:${transit.docId}:${transit.materialType}:${transit.refId}:${transit.branchType}:${transit.branchId}`;
+    const existing = transitByMovement.get(key) ?? { quantity: 0, value: 0 };
+    existing.quantity = existing.quantity + transit.quantity;
+    existing.value = r2(existing.value + transit.value);
+    transitByMovement.set(key, existing);
+  }
+
   // Transfer value belongs in the opening term only. Closing stock is valued
-  // independently from on-hand quantity; in-transit stock is intentionally not
-  // part of the financial-statement closing figure.
+  // independently from the movement adjustment, and active in-transit stock is
+  // included because it remains owned by the sending location.
   const refs = rows.map((r: any) => ({
     materialType: String(r.material_type) as ValuedItem["materialType"],
     refId: Number(r.ref_id),
@@ -309,13 +340,23 @@ export async function stockTransferOpeningAdjustment(
   for (const row of rows) {
     const materialType = String(row.material_type) as ValuedItem["materialType"];
     const refId = Number(row.ref_id);
-    const rawQty = Number(row.qty_change ?? 0);
+    const ledgerQty = Number(row.qty_change ?? 0);
     const recordedUnitCost = Number(row.unit_cost ?? 0);
     // A missing dated cost cannot be reconstructed from today's mutable master.
     // Keep the missing amount explicit via reliability, never fabricate it.
-    if (!(recordedUnitCost > 0) && rawQty !== 0) missingCost++;
+    if (!(recordedUnitCost > 0) && ledgerQty !== 0) missingCost++;
     const unitCost = recordedUnitCost > 0 ? recordedUnitCost : 0;
-    addLine(materialType, refId, rawQty, r2(rawQty * unitCost), unitCost);
+    let qty = ledgerQty;
+    let value = r2(ledgerQty * unitCost);
+    if (ledgerQty < 0) {
+      const key = `${row.doc_type}:${row.doc_id}:${materialType}:${refId}:${row.branch_type}:${row.branch_id}`;
+      const inTransit = transitByMovement.get(key);
+      if (inTransit) {
+        qty = r3(qty + inTransit.quantity);
+        value = r2(value + inTransit.value);
+      }
+    }
+    addLine(materialType, refId, qty, value, unitCost);
   }
 
   const lines = [...byKey.values()].filter((line) => Math.abs(line.value) > 0.005 || Math.abs(line.qty) > 0.001);
@@ -991,8 +1032,8 @@ export async function buildBooks(
   const skipStock = location?.type === "company";
   const historicalClose = toDate !== null && toDate < todayISO();
   const closing = skipStock ? emptyStock
-    : historicalClose ? await stockAsOf(toDate, stockScope, q)
-      : await closingStockAt(stockScope, q, { includeInTransit: false });
+      : historicalClose ? await stockAsOf(toDate, stockScope, q)
+      : await closingStockAt(stockScope, q, { includeInTransit: true });
   // A current-day period with no stock-ledger movement has one physical stock
   // position at both boundaries. Use the current on-hand closing valuation for
   // that opening boundary as well. This matters when an older checkpoint is
