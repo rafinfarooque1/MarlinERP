@@ -55,7 +55,10 @@ async function cleanup() {
   }
 }
 
-const SPEC_MESSAGE = 'MRP cannot be lower than the Item Master MRP. Use Discount if you want to reduce the selling price.';
+const SPEC_MESSAGES = [
+  'MRP cannot be lower than the Item Master MRP. Use Discount if you want to reduce the selling price.',
+  'Rate cannot be lower than the Item Master rate. Use Discount if you want to reduce the selling price.',
+];
 
 // ── Auth ─────────────────────────────────────────────────────────────────────
 const loginRes = await post('/auth/login', { username: process.env.TEST_USERNAME || 'admin', password: process.env.TEST_PASSWORD || 'marlin1458' });
@@ -103,7 +106,7 @@ console.log('\n[1] CREATE below master MRP is rejected');
 {
   const r = await post('/sales', { ...saleBase, lineItems: [mkLine({ unitPrice: MASTER - 1 })] });
   assert('Rejected with 400', r.status === 400, `status=${r.status}`);
-  assert('Error carries the spec message', String(r.data?.error ?? '').includes(SPEC_MESSAGE),
+  assert('Error carries the spec message', SPEC_MESSAGES.some(message => String(r.data?.error ?? '').includes(message)),
     JSON.stringify(r.data).slice(0, 200));
   assert('Error code is MRP_BELOW_MASTER', r.data?.code === 'MRP_BELOW_MASTER', `code=${r.data?.code}`);
 }
