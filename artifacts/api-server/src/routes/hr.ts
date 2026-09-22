@@ -286,9 +286,9 @@ function minutesInZone(ts: Date, timeZone: string): number {
 /**
  * The derived register fields for one attendance row + its punches.
  *
- * workingHours: total closed-punch hours when punches exist; otherwise the
- * first-in→last-out span — the same preference dayFactor applies, so the
- * register never shows hours that disagree with what the day is being paid on.
+ * workingHours: total closed-punch hours. The attendance timestamps are not
+ * used as a first-in→last-out span because breaks between sessions are not
+ * payable work.
  */
 function derivePunchFields(
   att: { checkIn: string | null; checkOut: string | null },
@@ -303,8 +303,6 @@ function derivePunchFields(
   if (closed.length > 0) {
     workingHours = round2(closed.reduce(
       (s, p) => s + (new Date(p.punchOut!).getTime() - new Date(p.punchIn!).getTime()) / 3_600_000, 0));
-  } else if (att.checkIn && att.checkOut) {
-    workingHours = round2((new Date(att.checkOut).getTime() - new Date(att.checkIn).getTime()) / 3_600_000);
   }
 
   const firstInIso = api.length > 0 ? api[0].punchIn : att.checkIn;
@@ -704,7 +702,10 @@ function computePayroll(opts: {
     ...(esiEmployee > 0 ? [{ name: `ESI (${rates.esiEmployeePercent}% of gross)`,           amount: esiEmployee }] : []),
   ];
   const deductionsTotal = round2(otherDeductionsTotal + pfEmployee + esiEmployee);
-  const netPay = round2(grossPay - deductionsTotal);
+  // Take-home pay cannot be negative. Advance recovery is capped against this
+  // value below, so a deduction configuration that exceeds gross pay cannot
+  // create a negative payable salary or make an advance appear recoverable.
+  const netPay = round2(Math.max(0, grossPay - deductionsTotal));
 
   return {
     lopDays, lopDeduction, effectiveBasic, grossPay,
@@ -2300,16 +2301,19 @@ async function refreshPayrollDraftsLocked(opts: { year: number; month: number; e
     // posted to the advance ledger out of step with the advances actually
     // closed. Take advances in date order while they still fit in net pay;
     // anything that does not fit stays outstanding for a later run.
-    let recoverable = computed.netPay;
+    const netPayBeforeAdvance = Math.max(0, computed.netPay);
+    let recoverable = netPayBeforeAdvance;
     for (const a of advances) {
       const amt = Number(a.amount);
-      if (amt <= recoverable + 0.005) {
+      // Recover whole advances only, and never use a tolerance that can let
+      // the stored deduction exceed the cycle's net payable salary.
+      if (amt > 0 && amt <= recoverable) {
         claimedIds.push(Number(a.id));
         advanceDeduction = round2(advanceDeduction + amt);
         recoverable = round2(recoverable - amt);
       }
     }
-    const netPayAfterAdvance = round2(computed.netPay - advanceDeduction);
+    const netPayAfterAdvance = round2(Math.max(0, netPayBeforeAdvance - advanceDeduction));
 
     const snapshot = {
       ...rates,
@@ -3634,8 +3638,8 @@ router.post("/hr/attendance/check-in", requireModuleAction("page:/hr/attendance"
 
       // The attendance row keeps first-in / last-out: the first check-in of the
       // day owns check_in, and re-checking in reopens the day, so check_out is
-      // cleared until the next check-out writes the new last-out. An open day
-      // is provisionally whole (see dayFactor), exactly as before.
+      // cleared until the next check-out writes the new last-out. Only closed
+      // punch sessions are payable while the day is open.
       const { rows: [r] } = await q.query(
         `INSERT INTO attendance (employee_id, date, status, check_in, check_in_lat, check_in_lng)
          VALUES ($1, $2, 'present', now(), $3, $4)
@@ -3739,8 +3743,8 @@ router.post("/hr/attendance/check-out", requireModuleAction("page:/hr/attendance
     return;
   }
   row = attendanceRowToApi(row);
-  // Check-out is the moment the day stops being provisionally whole and is
-  // priced on the hours actually worked, so the books have to be re-read here.
+  // Check-out closes a punch session and changes the hours actually worked, so
+  // the books have to be re-read here.
   await reaccrue(row.employeeId, "check-out");
   const [emp] = await db.select().from(employeesTable).where(eq(employeesTable.id, row.employeeId)).limit(1);
   res.json({
