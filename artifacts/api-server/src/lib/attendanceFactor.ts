@@ -104,12 +104,10 @@ export interface AttendanceDay {
   checkIn?: Date | string | null;
   checkOut?: Date | string | null;
   /**
-   * Total hours across the day's CLOSED punch pairs, when the day has punch
-   * rows at all. A day can now hold several work sessions, and first-in →
-   * last-out overstates it (the span includes the breaks between sessions), so
-   * when this figure exists it replaces the span. Null/undefined — the day has
-   * no punch rows — falls back to the span, which is what keeps every
-   * pre-punch attendance row worth exactly what it always was.
+   * Total hours across the day's CLOSED punch pairs. A day can now hold
+   * several work sessions, and first-in → last-out overstates it because the
+   * span includes breaks between sessions. Missing/null means zero closed
+   * punched hours; payable attendance never falls back to the timestamp span.
    */
   punchedHours?: number | string | null;
   /** Business date (YYYY-MM-DD or Date) — needed for calendar-aware months. */
@@ -320,19 +318,14 @@ export function dayContribution(
       ? { ...ZERO, sickLeave: 1 }
       : { ...ZERO, casualLeave: 1 };
   }
-  if (a.checkIn && a.checkOut) {
-    // Total punched hours when the day has punch rows (breaks excluded);
-    // first-in → last-out span otherwise. See AttendanceDay.punchedHours.
-    const hrs = a.punchedHours != null
-      ? Number(a.punchedHours)
-      : (new Date(a.checkOut).getTime() - new Date(a.checkIn).getTime()) / 3_600_000;
+  if (a.checkIn || a.checkOut) {
+    // Only closed punch sessions are payable. Never use the attendance row's
+    // first-in → last-out span: breaks between sessions are not work.
+    const hrs = Number(a.punchedHours ?? 0);
     if (hrs >= t.fullDayHours) return { ...ZERO, work: 1 };
     if (hrs >= t.halfDayHours) return { ...ZERO, work: 0.5, casualLeave: 0.5 };
     return ZERO; // under the half-day threshold — loss of pay
   }
-  // Checked in but not yet out: the day is still open, so it is provisionally
-  // whole. Check-out re-evaluates it against the hours actually worked.
-  if (a.checkIn) return { ...ZERO, work: 1 };
   if (a.status === "present") return { ...ZERO, work: 1 };
   if (a.status === "half_day") return { ...ZERO, work: 0.5, casualLeave: 0.5 };
   return ZERO; // absent
