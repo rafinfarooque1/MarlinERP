@@ -37,6 +37,52 @@ export type ProductKind = ReservationProductKind;
 
 const r3 = (n: number) => Math.round(n * 1000) / 1000;
 const r2 = (n: number) => Math.round(n * 100) / 100;
+const r4 = (n: number) => Math.round(n * 10000) / 10000;
+
+/**
+ * The stock identity is polymorphic: numeric ids overlap between items,
+ * materials and packing materials. Every in-memory valuation key must carry
+ * the discriminator as well as the id.
+ */
+export function productIdentityKey(materialType: ProductKind, refId: number): string {
+  return `${materialType}:${Number(refId)}`;
+}
+
+export function productLocationIdentityKey(
+  materialType: ProductKind,
+  refId: number,
+  branchType: string,
+  branchId: number,
+): string {
+  return `${productIdentityKey(materialType, refId)}:${branchType}:${Number(branchId)}`;
+}
+
+/**
+ * Preserve the exact cost attached to a dispatched movement. In-transit
+ * valuation must never fall back to a mutable product-master average after the
+ * dispatch has happened.
+ */
+export function sourceMovementUnitCost(value: unknown): number {
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? r4(n) : 0;
+}
+
+/** Weighted-average cost from current stock and one inbound movement. */
+export function weightedAverageUnitCost(
+  currentStockQty: number,
+  currentUnitCost: number,
+  inwardQty: number,
+  inwardUnitCost: number,
+): number {
+  const currentQty = Math.max(0, Number(currentStockQty) || 0);
+  const receivedQty = Math.max(0, Number(inwardQty) || 0);
+  const totalQty = currentQty + receivedQty;
+  if (!(totalQty > 0)) return 0;
+  return r4(
+    (currentQty * (Number(currentUnitCost) || 0)
+      + receivedQty * (Number(inwardUnitCost) || 0)) / totalQty,
+  );
+}
 
 /** Weighted-average cost with a manual-cost fallback, for a stock_entries row
  *  joined to all three master tables as i / m / rm. Only one join can match a
@@ -310,8 +356,8 @@ async function buildStockValuationRows(q: Queryable, scope: ValuationScope, issu
   const names = await resolveProductNames(q, transit.map((t) => ({ materialType: t.materialType, refId: t.refId })));
   const grouped = new Map<string, ValuationRow>();
   for (const t of transit) {
-    const key = `${t.materialType}:${t.refId}:${t.branchType}:${t.branchId}`;
-    const meta = names.get(`${t.materialType}:${t.refId}`);
+    const key = productLocationIdentityKey(t.materialType, t.refId, t.branchType, t.branchId);
+    const meta = names.get(productIdentityKey(t.materialType, t.refId));
     if (!(t.unitCost > 0)) {
       issues.push({
         code: "MISSING_TRANSIT_COST", materialType: t.materialType, refId: t.refId,
@@ -321,15 +367,18 @@ async function buildStockValuationRows(q: Queryable, scope: ValuationScope, issu
       });
       continue;
     }
-    const unitCost = t.unitCost;
+    const unitCost = sourceMovementUnitCost(t.unitCost);
     const existing = grouped.get(key);
     if (existing) {
+      const previousQuantity = existing.quantity;
+      const previousUnitCost = existing.unitCost;
       const quantity = r3(existing.quantity + t.quantity);
       existing.quantity = quantity;
       existing.available = quantity;
       existing.value = r2(existing.value + t.quantity * unitCost);
-      // Blended cost, so value / quantity always reconciles.
-      existing.unitCost = quantity > 0 ? r2(existing.value / quantity) : unitCost;
+      existing.unitCost = weightedAverageUnitCost(
+        previousQuantity, previousUnitCost, t.quantity, unitCost,
+      );
     } else {
       grouped.set(key, {
         materialType: t.materialType,
@@ -374,7 +423,7 @@ export async function resolveProductNames(
       [ids],
     );
     for (const r of rows) {
-      out.set(`${kind}:${Number(r.id)}`, {
+      out.set(productIdentityKey(kind as ProductKind, Number(r.id)), {
         name: r.name ?? "",
         unit: r.unit ?? "",
         unitCost: r2(Number(r.unit_cost ?? 0)),
@@ -423,7 +472,7 @@ export async function stockValuation(q: Queryable, scope: ValuationScope = {}): 
     type.value = r2(type.value + r.value);
     typeMap.set(r.materialType, type);
 
-    const pk = `${r.materialType}:${r.refId}`;
+     const pk = productIdentityKey(r.materialType, r.refId);
     const prod = prodMap.get(pk) ?? {
       materialType: r.materialType, refId: r.refId, itemName: r.itemName, unit: r.unit,
       quantity: 0, unitCost: r.unitCost, value: 0,

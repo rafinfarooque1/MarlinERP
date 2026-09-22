@@ -42,11 +42,55 @@ const num = (v: unknown): number => {
   return Number.isFinite(n) ? n : 0;
 };
 
+/**
+ * Inventory cost per received unit.
+ *
+ * `taxableGoodsValue` and `discount` are GST-exclusive figures. GST never
+ * enters inventory value; inward charges are the only addition. Keeping this
+ * as a named helper prevents callers from accidentally using the vendor's
+ * gross payable amount as stock cost.
+ */
+export function purchaseInwardUnitCost(
+  taxableGoodsValue: number,
+  discount: number,
+  allocatedInwardCharges: number,
+  quantity: number,
+): number {
+  const qty = num(quantity);
+  if (!(qty > 0)) return 0;
+  const value = num(taxableGoodsValue) - num(discount) + num(allocatedInwardCharges);
+  return round2(Math.max(0, value) / qty);
+}
+
+/**
+ * Weighted-average cost after an inbound movement.
+ *
+ * Unlike a "non-zero inbound" shortcut, a zero-cost inbound still contributes
+ * its quantity to the denominator. That is the stated inventory formula and
+ * avoids silently preserving an old average for a real receipt.
+ */
+export function weightedAverageCost(
+  currentStockQty: number,
+  currentUnitCost: number,
+  inwardQty: number,
+  inwardUnitCost: number,
+): number {
+  const currentQty = Math.max(0, num(currentStockQty));
+  const receivedQty = Math.max(0, num(inwardQty));
+  const totalQty = currentQty + receivedQty;
+  if (!(totalQty > 0)) return 0;
+  return round2(
+    (currentQty * num(currentUnitCost) + receivedQty * num(inwardUnitCost)) / totalQty,
+  );
+}
+
 export interface PurchaseLineInput {
   quantity?: unknown;
   unitCost?: unknown;
   /** Discount as a percentage of the line's gross value. */
   discount?: unknown;
+  /** GST-exclusive inward charges allocated to this line. */
+  allocatedInwardCharges?: unknown;
   gstRate?: unknown;
   taxType?: unknown;
   /** Per-line override; the bill-level mode is used when absent. */
@@ -132,7 +176,20 @@ export function calcPurchaseLine(
   const igst = intra ? 0 : taxAmount;
 
   const lineTotal = round2(taxableValue + taxAmount);
-  const costPerUnit = quantity > 0 ? round2(taxableValue / quantity) : 0;
+  // `taxableValue` is already net of the line discount. For inclusive rates,
+  // derive the pre-discount taxable goods value before subtracting the
+  // discount; doing this in the GST-exclusive base keeps the cost formula
+  // identical for exclusive and inclusive bills.
+  const taxableGoodsValue = priceMode === "inclusive"
+    ? round2(lineSubtotal / (1 + gstRate / 100))
+    : lineSubtotal;
+  const discountOnTaxableGoods = round2(taxableGoodsValue - taxableValue);
+  const costPerUnit = purchaseInwardUnitCost(
+    taxableGoodsValue,
+    discountOnTaxableGoods,
+    num(li.allocatedInwardCharges),
+    quantity,
+  );
 
   return {
     quantity, unitCost, discount, gstRate, taxType, priceMode,
@@ -168,8 +225,44 @@ export interface PurchaseBillAmounts<T extends PurchaseLineInput> extends Purcha
 export function calcPurchaseBill<T extends PurchaseLineInput>(
   lines: readonly T[],
   billPriceMode: PriceMode = "exclusive",
+  inwardChargesTotal: unknown = 0,
 ): PurchaseBillAmounts<T> {
-  const priced = (lines ?? []).map((li) => ({ ...li, ...calcPurchaseLine(li, billPriceMode) }));
+  let priced = (lines ?? []).map((li) => ({ ...li, ...calcPurchaseLine(li, billPriceMode) }));
+
+  // Allocate a bill-level inward charge across the taxable goods value of each
+  // line. All but the final line are rounded to paise; the final line receives
+  // the remainder so the stored allocations add to the exact bill charge.
+  const chargeOption = typeof inwardChargesTotal === "object" && inwardChargesTotal !== null
+    ? inwardChargesTotal as {
+      total?: unknown;
+      inwardChargesTotal?: unknown;
+      allocatedInwardCharges?: unknown;
+    }
+    : null;
+  const chargeTotal = round2(Math.max(0, num(
+    chargeOption
+      ? chargeOption.inwardChargesTotal
+        ?? chargeOption.allocatedInwardCharges
+        ?? chargeOption.total
+      : inwardChargesTotal,
+  )));
+  if (chargeTotal > 0 && priced.length > 0) {
+    const taxableBasis = priced.reduce((sum, line) => sum + line.taxableValue, 0);
+    let allocated = 0;
+    priced = priced.map((line, index) => {
+      const charge = index === priced.length - 1
+        ? round2(chargeTotal - allocated)
+        : taxableBasis > 0
+          ? round2(chargeTotal * line.taxableValue / taxableBasis)
+          : 0;
+      allocated = round2(allocated + charge);
+      return {
+        ...line,
+        allocatedInwardCharges: charge,
+        ...calcPurchaseLine({ ...line, allocatedInwardCharges: charge }, billPriceMode),
+      };
+    });
+  }
 
   const sum = (pick: (l: PurchaseLineAmounts) => number) =>
     round2(priced.reduce((acc, l) => acc + pick(l), 0));
