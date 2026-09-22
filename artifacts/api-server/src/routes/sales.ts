@@ -89,13 +89,21 @@ function computeLineTax(
   if (isInterState) {
     return { taxRate, taxType: 'igst', cgst: 0, sgst: 0, igst: taxAmount, taxAmount, taxableAmount };
   }
-  // Odd-paise tax: rounding both halves independently would make
-  // cgst + sgst ≠ taxAmount (e.g. 0.05 → 0.03 + 0.03), so accounting heads
-  // and GST reports would disagree with the stored line tax. Round one half
-  // and give the exact remainder to the other.
-  const half = Math.round(taxAmount / 2 * 100) / 100;
-  const rest = Math.round((taxAmount - half) * 100) / 100;
-  return { taxRate, taxType: 'cgst_sgst', cgst: half, sgst: rest, igst: 0, taxAmount, taxableAmount };
+  // Split the already-rounded tax in integer paise. CGST gets the floor half
+  // and SGST gets the exact remainder, so the two accounting heads always
+  // reconcile to the stored line tax, including odd-paise amounts.
+  const taxPaise = Math.max(0, Math.round(taxAmount * 100));
+  const cgstPaise = Math.floor(taxPaise / 2);
+  const sgstPaise = taxPaise - cgstPaise;
+  return {
+    taxRate,
+    taxType: 'cgst_sgst',
+    cgst: cgstPaise / 100,
+    sgst: sgstPaise / 100,
+    igst: 0,
+    taxAmount,
+    taxableAmount,
+  };
 }
 
 const round2 = (n: number): number => Math.round(n * 100) / 100;
@@ -2005,8 +2013,15 @@ router.put("/sales/:id", requireModuleAction("page:/sales/pos", "edit"), async (
         // Only subtract the old contribution when the sale already sits on THIS
         // customer's ledger — reassigning a sale to a new customer brings its
         // whole unpaid remainder along as fresh exposure.
-        const oldContribution = Number(existingRaw.customer_id) === editCustomerId
-          ? Number(existingRaw.total_amount ?? 0) - Number(existingRaw.amount_paid ?? 0)
+        // Remove this sale's actual ledger contribution before projecting the
+        // replacement. The old gross-minus-paid shortcut ignored credit-note
+        // returns, so editing a credited invoice understated the customer's
+        // existing exposure and could incorrectly pass the limit check.
+        const oldPosition = Number(existingRaw.customer_id) === editCustomerId
+          ? await loadPaymentPosition(editTx, id)
+          : null;
+        const oldContribution = oldPosition
+          ? round2(oldPosition.amountDue - oldPosition.amountReceived)
           : 0;
         const currentOutstanding = Math.max(0, Math.round((Number(st.closing ?? 0) - oldContribution) * 100) / 100);
         // What will actually stand collected on this sale AFTER the edit, with
@@ -2020,7 +2035,10 @@ router.put("/sales/:id", requireModuleAction("page:/sales/pos", "edit"), async (
           [id]
         );
         const paidOnThisSale = Number(paidRow?.paid ?? 0);
-        const projectedOutstanding = Math.round((currentOutstanding + Math.max(0, totalAmount - paidOnThisSale)) * 100) / 100;
+        const projectedOutstanding = Math.round((
+          currentOutstanding
+          + Math.max(0, totalAmount - (oldPosition?.creditAdjustments ?? 0) - paidOnThisSale)
+        ) * 100) / 100;
 
         if (projectedOutstanding > editCreditLimit + 0.009) {
           const editOverrideRequested = (req.body as any).creditOverride === true;
