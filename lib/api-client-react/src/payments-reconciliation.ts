@@ -121,6 +121,50 @@ export interface ReconciliationBatch {
   itemCount: number;
 }
 
+export interface PendingManualVoucher {
+  kind: "payment" | "receipt";
+  id: number;
+  voucherNumber: string | null;
+  transactionDate: string;
+  amount: number;
+  referenceNumber: string | null;
+  narration: string | null;
+  partyName: string | null;
+  locationType: string;
+  locationId: number;
+}
+
+export function useGetPendingManualVouchers() {
+  return useQuery<PendingManualVoucher[]>({
+    queryKey: ["reconciliation-pending-manual-vouchers"],
+    queryFn: () => customFetch("/api/reconciliation/pending-manual-vouchers"),
+  });
+}
+
+export function useReconcilePendingManualVouchers() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: {
+      bankAccountId: number;
+      pendingVoucherIds: { kind: "payment" | "receipt"; id: number }[];
+      reconciliationDate: string;
+    }) => customFetch("/api/reconciliation/manual-vouchers", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["reconciliation-pending-manual-vouchers"] });
+      qc.invalidateQueries({ queryKey: ["reconciliation-bank-transactions"] });
+      qc.invalidateQueries({ queryKey: ["bank-reconciliation-batches"] });
+      qc.invalidateQueries({ queryKey: ["bank-reconciliation-audit"] });
+      qc.invalidateQueries({ queryKey: ["/api/accounts/cash-bank-book"] });
+      qc.invalidateQueries({ queryKey: ["/api/accounts/payments"] });
+      qc.invalidateQueries({ queryKey: ["/api/accounts/receipts"] });
+    },
+  });
+}
+
 export interface ReconciliationBatchDetail extends ReconciliationBatch {
   items: {
     id: number;
