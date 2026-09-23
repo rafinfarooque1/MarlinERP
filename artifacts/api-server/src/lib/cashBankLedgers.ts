@@ -171,16 +171,16 @@ export async function rootIdForType(
   return Number(r.id);
 }
 
-/** Every ledger id inside the Cash/Bank subtrees, roots included. */
+/** Every ledger id inside the Cash/Bank/Online subtrees, roots included. */
 export async function cashBankSubtreeIds(q: Pool | PoolClient): Promise<Set<number>> {
   const { rows } = await q.query(`
     WITH RECURSIVE tree AS (
-      SELECT id FROM account_ledgers WHERE code IN ($1, $2)
+      SELECT id FROM account_ledgers WHERE code IN ($1, $2, $3)
       UNION ALL
       SELECT al.id FROM account_ledgers al JOIN tree t ON al.parent_id = t.id
     )
     SELECT id FROM tree
-  `, [CASH_ROOT_CODE, BANK_ROOT_CODE]);
+  `, [CASH_ROOT_CODE, BANK_ROOT_CODE, ONLINE_ROOT_CODE]);
   return new Set(rows.map((r: any) => Number(r.id)));
 }
 
