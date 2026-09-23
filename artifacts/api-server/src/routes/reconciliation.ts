@@ -121,6 +121,28 @@ function matchesViewLocation(
     && Number(row.location_id) === Number(location.locationId);
 }
 
+function accountLocations(row: any): Array<{ location_type: string; location_id: number }> {
+  const raw = Array.isArray(row.locations) ? row.locations : [];
+  if (raw.length > 0) {
+    return raw.map((location: any) => ({
+      location_type: String(location.location_type),
+      location_id: Number(location.location_id),
+    }));
+  }
+  return [{
+    location_type: String(row.location_type ?? "headoffice"),
+    location_id: Number(row.location_id ?? 0),
+  }];
+}
+
+function matchesAccountLocation(row: any, location: { locationType: string; locationId: number } | null): boolean {
+  if (!location) return true;
+  return accountLocations(row).some((assigned) =>
+    assigned.location_type === location.locationType
+    && (location.locationType === "headoffice" || assigned.location_id === Number(location.locationId)),
+  );
+}
+
 // ── GET /accounts/reconciliation/audit ───────────────────────────────────────
 // Read-only, source-level accounting checks. This is intentionally separate
 // from the presentation reports: it returns the failed equation and the
@@ -625,6 +647,14 @@ router.get("/reconciliation/bank-ledgers", requireModuleView(["page:/accounts/re
     SELECT cba.id AS account_id, cba.ledger_id, cba.name, cba.account_type,
            cba.requires_reconciliation, COALESCE(cba.location_type, 'headoffice') AS location_type,
            COALESCE(cba.location_id, 0) AS location_id,
+           COALESCE(
+             (SELECT json_agg(json_build_object('location_type', l.location_type, 'location_id', l.location_id))
+                FROM cash_bank_account_locations l WHERE l.account_id = cba.id),
+             json_build_array(json_build_object(
+               'location_type', COALESCE(cba.location_type, 'headoffice'),
+               'location_id', COALESCE(cba.location_id, 0)
+             ))
+           ) AS locations,
            al.code, al.bank_details,
            COALESCE(w.name, o.name, 'Head Office') AS location_name
       FROM cash_bank_accounts cba
@@ -641,9 +671,7 @@ router.get("/reconciliation/bank-ledgers", requireModuleView(["page:/accounts/re
     .filter((r: any) => {
       if (access.ledgerIds && !access.ledgerIds.has(Number(r.ledger_id))) return false;
       if (!viewLocation) return true;
-      if (viewLocation.locationType === "headoffice") return r.location_type === "headoffice";
-      return r.location_type === viewLocation.locationType
-        && Number(r.location_id) === Number(viewLocation.locationId);
+       return matchesAccountLocation(r, viewLocation);
     })
     .map((r: any) => ({
       // `id` remains the ledger id for legacy batch consumers. The new
@@ -707,6 +735,14 @@ router.get("/reconciliation/bank-transactions", requireModuleView("page:/account
     SELECT cba.id AS account_id, cba.ledger_id, cba.name, cba.account_type,
            cba.requires_reconciliation, COALESCE(cba.location_type, 'headoffice') AS location_type,
            COALESCE(cba.location_id, 0) AS location_id,
+           COALESCE(
+             (SELECT json_agg(json_build_object('location_type', l.location_type, 'location_id', l.location_id))
+                FROM cash_bank_account_locations l WHERE l.account_id = cba.id),
+             json_build_array(json_build_object(
+               'location_type', COALESCE(cba.location_type, 'headoffice'),
+               'location_id', COALESCE(cba.location_id, 0)
+             ))
+           ) AS locations,
            COALESCE(w.name, o.name, 'Head Office') AS location_name
       FROM cash_bank_accounts cba
       JOIN account_ledgers al ON al.id = cba.ledger_id
@@ -718,9 +754,7 @@ router.get("/reconciliation/bank-transactions", requireModuleView("page:/account
   `);
   const accountLocationMatches = (r: any) => {
     if (!viewLocation) return true;
-    if (viewLocation.locationType === "headoffice") return r.location_type === "headoffice";
-    return r.location_type === viewLocation.locationType
-      && Number(r.location_id) === Number(viewLocation.locationId);
+    return matchesAccountLocation(r, viewLocation);
   };
   const accounts = accountRows.filter((r: any) =>
     (!access.ledgerIds || access.ledgerIds.has(Number(r.ledger_id)))
@@ -919,6 +953,14 @@ router.get("/reconciliation/bank-audit", requireModuleView("page:/accounts/recon
     SELECT cba.id AS account_id, cba.ledger_id, cba.name,
            COALESCE(cba.location_type, 'headoffice') AS location_type,
            COALESCE(cba.location_id, 0) AS location_id,
+           COALESCE(
+             (SELECT json_agg(json_build_object('location_type', l.location_type, 'location_id', l.location_id))
+                FROM cash_bank_account_locations l WHERE l.account_id = cba.id),
+             json_build_array(json_build_object(
+               'location_type', COALESCE(cba.location_type, 'headoffice'),
+               'location_id', COALESCE(cba.location_id, 0)
+             ))
+           ) AS locations,
            COALESCE(w.name, o.name, 'Head Office') AS location_name
       FROM cash_bank_accounts cba
       JOIN account_ledgers al ON al.id = cba.ledger_id
@@ -929,10 +971,7 @@ router.get("/reconciliation/bank-audit", requireModuleView("page:/accounts/recon
   const allowed = accounts.filter((a: any) =>
     (!access.ledgerIds || access.ledgerIds.has(Number(a.ledger_id))) &&
     (!viewLocation ||
-      (viewLocation.locationType === "headoffice"
-        ? a.location_type === "headoffice"
-        : a.location_type === viewLocation.locationType
-          && Number(a.location_id) === Number(viewLocation.locationId))),
+      matchesAccountLocation(a, viewLocation)),
   );
   const accountByLedger = new Map<number, any>(allowed.map((a: any) => [Number(a.ledger_id), a]));
   const postings = await buildDerivedPostings({});
@@ -1229,6 +1268,14 @@ router.post("/reconciliation/bank-batches", requireModuleAction("page:/accounts/
       `SELECT cba.id AS account_id, cba.ledger_id, cba.name, cba.account_type,
               COALESCE(cba.location_type, 'headoffice') AS location_type,
               COALESCE(cba.location_id, 0) AS location_id,
+              COALESCE(
+                (SELECT json_agg(json_build_object('location_type', l.location_type, 'location_id', l.location_id))
+                   FROM cash_bank_account_locations l WHERE l.account_id = cba.id),
+                json_build_array(json_build_object(
+                  'location_type', COALESCE(cba.location_type, 'headoffice'),
+                  'location_id', COALESCE(cba.location_id, 0)
+                ))
+              ) AS locations,
               COALESCE(w.name, o.name, 'Head Office') AS location_name
          FROM cash_bank_accounts cba
          JOIN account_ledgers al ON al.id = cba.ledger_id
@@ -1241,7 +1288,7 @@ router.post("/reconciliation/bank-batches", requireModuleAction("page:/accounts/
     );
     if (!account
       || (access.ledgerIds && !access.ledgerIds.has(Number(account.ledger_id)))
-      || !matchesViewLocation(account, requestedLocation)) {
+       || !matchesAccountLocation(account, requestedLocation)) {
       await client.query("ROLLBACK");
       res.status(404).json({ error: "Bank account not found." });
       return;

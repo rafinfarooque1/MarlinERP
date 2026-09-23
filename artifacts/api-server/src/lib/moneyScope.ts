@@ -90,11 +90,22 @@ async function allLocationLedgers(): Promise<LocationLedgerRow[]> {
     UNION ALL
     SELECT sales_ledger_id AS ledger_id, 'outlet'    AS location_type, id AS location_id, 'sales' AS kind FROM outlets    WHERE sales_ledger_id IS NOT NULL
     UNION ALL
-    -- A managed Cash & Bank account has one canonical owner.
+    -- Managed Cash & Bank accounts inherit availability from their
+    -- membership rows. Keep the scalar fallback for older rows without a
+    -- junction entry.
+    SELECT cba.ledger_id, l.location_type, l.location_id, 'cash' AS kind
+    FROM cash_bank_accounts cba
+    JOIN cash_bank_account_locations l ON l.account_id = cba.id
+    WHERE cba.ledger_id IS NOT NULL
+      AND l.location_type IN ('warehouse', 'outlet')
+    UNION ALL
     SELECT cba.ledger_id, cba.location_type, cba.location_id, 'cash' AS kind
     FROM cash_bank_accounts cba
     WHERE cba.ledger_id IS NOT NULL
       AND cba.location_type IN ('warehouse', 'outlet')
+      AND NOT EXISTS (
+        SELECT 1 FROM cash_bank_account_locations l WHERE l.account_id = cba.id
+      )
   `);
   return rows.map((r) => ({ ...r, ledger_id: Number(r.ledger_id), location_id: Number(r.location_id) }));
 }
@@ -416,7 +427,17 @@ export async function locationOwnedLedgerMap(): Promise<Map<number, LedgerOwner[
     UNION ALL
     SELECT 'outlet' AS lt, id, name, cash_ledger_id, sales_ledger_id, NULL::integer AS purchase_ledger_id FROM outlets
     UNION ALL
-    -- Managed Cash & Bank accounts belong to exactly one location.
+    -- Managed Cash & Bank accounts belong to every assigned location.
+    SELECT l.location_type AS lt, l.location_id AS id,
+           COALESCE(w.name, o.name, 'branch') AS name,
+           cba.ledger_id AS cash_ledger_id, NULL::integer AS sales_ledger_id, NULL::integer AS purchase_ledger_id
+    FROM cash_bank_accounts cba
+    JOIN cash_bank_account_locations l ON l.account_id = cba.id
+    LEFT JOIN warehouses w ON l.location_type = 'warehouse' AND w.id = l.location_id
+    LEFT JOIN outlets    o ON l.location_type = 'outlet'    AND o.id = l.location_id
+    WHERE cba.ledger_id IS NOT NULL
+      AND l.location_type IN ('warehouse', 'outlet')
+    UNION ALL
     SELECT cba.location_type AS lt, cba.location_id AS id,
            COALESCE(w.name, o.name, 'branch') AS name,
            cba.ledger_id AS cash_ledger_id, NULL::integer AS sales_ledger_id, NULL::integer AS purchase_ledger_id
@@ -425,6 +446,9 @@ export async function locationOwnedLedgerMap(): Promise<Map<number, LedgerOwner[
     LEFT JOIN outlets    o ON cba.location_type = 'outlet'    AND o.id = cba.location_id
     WHERE cba.ledger_id IS NOT NULL
       AND cba.location_type IN ('warehouse', 'outlet')
+      AND NOT EXISTS (
+        SELECT 1 FROM cash_bank_account_locations l WHERE l.account_id = cba.id
+      )
   `);
   for (const r of rows) {
     const owner: LedgerOwner = { locationType: r.lt, locationId: Number(r.id), name: r.name };
@@ -467,17 +491,23 @@ export async function resolveMoneyVoucherLocation(
   if (ownershipError) return { ok: false, status: 409, error: ownershipError };
   const owned = await locationOwnedLedgerMap();
   const legacyOwners = owned.get(Number(tillLedgerId)) ?? [];
-  // The account's scalar owner is authoritative for account-backed ledgers.
+  // Account-backed ledgers use every junction membership as an availability
+  // owner. Legacy rows without memberships still fall back to their scalar
+  // location.
   const { rows: membershipRows } = await pool.query(
-    `SELECT cba.location_type, cba.location_id,
-            CASE cba.location_type
+    `SELECT COALESCE(l.location_type, cba.location_type) AS location_type,
+            COALESCE(l.location_id, cba.location_id) AS location_id,
+            CASE COALESCE(l.location_type, cba.location_type)
               WHEN 'headoffice' THEN 'Head Office'
               WHEN 'warehouse' THEN COALESCE(w.name, 'Warehouse')
               ELSE COALESCE(o.name, 'Outlet')
             END AS name
        FROM cash_bank_accounts cba
-       LEFT JOIN warehouses w ON cba.location_type = 'warehouse' AND w.id = cba.location_id
-       LEFT JOIN outlets o ON cba.location_type = 'outlet' AND o.id = cba.location_id
+       LEFT JOIN cash_bank_account_locations l ON l.account_id = cba.id
+       LEFT JOIN warehouses w ON COALESCE(l.location_type, cba.location_type) = 'warehouse'
+                             AND w.id = COALESCE(l.location_id, cba.location_id)
+       LEFT JOIN outlets o ON COALESCE(l.location_type, cba.location_type) = 'outlet'
+                          AND o.id = COALESCE(l.location_id, cba.location_id)
       WHERE cba.ledger_id = $1`,
     [tillLedgerId],
   );

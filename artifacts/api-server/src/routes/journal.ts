@@ -434,18 +434,23 @@ async function checkLinesLocation(
 ): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
   const owned = await locationOwnedLedgerMap();
   const ids = [...new Set(lines.map((l) => l.ledgerId))];
-  // Managed Cash/Bank accounts have one canonical owner. They take precedence
-  // over the legacy owner map, which represents actual location ledgers.
+  // Managed Cash/Bank accounts use every assignment as an owner. The scalar
+  // fields remain a fallback for older rows without a junction entry.
   const { rows: membershipRows } = await pool.query(
-    `SELECT cba.ledger_id, cba.location_type, cba.location_id,
-            CASE cba.location_type
+    `SELECT cba.ledger_id,
+            COALESCE(l.location_type, cba.location_type) AS location_type,
+            COALESCE(l.location_id, cba.location_id) AS location_id,
+            CASE COALESCE(l.location_type, cba.location_type)
               WHEN 'headoffice' THEN 'Head Office'
               WHEN 'warehouse' THEN COALESCE(w.name, 'Warehouse')
               ELSE COALESCE(o.name, 'Outlet')
             END AS name
        FROM cash_bank_accounts cba
-       LEFT JOIN warehouses w ON cba.location_type = 'warehouse' AND w.id = cba.location_id
-       LEFT JOIN outlets o ON cba.location_type = 'outlet' AND o.id = cba.location_id
+       LEFT JOIN cash_bank_account_locations l ON l.account_id = cba.id
+       LEFT JOIN warehouses w ON COALESCE(l.location_type, cba.location_type) = 'warehouse'
+                             AND w.id = COALESCE(l.location_id, cba.location_id)
+       LEFT JOIN outlets o ON COALESCE(l.location_type, cba.location_type) = 'outlet'
+                          AND o.id = COALESCE(l.location_id, cba.location_id)
       WHERE cba.ledger_id = ANY($1::int[])`, [ids],
   );
   const accountMemberships = new Map<number, Array<{ locationType: string; locationId: number; name: string }>>();
@@ -581,14 +586,17 @@ router.get("/accounts/voucher-locations", requireModuleView(["page:/accounts/vou
   const hoCashBank = await ledgerIdsUnderCodes(["STD-CASH", "STD-BANK"]);
   for (const id of ownedMap.keys()) hoCashBank.delete(id);
 
-  // Managed Cash & Bank accounts have one canonical owner.
+  // Managed Cash & Bank accounts may be assigned to multiple warehouses.
   const { rows: cbaRows } = await pool.query(
-    `SELECT cba.ledger_id, cba.location_type, cba.location_id
+    `SELECT cba.ledger_id,
+            COALESCE(l.location_type, cba.location_type) AS location_type,
+            COALESCE(l.location_id, cba.location_id) AS location_id
        FROM cash_bank_accounts cba
+       LEFT JOIN cash_bank_account_locations l ON l.account_id = cba.id
       WHERE cba.ledger_id IS NOT NULL
-        AND cba.location_type IN ('headoffice','warehouse','outlet')`,
+        AND COALESCE(l.location_type, cba.location_type) IN ('headoffice','warehouse','outlet')`,
   );
-  // An account is offered only at its canonical owner.
+  // An account is offered at every assigned location.
   for (const row of cbaRows) {
     if (row.location_type === "headoffice") hoCashBank.add(Number(row.ledger_id));
   }

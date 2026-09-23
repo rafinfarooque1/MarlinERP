@@ -9,6 +9,7 @@ import type { CashBankAccountAccountType } from './cashBankAccountAccountType';
 import type { CashBankAccountBalanceSource } from './cashBankAccountBalanceSource';
 import type { CashBankAccountLocationType } from './cashBankAccountLocationType';
 import type { CashBankAccountSource } from './cashBankAccountSource';
+import type { CashBankLocation } from './cashBankLocation';
 
 export interface CashBankAccount {
   id: number;
@@ -36,7 +37,7 @@ export interface CashBankAccount {
   /** @nullable */
   ledgerId?: number | null;
   /**
-     * The one location that owns this account. Head Office uses locationId 0.
+     * Legacy primary location. Bank accounts may be assigned to multiple warehouses.
      * @nullable
      */
   locationType: CashBankAccountLocationType;
@@ -44,6 +45,8 @@ export interface CashBankAccount {
   locationId?: number | null;
   /** @nullable */
   locationName?: string | null;
+  /** Locations where this account is available. Bank assignments are warehouse memberships. */
+  locations?: CashBankLocation[];
   /** module = managed on this screen; location = a branch till owned by the Locations module (read-only here); system = the Cash / Bank Accounts head itself; ledger = another ledger in the subtree. */
   source?: CashBankAccountSource;
   readOnly?: boolean;

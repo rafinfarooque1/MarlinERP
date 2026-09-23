@@ -7,7 +7,7 @@
  */
 
 /**
- * The one location that owns this account. Head Office uses locationId 0.
+ * Legacy primary location. Bank accounts may be assigned to multiple warehouses.
  * @nullable
  */
 export type CashBankAccountLocationType = typeof CashBankAccountLocationType[keyof typeof CashBankAccountLocationType] | null;
