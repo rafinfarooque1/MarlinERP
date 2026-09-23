@@ -13,7 +13,7 @@
  * api-server/src/lib/paymentModes.ts.
  */
 
-export const ONLINE_PAYMENT_MODES = ['swiggy', 'zomato', 'other_online'] as const;
+export const ONLINE_PAYMENT_MODES = ['online', 'swiggy', 'zomato', 'other_online'] as const;
 export type OnlinePaymentMode = (typeof ONLINE_PAYMENT_MODES)[number];
 
 export const SALE_PAYMENT_MODES = ['cash', 'bank', 'upi', ...ONLINE_PAYMENT_MODES, 'credit'] as const;
@@ -23,7 +23,7 @@ export type SalePaymentMode = (typeof SALE_PAYMENT_MODES)[number];
  * Modes a NEW sale may be created with. The selected Cash & Bank account
  * derives the stored bank/upi method for the combined Bank / UPI choice.
  */
-export const CREATE_SALE_PAYMENT_MODES = ['cash', 'bank', ...ONLINE_PAYMENT_MODES, 'credit'] as const;
+export const CREATE_SALE_PAYMENT_MODES = ['cash', 'bank', 'online', 'credit'] as const;
 
 /** Modes a collection against an existing bill can be recorded in. */
 export const COLLECTION_METHODS = ['cash', 'bank', 'upi', ...ONLINE_PAYMENT_MODES] as const;
@@ -52,9 +52,10 @@ export function paymentModeLabel(mode: string | null | undefined): string {
   switch ((mode ?? '').toLowerCase()) {
     case 'cash': return 'Cash';
     case 'upi': return 'UPI';
-    case 'swiggy': return 'Swiggy';
-    case 'zomato': return 'Zomato';
-    case 'other_online': return 'Other Online';
+    case 'online':
+    case 'swiggy':
+    case 'zomato':
+    case 'other_online': return 'Online';
     case 'bank':
     case 'card':
     case 'bank_transfer': return 'Bank';
@@ -82,9 +83,7 @@ export const PAYMENT_MODE_OPTIONS: ReadonlyArray<{ value: SalePaymentMode; label
 export const CREATE_PAYMENT_MODE_OPTIONS: ReadonlyArray<{ value: SalePaymentMode; label: string }> = [
   { value: 'cash', label: '💵 Cash' },
   { value: 'bank', label: '🏦 Bank / UPI' },
-  { value: 'swiggy', label: '🛵 Swiggy' },
-  { value: 'zomato', label: '🍽️ Zomato' },
-  { value: 'other_online', label: '🌐 Other Online' },
+  { value: 'online', label: '🌐 Online' },
   { value: 'credit', label: '🕒 Credit (pay later)' },
 ];
 

@@ -371,7 +371,7 @@ router.get("/accounts/cash-bank-ledgers", requireModuleView(["page:/accounts/cas
     id: r.id, name: r.name, type: r.type,
     parentId: r.parent_id ?? null, code: r.code ?? null,
     bankDetails: r.bank_details ?? null,
-    accountType: cbaType.get(Number(r.id)) ?? null,
+      accountType: cbaType.get(Number(r.id)) ?? null,
   })));
 });
 
@@ -848,6 +848,16 @@ async function isCashFamilyLedger(q: { query: Function }, ledgerId: number): Pro
   return rows.length > 0;
 }
 
+async function isOnlineFamilyLedger(q: { query: Function }, ledgerId: number): Promise<boolean> {
+  const { rows } = await q.query(
+    `SELECT 1 FROM cash_bank_accounts
+      WHERE ledger_id = $1 AND account_type = 'online'
+      LIMIT 1`,
+    [ledgerId],
+  );
+  return rows.length > 0;
+}
+
 async function electronicClearingLedgerId(q: { query: Function }): Promise<number | null> {
   const { rows: [row] } = await q.query(
     `SELECT id FROM account_ledgers WHERE code = 'STD-ELEC-CLR' AND COALESCE(is_active, true)`,
@@ -1073,8 +1083,8 @@ router.post("/accounts/payments", requireModuleAction(["page:/accounts/vouchers"
   const paymentMode = rawMode == null || String(rawMode).trim() === ""
     ? null
     : String(rawMode).trim().toLowerCase();
-  if (paymentMode !== null && paymentMode !== "cash" && paymentMode !== "bank") {
-    res.status(400).json({ error: "paymentMode must be cash or bank" }); return;
+  if (paymentMode !== null && paymentMode !== "cash" && paymentMode !== "bank" && paymentMode !== "online") {
+    res.status(400).json({ error: "paymentMode must be cash, bank, or online" }); return;
   }
   if (!paymentDate || !paidToLedgerId || !amount || (paymentMode !== "bank" && !paidFromLedgerId)) {
     res.status(400).json({ error: "paymentDate, paidToLedgerId and amount are required; a cash account is required for Cash entries" }); return;
@@ -1097,6 +1107,8 @@ router.post("/accounts/payments", requireModuleAction(["page:/accounts/vouchers"
     paidFromLedgerId = clearingId;
   } else if (paymentMode === "cash" && !(await isCashFamilyLedger(pool, Number(paidFromLedgerId)))) {
     res.status(400).json({ error: "Cash entries must use a permitted Cash account." }); return;
+  } else if (paymentMode === "online" && !(await isOnlineFamilyLedger(pool, Number(paidFromLedgerId)))) {
+    res.status(400).json({ error: "Online entries must use an Online sub-ledger." }); return;
   }
   const accountError = await postableLedgerError(pool, [Number(paidFromLedgerId), Number(paidToLedgerId)]);
   if (accountError) { res.status(400).json({ error: accountError }); return; }
@@ -1680,8 +1692,8 @@ router.post("/accounts/receipts", requireModuleAction(["page:/accounts/vouchers"
   const paymentMode = rawMode == null || String(rawMode).trim() === ""
     ? null
     : String(rawMode).trim().toLowerCase();
-  if (paymentMode !== null && paymentMode !== "cash" && paymentMode !== "bank") {
-    res.status(400).json({ error: "paymentMode must be cash or bank" }); return;
+  if (paymentMode !== null && paymentMode !== "cash" && paymentMode !== "bank" && paymentMode !== "online") {
+    res.status(400).json({ error: "paymentMode must be cash, bank, or online" }); return;
   }
   if (!receiptDate || !receivedFromLedgerId || !amount || (paymentMode !== "bank" && !receivedInLedgerId)) {
     res.status(400).json({ error: "receiptDate, receivedFromLedgerId and amount are required; a cash account is required for Cash entries" }); return;
@@ -1705,6 +1717,8 @@ router.post("/accounts/receipts", requireModuleAction(["page:/accounts/vouchers"
     receivedInLedgerId = clearingId;
   } else if (paymentMode === "cash" && !(await isCashFamilyLedger(pool, Number(receivedInLedgerId)))) {
     res.status(400).json({ error: "Cash entries must use a permitted Cash account." }); return;
+  } else if (paymentMode === "online" && !(await isOnlineFamilyLedger(pool, Number(receivedInLedgerId)))) {
+    res.status(400).json({ error: "Online entries must use an Online sub-ledger." }); return;
   }
   // A branch user may only collect into its own cash box.
   const scope = ownLocationScope((req as any).employee);
@@ -3952,8 +3966,8 @@ router.post("/accounts/location-expenses", requireModuleAction("page:/sales/expe
   const paymentMode = rawMode === undefined || rawMode === null || String(rawMode).trim() === ''
     ? 'cash'
     : String(rawMode).trim().toLowerCase();
-  if (!['cash', 'bank', 'credit'].includes(paymentMode)) {
-    res.status(400).json({ error: "paymentMode must be one of: cash, bank, credit" }); return;
+  if (!['cash', 'bank', 'online', 'credit'].includes(paymentMode)) {
+    res.status(400).json({ error: "paymentMode must be one of: cash, bank, online, credit" }); return;
   }
   const rawNotes = req.body?.notes;
   const notes = rawNotes === undefined || rawNotes === null || String(rawNotes).trim() === ''
@@ -4032,6 +4046,12 @@ router.post("/accounts/location-expenses", requireModuleAction("page:/sales/expe
       res.status(400).json({ error: "paymentAccountId must be a Bank ledger account" }); return;
     }
     fundingLedgerId = bankLedgerId;
+  } else if (paymentMode === 'online') {
+    const onlineLedgerId = Number(req.body?.paymentAccountId);
+    if (!Number.isFinite(onlineLedgerId) || onlineLedgerId <= 0 || !(await isOnlineFamilyLedger(pool, onlineLedgerId))) {
+      res.status(400).json({ error: "paymentAccountId must be an Online sub-ledger" }); return;
+    }
+    fundingLedgerId = onlineLedgerId;
   } else {
     // Credit: nothing moves now, the liability is recognised instead.
     const { rows: [payable] } = await pool.query(`SELECT id FROM account_ledgers WHERE code = 'STD-EXP-PAY'`);

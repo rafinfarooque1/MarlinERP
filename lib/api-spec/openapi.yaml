@@ -3573,7 +3573,7 @@ components:
           type: string
         accountType:
           type: string
-          enum: [cash, bank, upi, other]
+          enum: [cash, bank, online]
         bankName:
           type: ["string", "null"]
         accountNumber:
@@ -3641,7 +3641,7 @@ components:
           type: string
         accountType:
           type: string
-          enum: [cash, bank, upi, other]
+          enum: [cash, bank, online]
         bankName:
           type: string
         accountNumber:

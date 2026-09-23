@@ -1393,8 +1393,7 @@ export type CashBankAccountAccountType = typeof CashBankAccountAccountType[keyof
 export const CashBankAccountAccountType = {
   cash: 'cash',
   bank: 'bank',
-  upi: 'upi',
-  other: 'other',
+  online: 'online',
 } as const;
 
 export type CashBankAccountBalanceSource = typeof CashBankAccountBalanceSource[keyof typeof CashBankAccountBalanceSource];
@@ -1496,8 +1495,7 @@ export type CashBankInputAccountType = typeof CashBankInputAccountType[keyof typ
 export const CashBankInputAccountType = {
   cash: 'cash',
   bank: 'bank',
-  upi: 'upi',
-  other: 'other',
+  online: 'online',
 } as const;
 
 /**

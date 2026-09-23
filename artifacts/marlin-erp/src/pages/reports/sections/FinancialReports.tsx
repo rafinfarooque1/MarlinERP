@@ -55,12 +55,12 @@ interface FinancialStatements {
     expenses: {
       openingStock: number; openingStockItems: StockItem[];
       openingStockReliable: boolean; openingStockNote: string | null;
-      purchases: number; directExpenses: GroupSummary; indirectExpenses: GroupSummary; total: number;
+       purchases: number; stockTransferIn?: number; directExpenses: GroupSummary; indirectExpenses: GroupSummary; total: number;
     };
     incomes: {
       sales: number; closingStock: number; closingStockItems: StockItem[]; closingStockInTransit: number;
       closingStockReliable: boolean; closingStockNote: string | null;
-      directIncomes: GroupSummary; indirectIncomes: GroupSummary; total: number;
+       stockTransferOut?: number; directIncomes: GroupSummary; indirectIncomes: GroupSummary; total: number;
     };
     netProfit: number;
     summary: {
@@ -379,8 +379,10 @@ function PnlReport({ range, loc, canDownload }: { range: RangeState; loc: Locati
   const salesReturns = Number((pl?.incomes as any)?.salesReturns ?? 0);
   const grossSales = Number((pl?.incomes as any)?.grossSales ?? (pl?.incomes.sales ?? 0));
   const directIncome = pl?.incomes.directIncomes.total ?? 0;
+  const stockTransferIn = Number((pl?.expenses as any)?.stockTransferIn ?? 0);
+  const stockTransferOut = Number((pl?.incomes as any)?.stockTransferOut ?? 0);
   const goodsAvailable = pl
-    ? pl.expenses.openingStock + pl.expenses.purchases + pl.expenses.directExpenses.total
+    ? pl.expenses.openingStock + pl.expenses.purchases + stockTransferIn + pl.expenses.directExpenses.total
     : 0;
   // Financial charges and depreciation are ordinary indirect-expense ledgers;
   // they get their own statement lines when such ledgers exist. Topmost match
@@ -414,9 +416,11 @@ function PnlReport({ range, loc, canDownload }: { range: RangeState; loc: Locati
     ...(Math.abs(directIncome) > 0.005 ? [{ name: 'Add: Direct Income', amount: directIncome }] : []),
     { name: 'Opening Stock', amount: pl.expenses.openingStock },
     { name: 'Add: Purchases (net of returns)', amount: pl.expenses.purchases },
+    ...(stockTransferIn > 0.005 ? [{ name: 'Add: Stock Transfer In', amount: stockTransferIn }] : []),
     { name: 'Add: Direct Expenses', amount: pl.expenses.directExpenses.total },
     { name: 'Goods Available for Sale', amount: goodsAvailable, kind: 'sub' },
     { name: 'Less: Closing Stock', amount: pl.incomes.closingStock, less: true },
+    ...(stockTransferOut > 0.005 ? [{ name: 'Add: Stock Transfer Out', amount: stockTransferOut }] : []),
     { name: 'Cost of Goods Sold (COGS)', amount: s?.costOfGoodsSold ?? 0, kind: 'sub', id: 'pl-cogs' },
     { name: `Gross ${(s?.grossProfit ?? 0) >= 0 ? 'Profit' : 'Loss'} (GP)`, amount: Math.abs(s?.grossProfit ?? 0), kind: 'total', id: 'pl-gross-profit' },
     { name: 'Add: Other Income', amount: s?.otherIncome ?? 0 },

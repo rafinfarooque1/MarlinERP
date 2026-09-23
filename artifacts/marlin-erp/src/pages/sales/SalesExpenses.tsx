@@ -39,6 +39,7 @@ import { inr } from '@/lib/currency';
 const PAYMENT_MODES = [
   { value: 'cash',   label: 'Cash',   hint: "Paid from this location's till" },
   { value: 'bank',   label: 'Bank',   hint: 'Paid from a company bank account' },
+  { value: 'online', label: 'Online', hint: 'Paid from an Online platform sub-ledger' },
   { value: 'credit', label: 'Credit', hint: 'Not paid yet — recorded as Expense Payable' },
 ] as const;
 
@@ -50,11 +51,11 @@ const schema = z.object({
   amount:           z.coerce.number().min(0.01, 'Amount must be > 0'),
   expenseDate:      z.string().min(1, 'Date required'),
   reference:        z.string().optional(),
-  paymentMode:      z.enum(['cash', 'bank', 'credit']),
+  paymentMode:      z.enum(['cash', 'bank', 'online', 'credit']),
   paymentAccountId: z.coerce.number().optional(),
   notes:            z.string().optional(),
-}).refine(d => d.paymentMode !== 'bank' || Number(d.paymentAccountId ?? 0) > 0, {
-  message: 'Select the bank account it was paid from',
+}).refine(d => !['bank', 'online'].includes(d.paymentMode) || Number(d.paymentAccountId ?? 0) > 0, {
+  message: 'Select the account it was paid from',
   path: ['paymentAccountId'],
 });
 type FormValues = z.infer<typeof schema>;
@@ -131,6 +132,7 @@ export default function SalesExpenses() {
     // The root itself is the group heading, never a payable account.
     return list.filter(l => ids.has(l.id) && l.id !== root.id);
   })();
+  const onlineAccounts = bankAccounts.filter((a: any) => a.accountType === 'online');
 
   const { locationType, locationId, locationName } = locationState;
   const isAll       = locationType === 'all';
@@ -314,7 +316,7 @@ export default function SalesExpenses() {
           description: data.description,
           reference: data.reference || undefined,
           paymentMode: data.paymentMode,
-          paymentAccountId: data.paymentMode === 'bank' ? data.paymentAccountId : undefined,
+          paymentAccountId: data.paymentMode === 'bank' || data.paymentMode === 'online' ? data.paymentAccountId : undefined,
           notes: data.notes || undefined,
         }),
       });
@@ -713,12 +715,12 @@ export default function SalesExpenses() {
                           <SelectItem
                             key={m.value}
                             value={m.value}
-                            disabled={m.value === 'bank' && bankAccounts.length === 0}
+                            disabled={(m.value === 'bank' && bankAccounts.length === 0) || (m.value === 'online' && onlineAccounts.length === 0)}
                           >
                             {m.label}
                             <span className="text-muted-foreground text-xs">
                               {' · '}
-                              {m.value === 'bank' && bankAccounts.length === 0 ? 'Head Office only' : m.hint}
+                              {m.value === 'bank' && bankAccounts.length === 0 ? 'Head Office only' : m.value === 'online' && onlineAccounts.length === 0 ? 'No Online account available' : m.hint}
                             </span>
                           </SelectItem>
                         ))}
@@ -763,6 +765,23 @@ export default function SalesExpenses() {
                           ) : bankAccounts.map((b: any) => (
                             <SelectItem key={b.id} value={String(b.id)}>{b.name}</SelectItem>
                           ))}
+                        </SelectContent>
+                      </Select>
+                      <FormMessage />
+                    </FormItem>
+                  )} />
+                )}
+                {watchMode === 'online' && (
+                  <FormField control={form.control} name="paymentAccountId" render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Online Account <span className="text-destructive">*</span></FormLabel>
+                      <Select onValueChange={v => field.onChange(Number(v))}
+                        value={field.value && Number(field.value) > 0 ? String(field.value) : ''}>
+                        <FormControl><SelectTrigger><SelectValue placeholder="Select Online platform" /></SelectTrigger></FormControl>
+                        <SelectContent>
+                          {onlineAccounts.length === 0
+                            ? <SelectItem value="0" disabled>No Online accounts available</SelectItem>
+                            : onlineAccounts.map((b: any) => <SelectItem key={b.id} value={String(b.id)}>{b.name}</SelectItem>)}
                         </SelectContent>
                       </Select>
                       <FormMessage />

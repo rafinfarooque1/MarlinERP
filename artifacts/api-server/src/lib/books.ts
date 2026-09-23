@@ -839,6 +839,7 @@ export interface Books {
       purchaseReturns: number;
       purchasesGroup: StatementGroup;
       directExpenses: StatementGroup;
+      stockTransferIn: number;
       indirectExpenses: StatementGroup;
       total: number;
     };
@@ -859,6 +860,7 @@ export interface Books {
       closingStockReliable: boolean;
       closingStockNote: string | null;
       directIncomes: StatementGroup;
+      stockTransferOut: number;
       indirectIncomes: StatementGroup;
       total: number;
     };
@@ -1096,12 +1098,31 @@ export async function buildBooks(
   const directExp = buildGroup("SYS-DIREXP", periodAgg, 1);
   const indirectExp = buildGroup("SYS-INDEXP", periodAgg, 1);
 
-  const totalExpenses = r2(opening.total + purchasesGroup.total + directExp.total + indirectExp.total);
-  const totalIncomes = r2(salesGroup.total + closing.total + directInc.total + indirectInc.total);
+  const nodeTotal = (group: StatementGroup, names: Set<string>): number => {
+    const walk = (nodes: StatementNode[]): number => nodes.reduce((sum, n) =>
+      sum + (names.has(String(n.code ?? '').toUpperCase()) || names.has(n.name.toLowerCase()) ? Math.abs(n.balance) : 0) + walk(n.children), 0);
+    return r2(walk(group.children));
+  };
+  const stripTransferNodes = (group: StatementGroup, names: Set<string>): StatementGroup => {
+    const strip = (nodes: StatementNode[]): StatementNode[] => nodes
+      .filter((n) => !names.has(String(n.code ?? '').toUpperCase()) && !names.has(n.name.toLowerCase()))
+      .map((n) => ({ ...n, children: strip(n.children) }));
+    const transfer = nodeTotal(group, names);
+    return { ...group, total: r2(group.total - transfer), children: strip(group.children) };
+  };
+  const transferInNames = new Set(["TRANSFER-IN", "transfer-in"]);
+  const transferOutNames = new Set(["TRANSFER-OUT", "transfer-out"]);
+  const stockTransferIn = nodeTotal(directExp, transferInNames);
+  const stockTransferOut = nodeTotal(directInc, transferOutNames);
+  const directExpensesForPnl = stripTransferNodes(directExp, transferInNames);
+  const directIncomesForPnl = stripTransferNodes(directInc, transferOutNames);
+
+  const totalExpenses = r2(opening.total + purchasesGroup.total + stockTransferIn + directExpensesForPnl.total + indirectExp.total);
+  const totalIncomes = r2(salesGroup.total + closing.total + stockTransferOut + directIncomesForPnl.total + indirectInc.total);
   const netProfit = r2(totalIncomes - totalExpenses);
 
-  const revenue = r2(salesGroup.total + directInc.total);
-  const cogs = r2(opening.total + purchasesGroup.total + directExp.total - closing.total);
+  const revenue = r2(salesGroup.total + stockTransferOut + directIncomesForPnl.total);
+  const cogs = r2(opening.total + purchasesGroup.total + stockTransferIn + directExpensesForPnl.total - closing.total);
   const grossProfit = r2(revenue - cogs);
   const pct = (part: number, whole: number) => (Math.abs(whole) < 0.005 ? 0 : r2((part / whole) * 100));
 
@@ -1223,7 +1244,8 @@ export async function buildBooks(
         purchases: purchasesGroup.total,
         purchaseReturns,
         purchasesGroup,
-        directExpenses: directExp,
+        directExpenses: directExpensesForPnl,
+        stockTransferIn,
         indirectExpenses: indirectExp,
         total: totalExpenses,
       },
@@ -1239,7 +1261,8 @@ export async function buildBooks(
         closingStockNote: historicalClose
           ? [closing.note, HISTORICAL_CLOSE_NOTE].filter(Boolean).join(" ")
           : closing.note,
-        directIncomes: directInc,
+        directIncomes: directIncomesForPnl,
+        stockTransferOut,
         indirectIncomes: indirectInc,
         total: totalIncomes,
       },

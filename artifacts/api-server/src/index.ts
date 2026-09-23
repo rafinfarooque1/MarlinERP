@@ -4712,7 +4712,7 @@ await pool.query(`
   -- Per-account reconciliation switch. When TRUE, collections routed into the
   -- account go through Electronic Clearing + Reconciliation before reaching
   -- the bank balance; when FALSE they post straight into the account's ledger.
-  -- Meaningful for bank/upi/other only — cash never consults it.
+  -- Meaningful for bank/online only — cash never consults it.
   ALTER TABLE cash_bank_accounts ADD COLUMN IF NOT EXISTS requires_reconciliation BOOLEAN NOT NULL DEFAULT false;
 `);
 
@@ -4889,8 +4889,9 @@ try {
 // openings and the rebalance reads them, so on a fresh database an earlier
 // position would crash the boot.
 {
-  const { migrateCashBankLedgerLinks, rebalanceCashBankOpeningEquity } = await import("./lib/cashBankLedgers");
+  const { migrateCashBankLedgerLinks, migrateCashBankOnline, rebalanceCashBankOpeningEquity } = await import("./lib/cashBankLedgers");
   await migrateCashBankLedgerLinks(pool);
+  await migrateCashBankOnline(pool);
   // Every boot, not one-time: recomputes the equity counterweight to whatever
   // openings the CBA ledgers carry right now (idempotent, self-healing).
   await rebalanceCashBankOpeningEquity(pool);

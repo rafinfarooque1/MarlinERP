@@ -845,12 +845,13 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   const formReceiveOptionsForMode = useMemo(() => {
     if (watchPaymentMode === 'cash') return formReceiveOptions.filter(isCashOption);
     if (watchPaymentMode === 'bank') return formReceiveOptions.filter(o => !isCashOption(o));
+    if (watchPaymentMode === 'online') return formReceiveOptions.filter(o => o.accountType === 'online');
     return [];
   }, [formReceiveOptions, watchPaymentMode]);
 
   // Keep the picked account valid for the form's location and payment mode.
-  // Cash defaults to the location's own active till; Bank / UPI defaults to
-  // the first assigned electronic account.
+  // Cash defaults to the location's own active till; Bank and Online default to
+  // the first assigned account in their respective family.
   useEffect(() => {
     if (!isOpen || editItem) return;
     setReceiveLedgerId(prev => {
@@ -2059,7 +2060,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                               locationId={watchLocationId}
                               value={receiveLedgerId}
                               onChange={setReceiveLedgerId}
-                              mode={watchPaymentMode === 'cash' ? 'cash' : 'electronic'}
+                               mode={watchPaymentMode === 'cash' ? 'cash' : watchPaymentMode === 'online' ? 'online' : 'electronic'}
                             />
                           </>
                         ) : (
