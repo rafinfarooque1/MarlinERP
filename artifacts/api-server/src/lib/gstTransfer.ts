@@ -2,7 +2,7 @@
  * GST-aware inter-branch transfer logic.
  *
  * The system automatically classifies every stock transfer:
- *   - Same GSTIN          → 'internal'    (no GST, delivery challan only)
+ *   - Same GSTIN          → 'internal'    (no GST, internal transfer accounting)
  *   - Diff GSTIN, same state → 'intrastate' (CGST + SGST)
  *   - Diff GSTIN, diff state → 'interstate' (IGST)
  *
@@ -464,6 +464,52 @@ export async function createDispatchVoucher(args: DispatchVoucherArgs): Promise<
     );
   }
   return vid;
+}
+
+/**
+ * Reverse the source-side accounting when an internal transfer is rejected.
+ * The stock movement is reversed by the transfer route, but the original
+ * dispatch voucher remains immutable audit history. A balanced reversal keeps
+ * both the sender's Transfer-Out P&L leg and its internal receivable honest.
+ */
+export async function createDispatchReversalVoucher(args: {
+  client: PoolLike;
+  challanNumber: string;
+  transferDate: string;
+  fromLocation: LocationGst;
+  amount: number;
+  narration: string;
+  createdBy: string | null;
+}): Promise<number | null> {
+  const amount = r2(args.amount);
+  if (!(amount > 0.004)) return null;
+  const [branchDebtorId, transferOutId] = await Promise.all([
+    ensureClearingLedger(args.client, 'STD-BRANCH-DEBTOR', 'Inter-Branch Receivable', 'asset', 'balance_sheet'),
+    ensureClearingLedger(args.client, TRANSFER_OUT_LEDGER_CODE, 'Transfer-Out', 'income', 'profit_loss', 'SYS-DIRINC'),
+  ]);
+  if (!branchDebtorId || !transferOutId) {
+    throw new Error('Cannot reverse internal transfer — inter-branch ledgers are unavailable');
+  }
+  const { rows: [v] } = await args.client.query(
+    `INSERT INTO journal_vouchers
+       (voucher_type, voucher_number, voucher_date, narration, party_ledger_id,
+        total_amount, created_by, origin, source_module, location_type, location_id)
+     VALUES ('journal', $1, $2, $3, $4, $5, $6, 'system',
+             'branch_transfer_reversal', $7, $8)
+     RETURNING id`,
+    [
+      `TRF-REJ-${args.challanNumber}`, args.transferDate, args.narration,
+      branchDebtorId, amount, args.createdBy,
+      args.fromLocation.locationType, args.fromLocation.locationId,
+    ],
+  );
+  if (!v?.id) return null;
+  await args.client.query(
+    `INSERT INTO journal_voucher_lines (voucher_id, ledger_id, debit, credit)
+     VALUES ($1, $2, $3, 0), ($1, $4, 0, $3)`,
+    [v.id, transferOutId, amount, branchDebtorId],
+  );
+  return Number(v.id);
 }
 
 // ── Receive-side JV (destination branch books) ────────────────────────────────

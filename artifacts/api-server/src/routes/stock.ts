@@ -15,6 +15,7 @@ import { isIsoDate } from "../lib/dateInput";
 import { isMonthLocked, ymOfDate, monthLockedBody, respondIfMonthLocked } from "../lib/periodLock";
 import {
   resolveLocationGst, classifyTransfer, computeTransferGst, createDispatchVoucher, createReceiveVoucher,
+  createDispatchReversalVoucher,
   buildTransferInvoiceLines, totalsFromLines, isTransferInvoicingEnabled, nextTransferInvoiceNumber,
   createTransferSaleInvoice, createTransferPurchaseInvoice, createTransferCreditNote,
   type TaxType, type GstTotals, type TransferInvoiceLine,
@@ -906,13 +907,50 @@ router.post("/stock/transfers", requireModuleAction("page:/transfers", "add"), a
     );
     row.line_items = enrichedLines;
 
-    // ── Taxable inter-branch transfer: source-side document ─────────────────
-    // Same GSTIN ('internal') is a delivery challan only — no supply, no tax,
-    // no document. Different GSTIN is a taxable supply and gets EITHER a tax
-    // invoice (the default) OR the legacy journal voucher (module switched
-    // off), never both: the invoice and the voucher record the same postings,
-    // so raising both would double revenue, tax and the inter-branch balance.
-    if (transferType !== 'internal') {
+    // ── Transfer accounting: source-side document ───────────────────────────
+    // Same-GSTIN transfers are not taxable, but they still need an internal
+    // branch receivable and Transfer-Out P&L leg so the source warehouse's
+    // books show the stock leaving. The same balanced voucher helper is used
+    // with taxType 'none', so internal and taxable transfer accounting cannot
+    // drift apart.
+    if (transferType === 'internal') {
+      const internalLines = await buildTransferInvoiceLines(
+        client,
+        enrichedLines.map((l: any) => ({
+          itemId: l.itemId,
+          quantity: l.quantity,
+          costPrice: l.costPrice ?? 0,
+          materialType: l.materialType ?? 'item',
+        })),
+        'none',
+      );
+      const internalValue = totalsFromLines(internalLines).taxableValue;
+      if (internalValue > 0.004) {
+        const internalTotals: GstTotals = {
+          taxableValue: internalValue,
+          cgst: 0, sgst: 0, igst: 0, totalGst: 0, totalWithGst: internalValue,
+        };
+        const dispatchVoucherId = await createDispatchVoucher({
+          client,
+          challanNumber,
+          transferDate: parsed.data.transferDate,
+          fromLocation: fromGst,
+          gst: internalTotals,
+          taxType: 'none',
+          narration: `Internal transfer ${challanNumber}: ${fromGst.name} → ${toGst.name}`,
+          createdBy: null,
+        });
+        await client.query(
+          `UPDATE stock_transfers
+              SET transfer_value = $1, gst_amount = 0, document_mode = 'voucher',
+                  dispatch_voucher_id = $2
+            WHERE id = $3`,
+          [internalValue, dispatchVoucherId, row.id],
+        );
+      }
+    } else {
+      // Different GSTIN is a taxable supply and gets EITHER a tax invoice
+      // (the default) OR the legacy journal voucher, never both.
       // All dispatched kinds are priced, not just finished goods — a packing
       // material crossing a GSTIN boundary is just as taxable.
       const invLines = await buildTransferInvoiceLines(
@@ -1277,14 +1315,14 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction("page:/transfer
       }
     }
 
-    // ── Taxable inter-branch transfer: destination-side document ────────────
+    // ── Transfer accounting: destination-side document ──────────────────────
     // Mirrors whichever document the dispatch raised. The stamp on the transfer
     // decides, not the current setting — a transfer that left as a voucher must
     // land as a voucher even if the module was switched on mid-flight, or the
     // two legs would post to different ledgers and never offset.
     let receiveVoucherId: number | null = null;
     let purchaseInvoiceId: number | null = null;
-    if (row.transfer_type && row.transfer_type !== 'internal' && Number(row.transfer_value ?? 0) > 0) {
+    if (Number(row.transfer_value ?? 0) > 0) {
       const txnDate = receiptDate;
       const taxType = (row.tax_type ?? 'none') as TaxType;
 
@@ -1541,6 +1579,25 @@ router.patch("/stock/transfers/:id/reject", requireModuleAction("page:/transfers
       const info = rejectMeta.get(`${mt}:${l.itemId}`) ?? { name: '', unit: '' };
        return { txnType: 'transfer_in', materialType: mt, refId: Number(l.itemId), itemName: info.name, unit: info.unit, branchType: row.from_type, branchId: Number(row.from_id), branchName: fromName, qtyChange: Number(l.quantity), unitCost: Number(l.costPrice ?? 0), docType: 'stock_transfer', docId: id, notes: 'Transfer rejected — stock returned to source', txnDate: toTxnDate(row.transfer_date) };
     }));
+
+    // Internal transfers create an immutable sender-side accounting voucher at
+    // dispatch. Rejection returns the stock, so reverse that voucher in this
+    // transaction instead of leaving a receivable and Transfer-Out balance
+    // behind after the goods are back at the source.
+    if (row.transfer_type === 'internal' && Number(row.transfer_value ?? 0) > 0) {
+      const fromLocGst = await resolveLocationGst(pool, row.from_type, Number(row.from_id));
+      await createDispatchReversalVoucher({
+        client,
+        challanNumber: row.challan_number,
+        transferDate: row.transfer_date
+          ? new Date(row.transfer_date).toISOString().slice(0, 10)
+          : new Date().toISOString().slice(0, 10),
+        fromLocation: fromLocGst,
+        amount: Number(row.transfer_value),
+        narration: `Internal transfer ${row.challan_number} rejected — accounting reversal`,
+        createdBy: null,
+      });
+    }
 
     // ── Rejected after a tax invoice was raised → credit note ────────────────
     // The stock has gone back, but the invoice is a filed-or-filable document:

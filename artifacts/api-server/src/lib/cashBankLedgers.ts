@@ -63,21 +63,21 @@ export function parseCashBankLocations(
   accountType: unknown,
 ): { ok: true; locations: CashBankLocation[] } | { ok: false; error: string } {
   if (body.locations !== undefined) {
-    if (accountType !== "bank") {
-      return { ok: false, error: "Only Bank accounts can be assigned to multiple locations." };
+    if (accountType !== "bank" && accountType !== "cash") {
+      return { ok: false, error: "Only Bank and Cash accounts can be assigned to multiple locations." };
     }
     if (!Array.isArray(body.locations) || body.locations.length === 0) {
-      return { ok: false, error: "Select at least one warehouse for this Bank account." };
+      return { ok: false, error: `Select at least one location for this ${accountType === "cash" ? "Cash" : "Bank"} account.` };
     }
     const locations: CashBankLocation[] = [];
     const seen = new Set<string>();
     for (const raw of body.locations) {
       if (!raw || typeof raw !== "object") {
-        return { ok: false, error: "Each Bank account location must be a warehouse." };
+        return { ok: false, error: "Each account location must be a valid Head Office, warehouse, or outlet assignment." };
       }
       const parsed = parseCashBankLocation(raw as Record<string, unknown>);
-      if (!parsed.ok || parsed.location.locationType !== "warehouse") {
-        return { ok: false, error: "Bank account assignments must be valid warehouses." };
+      if (!parsed.ok) {
+        return { ok: false, error: parsed.error };
       }
       const key = `${parsed.location.locationType}:${parsed.location.locationId}`;
       if (seen.has(key)) continue;
@@ -85,7 +85,7 @@ export function parseCashBankLocations(
       locations.push(parsed.location);
     }
     if (locations.length === 0) {
-      return { ok: false, error: "Select at least one warehouse for this Bank account." };
+      return { ok: false, error: `Select at least one location for this ${accountType === "cash" ? "Cash" : "Bank"} account.` };
     }
     return { ok: true, locations };
   }
@@ -97,7 +97,7 @@ export function parseCashBankLocations(
 /**
  * Diagnose legacy ownership without selecting an arbitrary membership or
  * repairing data. Bank accounts may now have multiple valid warehouse
- * memberships; other account types retain the single-owner invariant.
+ * memberships; UPI/Other accounts retain the single-owner invariant.
  */
 export function diagnoseCashBankLocation(
   account: { account_type?: unknown; location_type?: unknown; location_id?: unknown },
@@ -109,11 +109,11 @@ export function diagnoseCashBankLocation(
     error: "Cash/Bank account has ambiguous or invalid location ownership. Writes are blocked; Head Office must review the scalar owner and legacy memberships. No locations have been reassigned.",
   };
   if (!owner.ok) return conflict;
-  if (account.account_type === "bank" && memberships.length > 1) {
+  if ((account.account_type === "bank" || account.account_type === "cash") && memberships.length > 1) {
     let ownerIsAssigned = false;
     for (const membership of memberships) {
       const member = parseCashBankLocation(membership);
-      if (!member.ok || member.location.locationType !== "warehouse") return conflict;
+      if (!member.ok) return conflict;
       ownerIsAssigned = ownerIsAssigned
         || member.location.locationType === owner.location.locationType
         && member.location.locationId === owner.location.locationId;
