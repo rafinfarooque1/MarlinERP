@@ -3,19 +3,24 @@ name: Payment modes and invoice sharing
 description: The canonical counter payment modes, how legacy values are handled, and the seam that keeps invoice-share message composition separate from the PDF renderer.
 ---
 
-## Rule: the counter has four modes — Cash, Bank, UPI, Credit
+## Rule: the stored domain has four modes, but POS creation has three choices
 
-'bank' covers every payment landing in a company bank account (card swipe, netbanking, NEFT/IMPS).
-UPI stays separate only because operators reconcile it against the UPI ID printed on the invoice.
-Credit is the only mode that creates a receivable and the only one under credit-limit control;
-everything else is settled the moment the sale is recorded.
+The POS create picker offers Cash, Bank / UPI, and Credit. Bank and UPI are one
+operator choice; the selected Cash & Bank account derives the stored bank/upi
+method. Cash posts to the selling location's active cash ledger. Bank / UPI
+creates a pending collection in Electronic Payment Clearing until reconciliation.
+Credit is the only mode that leaves the full invoice in customer outstanding.
+The stored domain still keeps separate bank and upi values, plus legacy card and
+bank_transfer values for history and editing.
 
-**Why:** "Card" as a top-level mode described the instrument, not where the money went, and left
-netbanking/transfer sales with no honest option at the counter.
+**Why:** the operator needs one clear electronic-payment choice, while the books
+still need the actual bank/UPI classification and a pending clearing state before
+the destination bank is approved.
 
-**How to apply:** one canonical list per side (api-server and web each own a `paymentModes` module)
-and both must agree. Never re-derive the settled/clears-through-bank distinction inline with an
-array literal — that is exactly what drifted before.
+**How to apply:** one canonical list per side (api-server and web each own a
+`paymentModes` module) and both must agree. New POS electronic collections use
+the shared receipt engine with forced clearing; later customer collections keep
+their account reconciliation behavior.
 
 ## Rule: legacy stored modes are displayed, never rewritten
 
