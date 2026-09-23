@@ -1,7 +1,8 @@
 /**
  * Payment-mode names and labels for the counter.
  *
- * The counter takes money four ways: Cash, Bank, UPI and Credit. 'bank' covers
+ * The counter takes money through Cash, Bank, named Online modes and Credit.
+ * 'bank' covers
  * every payment that lands in a company bank account — card swipe, netbanking,
  * NEFT/IMPS — and is settled the moment the sale is recorded, exactly like cash.
  * Only Credit creates a receivable.
@@ -12,17 +13,20 @@
  * api-server/src/lib/paymentModes.ts.
  */
 
-export const SALE_PAYMENT_MODES = ['cash', 'bank', 'upi', 'credit'] as const;
+export const ONLINE_PAYMENT_MODES = ['swiggy', 'zomato', 'other_online'] as const;
+export type OnlinePaymentMode = (typeof ONLINE_PAYMENT_MODES)[number];
+
+export const SALE_PAYMENT_MODES = ['cash', 'bank', 'upi', ...ONLINE_PAYMENT_MODES, 'credit'] as const;
 export type SalePaymentMode = (typeof SALE_PAYMENT_MODES)[number];
 
 /**
  * Modes a NEW sale may be created with. The selected Cash & Bank account
  * derives the stored bank/upi method for the combined Bank / UPI choice.
  */
-export const CREATE_SALE_PAYMENT_MODES = ['cash', 'bank', 'credit'] as const;
+export const CREATE_SALE_PAYMENT_MODES = ['cash', 'bank', ...ONLINE_PAYMENT_MODES, 'credit'] as const;
 
 /** Modes a collection against an existing bill can be recorded in. */
-export const COLLECTION_METHODS = ['cash', 'bank', 'upi'] as const;
+export const COLLECTION_METHODS = ['cash', 'bank', 'upi', ...ONLINE_PAYMENT_MODES] as const;
 
 /** Stored values that predate the 'bank' name. */
 export const LEGACY_BANK_MODES = ['card', 'bank_transfer'] as const;
@@ -34,7 +38,7 @@ export const LEGACY_BANK_MODES = ['card', 'bank_transfer'] as const;
  * rewrite a value the reconciliation rows point at, and the API reads it as an
  * attempt to change the sale's mode and refuses the edit outright.
  */
-export const STORED_SALE_MODES = ['cash', 'bank', 'upi', 'credit', 'card', 'bank_transfer'] as const;
+export const STORED_SALE_MODES = ['cash', 'bank', 'upi', ...ONLINE_PAYMENT_MODES, 'credit', 'card', 'bank_transfer'] as const;
 export type StoredSaleMode = (typeof STORED_SALE_MODES)[number];
 
 /** The value an edit form should hold: the stored one, left exactly as it is. */
@@ -48,6 +52,9 @@ export function paymentModeLabel(mode: string | null | undefined): string {
   switch ((mode ?? '').toLowerCase()) {
     case 'cash': return 'Cash';
     case 'upi': return 'UPI';
+    case 'swiggy': return 'Swiggy';
+    case 'zomato': return 'Zomato';
+    case 'other_online': return 'Other Online';
     case 'bank':
     case 'card':
     case 'bank_transfer': return 'Bank';
@@ -62,6 +69,9 @@ export const PAYMENT_MODE_OPTIONS: ReadonlyArray<{ value: SalePaymentMode; label
   { value: 'cash', label: '💵 Cash' },
   { value: 'bank', label: '🏦 Bank (card / netbanking / transfer)' },
   { value: 'upi', label: '📱 UPI' },
+  { value: 'swiggy', label: '🛵 Swiggy' },
+  { value: 'zomato', label: '🍽️ Zomato' },
+  { value: 'other_online', label: '🌐 Other Online' },
   { value: 'credit', label: '🕒 Credit (pay later)' },
 ];
 
@@ -72,6 +82,9 @@ export const PAYMENT_MODE_OPTIONS: ReadonlyArray<{ value: SalePaymentMode; label
 export const CREATE_PAYMENT_MODE_OPTIONS: ReadonlyArray<{ value: SalePaymentMode; label: string }> = [
   { value: 'cash', label: '💵 Cash' },
   { value: 'bank', label: '🏦 Bank / UPI' },
+  { value: 'swiggy', label: '🛵 Swiggy' },
+  { value: 'zomato', label: '🍽️ Zomato' },
+  { value: 'other_online', label: '🌐 Other Online' },
   { value: 'credit', label: '🕒 Credit (pay later)' },
 ];
 

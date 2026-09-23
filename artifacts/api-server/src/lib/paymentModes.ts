@@ -7,6 +7,8 @@
  *            NEFT/IMPS); settled at the counter but clears through the bank
  *   upi    — same as bank in accounting terms, kept separate because operators
  *            reconcile UPI collections against the UPI ID on the invoice
+ *   swiggy / zomato / other_online — online aggregators, held in Electronic
+ *            Clearing until the settlement is reconciled to a Cash & Bank ledger
  *   credit — pay later; the only mode that creates a receivable and the only one
  *            subject to credit-limit control
  *
@@ -24,13 +26,16 @@
  * NOTE: this is NOT the create-time allowlist. A brand-new sale may use cash,
  * bank/UPI, or credit — see CREATE_SALE_PAYMENT_MODES below.
  */
-export const SALE_PAYMENT_MODES = ["cash", "bank", "upi", "credit"] as const;
+export const ONLINE_PAYMENT_MODES = ["swiggy", "zomato", "other_online"] as const;
+export type OnlinePaymentMode = (typeof ONLINE_PAYMENT_MODES)[number];
+
+export const SALE_PAYMENT_MODES = ["cash", "bank", "upi", ...ONLINE_PAYMENT_MODES, "credit"] as const;
 
 /**
  * Modes a NEW sale may be created with. The POS presents Bank and UPI as one
  * choice; the selected Cash & Bank account derives the stored bank/upi method.
  */
-export const CREATE_SALE_PAYMENT_MODES = ["cash", "bank", "credit"] as const;
+export const CREATE_SALE_PAYMENT_MODES = ["cash", "bank", ...ONLINE_PAYMENT_MODES, "credit"] as const;
 
 /** True when `mode` may be used to CREATE a new POS sale. */
 export function isAllowedNewSaleMode(mode: string): boolean {
@@ -45,12 +50,13 @@ export const LEGACY_BANK_MODES = ["card", "bank_transfer"] as const;
 
 /** Modes accepted when recording a collection against an existing sale. */
 export const COLLECTION_METHODS = [
-  "cash", "bank", "upi", "card", "bank_transfer", "other",
+  "cash", "bank", "upi", ...ONLINE_PAYMENT_MODES, "card", "bank_transfer", "other",
 ] as const;
 
 /** True when a mode is settled at the counter (i.e. not 'credit'). */
 export function isSettledAtSale(mode: string): boolean {
   return (SETTLED_PAYMENT_MODES as readonly string[]).includes(mode)
+    || (ONLINE_PAYMENT_MODES as readonly string[]).includes(mode)
     || (LEGACY_BANK_MODES as readonly string[]).includes(mode);
 }
 
@@ -58,6 +64,11 @@ export function isSettledAtSale(mode: string): boolean {
 /** 'bank' and the older spellings that mean exactly the same thing. */
 export function isBankFamily(mode: string): boolean {
   return mode === "bank" || (LEGACY_BANK_MODES as readonly string[]).includes(mode);
+}
+
+/** Online aggregators clear through the electronic clearing ledger. */
+export function isOnlinePaymentMode(mode: string): boolean {
+  return (ONLINE_PAYMENT_MODES as readonly string[]).includes(mode);
 }
 
 /**
@@ -86,6 +97,7 @@ export function resolveEditedSaleMode(
 
 export function clearsThroughBank(mode: string): boolean {
   return mode === "bank" || mode === "upi"
+    || isOnlinePaymentMode(mode)
     || (LEGACY_BANK_MODES as readonly string[]).includes(mode);
 }
 
@@ -94,6 +106,9 @@ export function paymentModeLabel(mode: string | null | undefined): string {
   switch ((mode ?? "").toLowerCase()) {
     case "cash": return "Cash";
     case "upi": return "UPI";
+    case "swiggy": return "Swiggy";
+    case "zomato": return "Zomato";
+    case "other_online": return "Other Online";
     case "bank":
     case "card":
     case "bank_transfer": return "Bank";

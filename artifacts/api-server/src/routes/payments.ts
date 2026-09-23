@@ -313,6 +313,11 @@ router.post("/sales/:id/payments", requireModuleAction(["page:/sales/pos", "page
       invoiceNumber: invRow?.invoice_number ?? String(saleId),
       referenceNumber: referenceNumber ?? null,
       createdBy,
+      // Every electronic collection is reviewed in Reconciliation before it
+      // is cleared into the actual Cash & Bank ledger. This keeps bank, UPI,
+      // and named online-provider collections on one auditable path even when
+      // the account itself is configured without a reconciliation flag.
+      forceElectronicClearing: method !== "cash",
     });
     if ("error" in posted) {
       await client.query("ROLLBACK");
