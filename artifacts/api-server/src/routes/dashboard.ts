@@ -6,7 +6,7 @@ import { pushLocationFilter, type ParsedLocationFilter } from "../lib/queryFilte
 import { stockValuation } from "../lib/valuation";
 import { requireModuleView, canViewStockValuation } from "../middleware/permissions";
 import { buildDerivedPostings } from "./journal";
-import { companyBalances, companyFinancials, rangeMoneyFlows, ledgerSubtreeLookup } from "../lib/dashboardFinancials";
+import { companyBalances, companyFinancials, rangeMoneyFlows, ledgerSubtreeLookup, reconciliationPendingAmount } from "../lib/dashboardFinancials";
 import { outstandingExpr, outstandingAsOfExpr } from "../lib/salePaymentPosition";
 import { isIsoDate } from "../lib/dateInput";
 import { getLocationFilter, getPostingLocationFilter } from "../lib/requestLocation";
@@ -92,6 +92,7 @@ router.get("/dashboard/summary", requireModuleView("page:/"), async (req, res): 
     (async () => allPostings) as unknown as typeof buildDerivedPostings,
     { location: postingLoc },
   );
+  const reconciliationPending = await reconciliationPendingAmount({ location: postingLoc });
 
   // ── Other metrics ─────────────────────────────────────────────────────
   const salesConds = ["s.branch_transfer_id IS NULL", "s.cancelled_at IS NULL"];
@@ -214,6 +215,7 @@ router.get("/dashboard/summary", requireModuleView("page:/"), async (req, res): 
     totalBatchQuantity:   Number(batchRow.total_qty ?? 0),
     bankBalance,
     cashBalance,
+    reconciliationPendingAmount: reconciliationPending,
   });
 });
 
@@ -582,6 +584,7 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
         },
       ))()
     : Promise.resolve(null);
+  const reconciliationPendingP = reconciliationPendingAmount({ location: postingLoc });
 
   // ── Run everything in parallel ────────────────────────────────────────────
   const [
@@ -779,7 +782,11 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
   const salesCount = Number(salesTotals.rows[0]?.count ?? 0);
   const outputQty = qty(productionAgg.rows[0]?.output_qty);
   const wastageQty = qty(productionAgg.rows[0]?.wastage_qty);
-  const [accounting, moneyFlows] = await Promise.all([accountingP, moneyFlowsP]);
+  const [accounting, moneyFlows, reconciliationPending] = await Promise.all([
+    accountingP,
+    moneyFlowsP,
+    reconciliationPendingP,
+  ]);
   // Same rule as the Stock screen: no valuation right, no valuation figure.
   const showValuation = await canViewStockValuation((req as any).employee?.hierarchyId);
 
@@ -792,7 +799,8 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
     locationType: string; locationId: number; name: string;
     sales: number; purchases: number; inventoryValue: number;
     expense: number | null; payables: number | null; receivables: number | null;
-    payments: number | null; receipts: number | null; cash: number | null; bank: number | null;
+     payments: number | null; receipts: number | null; cash: number | null; bank: number | null;
+     reconciliationPending: number;
     grossProfit: number | null; netProfit: number | null;
   }> = [];
   if (isAllLocations || isMultiLocations) {
@@ -838,16 +846,17 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       const postingLocation = loc.locationType === "headoffice"
         ? ({ type: "headoffice", id: null } as const)
         : ({ type: loc.locationType as "warehouse" | "outlet", id: loc.locationId } as const);
-      const [financials, flows] = await Promise.all([
+       const [financials, flows, pending] = await Promise.all([
         companyFinancials(cachedPostings, { fromDate: fromDate || null, toDate: toDate || null, location: postingLocation }),
         rangeMoneyFlows(
           (await cachedPostings(toDate ? { toDate } : {})) as never[],
           { fromDate: fromDate || null, toDate: toDate || null, location: postingLocation, subtree: await ledgerSubtreeLookup() },
         ),
+         reconciliationPendingAmount({ location: postingLocation }),
       ]);
-      return { loc, financials, flows };
+       return { loc, financials, flows, pending };
     }));
-    locationBreakdown = locationFinancials.map(({ loc, financials, flows }) => ({
+     locationBreakdown = locationFinancials.map(({ loc, financials, flows, pending }) => ({
       ...loc,
       sales: salesMap.get(locationKey(loc.locationType, loc.locationId)) ?? 0,
       purchases: purchaseMap.get(locationKey(loc.locationType, loc.locationId)) ?? 0,
@@ -859,6 +868,7 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       receipts: flows.totalIn,
       cash: financials.cashBalance,
       bank: financials.bankBalance,
+       reconciliationPending: pending,
       grossProfit: financials.profit.gross,
       netProfit: financials.profit.net,
     }));
@@ -990,6 +1000,7 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
     // this ERP's existing STD-BANK / STD-CASH split.
     bank: {
       balance: accounting ? accounting.bankBalance : null,
+      reconciliationPending,
       companyWide: !postingLoc,
     },
     // Money movement for the SELECTED range — debits (in) and credits (out)

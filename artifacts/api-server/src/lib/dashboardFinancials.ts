@@ -80,6 +80,82 @@ export interface CompanyFinancials {
   rentPayable: number;
 }
 
+/**
+ * Amount still waiting for an electronic bank destination.
+ *
+ * This is deliberately separate from the bank ledger balance. A deferred sale
+ * collection is represented by a pending sale_payments row plus its clearing
+ * receipt, while a deferred manual allocation receipt has both an allocation
+ * row and a receipt for the same money. Count sale-originated collections from
+ * sale_payments, and voucher-originated receipts/payments from their source
+ * rows, so one rupee is counted once.
+ */
+export async function reconciliationPendingAmount(
+  opts: { location?: PostingLocationFilter | null } = {},
+): Promise<number> {
+  const location = opts.location ?? null;
+  const params: unknown[] = [];
+  const locationCond = (typeExpr: string, idExpr: string): string => {
+    if (!location) return "TRUE";
+    if (location.type === "headoffice") return `${typeExpr} = 'headoffice'`;
+    params.push(location.type);
+    const typeParam = `$${params.length}`;
+    params.push(location.id);
+    const idParam = `$${params.length}`;
+    return `${typeExpr} = ${typeParam} AND ${idExpr} = ${idParam}`;
+  };
+
+  const saleLocation = locationCond(
+    "COALESCE(s.location_type, 'outlet')",
+    "COALESCE(s.location_id, s.outlet_id)",
+  );
+  const receiptLocation = locationCond(
+    "COALESCE(r.location_type, 'headoffice')",
+    "COALESCE(r.location_id, 0)",
+  );
+  const paymentLocation = locationCond(
+    "COALESCE(py.location_type, 'headoffice')",
+    "COALESCE(py.location_id, 0)",
+  );
+
+  const { rows: [row] } = await pool.query(
+    `SELECT COALESCE(SUM(pending.amount), 0)::numeric AS amount
+       FROM (
+         -- Sale-originated electronic collections. Allocation receipts are
+         -- represented by their receipt row below, not counted a second time.
+         SELECT sp.amount::numeric AS amount
+           FROM sale_payments sp
+           JOIN sales s ON s.id = sp.sale_id
+           LEFT JOIN receipts sr ON sr.id = sp.clearing_receipt_id
+          WHERE sp.reconciliation_status = 'pending'
+            AND LOWER(COALESCE(sp.method, '')) IN ('bank', 'upi')
+            AND (sp.clearing_receipt_id IS NULL OR sr.source = 'sale')
+            AND ${saleLocation}
+         UNION ALL
+         -- Manual and allocation receipts are already the authoritative
+         -- voucher amount for their clearing entry.
+         SELECT r.amount::numeric AS amount
+           FROM receipts r
+           JOIN account_ledgers clr ON clr.id = r.received_in_ledger_id
+                                      AND clr.code = 'STD-ELEC-CLR'
+          WHERE r.payment_mode = 'bank'
+            AND r.source IN ('manual', 'allocation')
+            AND ${receiptLocation}
+         UNION ALL
+         -- Any payment still sourced from Electronic Payment Clearing is
+         -- awaiting selection/confirmation of its real bank destination.
+         SELECT py.amount::numeric AS amount
+           FROM payments py
+           JOIN account_ledgers clr ON clr.id = py.paid_from_ledger_id
+                                      AND clr.code = 'STD-ELEC-CLR'
+          WHERE py.payment_mode = 'bank'
+            AND ${paymentLocation}
+       ) pending`,
+    params,
+  );
+  return r2(Number(row?.amount ?? 0));
+}
+
 type Posting = { date: string; ledgerId: number; debit: number; credit: number };
 type PostingsFn = (opts: { toDate?: string }) => Promise<Posting[]>;
 
