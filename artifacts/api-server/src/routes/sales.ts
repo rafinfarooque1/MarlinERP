@@ -970,15 +970,11 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
   // sale never burns an invoice number.
   const paymentModeIn = parsed.data.paymentMode ?? 'cash';
   // The generated zod schema types paymentMode as a plain string, so the mode
-  // list is enforced here. A NEW sale may only be cash or credit: if the
-  // customer isn't paying cash now the invoice is raised on Credit and the
-  // money is collected later through payment collection (which still takes
-  // bank/upi). Bank/UPI/card/bank_transfer are rejected on creation — they stay
-  // valid only for reading/editing existing historical sales and for
-  // collections.
+  // list is enforced here. New POS sales may be Cash, Bank / UPI, or Credit.
+  // The selected Cash & Bank account derives the stored bank/upi spelling.
   if (!isAllowedNewSaleMode(paymentModeIn)) {
     res.status(400).json({
-      error: `paymentMode must be one of: ${CREATE_SALE_PAYMENT_MODES.join(', ')}. For a non-cash sale, record it as credit and collect payment later.`,
+      error: `paymentMode must be one of: ${CREATE_SALE_PAYMENT_MODES.join(', ')}.`,
     });
     return;
   }
@@ -998,14 +994,20 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
   let receiveAccount: ReceiveIntoAccount | null = null;
   // null = "the full remainder after any advance adjustment" (pay in full now).
   let amountReceivedIn: number | null = null;
-  if (receivedInLedgerId) {
+  if (receivedInLedgerId || paymentModeIn === 'bank') {
     if (paymentModeIn === 'credit') {
       res.status(400).json({ error: "Pick either Credit (pay later) or a Receive-Into account — not both." });
       return;
     }
-    const resolvedAcc = await resolveReceiveIntoAccount(pgPool, locationType, locationId, receivedInLedgerId);
-    if ('error' in resolvedAcc) { res.status(400).json({ error: resolvedAcc.error }); return; }
-    receiveAccount = resolvedAcc;
+    if (receivedInLedgerId) {
+      const resolvedAcc = await resolveReceiveIntoAccount(pgPool, locationType, locationId, receivedInLedgerId);
+      if ('error' in resolvedAcc) { res.status(400).json({ error: resolvedAcc.error }); return; }
+      receiveAccount = resolvedAcc;
+      if (paymentModeIn === 'bank' && receiveAccount.method === 'cash') {
+        res.status(400).json({ error: "Bank / UPI sales require a bank or UPI account." });
+        return;
+      }
+    }
     const rawAmt = rawBody.amountReceived;
     if (rawAmt !== undefined && rawAmt !== null && rawAmt !== '') {
       const amt = Number(rawAmt);
@@ -1025,8 +1027,13 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
   const settledAtSale = isSettledAtSale(paymentModeIn);
   const overrideRequested = rawBody.creditOverride === true;
   // Opt-in adjustment of the customer's advance balance against this bill.
+  // Credit selection must leave the full bill in customer outstanding, so an
+  // old or crafted useAdvance flag cannot turn a new Credit sale into a paid
+  // or partially paid invoice.
   // Read from the raw body (like creditOverride): zod strips unknown keys.
-  const useAdvanceRequested = rawBody.useAdvance === true && !!parsed.data.customerId;
+  const useAdvanceRequested = rawBody.useAdvance === true
+    && paymentModeIn !== 'credit'
+    && !!parsed.data.customerId;
   const advanceCapIn = Number((rawBody as any).advanceAmount);
 
   // Credit (pay later) sales must have a customer — otherwise there is no
@@ -1143,7 +1150,7 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
     // much of it the advance already covered.
     let counterPay: { amount: number } | null = null;
     let saleMode = paymentModeIn;
-    if (receiveAccount) {
+    if (receiveAccount || paymentModeIn === 'bank') {
       const remainderDue = round2(totalAmount - appliedAdvance);
       const amt = amountReceivedIn ?? Math.max(0, remainderDue);
       if (amt <= 0.004) {
@@ -1175,7 +1182,7 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
           });
           return;
         }
-        saleMode = receiveAccount.method;
+        saleMode = receiveAccount?.method ?? paymentModeIn;
       } else if (paidTotal < totalAmount - 0.004) {
         // Partial payment: the remainder is a receivable, so the bill lives on
         // the customer's credit — a walk-in has no account to owe it.
@@ -1189,7 +1196,7 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
         }
         saleMode = 'credit';
       } else {
-        saleMode = receiveAccount.method;
+        saleMode = receiveAccount?.method ?? paymentModeIn;
       }
       counterPay = { amount: amt };
     }
@@ -1391,9 +1398,9 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
     // cash account/till, electronic money direct-posted or through Electronic
     // Clearing ('pending') by the account's reconciliation switch. Committing
     // with the sale means a replayed clientRequestId can never double-post.
-    if (counterPay && receiveAccount) {
+    if (counterPay && (receiveAccount || paymentModeIn === 'bank')) {
       const posted = await postSaleCollectionReceipt(txClient, {
-        method: receiveAccount.method,
+        method: receiveAccount?.method ?? paymentModeIn,
         account: receiveAccount,
         locType: locationType,
         locId: locationId,
@@ -1402,6 +1409,7 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
         invoiceNumber,
         referenceNumber: payReferenceNumber,
         createdBy: (req as any).employee?.username ?? null,
+        forceElectronicClearing: true,
       });
       if ('error' in posted) {
         await txClient.query('ROLLBACK');
@@ -1412,7 +1420,7 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
         `INSERT INTO sale_payments
            (sale_id, payment_date, method, amount, reference_number, notes, reconciliation_status, clearing_receipt_id, outlet_id, created_by)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-        [row.id, parsed.data.saleDate, receiveAccount.method, counterPay.amount, payReferenceNumber,
+        [row.id, parsed.data.saleDate, receiveAccount?.method ?? paymentModeIn, counterPay.amount, payReferenceNumber,
          `Received at billing — ${invoiceNumber}`, posted.reconciliationStatus, posted.clearingReceiptId,
          outletIdForInsert, (req as any).employee?.username ?? null]
       );

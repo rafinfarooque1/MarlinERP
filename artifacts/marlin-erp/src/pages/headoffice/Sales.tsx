@@ -842,16 +842,22 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
       setPayReference('');
     }
   }, [isOpen]);
-  // Keep the picked account valid for the form's location, and default to the
-  // location's own cash till so a plain cash sale needs no extra click.
+  const formReceiveOptionsForMode = useMemo(() => {
+    if (watchPaymentMode === 'cash') return formReceiveOptions.filter(isCashOption);
+    if (watchPaymentMode === 'bank') return formReceiveOptions.filter(o => !isCashOption(o));
+    return [];
+  }, [formReceiveOptions, watchPaymentMode]);
+
+  // Keep the picked account valid for the form's location and payment mode.
+  // Cash defaults to the location's own active till; Bank / UPI defaults to
+  // the first assigned electronic account.
   useEffect(() => {
     if (!isOpen || editItem) return;
     setReceiveLedgerId(prev => {
-      if (prev > 0 && formReceiveOptions.some(o => o.id === prev)) return prev;
-      const cash = formReceiveOptions.find(o => isCashOption(o));
-      return cash?.id ?? formReceiveOptions[0]?.id ?? 0;
+      if (prev > 0 && formReceiveOptionsForMode.some(o => o.id === prev)) return prev;
+      return formReceiveOptionsForMode[0]?.id ?? 0;
     });
-  }, [isOpen, editItem, formReceiveOptions]);
+  }, [isOpen, editItem, formReceiveOptionsForMode]);
 
   // Advance adjustment: does the selected customer have money parked with us?
   // Only queried for registered customers; walk-ins have no advance ledger.
@@ -867,21 +873,11 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   const [billDiscountMode, setBillDiscountMode] = useState<'amount' | 'percent'>('amount');
   useEffect(() => { if (isOpen) setBillDiscountMode('amount'); }, [isOpen]);
 
-  // New sales keep the Receive Now/Credit flow. Edits expose the complete
-  // payment-mode picker so Cash, Bank, UPI, and Credit can be reassigned.
+  // New sales use the three counter choices. Edits expose the complete
+  // payment-mode picker so historical Cash, Bank, UPI, and Credit rows remain
+  // editable without rewriting legacy stored spellings.
   const paymentModeOptions = PAYMENT_MODE_OPTIONS;
-  // Create mode with location-assigned accounts available: 'cash' becomes
-  // "Receive Now" — the actual Cash/Bank/UPI method follows from the account
-  // picked below, not from this select. Locations without assigned accounts
-  // keep the legacy plain-cash option.
-  const createModeOptions = useMemo(() =>
-    formReceiveOptions.length > 0
-      ? [
-          { value: 'cash' as const, label: '💰 Receive Now (Cash / Bank / UPI)' },
-          { value: 'credit' as const, label: '🕒 Credit (pay later)' },
-        ]
-      : CREATE_PAYMENT_MODE_OPTIONS,
-    [formReceiveOptions.length]);
+  const createModeOptions = CREATE_PAYMENT_MODE_OPTIONS;
 
   const { data: outletPrices = [] } = useListItemPrices(
     { outletId: watchLocationId },
@@ -1177,10 +1173,11 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
     // Sent only when the location has assigned Cash & Bank accounts; locations
     // without them keep the legacy plain-cash submit. The server re-validates
     // everything authoritatively.
-    const payNow = !editItem && data.paymentMode !== 'credit' && formReceiveOptions.length > 0;
+    const payNow = !editItem && data.paymentMode !== 'credit'
+      && (data.paymentMode === 'bank' || formReceiveOptionsForMode.length > 0);
     let payFields: Record<string, unknown> = {};
     if (payNow) {
-      if (!receiveLedgerId) {
+      if (formReceiveOptionsForMode.length > 0 && !receiveLedgerId) {
         toast.error('Pick the Cash / Bank account the money went into.');
         return;
       }
@@ -1193,7 +1190,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
       }
       const refTrim = payReference.trim();
       payFields = {
-        receivedInLedgerId: receiveLedgerId,
+        ...(receiveLedgerId > 0 ? { receivedInLedgerId: receiveLedgerId } : {}),
         ...(amountReceivedStr !== '' ? { amountReceived: Number(amountReceivedStr) } : {}),
         ...(refTrim ? { referenceNumber: refTrim } : {}),
       };
@@ -1236,7 +1233,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
     // the credit); a walk-in has nowhere to hold it — hard stop. The server
     // enforces both authoritatively (EXCEEDS_OUTSTANDING without the flag).
     if (payNow && amountReceivedStr !== '') {
-      const advApplied = applyAdvance && data.customerId
+      const advApplied = applyAdvance && data.paymentMode !== 'credit' && data.customerId
         ? Math.min(Number(customerAdvance?.available ?? 0), finalAmount)
         : 0;
       const paidTotal = Math.round((advApplied + Number(amountReceivedStr)) * 100) / 100;
@@ -2031,13 +2028,12 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                 </FormItem>
               )} />
 
-              {/* Receive Into at billing — create mode, non-credit, only when
-                  the location has assigned Cash & Bank accounts (locations
-                  without them keep the legacy plain-cash submit). The picked
-                  account determines the stored method (cash/bank/UPI) — same
-                  resolver as the collect flow. Amount left blank = pay in
-                  full. The server re-validates everything authoritatively. */}
-              {!editItem && watchPaymentMode !== 'credit' && formReceiveOptions.length > 0 && (() => {
+              {/* Receive Into at billing — create mode, non-credit. Cash uses
+                  the location's active cash account; Bank / UPI uses an
+                  assigned electronic account when one is available. A blank
+                  amount means pay in full. The server re-validates everything
+                  authoritatively. */}
+              {!editItem && watchPaymentMode !== 'credit' && (formReceiveOptionsForMode.length > 0 || watchPaymentMode === 'bank') && (() => {
                 const advApplied = applyAdvance && watchCustomerId
                   ? Math.min(Number(customerAdvance?.available ?? 0), totals.finalAmount)
                   : 0;
@@ -2045,9 +2041,9 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                 const recvNum = amountReceivedStr === '' ? remainder : (Number(amountReceivedStr) || 0);
                 const paidTotal = Math.round((advApplied + recvNum) * 100) / 100;
                 const due = Math.round((totals.finalAmount - paidTotal) * 100) / 100;
-                const selected = formReceiveOptions.find(o => o.id === receiveLedgerId);
+                const selected = formReceiveOptionsForMode.find(o => o.id === receiveLedgerId);
                 return (
-                  <div className="rounded-lg border border-border bg-muted/20 p-3 space-y-3" data-testid="section-receive-now">
+                    <div className="rounded-lg border border-border bg-muted/20 p-3 space-y-3" data-testid="section-payment-collection">
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                       <div className="flex flex-col gap-1.5">
                         <span className="text-sm font-medium">Receive Into <span className="text-destructive">*</span></span>
@@ -2056,6 +2052,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                           locationId={watchLocationId}
                           value={receiveLedgerId}
                           onChange={setReceiveLedgerId}
+                          mode={watchPaymentMode === 'cash' ? 'cash' : 'electronic'}
                         />
                       </div>
                       <div className="flex flex-col gap-1.5">
@@ -2105,7 +2102,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
               {/* Advance adjustment — a customer with money parked beyond their
                   bills can have it auto-applied to this invoice. Create only:
                   edits never touch the advance. */}
-              {!editItem && (customerAdvance?.available ?? 0) > 0.004 && (
+              {!editItem && watchPaymentMode !== 'credit' && (customerAdvance?.available ?? 0) > 0.004 && (
                 <label className="flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-sm cursor-pointer">
                   <Checkbox checked={applyAdvance} onCheckedChange={v => setApplyAdvance(v === true)} />
                   <span>

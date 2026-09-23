@@ -21,20 +21,18 @@
  * so historical bank/upi/card/bank_transfer sales still read, print, post and
  * (when their mode is left unchanged) edit exactly as before.
  *
- * NOTE: this is NOT the create-time allowlist. A brand-new sale may only be
- * cash or credit — see CREATE_SALE_PAYMENT_MODES / isAllowedNewSaleMode below.
+ * NOTE: this is NOT the create-time allowlist. A brand-new sale may use cash,
+ * bank/UPI, or credit — see CREATE_SALE_PAYMENT_MODES below.
  */
 export const SALE_PAYMENT_MODES = ["cash", "bank", "upi", "credit"] as const;
 
 /**
- * Modes a NEW sale may be created with. If the customer is not paying cash on
- * the spot the invoice is raised on Credit and the money is collected later
- * through invoice/customer payment collection (which still accepts bank/upi —
- * see COLLECTION_METHODS). Bank and UPI are deliberately excluded here.
+ * Modes a NEW sale may be created with. The POS presents Bank and UPI as one
+ * choice; the selected Cash & Bank account derives the stored bank/upi method.
  */
-export const CREATE_SALE_PAYMENT_MODES = ["cash", "credit"] as const;
+export const CREATE_SALE_PAYMENT_MODES = ["cash", "bank", "credit"] as const;
 
-/** True when `mode` may be used to CREATE a new sale (cash or credit only). */
+/** True when `mode` may be used to CREATE a new POS sale. */
 export function isAllowedNewSaleMode(mode: string): boolean {
   return (CREATE_SALE_PAYMENT_MODES as readonly string[]).includes(mode);
 }
@@ -65,7 +63,7 @@ export function isBankFamily(mode: string): boolean {
 /**
  * The mode an EDIT should actually store.
  *
- * A new sale may only be created as cash or credit, but an existing sale can
+ * A new sale may use cash, bank/UPI, or credit, but an existing sale can also
  * be reassigned to any current mode during an edit. 'card' and 'bank_transfer'
  * are historical spellings of 'bank' and every client displays all three as
  * "Bank", so a canonical Bank selection against one of those stored values

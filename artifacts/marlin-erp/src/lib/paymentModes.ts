@@ -16,14 +16,10 @@ export const SALE_PAYMENT_MODES = ['cash', 'bank', 'upi', 'credit'] as const;
 export type SalePaymentMode = (typeof SALE_PAYMENT_MODES)[number];
 
 /**
- * Modes a NEW sale may be created with. If the customer isn't paying cash on
- * the spot the invoice is raised on Credit (pay later) and the money is
- * collected afterwards through invoice/customer payment collection (which keeps
- * Cash/Bank/UPI — see COLLECTION_METHODS). Bank and UPI are intentionally
- * absent here; the full SALE_PAYMENT_MODES list stays only for reading/editing
- * historical bank/upi sales.
+ * Modes a NEW sale may be created with. The selected Cash & Bank account
+ * derives the stored bank/upi method for the combined Bank / UPI choice.
  */
-export const CREATE_SALE_PAYMENT_MODES = ['cash', 'credit'] as const;
+export const CREATE_SALE_PAYMENT_MODES = ['cash', 'bank', 'credit'] as const;
 
 /** Modes a collection against an existing bill can be recorded in. */
 export const COLLECTION_METHODS = ['cash', 'bank', 'upi'] as const;
@@ -70,14 +66,14 @@ export const PAYMENT_MODE_OPTIONS: ReadonlyArray<{ value: SalePaymentMode; label
 ];
 
 /**
- * Modes offered when RECORDING a new sale — Cash or Credit only. A non-cash
- * sale is booked on Credit and settled later through payment collection, so
- * Bank/UPI never appear at sale time. Editing a historical bank/upi sale reuses
- * the full PAYMENT_MODE_OPTIONS so that stored mode still shows.
+ * Modes offered when RECORDING a new sale. Bank and UPI share one counter
+ * choice; editing a historical bank/upi sale reuses the full picker above.
  */
-export const CREATE_PAYMENT_MODE_OPTIONS: ReadonlyArray<{ value: SalePaymentMode; label: string }> =
-  PAYMENT_MODE_OPTIONS.filter(o =>
-    (CREATE_SALE_PAYMENT_MODES as readonly string[]).includes(o.value));
+export const CREATE_PAYMENT_MODE_OPTIONS: ReadonlyArray<{ value: SalePaymentMode; label: string }> = [
+  { value: 'cash', label: '💵 Cash' },
+  { value: 'bank', label: '🏦 Bank / UPI' },
+  { value: 'credit', label: '🕒 Credit (pay later)' },
+];
 
 /**
  * The mode an existing sale should show in an edit form. Legacy 'card' and

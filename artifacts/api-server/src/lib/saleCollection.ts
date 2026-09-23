@@ -103,6 +103,8 @@ export interface PostCollectionArgs {
   invoiceNumber: string;
   referenceNumber?: string | null;
   createdBy?: string | null;
+  /** POS creation must wait for reconciliation even if the account flag is off. */
+  forceElectronicClearing?: boolean;
 }
 
 /**
@@ -110,14 +112,19 @@ export interface PostCollectionArgs {
  * picked cash account (or the location's own till); electronic money posts
  * straight into the account when reconciliation is off, otherwise into
  * Electronic Payment Clearing with status 'pending' for the reconciliation
- * screen to settle. Runs on the CALLER's transaction client — it commits (or
- * rolls back) with whatever business write it belongs to.
+ * screen to settle. POS creation can force the latter behavior so an actual
+ * bank ledger is never debited before approval. Runs on the CALLER's
+ * transaction client — it commits (or rolls back) with whatever business
+ * write it belongs to.
  */
 export async function postSaleCollectionReceipt(
   q: Queryable,
   args: PostCollectionArgs,
 ): Promise<{ error: string } | { clearingReceiptId: number; reconciliationStatus: string | null }> {
-  const { method, account, locType, locId, amount, pDate, invoiceNumber, referenceNumber } = args;
+  const {
+    method, account, locType, locId, amount, pDate, invoiceNumber,
+    referenceNumber, forceElectronicClearing = false,
+  } = args;
   const isElectronic = method !== "cash";
 
   const { rows: [salesLedger] } = await q.query(
@@ -208,11 +215,13 @@ export async function postSaleCollectionReceipt(
           ORDER BY cb.id LIMIT 1`,
         [wantType, locType, locId],
       );
-  const directLedgerId = account
-    ? Number(account.ledgerId)
-    : assigned && assigned.requires_reconciliation !== true
-      ? Number(assigned.ledger_id)
-      : null;
+  const directLedgerId = forceElectronicClearing
+    ? null
+    : account
+      ? Number(account.ledgerId)
+      : assigned && assigned.requires_reconciliation !== true
+        ? Number(assigned.ledger_id)
+        : null;
 
   let receiveInLedgerId: number;
   if (directLedgerId != null) {

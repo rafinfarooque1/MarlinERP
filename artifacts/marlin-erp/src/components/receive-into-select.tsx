@@ -48,7 +48,7 @@ export function useReceiveIntoOptions(
 }
 
 export function ReceiveIntoSelect({
-  locationType, locationId, value, onChange, disabled, className, compact,
+  locationType, locationId, value, onChange, disabled, className, compact, mode,
 }: {
   locationType?: string | null;
   locationId?: number | null;
@@ -58,14 +58,30 @@ export function ReceiveIntoSelect({
   className?: string;
   /** h-8 text-sm trigger for dense panels */
   compact?: boolean;
+  /** Limit the picker to cash or electronic accounts for POS creation. */
+  mode?: 'cash' | 'electronic';
 }) {
   const { options, isLoading } = useReceiveIntoOptions(locationType, locationId);
+  const visibleOptions = useMemo(
+    () => mode === 'cash'
+      ? options.filter(isCashOption)
+      : mode === 'electronic'
+        ? options.filter(o => !isCashOption(o))
+        : options,
+    [options, mode],
+  );
   return (
     <AccountCombobox
-      options={options}
+      options={visibleOptions}
       value={value}
       onChange={onChange}
-      placeholder={isLoading ? 'Loading accounts…' : 'Select Cash / Bank account'}
+      placeholder={isLoading
+        ? 'Loading accounts…'
+        : mode === 'cash'
+          ? 'Select cash account'
+          : mode === 'electronic'
+            ? 'Select bank / UPI account'
+            : 'Select Cash / Bank account'}
       disabled={disabled}
       className={`${compact ? 'h-8 text-sm' : ''} ${className ?? ''}`.trim() || undefined}
       data-testid="select-receive-into"
