@@ -35,6 +35,7 @@ const schema = z.object({
   name: z.string().min(2, 'Name required (at least 2 characters)'),
   accountType: z.enum(['cash', 'bank', 'upi', 'other']),
   locationKey: z.string().optional(),
+  locationKeys: z.array(z.string()).default([]),
   warehouseIds: z.array(z.string()).default([]),
   // Never parsed as numbers: leading zeros are significant and real account
   // numbers exceed the safe integer range.
@@ -55,9 +56,9 @@ const schema = z.object({
     .multipleOf(0.01, 'Opening balance can have at most two decimal places.')
     .max(9999999999.99, 'Opening balance is larger than this field can store.'),
 }).superRefine((value, ctx) => {
-  if (value.accountType === 'bank') {
-    if (value.warehouseIds.length === 0) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['warehouseIds'], message: 'Select at least one warehouse.' });
+  if (value.accountType === 'bank' || value.accountType === 'cash') {
+    if (value.locationKeys.length === 0) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['locationKeys'], message: 'Select at least one location.' });
     }
   } else if (!value.locationKey) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['locationKey'], message: 'Select a location.' });
@@ -98,7 +99,7 @@ export default function CashBank() {
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
-    defaultValues: { name: '', accountType: 'bank', locationKey: '', warehouseIds: [], accountNumber: '', bankName: '', ifscCode: '', openingBalance: 0, requiresReconciliation: true },
+    defaultValues: { name: '', accountType: 'bank', locationKey: '', locationKeys: [], warehouseIds: [], accountNumber: '', bankName: '', ifscCode: '', openingBalance: 0, requiresReconciliation: true },
   });
 
   const watchType = form.watch('accountType');
@@ -106,7 +107,7 @@ export default function CashBank() {
 
   const openAdd = () => {
     setEditing(null);
-    form.reset({ name: '', accountType: 'bank', locationKey: '', warehouseIds: [], accountNumber: '', bankName: '', ifscCode: '', openingBalance: 0, requiresReconciliation: true });
+    form.reset({ name: '', accountType: 'bank', locationKey: '', locationKeys: [], warehouseIds: [], accountNumber: '', bankName: '', ifscCode: '', openingBalance: 0, requiresReconciliation: true });
     setIsOpen(true);
   };
   const openEdit = (a: any) => {
@@ -115,6 +116,7 @@ export default function CashBank() {
       name: a.name ?? '',
       accountType: a.accountType,
       locationKey: `${a.locationType ?? 'headoffice'}:${a.locationId ?? 0}`,
+      locationKeys: (a.locations ?? []).map((location: any) => `${location.locationType}:${location.locationId}`),
       warehouseIds: (a.locations ?? [])
         .filter((location: any) => location.locationType === 'warehouse')
         .map((location: any) => String(location.locationId)),
@@ -137,8 +139,8 @@ export default function CashBank() {
         id: editing.id,
         data: {
            name: data.name, bankName: data.bankName, accountNumber: data.accountNumber, ifscCode: data.ifscCode,
-           ...(data.accountType === 'bank'
-             ? { locations: data.warehouseIds.map((id) => ({ locationType: 'warehouse' as const, locationId: Number(id) })) }
+            ...((data.accountType === 'bank' || data.accountType === 'cash')
+              ? { locations: data.locationKeys.map((key) => splitLocationKey(key)) }
              : location ? { locationType: location.locationType, locationId: location.locationId } : {}),
           ...(dirty.openingBalance ? { openingBalance: data.openingBalance } : {}),
           // Cash accounts never send the flag — the server rejects it for them.
@@ -149,12 +151,12 @@ export default function CashBank() {
         onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
       });
     } else {
-      const { locationKey: _locationKey, warehouseIds, ...rest } = data;
+       const { locationKey: _locationKey, locationKeys: _locationKeys, warehouseIds: _warehouseIds, ...rest } = data;
       createMutation.mutate({
         data: {
           ...rest,
-          ...(data.accountType === 'bank'
-            ? { locations: warehouseIds.map((id) => ({ locationType: 'warehouse' as const, locationId: Number(id) })) }
+           ...((data.accountType === 'bank' || data.accountType === 'cash')
+             ? { locations: data.locationKeys.map((key) => splitLocationKey(key)) }
             : location ? location : {}),
         } as any,
       }, {
@@ -185,10 +187,6 @@ export default function CashBank() {
   const locationOptions = ownLocationKey
     ? allLocationOptions.filter((location) => location.key === ownLocationKey)
     : allLocationOptions;
-  const warehouseOptions = warehouses.map((warehouse: any) => ({
-    id: String(warehouse.id),
-    name: warehouse.name,
-  }));
   const locationText = (a: any) => a.locationName ?? (
     a.locationType === 'warehouse'
       ? warehouses.find((w: any) => Number(w.id) === Number(a.locationId))?.name ?? 'Warehouse'
@@ -430,32 +428,32 @@ export default function CashBank() {
                     {isEdit && <p className="text-xs text-muted-foreground">Type decides the ledger's group and cannot change.</p>}
                     <FormMessage /></FormItem>
                 )} />
-                {watchType === 'bank' ? (
-                  <FormField control={form.control} name="warehouseIds" render={({ field }) => (
+                {watchType === 'bank' || watchType === 'cash' ? (
+                  <FormField control={form.control} name="locationKeys" render={({ field }) => (
                     <FormItem className="sm:col-span-2">
-                      <FormLabel>Available at warehouses <span className="text-destructive">*</span></FormLabel>
+                      <FormLabel>Available at locations <span className="text-destructive">*</span></FormLabel>
                       <div className="rounded-lg border border-border p-3 space-y-2 max-h-44 overflow-y-auto">
-                        {warehouseOptions.length === 0 ? (
-                          <p className="text-sm text-muted-foreground">No warehouses are available.</p>
-                        ) : warehouseOptions.map((warehouse) => {
-                          const checked = field.value.includes(warehouse.id);
+                        {locationOptions.length === 0 ? (
+                          <p className="text-sm text-muted-foreground">No locations are available.</p>
+                        ) : locationOptions.map((location) => {
+                           const checked = field.value.includes(location.key);
                           return (
-                            <label key={warehouse.id} className="flex items-center gap-2 text-sm cursor-pointer">
+                            <label key={location.key} className="flex items-center gap-2 text-sm cursor-pointer">
                               <Checkbox
-                                data-testid={`checkbox-bank-warehouse-${warehouse.id}`}
+                                data-testid={`checkbox-${watchType}-location-${location.key.replace(':', '-')}`}
                                 checked={checked}
                                 onCheckedChange={(next) => field.onChange(
                                   next
-                                    ? [...field.value, warehouse.id]
-                                    : field.value.filter((id) => id !== warehouse.id),
+                                    ? [...field.value, location.key]
+                                    : field.value.filter((key) => key !== location.key),
                                 )}
                               />
-                              {warehouse.name}
+                              {location.name}
                             </label>
                           );
                         })}
                       </div>
-                      <p className="text-xs text-muted-foreground">This Bank account will be available in every selected warehouse.</p>
+                      <p className="text-xs text-muted-foreground">This {watchType === 'cash' ? 'Cash' : 'Bank'} account will be available in every selected location.</p>
                       <FormMessage />
                     </FormItem>
                   )} />

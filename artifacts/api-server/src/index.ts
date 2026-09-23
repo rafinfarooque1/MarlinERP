@@ -47,7 +47,7 @@ import { addStorageLocationsSetup } from "./migrations/storageLocationsSetup";
 import { cleanupOrphanStockRows, ensureStockMasterGuardTrigger } from "./migrations/orphanStockCleanup";
 import { addDataImport } from "./migrations/dataImport";
 import { addWarehouseLifecycle } from "./migrations/warehouseLifecycle";
-import { backfillTransferAccounting } from "./migrations/transferAccounting";
+import { backfillInternalTransferAccounting, backfillTransferAccounting } from "./migrations/transferAccounting";
 
 async function runMigrations() {
   // Existing migrations
@@ -3124,6 +3124,11 @@ try {
   await backfillTransferAccounting(pool);
 } catch (err) {
   console.error("[migration] transfer_accounting_pnl_v1 FAILED (non-fatal, retries next boot):", (err as Error).message);
+}
+try {
+  await backfillInternalTransferAccounting(pool);
+} catch (err) {
+  console.error("[migration] internal_transfer_accounting_v1 FAILED (non-fatal, retries next boot):", (err as Error).message);
 }
 
 // Independent of the block above, on purpose — see convertTextDateColumns().

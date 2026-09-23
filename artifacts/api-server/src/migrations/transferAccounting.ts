@@ -15,6 +15,7 @@ import {
 } from "../lib/transferAccounting";
 
 const MIGRATION_NAME = "transfer_accounting_pnl_v1";
+const INTERNAL_MIGRATION_NAME = "internal_transfer_accounting_v1";
 const r2 = (n: number) => Math.round(n * 100) / 100;
 
 function dateOnly(value: unknown): string {
@@ -237,6 +238,113 @@ export async function backfillTransferAccounting(pool: Pool): Promise<void> {
     await client.query("ROLLBACK").catch(() => {});
     console.error(
       `[migration] ${MIGRATION_NAME} FAILED — rolled back; will retry next boot:`,
+      error,
+    );
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Give completed same-GSTIN transfers the same internal branch accounting as
+ * newly dispatched transfers. Older internal rows were delivery-challan-only,
+ * so this adds balanced source and destination vouchers without changing stock
+ * or rewriting any existing journal lines.
+ */
+export async function backfillInternalTransferAccounting(pool: Pool): Promise<void> {
+  const client = await pool.connect();
+  const report = { scanned: 0, backfilled: 0 };
+  try {
+    await client.query("BEGIN");
+    const { rows: claimed } = await client.query(
+      `INSERT INTO migration_log (name) VALUES ($1)
+       ON CONFLICT (name) DO NOTHING
+       RETURNING name`,
+      [INTERNAL_MIGRATION_NAME],
+    );
+    if (claimed.length === 0) {
+      await client.query("ROLLBACK");
+      return;
+    }
+
+    const { rows: ledgers } = await client.query(
+      `SELECT code, id FROM account_ledgers
+        WHERE code = ANY($1::text[])`,
+      [["STD-BRANCH-DEBTOR", "STD-BRANCH-CREDITOR", TRANSFER_IN_LEDGER_CODE, TRANSFER_OUT_LEDGER_CODE]],
+    );
+    const byCode = new Map<string, number>(
+      ledgers.map((row: any) => [String(row.code), Number(row.id)]),
+    );
+    const debtor = byCode.get("STD-BRANCH-DEBTOR");
+    const creditor = byCode.get("STD-BRANCH-CREDITOR");
+    const transferIn = byCode.get(TRANSFER_IN_LEDGER_CODE);
+    const transferOut = byCode.get(TRANSFER_OUT_LEDGER_CODE);
+    if (!debtor || !creditor || !transferIn || !transferOut) {
+      throw new Error("internal transfer accounting ledgers are not available");
+    }
+
+    const { rows: transfers } = await client.query(`
+      SELECT id, challan_number, from_type, from_id, to_type, to_id,
+             transfer_date, received_date, line_items
+        FROM stock_transfers
+       WHERE status = 'completed'
+         AND COALESCE(transfer_type, 'internal') = 'internal'
+         AND COALESCE(transfer_value, 0)::numeric = 0
+       ORDER BY id
+       FOR UPDATE
+    `);
+    for (const transfer of transfers) {
+      report.scanned++;
+      const lines = Array.isArray(transfer.line_items) ? transfer.line_items : [];
+      const value = r2(lines.reduce(
+        (sum: number, line: any) =>
+          sum + Number(line?.quantity ?? 0) * Number(line?.costPrice ?? 0),
+        0,
+      ));
+      if (!(value > 0.004)) continue;
+
+      const dispatchId = await createAdjustmentVoucher({
+        client,
+        date: dateOnly(transfer.transfer_date),
+        locationType: String(transfer.from_type),
+        locationId: locationId(String(transfer.from_type), transfer.from_id),
+        amount: value,
+        debitLedger: debtor,
+        creditLedger: transferOut,
+        narration: `Internal transfer dispatch — ${transfer.challan_number}`,
+      });
+      const receiveId = await createAdjustmentVoucher({
+        client,
+        date: dateOnly(transfer.received_date ?? transfer.transfer_date),
+        locationType: String(transfer.to_type),
+        locationId: locationId(String(transfer.to_type), transfer.to_id),
+        amount: value,
+        debitLedger: transferIn,
+        creditLedger: creditor,
+        narration: `Internal transfer receipt — ${transfer.challan_number}`,
+      });
+      await client.query(
+        `UPDATE stock_transfers
+            SET transfer_value = $1, gst_amount = 0, document_mode = 'voucher',
+                dispatch_voucher_id = $2, receive_voucher_id = $3
+          WHERE id = $4`,
+        [value, dispatchId, receiveId, transfer.id],
+      );
+      report.backfilled++;
+    }
+
+    await client.query("COMMIT");
+    const summary = JSON.stringify(report);
+    console.error(`[migration] ${INTERNAL_MIGRATION_NAME}: ${summary}`);
+    await pool.query(
+      `INSERT INTO boot_status (node_env, migrations_ok, notes)
+       VALUES ($1, TRUE, $2)`,
+      [process.env.NODE_ENV ?? "development", `${INTERNAL_MIGRATION_NAME}: ${summary}`],
+    ).catch(() => {});
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    console.error(
+      `[migration] ${INTERNAL_MIGRATION_NAME} FAILED — rolled back; will retry next boot:`,
       error,
     );
   } finally {
