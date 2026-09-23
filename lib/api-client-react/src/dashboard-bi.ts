@@ -38,6 +38,7 @@ export interface BiLocationMetric {
   receipts: number | null;
   cash: number | null;
   bank: number | null;
+  reconciliationPending: number;
   grossProfit: number | null;
   netProfit: number | null;
 }
@@ -108,7 +109,12 @@ export interface DashboardBi {
     companyWide: boolean;
   };
   /** Aggregate bank ledger balance (excludes physical cash). `null` as above. */
-  bank: { balance: number | null; companyWide: boolean };
+  bank: {
+    balance: number | null;
+    /** Electronic collections still awaiting bank clearance, scoped by location. */
+    reconciliationPending: number;
+    companyWide: boolean;
+  };
   /**
    * Gross/net profit for the selected period, off the SAME P&L build as
    * `expenses` — so the GP/NP tiles always equal the Profit & Loss report.
