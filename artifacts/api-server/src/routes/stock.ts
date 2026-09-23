@@ -1312,10 +1312,11 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction("page:/transfer
       } else {
         const toLocGst = await resolveLocationGst(pool, row.to_type, Number(row.to_id));
         const gstAmt = Number(row.gst_amount ?? 0);
-        const storedGst: GstTotals = {
+       const halfGst = Math.round(gstAmt / 2 * 100) / 100;
+       const storedGst: GstTotals = {
           taxableValue: Number(row.transfer_value),
-          cgst:  row.tax_type === 'cgst_sgst' ? gstAmt / 2 : 0,
-          sgst:  row.tax_type === 'cgst_sgst' ? gstAmt / 2 : 0,
+         cgst:  row.tax_type === 'cgst_sgst' ? halfGst : 0,
+         sgst:  row.tax_type === 'cgst_sgst' ? Math.round((gstAmt - halfGst) * 100) / 100 : 0,
           igst:  row.tax_type === 'igst'       ? gstAmt     : 0,
           totalGst: gstAmt,
           totalWithGst: Number(row.transfer_value) + gstAmt,
