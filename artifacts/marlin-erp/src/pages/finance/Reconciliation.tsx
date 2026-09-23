@@ -464,7 +464,7 @@ export default function Reconciliation() {
                 <SelectContent>
                   <SelectItem value="all">All online modes</SelectItem>
                   <SelectItem value="bank">Bank</SelectItem>
-                  <SelectItem value="upi">UPI</SelectItem>
+                   <SelectItem value="online">Online</SelectItem>
                   <SelectItem value="swiggy">Swiggy</SelectItem>
                   <SelectItem value="zomato">Zomato</SelectItem>
                   <SelectItem value="other_online">Other Online</SelectItem>
@@ -838,7 +838,7 @@ export default function Reconciliation() {
                   <SelectContent>
                     {settlementLedgers.map(account => (
                       <SelectItem key={account.ledgerId} value={String(account.ledgerId)}>
-                        {account.name} · {account.accountType === 'cash' ? 'Cash' : account.accountType === 'upi' ? 'UPI' : 'Bank'} · {account.locationName}
+                        {account.name} · {account.accountType === 'cash' ? 'Cash' : account.accountType === 'online' ? 'Online' : 'Bank'} · {account.locationName}
                       </SelectItem>
                     ))}
                   </SelectContent>

@@ -12,6 +12,5 @@ export type CashBankInputAccountType = typeof CashBankInputAccountType[keyof typ
 export const CashBankInputAccountType = {
   cash: 'cash',
   bank: 'bank',
-  upi: 'upi',
-  other: 'other',
+  online: 'online',
 } as const;

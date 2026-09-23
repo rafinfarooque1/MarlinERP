@@ -386,6 +386,26 @@ export async function ensureClearingLedger(
   }
 }
 
+function pairPart(location: LocationGst): string {
+  const type = String(location.locationType).toUpperCase().replace(/[^A-Z0-9]/g, '');
+  return `${type}-${Number(location.locationId ?? 0)}`;
+}
+
+/** One receivable/payable pair per source and destination location. */
+async function ensureTransferPairLedger(
+  db: PoolLike,
+  side: 'receivable' | 'payable',
+  fromLocation: LocationGst,
+  toLocation: LocationGst,
+): Promise<number | null> {
+  const code = `STD-BRANCH-${side === 'receivable' ? 'DR' : 'CR'}-${pairPart(fromLocation)}-${pairPart(toLocation)}`;
+  const name = `${side === 'receivable' ? 'Inter-Branch Receivable' : 'Inter-Branch Payable'} — ${fromLocation.name} → ${toLocation.name}`;
+  return ensureClearingLedger(
+    db, code, name, side === 'receivable' ? 'asset' : 'liability',
+    'balance_sheet', side === 'receivable' ? 'SYS-CURA' : 'SYS-CURL',
+  );
+}
+
 // ── Dispatch-side JV (source branch books) ───────────────────────────────────
 
 export interface DispatchVoucherArgs {
@@ -393,6 +413,7 @@ export interface DispatchVoucherArgs {
   challanNumber: string;
   transferDate: string;
   fromLocation: LocationGst;
+  toLocation: LocationGst;
   gst: GstTotals;
   taxType: TaxType;
   narration: string;
@@ -414,7 +435,7 @@ export async function createDispatchVoucher(args: DispatchVoucherArgs): Promise<
   if (!(gst.taxableValue > 0)) return null;
 
   const [branchDebtorId, transferOutId] = await Promise.all([
-    ensureClearingLedger(client, 'STD-BRANCH-DEBTOR', 'Inter-Branch Receivable', 'asset', 'balance_sheet'),
+    ensureTransferPairLedger(client, 'receivable', fromLocation, args.toLocation),
     ensureClearingLedger(client, TRANSFER_OUT_LEDGER_CODE, 'Transfer-Out', 'income', 'profit_loss', 'SYS-DIRINC'),
   ]);
   if (!branchDebtorId || !transferOutId) {
@@ -477,6 +498,7 @@ export async function createDispatchReversalVoucher(args: {
   challanNumber: string;
   transferDate: string;
   fromLocation: LocationGst;
+  toLocation: LocationGst;
   amount: number;
   narration: string;
   createdBy: string | null;
@@ -484,7 +506,7 @@ export async function createDispatchReversalVoucher(args: {
   const amount = r2(args.amount);
   if (!(amount > 0.004)) return null;
   const [branchDebtorId, transferOutId] = await Promise.all([
-    ensureClearingLedger(args.client, 'STD-BRANCH-DEBTOR', 'Inter-Branch Receivable', 'asset', 'balance_sheet'),
+    ensureTransferPairLedger(args.client, 'receivable', args.fromLocation, args.toLocation),
     ensureClearingLedger(args.client, TRANSFER_OUT_LEDGER_CODE, 'Transfer-Out', 'income', 'profit_loss', 'SYS-DIRINC'),
   ]);
   if (!branchDebtorId || !transferOutId) {
@@ -520,6 +542,7 @@ export interface ReceiveVoucherArgs {
   challanNumber: string;
   transferDate: string;
   toLocation: LocationGst;
+  fromLocation: LocationGst;
   gst: GstTotals;
   taxType: TaxType;
   narration: string;
@@ -536,11 +559,11 @@ export interface ReceiveVoucherArgs {
  * Transfer-Out credit when the transfer is complete.
  */
 export async function createReceiveVoucher(args: ReceiveVoucherArgs): Promise<number | null> {
-  const { client, challanNumber, transferDate, toLocation, gst, taxType, narration, createdBy } = args;
+  const { client, challanNumber, transferDate, fromLocation, toLocation, gst, taxType, narration, createdBy } = args;
   if (!(gst.taxableValue > 0)) return null;
 
   const [branchCreditorId, transferInId] = await Promise.all([
-    ensureClearingLedger(client, 'STD-BRANCH-CREDITOR', 'Inter-Branch Payable', 'liability', 'balance_sheet'),
+    ensureTransferPairLedger(client, 'payable', fromLocation, toLocation),
     ensureClearingLedger(client, TRANSFER_IN_LEDGER_CODE, 'Transfer-In', 'expense', 'profit_loss', 'SYS-PUR'),
   ]);
   if (!branchCreditorId || !transferInId) {
@@ -679,7 +702,7 @@ export async function createTransferSaleInvoice(args: TransferInvoiceArgs): Prom
   // path must not depend on the legacy voucher path having run first, and must
   // never silently fall back to Sales/Purchases if a transfer ledger is absent.
   const [branchDebtorId, transferOutId] = await Promise.all([
-    ensureClearingLedger(client, 'STD-BRANCH-DEBTOR', 'Inter-Branch Receivable', 'asset', 'balance_sheet', 'SYS-CURA'),
+    ensureTransferPairLedger(client, 'receivable', fromLocation, toLocation),
     ensureClearingLedger(client, TRANSFER_OUT_LEDGER_CODE, 'Transfer-Out', 'income', 'profit_loss', 'SYS-DIRINC'),
   ]);
   if (!branchDebtorId || !transferOutId) {
@@ -733,7 +756,7 @@ export async function createTransferPurchaseInvoice(args: TransferInvoiceArgs): 
   // Provision both destination-side ledgers here as well. A transfer invoice
   // must never fall back to Purchases if setup is incomplete.
   const [branchCreditorId, transferInId] = await Promise.all([
-    ensureClearingLedger(client, 'STD-BRANCH-CREDITOR', 'Inter-Branch Payable', 'liability', 'balance_sheet', 'SYS-CURL'),
+    ensureTransferPairLedger(client, 'payable', fromLocation, toLocation),
     ensureClearingLedger(client, TRANSFER_IN_LEDGER_CODE, 'Transfer-In', 'expense', 'profit_loss', 'SYS-PUR'),
   ]);
   if (!branchCreditorId || !transferInId) {
@@ -801,7 +824,7 @@ export async function createTransferCreditNote(args: TransferCreditNoteArgs): Pr
   if (!(totals.taxableValue > 0)) return null;
 
   const [branchDebtorId, transferOutId] = await Promise.all([
-    ensureClearingLedger(client, 'STD-BRANCH-DEBTOR', 'Inter-Branch Receivable', 'asset', 'balance_sheet', 'SYS-CURA'),
+    ensureTransferPairLedger(client, 'receivable', fromLocation, toLocation),
     ensureClearingLedger(client, TRANSFER_OUT_LEDGER_CODE, 'Transfer-Out', 'income', 'profit_loss', 'SYS-DIRINC'),
   ]);
   if (!branchDebtorId || !transferOutId) {

@@ -5,10 +5,7 @@
  *   cash   — notes into the location's own cash box
  *   bank   — money that lands in a company bank account (card swipe, netbanking,
  *            NEFT/IMPS); settled at the counter but clears through the bank
- *   upi    — same as bank in accounting terms, kept separate because operators
- *            reconcile UPI collections against the UPI ID on the invoice
- *   swiggy / zomato / other_online — online aggregators, held in Electronic
- *            Clearing until the settlement is reconciled to a Cash & Bank ledger
+ *   online — a named Online sub-ledger such as Swiggy, Zomato, or Blinkit
  *   credit — pay later; the only mode that creates a receivable and the only one
  *            subject to credit-limit control
  *
@@ -26,7 +23,7 @@
  * NOTE: this is NOT the create-time allowlist. A brand-new sale may use cash,
  * bank/UPI, or credit — see CREATE_SALE_PAYMENT_MODES below.
  */
-export const ONLINE_PAYMENT_MODES = ["swiggy", "zomato", "other_online"] as const;
+export const ONLINE_PAYMENT_MODES = ["online", "swiggy", "zomato", "other_online"] as const;
 export type OnlinePaymentMode = (typeof ONLINE_PAYMENT_MODES)[number];
 
 export const SALE_PAYMENT_MODES = ["cash", "bank", "upi", ...ONLINE_PAYMENT_MODES, "credit"] as const;
@@ -35,7 +32,7 @@ export const SALE_PAYMENT_MODES = ["cash", "bank", "upi", ...ONLINE_PAYMENT_MODE
  * Modes a NEW sale may be created with. The POS presents Bank and UPI as one
  * choice; the selected Cash & Bank account derives the stored bank/upi method.
  */
-export const CREATE_SALE_PAYMENT_MODES = ["cash", "bank", ...ONLINE_PAYMENT_MODES, "credit"] as const;
+export const CREATE_SALE_PAYMENT_MODES = ["cash", "bank", "online", "credit"] as const;
 
 /** True when `mode` may be used to CREATE a new POS sale. */
 export function isAllowedNewSaleMode(mode: string): boolean {
@@ -43,7 +40,7 @@ export function isAllowedNewSaleMode(mode: string): boolean {
 }
 
 /** Modes that are fully settled the moment the sale is recorded. */
-export const SETTLED_PAYMENT_MODES = ["cash", "bank", "upi", "card"] as const;
+export const SETTLED_PAYMENT_MODES = ["cash", "bank", "upi", "online", "card"] as const;
 
 /** Legacy stored values that mean "bank". */
 export const LEGACY_BANK_MODES = ["card", "bank_transfer"] as const;
@@ -106,9 +103,10 @@ export function paymentModeLabel(mode: string | null | undefined): string {
   switch ((mode ?? "").toLowerCase()) {
     case "cash": return "Cash";
     case "upi": return "UPI";
-    case "swiggy": return "Swiggy";
-    case "zomato": return "Zomato";
-    case "other_online": return "Other Online";
+    case "online": return "Online";
+    case "swiggy": return "Online";
+    case "zomato": return "Online";
+    case "other_online": return "Online";
     case "bank":
     case "card":
     case "bank_transfer": return "Bank";

@@ -33,7 +33,7 @@ const BAD_BALANCE = 'Please enter a valid opening balance.';
 
 const schema = z.object({
   name: z.string().min(2, 'Name required (at least 2 characters)'),
-  accountType: z.enum(['cash', 'bank', 'upi', 'other']),
+  accountType: z.enum(['cash', 'bank', 'online']),
   locationKey: z.string().optional(),
   locationKeys: z.array(z.string()).default([]),
   warehouseIds: z.array(z.string()).default([]),
@@ -219,7 +219,7 @@ export default function CashBank() {
 
   const { pageRows, pagerProps } = useClientPage(sorted);
 
-  const typeColor = (t: string) => t === 'cash' ? 'bg-emerald-500/10 text-emerald-500' : t === 'bank' ? 'bg-primary/10 text-primary' : t === 'upi' ? 'bg-purple-500/10 text-purple-500' : 'bg-muted';
+  const typeColor = (t: string) => t === 'cash' ? 'bg-emerald-500/10 text-emerald-500' : t === 'bank' ? 'bg-primary/10 text-primary' : 'bg-purple-500/10 text-purple-500';
   const sourceBadge = (a: any) => {
     if (a.source === 'system') return <Badge variant="outline" className="ml-2 gap-1 text-[10px] uppercase tracking-wide"><Lock className="w-2.5 h-2.5" /> system</Badge>;
     if (a.source === 'location') return <Badge variant="outline" className="ml-2 text-[10px] uppercase tracking-wide">location till</Badge>;
@@ -420,9 +420,8 @@ export default function CashBank() {
                       <FormControl><SelectTrigger><SelectValue /></SelectTrigger></FormControl>
                       <SelectContent>
                         <SelectItem value="cash">Cash</SelectItem>
-                        <SelectItem value="bank">Bank Account</SelectItem>
-                        <SelectItem value="upi">UPI / Digital</SelectItem>
-                        <SelectItem value="other">Other</SelectItem>
+                         <SelectItem value="bank">Bank Account</SelectItem>
+                         <SelectItem value="online">Online</SelectItem>
                       </SelectContent>
                     </Select>
                     {isEdit && <p className="text-xs text-muted-foreground">Type decides the ledger's group and cannot change.</p>}
@@ -477,7 +476,7 @@ export default function CashBank() {
                 )}
                 <p className="text-xs text-muted-foreground sm:col-span-2">Existing transactions keep their original location.</p>
               </div>
-              {(watchType === 'bank' || watchType === 'upi' || watchType === 'other') && (
+               {(watchType === 'bank' || watchType === 'online') && (
                 <FormField control={form.control} name="requiresReconciliation" render={({ field }) => (
                   <FormItem className="flex items-start justify-between gap-4 rounded-lg border border-border p-3">
                     <div className="space-y-0.5">
@@ -494,7 +493,7 @@ export default function CashBank() {
                   </FormItem>
                 )} />
               )}
-              {(watchType === 'bank' || watchType === 'upi' || watchType === 'other') && (
+              {(watchType === 'bank' || watchType === 'online') && (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <FormField control={form.control} name="bankName" render={({ field }) => (
                     <FormItem><FormLabel>Bank Name</FormLabel><FormControl><Input placeholder="HDFC, SBI..." {...field} /></FormControl><FormMessage /></FormItem>

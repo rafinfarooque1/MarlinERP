@@ -935,6 +935,7 @@ router.post("/stock/transfers", requireModuleAction("page:/transfers", "add"), a
           challanNumber,
           transferDate: parsed.data.transferDate,
           fromLocation: fromGst,
+           toLocation: toGst,
           gst: internalTotals,
           taxType: 'none',
           narration: `Internal transfer ${challanNumber}: ${fromGst.name} → ${toGst.name}`,
@@ -982,6 +983,7 @@ router.post("/stock/transfers", requireModuleAction("page:/transfers", "add"), a
             challanNumber,
             transferDate: parsed.data.transferDate,
             fromLocation: fromGst,
+             toLocation: toGst,
             gst,
             taxType,
             narration: `Inter-branch transfer ${challanNumber}: ${fromGst.name} → ${toGst.name}`,
@@ -1349,6 +1351,7 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction("page:/transfer
         });
       } else {
         const toLocGst = await resolveLocationGst(pool, row.to_type, Number(row.to_id));
+           const fromLocGst = await resolveLocationGst(pool, row.from_type, Number(row.from_id));
         const gstAmt = Number(row.gst_amount ?? 0);
        const halfGst = Math.round(gstAmt / 2 * 100) / 100;
        const storedGst: GstTotals = {
@@ -1364,6 +1367,7 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction("page:/transfer
           challanNumber: row.challan_number,
           transferDate: txnDate,
           toLocation: toLocGst,
+           fromLocation: fromLocGst,
           gst: storedGst,
           taxType,
           narration: `Inter-branch transfer ${row.challan_number} — received at ${toLocGst.name}`,
@@ -1586,6 +1590,7 @@ router.patch("/stock/transfers/:id/reject", requireModuleAction("page:/transfers
     // behind after the goods are back at the source.
     if (row.transfer_type === 'internal' && Number(row.transfer_value ?? 0) > 0) {
       const fromLocGst = await resolveLocationGst(pool, row.from_type, Number(row.from_id));
+        const toLocGst = await resolveLocationGst(pool, row.to_type, Number(row.to_id));
       await createDispatchReversalVoucher({
         client,
         challanNumber: row.challan_number,
@@ -1593,6 +1598,7 @@ router.patch("/stock/transfers/:id/reject", requireModuleAction("page:/transfers
           ? new Date(row.transfer_date).toISOString().slice(0, 10)
           : new Date().toISOString().slice(0, 10),
         fromLocation: fromLocGst,
+         toLocation: toLocGst,
         amount: Number(row.transfer_value),
         narration: `Internal transfer ${row.challan_number} rejected — accounting reversal`,
         createdBy: null,

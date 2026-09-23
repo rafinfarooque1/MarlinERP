@@ -14,7 +14,7 @@ export const accountLedgersTable = pgTable("account_ledgers", {
 export const cashBankAccountsTable = pgTable("cash_bank_accounts", {
   id: serial("id").primaryKey(),
   name: text("name").notNull(),
-  accountType: text("account_type").notNull(), // cash, bank
+  accountType: text("account_type").notNull(), // cash, bank, online
   bankName: text("bank_name"),
   // Both are text on purpose. An account number's leading zeros are
   // significant and it routinely exceeds Number.MAX_SAFE_INTEGER, so parsing

@@ -2541,7 +2541,7 @@ export const ListCashBankAccountsQueryParams = zod.object({
 export const ListCashBankAccountsResponseItem = zod.object({
   "id": zod.number(),
   "name": zod.string(),
-  "accountType": zod.enum(['cash', 'bank', 'upi', 'other']),
+  "accountType": zod.enum(['cash', 'bank', 'online']),
   "bankName": zod.string().nullish(),
   "accountNumber": zod.string().nullish().describe('Always a string — leading zeros are significant and real account numbers exceed the safe integer range.'),
   "ifscCode": zod.string().nullish(),
@@ -2573,7 +2573,7 @@ export const ListCashBankAccountsResponse = zod.array(ListCashBankAccountsRespon
 
 export const CreateCashBankAccountBody = zod.object({
   "name": zod.string(),
-  "accountType": zod.enum(['cash', 'bank', 'upi', 'other']),
+  "accountType": zod.enum(['cash', 'bank', 'online']),
   "bankName": zod.string().optional(),
   "accountNumber": zod.string().optional(),
   "ifscCode": zod.string().optional(),
@@ -2591,7 +2591,7 @@ export const CreateCashBankAccountBody = zod.object({
 export const CreateCashBankAccountResponse = zod.object({
   "id": zod.number(),
   "name": zod.string(),
-  "accountType": zod.enum(['cash', 'bank', 'upi', 'other']),
+  "accountType": zod.enum(['cash', 'bank', 'online']),
   "bankName": zod.string().nullish(),
   "accountNumber": zod.string().nullish().describe('Always a string — leading zeros are significant and real account numbers exceed the safe integer range.'),
   "ifscCode": zod.string().nullish(),
@@ -2643,7 +2643,7 @@ export const UpdateCashBankAccountBody = zod.object({
 export const UpdateCashBankAccountResponse = zod.object({
   "id": zod.number(),
   "name": zod.string(),
-  "accountType": zod.enum(['cash', 'bank', 'upi', 'other']),
+  "accountType": zod.enum(['cash', 'bank', 'online']),
   "bankName": zod.string().nullish(),
   "accountNumber": zod.string().nullish().describe('Always a string — leading zeros are significant and real account numbers exceed the safe integer range.'),
   "ifscCode": zod.string().nullish(),

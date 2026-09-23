@@ -3,7 +3,7 @@ import { useCashBankLedgersFlat, useVoucherLocations } from '@workspace/api-clie
 import { AccountCombobox, type AccountOption } from '@/components/ui/account-combobox';
 
 export type ReceiveIntoOption = AccountOption & {
-  /** cash / bank / upi when backed by a Cash & Bank account row; null for tills. */
+  /** cash / bank / online when backed by a Cash & Bank account row; null for tills. */
   accountType?: string | null;
 };
 
@@ -59,7 +59,7 @@ export function ReceiveIntoSelect({
   /** h-8 text-sm trigger for dense panels */
   compact?: boolean;
   /** Limit the picker to cash or electronic accounts for POS creation. */
-  mode?: 'cash' | 'electronic';
+  mode?: 'cash' | 'electronic' | 'online';
 }) {
   const { options, isLoading } = useReceiveIntoOptions(locationType, locationId);
   const visibleOptions = useMemo(
@@ -67,6 +67,8 @@ export function ReceiveIntoSelect({
       ? options.filter(isCashOption)
       : mode === 'electronic'
         ? options.filter(o => !isCashOption(o))
+        : mode === 'online'
+          ? options.filter(o => o.accountType === 'online')
         : options,
     [options, mode],
   );
@@ -79,7 +81,9 @@ export function ReceiveIntoSelect({
         ? 'Loading accounts…'
         : mode === 'cash'
           ? 'Select cash account'
-          : mode === 'electronic'
+          : mode === 'online'
+            ? 'Select Online platform'
+            : mode === 'electronic'
             ? 'Select bank / UPI account'
             : 'Select Cash / Bank account'}
       disabled={disabled}

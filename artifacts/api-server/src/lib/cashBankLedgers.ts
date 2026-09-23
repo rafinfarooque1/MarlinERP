@@ -34,6 +34,7 @@ type PoolClient = Queryable & { release(): void };
 /** Codes of the two locked heads. */
 export const CASH_ROOT_CODE = "STD-CASH";
 export const BANK_ROOT_CODE = "STD-BANK";
+export const ONLINE_ROOT_CODE = "STD-ONLINE";
 
 export type CashBankLocation = { locationType: "headoffice" | "warehouse" | "outlet"; locationId: number };
 type LocationResult = { ok: true; location: CashBankLocation } | { ok: false; error: string };
@@ -97,7 +98,7 @@ export function parseCashBankLocations(
 /**
  * Diagnose legacy ownership without selecting an arbitrary membership or
  * repairing data. Bank accounts may now have multiple valid warehouse
- * memberships; UPI/Other accounts retain the single-owner invariant.
+ * memberships; Online accounts retain the single-owner invariant.
  */
 export function diagnoseCashBankLocation(
   account: { account_type?: unknown; location_type?: unknown; location_id?: unknown },
@@ -152,7 +153,10 @@ export async function cashBankLedgerLocationError(q: Queryable, ledgerIds: numbe
  *  under Cash; everything that is a claim on an institution (bank, upi
  *  wallets, "other") goes under Bank Accounts. No exceptions. */
 export function rootCodeForType(accountType: string): string {
-  return String(accountType).toLowerCase() === "cash" ? CASH_ROOT_CODE : BANK_ROOT_CODE;
+  const type = String(accountType).toLowerCase();
+  if (type === "cash") return CASH_ROOT_CODE;
+  if (type === "online") return ONLINE_ROOT_CODE;
+  return BANK_ROOT_CODE;
 }
 
 export async function rootIdForType(
@@ -402,5 +406,67 @@ export async function migrateCashBankLedgerLinks(pool: Pool): Promise<void> {
       notes: "Migrated from Cash & Bank stored balance",
       user: "system", ledgerName: s.name,
     });
+  }
+}
+
+/**
+ * One-time, additive consolidation of legacy digital account types.
+ * Existing account and ledger ids remain stable; only the master classification
+ * and chart parent change.
+ */
+export async function migrateCashBankOnline(pool: Pool): Promise<void> {
+  const { rows: done } = await pool.query(
+    `SELECT 1 FROM migration_log WHERE name = 'cash_bank_online_v1'`,
+  );
+  if (done.length > 0) return;
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows: [bank] } = await client.query(
+      `SELECT id FROM account_ledgers WHERE code = $1`, [BANK_ROOT_CODE],
+    );
+    if (!bank) throw new Error("Bank Accounts chart head is missing");
+
+    let onlineId: number;
+    const { rows: existing } = await client.query(
+      `SELECT id FROM account_ledgers WHERE code = $1`, [ONLINE_ROOT_CODE],
+    );
+    if (existing[0]) {
+      onlineId = Number(existing[0].id);
+    } else {
+      const { rows: [created] } = await client.query(
+        `INSERT INTO account_ledgers
+          (name, type, code, section, parent_id, is_group, is_system_group, description)
+         VALUES ('Online', 'asset', $1, 'balance_sheet', $2, true, false,
+                 'Online payment platforms and digital collection sub-ledgers')
+         RETURNING id`,
+        [ONLINE_ROOT_CODE, Number(bank.id)],
+      );
+      onlineId = Number(created.id);
+    }
+
+    await client.query(
+      `UPDATE cash_bank_accounts SET account_type = 'online'
+        WHERE account_type IN ('upi', 'other')`,
+    );
+    await client.query(
+      `UPDATE account_ledgers al SET parent_id = $1
+         FROM cash_bank_accounts c
+        WHERE c.ledger_id = al.id
+          AND c.account_type = 'online'
+          AND al.id <> $1`,
+      [onlineId],
+    );
+    await client.query(
+      `INSERT INTO migration_log (name) VALUES ('cash_bank_online_v1')
+       ON CONFLICT (name) DO NOTHING`,
+    );
+    await client.query("COMMIT");
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw e;
+  } finally {
+    client.release();
   }
 }

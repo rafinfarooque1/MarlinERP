@@ -102,15 +102,15 @@ const PARTY_TYPES = [
 
 const schema = z.object({
   voucherDate: z.string().min(1, 'Date required'),
-  paymentMode: z.enum(['cash', 'bank']),
+  paymentMode: z.enum(['cash', 'bank', 'online']),
   cashBankLedgerId: z.coerce.number(),
   partyLedgerId: z.coerce.number().min(1, 'Select the party account'),
   amount: z.coerce.number().min(0.01, 'Amount must be greater than 0'),
   referenceNumber: z.string().max(100).optional(),
   narration: z.string().optional(),
 }).superRefine((v, ctx) => {
-  if (v.paymentMode === 'cash' && v.cashBankLedgerId < 1) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['cashBankLedgerId'], message: 'Select the permitted Cash account' });
+  if ((v.paymentMode === 'cash' || v.paymentMode === 'online') && v.cashBankLedgerId < 1) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['cashBankLedgerId'], message: v.paymentMode === 'online' ? 'Select an Online sub-ledger' : 'Select the permitted Cash account' });
   }
 });
 type FormValues = z.infer<typeof schema>;
@@ -251,6 +251,10 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
     () => (cashBankAccounts as any[]).filter(a => !selLoc || selLoc.cashBankLedgerIds.includes(a.id)),
     [cashBankAccounts, selLoc],
   );
+  const onlineOptions = useMemo(
+    () => tillOptions.filter((a: any) => a.accountType === 'online'),
+    [tillOptions],
+  );
 
   // Branch users (warehouse/outlet) get exactly their own till from the
   // server-scoped cash/bank list — pre-select it so the voucher can only move
@@ -294,7 +298,7 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
     if (row.locationType) setLocKey(`${row.locationType}:${row.locationId ?? 0}`);
     form.reset({
       voucherDate: String(row[C.dateField]).split('T')[0],
-      paymentMode: row.paymentMode === 'bank' || row.paymentMode === 'bank_settled' ? 'bank' : 'cash',
+      paymentMode: row.paymentMode === 'online' ? 'online' : row.paymentMode === 'bank' || row.paymentMode === 'bank_settled' ? 'bank' : 'cash',
       cashBankLedgerId: row.paymentMode === 'bank' || row.paymentMode === 'bank_settled' ? 0 : Number(row[C.cashField]),
       partyLedgerId: partyId,
       amount: Number(row.amount),
@@ -311,7 +315,7 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
     return {
       [C.dateField]: v.voucherDate,
       paymentMode: v.paymentMode,
-      ...(v.paymentMode === 'cash' ? { [C.cashField]: v.cashBankLedgerId } : {}),
+      ...((v.paymentMode === 'cash' || v.paymentMode === 'online') ? { [C.cashField]: v.cashBankLedgerId } : {}),
       [C.partyField]: v.partyLedgerId,
       amount: v.amount,
       referenceNumber: v.referenceNumber ?? '',
@@ -515,23 +519,27 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
                       <FormLabel>Payment Mode <span className="text-destructive">*</span></FormLabel>
                       <Select value={field.value} onValueChange={v => {
                         field.onChange(v);
-                        if (v === 'bank') form.setValue('cashBankLedgerId', 0);
+                         if (v === 'bank') form.setValue('cashBankLedgerId', 0);
+                         else if (v === 'online') form.setValue('cashBankLedgerId', 0);
                         else if (!form.getValues('cashBankLedgerId') && defaultCashId) form.setValue('cashBankLedgerId', defaultCashId);
                       }}>
                         <SelectTrigger><SelectValue /></SelectTrigger>
                         <SelectContent>
                           <SelectItem value="cash">Cash</SelectItem>
                           <SelectItem value="bank">Bank</SelectItem>
+                           <SelectItem value="online">Online</SelectItem>
                         </SelectContent>
                       </Select>
                       <FormMessage />
                     </FormItem>
                   )} />
-                  {paymentMode === 'cash' ? <FormField control={form.control} name="cashBankLedgerId" render={({ field }) => (
+                  {paymentMode === 'cash' || paymentMode === 'online' ? <FormField control={form.control} name="cashBankLedgerId" render={({ field }) => (
                     <FormItem>
                       <FormLabel>{C.cashLabel} <span className="text-destructive">*</span></FormLabel>
-                      <AccountCombobox options={tillOptions} value={field.value}
-                        onChange={field.onChange} placeholder="This location's permitted cash account" advanceOnSelect data-field="cashBankLedgerId" />
+                       <AccountCombobox options={paymentMode === 'online' ? onlineOptions : tillOptions.filter((a: any) => a.accountType === 'cash' || !a.accountType)}
+                         value={field.value} onChange={field.onChange}
+                         placeholder={paymentMode === 'online' ? 'Select Online platform' : "This location's permitted cash account"}
+                         advanceOnSelect data-field="cashBankLedgerId" />
                       <FormMessage />
                     </FormItem>
                   )} /> : (

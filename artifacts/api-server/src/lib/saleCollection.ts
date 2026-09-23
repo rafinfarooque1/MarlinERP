@@ -21,7 +21,7 @@ export interface ReceiveIntoAccount {
   ledgerId: number;
   name: string;
   /** Derived from the ACCOUNT, never trusted from the client. */
-  method: "cash" | "bank" | "upi";
+  method: "cash" | "bank" | "upi" | "online";
   /** Electronic accounts only: route via STD-ELEC-CLR + pending when true. */
   requiresRecon: boolean;
 }
@@ -81,8 +81,10 @@ export async function resolveReceiveIntoAccount(
   const isCashDest = led.account_type != null
     ? led.account_type === "cash"
     : cashTree.has(Number(led.id));
-  const method: "cash" | "bank" | "upi" =
-    isCashDest ? "cash" : led.account_type === "upi" ? "upi" : "bank";
+  const method: "cash" | "bank" | "upi" | "online" =
+    isCashDest ? "cash"
+      : led.account_type === "online" ? "online"
+        : led.account_type === "upi" ? "upi" : "bank";
   return {
     ledgerId: Number(led.id),
     name: String(led.name),
