@@ -422,15 +422,16 @@ export function useGetReconciliationBatch(id: number, options?: { enabled?: bool
   });
 }
 
-export function useGetBankLedgers(params?: { locationType?: string; locationId?: number }) {
+export function useGetBankLedgers(params?: { locationType?: string; locationId?: number; includeCash?: boolean }) {
   return useQuery<BankLedger[]>({
     queryKey: [...getBankLedgersQueryKey(), params],
     queryFn: () => {
       const qs = new URLSearchParams();
       if (params?.locationType && params.locationType !== "all") qs.set("locationType", params.locationType);
       if (params?.locationId) qs.set("locationId", String(params.locationId));
+       if (params?.includeCash) qs.set("includeCash", "true");
       const query = qs.toString();
-      return customFetch(`/api/reconciliation/bank-ledgers${query ? `?${query}` : ""}`);
+       return customFetch(`/api/reconciliation/bank-ledgers${query ? `?${query}` : ""}`);
     },
   });
 }

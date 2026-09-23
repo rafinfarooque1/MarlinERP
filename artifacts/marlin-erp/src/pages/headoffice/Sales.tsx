@@ -45,7 +45,7 @@ import { CustomerFormDialog } from '@/components/customers/CustomerFormDialog';
 import { locationValueOf } from '@/lib/usePartyLocations';
 import {
   STORED_SALE_MODES, PAYMENT_MODE_OPTIONS, CREATE_PAYMENT_MODE_OPTIONS,
-  paymentModeLabel, editableSaleMode,
+  paymentModeLabel, editableSaleMode, ONLINE_PAYMENT_MODES,
 } from '@/lib/paymentModes';
 import { ReceiveIntoSelect, useReceiveIntoOptions, isCashOption } from '@/components/receive-into-select';
 import {
@@ -1174,7 +1174,9 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
     // without them keep the legacy plain-cash submit. The server re-validates
     // everything authoritatively.
     const payNow = !editItem && data.paymentMode !== 'credit'
-      && (data.paymentMode === 'bank' || formReceiveOptionsForMode.length > 0);
+      && (data.paymentMode === 'bank'
+        || (ONLINE_PAYMENT_MODES as readonly string[]).includes(data.paymentMode)
+        || formReceiveOptionsForMode.length > 0);
     let payFields: Record<string, unknown> = {};
     if (payNow) {
       if (formReceiveOptionsForMode.length > 0 && !receiveLedgerId) {
@@ -2029,11 +2031,14 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
               )} />
 
               {/* Receive Into at billing — create mode, non-credit. Cash uses
-                  the location's active cash account; Bank / UPI uses an
-                  assigned electronic account when one is available. A blank
-                  amount means pay in full. The server re-validates everything
-                  authoritatively. */}
-              {!editItem && watchPaymentMode !== 'credit' && (formReceiveOptionsForMode.length > 0 || watchPaymentMode === 'bank') && (() => {
+                  the location's active cash account; Bank uses an assigned
+                  electronic account. Named online modes go to Electronic
+                  Clearing and are selected later in Reconciliation. */}
+              {!editItem && watchPaymentMode !== 'credit' && (
+                formReceiveOptionsForMode.length > 0
+                || watchPaymentMode === 'bank'
+                || (ONLINE_PAYMENT_MODES as readonly string[]).includes(watchPaymentMode)
+              ) && (() => {
                 const advApplied = applyAdvance && watchCustomerId
                   ? Math.min(Number(customerAdvance?.available ?? 0), totals.finalAmount)
                   : 0;
@@ -2046,14 +2051,25 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                     <div className="rounded-lg border border-border bg-muted/20 p-3 space-y-3" data-testid="section-payment-collection">
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                       <div className="flex flex-col gap-1.5">
-                        <span className="text-sm font-medium">Receive Into <span className="text-destructive">*</span></span>
-                        <ReceiveIntoSelect
-                          locationType={watchLocationType}
-                          locationId={watchLocationId}
-                          value={receiveLedgerId}
-                          onChange={setReceiveLedgerId}
-                          mode={watchPaymentMode === 'cash' ? 'cash' : 'electronic'}
-                        />
+                        {formReceiveOptionsForMode.length > 0 ? (
+                          <>
+                            <span className="text-sm font-medium">Receive Into <span className="text-destructive">*</span></span>
+                            <ReceiveIntoSelect
+                              locationType={watchLocationType}
+                              locationId={watchLocationId}
+                              value={receiveLedgerId}
+                              onChange={setReceiveLedgerId}
+                              mode={watchPaymentMode === 'cash' ? 'cash' : 'electronic'}
+                            />
+                          </>
+                        ) : (
+                          <>
+                            <span className="text-sm font-medium">Settlement</span>
+                            <div className="h-9 flex items-center rounded-md border border-amber-500/30 bg-amber-500/5 px-3 text-sm text-amber-700">
+                              Held for reconciliation
+                            </div>
+                          </>
+                        )}
                       </div>
                       <div className="flex flex-col gap-1.5">
                         <span className="text-sm font-medium">Amount Received <span className="text-xs text-muted-foreground font-normal">(blank = full)</span></span>
@@ -2065,7 +2081,8 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                           data-testid="input-amount-received"
                         />
                       </div>
-                      {selected && !isCashOption(selected) && (
+                      {(selected && !isCashOption(selected))
+                        || (ONLINE_PAYMENT_MODES as readonly string[]).includes(watchPaymentMode) ? (
                         <div className="flex flex-col gap-1.5">
                           <span className="text-sm font-medium">Reference <span className="text-xs text-muted-foreground font-normal">(UTR / txn no.)</span></span>
                           <Input
@@ -2075,7 +2092,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                             data-testid="input-payment-reference"
                           />
                         </div>
-                      )}
+                      ) : null}
                     </div>
                     {totals.finalAmount > 0 && (
                       <p className="text-xs" data-testid="text-payment-preview">

@@ -3,24 +3,23 @@ name: Payment modes and invoice sharing
 description: The canonical counter payment modes, how legacy values are handled, and the seam that keeps invoice-share message composition separate from the PDF renderer.
 ---
 
-## Rule: the stored domain has four modes, but POS creation has three choices
+## Rule: named online modes are stored directly and clear through reconciliation
 
-The POS create picker offers Cash, Bank / UPI, and Credit. Bank and UPI are one
-operator choice; the selected Cash & Bank account derives the stored bank/upi
-method. Cash posts to the selling location's active cash ledger. Bank / UPI
-creates a pending collection in Electronic Payment Clearing until reconciliation.
-Credit is the only mode that leaves the full invoice in customer outstanding.
-The stored domain still keeps separate bank and upi values, plus legacy card and
-bank_transfer values for history and editing.
+The stored domain includes cash, bank, upi, named online providers (Swiggy,
+Zomato, and Other Online), credit, plus legacy card and bank_transfer values.
+Cash posts to the selling location's active cash ledger. Every non-cash
+collection, including existing-bill collections and named online modes, enters
+Electronic Payment Clearing until it is cleared into an authorized Cash & Bank
+ledger. Credit is the only mode that leaves the invoice in customer outstanding.
 
-**Why:** the operator needs one clear electronic-payment choice, while the books
-still need the actual bank/UPI classification and a pending clearing state before
-the destination bank is approved.
+**Why:** operators need provider-level reconciliation, and direct electronic
+posting made the reconciliation queue depend on an account's configuration.
 
 **How to apply:** one canonical list per side (api-server and web each own a
-`paymentModes` module) and both must agree. New POS electronic collections use
-the shared receipt engine with forced clearing; later customer collections keep
-their account reconciliation behavior.
+`paymentModes` module) and both must agree. Use the shared receipt engine with
+forced clearing for all non-cash sale collections; the reconciliation batch
+route validates both the user's location scope and the destination account's
+Cash & Bank assignment.
 
 ## Rule: legacy stored modes are displayed, never rewritten
 
@@ -35,7 +34,7 @@ Any *filter* that offers "Bank" must match the legacy values too, or old rows va
 
 ## Rule: sale edits may reassign the complete current mode set
 
-The edit form offers Cash, Bank, UPI, and Credit. The API accepts those canonical modes on edit,
+The edit form offers Cash, Bank, UPI, named online providers, and Credit. The API accepts those canonical modes on edit,
 while still preserving a stored 'card' or 'bank_transfer' value when the selected mode remains Bank.
 
 **Why:** operators need to correct the settlement mode on an existing invoice, not only retain the

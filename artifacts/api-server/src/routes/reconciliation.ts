@@ -643,6 +643,7 @@ router.get(
 router.get("/reconciliation/bank-ledgers", requireModuleView(["page:/accounts/reconciliation", "page:/accounts/cash-in-outlet"]), async (req, res): Promise<void> => {
   const access = await bookAccessScope(((req as any).employee ?? {}));
   const viewLocation = getLocationFilter(req);
+  const includeCash = String(req.query.includeCash ?? "") === "true";
   const { rows } = await pool.query(`
     SELECT cba.id AS account_id, cba.ledger_id, cba.name, cba.account_type,
            cba.requires_reconciliation, COALESCE(cba.location_type, 'headoffice') AS location_type,
@@ -662,10 +663,10 @@ router.get("/reconciliation/bank-ledgers", requireModuleView(["page:/accounts/re
       LEFT JOIN warehouses w ON cba.location_type = 'warehouse' AND w.id = cba.location_id
       LEFT JOIN outlets o ON cba.location_type = 'outlet' AND o.id = cba.location_id
      WHERE cba.ledger_id IS NOT NULL
-       AND cba.account_type <> 'cash'
+        AND ($1::boolean OR cba.account_type <> 'cash')
        AND COALESCE(al.is_active, true)
      ORDER BY cba.location_type, location_name, cba.name, cba.id
-  `);
+  `, [includeCash]);
 
   res.json(rows
     .filter((r: any) => {
@@ -2705,8 +2706,12 @@ router.post("/reconciliation/batches", requireModuleAction("page:/accounts/recon
 
     // 1. Verify all payments exist, are pending, and lock them
     const { rows: payments } = await client.query(
-      `SELECT id, amount::numeric AS amount, reconciliation_status, sale_id
-       FROM sale_payments WHERE id = ANY($1) FOR UPDATE`,
+      `SELECT sp.id, sp.amount::numeric AS amount, sp.reconciliation_status, sp.sale_id,
+              s.location_type, s.location_id
+         FROM sale_payments sp
+         JOIN sales s ON s.id = sp.sale_id
+        WHERE sp.id = ANY($1)
+        FOR UPDATE OF sp`,
       [salePaymentIds]
     );
 
@@ -2734,20 +2739,47 @@ router.post("/reconciliation/batches", requireModuleAction("page:/accounts/recon
       res.status(400).json({ error: "Charges cannot be greater than or equal to gross amount" }); return;
     }
 
-    // 3. Verify destination bank ledger is under STD-BANK
-    const { rows: allLedgers } = await client.query(`SELECT id, parent_id, code FROM account_ledgers`);
-    const bankRoot = allLedgers.find((l: any) => l.code === "STD-BANK");
-    if (!bankRoot) { await client.query("ROLLBACK"); res.status(500).json({ error: "STD-BANK ledger not found" }); return; }
-
-    const bankIds = new Set<number>([bankRoot.id]);
-    for (let i = 0; i < 5; i++) {
-      for (const l of allLedgers) {
-        if (l.parent_id && bankIds.has(l.parent_id)) bankIds.add(l.id);
-      }
-    }
-    if (!bankIds.has(Number(destinationBankLedgerId))) {
+    // 3. Verify the destination is an active Cash & Bank account and is
+    // authorized for every selected sale location. The column keeps its
+    // historical name, but it may now hold either a cash or bank ledger.
+    const access = await bookAccessScope((req as any).employee ?? {});
+    const { rows: [destination] } = await client.query(
+      `SELECT cba.ledger_id, cba.account_type, cba.name,
+              COALESCE(cba.location_type, 'headoffice') AS location_type,
+              COALESCE(cba.location_id, 0) AS location_id,
+              COALESCE(
+                (SELECT json_agg(json_build_object('location_type', l.location_type, 'location_id', l.location_id))
+                   FROM cash_bank_account_locations l WHERE l.account_id = cba.id),
+                json_build_array(json_build_object(
+                  'location_type', COALESCE(cba.location_type, 'headoffice'),
+                  'location_id', COALESCE(cba.location_id, 0)))
+              ) AS locations
+         FROM cash_bank_accounts cba
+         JOIN account_ledgers al ON al.id = cba.ledger_id
+        WHERE cba.ledger_id = $1
+          AND cba.account_type IN ('cash', 'bank', 'upi')
+          AND COALESCE(al.is_active, true)
+        LIMIT 1
+        FOR UPDATE OF cba`,
+      [Number(destinationBankLedgerId)],
+    );
+    if (!destination || (access.ledgerIds && !access.ledgerIds.has(Number(destination.ledger_id)))) {
       await client.query("ROLLBACK");
-      res.status(400).json({ error: "Destination ledger must be a bank account under the Bank ledger group" }); return;
+      res.status(400).json({ error: "Destination must be an active Cash & Bank account you are authorized to use." }); return;
+    }
+    for (const payment of payments) {
+      const location = {
+        locationType: payment.location_type ?? "headoffice",
+        locationId: Number(payment.location_id ?? 0),
+      };
+      if (!isLocationInScope(access.dataScope, location.locationType, location.locationId)) {
+        await client.query("ROLLBACK");
+        res.status(404).json({ error: "One or more payments are outside your location scope." }); return;
+      }
+      if (!matchesAccountLocation(destination, location)) {
+        await client.query("ROLLBACK");
+        res.status(409).json({ error: `The selected Cash / Bank account is not permitted for the payment's ${location.locationType} location.` }); return;
+      }
     }
 
     // 4. Get STD-ELEC-CLR ledger
@@ -2816,7 +2848,7 @@ router.post("/reconciliation/batches", requireModuleAction("page:/accounts/recon
       `INSERT INTO receipts (voucher_number, receipt_date, received_from_ledger_id, received_in_ledger_id, amount, narration, source, location_type, location_id)
        VALUES ($1, $2, $3, $4, $5, $6, 'settlement', $7, $8) RETURNING id`,
       [recVoucher, settlementDate, clearingLedger.id, destinationBankLedgerId, netAmount,
-        `Bank settlement ${batchReference} — ${payments.length} payments`,
+         `${destination.account_type === 'cash' ? 'Cash' : 'Bank'} settlement ${batchReference} — ${payments.length} payments`,
         batchLoc.locationType, Number(batchLoc.locationId)]
     );
 

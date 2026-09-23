@@ -19,7 +19,7 @@ import {
 import { getUserDataScope, isLocationInScope, scopeSalesWhere } from "../lib/dataScope";
 import { getLocationFilter } from "../lib/requestLocation";
 import { blockedByInactiveProducts, INACTIVE_PRODUCT_CODE } from "../lib/productIdentity";
-import { CREATE_SALE_PAYMENT_MODES, SALE_PAYMENT_MODES, isAllowedNewSaleMode, isSettledAtSale, clearsThroughBank, resolveEditedSaleMode } from "../lib/paymentModes";
+import { CREATE_SALE_PAYMENT_MODES, SALE_PAYMENT_MODES, isAllowedNewSaleMode, isSettledAtSale, clearsThroughBank, isOnlinePaymentMode, resolveEditedSaleMode } from "../lib/paymentModes";
 import { availabilityAt, insufficientStockMessage } from "../lib/reservations";
 import { isIsoDate } from "../lib/dateInput";
 import { respondIfMonthLocked, isMonthLocked, ymOfDate, monthLockedBody } from "../lib/periodLock";
@@ -994,7 +994,7 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
   let receiveAccount: ReceiveIntoAccount | null = null;
   // null = "the full remainder after any advance adjustment" (pay in full now).
   let amountReceivedIn: number | null = null;
-  if (receivedInLedgerId || paymentModeIn === 'bank') {
+  if (receivedInLedgerId || paymentModeIn === 'bank' || isOnlinePaymentMode(paymentModeIn)) {
     if (paymentModeIn === 'credit') {
       res.status(400).json({ error: "Pick either Credit (pay later) or a Receive-Into account — not both." });
       return;
@@ -1005,6 +1005,10 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
       receiveAccount = resolvedAcc;
       if (paymentModeIn === 'bank' && receiveAccount.method === 'cash') {
         res.status(400).json({ error: "Bank / UPI sales require a bank or UPI account." });
+        return;
+      }
+      if (isOnlinePaymentMode(paymentModeIn) && receiveAccount.method === 'cash') {
+        res.status(400).json({ error: "Online sales cannot use a cash account." });
         return;
       }
     }
@@ -1150,7 +1154,7 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
     // much of it the advance already covered.
     let counterPay: { amount: number } | null = null;
     let saleMode = paymentModeIn;
-    if (receiveAccount || paymentModeIn === 'bank') {
+    if (receiveAccount || paymentModeIn === 'bank' || isOnlinePaymentMode(paymentModeIn)) {
       const remainderDue = round2(totalAmount - appliedAdvance);
       const amt = amountReceivedIn ?? Math.max(0, remainderDue);
       if (amt <= 0.004) {
@@ -1182,7 +1186,7 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
           });
           return;
         }
-        saleMode = receiveAccount?.method ?? paymentModeIn;
+        saleMode = isOnlinePaymentMode(paymentModeIn) ? paymentModeIn : receiveAccount?.method ?? paymentModeIn;
       } else if (paidTotal < totalAmount - 0.004) {
         // Partial payment: the remainder is a receivable, so the bill lives on
         // the customer's credit — a walk-in has no account to owe it.
@@ -1196,7 +1200,7 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
         }
         saleMode = 'credit';
       } else {
-        saleMode = receiveAccount?.method ?? paymentModeIn;
+        saleMode = isOnlinePaymentMode(paymentModeIn) ? paymentModeIn : receiveAccount?.method ?? paymentModeIn;
       }
       counterPay = { amount: amt };
     }
@@ -1398,9 +1402,12 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
     // cash account/till, electronic money direct-posted or through Electronic
     // Clearing ('pending') by the account's reconciliation switch. Committing
     // with the sale means a replayed clientRequestId can never double-post.
-    if (counterPay && (receiveAccount || paymentModeIn === 'bank')) {
+    if (counterPay && (receiveAccount || paymentModeIn === 'bank' || isOnlinePaymentMode(paymentModeIn))) {
+      const collectionMethod = isOnlinePaymentMode(paymentModeIn)
+        ? paymentModeIn
+        : receiveAccount?.method ?? paymentModeIn;
       const posted = await postSaleCollectionReceipt(txClient, {
-        method: receiveAccount?.method ?? paymentModeIn,
+        method: collectionMethod,
         account: receiveAccount,
         locType: locationType,
         locId: locationId,
@@ -1420,7 +1427,7 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
         `INSERT INTO sale_payments
            (sale_id, payment_date, method, amount, reference_number, notes, reconciliation_status, clearing_receipt_id, outlet_id, created_by)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-        [row.id, parsed.data.saleDate, receiveAccount?.method ?? paymentModeIn, counterPay.amount, payReferenceNumber,
+         [row.id, parsed.data.saleDate, collectionMethod, counterPay.amount, payReferenceNumber,
          `Received at billing — ${invoiceNumber}`, posted.reconciliationStatus, posted.clearingReceiptId,
          outletIdForInsert, (req as any).employee?.username ?? null]
       );
