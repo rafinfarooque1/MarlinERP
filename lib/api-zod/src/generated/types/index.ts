@@ -31,6 +31,8 @@ export * from './cashBankAccountSource';
 export * from './cashBankInput';
 export * from './cashBankInputAccountType';
 export * from './cashBankInputLocationType';
+export * from './cashBankLocation';
+export * from './cashBankLocationLocationType';
 export * from './cashBankUpdate';
 export * from './cashBankUpdateLocationType';
 export * from './changePasswordInput';

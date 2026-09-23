@@ -7,7 +7,7 @@
  */
 
 /**
- * The one location that owns this account. Head Office uses locationId 0.
+ * Legacy single-location input for cash, UPI, other, and older clients.
  */
 export type CashBankInputLocationType = typeof CashBankInputLocationType[keyof typeof CashBankInputLocationType];
 

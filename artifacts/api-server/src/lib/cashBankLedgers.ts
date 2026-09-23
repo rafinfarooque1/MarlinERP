@@ -41,9 +41,6 @@ export const CASH_BANK_LOCATION_CONFLICT = "CASH_BANK_LOCATION_CONFLICT";
 
 /** Explicit single-owner input only. Never turn blank or malformed input into HO. */
 export function parseCashBankLocation(body: Record<string, unknown>): LocationResult {
-  if (Object.prototype.hasOwnProperty.call(body, "locations")) {
-    return { ok: false, error: "Cash & Bank accounts require exactly one location; multiple-location input is not supported." };
-  }
   const type = body.locationType;
   if (type !== "headoffice" && type !== "warehouse" && type !== "outlet") {
     return { ok: false, error: "Select exactly one location (headoffice, warehouse or outlet)." };
@@ -61,13 +58,49 @@ export function parseCashBankLocation(body: Record<string, unknown>): LocationRe
   return { ok: true, location: { locationType: type, locationId: id } };
 }
 
+export function parseCashBankLocations(
+  body: Record<string, unknown>,
+  accountType: unknown,
+): { ok: true; locations: CashBankLocation[] } | { ok: false; error: string } {
+  if (body.locations !== undefined) {
+    if (accountType !== "bank") {
+      return { ok: false, error: "Only Bank accounts can be assigned to multiple locations." };
+    }
+    if (!Array.isArray(body.locations) || body.locations.length === 0) {
+      return { ok: false, error: "Select at least one warehouse for this Bank account." };
+    }
+    const locations: CashBankLocation[] = [];
+    const seen = new Set<string>();
+    for (const raw of body.locations) {
+      if (!raw || typeof raw !== "object") {
+        return { ok: false, error: "Each Bank account location must be a warehouse." };
+      }
+      const parsed = parseCashBankLocation(raw as Record<string, unknown>);
+      if (!parsed.ok || parsed.location.locationType !== "warehouse") {
+        return { ok: false, error: "Bank account assignments must be valid warehouses." };
+      }
+      const key = `${parsed.location.locationType}:${parsed.location.locationId}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      locations.push(parsed.location);
+    }
+    if (locations.length === 0) {
+      return { ok: false, error: "Select at least one warehouse for this Bank account." };
+    }
+    return { ok: true, locations };
+  }
+
+  const parsed = parseCashBankLocation(body);
+  return parsed.ok ? { ok: true, locations: [parsed.location] } : parsed;
+}
+
 /**
  * Diagnose legacy ownership without selecting an arbitrary membership or
- * repairing data. A missing shadow is compatible with an unambiguous scalar;
- * multiple, invalid, or disagreeing memberships require explicit review.
+ * repairing data. Bank accounts may now have multiple valid warehouse
+ * memberships; other account types retain the single-owner invariant.
  */
 export function diagnoseCashBankLocation(
-  account: { location_type?: unknown; location_id?: unknown },
+  account: { account_type?: unknown; location_type?: unknown; location_id?: unknown },
   memberships: Array<{ location_type?: unknown; location_id?: unknown }>,
 ): LocationResult {
   const owner = parseCashBankLocation({ locationType: account.location_type, locationId: account.location_id });
@@ -75,7 +108,19 @@ export function diagnoseCashBankLocation(
     ok: false as const,
     error: "Cash/Bank account has ambiguous or invalid location ownership. Writes are blocked; Head Office must review the scalar owner and legacy memberships. No locations have been reassigned.",
   };
-  if (!owner.ok || memberships.length > 1) return conflict;
+  if (!owner.ok) return conflict;
+  if (account.account_type === "bank" && memberships.length > 1) {
+    let ownerIsAssigned = false;
+    for (const membership of memberships) {
+      const member = parseCashBankLocation(membership);
+      if (!member.ok || member.location.locationType !== "warehouse") return conflict;
+      ownerIsAssigned = ownerIsAssigned
+        || member.location.locationType === owner.location.locationType
+        && member.location.locationId === owner.location.locationId;
+    }
+    return ownerIsAssigned ? owner : conflict;
+  }
+  if (memberships.length > 1) return conflict;
   if (memberships.length === 1) {
     const member = parseCashBankLocation({ locationType: memberships[0].location_type, locationId: memberships[0].location_id });
     if (!member.ok || member.location.locationType !== owner.location.locationType
@@ -87,7 +132,7 @@ export function diagnoseCashBankLocation(
 /** Pure diagnosis above is shared by account edits and money-voucher guards. */
 export async function cashBankLedgerLocationError(q: Queryable, ledgerIds: number[]): Promise<string | null> {
   const { rows } = await q.query(
-    `SELECT c.id, c.ledger_id, c.location_type, c.location_id,
+    `SELECT c.id, c.ledger_id, c.account_type, c.location_type, c.location_id,
             COALESCE((SELECT json_agg(json_build_object('location_type', l.location_type, 'location_id', l.location_id))
                       FROM cash_bank_account_locations l WHERE l.account_id = c.id), '[]'::json) AS memberships
        FROM cash_bank_accounts c WHERE c.ledger_id = ANY($1::int[])`,

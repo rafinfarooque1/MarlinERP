@@ -1406,7 +1406,7 @@ export const CashBankAccountBalanceSource = {
 } as const;
 
 /**
- * The one location that owns this account. Head Office uses locationId 0.
+ * Legacy primary location. Bank accounts may be assigned to multiple warehouses.
  * @nullable
  */
 export type CashBankAccountLocationType = typeof CashBankAccountLocationType[keyof typeof CashBankAccountLocationType] | null;
@@ -1430,6 +1430,22 @@ export const CashBankAccountSource = {
   system: 'system',
   ledger: 'ledger',
 } as const;
+
+export type CashBankLocationLocationType = typeof CashBankLocationLocationType[keyof typeof CashBankLocationLocationType];
+
+
+export const CashBankLocationLocationType = {
+  headoffice: 'headoffice',
+  warehouse: 'warehouse',
+  outlet: 'outlet',
+} as const;
+
+export interface CashBankLocation {
+  locationType: CashBankLocationLocationType;
+  locationId: number;
+  /** @nullable */
+  locationName?: string | null;
+}
 
 export interface CashBankAccount {
   id: number;
@@ -1457,7 +1473,7 @@ export interface CashBankAccount {
   /** @nullable */
   ledgerId?: number | null;
   /**
-     * The one location that owns this account. Head Office uses locationId 0.
+     * Legacy primary location. Bank accounts may be assigned to multiple warehouses.
      * @nullable
      */
   locationType: CashBankAccountLocationType;
@@ -1465,6 +1481,8 @@ export interface CashBankAccount {
   locationId?: number | null;
   /** @nullable */
   locationName?: string | null;
+  /** Locations where this account is available. Bank assignments are warehouse memberships. */
+  locations?: CashBankLocation[];
   /** module = managed on this screen; location = a branch till owned by the Locations module (read-only here); system = the Cash / Bank Accounts head itself; ledger = another ledger in the subtree. */
   source?: CashBankAccountSource;
   readOnly?: boolean;
@@ -1483,7 +1501,7 @@ export const CashBankInputAccountType = {
 } as const;
 
 /**
- * The one location that owns this account. Head Office uses locationId 0.
+ * Legacy single-location input for cash, UPI, other, and older clients.
  */
 export type CashBankInputLocationType = typeof CashBankInputLocationType[keyof typeof CashBankInputLocationType];
 
@@ -1500,10 +1518,15 @@ export interface CashBankInput {
   bankName?: string;
   accountNumber?: string;
   ifscCode?: string;
-  /** The one location that owns this account. Head Office uses locationId 0. */
-  locationType: CashBankInputLocationType;
-  /** Required when locationType is warehouse or outlet. */
+  /** Legacy single-location input for cash, UPI, other, and older clients. */
+  locationType?: CashBankInputLocationType;
+  /** Required with locationType when using legacy single-location input. */
   locationId?: number;
+  /**
+     * Bank accounts can be assigned to one or more warehouses.
+     * @minItems 1
+     */
+  locations?: CashBankLocation[];
   /** Recorded as the backing ledger's opening balance (debit) through the opening-balances store — never a stored column. Absent or blank means 0. */
   openingBalance?: number;
   /** Bank/UPI accounts only — whether collections into this account must pass through Reconciliation before hitting the bank balance. Defaults to true for bank/UPI/other, ignored for cash. */
@@ -1526,6 +1549,11 @@ export interface CashBankUpdate {
   ifscCode?: string;
   locationType?: CashBankUpdateLocationType;
   locationId?: number;
+  /**
+     * Replaces the bank account's warehouse memberships.
+     * @minItems 1
+     */
+  locations?: CashBankLocation[];
   /** Replaces the ledger's opening balance for the current financial year. */
   openingBalance?: number;
   /** Bank/UPI accounts only — toggle the reconciliation requirement. */

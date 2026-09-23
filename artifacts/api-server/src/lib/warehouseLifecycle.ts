@@ -141,14 +141,38 @@ export async function warehouseDeleteSummary(c: Queryable, id: number): Promise<
     one(`SELECT COUNT(*) AS count FROM stock_entries WHERE branch_type = 'warehouse' AND branch_id = $1 AND quantity::numeric <> 0`),
      one(`SELECT COUNT(*) FILTER (WHERE cba.account_type = 'cash') AS count
            FROM cash_bank_accounts cba
-          WHERE cba.location_type = 'warehouse' AND cba.location_id = $1`),
+          WHERE (
+            EXISTS (
+              SELECT 1 FROM cash_bank_account_locations l
+               WHERE l.account_id = cba.id
+                 AND l.location_type = 'warehouse' AND l.location_id = $1
+            )
+            OR (
+              NOT EXISTS (
+                SELECT 1 FROM cash_bank_account_locations l WHERE l.account_id = cba.id
+              )
+              AND cba.location_type = 'warehouse' AND cba.location_id = $1
+            )
+          )`),
     one(`SELECT (SELECT COUNT(*) FROM rent_accruals WHERE warehouse_id = $1)
              + (SELECT COUNT(*) FROM rent_payments WHERE warehouse_id = $1) AS count`),
   ]);
   const bankAccounts = await one(
     `SELECT COUNT(*) FILTER (WHERE cba.account_type <> 'cash') AS count
        FROM cash_bank_accounts cba
-      WHERE cba.location_type = 'warehouse' AND cba.location_id = $1`);
+       WHERE (
+         EXISTS (
+           SELECT 1 FROM cash_bank_account_locations l
+            WHERE l.account_id = cba.id
+              AND l.location_type = 'warehouse' AND l.location_id = $1
+         )
+         OR (
+           NOT EXISTS (
+             SELECT 1 FROM cash_bank_account_locations l WHERE l.account_id = cba.id
+           )
+           AND cba.location_type = 'warehouse' AND cba.location_id = $1
+         )
+       )`);
 
   // Money documents derive two postings each; JV lines are stored directly.
   const ledgerEntries = jvLines + 2 * (sales + purchases + receipts + payments + expenses);
