@@ -100,22 +100,24 @@ const PARTY_TYPES = [
   { value: 'ledger', label: 'Other Ledger', match: (_c: string) => true },
 ] as const;
 
-// No payment "mode" field: the selected Cash / Bank account IS the instrument
-// (its ledger drives the posting), so a separate mode was redundant and could
-// contradict the account. Attachments were likewise retired from vouchers.
 const schema = z.object({
   voucherDate: z.string().min(1, 'Date required'),
-  cashBankLedgerId: z.coerce.number().min(1, 'Select the Cash / Bank account'),
+  paymentMode: z.enum(['cash', 'bank']),
+  cashBankLedgerId: z.coerce.number(),
   partyLedgerId: z.coerce.number().min(1, 'Select the party account'),
   amount: z.coerce.number().min(0.01, 'Amount must be greater than 0'),
   referenceNumber: z.string().max(100).optional(),
   narration: z.string().optional(),
+}).superRefine((v, ctx) => {
+  if (v.paymentMode === 'cash' && v.cashBankLedgerId < 1) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['cashBankLedgerId'], message: 'Select the permitted Cash account' });
+  }
 });
 type FormValues = z.infer<typeof schema>;
 
 const today = () => new Date().toISOString().split('T')[0];
 const EMPTY: FormValues = {
-  voucherDate: today(), cashBankLedgerId: 0, partyLedgerId: 0,
+  voucherDate: today(), paymentMode: 'cash', cashBankLedgerId: 0, partyLedgerId: 0,
   amount: 0, referenceNumber: '', narration: '',
 };
 
@@ -184,6 +186,7 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
   const scopeRef = useRef<HTMLFormElement>(null);
 
   const form = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: EMPTY });
+  const paymentMode = form.watch('paymentMode');
 
   // The selected location OWNS the voucher's accounting — an Admin recording
   // on behalf of a branch produces a branch voucher. Defaults to the global
@@ -256,7 +259,7 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
   const defaultCashId = isBranchUser && (cashBankAccounts as any[]).length === 1
     ? Number((cashBankAccounts as any[])[0].id) : 0;
   useEffect(() => {
-    if (defaultCashId && !editing && !form.getValues('cashBankLedgerId')) {
+    if (defaultCashId && !editing && form.getValues('paymentMode') === 'cash' && !form.getValues('cashBankLedgerId')) {
       form.setValue('cashBankLedgerId', defaultCashId);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -291,7 +294,8 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
     if (row.locationType) setLocKey(`${row.locationType}:${row.locationId ?? 0}`);
     form.reset({
       voucherDate: String(row[C.dateField]).split('T')[0],
-      cashBankLedgerId: Number(row[C.cashField]),
+      paymentMode: row.paymentMode === 'bank' || row.paymentMode === 'bank_settled' ? 'bank' : 'cash',
+      cashBankLedgerId: row.paymentMode === 'bank' || row.paymentMode === 'bank_settled' ? 0 : Number(row[C.cashField]),
       partyLedgerId: partyId,
       amount: Number(row.amount),
       referenceNumber: row.referenceNumber ?? '',
@@ -306,7 +310,8 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
     const loc = parseLocKey(locKey);
     return {
       [C.dateField]: v.voucherDate,
-      [C.cashField]: v.cashBankLedgerId,
+      paymentMode: v.paymentMode,
+      ...(v.paymentMode === 'cash' ? { [C.cashField]: v.cashBankLedgerId } : {}),
       [C.partyField]: v.partyLedgerId,
       amount: v.amount,
       referenceNumber: v.referenceNumber ?? '',
@@ -375,7 +380,7 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
   }, [canEnter]);
 
   const focusFirstError = (errors: any) => {
-    const first = ['voucherDate', 'cashBankLedgerId', 'partyLedgerId', 'amount']
+    const first = ['voucherDate', 'paymentMode', 'cashBankLedgerId', 'partyLedgerId', 'amount']
       .find(f => errors[f]);
     if (first) focusField(first, scopeRef.current);
   };
@@ -505,14 +510,35 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
                       <FormMessage />
                     </FormItem>
                   )} />
-                  <FormField control={form.control} name="cashBankLedgerId" render={({ field }) => (
+                  <FormField control={form.control} name="paymentMode" render={({ field }) => (
                     <FormItem>
-                      <FormLabel>{C.cashLabel} <span className="text-destructive">*</span></FormLabel>
-                      <AccountCombobox options={tillOptions} value={field.value}
-                        onChange={field.onChange} placeholder="This location's cash or bank account" advanceOnSelect data-field="cashBankLedgerId" />
+                      <FormLabel>Payment Mode <span className="text-destructive">*</span></FormLabel>
+                      <Select value={field.value} onValueChange={v => {
+                        field.onChange(v);
+                        if (v === 'bank') form.setValue('cashBankLedgerId', 0);
+                        else if (!form.getValues('cashBankLedgerId') && defaultCashId) form.setValue('cashBankLedgerId', defaultCashId);
+                      }}>
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="cash">Cash</SelectItem>
+                          <SelectItem value="bank">Bank</SelectItem>
+                        </SelectContent>
+                      </Select>
                       <FormMessage />
                     </FormItem>
                   )} />
+                  {paymentMode === 'cash' ? <FormField control={form.control} name="cashBankLedgerId" render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{C.cashLabel} <span className="text-destructive">*</span></FormLabel>
+                      <AccountCombobox options={tillOptions} value={field.value}
+                        onChange={field.onChange} placeholder="This location's permitted cash account" advanceOnSelect data-field="cashBankLedgerId" />
+                      <FormMessage />
+                    </FormItem>
+                  )} /> : (
+                    <div className="rounded-md border border-dashed border-primary/30 bg-primary/5 px-3 py-2 text-sm text-muted-foreground">
+                      Bank account is selected later in Reconciliation after the warehouse statement is available.
+                    </div>
+                  )}
 
                   {/* Plain label — not a react-hook-form field, so no FormItem/FormLabel
                       (those require a FormField context and crash without one). */}

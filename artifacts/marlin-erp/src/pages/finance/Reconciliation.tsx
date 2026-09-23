@@ -14,6 +14,7 @@ import {
   useGetBankReconciliationAudit, useGetBankReconciliationBatches,
   useGetBankReconciliationBatch, useUpdateBankReconciliationBatch,
   useResetBankReconciliation,
+  useGetPendingManualVouchers, useReconcilePendingManualVouchers,
   useListOutlets, useListWarehouses,
 } from '@workspace/api-client-react';
 import { toast } from 'sonner';
@@ -63,6 +64,10 @@ export default function Reconciliation() {
   const [editBatchId, setEditBatchId] = useState<number | null>(null);
   const [reconciliationDate, setReconciliationDate] = useState(localDateValue);
   const [processingCharge, setProcessingCharge] = useState('0');
+  const [pendingSelected, setPendingSelected] = useState<Set<string>>(new Set());
+  const [deferredOpen, setDeferredOpen] = useState(false);
+  const [deferredBankAccountId, setDeferredBankAccountId] = useState('');
+  const [deferredDate, setDeferredDate] = useState(localDateValue);
 
   // The page has its own location filter for explicit, auditable account
   // selection. The global selector is still sent by the client as a header.
@@ -92,6 +97,16 @@ export default function Reconciliation() {
     enabled: editBatchId != null,
   });
   const resetMutation = useResetBankReconciliation();
+  const { data: pendingManualVouchers = [], isLoading: pendingManualLoading } = useGetPendingManualVouchers();
+  const reconcilePendingMutation = useReconcilePendingManualVouchers();
+  const selectedPendingRows = pendingManualVouchers.filter(v => pendingSelected.has(`${v.kind}:${v.id}`));
+  const pendingLocation = selectedPendingRows.length > 0
+    ? { type: selectedPendingRows[0].locationType, id: selectedPendingRows[0].locationId }
+    : { type: undefined, id: undefined };
+  const { data: pendingBankLedgers = [] } = useGetBankLedgers({
+    locationType: pendingLocation.type,
+    locationId: pendingLocation.id,
+  });
 
   useEffect(() => {
     if (!editingBatch || editBatchId == null) return;
@@ -254,6 +269,44 @@ export default function Reconciliation() {
     setAccountFilter('all');
   }
 
+  function togglePending(voucher: typeof pendingManualVouchers[number], checked: boolean) {
+    const key = `${voucher.kind}:${voucher.id}`;
+    if (checked && selectedPendingRows.length > 0) {
+      const first = selectedPendingRows[0];
+      if (first.locationType !== voucher.locationType || first.locationId !== voucher.locationId) {
+        toast.error('Reconcile vouchers from one warehouse or outlet at a time.');
+        return;
+      }
+    }
+    setPendingSelected(previous => {
+      const next = new Set(previous);
+      if (checked) next.add(key); else next.delete(key);
+      return next;
+    });
+  }
+
+  function openDeferredReconciliation() {
+    setDeferredDate(localDateValue());
+    setDeferredBankAccountId('');
+    setDeferredOpen(true);
+  }
+
+  async function submitDeferredReconciliation() {
+    if (!selectedPendingRows.length || !deferredBankAccountId || !deferredDate) return;
+    try {
+      await reconcilePendingMutation.mutateAsync({
+        bankAccountId: Number(deferredBankAccountId),
+        reconciliationDate: deferredDate,
+        pendingVoucherIds: selectedPendingRows.map(v => ({ kind: v.kind, id: v.id })),
+      });
+      setPendingSelected(new Set());
+      setDeferredOpen(false);
+      toast.success('Bank vouchers reconciled and posted to the selected bank account.');
+    } catch (e: any) {
+      toast.error(e?.data?.error || e?.message || 'Unable to reconcile bank vouchers.');
+    }
+  }
+
   async function resetReconciliation() {
     const confirmed = window.confirm(
       'Reset bank reconciliation review state? This clears reconciliation batches and statuses, but does not delete sales, receipts, payments, journals, or bank postings.',
@@ -292,6 +345,57 @@ export default function Reconciliation() {
           description="Reconcile the actual transactions in each Cash & Bank account"
           icon={CheckSquare}
         />
+
+        <div className="rounded-xl border border-primary/30 bg-primary/5 overflow-hidden">
+          <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 border-b border-primary/20">
+            <div>
+              <h2 className="font-semibold">Pending bank vouchers</h2>
+              <p className="text-xs text-muted-foreground">
+                Bank vouchers entered without a destination account. Select the actual permitted warehouse bank account to complete posting.
+              </p>
+            </div>
+            <Button
+              size="sm"
+              disabled={!perm.canEdit || selectedPendingRows.length === 0}
+              onClick={openDeferredReconciliation}
+            >
+              <Landmark className="w-4 h-4 mr-2" />
+              Reconcile pending{selectedPendingRows.length ? ` (${selectedPendingRows.length})` : ''}
+            </Button>
+          </div>
+          {pendingManualLoading ? (
+            <div className="px-4 py-5 text-sm text-muted-foreground">Loading pending vouchers…</div>
+          ) : pendingManualVouchers.length === 0 ? (
+            <div className="px-4 py-5 text-sm text-muted-foreground">No deferred bank vouchers.</div>
+          ) : (
+            <Table>
+              <TableHeader><TableRow>
+                <TableHead className="w-12"></TableHead><TableHead>Date</TableHead><TableHead>Type</TableHead>
+                <TableHead>Voucher</TableHead><TableHead>Party</TableHead><TableHead>Location</TableHead><TableHead className="text-right">Amount</TableHead>
+              </TableRow></TableHeader>
+              <TableBody>
+                {pendingManualVouchers.map(v => (
+                  <TableRow key={`${v.kind}:${v.id}`}>
+                    <TableCell>
+                      <Checkbox
+                        checked={pendingSelected.has(`${v.kind}:${v.id}`)}
+                        onCheckedChange={checked => togglePending(v, checked === true)}
+                        disabled={!perm.canEdit}
+                        aria-label={`Select ${v.voucherNumber || `${v.kind} ${v.id}`}`}
+                      />
+                    </TableCell>
+                    <TableCell className="text-xs text-muted-foreground">{v.transactionDate}</TableCell>
+                    <TableCell className="text-sm capitalize">{v.kind}</TableCell>
+                    <TableCell className="font-mono text-xs">{v.voucherNumber || `${v.kind} #${v.id}`}</TableCell>
+                    <TableCell className="text-sm">{v.partyName ?? '—'}</TableCell>
+                    <TableCell className="text-sm">{v.locationType === 'headoffice' ? 'Head Office' : `${v.locationType} #${v.locationId}`}</TableCell>
+                    <TableCell className="text-right font-mono text-sm">{fmt(v.amount)}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </div>
 
         <SummaryCardGrid>
           <SummaryCard label="Eligible transactions" value={String(authoritativeTotals?.eligibleCount ?? 0)} icon={Landmark} loading={transactionsLoading} />
@@ -475,7 +579,7 @@ export default function Reconciliation() {
         <div className="rounded-xl border border-border bg-card overflow-hidden">
           <div className="px-4 py-3 border-b border-border">
             <h2 className="font-semibold">Recent reconciliation batches</h2>
-            <p className="text-xs text-muted-foreground">Review metadata only; no accounting vouchers are created.</p>
+            <p className="text-xs text-muted-foreground">Standard bank batches are metadata-only; deferred voucher batches also show the balancing bank posting.</p>
           </div>
           {batches.length === 0 ? (
             <p className="px-4 py-5 text-sm text-muted-foreground">No bank reconciliation batches yet.</p>
@@ -493,7 +597,7 @@ export default function Reconciliation() {
                     <TableCell className="text-right font-mono text-sm">{fmt(batch.netAmount)}</TableCell>
                     <TableCell className="text-sm">{batch.itemCount}</TableCell>
                     <TableCell>
-                      {perm.canEdit && batch.status === 'active' ? (
+                      {perm.canEdit && batch.status === 'active' && batch.accountingImpact === 'none' ? (
                         <Button
                           variant="ghost"
                           size="sm"
@@ -545,6 +649,50 @@ export default function Reconciliation() {
                 {createBatchMutation.isPending || updateBatchMutation.isPending
                   ? 'Saving…'
                   : editBatchId != null ? 'Save batch changes' : 'Confirm reconciliation'}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog open={deferredOpen} onOpenChange={setDeferredOpen}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>Complete deferred bank vouchers</DialogTitle>
+              <DialogDescription>
+                This posts the balancing bank leg and locks the selected voucher(s). It does not alter the separate metadata-only bank review batches.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <div><span className="text-muted-foreground">Vouchers</span><div className="font-semibold">{selectedPendingRows.length}</div></div>
+                <div><span className="text-muted-foreground">Amount</span><div className="font-semibold">{fmt(selectedPendingRows.reduce((s, v) => s + Number(v.amount), 0))}</div></div>
+              </div>
+              <label className="space-y-1 block text-sm">
+                <span className="font-medium">Permitted bank account</span>
+                <Select value={deferredBankAccountId} onValueChange={setDeferredBankAccountId}>
+                  <SelectTrigger><SelectValue placeholder="Select the warehouse bank account" /></SelectTrigger>
+                  <SelectContent>
+                    {pendingBankLedgers.map(account => (
+                      <SelectItem key={account.accountId} value={String(account.accountId)}>
+                        {account.name} · {account.locationName}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {!pendingBankLedgers.length ? <span className="text-xs text-destructive">No permitted bank account is assigned to this location.</span> : null}
+              </label>
+              <label className="space-y-1 block text-sm">
+                <span className="font-medium">Reconciliation date</span>
+                <Input type="date" value={deferredDate} onChange={e => setDeferredDate(e.target.value)} />
+              </label>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setDeferredOpen(false)}>Cancel</Button>
+              <Button
+                onClick={submitDeferredReconciliation}
+                disabled={reconcilePendingMutation.isPending || !deferredBankAccountId || !deferredDate || !selectedPendingRows.length}
+              >
+                {reconcilePendingMutation.isPending ? 'Posting…' : 'Confirm bank posting'}
               </Button>
             </DialogFooter>
           </DialogContent>
