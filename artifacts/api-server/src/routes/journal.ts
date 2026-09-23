@@ -566,8 +566,9 @@ router.get("/accounts/journal-vouchers", requireModuleView("page:/accounts/vouch
 
 /**
  * The locations the caller may record a manual voucher under, each with the
- * cash/bank ledger ids the voucher dialog should offer for it. Head Office's
- * set is the STD-CASH/STD-BANK subtrees minus every branch-owned till; a
+ * cash/bank/online ledger ids the voucher dialog should offer for it. Head
+ * Office's set is the STD-CASH/STD-BANK/STD-ONLINE subtrees minus every
+ * branch-owned till; a
  * branch's set is its own cash ledger(s). `ownedLedgers` maps every
  * branch-owned ledger to its owner so the dialog can hide accounts belonging
  * to a location other than the one selected — the same rule the server
@@ -584,7 +585,7 @@ router.get("/accounts/voucher-locations", requireModuleView(["page:/accounts/vou
     : (await pool.query(`SELECT id, name, cash_ledger_id FROM outlets ORDER BY name`)).rows;
 
   const ownedMap = await locationOwnedLedgerMap();
-  const hoCashBank = await ledgerIdsUnderCodes(["STD-CASH", "STD-BANK"]);
+  const hoCashBank = await ledgerIdsUnderCodes(["STD-CASH", "STD-BANK", "STD-ONLINE"]);
   for (const id of ownedMap.keys()) hoCashBank.delete(id);
 
   // Managed Cash & Bank accounts may be assigned to multiple warehouses.

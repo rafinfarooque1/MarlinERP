@@ -374,15 +374,19 @@ export async function checkVoucherPartyLocation(
 }
 
 /**
- * Every ledger under the Cash-in-Hand and Bank Accounts groups.
- * Used to keep branch users out of Head Office's cash and bank accounts.
+ * Every ledger under the Cash-in-Hand, Bank Accounts, and Online groups.
+ * Used to keep branch users out of Head Office's money accounts.
  */
 export async function headOfficeCashBankLedgerIds(): Promise<number[]> {
   const { rows } = await pool.query<{ id: number; parent_id: number | null; code: string | null }>(
     `SELECT id, parent_id, code FROM account_ledgers ORDER BY id`,
   );
   const ids = new Set<number>();
-  for (const r of rows) if (r.code === "STD-CASH" || r.code === "STD-BANK") ids.add(Number(r.id));
+  for (const r of rows) {
+    if (r.code === "STD-CASH" || r.code === "STD-BANK" || r.code === "STD-ONLINE") {
+      ids.add(Number(r.id));
+    }
+  }
   for (let i = 0; i < 8; i++) {
     for (const r of rows) {
       if (r.parent_id && ids.has(Number(r.parent_id))) ids.add(Number(r.id));

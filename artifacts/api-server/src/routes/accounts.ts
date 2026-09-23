@@ -335,15 +335,19 @@ router.get("/accounts/voucher-parties", requireModuleView(["page:/accounts/vouch
   })));
 });
 
-// Cash/Bank ledgers only — for Received In / Paid From dropdowns
+// Cash/Bank/Online ledgers only — for Received In / Paid From dropdowns.
+// Online platforms live under the dedicated STD-ONLINE chart head and must
+// be included here so voucher forms can filter them by accountType.
 // Serves Cash & Bank and Expenses pages.
 router.get("/accounts/cash-bank-ledgers", requireModuleView(["page:/accounts/cash-bank", "page:/accounts/expenses", "page:/accounts/vouchers", "page:/vendors", "page:/sales/expenses", "page:/hr/payroll", "page:/hr/advances", "page:/operations/receipt-voucher", "page:/operations/payment-voucher", "page:/sales/pos", "page:/outstanding", "page:/customers"]), async (req, res): Promise<void> => {
   const { rows } = await pool.query(`SELECT * FROM account_ledgers ORDER BY id`);
   const bankRoot = rows.find((r: any) => r.code === 'STD-BANK');
   const cashRoot = rows.find((r: any) => r.code === 'STD-CASH');
+  const onlineRoot = rows.find((r: any) => r.code === 'STD-ONLINE');
   const ids = new Set<number>();
   if (bankRoot) ids.add(bankRoot.id);
   if (cashRoot) ids.add(cashRoot.id);
+  if (onlineRoot) ids.add(onlineRoot.id);
   // Multi-level descendant walk (up to 4 levels)
   for (let i = 0; i < 4; i++) {
     for (const r of rows) {
