@@ -22,8 +22,6 @@
 - [Unified sidebar architecture](unified-sidebar.md) — ONE nav for all users; Sales/Accounts switcher removed; getNavGroups() replaces getAccountsNavGroups()+getSalesNavItems(); getPermissionGroups() replaces getPermissionSegments().
 - [Payroll workflow](payroll-workflow.md) — drafts LIVE-refresh on GET (no Generate buttons); approval gates on unclassified absences (409/confirmLop); per-employee ledgers; advances auto-deducted at generate.
 - [LOP leave policy](lop-leave-policy.md) — wd = calendar days of the month (payrollWorkingDays retired/ignored); ONE formula (dayContribution/monthLeaveSummary); NULL leave snapshot = omit, never 0; suites pin policy + derive DIM.
-- [LBAC implementation](lbac-implementation.md) — full location-scoping across all routes; decisions on HO-only endpoints; vendor/customer location stamping; dataScope helpers.
-- [Money voucher ownership](money-voucher-ownership.md) — the till anchors the stamp via ONE resolver (reconcile/deposit/import paths get forgotten); ownership = stamp OR ledger-leg; own-location scope.
 - [Money and collection flows](payment-modes-invoice-share.md) + [voucher ownership](money-voucher-ownership.md) + [cash/bank availability](cash-bank-multilocation.md) + [receipt routing](electronic-collection-routing.md) — derive mode and ownership from the effective ledger/location; preserve legacy modes.
 - [Polymorphic stock_entries](polymorphic-stock-entries.md) — OVERLAPPING ids, scope material_type everywhere; master existence enforced by KEY SHARE trigger (no FK possible); orphan ledger keys poison backdated statements.
 - [Module retirement pattern](module-retirement-pattern.md) — TOTAL hide (no badge/placeholder); GETs keep returning data; page retirement = shared RETIRED_PAGE_HREFS set (nav+routes+perm matrix), keys stay registered.
@@ -147,7 +145,6 @@
 - [Route-guard audit CI](route-guard-audit.md) — audit-route-guards.ts fails CI on unguarded writes (exemptions stay exact) + check-permissions #6 pins App.tsx guard keys; a comment claiming a fix ≠ the fix.
 - [Mobile app distribution](mobile-app-distribution.md) — no app stores BY CHOICE: Android ships ONLY via the automated EAS pipeline → storage manifest (atomic swap + grace copy; upload UI/URL proxy REMOVED); raw .ipa always rejected.
 - [HR employee lifecycle](hr-employee-lifecycle.md) — app-created employees carry a pay_components row (delete removes it, history blocks with 400); leave cancel = status flip; POS cash sale payments are receipt-backed → system-delete the receipt before cancel.
-- [Voucher print verification](voucher-print-verification.md) — validate physical page geometry with pdfinfo, left-half text bounds with pdftotext -bbox, and clipping visually with a raster render
 - [Bank Book reconciliation identity](bank-book-reconciliation.md) — status keys are exact posting ledger + derived entry id; one-step reconciliation is metadata-only and never posts accounting
 - [Salesman assignment](salesman-assignment.md) — store employee ID plus name snapshot; validate new assignments by activity/location and grandfather unchanged historical assignments
 - [Rate terminology compatibility](rate-terminology-compatibility.md) — user-facing MRP terminology is Rate; preserve internal mrp/masterMrp fields and API aliases for compatibility
@@ -157,3 +154,4 @@
 - [Customer receipt ledger aggregation](receipt-ledger-aggregation.md) — allocation rows are settlement metadata; one receipt posts one customer credit for its full amount
 - [Report parity gates](report-parity-gates.md) — verify API-derived screen anchors against parsed PDF/XLSX content; a missing UI export action is a real failure
 - [Sales report definitions](sales-report-definitions.md) — Sales Register includes invoice-level charges; By Item is explicitly merchandise-line-only
+- [Transfer accounting](transfer-accounting.md) — taxable inter-warehouse value uses Transfer-Out/Transfer-In P&L ledgers; legacy voucher mode is backfilled with additive balanced adjustments

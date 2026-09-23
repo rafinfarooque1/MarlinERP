@@ -47,6 +47,7 @@ import { addStorageLocationsSetup } from "./migrations/storageLocationsSetup";
 import { cleanupOrphanStockRows, ensureStockMasterGuardTrigger } from "./migrations/orphanStockCleanup";
 import { addDataImport } from "./migrations/dataImport";
 import { addWarehouseLifecycle } from "./migrations/warehouseLifecycle";
+import { backfillTransferAccounting } from "./migrations/transferAccounting";
 
 async function runMigrations() {
   // Existing migrations
@@ -928,12 +929,12 @@ async function runMigrations() {
   const productionLedgers: [string, string, string, string, string, string][] = [
     ['Finished Goods Inventory', 'asset',   'STD-FG-INV',   'balance_sheet', 'SYS-CURA',   'Manufactured stock held at cost — debited when a production batch is recorded'],
     ['Production Cost Absorbed', 'expense', 'STD-PROD-ABS', 'profit_loss',   'SYS-DIREXP', 'Contra to purchases, wages and overhead for costs capitalised into manufactured stock'],
-    // Inter-branch transfer clearing. A transfer between two GSTINs raises a tax
-    // invoice, but it is not turnover — so its value must NOT land in Sales or
-    // Purchases. It parks here instead: credited when goods leave, debited when
-    // they land, netting to zero once both legs post. Sitting in the balance
-    // sheet is what keeps the P&L completely untouched by transfers.
+    // Inter-branch transfer clearing remains for legacy vouchers. New transfer
+    // accounting shows the taxable value as a matched Transfer-Out /
+    // Transfer-In P&L pair while GST and inter-branch balances stay separate.
     ['Inter-Branch Transfer',    'liability', 'STD-BRANCH-TRF', 'balance_sheet', 'SYS-CURL', 'Value of taxable stock transferred between own GSTINs — credited on dispatch, debited on receipt, nets to zero'],
+    ['Transfer-In',              'expense',   'STD-TRF-IN',     'profit_loss',   'SYS-PUR',   'Purchase-like taxable value recognised when stock is received from another warehouse'],
+    ['Transfer-Out',             'income',    'STD-TRF-OUT',    'profit_loss',   'SYS-DIRINC', 'P&L offset for taxable stock dispatched to another warehouse'],
   ];
   for (const [name, type, code, section, parentCode, desc] of productionLedgers) {
     const { rows: [parent] } = await pool.query(`SELECT id FROM account_ledgers WHERE code = $1`, [parentCode]);
@@ -3113,6 +3114,16 @@ try {
   console.error("[migration] runMigrations FAILED (non-fatal):", migrationsError);
   console.error(e?.stack ?? "(no stack available)");
   logger.warn({ err }, "Migration warning (non-fatal)");
+}
+
+// Transfer accounting is intentionally independent of runMigrations(). The
+// one-time backfill appends balanced adjustment vouchers for legacy voucher-mode
+// transfers; invoice-mode history is projected by buildDerivedPostings instead.
+// Its marker is written in the same transaction as every generated voucher.
+try {
+  await backfillTransferAccounting(pool);
+} catch (err) {
+  console.error("[migration] transfer_accounting_pnl_v1 FAILED (non-fatal, retries next boot):", (err as Error).message);
 }
 
 // Independent of the block above, on purpose — see convertTextDateColumns().

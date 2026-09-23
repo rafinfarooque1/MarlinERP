@@ -14,6 +14,7 @@ import { outletWritesBlocked } from "../lib/featureFlags";
 import { respondIfMonthLocked, isMonthLocked, ymOfDate, monthLockedBody } from "../lib/periodLock";
 import { isLevelOneAdmin, ADMIN_DELETE_ERROR } from "../lib/adminGate";
 import { parsePartyLedgerCode } from "../lib/advanceLedgers";
+import { TRANSFER_IN_LEDGER_CODE, TRANSFER_OUT_LEDGER_CODE } from "../lib/transferAccounting";
 
 const router = Router();
 
@@ -1101,12 +1102,12 @@ export async function buildDerivedPostings(opts: { toDate?: string; q?: Q } = {}
         stdDtx = idOf("STD-DTX"), stdPur = idOf("STD-PUR"), elecClr = idOf("STD-ELEC-CLR"),
         debtors = idOf("SYS-DEBTORS"), creditors = idOf("SYS-CREDITORS");
   // Inter-branch transfer ledgers. A cross-GSTIN transfer raises a real tax
-  // invoice, but it is a movement of own stock, not turnover — so its value
-  // parks in the balance-sheet clearing ledger instead of Sales/Purchases,
-  // which is what keeps transfers out of the P&L entirely.
-  const branchTrf = idOf("STD-BRANCH-TRF"),
-        branchDebtor = idOf("STD-BRANCH-DEBTOR"),
-        branchCreditor = idOf("STD-BRANCH-CREDITOR");
+  // invoice, and its taxable value is shown as a matched Transfer-Out /
+  // Transfer-In P&L pair rather than hidden in operational Sales/Purchases.
+  const branchDebtor = idOf("STD-BRANCH-DEBTOR"),
+        branchCreditor = idOf("STD-BRANCH-CREDITOR"),
+        transferIn = idOf(TRANSFER_IN_LEDGER_CODE),
+        transferOut = idOf(TRANSFER_OUT_LEDGER_CODE);
 
   // Location → cash / sales / purchase ledger mapping. A location's purchases
   // debit its own purchase ledger, so each warehouse's buying shows separately
@@ -1405,15 +1406,15 @@ export async function buildDerivedPostings(opts: { toDate?: string; q?: Q } = {}
     const net = round2(total - tax - ocTotal);
     const inv = s.invoice_number || `Sale #${s.id}`;
     const loc = locMap.get(`${s.location_type}:${s.location_id}`);
-    // A branch-transfer invoice credits the inter-branch clearing ledger, never
-    // a sales ledger. It replaces the dispatch journal voucher that used to be
-    // raised for the same transfer — both would double the revenue and the tax.
+    // A branch-transfer invoice credits Transfer-Out, never an operational sales
+    // ledger. It replaces the dispatch journal voucher that used to be raised
+    // for the same transfer — both would double the revenue and the tax.
     const isBranchTransfer = s.branch_transfer_id != null;
-    if (isBranchTransfer && !branchTrf) {
-      throw new Error(`Branch-transfer sale ${s.id} cannot be posted: STD-BRANCH-TRF is missing`);
+    if (isBranchTransfer && (!transferOut || !branchDebtor)) {
+      throw new Error(`Branch-transfer sale ${s.id} cannot be posted: transfer accounting ledgers are missing`);
     }
     const salesLedger = isBranchTransfer
-      ? branchTrf!
+      ? transferOut!
       : (loc?.sales_ledger_id ?? stdSales);
     const cashLedger = loc?.cash_ledger_id ?? stdCash;
     const eid = `sale:${s.id}`;
@@ -1596,12 +1597,11 @@ export async function buildDerivedPostings(opts: { toDate?: string; q?: Q } = {}
     const amt = Number(p.total_amount);
     const bill = p.invoice_number || `Purchase #${p.id}`;
     // The inward leg of a branch transfer: owed to the sending branch, and its
-    // value goes to the inter-branch clearing ledger rather than Purchases, so
-    // it offsets the outward leg instead of inflating cost of goods. Replaces
-    // the receive journal voucher for the same transfer.
+    // taxable value goes to the Transfer-In expense ledger. Replaces the
+    // receive journal voucher for the same transfer.
     const isBranchTransfer = p.branch_transfer_id != null;
-    if (isBranchTransfer && !branchTrf) {
-      throw new Error(`Branch-transfer purchase ${p.id} cannot be posted: STD-BRANCH-TRF is missing`);
+    if (isBranchTransfer && (!transferIn || !branchCreditor)) {
+      throw new Error(`Branch-transfer purchase ${p.id} cannot be posted: transfer accounting ledgers are missing`);
     }
     const vendLedger = isBranchTransfer
       ? (branchCreditor || creditors)
@@ -1610,7 +1610,7 @@ export async function buildDerivedPostings(opts: { toDate?: string; q?: Q } = {}
     // Office bills (and anything without a location) keep the standard one.
     const pLoc = locMap.get(`${p.location_type}:${p.location_id}`);
     const purLedger = isBranchTransfer
-      ? branchTrf!
+      ? transferIn!
       : ((p.location_type && p.location_type !== 'headoffice' && pLoc?.purchase_ledger_id)
         ? Number(pLoc.purchase_ledger_id) : stdPur);
     const pLines = (p.line_items ?? []) as any[];
