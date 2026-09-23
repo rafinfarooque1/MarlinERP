@@ -128,7 +128,8 @@ export async function reconciliationPendingAmount(
            JOIN sales s ON s.id = sp.sale_id
            LEFT JOIN receipts sr ON sr.id = sp.clearing_receipt_id
           WHERE sp.reconciliation_status = 'pending'
-            AND LOWER(COALESCE(sp.method, '')) IN ('bank', 'upi')
+             -- card and bank_transfer are historical spellings of bank.
+             AND LOWER(COALESCE(sp.method, '')) IN ('bank', 'upi', 'card', 'bank_transfer')
             AND (sp.clearing_receipt_id IS NULL OR sr.source = 'sale')
             AND ${saleLocation}
          UNION ALL

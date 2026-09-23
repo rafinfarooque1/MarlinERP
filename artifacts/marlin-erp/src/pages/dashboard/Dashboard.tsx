@@ -404,7 +404,7 @@ export default function Dashboard() {
 
   // Fixed two-per-row pair layout (owner's spec), identical on desktop and
   // mobile: Sales|Purchases, Inventory|Expenses, Payables|Receivables,
-  // Payments|Receipts, Cash|Bank, GP|NP.
+  // Payments|Receipts, Cash|Reconciliation Pending, GP|NP.
   // Inventory Value is hidden entirely for employees without the valuation
   // right (the server omits the figure) — Expenses then spans its full row so
   // every later pair stays intact.
@@ -496,7 +496,7 @@ export default function Dashboard() {
       hint: locationHint('receipts', mf == null ? undefined : `Cash ${fmt(mf.cashIn)} · Bank ${fmt(mf.bankIn)}`),
       onClick: drillTo('/reports/financial', 'cashBank'),
     },
-    // ── Row 5: Cash · Bank ──────────────────────────────────────────────────
+    // ── Row 5: Cash · Reconciliation Pending ───────────────────────────────
     {
       label: 'Cash Balance',
       value: dashboardValue('cash', bi?.cash?.balance) == null ? '—' : fmt(dashboardValue('cash', bi?.cash?.balance)!),
@@ -505,14 +505,13 @@ export default function Dashboard() {
       onClick: drillTo('/reports/financial', 'cash'),
     },
     {
-      label: 'Bank Balance',
-      value: dashboardValue('bank', bi?.bank?.balance) == null ? '—' : fmt(dashboardValue('bank', bi?.bank?.balance)!),
-      tone: bi?.bank?.balance == null ? 'default' : bi.bank.balance >= 0 ? 'pos' : 'neg',
-      hint: locationHint('bank'),
-      onClick: drillTo('/reports/financial', 'bank'),
+      label: 'Reconciliation Pending',
+      value: fmt(dashboardValue('reconciliationPending', bi?.bank?.reconciliationPending) ?? 0),
+      tone: (dashboardValue('reconciliationPending', bi?.bank?.reconciliationPending) ?? 0) > 0 ? 'warn' : 'default',
+      hint: locationHint('reconciliationPending', 'Awaiting bank clearance'),
     },
     // ── Row 6: GP · NP — both read the P&L's own summary, never a re-sum ──
-    // NP sits beside GP (under Bank Balance) per owner spec, Aug 2026.
+    // NP stays beside GP in the final KPI pair.
     {
       label: 'GP',
       value: dashboardValue('grossProfit', pf?.gross) == null ? '—' : fmt(dashboardValue('grossProfit', pf?.gross)!),
@@ -545,7 +544,7 @@ export default function Dashboard() {
     { src: 'Payments', out: 'Payments', metric: 'payments' },
     { src: 'Receipts', out: 'Receipts', metric: 'receipts' },
     { src: 'Cash Balance', out: 'Cash', metric: 'cash' },
-    { src: 'Bank Balance', out: 'Bank', metric: 'bank' },
+    { src: 'Reconciliation Pending', out: 'Reconciliation Pending', metric: 'reconciliationPending', fallbackHint: 'awaiting bank clearance' },
     { src: 'GP', out: 'GP · Gross Profit', metric: 'grossProfit', fallbackHint: 'tap for P&L' },
     { src: 'NP', out: 'NP · Net Profit', metric: 'netProfit', fallbackHint: 'tap for P&L' },
   ];
@@ -567,7 +566,7 @@ export default function Dashboard() {
   // with shorter labels, subtle icons, structured breakdown lines and one-line
   // descriptions, per the owner's mobile-dashboard spec. Pairs land as
   // Sales|Purchases, Inventory|Expenses, Payables|Receivables,
-  // Payments|Receipts, Cash|Bank, GP|NP; when Inventory is permission-hidden,
+  // Payments|Receipts, Cash|Reconciliation Pending, GP|NP; when Inventory is permission-hidden,
   // Expenses spans its full row so every later semantic pair stays intact.
   const mobileCards: MobileKpi[] = [
      { label: 'Sales', icon: TrendingUp, value: fmt(dashboardValue('sales', s?.total) ?? 0), tone: 'pos', lines: locationLines('sales'), onClick: drillTo('/reports/sales', 'register') },
@@ -655,12 +654,12 @@ export default function Dashboard() {
       onClick: drillTo('/reports/financial', 'cash'),
     },
     {
-      label: 'Bank',
+      label: 'Reconciliation Pending',
       icon: Landmark,
-       value: dashboardValue('bank', bi?.bank?.balance) == null ? '—' : fmt(dashboardValue('bank', bi?.bank?.balance)!),
-      tone: bi?.bank?.balance == null ? 'default' : bi.bank.balance >= 0 ? 'pos' : 'neg',
-      lines: locationLines('bank'),
-      onClick: drillTo('/reports/financial', 'bank'),
+      value: fmt(dashboardValue('reconciliationPending', bi?.bank?.reconciliationPending) ?? 0),
+      tone: (dashboardValue('reconciliationPending', bi?.bank?.reconciliationPending) ?? 0) > 0 ? 'warn' : 'default',
+      lines: locationLines('reconciliationPending'),
+      desc: showLocationBreakdown ? undefined : 'Awaiting bank clearance',
     },
     {
       label: 'GP',
@@ -753,8 +752,9 @@ export default function Dashboard() {
             <SummaryCards cards={summaryCards} gridClassName="hidden md:grid md:grid-cols-2 gap-3" />
             {bi && bi.expenses?.total == null && (
               <p className="text-xs text-muted-foreground">
-                Expenses and Bank Balance are company-level accounting figures and are not
-                broken down by location, so they are not shown for a single-location view.
+                Expenses are company-level accounting figures and are not broken down by
+                location, so that figure is not shown for a single-location view. Reconciliation
+                Pending is scoped to the current warehouse/location.
               </p>
             )}
           </>
