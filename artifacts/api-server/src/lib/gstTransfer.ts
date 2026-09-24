@@ -373,6 +373,12 @@ export async function ensureClearingLedger(
   const existing = await ledgerIdByCode(db, code);
   if (existing) return existing;
   const parentId = parentCode ? await ledgerIdByCode(db, parentCode) : null;
+  // A requested parent is part of the ledger's accounting identity. Creating
+  // the leaf under the root when the parent seed is temporarily unavailable
+  // makes the transfer balance disappear from the Balance Sheet hierarchy.
+  // Callers already treat null as "ledger unavailable", so fail closed and let
+  // the transaction retry after bootstrap repairs the chart.
+  if (parentCode && !parentId) return null;
   try {
     const { rows: [ins] } = await db.query(
       `INSERT INTO account_ledgers (name, type, code, section, parent_id, is_system_group, description)

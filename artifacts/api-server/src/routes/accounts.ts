@@ -275,6 +275,49 @@ router.get("/accounts/chart/flat", requireModuleView(["page:/accounts/vouchers",
 });
 
 /**
+ * System-generated inter-branch balances are not vendor/customer master rows.
+ * Keep them out of ordinary party pickers, but expose the ledger-owned
+ * receivable/payable figures wherever users review vendor and sundry balances.
+ */
+router.get(
+  "/accounts/internal-transfer-balances",
+  requireModuleView(["page:/vendors", "page:/outstanding", "page:/accounts/chart"]),
+  async (req, res): Promise<void> => {
+    if (req.employee?.branchType !== "headoffice") {
+      res.status(403).json({ error: "Inter-branch balances are available to Head Office users only" });
+      return;
+    }
+    const { currentBalanceIndex } = await import("../lib/ledgerBalances");
+    const balanceIndex = await currentBalanceIndex();
+    const { rows } = await pool.query(
+      `SELECT id, code, name, parent_id
+         FROM account_ledgers
+        WHERE code = 'STD-BRANCH-DEBTOR'
+           OR code = 'STD-BRANCH-CREDITOR'
+           OR code LIKE 'STD-BRANCH-DR-%'
+           OR code LIKE 'STD-BRANCH-CR-%'
+        ORDER BY code`,
+    );
+    const balances = rows.map((row: any) => {
+      const net = balanceIndex.net(Number(row.id));
+      const isReceivable = String(row.code).startsWith("STD-BRANCH-DR-")
+        || row.code === "STD-BRANCH-DEBTOR";
+      return {
+        ledgerId: Number(row.id),
+        code: String(row.code),
+        name: String(row.name),
+        kind: isReceivable ? "receivable" : "payable",
+        balance: Math.round((isReceivable ? net : -net) * 100) / 100,
+      };
+    });
+    res.json({
+      receivables: balances.filter((row: any) => row.kind === "receivable"),
+      payables: balances.filter((row: any) => row.kind === "payable"),
+    });
+  },
+);
+
+/**
  * Party-ledger picker for receipt/payment vouchers.
  *
  * Unlike the general chart endpoint, this endpoint accepts the voucher form's
