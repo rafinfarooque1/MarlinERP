@@ -16,6 +16,7 @@ import {
 
 const MIGRATION_NAME = "transfer_accounting_pnl_v1";
 const INTERNAL_MIGRATION_NAME = "internal_transfer_accounting_v1";
+const INTERNAL_PARENT_REPAIR_NAME = "internal_transfer_ledger_parents_v1";
 const r2 = (n: number) => Math.round(n * 100) / 100;
 
 function dateOnly(value: unknown): string {
@@ -345,6 +346,53 @@ export async function backfillInternalTransferAccounting(pool: Pool): Promise<vo
     await client.query("ROLLBACK").catch(() => {});
     console.error(
       `[migration] ${INTERNAL_MIGRATION_NAME} FAILED — rolled back; will retry next boot:`,
+      error,
+    );
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Repair the hierarchy of system-generated inter-branch ledgers without
+ * touching their postings. These codes are module-owned, so their parent is
+ * part of their accounting contract: receivables belong under Current Assets
+ * and payables under Current Liabilities.
+ */
+export async function repairInternalTransferLedgerParents(pool: Pool): Promise<void> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows: claimed } = await client.query(
+      `INSERT INTO migration_log (name) VALUES ($1)
+       ON CONFLICT (name) DO NOTHING
+       RETURNING name`,
+      [INTERNAL_PARENT_REPAIR_NAME],
+    );
+    if (claimed.length === 0) {
+      await client.query("ROLLBACK");
+      return;
+    }
+
+    await client.query(
+      `UPDATE account_ledgers AS child
+          SET parent_id = parent.id
+         FROM account_ledgers AS parent
+        WHERE (
+          (child.code LIKE 'STD-BRANCH-DR-%' AND parent.code = 'SYS-CURA')
+          OR (child.code LIKE 'STD-BRANCH-CR-%' AND parent.code = 'SYS-CURL')
+          OR (child.code = 'STD-BRANCH-DEBTOR' AND parent.code = 'SYS-CURA')
+          OR (child.code = 'STD-BRANCH-CREDITOR' AND parent.code = 'SYS-CURL')
+        )
+          AND child.parent_id IS DISTINCT FROM parent.id`,
+    );
+
+    await client.query("COMMIT");
+    console.error(`[migration] ${INTERNAL_PARENT_REPAIR_NAME}: applied`);
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    console.error(
+      `[migration] ${INTERNAL_PARENT_REPAIR_NAME} FAILED — rolled back; will retry next boot:`,
       error,
     );
   } finally {

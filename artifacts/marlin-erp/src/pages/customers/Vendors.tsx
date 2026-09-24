@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react';
 import {
   useListVendors, useCreateVendor, useUpdateVendor, getListVendorsQueryKey,
   useGetVendorLedger, useGetCashBankLedgers, useRecordVendorPayment,
+  customFetch,
 } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
@@ -18,6 +19,7 @@ import * as z from 'zod';
 import { Plus, Search, Truck, Download, Eye, BookOpen, Pencil, IndianRupee, ArrowUpRight, ArrowDownLeft, ShieldOff, Wallet } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { downloadCSV } from '@/lib/download';
 import { StateCombobox } from '@/components/ui/state-combobox';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -311,6 +313,13 @@ function PaymentDialog({ vendor, onClose }: { vendor: any; onClose: () => void }
 export default function Vendors() {
   const perm = usePermission('page:/vendors');
   const { data: vendors = [], isLoading } = useListVendors();
+  const { data: internalBalances, isLoading: internalBalancesLoading } = useQuery({
+    queryKey: ['/api/accounts/internal-transfer-balances'],
+    queryFn: () => customFetch<{
+      receivables: Array<{ ledgerId: number; code: string; name: string; kind: string; balance: number }>;
+      payables: Array<{ ledgerId: number; code: string; name: string; kind: string; balance: number }>;
+    }>('/api/accounts/internal-transfer-balances'),
+  });
   const loc = usePartyLocations();
   const [locFilter, setLocFilter] = useState('all');
   const [search, setSearch] = useState('');
@@ -425,6 +434,39 @@ export default function Vendors() {
           <SummaryCard label="With Dues" value={withDues} icon={Truck} tone="warning" loading={isLoading} />
           <SummaryCard label="Total Payable" value={inr(totalPayable)} icon={Wallet} tone="warning" loading={isLoading} />
         </SummaryCardGrid>
+
+        {!internalBalancesLoading && (internalBalances?.payables?.length || internalBalances?.receivables?.length) ? (
+          <div className="rounded-xl border border-border bg-card shadow-sm overflow-hidden">
+            <div className="px-4 py-3 border-b border-border bg-muted/20">
+              <h2 className="text-sm font-semibold">Inter-branch balances</h2>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                System-generated transfer ledgers shown separately from ordinary vendor masters.
+              </p>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-border">
+              {([
+                ['Payables', internalBalances?.payables ?? [], 'text-amber-600'],
+                ['Receivables', internalBalances?.receivables ?? [], 'text-emerald-600'],
+              ] as Array<[string, any[], string]>).map(([title, rows, tone]) => (
+                <div key={String(title)} className="p-4">
+                  <p className={`text-xs font-semibold uppercase tracking-wide ${tone}`}>{title}</p>
+                  <div className="mt-2 space-y-2">
+                    {(rows as any[]).map((row) => (
+                      <div key={row.ledgerId} className="flex items-center justify-between gap-3 text-sm">
+                        <div className="min-w-0">
+                          <p className="font-medium truncate">{row.name}</p>
+                          <p className="text-[11px] text-muted-foreground font-mono">{row.code}</p>
+                        </div>
+                        <span className="font-mono tabular-nums shrink-0">{inr(Math.abs(Number(row.balance) || 0))}</span>
+                      </div>
+                    ))}
+                    {(rows as any[]).length === 0 && <p className="text-xs text-muted-foreground">No inter-branch ledgers.</p>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
 
         <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
           <div className="p-4 border-b border-border flex flex-col sm:flex-row sm:items-center gap-2 bg-muted/20">

@@ -147,13 +147,13 @@ router.get(
       (opts) => buildDerivedPostings(opts),
       { fromDate, toDate, location: loc },
     );
-    // Financial statements intentionally exclude stock in transit.  A current
-    // period should also use the live quantity truth rather than the historic
-    // rewind path, which can legitimately report incomplete pre-checkpoint
-    // history for today's date.
+    // Financial statements use the valuation engine's default ownership rule:
+    // dispatched-but-unreceived goods remain inventory of the sending branch.
+    // Keep the diagnostic on that same canonical figure so it cannot report a
+    // false mismatch merely because it omitted in-transit stock.
     const valuation = await stockValuation(pool, {
       ...(toDate === todayISO() ? {} : { asOf: toDate }),
-      includeInTransit: false,
+      includeInTransit: true,
       ...stockScope(loc),
     });
     const [derived, openings] = await Promise.all([
@@ -208,7 +208,7 @@ router.get(
       : close(pl.incomes.closingStock, stockValue) ? "PASS" : "FAIL";
     checks.push(check("FI-06", "P&L closing stock = inventory valuation", stockPnlStatus, {
       actual: pl.incomes.closingStock, expected: stockValue, difference: stockDiff, date: toDate, location: locJson,
-      source: "buildBooks + stockValuation(asOf)",
+      source: "buildBooks + stockValuation(asOf, includeInTransit)",
       explanation: valuation.reliable ? "P&L closing stock is compared with the dated valuation service." : valuation.note ?? "Historical valuation evidence is incomplete.",
     }));
     const bsStockDiff = r2(books.balanceSheet.assets.closingStock - stockValue);
@@ -217,7 +217,7 @@ router.get(
       : close(books.balanceSheet.assets.closingStock, stockValue) ? "PASS" : "FAIL";
     checks.push(check("FI-07", "Inventory valuation = Balance Sheet inventory", stockBsStatus, {
       actual: books.balanceSheet.assets.closingStock, expected: stockValue, difference: bsStockDiff, date: toDate, location: locJson,
-      source: "buildBooks.balanceSheet + stockValuation(asOf)",
+      source: "buildBooks.balanceSheet + stockValuation(asOf, includeInTransit)",
       explanation: valuation.reliable ? "Balance-sheet inventory is compared with the same dated valuation service." : valuation.note ?? "Historical valuation evidence is incomplete.",
     }));
 

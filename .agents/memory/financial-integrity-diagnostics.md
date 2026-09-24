@@ -16,3 +16,11 @@ description: Integrity checks must separate proven equality from unavailable evi
 **Why:** Treating every unavailable check as WARN makes a healthy 0-FAIL result look like a P&L defect and encourages unsafe “fixes” that only turn unknowns green.
 
 **How to apply:** Keep the distinction in both the API summary and the integrity panel; a reliable inventory mismatch is FAIL, while an unreliable historical valuation is UNVERIFIED.
+
+## Stock comparison must use the statement's ownership scope
+
+**Rule:** Inventory integrity comparisons must use the same valuation options as the canonical statements, including sender-owned in-transit stock.
+
+**Why:** Excluding a valid ownership component from the diagnostic creates a deterministic false mismatch even when the P&L and Balance Sheet agree.
+
+**How to apply:** When changing stock valuation inclusion rules, update FI-06/FI-07 and the statement engine together; verify both on-hand and in-transit components.
