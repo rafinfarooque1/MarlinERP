@@ -29,11 +29,11 @@ import { usePartyLocations, locationValueOf, HEAD_OFFICE_VALUE } from '@/lib/use
 
 const customerFormSchema = z.object({
   name: z.string().min(1, 'Name required'),
-  phone: z.string().optional(),
+  phone: z.string().trim().min(1, 'Phone is required'),
   email: z.string().email().optional().or(z.literal('')),
   address: z.string().optional(),
   gstNumber: z.string().optional(),
-  state: z.string().optional(),
+  state: z.string().trim().min(1, 'Select a state'),
   notes: z.string().optional(),
   creditLimit: z.coerce.number().min(0, 'Must be ≥ 0').optional(),
   creditDays: z.coerce.number().int('Whole days').min(0, 'Must be ≥ 0').optional(),
@@ -131,7 +131,11 @@ export function CustomerFormDialog({ open, onOpenChange, editItem, defaultLocati
             )} />
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <FormField control={form.control} name="phone" render={({ field }) => (
-                <FormItem><FormLabel>Phone</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
+                <FormItem>
+                  <FormLabel>Phone <span className="text-destructive">*</span></FormLabel>
+                  <FormControl><Input aria-required="true" {...field} /></FormControl>
+                  <FormMessage />
+                </FormItem>
               )} />
               <FormField control={form.control} name="email" render={({ field }) => (
                 <FormItem><FormLabel>Email</FormLabel><FormControl><Input type="email" {...field} /></FormControl><FormMessage /></FormItem>
@@ -140,8 +144,10 @@ export function CustomerFormDialog({ open, onOpenChange, editItem, defaultLocati
                 <FormItem><FormLabel>GST Number (GSTIN)</FormLabel><FormControl><Input placeholder="15-char GSTIN" className="font-mono" {...field} /></FormControl></FormItem>
               )} />
               <FormField control={form.control} name="state" render={({ field }) => (
-                <FormItem><FormLabel>State</FormLabel>
-                  <FormControl><StateCombobox value={field.value || ''} onChange={field.onChange} data-testid="select-customer-state" /></FormControl>
+                <FormItem>
+                  <FormLabel>State <span className="text-destructive">*</span></FormLabel>
+                  <FormControl><StateCombobox aria-required="true" value={field.value || ''} onChange={field.onChange} data-testid="select-customer-state" /></FormControl>
+                  <FormMessage />
                 </FormItem>
               )} />
             </div>
