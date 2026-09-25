@@ -136,17 +136,15 @@ export const SALES_SERIES = {
 export type SalesSeries = keyof typeof SALES_SERIES;
 
 export function salesInvoiceNumber(series: SalesSeries, fyLabel: string, seq: number): string {
-  return `${SALES_SERIES[series].prefix}/${fyLabel}/${String(seq).padStart(6, "0")}`;
+  return formatSalesInvoiceNumber(series, fyLabel, seq, DEFAULT_SALES_NUMBER_FORMAT);
 }
 
 // ── Per-location number FORMAT overrides ────────────────────────────────────
 //
-// The default printed shape is SB2C/2026-27/000001 (full FY label, 6-digit
-// zero padding, serials restart every FY). A location migrated onto its old
-// physical bill-book numbering (admin renumber operation) instead prints
-// SB2C/26-27/7490 — short FY label, no padding, and ONE serial sequence that
-// keeps counting across financial years ("continuous": the physical book
-// never restarted in April, so neither does the migrated sequence).
+// The default printed shape is SB2C/26-27/1 (short FY label, no zero padding,
+// serials restart every FY). A location with a continuous sequence still keeps
+// ONE serial across financial years ("continuous": the physical book never
+// restarted in April, so neither does that location's migrated sequence).
 //
 // The override lives in sales_number_formats keyed on the folded counter
 // scope. Every producer that prints or allocates a sales number must go
@@ -336,7 +334,7 @@ export type SalesNumberAllocation = {
  * independent running serial (Head Office numbering never advances a
  * warehouse's, and a new location starts at 000001 automatically because its
  * counter row simply doesn't exist yet). The printed format stays clean
- * (SB2C/2026-27/000001, no location code); the location identity is what the
+ * (SB2C/26-27/1, no location code); the location identity is what the
  * ERP tracks internally via the columns stamped from this allocation.
  */
 export async function allocateSalesInvoiceNumber(
@@ -392,7 +390,7 @@ export async function nextSalesInvoiceNumber(
 }
 
 /**
- * Parse "PREFIX/FY/SERIAL" (e.g. SB2C/2026-27/000013, BTR/2026-27/0004) into
+ * Parse "PREFIX/FY/SERIAL" (e.g. SB2C/26-27/13, BTR/2026-27/0004) into
  * its identity parts. Returns null for anything that doesn't match — legacy
  * hand-shaped numbers keep NULL identity columns, they are never renumbered.
  */

@@ -4,8 +4,9 @@ description: Per-location invoice number formats (short FY, no padding, continuo
 ---
 
 ## Format overrides (`sales_number_formats`)
-- Keyed on the folded counter scope (e.g. `warehouse:1`). Row present ⇒ that location prints `SB2C/26-27/7490` style: `fy_short` (short FY segment), `pad=0` (no zero padding), `continuous` (ONE serial across financial years — counter row keyed `'ALL'` instead of the FY label).
-- Rows are created ONLY by the admin renumber apply. Absence = default format (`SB2C/2026-27/000001`, per-FY counters). `getSalesNumberFormat` defaults on missing row OR missing table.
+- Keyed on the folded counter scope (e.g. `warehouse:1`). New sales numbers use `SB2C/26-27/123`: short FY and no zero padding, whether or not a format row exists.
+- Existing rows preserve their `continuous` counter policy (one serial across FYs, keyed `'ALL'`, versus normal per-FY counters); startup normalizes their printed FY/padding to the current global format without renumbering existing sales.
+- `getSalesNumberFormat` uses the global short/unpadded default when the row or table is missing.
 - **Every producer must go through the format helpers** (`formatSalesInvoiceNumber`, `salesCounterFyLabel`): the sale-creation allocator, the B2C→B2B reclass, and the every-boot counter reconcile (which folds cross-FY max onto the `'ALL'` row for continuous scopes). A producer that hardcodes the shape forks the series.
 - Stamped `invoice_fy` = the PRINTED segment (`26-27`), so `split_part(invoice_number,'/',2)` and the identity columns always agree. `shortFyLabel` is idempotent.
 - Books-shape predicates match on `SB2B/%`/`SB2C/%` prefixes and receipt↔sale number equality — both survive the format change by construction, but any NEW consumer that regex-parses the FY segment must accept both `\d{4}-\d{2}` and `\d{2}-\d{2}`.

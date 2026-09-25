@@ -220,7 +220,7 @@ const SETTING_GROUPS: SettingGroup[] = [
     settings: [
       { key: 'currency', label: 'Currency', type: 'select', options: ['INR', 'USD', 'EUR'], defaultValue: 'INR' },
       { key: 'timezone', label: 'Timezone', type: 'select', options: ['Asia/Kolkata', 'UTC', 'America/New_York'], defaultValue: 'Asia/Kolkata' },
-      { key: 'dateFormat', label: 'Date Format', type: 'select', options: ['DD-MM-YY'], defaultValue: 'DD-MM-YY' },
+      { key: 'dateFormat', label: 'Date Format', type: 'select', options: ['DD-MM-YY'], defaultValue: 'DD-MM-YY', description: 'Dates are displayed as DD-MM-YY throughout the ERP.' },
     ],
   },
 ];
@@ -1301,7 +1301,7 @@ export default function Settings() {
                       <Input type="number" value={values[setting.key] || 0} onChange={e => set(setting.key, Number(e.target.value))} className="w-28 font-mono" />
                     )}
                     {setting.type === 'select' && (
-                      <Select value={String(values[setting.key])} onValueChange={v => set(setting.key, v)}>
+                      <Select value={setting.key === 'dateFormat' ? 'DD-MM-YY' : String(values[setting.key])} onValueChange={v => set(setting.key, v)}>
                         <SelectTrigger className="w-48"><SelectValue /></SelectTrigger>
                         <SelectContent>{setting.options?.map(o => {
                           const opt = typeof o === 'string' ? { value: o, label: o } : o;
