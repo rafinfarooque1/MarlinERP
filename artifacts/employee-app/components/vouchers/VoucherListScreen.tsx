@@ -24,6 +24,7 @@ import { notify } from '@/lib/dialogs';
 import { openMoneyVoucherPdf, type MoneyVoucherKind } from '@/lib/voucherPdf';
 import { PAGE, useErpPermissions } from '@/hooks/useErpPermissions';
 import { useColors } from '@/hooks/useColors';
+import { formatDate } from '@/lib/formatting';
 
 /**
  * Shared Receipt / Payment voucher register — read + PDF only. Editing and
@@ -82,12 +83,6 @@ function normalize(kind: MoneyVoucherKind, raw: (Receipt | Payment)[]): Row[] {
     locationType: r.locationType,
     locationId: r.locationId,
   }));
-}
-
-function formatDate(d: string): string {
-  const dt = new Date(`${d}T00:00:00`);
-  if (Number.isNaN(dt.getTime())) return d || '—';
-  return dt.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
 export function VoucherListScreen({ kind }: { kind: MoneyVoucherKind }) {

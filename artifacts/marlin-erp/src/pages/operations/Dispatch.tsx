@@ -28,6 +28,7 @@ import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { usePermission } from '@/lib/usePermission';
 import { formatDateTime } from '@/lib/date';
 import { inr } from '@/lib/currency';
+import { formatSalesInvoiceDisplayNumber } from '@/lib/invoiceNumber';
 import { toast } from 'sonner';
 import { Truck, Search, PackageCheck, PackageOpen, Clock, CheckCircle2, Eye, FileDown } from 'lucide-react';
 
@@ -104,7 +105,7 @@ export default function Dispatch() {
     if (setStatusM.isPending) return;
     setStatusM.mutate({ saleId: row.saleId, status }, {
       onSuccess: () => {
-        toast.success(`${row.invoiceNumber} marked ${status === 'READY' ? 'Ready' : 'Dispatched'}`);
+        toast.success(`${formatSalesInvoiceDisplayNumber(row.invoiceNumber)} marked ${status === 'READY' ? 'Ready' : 'Dispatched'}`);
         onDone?.();
       },
       onError: (e: any) => {
@@ -263,7 +264,7 @@ export default function Dispatch() {
                 <TableBody>
                   {pageRows.map(row => (
                     <TableRow key={row.saleId}>
-                      <TableCell className="font-mono text-xs">{row.invoiceNumber}</TableCell>
+                      <TableCell className="font-mono text-xs">{formatSalesInvoiceDisplayNumber(row.invoiceNumber)}</TableCell>
                       <TableCell>
                         <div className="text-sm">{row.saleDate}</div>
                         <div className="text-xs text-muted-foreground">{timeSince(row.createdAt)} ago</div>
@@ -314,7 +315,7 @@ export default function Dispatch() {
                 <div key={row.saleId} className="bg-card border border-border rounded-xl shadow-sm p-4 space-y-2">
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
-                      <div className="font-mono text-xs">{row.invoiceNumber}</div>
+                      <div className="font-mono text-xs">{formatSalesInvoiceDisplayNumber(row.invoiceNumber)}</div>
                       <div className="font-medium truncate">{row.customerName ?? 'Walk-in'}</div>
                     </div>
                     <StatusBadge status={row.status.toLowerCase()} />
@@ -354,7 +355,7 @@ export default function Dispatch() {
             {viewRow && (
               <>
                 <DialogHeader>
-                  <DialogTitle className="font-mono text-base">{viewRow.invoiceNumber}</DialogTitle>
+                  <DialogTitle className="font-mono text-base">{formatSalesInvoiceDisplayNumber(viewRow.invoiceNumber)}</DialogTitle>
                   <DialogDescription>
                     {viewRow.customerName ?? 'Walk-in'} · {viewRow.locationName || '—'} · {inr(viewRow.totalAmount)}
                   </DialogDescription>

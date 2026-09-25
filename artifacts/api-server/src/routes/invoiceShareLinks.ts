@@ -22,6 +22,8 @@ import { pool } from "@workspace/db";
 import { requireModuleAction } from "../middleware/permissions";
 import { getUserDataScope, scopeSalesWhere } from "../lib/dataScope";
 import { logActivity } from "../lib/audit";
+import { formatDisplayDate } from "../lib/displayDate";
+import { formatSalesInvoiceDisplayNumber } from "../lib/voucherNumber";
 import { assembleInvoiceData, renderInvoicePdf } from "../services/invoicePdf";
 import {
   newPublicId, newShareToken, shareTokenMatches,
@@ -430,10 +432,7 @@ const inr = (n: unknown): string =>
   `₹${Number(n ?? 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 const asDate = (d: unknown): string => {
-  const t = new Date(String(d));
-  return Number.isFinite(t.getTime())
-    ? t.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })
-    : String(d ?? "");
+  return formatDisplayDate(d instanceof Date || typeof d === "string" || typeof d === "number" ? d : String(d ?? ""));
 };
 
 /**
@@ -556,7 +555,7 @@ router.get("/share/invoice/:publicId", async (req, res): Promise<void> => {
   const expires = asDate(resolved.row.expires_at);
 
   res.status(200).type("html").send(page({
-    title: `Invoice ${data.sale.invoiceNumber ?? ""} — ${company}`,
+    title: `Invoice ${formatSalesInvoiceDisplayNumber(data.sale.invoiceNumber)} — ${company}`,
     body: `
       <div class="head">
         <h1>${esc(company)}</h1>
@@ -564,7 +563,7 @@ router.get("/share/invoice/:publicId", async (req, res): Promise<void> => {
       </div>
       <div class="body">
         <dl>
-          <dt>Invoice number</dt><dd>${esc(data.sale.invoiceNumber ?? "—")}</dd>
+          <dt>Invoice number</dt><dd>${esc(formatSalesInvoiceDisplayNumber(data.sale.invoiceNumber ?? "—"))}</dd>
           <dt>Invoice date</dt><dd>${esc(asDate(data.sale.saleDate))}</dd>
           ${data.customer?.name ? `<dt>Billed to</dt><dd>${esc(data.customer.name)}</dd>` : ""}
         </dl>

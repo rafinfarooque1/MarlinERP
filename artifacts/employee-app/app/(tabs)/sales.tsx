@@ -20,6 +20,7 @@ import { localYmd, shiftYmd } from '@/lib/localDate';
 import { PAGE, useErpPermissions } from '@/hooks/useErpPermissions';
 import { useLocationContext } from '@/contexts/LocationContext';
 import { useColors } from '@/hooks/useColors';
+import { formatDate, formatSalesInvoiceDisplayNumber } from '@/lib/formatting';
 
 /** Payment-status pill: same vocabulary as the web sales list. */
 function statusBadge(row: PaginatedSaleRow): { label: string; tone: BadgeTone } {
@@ -33,13 +34,6 @@ function statusBadge(row: PaginatedSaleRow): { label: string; tone: BadgeTone } 
     case 'cancelled': return { label: 'Cancelled', tone: 'muted' };
     default: return { label: row.paymentStatus ?? '—', tone: 'muted' };
   }
-}
-
-function formatDate(d?: string | null): string {
-  if (!d) return '';
-  const dt = new Date(`${String(d).slice(0, 10)}T00:00:00`);
-  if (Number.isNaN(dt.getTime())) return String(d);
-  return dt.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: '2-digit' });
 }
 
 const RANGES = [
@@ -180,7 +174,7 @@ export default function SalesScreen() {
               >
                 <View style={{ flex: 1, gap: 3 }}>
                   <Text style={styles.invoice} numberOfLines={1}>
-                    {(row as any).invoiceNumber ?? `#${row.id}`}
+                    {formatSalesInvoiceDisplayNumber((row as any).invoiceNumber ?? `#${row.id}`)}
                   </Text>
                   <Text style={styles.customer} numberOfLines={1}>
                     {(row as any).customerName || 'Walk-in customer'}

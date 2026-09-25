@@ -16,6 +16,7 @@ import { Feather } from '@expo/vector-icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as Location from 'expo-location';
 import { useColors } from '@/hooks/useColors';
+import { formatDate } from '@/lib/formatting';
 import { useAuth } from '@/contexts/AuthContext';
 import { customFetch } from '@workspace/api-client-react';
 
@@ -182,9 +183,9 @@ function TodayCard() {
   const todayStr = companyTodayStr(tz);
   const todayLabel = (() => {
     try {
-      return new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', timeZone: tz || 'Asia/Kolkata' });
+      return formatDate(new Date().toLocaleDateString('en-CA', { timeZone: tz || 'Asia/Kolkata' }));
     } catch {
-      return new Date(`${todayStr}T00:00:00`).toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' });
+      return formatDate(todayStr);
     }
   })();
 
@@ -556,7 +557,7 @@ export default function AttendanceScreen() {
                     <View style={[styles.logDot, { backgroundColor: cfg.bg }]} />
                     <View>
                       <Text style={styles.logDate}>
-                        {new Date(dateStr + 'T00:00:00').toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' })}
+                        {formatDate(dateStr)}
                       </Text>
                       <Text style={styles.logStatus}>{cfg.label}</Text>
                     </View>

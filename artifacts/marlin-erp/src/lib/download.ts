@@ -5,6 +5,7 @@
  * (it is a view preference the server treats as a filter, never authority).
  */
 import { formatDate } from './date';
+import { formatSalesInvoiceDisplayNumber } from './invoiceNumber';
 
 function locationHeaders(): Record<string, string> {
   try {
@@ -297,7 +298,7 @@ export function buildGstInvoiceHtml(opts: {
       <td style="width:50%;border-right:1px solid #555">
         <table class="no-border">
           <tr><td class="label" style="width:200px">GST Number</td><td>: &nbsp;<strong>${cs?.gstNumber || ''}</strong></td></tr>
-          <tr><td class="label">Invoice Number</td><td>: &nbsp;<strong>${sale.invoiceNumber}</strong></td></tr>
+          <tr><td class="label">Invoice Number</td><td>: &nbsp;<strong>${formatSalesInvoiceDisplayNumber(sale.invoiceNumber)}</strong></td></tr>
           <tr><td class="label">Invoice Date</td><td>: &nbsp;${dateStr}</td></tr>
           <tr><td class="label">Tax Payable on Reverse Charge</td><td>: &nbsp;No</td></tr>
         </table>
@@ -419,7 +420,7 @@ export function buildGstInvoiceHtml(opts: {
             <img src="${qrDataUrl}" style="width:100px;height:100px;display:block;margin:0 auto" alt="UPI QR" />
             <div style="font-size:8px;color:#666;margin-top:3px;word-break:break-all">${(sale as any).outletUpiId || ''}</div>
             <div style="font-size:10px;font-weight:bold;margin-top:2px">${outstandingNum == null ? 'Balance unavailable' : `₹${outstandingNum.toFixed(2)}`}</div>
-            <div style="font-size:7px;color:#999">Outstanding &middot; ${sale.invoiceNumber || ''}</div>
+            <div style="font-size:7px;color:#999">Outstanding &middot; ${formatSalesInvoiceDisplayNumber(sale.invoiceNumber || '')}</div>
           </td>` : ''}
           <td style="width:${showQr ? '38%' : '45%'};padding:8px;text-align:right">
             <div class="bold" style="margin-bottom:4px">${cs?.companyName || ''}</div>

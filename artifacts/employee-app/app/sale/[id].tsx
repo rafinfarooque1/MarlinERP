@@ -25,6 +25,7 @@ import { apiOrigin } from '@/lib/apiOrigin';
 import { notify } from '@/lib/dialogs';
 import { PAGE, useErpPermissions } from '@/hooks/useErpPermissions';
 import { useColors } from '@/hooks/useColors';
+import { formatDate, formatSalesInvoiceDisplayNumber } from '@/lib/formatting';
 
 function statusMeta(status?: string, cancelled?: boolean): { label: string; tone: BadgeTone } {
   if (cancelled || status === 'cancelled') return { label: 'Cancelled', tone: 'muted' };
@@ -44,13 +45,6 @@ function paymentModeLabel(mode?: string): string {
     case 'bank_transfer': return 'Bank';
     default: return mode || '—';
   }
-}
-
-function formatDate(d?: string | null): string {
-  if (!d) return '';
-  const dt = new Date(`${String(d).slice(0, 10)}T00:00:00`);
-  if (Number.isNaN(dt.getTime())) return String(d);
-  return dt.toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' });
 }
 
 /** Line discount for display: per-unit ₹ × qty on newer rows, the stored
@@ -116,10 +110,11 @@ export default function SaleDetailScreen() {
       const path = result.link?.path;
       if (!path) throw new Error('No active share link.');
       const url = `${apiOrigin()}${path}`;
-      const message = `Invoice ${sale?.invoiceNumber ?? ''} — ${url}`;
+      const displayInvoiceNumber = formatSalesInvoiceDisplayNumber(sale?.invoiceNumber);
+      const message = `Invoice ${displayInvoiceNumber} — ${url}`;
       if (Platform.OS === 'web') {
         const nav: any = typeof navigator !== 'undefined' ? navigator : null;
-        if (nav?.share) await nav.share({ title: `Invoice ${sale?.invoiceNumber ?? ''}`, url });
+        if (nav?.share) await nav.share({ title: `Invoice ${displayInvoiceNumber}`, url });
         else if (nav?.clipboard) {
           await nav.clipboard.writeText(url);
           notify('Link copied', 'The invoice link is on your clipboard.');
@@ -160,7 +155,7 @@ export default function SaleDetailScreen() {
 
   return (
     <FormScreen
-      title={sale.invoiceNumber || `Sale #${sale.id}`}
+      title={formatSalesInvoiceDisplayNumber(sale.invoiceNumber || `Sale #${sale.id}`)}
       subtitle={formatDate(sale.saleDate)}
       footer={
         canDownload ? (

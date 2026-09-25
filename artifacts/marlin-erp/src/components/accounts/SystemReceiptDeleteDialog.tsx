@@ -7,6 +7,7 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { AlertTriangle, Check, Loader2, ShieldAlert } from 'lucide-react';
 import { toast } from 'sonner';
+import { formatSalesInvoiceDisplayNumber } from '@/lib/invoiceNumber';
 
 const inr = (n: number) => `₹${Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
 
@@ -103,7 +104,7 @@ export function SystemReceiptDeleteDialog({ receiptId, onClose }: { receiptId: n
                 {impact.sales.map(s => (
                   <div key={s.saleId} className="space-y-0.5">
                     <div className="flex justify-between gap-2">
-                      <span className="font-mono font-semibold">{s.invoiceNumber}</span>
+                      <span className="font-mono font-semibold">{formatSalesInvoiceDisplayNumber(s.invoiceNumber)}</span>
                       <span className="text-muted-foreground truncate">{s.customerName}</span>
                     </div>
                     <div className="flex justify-between gap-2 text-xs text-muted-foreground">

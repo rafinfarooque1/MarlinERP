@@ -76,6 +76,7 @@ import { Badge } from '@/components/ui/badge';
 import { downloadCSV } from '@/lib/download';
 import { Separator } from '@/components/ui/separator';
 import { inr } from '@/lib/currency';
+import { formatSalesInvoiceDisplayNumber } from '@/lib/invoiceNumber';
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
@@ -277,7 +278,7 @@ function PriceHistoryButton({ customerId, itemId }: { customerId?: number | null
               <div key={h.saleId} className="flex items-center justify-between gap-2 text-xs">
                 <div className="min-w-0 flex-1">
                   <span className="text-muted-foreground">{formatDate(h.saleDate)}</span>
-                  <span className="ml-1.5 font-mono text-[10px] text-muted-foreground break-all">{h.invoiceNumber}</span>
+                  <span className="ml-1.5 font-mono text-[10px] text-muted-foreground break-all">{formatSalesInvoiceDisplayNumber(h.invoiceNumber)}</span>
                 </div>
                 <div className="shrink-0 text-right">
                   <span className="font-mono font-semibold">{inr(Number(h.unitPrice))}</span>
@@ -504,7 +505,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
       setCollectQrUrl(null); return;
     }
     const amount = Math.min(typed, balanceDue).toFixed(2);
-    const uri = `upi://pay?pa=${encodeURIComponent(upiId)}&pn=${encodeURIComponent(viewItem.outletName || '')}&am=${amount}&cu=INR&tn=${encodeURIComponent(viewItem.invoiceNumber || '')}`;
+    const uri = `upi://pay?pa=${encodeURIComponent(upiId)}&pn=${encodeURIComponent(viewItem.outletName || '')}&am=${amount}&cu=INR&tn=${encodeURIComponent(formatSalesInvoiceDisplayNumber(viewItem.invoiceNumber || ''))}`;
     let cancelled = false;
     (import('qrcode') as Promise<any>).then(QR => {
       QR.toDataURL(uri, { width: 160, margin: 2 }).then((url: string) => { if (!cancelled) setCollectQrUrl(url); });
@@ -1306,7 +1307,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
           line_count: Number(payload.lineItems?.length ?? 0),
         });
         toast.success(convertFrom
-          ? `Quotation ${convertFrom.quotationNumber} converted — invoice ${created?.invoiceNumber ?? ''} recorded`
+          ? `Quotation ${convertFrom.quotationNumber} converted — invoice ${formatSalesInvoiceDisplayNumber(created?.invoiceNumber ?? '')} recorded`
           : 'Sale recorded successfully');
         invalidateSalesData();
         if (convertFrom) {
@@ -1573,7 +1574,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                 <Button variant="outline" size="sm" onClick={async () => downloadCSV('sales.csv', (await fetchAllSales(salesListFilters))
                   .filter(s => statusFilter === 'all' || ((s as any).paymentStatus ?? 'paid') === statusFilter)
                   .map(s => ({
-                  Invoice: s.invoiceNumber, Date: s.saleDate, Outlet: s.outletName,
+                  Invoice: formatSalesInvoiceDisplayNumber(s.invoiceNumber), Date: s.saleDate, Outlet: s.outletName,
                   Customer: s.customerName || 'Walk-in', Payment: paymentModeLabel(s.paymentMode),
                   Subtotal: s.subtotal, Tax: s.taxTotal,
                   Discount: (Number((s as any).discountTotal ?? 0)
@@ -1682,7 +1683,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                 </TableCell></TableRow>
               ) : sorted.map(sale => (
                 <TableRow key={sale.id} className="hover:bg-muted/10">
-                  <TableCell className="font-mono text-primary font-bold">{sale.invoiceNumber}</TableCell>
+                  <TableCell className="font-mono text-primary font-bold">{formatSalesInvoiceDisplayNumber(sale.invoiceNumber)}</TableCell>
                   <TableCell className="text-sm text-muted-foreground">
                     <div className="flex items-center gap-1"><Calendar className="w-3 h-3" />{formatDate(sale.saleDate)}</div>
                   </TableCell>
@@ -1763,7 +1764,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                     <div key={sale.id} className="border border-border rounded-lg p-3 space-y-2">
                       <div className="flex items-start justify-between gap-2">
                         <div className="min-w-0">
-                          <p className="font-mono text-primary font-bold text-sm">{sale.invoiceNumber}</p>
+                          <p className="font-mono text-primary font-bold text-sm">{formatSalesInvoiceDisplayNumber(sale.invoiceNumber)}</p>
                           <p className="text-xs text-muted-foreground flex items-center gap-1">
                             <Calendar className="w-3 h-3" />{formatDate(sale.saleDate)}
                           </p>
@@ -1836,7 +1837,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
       >
         <TransactionDialogContent className="sm:max-w-6xl" onOpenAutoFocus={autoFocusFirst}>
           <DialogHeader><DialogTitle>{editItem
-            ? `Edit Sale — ${editItem.invoiceNumber}`
+            ? `Edit Sale — ${formatSalesInvoiceDisplayNumber(editItem.invoiceNumber)}`
             : convertFrom
               ? `Convert ${convertFrom.quotationNumber} to Sale`
               : 'Record Sale'}</DialogTitle></DialogHeader>
@@ -2712,7 +2713,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
           <SheetHeader>
             <div className="flex items-start justify-between gap-2">
               <div>
-                <SheetTitle className="flex items-center gap-2"><Receipt className="w-5 h-5 text-primary" />{viewItem?.invoiceNumber}</SheetTitle>
+                <SheetTitle className="flex items-center gap-2"><Receipt className="w-5 h-5 text-primary" />{formatSalesInvoiceDisplayNumber(viewItem?.invoiceNumber)}</SheetTitle>
                 <SheetDescription>{viewItem?.outletName} · {viewItem && formatDate(viewItem.saleDate)}</SheetDescription>
                 {viewItem?.quotationNumber && (
                   <p className="text-xs text-violet-600 font-medium mt-1">
@@ -3107,7 +3108,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                   <p className="text-xs text-muted-foreground mt-2 font-mono">{(viewItem as any).outletUpiId}</p>
                   <p className="text-[10px] text-muted-foreground uppercase tracking-wide mt-1">Amount Due</p>
                   <p className="text-base font-bold">{inr(Number((viewItem as any).upiQrAmount ?? (viewItem as any).balanceDue ?? 0))}</p>
-                  <p className="text-xs text-muted-foreground">{viewItem.invoiceNumber}</p>
+                  <p className="text-xs text-muted-foreground">{formatSalesInvoiceDisplayNumber(viewItem.invoiceNumber)}</p>
                   {/* A part collection being keyed in gets its own, smaller QR so
                       it can never be mistaken for the invoice's balance. */}
                   {showPaymentForm && paymentMethod === 'upi' && collectQrUrl && (

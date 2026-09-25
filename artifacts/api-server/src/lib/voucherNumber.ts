@@ -207,6 +207,23 @@ export function formatSalesInvoiceNumber(
 }
 
 /**
+ * Display-only normalization for legacy B2B/B2C sales numbers. Do not use for
+ * lookups or writes: the stored invoice number remains the accounting identity.
+ */
+export function formatSalesInvoiceDisplayNumber(value: string | null | undefined): string {
+  const raw = String(value ?? "");
+  const match = /^(SB2[BC])\/(\d{4}-\d{2}|\d{2}-\d{2})\/(\d+)$/i.exec(raw.trim());
+  if (!match) return raw;
+
+  const [, rawSeries, fyLabel, rawSerial] = match;
+  const shortFy = fyLabel.length === 7
+    ? `${fyLabel.slice(2, 4)}-${fyLabel.slice(5, 7)}`
+    : fyLabel;
+  const serial = rawSerial.replace(/^0+(?=\d)/, "");
+  return `${rawSeries.toUpperCase()}/${shortFy}/${serial}`;
+}
+
+/**
  * Load the number format for a counter scope. Missing row (or the table not
  * yet migrated) means the default format — overrides are strictly opt-in,
  * created only by the admin renumber operation.

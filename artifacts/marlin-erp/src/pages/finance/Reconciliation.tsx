@@ -3,6 +3,7 @@ import { AppLayout } from '@/components/layout/AppLayout';
 import { usePermission } from '@/lib/usePermission';
 import { useOutletsEnabled, useClearOutletSelection } from '@/lib/useFeatureFlags';
 import { useLocationContext } from '@/lib/locationContext';
+import { formatSalesInvoiceDisplayNumber } from '@/lib/invoiceNumber';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -500,12 +501,12 @@ export default function Reconciliation() {
                         checked={pendingSaleSelected.has(payment.id)}
                         onCheckedChange={checked => togglePendingSale(payment, checked === true)}
                         disabled={!perm.canEdit}
-                        aria-label={`Select ${payment.invoiceNumber}`}
+                        aria-label={`Select ${formatSalesInvoiceDisplayNumber(payment.invoiceNumber)}`}
                       />
                     </TableCell>
                     <TableCell className="text-xs text-muted-foreground">{String(payment.paymentDate).slice(0, 10)}</TableCell>
                     <TableCell className="text-sm font-medium">{paymentModeLabel(payment.method)}</TableCell>
-                    <TableCell className="font-mono text-xs">{payment.invoiceNumber}</TableCell>
+                    <TableCell className="font-mono text-xs">{formatSalesInvoiceDisplayNumber(payment.invoiceNumber)}</TableCell>
                     <TableCell className="text-sm">{payment.customerName ?? 'Walk-in'}</TableCell>
                     <TableCell className="text-sm">{payment.locationName}</TableCell>
                     <TableCell className="font-mono text-xs">{payment.referenceNumber ?? '—'}</TableCell>

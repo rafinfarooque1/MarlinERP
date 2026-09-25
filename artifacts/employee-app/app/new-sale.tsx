@@ -39,6 +39,7 @@ import { localYmd, shiftYmd } from '@/lib/localDate';
 import { PAGE, useErpPermissions } from '@/hooks/useErpPermissions';
 import { useLocationContext } from '@/contexts/LocationContext';
 import { useColors } from '@/hooks/useColors';
+import { formatDate, formatSalesInvoiceDisplayNumber } from '@/lib/formatting';
 
 /**
  * New Sale — full-screen stepped billing flow:
@@ -74,12 +75,6 @@ function accountClass(a: { accountType?: string | null; code?: string | null }):
 
 const todayStr = () => localYmd();
 const shiftDate = shiftYmd;
-
-function formatDateLong(d: string): string {
-  const dt = new Date(`${d}T00:00:00`);
-  if (Number.isNaN(dt.getTime())) return d;
-  return dt.toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'long', year: 'numeric' });
-}
 
 export default function NewSaleScreen() {
   const colors = useColors();
@@ -499,12 +494,12 @@ export default function NewSaleScreen() {
           <View style={styles.successIcon}>
             <Feather name="check" size={30} color={colors.successForeground} />
           </View>
-          <Text style={styles.successInvoice}>{created.invoiceNumber}</Text>
+          <Text style={styles.successInvoice}>{formatSalesInvoiceDisplayNumber(created.invoiceNumber)}</Text>
           <Text style={styles.successAmount}>
             {formatMoney(Number(created.totalAmount ?? 0), { showPaise: true })}
           </Text>
           <Text style={styles.mutedText}>
-            {created.customerName || 'Walk-in customer'} · {formatDateLong(created.saleDate)}
+            {created.customerName || 'Walk-in customer'} · {formatDate(created.saleDate)}
           </Text>
           {Number(created.balanceDue ?? 0) > 0 ? (
             <Text style={[styles.mutedText, { color: colors.warning }]}>
@@ -665,7 +660,7 @@ export default function NewSaleScreen() {
               <Feather name="chevron-left" size={20} color={colors.foreground} />
             </Pressable>
             <View style={{ flex: 1, alignItems: 'center' }}>
-              <Text style={styles.valueText}>{formatDateLong(saleDate)}</Text>
+              <Text style={styles.valueText}>{formatDate(saleDate)}</Text>
               {saleDate !== todayStr() ? (
                 <Pressable onPress={() => setSaleDate(todayStr())} hitSlop={6}>
                   <Text style={[styles.mutedText, { color: colors.primary }]}>Back to today</Text>

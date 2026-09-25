@@ -18,6 +18,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
 import { formatDate } from '@/lib/date';
+import { formatSalesInvoiceDisplayNumber } from '@/lib/invoiceNumber';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
 import {
@@ -411,7 +412,7 @@ export default function SalesDashboard() {
                         <TableBody>
                           {loc.items.map((s: any) => (
                             <TableRow key={s.id}>
-                              <TableCell className="font-mono text-xs font-bold text-primary">{s.invoiceNumber ?? `#${s.id}`}</TableCell>
+                              <TableCell className="font-mono text-xs font-bold text-primary">{formatSalesInvoiceDisplayNumber(s.invoiceNumber ?? `#${s.id}`)}</TableCell>
                               <TableCell className="text-sm">{s.customerName ?? <span className="text-muted-foreground italic">Walk-in</span>}</TableCell>
                               <TableCell className="text-right font-mono text-sm font-semibold">{fmt(Number(s.totalAmount ?? 0))}</TableCell>
                               <TableCell className="text-right font-mono text-sm text-emerald-600">{fmt(Number(s.amountPaid ?? 0))}</TableCell>
@@ -446,7 +447,7 @@ export default function SalesDashboard() {
                   <TableBody>
                     {salesSort.sorted.map((s: any) => (
                       <TableRow key={s.id}>
-                        <TableCell className="font-mono text-xs font-bold text-primary">{s.invoiceNumber ?? `#${s.id}`}</TableCell>
+                        <TableCell className="font-mono text-xs font-bold text-primary">{formatSalesInvoiceDisplayNumber(s.invoiceNumber ?? `#${s.id}`)}</TableCell>
                         <TableCell className="text-sm">{s.customerName ?? <span className="text-muted-foreground italic">Walk-in</span>}</TableCell>
                         <TableCell className="text-right font-mono text-sm font-semibold">{fmt(Number(s.totalAmount ?? 0))}</TableCell>
                         <TableCell className="text-right font-mono text-sm text-emerald-600">{fmt(Number(s.amountPaid ?? 0))}</TableCell>

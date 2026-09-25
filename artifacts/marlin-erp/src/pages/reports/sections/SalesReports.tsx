@@ -14,6 +14,7 @@ import { Building2, Store } from 'lucide-react';
 import { usePermission } from '@/lib/usePermission';
 import { downloadCSV } from '@/lib/download';
 import { paymentModeLabel } from '@/lib/paymentModes';
+import { formatSalesInvoiceDisplayNumber } from '@/lib/invoiceNumber';
 import { useEnabledOutlets, useAllOutlets } from '@/lib/locationStructure';
 import { useClearOutletSelection } from '@/lib/useFeatureFlags';
 import {
@@ -268,7 +269,7 @@ function RegisterReport({ range, canDownload }: { range: RangeState; canDownload
        ...(warehouses as any[]).map((w) => ({ v: `warehouse:${w.id}`, n: w.name }))].find((x) => x.v === loc)?.n ?? loc;
 
   const cols: Col<(typeof rows)[number]>[] = [
-    { key: 'invoiceNumber', label: 'Invoice', render: (r) => <span className="font-mono text-xs text-primary font-bold">{r.invoiceNumber}</span> },
+    { key: 'invoiceNumber', label: 'Invoice', render: (r) => <span className="font-mono text-xs text-primary font-bold">{formatSalesInvoiceDisplayNumber(r.invoiceNumber)}</span> },
     { key: 'date', label: 'Date', render: (r) => fmtDate(r.date) },
     { key: 'locationName', label: 'Location' },
     { key: 'locationType', label: 'Type', render: (r) => <LocationBadge type={r.locationType} /> },
@@ -297,7 +298,7 @@ function RegisterReport({ range, canDownload }: { range: RangeState; canDownload
           canDownload={canDownload}
           disabled={isLoading || rows.length === 0}
           onCSV={() => downloadCSV('sales-register.csv', rows.map((r) => ({
-            Invoice: r.invoiceNumber, Date: r.date, Location: r.locationName, 'Location Type': r.locationType,
+            Invoice: formatSalesInvoiceDisplayNumber(r.invoiceNumber), Date: r.date, Location: r.locationName, 'Location Type': r.locationType,
             Customer: r.customerName, Salesman: r.salespersonName, 'Taxable (₹)': r.subtotal.toFixed(2), 'Discount (₹)': r.discount.toFixed(2),
             'Tax (₹)': r.tax.toFixed(2), 'Total (₹)': r.total.toFixed(2), 'Paid (₹)': r.paid.toFixed(2),
             'Balance (₹)': r.balance.toFixed(2), Mode: paymentModeLabel(r.paymentMode), Status: r.paymentStatus,
@@ -315,7 +316,7 @@ function RegisterReport({ range, canDownload }: { range: RangeState; canDownload
                 { label: 'Paid', align: 'right', width: 1.2 }, { label: 'Balance', align: 'right', width: 1.2 },
                 { label: 'Status' },
               ],
-               rows: rows.map((r) => [r.invoiceNumber, fmtDate(r.date), r.locationName, r.customerName, r.salespersonName,
+               rows: rows.map((r) => [formatSalesInvoiceDisplayNumber(r.invoiceNumber), fmtDate(r.date), r.locationName, r.customerName, r.salespersonName,
                 pdfMoney(r.subtotal), pdfMoney(r.tax), pdfMoney(r.total), pdfMoney(r.paid), pdfMoney(r.balance),
                 titleCase(r.paymentStatus)]),
                totalsRow: ['TOTAL', '', '', '', '', pdfMoney(t?.subtotal), pdfMoney(t?.tax), pdfMoney(t?.total),
@@ -436,7 +437,7 @@ function DiscountsReport({ range, canDownload }: { range: RangeState; canDownloa
        ...(warehouses as any[]).map((w) => ({ v: `warehouse:${w.id}`, n: w.name }))].find((x) => x.v === loc)?.n ?? loc;
 
   const cols: Col<(typeof rows)[number]>[] = [
-    { key: 'invoiceNumber', label: 'Invoice', render: (r) => <span className="font-mono text-xs text-primary font-bold">{r.invoiceNumber}</span> },
+    { key: 'invoiceNumber', label: 'Invoice', render: (r) => <span className="font-mono text-xs text-primary font-bold">{formatSalesInvoiceDisplayNumber(r.invoiceNumber)}</span> },
     { key: 'date', label: 'Date', render: (r) => fmtDate(r.date) },
     { key: 'locationName', label: 'Location' },
     { key: 'customerName', label: 'Customer' },
@@ -466,7 +467,7 @@ function DiscountsReport({ range, canDownload }: { range: RangeState; canDownloa
           canDownload={canDownload}
           disabled={isLoading || rows.length === 0}
           onCSV={() => downloadCSV('discount-report.csv', rows.map((r) => ({
-            Invoice: r.invoiceNumber, Date: r.date, Location: r.locationName, Customer: r.customerName,
+            Invoice: formatSalesInvoiceDisplayNumber(r.invoiceNumber), Date: r.date, Location: r.locationName, Customer: r.customerName,
             Coupon: r.couponCode || '', 'Gross (₹)': r.gross.toFixed(2),
             'Item Discount (₹)': r.itemDiscount.toFixed(2), 'Bill Discount (₹)': r.billDiscount.toFixed(2),
             'Total Discount (₹)': r.totalDiscount.toFixed(2), 'Discount %': r.discountPct.toFixed(1),
@@ -489,7 +490,7 @@ function DiscountsReport({ range, canDownload }: { range: RangeState; canDownloa
                 { label: 'Bill Disc.', align: 'right', width: 1.1 }, { label: 'Total Disc.', align: 'right', width: 1.2 },
                 { label: 'Disc. %', align: 'right' }, { label: 'Net', align: 'right', width: 1.2 },
               ],
-              rows: rows.map((r) => [r.invoiceNumber, fmtDate(r.date), r.locationName, r.customerName,
+              rows: rows.map((r) => [formatSalesInvoiceDisplayNumber(r.invoiceNumber), fmtDate(r.date), r.locationName, r.customerName,
                 r.couponCode || '—', pdfMoney(r.gross), pdfMoney(r.itemDiscount), pdfMoney(r.billDiscount),
                 pdfMoney(r.totalDiscount), `${r.discountPct.toFixed(1)}%`, pdfMoney(r.net)]),
               totalsRow: ['TOTAL', '', '', '', '', pdfMoney(t?.gross), pdfMoney(t?.itemDiscount),

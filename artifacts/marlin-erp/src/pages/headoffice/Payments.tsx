@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { usePermission } from '@/lib/usePermission';
 import { formatDate } from '@/lib/date';
+import { formatSalesInvoiceDisplayNumber } from '@/lib/invoiceNumber';
 import { useOutletsEnabled, useClearOutletSelection } from '@/lib/useFeatureFlags';
 import { paymentModeLabel } from '@/lib/paymentModes';
 import { ReceiveIntoSelect, useReceiveIntoOptions, isCashOption } from '@/components/receive-into-select';
@@ -90,7 +91,7 @@ function CollectPaymentPanel({ sale, onClose, onDone }: { sale: any; onClose: ()
       <div className="rounded-lg border border-border p-3 text-sm space-y-1.5">
         <div className="flex justify-between">
           <span className="text-muted-foreground">Invoice</span>
-          <span className="font-mono font-semibold">{sale.invoiceNumber}</span>
+          <span className="font-mono font-semibold">{formatSalesInvoiceDisplayNumber(sale.invoiceNumber)}</span>
         </div>
         <div className="flex justify-between">
           <span className="text-muted-foreground">Customer</span>
@@ -351,7 +352,7 @@ export default function Payments() {
               <TableBody>
                 {sorted.map((s: any) => (
                   <TableRow key={s.id} className={Number(s.balanceDue ?? 0) > 0 ? 'bg-red-500/2' : ''}>
-                    <TableCell className="font-mono text-xs font-semibold">{s.invoiceNumber}</TableCell>
+                    <TableCell className="font-mono text-xs font-semibold">{formatSalesInvoiceDisplayNumber(s.invoiceNumber)}</TableCell>
                     <TableCell className="text-sm text-muted-foreground">{formatDate(s.saleDate)}</TableCell>
                     <TableCell className="text-sm">{s.customerName || <span className="text-muted-foreground italic">Walk-in</span>}</TableCell>
                     <TableCell className="text-sm">{s.outletName}</TableCell>
@@ -384,7 +385,7 @@ export default function Payments() {
           <SheetHeader className="pb-4">
             <SheetTitle className="flex items-center gap-2">
               <Banknote className="w-5 h-5 text-primary" />
-              {selectedSale?.invoiceNumber}
+              {formatSalesInvoiceDisplayNumber(selectedSale?.invoiceNumber)}
             </SheetTitle>
           </SheetHeader>
           {selectedSale && (

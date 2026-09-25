@@ -15,6 +15,7 @@ import { Input } from '@/components/ui/input';
 import { usePermission } from '@/lib/usePermission';
 import { downloadCSV } from '@/lib/download';
 import { formatDate } from '@/lib/date';
+import { formatSalesInvoiceDisplayNumber } from '@/lib/invoiceNumber';
 import {
   fmt, num, pdfMoney, fmtDate, titleCase,
   useDateRange, RangeBar, ReportPicker, SummaryCards, LocationBadge, RTable, ExportButtons, exportReportPdf, reportViewFromUrl,
@@ -754,7 +755,7 @@ function GstTransfersReport({ canDownload }: { canDownload: boolean }) {
           canDownload={canDownload}
           disabled={isLoading || rows.length === 0}
           onCSV={() => downloadCSV('gst-transfers.csv', rows.map((r) => ({
-            Invoice: r.invoiceNumber ?? '—', Challan: r.challanNumber, Date: fmtDate(r.date),
+            Invoice: formatSalesInvoiceDisplayNumber(r.invoiceNumber ?? '—'), Challan: r.challanNumber, Date: fmtDate(r.date),
             From: r.fromName, 'From GSTIN': r.fromGstin, To: r.toName, 'To GSTIN': r.toGstin,
             Supply: r.supplyType, Taxable: r.taxable, CGST: r.cgst, SGST: r.sgst, IGST: r.igst,
             'Total GST': r.tax, 'Invoice Value': r.total,
@@ -777,7 +778,7 @@ function GstTransfersReport({ canDownload }: { canDownload: boolean }) {
                 { label: 'Value', align: 'right' }, { label: 'Status' },
               ],
               rows: rows.map((r) => [
-                r.invoiceNumber ?? r.challanNumber, fmtDate(r.date), r.fromName, r.toName, r.supplyType,
+                formatSalesInvoiceDisplayNumber(r.invoiceNumber ?? r.challanNumber), fmtDate(r.date), r.fromName, r.toName, r.supplyType,
                 pdfMoney(r.taxable), pdfMoney(r.tax), pdfMoney(r.total), rowStatus(r),
               ]),
               totalsRow: ['TOTAL', '', '', '', '', pdfMoney(bt?.taxable ?? 0), pdfMoney(bt?.tax ?? 0), pdfMoney(bt?.total ?? 0), ''],
@@ -843,7 +844,7 @@ function GstTransfersReport({ canDownload }: { canDownload: boolean }) {
 
       <RTable
         cols={[
-          { key: 'invoiceNumber', label: 'Tax Invoice', render: (r) => <span className="font-mono text-xs text-primary font-bold">{r.invoiceNumber ?? '—'}</span> },
+          { key: 'invoiceNumber', label: 'Tax Invoice', render: (r) => <span className="font-mono text-xs text-primary font-bold">{formatSalesInvoiceDisplayNumber(r.invoiceNumber ?? '—')}</span> },
           { key: 'challanNumber', label: 'Challan', render: (r) => <span className="font-mono text-[11px] text-muted-foreground">{r.challanNumber}</span> },
           { key: 'date', label: 'Date', render: (r) => fmtDate(r.date) },
           { key: 'fromName', label: 'From', render: (r) => (
