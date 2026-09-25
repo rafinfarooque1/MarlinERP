@@ -23,6 +23,8 @@ import { PageHeader } from '@/components/app/page-header';
 import { EmptyState } from '@/components/app/empty-state';
 import { TableSkeleton } from '@/components/app/loading-skeletons';
 import { formatSalesInvoiceDisplayNumber } from '@/lib/invoiceNumber';
+import { formatGstDocumentDisplayNumber } from '@/lib/invoiceNumber';
+import { formatDateOrDash } from '@/lib/date';
 
 const payStatusLabel = (s?: string) =>
   s === 'na' ? '—' : s === 'paid' ? 'Paid' : s === 'partially_paid' ? 'Partial' : 'Unpaid';
@@ -256,7 +258,7 @@ export default function GstReturns() {
   const exportGstr1 = () => {
     downloadCSV(`gstr1-${fromDate}-to-${toDate}.csv`, [
       ...b2b.map(r => ({
-        Section: 'B2B', 'Invoice No': formatSalesInvoiceDisplayNumber(r.invoiceNumber), Date: r.saleDate, Customer: r.customerName,
+        Section: 'B2B', 'Invoice No': formatSalesInvoiceDisplayNumber(r.invoiceNumber), Date: formatDateOrDash(r.saleDate), Customer: r.customerName,
         GSTIN: r.gstin, 'Place of Supply': r.placeOfSupply, Warehouse: r.warehouseName ?? '',
         'Rate %': r.taxRate,
         'Taxable Value': r.taxableValue, CGST: r.cgst, SGST: r.sgst, IGST: r.igst,
@@ -264,7 +266,7 @@ export default function GstReturns() {
         'Payment Status': payStatusLabel(r.paymentStatus), 'Payment Mode': r.paymentModes ?? '',
       })),
       ...b2c.map(r => ({
-        Section: 'B2C (Invoices)', 'Invoice No': formatSalesInvoiceDisplayNumber(r.invoiceNumber), Date: r.saleDate, Customer: r.customerName,
+        Section: 'B2C (Invoices)', 'Invoice No': formatSalesInvoiceDisplayNumber(r.invoiceNumber), Date: formatDateOrDash(r.saleDate), Customer: r.customerName,
         GSTIN: '', 'Place of Supply': r.placeOfSupply, Warehouse: r.warehouseName ?? '',
         'Rate %': r.taxRate,
         'Taxable Value': r.taxableValue, CGST: r.cgst, SGST: r.sgst, IGST: r.igst,
@@ -297,19 +299,19 @@ export default function GstReturns() {
       })),
       ...mismatchDocs.map(r => ({
         Section: r.docType === 'sale' ? 'Mismatch (Outward)' : 'Mismatch (Inward)',
-        Head: '', Ledger: '', Document: r.documentNumber, Date: r.date, Party: r.partyName,
+        Head: '', Ledger: '', Document: r.docType === 'sale' ? formatSalesInvoiceDisplayNumber(r.documentNumber) : r.documentNumber, Date: formatDateOrDash(r.date), Party: r.partyName,
         'Ledger Amount': r.ledger.cgst + r.ledger.sgst + r.ledger.igst,
         'Register Amount': r.register.cgst + r.register.sgst + r.register.igst,
         Difference: r.differenceTotal, Reason: r.reason,
       })),
       ...otherEntries.map(r => ({
         Section: 'Other GST-Ledger Entries', Head: r.head, Ledger: r.ledgerCode,
-        Document: r.voucherNumber ?? r.entryId, Date: r.date, Party: r.description,
+        Document: formatGstDocumentDisplayNumber(r.voucherNumber ?? r.entryId), Date: formatDateOrDash(r.date), Party: r.description,
         'Ledger Amount': r.amount, 'Register Amount': '', Difference: r.amount, Reason: '',
       })),
       ...registerAdjustments.map(r => ({
         Section: 'GST Register Adjustment', Head: r.side, Ledger: r.source,
-        Document: r.voucherNumber ?? r.entryId, Date: r.date, Party: r.description,
+        Document: formatGstDocumentDisplayNumber(r.voucherNumber ?? r.entryId), Date: formatDateOrDash(r.date), Party: r.description,
         'Ledger Amount': r.total, 'Register Amount': r.total, Difference: 0,
         Reason: 'Included on the register side as a credit/debit note',
       })),
@@ -339,7 +341,7 @@ export default function GstReturns() {
   const hsnRow = (r: HsnSummaryRow, type: string): (string | number)[] =>
     [type, r.hsnCode, `${r.taxRate}%`, r.quantity, r.unit, r.taxableValue, r.cgst, r.sgst, r.igst, r.taxAmount];
   const hsnDoc = (): ReportDoc => ({
-    title: 'HSN Summary', subtitle: `${fromDate} to ${toDate}`, metaRows, orientation: 'landscape',
+    title: 'HSN Summary', subtitle: `${formatDateOrDash(fromDate)} to ${formatDateOrDash(toDate)}`, metaRows, orientation: 'landscape',
     filename: `hsn-summary-${fromDate}-to-${toDate}`,
     sections: [
       { heading: 'Outward Supplies (Sales)', columns: hsnCols, rows: (hsn.data?.outward ?? []).map(r => hsnRow(r, 'Outward')) },
@@ -347,7 +349,7 @@ export default function GstReturns() {
     ],
   });
   const gstr1Doc = (): ReportDoc => ({
-    title: 'GSTR-1 Working', subtitle: `${fromDate} to ${toDate}`, metaRows, orientation: 'landscape',
+    title: 'GSTR-1 Working', subtitle: `${formatDateOrDash(fromDate)} to ${formatDateOrDash(toDate)}`, metaRows, orientation: 'landscape',
     filename: `gstr1-${fromDate}-to-${toDate}`,
     sections: [
       {
@@ -360,7 +362,7 @@ export default function GstReturns() {
           { label: 'Payment Status' }, { label: 'Payment Mode' },
         ],
         rows: b2b.map(r => [
-          formatSalesInvoiceDisplayNumber(r.invoiceNumber), r.saleDate, r.customerName, r.gstin, r.warehouseName ?? '',
+          formatSalesInvoiceDisplayNumber(r.invoiceNumber), formatDateOrDash(r.saleDate), r.customerName, r.gstin, r.warehouseName ?? '',
           `${r.taxRate}%`, r.taxableValue, r.taxAmount, r.invoiceValue,
           payStatusLabel(r.paymentStatus), r.paymentModes ?? '',
         ]),
@@ -375,7 +377,7 @@ export default function GstReturns() {
           { label: 'Payment Status' }, { label: 'Payment Mode' },
         ],
         rows: b2c.map(r => [
-          formatSalesInvoiceDisplayNumber(r.invoiceNumber), r.saleDate, r.customerName, r.warehouseName ?? '',
+          formatSalesInvoiceDisplayNumber(r.invoiceNumber), formatDateOrDash(r.saleDate), r.customerName, r.warehouseName ?? '',
           `${r.taxRate}%`, r.taxableValue, r.taxAmount, r.invoiceValue,
           payStatusLabel(r.paymentStatus), r.paymentModes ?? '',
         ]),
@@ -411,7 +413,7 @@ export default function GstReturns() {
     }],
   });
   const reconDoc = (): ReportDoc => ({
-    title: 'GST Reconciliation', subtitle: `${fromDate} to ${toDate}`,
+    title: 'GST Reconciliation', subtitle: `${formatDateOrDash(fromDate)} to ${formatDateOrDash(toDate)}`,
     metaRows: [
       ['Scope', 'Company-wide (ledgers are not GSTIN-scoped)'],
       ['Documents checked', `${reconChecked?.sales ?? 0} sales, ${reconChecked?.purchases ?? 0} purchase bills`],
@@ -439,7 +441,9 @@ export default function GstReturns() {
           { label: 'Reason' },
         ],
         rows: mismatchDocs.map(r => [
-          r.docType === 'sale' ? 'Sale' : 'Purchase', r.documentNumber, r.date, r.partyName,
+          r.docType === 'sale' ? 'Sale' : 'Purchase',
+          r.docType === 'sale' ? formatSalesInvoiceDisplayNumber(r.documentNumber) : r.documentNumber,
+          formatDateOrDash(r.date), r.partyName,
           r.register.cgst + r.register.sgst + r.register.igst,
           r.ledger.cgst + r.ledger.sgst + r.ledger.igst,
           r.differenceTotal, r.reason,
@@ -451,7 +455,7 @@ export default function GstReturns() {
           { label: 'Date' }, { label: 'Source' }, { label: 'Voucher' },
           { label: 'Head' }, { label: 'Amount', align: 'right' as const }, { label: 'Description' },
         ],
-        rows: otherEntries.map(r => [r.date, r.source, r.voucherNumber ?? r.entryId, r.head, r.amount, r.description]),
+        rows: otherEntries.map(r => [formatDateOrDash(r.date), r.source, formatGstDocumentDisplayNumber(r.voucherNumber ?? r.entryId), r.head, r.amount, r.description]),
       }] : []),
       ...(registerAdjustments.length ? [{
         heading: 'GST Register Adjustments (credit/debit notes)',
@@ -462,8 +466,8 @@ export default function GstReturns() {
           { label: 'Description' },
         ],
         rows: registerAdjustments.map(r => [
-          r.date, r.side === 'outward' ? 'Credit note' : 'Debit note',
-          r.voucherNumber ?? r.entryId, r.cgst, r.sgst, r.igst, r.total, r.description,
+          formatDateOrDash(r.date), r.side === 'outward' ? 'Credit note' : 'Debit note',
+          formatGstDocumentDisplayNumber(r.voucherNumber ?? r.entryId), r.cgst, r.sgst, r.igst, r.total, r.description,
         ]),
       }] : []),
     ],
@@ -555,7 +559,7 @@ export default function GstReturns() {
                     {b2bSort.sorted.map((r, i) => (
                       <TableRow key={i} className="hover:bg-muted/10">
                         <TableCell className="font-mono text-xs">{formatSalesInvoiceDisplayNumber(r.invoiceNumber)}</TableCell>
-                        <TableCell className="text-xs">{r.saleDate}</TableCell>
+                        <TableCell className="text-xs">{formatDateOrDash(r.saleDate)}</TableCell>
                         <TableCell className="text-xs">{r.customerName}</TableCell>
                         <TableCell className="font-mono text-xs">{r.gstin}</TableCell>
                         <TableCell className="text-xs">{r.placeOfSupply || '—'}</TableCell>
@@ -608,7 +612,7 @@ export default function GstReturns() {
                     {b2cSort.sorted.map((r, i) => (
                       <TableRow key={i} className="hover:bg-muted/10">
                         <TableCell className="font-mono text-xs">{formatSalesInvoiceDisplayNumber(r.invoiceNumber)}</TableCell>
-                        <TableCell className="text-xs">{r.saleDate}</TableCell>
+                        <TableCell className="text-xs">{formatDateOrDash(r.saleDate)}</TableCell>
                         <TableCell className="text-xs">{r.customerName}</TableCell>
                         <TableCell className="text-xs">{r.placeOfSupply || '—'}</TableCell>
                         <TableCell className="text-xs">{r.warehouseName ?? '—'}</TableCell>
@@ -814,8 +818,10 @@ export default function GstReturns() {
                           <Badge variant="secondary">{r.docType === 'sale' ? 'Sale' : 'Purchase'}</Badge>
                           {r.cancelled && <Badge className="ml-1 bg-red-500/15 text-red-600 hover:bg-red-500/15 border-0">Cancelled</Badge>}
                         </TableCell>
-                        <TableCell className="font-mono text-xs text-primary font-semibold">{r.documentNumber}</TableCell>
-                        <TableCell className="text-xs">{r.date}</TableCell>
+                        <TableCell className="font-mono text-xs text-primary font-semibold">
+                          {r.docType === 'sale' ? formatSalesInvoiceDisplayNumber(r.documentNumber) : r.documentNumber}
+                        </TableCell>
+                        <TableCell className="text-xs">{formatDateOrDash(r.date)}</TableCell>
                         <TableCell className="text-xs">{r.partyName || '—'}</TableCell>
                         <TableCell className="text-right font-mono text-xs">{fmt(r.register.cgst + r.register.sgst + r.register.igst)}</TableCell>
                         <TableCell className="text-right font-mono text-xs">{fmt(r.ledger.cgst + r.ledger.sgst + r.ledger.igst)}</TableCell>
@@ -861,9 +867,9 @@ export default function GstReturns() {
                         onClick={() => openEntry(r.entryId, r.source)}
                         title="Open voucher"
                       >
-                        <TableCell className="text-xs">{r.date}</TableCell>
+                        <TableCell className="text-xs">{formatDateOrDash(r.date)}</TableCell>
                         <TableCell><Badge variant="secondary">{r.side === 'outward' ? 'Credit note' : 'Debit note'}</Badge></TableCell>
-                        <TableCell className="font-mono text-xs text-primary font-semibold">{r.voucherNumber ?? '—'}</TableCell>
+                        <TableCell className="font-mono text-xs text-primary font-semibold">{formatGstDocumentDisplayNumber(r.voucherNumber ?? '—')}</TableCell>
                         <TableCell className="text-right font-mono text-xs">{fmt(r.cgst)}</TableCell>
                         <TableCell className="text-right font-mono text-xs">{fmt(r.sgst)}</TableCell>
                         <TableCell className="text-right font-mono text-xs">{fmt(r.igst)}</TableCell>
@@ -906,9 +912,9 @@ export default function GstReturns() {
                           title={drill ? (drill.kind === 'link' ? drill.label : 'No document — click for details') : undefined}
                           onClick={() => openEntry(r.entryId, r.source)}
                         >
-                          <TableCell className="text-xs">{r.date}</TableCell>
+                          <TableCell className="text-xs">{formatDateOrDash(r.date)}</TableCell>
                           <TableCell><Badge variant="secondary">{r.source}</Badge></TableCell>
-                          <TableCell className="font-mono text-xs text-primary font-semibold">{r.voucherNumber ?? '—'}</TableCell>
+                          <TableCell className="font-mono text-xs text-primary font-semibold">{formatGstDocumentDisplayNumber(r.voucherNumber ?? '—')}</TableCell>
                           <TableCell className="text-xs">{r.head}</TableCell>
                           <TableCell className="text-right font-mono text-xs">{r.amount < 0 ? `−${fmt(r.amount)}` : fmt(r.amount)}</TableCell>
                           <TableCell className="text-xs text-muted-foreground max-w-96 truncate">{r.description}</TableCell>

@@ -176,7 +176,7 @@ export default function Purchases() {
                 q: debouncedSearch || undefined,
                 from: range.from || undefined, to: range.to || undefined, ...locParams,
               })).map(p => ({
-                'Bill #': p.id, Date: p.purchaseDate, Vendor: p.vendorName, Invoice: p.invoiceNumber || '',
+                'Bill #': p.id, Date: formatDate(p.purchaseDate), Vendor: p.vendorName, Invoice: p.invoiceNumber || '',
                 // Absent on historical bills — exported blank, never a fake date.
                 'Vendor Inv Date': (p as any).vendorInvoiceDate || '',
                 Location: (p as any).locationName ?? '',

@@ -298,7 +298,7 @@ function RegisterReport({ range, canDownload }: { range: RangeState; canDownload
           canDownload={canDownload}
           disabled={isLoading || rows.length === 0}
           onCSV={() => downloadCSV('sales-register.csv', rows.map((r) => ({
-            Invoice: formatSalesInvoiceDisplayNumber(r.invoiceNumber), Date: r.date, Location: r.locationName, 'Location Type': r.locationType,
+            Invoice: formatSalesInvoiceDisplayNumber(r.invoiceNumber), Date: fmtDate(r.date), Location: r.locationName, 'Location Type': r.locationType,
             Customer: r.customerName, Salesman: r.salespersonName, 'Taxable (₹)': r.subtotal.toFixed(2), 'Discount (₹)': r.discount.toFixed(2),
             'Tax (₹)': r.tax.toFixed(2), 'Total (₹)': r.total.toFixed(2), 'Paid (₹)': r.paid.toFixed(2),
             'Balance (₹)': r.balance.toFixed(2), Mode: paymentModeLabel(r.paymentMode), Status: r.paymentStatus,
@@ -467,7 +467,7 @@ function DiscountsReport({ range, canDownload }: { range: RangeState; canDownloa
           canDownload={canDownload}
           disabled={isLoading || rows.length === 0}
           onCSV={() => downloadCSV('discount-report.csv', rows.map((r) => ({
-            Invoice: formatSalesInvoiceDisplayNumber(r.invoiceNumber), Date: r.date, Location: r.locationName, Customer: r.customerName,
+            Invoice: formatSalesInvoiceDisplayNumber(r.invoiceNumber), Date: fmtDate(r.date), Location: r.locationName, Customer: r.customerName,
             Coupon: r.couponCode || '', 'Gross (₹)': r.gross.toFixed(2),
             'Item Discount (₹)': r.itemDiscount.toFixed(2), 'Bill Discount (₹)': r.billDiscount.toFixed(2),
             'Total Discount (₹)': r.totalDiscount.toFixed(2), 'Discount %': r.discountPct.toFixed(1),

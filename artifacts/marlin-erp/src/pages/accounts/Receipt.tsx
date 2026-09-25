@@ -190,7 +190,7 @@ export default function ReceiptPage() {
             <>
               {perm.canDownload && (
                 <Button variant="outline" size="sm" onClick={() => downloadCSV('receipts.csv', filtered.map((r: any) => ({
-                  Voucher: r.voucherNumber, Date: r.receiptDate, 'Received From': r.receivedFromName,
+                  Voucher: r.voucherNumber, Date: formatDate(r.receiptDate), 'Received From': r.receivedFromName,
                   'Received In': r.receivedInName, Location: voucherLocationName(locations, r.locationType, r.locationId),
                   Amount: r.amount,
                   Reference: r.referenceNumber || '', Narration: r.narration || '',

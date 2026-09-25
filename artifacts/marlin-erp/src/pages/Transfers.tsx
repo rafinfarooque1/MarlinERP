@@ -726,7 +726,7 @@ export default function Transfers() {
               {canDownload && (
                 <Button variant="outline" size="sm"
                   onClick={() => downloadCSV('transfers.csv', filtered.map((t: any) => ({
-                    Challan: t.challanNumber, Date: t.transferDate,
+                    Challan: t.challanNumber, Date: formatDate(t.transferDate),
                     From: t.fromName, 'From Type': t.fromType,
                     To: t.toName, 'To Type': t.toType,
                     Items: t.lineItems?.length || 0, Status: t.status,

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { formatDateOrDash } from '@/lib/date';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { PageHeader } from '@/components/app/page-header';
 import { useGetMe } from '@workspace/api-client-react';
@@ -260,7 +261,7 @@ export default function ProfileMe() {
                 </div>
                 <p className="text-xs text-muted-foreground pt-1">
                   Username: <span className="font-mono font-medium">{u?.username}</span>
-                  {u?.joinDate && <> · Joined {u.joinDate}</>}
+                  {u?.joinDate && <> · Joined {formatDateOrDash(u.joinDate)}</>}
                 </p>
               </div>
             </div>

@@ -61,7 +61,7 @@ function MonthSummary({ ym }: { ym: Ym }) {
         )}
       </div>
       <div>
-        <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1 mt-4 sm:mt-0">As of {s.toDate}</p>
+        <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1 mt-4 sm:mt-0">As of {formatDate(s.toDate)}</p>
         <SummaryRow label="Receivables" value={inr(s.asOfMonthEnd.receivables)} />
         <SummaryRow label="Payables" value={inr(s.asOfMonthEnd.payables)} />
         <SummaryRow label="Cash in hand" value={inr(s.asOfMonthEnd.cash)} />

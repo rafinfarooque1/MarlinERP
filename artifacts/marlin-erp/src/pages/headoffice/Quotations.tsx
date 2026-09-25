@@ -898,7 +898,7 @@ export default function Quotations() {
                     ? { locationType: locFilterType, locationId: locFilterId }
                     : {}),
                 })).map(q => ({
-                  Quotation: q.quotationNumber, Date: q.quoteDate, Location: q.locationName,
+                  Quotation: q.quotationNumber, Date: formatDateOrDash(q.quoteDate), Location: q.locationName,
                   Customer: q.customerName || 'Walk-in', Status: STATUS_LABEL[q.status as QStatus] ?? q.status,
                   'Valid Till': q.validTill ?? '', Salesperson: q.salesperson ?? '',
                   Subtotal: q.subtotal, Tax: q.taxTotal,

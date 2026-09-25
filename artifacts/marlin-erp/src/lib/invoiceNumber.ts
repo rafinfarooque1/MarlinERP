@@ -17,3 +17,20 @@ export function formatSalesInvoiceDisplayNumber(value: string | null | undefined
   const serial = rawSerial.replace(/^0+(?=\d)/, '');
   return `${rawSeries.toUpperCase()}/${shortFy}/${serial}`;
 }
+
+/**
+ * Normalize legacy GST return/note numbers at display boundaries only.
+ * Ordinary voucher numbers and purchase/vendor invoice references pass through.
+ */
+export function formatGstDocumentDisplayNumber(value: string | null | undefined): string {
+  const raw = String(value ?? '');
+  const match = /^(SB2[BC]|SR|PR|CN|DN)\/(\d{4}-\d{2}|\d{2}-\d{2})\/(\d+)$/i.exec(raw.trim());
+  if (!match) return raw;
+
+  const [, rawSeries, fyLabel, rawSerial] = match;
+  const shortFy = fyLabel.length === 7
+    ? `${fyLabel.slice(2, 4)}-${fyLabel.slice(5, 7)}`
+    : fyLabel;
+  const serial = rawSerial.replace(/^0+(?=\d)/, '');
+  return `${rawSeries.toUpperCase()}/${shortFy}/${serial}`;
+}

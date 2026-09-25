@@ -14,6 +14,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { usePermission } from '@/lib/usePermission';
 import { GstScopeFilter, gstScopeLabel, type GstScope } from '@/components/accounts/GstScopeFilter';
 import { ExportButtons, type ReportDoc, type PdfSection } from '@/pages/reports/shared';
+import { formatDateOrDash } from '@/lib/date';
+import { formatSalesInvoiceDisplayNumber } from '@/lib/invoiceNumber';
 import { PageHeader } from '@/components/app/page-header';
 import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
 import { EmptyState } from '@/components/app/empty-state';
@@ -77,9 +79,11 @@ export function GstDocumentsTable({ title, icon, rows, loading }: {
           <TableBody>
             {sorted.map((r, i) => (
               <TableRow key={i} className="hover:bg-muted/10">
-                <TableCell className="text-xs whitespace-nowrap">{r.date}</TableCell>
+                <TableCell className="text-xs whitespace-nowrap">{formatDateOrDash(r.date)}</TableCell>
                 <TableCell className="font-mono text-xs whitespace-nowrap">
-                  {r.documentNumber || '—'}
+                  {title.startsWith('Outward')
+                    ? formatSalesInvoiceDisplayNumber(r.documentNumber || '—')
+                    : r.documentNumber || '—'}
                   {r.isBranchTransfer && <Badge variant="outline" className="ml-1.5 text-[10px]">Transfer</Badge>}
                 </TableCell>
                 <TableCell className="text-xs">{r.partyName || '—'}</TableCell>
@@ -110,9 +114,11 @@ export function GstDocumentsTable({ title, icon, rows, loading }: {
 }
 
 /** Document rows → export cells, shared by CSV and the PDF/Excel doc. */
-export const docExportRow = (r: GstDocumentRow) => ({
-  Date: r.date,
-  'Document No': r.documentNumber || '—',
+export const docExportRow = (r: GstDocumentRow, outward = false) => ({
+  Date: formatDateOrDash(r.date),
+  'Document No': outward
+    ? formatSalesInvoiceDisplayNumber(r.documentNumber || '—')
+    : r.documentNumber || '—',
   Party: r.partyName || '—',
   'GST No.': r.partyGstin || '—',
   Warehouse: r.warehouseName,
@@ -132,8 +138,10 @@ export const DOC_PDF_COLUMNS = [
   { label: 'Total', align: 'right' as const }, { label: 'Payment Status' }, { label: 'Payment Mode' },
 ];
 
-export const docPdfRow = (r: GstDocumentRow): (string | number)[] => [
-  r.date, r.documentNumber || '—', r.partyName || '—', r.partyGstin || '—', r.warehouseName,
+export const docPdfRow = (r: GstDocumentRow, outward = false): (string | number)[] => [
+  formatDateOrDash(r.date),
+  outward ? formatSalesInvoiceDisplayNumber(r.documentNumber || '—') : r.documentNumber || '—',
+  r.partyName || '—', r.partyGstin || '—', r.warehouseName,
   r.taxableValue, r.taxAmount, r.invoiceValue, payStatusLabel(r.paymentStatus), r.paymentModes,
 ];
 
@@ -190,7 +198,7 @@ export default function GstSummary() {
     downloadCSV(`gst-summary-${fromDate}-to-${toDate}.csv`, [
       ...salesData.map(r => ({ Section: 'Output by rate', Detail: `${r.taxRate}%`, Taxable: r.taxableValue, CGST: r.cgst, SGST: r.sgst, IGST: r.igst, 'Total Tax': r.taxAmount })),
       ...purchasesData.map(r => ({ Section: 'Input by rate', Detail: `${r.taxRate}%`, Taxable: r.taxableValue, CGST: r.cgst, SGST: r.sgst, IGST: r.igst, 'Total Tax': r.taxAmount })),
-      ...outward.map(r => ({ Section: 'Outward documents', Detail: '', ...docExportRow(r) })),
+      ...outward.map(r => ({ Section: 'Outward documents', Detail: '', ...docExportRow(r, true) })),
       ...inward.map(r => ({ Section: 'Inward documents', Detail: '', ...docExportRow(r) })),
     ]);
   };
@@ -211,12 +219,12 @@ export default function GstSummary() {
         columns: [{ label: 'Month' }, { label: 'Output Taxable', align: 'right' as const }, { label: 'Output Tax', align: 'right' as const }, { label: 'Input Taxable', align: 'right' as const }, { label: 'Input Tax', align: 'right' as const }, { label: 'Net GST', align: 'right' as const }],
         rows: monthWise.map(m => [m.month, m.outputTaxable, m.outputTax, m.inputTaxable, m.inputTax, m.netGst]),
       },
-      { heading: 'Outward Documents (Sales)', columns: DOC_PDF_COLUMNS, rows: outward.map(docPdfRow) },
-      { heading: 'Inward Documents (Purchases)', columns: DOC_PDF_COLUMNS, rows: inward.map(docPdfRow) },
+      { heading: 'Outward Documents (Sales)', columns: DOC_PDF_COLUMNS, rows: outward.map(r => docPdfRow(r, true)) },
+      { heading: 'Inward Documents (Purchases)', columns: DOC_PDF_COLUMNS, rows: inward.map(r => docPdfRow(r)) },
     ];
     return {
       title: 'GST Summary',
-      subtitle: `${fromDate} to ${toDate}`,
+      subtitle: `${formatDateOrDash(fromDate)} to ${formatDateOrDash(toDate)}`,
       metaRows: [['Scope', scopeText]],
       orientation: 'landscape',
       sections,

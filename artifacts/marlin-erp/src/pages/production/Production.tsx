@@ -347,7 +347,7 @@ export default function ProductionList() {
             {perm.canDownload && (
               <Button variant="outline" size="sm" onClick={() => downloadCSV('production.csv', filtered.map(p => ({
                 Batch: (p as any).batchNumber || `B-${String(p.id).padStart(4, '0')}`,
-                Date: p.productionDate, Item: p.itemName, Qty: p.producedQuantity,
+                Date: formatDate(p.productionDate), Item: p.itemName, Qty: p.producedQuantity,
                 Location: (p as any).locationName ?? '',
                 'Wastage Qty': (p as any).wastageQty || 0,
                 'Raw Material Cost': (p as any).rmCost ?? '',

@@ -28,6 +28,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { usePermission } from '@/lib/usePermission';
 import { useEnabledOutlets } from '@/lib/locationStructure';
 import { downloadCSV } from '@/lib/download';
+import { formatGstDocumentDisplayNumber } from '@/lib/invoiceNumber';
 import {
   fmt, num, pdfMoney, periodLabel, fmtDate,
   useDateRange, useLocationFilter, RangeBar, LocationFilter, ReportPicker, SummaryCards, RTable,
@@ -822,7 +823,7 @@ function DayBookReport({ range, loc, canDownload }: { range: RangeState; loc: Lo
     metaRows: [['Period', periodLabel(range.from, range.to)], ['Entries', String(data?.totals?.count ?? 0)], ['Total Debit', pdfMoney(data?.totals?.debit)], ['Total Credit', pdfMoney(data?.totals?.credit)]],
     sections: [{
       columns: [{ label: 'Date', width: 1 }, { label: 'Voucher', width: 1.3 }, { label: 'Type', width: 0.9 }, { label: 'Particulars', width: 3.4 }, { label: 'Amount', align: 'right', width: 1.2 }],
-      rows: rows.map((e) => [e.date, e.voucherNumber ?? '—', e.source, e.particulars, pdfMoney(e.amount)]),
+      rows: rows.map((e) => [fmtDate(e.date), formatGstDocumentDisplayNumber(e.voucherNumber ?? '—'), e.source, e.particulars, pdfMoney(e.amount)]),
       totalsRow: ['', '', '', 'Total', pdfMoney(data?.totals?.amount)],
     }],
   });
@@ -834,7 +835,7 @@ function DayBookReport({ range, loc, canDownload }: { range: RangeState; loc: Lo
         <ExportButtons
           canDownload={canDownload} disabled={isLoading} doc={doc}
           onCSV={() => downloadCSV('day-book.csv', rows.map((e) => ({
-            Date: e.date, Voucher: e.voucherNumber ?? '', Type: e.source,
+            Date: fmtDate(e.date), Voucher: formatGstDocumentDisplayNumber(e.voucherNumber ?? ''), Type: e.source,
             Particulars: e.particulars, Narration: e.narration ?? '',
             'Debit (₹)': e.debit.toFixed(2), 'Credit (₹)': e.credit.toFixed(2),
           })))}
@@ -853,7 +854,7 @@ function DayBookReport({ range, loc, canDownload }: { range: RangeState; loc: Lo
       <RTable
         cols={[
           { key: 'date', label: 'Date', render: (e) => fmtDate(e.date) },
-          { key: 'voucherNumber', label: 'Voucher', render: (e) => <span className="font-mono text-xs">{e.voucherNumber ?? '—'}</span> },
+          { key: 'voucherNumber', label: 'Voucher', render: (e) => <span className="font-mono text-xs">{formatGstDocumentDisplayNumber(e.voucherNumber ?? '—')}</span> },
           { key: 'source', label: 'Type', render: (e) => <span className="capitalize text-xs">{e.source}</span> },
           { key: 'particulars', label: 'Particulars', render: (e) => (
             <div className="max-w-md">
@@ -967,7 +968,7 @@ function BookReport({ kind, range, loc, canDownload }: { kind: 'cash' | 'bank' |
       {
         heading: 'Transactions',
         columns: [{ label: 'Date', width: 1 }, { label: 'Voucher', width: 1.3 }, { label: 'Account', width: 1.6 }, { label: 'Particulars', width: 2.4 }, { label: 'Receipt', align: 'right', width: 1 }, { label: 'Payment', align: 'right', width: 1 }, { label: 'Balance', align: 'right', width: 1.1 }],
-        rows: rows.map((e) => [e.date, e.voucherNumber ?? '—', e.account, e.description, e.receipt ? pdfMoney(e.receipt) : '', e.payment ? pdfMoney(e.payment) : '', pdfMoney(e.balance)]),
+        rows: rows.map((e) => [fmtDate(e.date), formatGstDocumentDisplayNumber(e.voucherNumber ?? '—'), e.account, e.description, e.receipt ? pdfMoney(e.receipt) : '', e.payment ? pdfMoney(e.payment) : '', pdfMoney(e.balance)]),
         totalsRow: ['', '', '', 'Total', pdfMoney(data?.totalReceipts), pdfMoney(data?.totalPayments), pdfMoney(data?.closingBalance)],
       },
     ],
@@ -988,7 +989,7 @@ function BookReport({ kind, range, loc, canDownload }: { kind: 'cash' | 'bank' |
         <ExportButtons
           canDownload={canDownload} disabled={isLoading} doc={doc}
           onCSV={() => downloadCSV(`${kind}-book.csv`, rows.map((e) => ({
-            Date: e.date, Voucher: e.voucherNumber ?? '', Account: e.account, Particulars: e.description,
+            Date: fmtDate(e.date), Voucher: formatGstDocumentDisplayNumber(e.voucherNumber ?? ''), Account: e.account, Particulars: e.description,
             'Receipt (₹)': e.receipt.toFixed(2), 'Payment (₹)': e.payment.toFixed(2), 'Balance (₹)': e.balance.toFixed(2),
           })))}
         />
@@ -1024,7 +1025,7 @@ function BookReport({ kind, range, loc, canDownload }: { kind: 'cash' | 'bank' |
         <RTable
           cols={[
             { key: 'date', label: 'Date', render: (e) => fmtDate(e.date) },
-            { key: 'voucherNumber', label: 'Voucher', render: (e) => <span className="font-mono text-xs">{e.voucherNumber ?? '—'}</span> },
+            { key: 'voucherNumber', label: 'Voucher', render: (e) => <span className="font-mono text-xs">{formatGstDocumentDisplayNumber(e.voucherNumber ?? '—')}</span> },
             { key: 'account', label: 'Account' },
             { key: 'description', label: 'Particulars', render: (e) => <span className="block max-w-xs truncate">{e.description}</span> },
             { key: 'receipt', label: 'Receipt', align: 'right', render: (e) => (e.receipt ? fmt(e.receipt) : '—') },
@@ -1178,7 +1179,7 @@ function ExpenseReport({ range, loc, canDownload }: { range: RangeState; loc: Lo
       {
         heading: 'Register',
         columns: [{ label: 'Date', width: 1 }, { label: 'Voucher', width: 1.4 }, { label: 'Category', width: 1.3 }, { label: 'Account', width: 1.6 }, { label: 'Location', width: 1.4 }, { label: 'Particulars', width: 2 }, MONEY_COL],
-        rows: rows.map((r) => [r.date, r.expenseNumber ?? '—', r.category, r.ledgerName, r.locationName, r.description, pdfMoney(r.amount)]),
+        rows: rows.map((r) => [fmtDate(r.date), r.expenseNumber ?? '—', r.category, r.ledgerName, r.locationName, r.description, pdfMoney(r.amount)]),
         totalsRow: ['', '', '', '', '', 'Total', pdfMoney(data?.total)],
       },
     ],
@@ -1191,7 +1192,7 @@ function ExpenseReport({ range, loc, canDownload }: { range: RangeState; loc: Lo
         <ExportButtons
           canDownload={canDownload} disabled={isLoading} doc={doc}
           onCSV={() => downloadCSV('expense-report.csv', rows.map((r) => ({
-            Date: r.date, Voucher: r.expenseNumber ?? '', Category: r.category, Account: r.ledgerName,
+            Date: fmtDate(r.date), Voucher: r.expenseNumber ?? '', Category: r.category, Account: r.ledgerName,
             'Paid from': r.paidFrom, Location: r.locationName, Particulars: r.description,
             'Recorded by': r.createdBy ?? '', 'Amount (₹)': r.amount.toFixed(2),
           })))}

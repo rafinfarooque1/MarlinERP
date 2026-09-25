@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect } from 'react';
-import { formatDate } from '@/lib/date';
+import { formatDate, formatDateOrDash } from '@/lib/date';
 import {
   useListAttendance, useCheckIn, useCheckOut, getListAttendanceQueryKey,
   useListEmployees, useListWarehouses, useListOutlets,
@@ -812,7 +812,7 @@ export default function Attendance() {
                 <Button variant="outline" size="sm" onClick={() =>
                   viewMode === 'day'
                     ? downloadCSV('attendance.csv', filtered.map((a: any) => ({
-                        Employee: a.employeeName, Date: a.date,
+                        Employee: a.employeeName, Date: formatDateOrDash(a.date),
                         Sessions: (a.punches ?? []).map((p: any) =>
                           `${p.punchIn ? new Date(p.punchIn).toLocaleTimeString('en-IN') : ''}-${p.punchOut ? new Date(p.punchOut).toLocaleTimeString('en-IN') : 'open'}`).join(' | ') || '—',
                         FirstIn: a.checkIn ? new Date(a.checkIn).toLocaleTimeString('en-IN') : '—',
@@ -825,7 +825,7 @@ export default function Attendance() {
                         Status: a.status,
                       })))
                     : downloadCSV(`attendance_${range.from || 'start'}_${range.to || 'today'}.csv`, filteredRange.map((a: any) => ({
-                        Date: a.date, Employee: empNameMap.get(a.employeeId) ?? a.employeeId,
+                        Date: formatDateOrDash(a.date), Employee: empNameMap.get(a.employeeId) ?? a.employeeId,
                         CheckIn: a.checkIn ? new Date(a.checkIn).toLocaleTimeString('en-IN') : '—',
                         CheckOut: a.checkOut ? new Date(a.checkOut).toLocaleTimeString('en-IN') : '—',
                         Hours: a.hoursWorked ? Number(a.hoursWorked).toFixed(1) : '—',
@@ -1051,7 +1051,7 @@ export default function Attendance() {
                   </TableRow>
                 ) : rangeSort.sorted.map((a: any) => (
                   <TableRow key={`${a.date}:${a.employeeId}`} className="hover:bg-muted/10">
-                    <TableCell className="text-sm font-mono">{a.date}</TableCell>
+                    <TableCell className="text-sm font-mono">{formatDateOrDash(a.date)}</TableCell>
                     <TableCell className="font-semibold">{empNameMap.get(a.employeeId) ?? `#${a.employeeId}`}</TableCell>
                     <TableCell className="text-sm font-mono">
                       {a.checkIn ? new Date(a.checkIn).toLocaleTimeString('en-IN') : <span className="text-muted-foreground/50">—</span>}
@@ -1328,7 +1328,7 @@ export default function Attendance() {
                 </TableRow>
               ) : myRangeSort.sorted.map((a: any) => (
                 <TableRow key={`${a.date}:${a.employeeId}`} className="hover:bg-muted/10">
-                  <TableCell className="text-sm font-mono">{a.date}</TableCell>
+                  <TableCell className="text-sm font-mono">{formatDateOrDash(a.date)}</TableCell>
                   <TableCell className="text-sm font-mono">
                     {a.checkIn ? new Date(a.checkIn).toLocaleTimeString('en-IN') : <span className="text-muted-foreground/50">—</span>}
                   </TableCell>

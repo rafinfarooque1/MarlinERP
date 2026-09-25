@@ -441,7 +441,7 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
 
   const exportCsv = () => downloadCSV(C.csvName, filtered.map(r => ({
     Voucher: r.voucherNumber,
-    Date: String(r[C.dateField]).split('T')[0],
+    Date: formatDate(r[C.dateField]),
     [C.partyLabel]: r[C.partyNameField],
     'Cash / Bank': r[C.cashNameField],
     Location: voucherLocationName(locations, r.locationType, r.locationId),

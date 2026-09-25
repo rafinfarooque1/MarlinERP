@@ -112,7 +112,7 @@ function LedgerStatementSheet({ ledgerNode, fromDate, toDate, loc, onClose }: {
             {ledgerNode.code && <span className="text-xs font-mono text-muted-foreground">({ledgerNode.code})</span>}
           </SheetTitle>
           <p className="text-xs text-muted-foreground">
-            Ledger Statement {fromDate || toDate ? `· ${fromDate ?? '…'} to ${toDate ?? '…'}` : '· All dates'}
+            Ledger Statement {fromDate || toDate ? `· ${fromDate ? formatDate(fromDate) : '…'} to ${toDate ? formatDate(toDate) : '…'}` : '· All dates'}
           </p>
         </SheetHeader>
 

@@ -7,7 +7,8 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { AlertTriangle, Check, Loader2, ShieldAlert } from 'lucide-react';
 import { toast } from 'sonner';
-import { formatSalesInvoiceDisplayNumber } from '@/lib/invoiceNumber';
+import { formatSalesInvoiceDisplayNumber, formatGstDocumentDisplayNumber } from '@/lib/invoiceNumber';
+import { formatDateOrDash } from '@/lib/date';
 
 const inr = (n: number) => `₹${Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
 
@@ -86,9 +87,9 @@ export function SystemReceiptDeleteDialog({ receiptId, onClose }: { receiptId: n
             {/* Voucher details */}
             <div className="rounded-md border p-3 text-sm grid grid-cols-2 gap-x-4 gap-y-1.5">
               <span className="text-muted-foreground">Voucher No</span>
-              <span className="font-mono font-semibold text-right">{impact.voucherNumber}</span>
+              <span className="font-mono font-semibold text-right">{formatGstDocumentDisplayNumber(impact.voucherNumber)}</span>
               <span className="text-muted-foreground">Date</span>
-              <span className="text-right">{impact.receiptDate}</span>
+              <span className="text-right">{formatDateOrDash(impact.receiptDate)}</span>
               <span className="text-muted-foreground">Amount</span>
               <span className="font-mono font-semibold text-right">{inr(impact.amount)}</span>
               <span className="text-muted-foreground">Location</span>

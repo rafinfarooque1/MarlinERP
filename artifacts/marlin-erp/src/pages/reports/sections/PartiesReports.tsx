@@ -65,7 +65,7 @@ function Statement({ kind, range, canDownload }: { kind: 'customer' | 'vendor'; 
   const csv = () => downloadCSV(`${kind}-statement-${(party?.name ?? 'party').toLowerCase().replace(/\s+/g, '-')}.csv`, [
     { Date: '', Description: 'Opening Balance', Type: '', 'Debit (₹)': '', 'Credit (₹)': '', 'Balance (₹)': opening.toFixed(2) },
     ...rows.map((r) => ({
-      Date: dkey(r.date), Description: r.description, Type: r.entryType,
+      Date: fmtDate(r.date), Description: r.description, Type: r.entryType,
       'Debit (₹)': r.debit.toFixed(2), 'Credit (₹)': r.credit.toFixed(2), 'Balance (₹)': r.running.toFixed(2),
     })),
   ]);

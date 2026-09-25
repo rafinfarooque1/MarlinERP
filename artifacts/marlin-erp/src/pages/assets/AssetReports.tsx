@@ -223,13 +223,13 @@ export default function AssetReports() {
     switch (report) {
       case 'register':
         return assets.map(a => ({
-          Code: a.assetCode, Asset: a.assetName, Category: a.categoryName || '', Purchased: a.purchaseDate,
+          Code: a.assetCode, Asset: a.assetName, Category: a.categoryName || '', Purchased: fmtDate(a.purchaseDate),
           Location: a.currentLocationName || '', Vendor: a.vendorName || '', Qty: a.quantity,
-          Cost: a.totalCost, Status: ASSET_STATUS_LABELS[a.status] ?? a.status, 'Warranty End': a.warrantyEnd || '',
+          Cost: a.totalCost, Status: ASSET_STATUS_LABELS[a.status] ?? a.status, 'Warranty End': a.warrantyEnd ? fmtDate(a.warrantyEnd) : '',
         }));
       case 'purchases':
         return assets.map(a => ({
-          Date: a.purchaseDate, Code: a.assetCode, Asset: a.assetName, 'Invoice No.': a.invoiceNumber || '',
+          Date: fmtDate(a.purchaseDate), Code: a.assetCode, Asset: a.assetName, 'Invoice No.': a.invoiceNumber || '',
           Vendor: a.vendorName || '', Location: a.locationName || '', Qty: a.quantity,
           'Unit Cost': a.acquisitionCost, 'GST %': a.gstRate, 'GST Amount': a.gstAmount, Total: a.totalCost,
           'Payment Mode': PAYMENT_MODE_LABELS[a.paymentMode] ?? a.paymentMode,
@@ -240,17 +240,17 @@ export default function AssetReports() {
       case 'warranty':
         return warrantyRows.map(a => ({
           Code: a.assetCode, Asset: a.assetName, Category: a.categoryName || '', Location: a.currentLocationName || '',
-          'Serial No.': a.serialNumber || '', 'Warranty Start': a.warrantyStart || '', 'Warranty End': a.warrantyEnd || '',
+          'Serial No.': a.serialNumber || '', 'Warranty Start': a.warrantyStart ? fmtDate(a.warrantyStart) : '', 'Warranty End': a.warrantyEnd ? fmtDate(a.warrantyEnd) : '',
           Status: ASSET_STATUS_LABELS[a.status] ?? a.status,
         }));
       case 'transfers':
         return transfers.map(t => ({
-          Date: t.transferDate, Code: t.assetCode, Asset: t.assetName, From: t.fromName, To: t.toName,
+          Date: fmtDate(t.transferDate), Code: t.assetCode, Asset: t.assetName, From: t.fromName, To: t.toName,
           'Approved By': t.approvedBy || '', Reason: t.reason || '',
         }));
       case 'disposals':
         return disposals.map(d => ({
-          Date: d.disposalDate, Code: d.assetCode, Asset: d.assetName,
+          Date: fmtDate(d.disposalDate), Code: d.assetCode, Asset: d.assetName,
           Type: ASSET_STATUS_LABELS[d.disposalType] ?? d.disposalType,
           'Asset Cost': d.totalCost ?? '', Reason: d.reason || '', 'Recorded By': d.createdBy || '',
         }));

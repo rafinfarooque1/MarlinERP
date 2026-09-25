@@ -1,4 +1,5 @@
 import { useState, useMemo } from 'react';
+import { formatDateOrDash } from '@/lib/date';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { usePermission } from '@/lib/usePermission';
 import { Button } from '@/components/ui/button';
@@ -564,7 +565,7 @@ export default function CashBalance() {
                             {(d as any).locationName ?? d.outletName}
                           </span>
                         </TableCell>
-                        <TableCell className="text-sm text-muted-foreground">{d.depositDate}</TableCell>
+                        <TableCell className="text-sm text-muted-foreground">{formatDateOrDash(d.depositDate)}</TableCell>
                         <TableCell className="font-mono text-xs">{d.depositReference ?? '—'}</TableCell>
                         <TableCell className="text-sm">{d.bankLedgerName ?? <span className="text-muted-foreground italic text-xs">Not specified</span>}</TableCell>
                         <TableCell className="text-right font-mono font-semibold text-sm">{fmt(d.amount)}</TableCell>
@@ -708,7 +709,7 @@ export default function CashBalance() {
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Deposited</span>
-                  <span>{selectedDeposit.depositDate}</span>
+                  <span>{formatDateOrDash(selectedDeposit.depositDate)}</span>
                 </div>
                 {Number(recCharges) > 0 && (
                   <>

@@ -11,6 +11,7 @@ import { downloadCSV } from '@/lib/download';
 import { ExportButtons, pdfMoney, periodLabel, type ReportDoc } from '@/pages/reports/shared';
 import { usePermission } from '@/lib/usePermission';
 import { formatDate } from '@/lib/date';
+import { formatGstDocumentDisplayNumber } from '@/lib/invoiceNumber';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { useLocationContext, locationFilterParams } from '@/lib/locationContext';
 import { PageHeader } from '@/components/app/page-header';
@@ -122,7 +123,7 @@ export default function CashBankBook({ kind }: { kind: 'cash' | 'bank' }) {
         ...entries.map(e => [
           formatDate(e.date),
           SOURCE_LABEL[e.source] ?? e.source,
-          e.voucherNumber || '',
+          formatGstDocumentDisplayNumber(e.voucherNumber || ''),
           e.description,
           e.debit > 0 ? pdfMoney(e.debit) : '',
           e.credit > 0 ? pdfMoney(e.credit) : '',
@@ -163,7 +164,7 @@ export default function CashBankBook({ kind }: { kind: 'cash' | 'bank' }) {
               onCSV={() => downloadCSV(`${kind}-book-${fromDate}-to-${toDate}.csv`, [
                { Date: '', Type: '', Voucher: 'Opening Balance', Description: '', Debit: '', Credit: '', Balance: data?.openingBalance ?? 0, Reconciliation: '' },
                 ...entries.map(e => ({
-                  Date: e.date, Type: SOURCE_LABEL[e.source] ?? e.source, Voucher: e.voucherNumber || '',
+                  Date: formatDate(e.date), Type: SOURCE_LABEL[e.source] ?? e.source, Voucher: formatGstDocumentDisplayNumber(e.voucherNumber || ''),
                  Description: e.description, Debit: e.debit || '', Credit: e.credit || '', Balance: e.balance,
                  Reconciliation: e.reconciliationEligible ? e.reconciliationStatus : 'Not applicable',
                 })),
@@ -262,7 +263,7 @@ export default function CashBankBook({ kind }: { kind: 'cash' | 'bank' }) {
                        </TableCell>
                       <TableCell className="text-sm text-muted-foreground whitespace-nowrap">{formatDate(e.date)}</TableCell>
                       <TableCell><Badge variant="outline" className="text-xs">{SOURCE_LABEL[e.source] ?? e.source}</Badge></TableCell>
-                      <TableCell className="font-mono text-primary text-xs font-semibold">{e.voucherNumber || '—'}</TableCell>
+                      <TableCell className="font-mono text-primary text-xs font-semibold">{formatGstDocumentDisplayNumber(e.voucherNumber || '—')}</TableCell>
                       <TableCell className="text-sm max-w-[280px] truncate">{e.description}</TableCell>
                       <TableCell className="text-right font-mono text-emerald-600">{e.debit > 0 ? inr(e.debit) : ''}</TableCell>
                       <TableCell className="text-right font-mono text-red-500">{e.credit > 0 ? inr(e.credit) : ''}</TableCell>

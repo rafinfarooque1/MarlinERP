@@ -194,7 +194,7 @@ export default function Journal() {
             <>
               {perm.canDownload && (
                 <Button variant="outline" size="sm" onClick={() => downloadCSV('journal-vouchers.csv', filtered.flatMap(v => v.lines.map(l => ({
-                  Voucher: v.voucherNumber, Date: v.voucherDate, Ledger: l.ledgerName,
+                  Voucher: v.voucherNumber, Date: formatDate(v.voucherDate), Ledger: l.ledgerName,
                   Debit: l.debit, Credit: l.credit, Narration: v.narration || '',
                 }))))}>
                   <Download className="w-4 h-4 mr-2" /> Export
