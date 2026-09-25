@@ -13,6 +13,7 @@
  * what the caller is already entitled to see, never widen it.
  */
 import { useState } from 'react';
+import { formatSalesInvoiceDisplayNumber } from '@/lib/invoiceNumber';
 import { useQuery } from '@tanstack/react-query';
 import {
   customFetch, useBranchTransfersReport, useListItems,
@@ -142,7 +143,7 @@ function BranchTransferReport({ canDownload }: { canDownload: boolean }) {
       rows: rows.map((r) => [
         r.challanNumber, fmtDate(r.transferDate), r.sourceName, r.destName,
          `${r.outwardDocument}${r.documentTreatment === 'internal' ? '' : ` → ${r.inwardDocument}`}`,
-         r.invoiceNumber ?? '-', r.itemName, batchLabel(r) || '-', num(r.quantity), r.unit,
+         formatSalesInvoiceDisplayNumber(r.invoiceNumber ?? '-'), r.itemName, batchLabel(r) || '-', num(r.quantity), r.unit,
          r.invoiceRate == null ? '-' : pdfMoney(r.invoiceRate),
          r.taxableValue == null ? '-' : pdfMoney(r.taxableValue),
          r.taxAmount > 0 ? pdfMoney(r.cgst) : '-', r.taxAmount > 0 ? pdfMoney(r.sgst) : '-',
@@ -245,7 +246,7 @@ function BranchTransferReport({ canDownload }: { canDownload: boolean }) {
              </span>
            ) },
            { key: 'invoiceNumber', label: 'Invoice', render: (r) => r.invoiceNumber
-             ? <span className="font-mono text-xs font-bold">{r.invoiceNumber}</span>
+             ? <span className="font-mono text-xs font-bold">{formatSalesInvoiceDisplayNumber(r.invoiceNumber)}</span>
              : <span className="text-muted-foreground">—</span> },
            { key: 'itemName', label: 'Item', render: (r) => (
             <span className="flex items-center gap-1.5">

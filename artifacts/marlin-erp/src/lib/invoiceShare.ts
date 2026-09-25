@@ -14,6 +14,7 @@
 
 import { paymentModeLabel } from './paymentModes';
 import { formatDate as displayDate } from './date';
+import { formatSalesInvoiceDisplayNumber } from './invoiceNumber';
 
 // ── Phone numbers ─────────────────────────────────────────────────────────────
 
@@ -176,7 +177,7 @@ export function composeInvoiceMessage({
     ``,
     `Thank you for your purchase from *${seller}*! 🙏`,
     ``,
-    `*Invoice No:* ${sale.invoiceNumber ?? `#${sale.id}`}`,
+    `*Invoice No:* ${formatSalesInvoiceDisplayNumber(sale.invoiceNumber ?? `#${sale.id}`)}`,
     `*Date:* ${formatDate(sale.saleDate)}`,
     ``,
     `*Bill Details:*`,

@@ -17,6 +17,7 @@ import { EmptyState } from '@/components/app/empty-state';
 import { toast } from 'sonner';
 import { inr } from '@/lib/currency';
 import { formatDateOrDash } from '@/lib/date';
+import { formatSalesInvoiceDisplayNumber } from '@/lib/invoiceNumber';
 
 const fmt = (n: unknown) => Number(n ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 });
 const dfmt = (d?: string | null) => formatDateOrDash(d);
@@ -79,7 +80,7 @@ export function CollectPaymentDialog({
       { saleId: activeInv.saleId, data: { receivedInLedgerId: ledgerId, amount: amt, referenceNumber: reference.trim() || undefined, paymentDate } },
       {
         onSuccess: () => {
-          toast.success(`${inr(amt)} recorded against ${activeInv.invoiceNumber || `Sale #${activeInv.saleId}`}`);
+          toast.success(`${inr(amt)} recorded against ${formatSalesInvoiceDisplayNumber(activeInv.invoiceNumber || `Sale #${activeInv.saleId}`)}`);
           invalidate();
           setSelected(null);
           setAmount('');
@@ -128,7 +129,7 @@ export function CollectPaymentDialog({
                 <tbody>
                   {invoices.map((inv) => (
                     <tr key={inv.saleId} className={`border-t border-border ${selected === inv.saleId ? 'bg-primary/5' : 'hover:bg-muted/10'}`}>
-                      <td className="px-3 py-2 font-mono">{inv.invoiceNumber || `Sale #${inv.saleId}`}</td>
+                      <td className="px-3 py-2 font-mono">{formatSalesInvoiceDisplayNumber(inv.invoiceNumber || `Sale #${inv.saleId}`)}</td>
                       <td className="px-3 py-2 whitespace-nowrap">{dfmt(inv.saleDate)}</td>
                       <td className="px-3 py-2 whitespace-nowrap">
                         {dfmt(inv.dueDate)}
@@ -154,7 +155,7 @@ export function CollectPaymentDialog({
             {activeInv && (
               <div className="rounded-lg border border-border p-4 space-y-4 bg-muted/10">
                 <p className="text-sm font-medium">
-                  Collecting against <span className="font-mono">{activeInv.invoiceNumber || `Sale #${activeInv.saleId}`}</span>
+                  Collecting against <span className="font-mono">{formatSalesInvoiceDisplayNumber(activeInv.invoiceNumber || `Sale #${activeInv.saleId}`)}</span>
                   <span className="text-muted-foreground font-normal"> · outstanding {inr(activeInv.balance)}</span>
                 </p>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

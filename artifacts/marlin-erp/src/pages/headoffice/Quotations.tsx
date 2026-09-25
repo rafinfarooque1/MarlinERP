@@ -24,6 +24,7 @@ import {
 import { EntityCombobox, type EntityOption } from '@/components/ui/entity-combobox';
 import { usePermission } from '@/lib/usePermission';
 import { formatDateOrDash } from '@/lib/date';
+import { formatSalesInvoiceDisplayNumber } from '@/lib/invoiceNumber';
 import { isActiveProduct } from '@/lib/productStatus';
 import { useOutletsEnabled, useFeatureFlags } from '@/lib/useFeatureFlags';
 import { useEnabledOutlets } from '@/lib/locationStructure';
@@ -415,7 +416,7 @@ export default function Quotations() {
 
   const openEdit = (q: QuotationListRow) => {
     if (q.convertedSaleId) {
-      toast.error(`${q.quotationNumber} was converted to ${q.convertedInvoiceNumber ?? 'a sale'} and can no longer be edited.`);
+      toast.error(`${q.quotationNumber} was converted to ${formatSalesInvoiceDisplayNumber(q.convertedInvoiceNumber ?? 'a sale')} and can no longer be edited.`);
       return;
     }
     setEditItem(q);
@@ -811,7 +812,7 @@ export default function Quotations() {
 
   const handleConvert = async (q: QuotationListRow) => {
     if (q.convertedSaleId) {
-      toast.error(`${q.quotationNumber} was already converted to ${q.convertedInvoiceNumber ?? 'a sale'}.`);
+      toast.error(`${q.quotationNumber} was already converted to ${formatSalesInvoiceDisplayNumber(q.convertedInvoiceNumber ?? 'a sale')}.`);
       return;
     }
     setConvertBusyId(q.id);
@@ -904,7 +905,7 @@ export default function Quotations() {
                   Discount: (Number(q.discountTotal ?? 0)
                     + ((q.lineItems as any[]) ?? []).reduce((acc: number, li: any) => acc + Number(li?.discount ?? 0), 0)).toFixed(2),
                   Total: q.totalAmount,
-                  'Converted To': q.convertedInvoiceNumber ?? '',
+                  'Converted To': formatSalesInvoiceDisplayNumber(q.convertedInvoiceNumber ?? ''),
                 })))}>
                   <Download className="w-4 h-4 mr-2" /> Export
                 </Button>
@@ -993,7 +994,7 @@ export default function Quotations() {
                   <TableCell className="font-mono text-primary font-bold">
                     {q.quotationNumber}
                     {q.convertedInvoiceNumber && (
-                      <p className="text-[10px] font-sans font-normal text-violet-600">→ {q.convertedInvoiceNumber}</p>
+                      <p className="text-[10px] font-sans font-normal text-violet-600">→ {formatSalesInvoiceDisplayNumber(q.convertedInvoiceNumber)}</p>
                     )}
                   </TableCell>
                   <TableCell className="text-sm text-muted-foreground">
@@ -1877,7 +1878,7 @@ export default function Quotations() {
               {viewItem.convertedInvoiceNumber && (
                 <div className="rounded-lg border border-violet-500/30 bg-violet-500/5 p-3 text-sm">
                   <p className="font-semibold text-violet-600 flex items-center gap-1.5">
-                    <ArrowRightLeft className="w-4 h-4" /> Converted To: {viewItem.convertedInvoiceNumber}
+                    <ArrowRightLeft className="w-4 h-4" /> Converted To: {formatSalesInvoiceDisplayNumber(viewItem.convertedInvoiceNumber)}
                   </p>
                   <p className="text-xs text-muted-foreground mt-0.5">This quotation became a sales invoice — it can no longer be edited or deleted.</p>
                 </div>

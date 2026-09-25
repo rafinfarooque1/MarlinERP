@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { formatDate } from '@/lib/date';
+import { formatSalesInvoiceDisplayNumber } from '@/lib/invoiceNumber';
 import { useSettlementContext, type SettlementBill } from '@workspace/api-client-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -134,7 +135,7 @@ export function BillSettlementPanel({ ledgerId, amount, onSelection }: {
                 const val = allocs.get(id) ?? 0;
                 return (
                   <tr key={id} className="border-t border-border/50">
-                    <td className="py-1 pr-2 font-mono">{b.invoiceNumber || `#${id}`}</td>
+                    <td className="py-1 pr-2 font-mono">{formatSalesInvoiceDisplayNumber(b.invoiceNumber || `#${id}`)}</td>
                     <td className="py-1 pr-2 text-muted-foreground">{formatDate(b.billDate)}</td>
                     <td className="py-1 pr-2 text-right font-mono">{fmt(b.due)}</td>
                     <td className="py-1 text-right">

@@ -14,6 +14,7 @@ import { StatusBadge, type BadgeTone } from '@/components/ui/StatusBadge';
 import { formatMoney } from '@/components/ui/MoneyText';
 import { PAGE, useErpPermissions } from '@/hooks/useErpPermissions';
 import { useColors } from '@/hooks/useColors';
+import { formatDate, formatSalesInvoiceDisplayNumber } from '@/lib/formatting';
 
 /**
  * Stock item detail — one product at one location: quantities, lots (with
@@ -33,13 +34,6 @@ const TYPE_LABELS: Record<string, string> = {
 };
 
 const qtyIN = (n: number) => Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 3 });
-
-function formatDate(d?: string | null): string {
-  if (!d) return '—';
-  const dt = new Date(`${String(d).slice(0, 10)}T00:00:00`);
-  if (Number.isNaN(dt.getTime())) return String(d);
-  return dt.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: '2-digit' });
-}
 
 function batchTone(status: StockBatch['status']): BadgeTone {
   if (status === 'expired') return 'destructive';
@@ -91,7 +85,7 @@ function buildTimeline(t: ItemTrackingResponse): TimelineEvent[] {
       date: s.saleDate,
       icon: 'shopping-bag',
       title: 'Sold',
-      sub: `${s.customerName || 'Walk-in customer'} · ${s.invoiceNumber} · ${s.location}`,
+       sub: `${s.customerName || 'Walk-in customer'} · ${formatSalesInvoiceDisplayNumber(s.invoiceNumber)} · ${s.location}`,
       delta: neutral ? null : -Number(s.quantity),
       tone: 'info',
       flags: [s.cancelled ? 'Cancelled' : '', s.isBranchTransfer ? 'Branch transfer' : ''].filter(Boolean),
@@ -103,7 +97,7 @@ function buildTimeline(t: ItemTrackingResponse): TimelineEvent[] {
       date: r.returnDate,
       icon: 'corner-up-left',
       title: 'Sales return',
-      sub: `${r.customerName || 'Walk-in customer'} · against ${r.againstInvoice} · ${r.location}`,
+      sub: `${r.customerName || 'Walk-in customer'} · against ${formatSalesInvoiceDisplayNumber(r.againstInvoice)} · ${r.location}`,
       delta: Number(r.quantity),
       tone: 'warning',
       flags: [],

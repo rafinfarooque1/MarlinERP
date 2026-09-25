@@ -29,6 +29,7 @@ import { openMoneyVoucherPdf, type MoneyVoucherKind } from '@/lib/voucherPdf';
 import { PAGE, useErpPermissions } from '@/hooks/useErpPermissions';
 import { useLocationContext } from '@/contexts/LocationContext';
 import { useColors } from '@/hooks/useColors';
+import { formatDate } from '@/lib/formatting';
 
 /**
  * New Receipt / Payment voucher — one form for both kinds (?kind=receipt|payment).
@@ -98,12 +99,6 @@ function isSystemLedger(code?: string | null): boolean {
 type FlatAccount = AccountFlat & { isGroup?: boolean };
 
 const todayStr = () => localYmd();
-
-function formatDateLong(d: string): string {
-  const dt = new Date(`${d}T00:00:00`);
-  if (Number.isNaN(dt.getTime())) return d;
-  return dt.toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'long', year: 'numeric' });
-}
 
 const locKeyOf = (l: { locationType: string; locationId: number }) =>
   `${l.locationType}:${l.locationId}`;
@@ -437,7 +432,7 @@ export default function NewVoucherScreen() {
           <Feather name="chevron-left" size={20} color={colors.foreground} />
         </Pressable>
         <View style={{ flex: 1, alignItems: 'center' }}>
-          <Text style={styles.selectValue}>{formatDateLong(date)}</Text>
+          <Text style={styles.selectValue}>{formatDate(date)}</Text>
           {date !== todayStr() ? (
             <Pressable onPress={() => setDate(todayStr())} hitSlop={6}>
               <Text style={[styles.mutedText, { color: colors.primary }]}>Back to today</Text>

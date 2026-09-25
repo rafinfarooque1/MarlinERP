@@ -3,6 +3,7 @@ import { ActivityIndicator, FlatList, Modal, Pressable, StyleSheet, Text, View }
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useSalePriceHistory } from '@workspace/api-client-react';
 import { formatMoney } from '@/components/ui/MoneyText';
+import { formatDate, formatSalesInvoiceDisplayNumber } from '@/lib/formatting';
 import { useColors } from '@/hooks/useColors';
 
 /**
@@ -57,7 +58,7 @@ export function PriceHistorySheet({
               return (
                 <View style={styles.row}>
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.invoice} numberOfLines={1}>{r.invoiceNumber}</Text>
+                    <Text style={styles.invoice} numberOfLines={1}>{formatSalesInvoiceDisplayNumber(r.invoiceNumber)}</Text>
                     <Text style={styles.meta}>
                       {formatDate(r.saleDate)} · qty {r.quantity}
                       {disc ? ` · ${disc}` : ''}
@@ -74,11 +75,6 @@ export function PriceHistorySheet({
   );
 }
 
-function formatDate(d: string): string {
-  const dt = new Date(`${d}T00:00:00`);
-  if (Number.isNaN(dt.getTime())) return d;
-  return dt.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: '2-digit' });
-}
 
 const makeStyles = (colors: ReturnType<typeof useColors>, bottomInset: number) =>
   StyleSheet.create({

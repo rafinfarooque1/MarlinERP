@@ -25,6 +25,7 @@ import { formatMoney } from '@/components/ui/MoneyText';
 import { confirmDialog, notify } from '@/lib/dialogs';
 import { PAGE, useErpPermissions } from '@/hooks/useErpPermissions';
 import { useColors } from '@/hooks/useColors';
+import { formatDateTime, formatSalesInvoiceDisplayNumber } from '@/lib/formatting';
 
 /**
  * Dispatch queue — billed sales awaiting physical fulfilment.
@@ -67,9 +68,7 @@ function timeSince(iso: string): string {
 
 function fmtStamp(iso: string | null): string {
   if (!iso) return '';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '';
-  return d.toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
+  return formatDateTime(iso);
 }
 
 /** How many item lines a collapsed card shows before "Show all". */
@@ -154,7 +153,7 @@ export default function DispatchScreen() {
   const onMarkDispatched = (row: DispatchQueueEntry) => {
     confirmDialog({
       title: 'Mark dispatched?',
-      message: `${row.invoiceNumber} · ${row.customerName ?? 'Walk-in customer'}\n\nThis is the final step — a dispatched bill cannot be moved back.`,
+       message: `${formatSalesInvoiceDisplayNumber(row.invoiceNumber)} · ${row.customerName ?? 'Walk-in customer'}\n\nThis is the final step — a dispatched bill cannot be moved back.`,
       confirmText: 'Mark dispatched',
       cancelText: 'Not yet',
       onConfirm: () => transition(row, 'DISPATCHED'),
@@ -187,7 +186,7 @@ export default function DispatchScreen() {
               {row.customerName ?? 'Walk-in customer'}
             </Text>
             <Text style={styles.subLine} numberOfLines={1}>
-              {row.invoiceNumber} · {row.locationName || '—'}
+              {formatSalesInvoiceDisplayNumber(row.invoiceNumber)} · {row.locationName || '—'}
             </Text>
           </View>
           <StatusBadge label={meta.label} tone={meta.tone} />

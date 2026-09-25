@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { formatDateOrDash } from '@/lib/date';
+import { formatSalesInvoiceDisplayNumber } from '@/lib/invoiceNumber';
 import {
   useListItems, useListMaterials, useListRawMaterials, useItemTracking,
 } from '@workspace/api-client-react';
@@ -171,7 +172,7 @@ export default function ItemTrackingTab() {
     for (const r of data.salesHistory ?? []) {
       rows.push({
         key: `sal-${r.saleId}-${rows.length}`, kind: 'sale', date: r.saleDate, docId: r.saleId,
-        ref: r.invoiceNumber, detail: r.customerName,
+        ref: formatSalesInvoiceDisplayNumber(r.invoiceNumber), detail: r.customerName,
         qty: -Number(r.quantity), amount: r.unitPrice, amountIsRate: true,
         location: r.location, cancelled: r.cancelled, isBranchTransfer: r.isBranchTransfer,
       });

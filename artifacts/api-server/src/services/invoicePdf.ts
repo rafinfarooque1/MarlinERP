@@ -35,6 +35,8 @@ import { eq, inArray } from "drizzle-orm";
 import { FONT, SCRIPT_FONT, registerFonts, registerScriptFont } from "@workspace/pdf-kit";
 import { paymentModeLabel } from "../lib/paymentModes";
 import { parseStoredOtherCharges } from "../lib/otherCharges";
+import { formatDisplayDate } from "../lib/displayDate";
+import { formatSalesInvoiceDisplayNumber } from "../lib/voucherNumber";
 import { resolveInvoiceIssuer, resolveLocationIssuer, type InvoiceIssuer } from "../lib/billingProfile";
 import {
   loadPaymentPosition, loadRecordedPayments, loadInvoicePaymentSettings, buildUpiRequest,
@@ -223,7 +225,7 @@ export async function assembleInvoiceData(saleId: number): Promise<InvoiceData |
     position,
     upiId: issuer.upiId,
     payeeName: paySettings.upiPayeeName || issuer.tradeName || String((cs as any)?.companyName ?? ""),
-    reference: sale.invoiceNumber ?? "",
+    reference: formatSalesInvoiceDisplayNumber(sale.invoiceNumber),
     enabled: paySettings.upiEnabled && paySettings.showUpiQrOnInvoice,
   });
 
@@ -436,7 +438,8 @@ export async function assembleQuotationData(quotationId: number): Promise<Invoic
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 export function invoiceFileName(invoiceNumber: string | null, saleId: number): string {
-  const base = (invoiceNumber || `INV-${saleId}`).replace(/[^A-Za-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  const base = formatSalesInvoiceDisplayNumber(invoiceNumber || `INV-${saleId}`)
+    .replace(/[^A-Za-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
   return `Invoice-${base}.pdf`;
 }
 
@@ -705,7 +708,7 @@ export async function renderInvoicePdf(data: InvoiceData): Promise<{ buffer: Buf
     ln(x, y + s * 0.92, x + s, y + s * 0.92, c, 0.45);
   };
 
-  const fmtDate = new Date(sale.saleDate).toLocaleDateString("en-IN", { day: "2-digit", month: "2-digit", year: "numeric" });
+  const fmtDate = formatDisplayDate(sale.saleDate);
   const placeOfSupply = customer?.state || issuer.state;
 
   let y = M + 2;
@@ -800,12 +803,11 @@ export async function renderInvoicePdf(data: InvoiceData): Promise<{ buffer: Buf
   rfill(badgeX, y, BADGE_W, 9.5, NAVY, 1);
   txt(isQuotation ? "QUOTATION" : "TAX INVOICE", badgeX + BADGE_W / 2, y + 6.4, { bold: true, size: 12, color: WHITE, align: "center" });
 
-  const fmtIso = (iso: string): string =>
-    new Date(iso).toLocaleDateString("en-IN", { day: "2-digit", month: "2-digit", year: "numeric" });
+  const fmtIso = (iso: string): string => formatDisplayDate(iso);
 
   type MetaRow = [icon: (x: number, y: number, s: number) => void, label: string, value: string];
   const metaRows: MetaRow[] = [
-    [icoDoc, isQuotation ? "Quotation No." : "Invoice No.", esc(sale.invoiceNumber || "-")],
+    [icoDoc, isQuotation ? "Quotation No." : "Invoice No.", esc(formatSalesInvoiceDisplayNumber(sale.invoiceNumber || "-"))],
     [icoCal, isQuotation ? "Quotation Date" : "Invoice Date", fmtDate],
   ];
   if (isQuotation && q?.validTill) {
@@ -820,10 +822,10 @@ export async function renderInvoicePdf(data: InvoiceData): Promise<{ buffer: Buf
   if (isQuotation) {
     if (q?.salesperson) metaRows.push([(x, yy, s) => icoPerson(x, yy, s, NAVY), "Salesperson", q.salesperson]);
     // Two-way trace: a converted quotation names the invoice it became.
-    if (q?.convertedInvoiceNumber) metaRows.push([icoCycle, "Converted To", q.convertedInvoiceNumber]);
+    if (q?.convertedInvoiceNumber) metaRows.push([icoCycle, "Converted To", formatSalesInvoiceDisplayNumber(q.convertedInvoiceNumber)]);
   } else {
     // Two-way trace: a converted sale names the quotation it came from.
-    if (sale.quotationNumber) metaRows.push([icoCycle, "Converted From", sale.quotationNumber]);
+    if (sale.quotationNumber) metaRows.push([icoCycle, "Converted From", formatSalesInvoiceDisplayNumber(sale.quotationNumber)]);
     metaRows.push([icoCycle, "Reverse Charge", "No"]);
   }
 
@@ -1310,7 +1312,7 @@ export async function renderInvoicePdf(data: InvoiceData): Promise<{ buffer: Buf
             : "Total amount outstanding on this invoice.", payW - 10, 6.8)
       .forEach((t, i) => txt(t, M + 4.5, y + 27.5 + i * 3.6, { size: 6.8, color: MUT }));
     if (sale.invoiceNumber) {
-      txt(`Ref: ${esc(sale.invoiceNumber)}`, M + 4.5, y + PAY_H - 4, { size: 6.4, color: MUT });
+      txt(`Ref: ${esc(formatSalesInvoiceDisplayNumber(sale.invoiceNumber))}`, M + 4.5, y + PAY_H - 4, { size: 6.4, color: MUT });
     }
 
     // Bank transfer details
@@ -1478,7 +1480,7 @@ export async function renderInvoicePdf(data: InvoiceData): Promise<{ buffer: Buf
   // The validity line is part of the document's meaning, not decoration:
   // it is what makes the offer time-bound.
   if (q?.validTill) {
-    const vt = new Date(q.validTill).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+    const vt = formatDisplayDate(q.validTill);
     txt(`This quotation is valid until ${vt}.`, PW / 2, noteY, { bold: true, size: 7, color: NAVY, align: "center" });
     noteY += 3.6;
   }

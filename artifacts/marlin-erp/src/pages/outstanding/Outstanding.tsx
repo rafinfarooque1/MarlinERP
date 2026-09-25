@@ -9,6 +9,7 @@ import { PageHeader } from '@/components/app/page-header';
 import { EmptyState } from '@/components/app/empty-state';
 import { inr } from '@/lib/currency';
 import { formatDateOrDash } from '@/lib/date';
+import { formatSalesInvoiceDisplayNumber } from '@/lib/invoiceNumber';
 
 const dfmt = (d?: string | null) => formatDateOrDash(d);
 
@@ -214,7 +215,7 @@ export default function Outstanding() {
                               <tbody>
                                 {(c.invoices ?? []).map((inv: any) => (
                                   <tr key={inv.saleId} className="border-t border-border/50">
-                                    <td className="py-1.5 font-mono">{inv.invoiceNumber || `Sale #${inv.saleId}`}</td>
+                                    <td className="py-1.5 font-mono">{formatSalesInvoiceDisplayNumber(inv.invoiceNumber || `Sale #${inv.saleId}`)}</td>
                                     <td className="py-1.5">{dfmt(inv.saleDate)}</td>
                                     <td className="py-1.5">{dfmt(inv.dueDate)}</td>
                                     <td className="py-1.5 text-right">

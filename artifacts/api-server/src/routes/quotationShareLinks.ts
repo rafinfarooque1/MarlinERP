@@ -21,6 +21,8 @@ import { pool } from "@workspace/db";
 import { requireModuleAction } from "../middleware/permissions";
 import { getUserDataScope, type DataScope } from "../lib/dataScope";
 import { logActivity } from "../lib/audit";
+import { formatDisplayDate } from "../lib/displayDate";
+import { formatSalesInvoiceDisplayNumber } from "../lib/voucherNumber";
 import { assembleQuotationData, renderInvoicePdf } from "../services/invoicePdf";
 import {
   newPublicId, newShareToken, shareTokenMatches,
@@ -419,10 +421,7 @@ const inr = (n: unknown): string =>
   `₹${Number(n ?? 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 const asDate = (d: unknown): string => {
-  const t = new Date(String(d));
-  return Number.isFinite(t.getTime())
-    ? t.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })
-    : String(d ?? "");
+  return formatDisplayDate(d instanceof Date || typeof d === "string" || typeof d === "number" ? d : String(d ?? ""));
 };
 
 /**
@@ -541,7 +540,7 @@ router.get("/share/quotation/:publicId", async (req, res): Promise<void> => {
   const validTill = data.quotation?.validTill ? asDate(data.quotation.validTill) : null;
 
   res.status(200).type("html").send(page({
-    title: `Quotation ${data.sale.invoiceNumber ?? ""} — ${company}`,
+    title: `Quotation ${formatSalesInvoiceDisplayNumber(data.sale.invoiceNumber)} — ${company}`,
     body: `
       <div class="head">
         <h1>${esc(company)}</h1>
@@ -549,7 +548,7 @@ router.get("/share/quotation/:publicId", async (req, res): Promise<void> => {
       </div>
       <div class="body">
         <dl>
-          <dt>Quotation number</dt><dd>${esc(data.sale.invoiceNumber ?? "—")}</dd>
+          <dt>Quotation number</dt><dd>${esc(formatSalesInvoiceDisplayNumber(data.sale.invoiceNumber ?? "—"))}</dd>
           <dt>Quotation date</dt><dd>${esc(asDate(data.sale.saleDate))}</dd>
           ${validTill ? `<dt>Valid until</dt><dd>${esc(validTill)}</dd>` : ""}
           ${data.customer?.name ? `<dt>Prepared for</dt><dd>${esc(data.customer.name)}</dd>` : ""}

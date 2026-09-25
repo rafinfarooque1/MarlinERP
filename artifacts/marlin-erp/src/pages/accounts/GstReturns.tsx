@@ -22,6 +22,7 @@ import { ExportButtons, type ReportDoc } from '@/pages/reports/shared';
 import { PageHeader } from '@/components/app/page-header';
 import { EmptyState } from '@/components/app/empty-state';
 import { TableSkeleton } from '@/components/app/loading-skeletons';
+import { formatSalesInvoiceDisplayNumber } from '@/lib/invoiceNumber';
 
 const payStatusLabel = (s?: string) =>
   s === 'na' ? '—' : s === 'paid' ? 'Paid' : s === 'partially_paid' ? 'Partial' : 'Unpaid';
@@ -255,7 +256,7 @@ export default function GstReturns() {
   const exportGstr1 = () => {
     downloadCSV(`gstr1-${fromDate}-to-${toDate}.csv`, [
       ...b2b.map(r => ({
-        Section: 'B2B', 'Invoice No': r.invoiceNumber, Date: r.saleDate, Customer: r.customerName,
+        Section: 'B2B', 'Invoice No': formatSalesInvoiceDisplayNumber(r.invoiceNumber), Date: r.saleDate, Customer: r.customerName,
         GSTIN: r.gstin, 'Place of Supply': r.placeOfSupply, Warehouse: r.warehouseName ?? '',
         'Rate %': r.taxRate,
         'Taxable Value': r.taxableValue, CGST: r.cgst, SGST: r.sgst, IGST: r.igst,
@@ -263,7 +264,7 @@ export default function GstReturns() {
         'Payment Status': payStatusLabel(r.paymentStatus), 'Payment Mode': r.paymentModes ?? '',
       })),
       ...b2c.map(r => ({
-        Section: 'B2C (Invoices)', 'Invoice No': r.invoiceNumber, Date: r.saleDate, Customer: r.customerName,
+        Section: 'B2C (Invoices)', 'Invoice No': formatSalesInvoiceDisplayNumber(r.invoiceNumber), Date: r.saleDate, Customer: r.customerName,
         GSTIN: '', 'Place of Supply': r.placeOfSupply, Warehouse: r.warehouseName ?? '',
         'Rate %': r.taxRate,
         'Taxable Value': r.taxableValue, CGST: r.cgst, SGST: r.sgst, IGST: r.igst,
@@ -359,7 +360,7 @@ export default function GstReturns() {
           { label: 'Payment Status' }, { label: 'Payment Mode' },
         ],
         rows: b2b.map(r => [
-          r.invoiceNumber, r.saleDate, r.customerName, r.gstin, r.warehouseName ?? '',
+          formatSalesInvoiceDisplayNumber(r.invoiceNumber), r.saleDate, r.customerName, r.gstin, r.warehouseName ?? '',
           `${r.taxRate}%`, r.taxableValue, r.taxAmount, r.invoiceValue,
           payStatusLabel(r.paymentStatus), r.paymentModes ?? '',
         ]),
@@ -374,7 +375,7 @@ export default function GstReturns() {
           { label: 'Payment Status' }, { label: 'Payment Mode' },
         ],
         rows: b2c.map(r => [
-          r.invoiceNumber, r.saleDate, r.customerName, r.warehouseName ?? '',
+          formatSalesInvoiceDisplayNumber(r.invoiceNumber), r.saleDate, r.customerName, r.warehouseName ?? '',
           `${r.taxRate}%`, r.taxableValue, r.taxAmount, r.invoiceValue,
           payStatusLabel(r.paymentStatus), r.paymentModes ?? '',
         ]),
@@ -553,7 +554,7 @@ export default function GstReturns() {
                   <TableBody>
                     {b2bSort.sorted.map((r, i) => (
                       <TableRow key={i} className="hover:bg-muted/10">
-                        <TableCell className="font-mono text-xs">{r.invoiceNumber}</TableCell>
+                        <TableCell className="font-mono text-xs">{formatSalesInvoiceDisplayNumber(r.invoiceNumber)}</TableCell>
                         <TableCell className="text-xs">{r.saleDate}</TableCell>
                         <TableCell className="text-xs">{r.customerName}</TableCell>
                         <TableCell className="font-mono text-xs">{r.gstin}</TableCell>
@@ -606,7 +607,7 @@ export default function GstReturns() {
                   <TableBody>
                     {b2cSort.sorted.map((r, i) => (
                       <TableRow key={i} className="hover:bg-muted/10">
-                        <TableCell className="font-mono text-xs">{r.invoiceNumber}</TableCell>
+                        <TableCell className="font-mono text-xs">{formatSalesInvoiceDisplayNumber(r.invoiceNumber)}</TableCell>
                         <TableCell className="text-xs">{r.saleDate}</TableCell>
                         <TableCell className="text-xs">{r.customerName}</TableCell>
                         <TableCell className="text-xs">{r.placeOfSupply || '—'}</TableCell>

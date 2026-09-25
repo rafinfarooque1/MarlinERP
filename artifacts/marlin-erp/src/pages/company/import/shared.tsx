@@ -4,6 +4,7 @@
  */
 import { useState } from 'react';
 import { formatDateTime } from '@/lib/date';
+import { formatSalesInvoiceDisplayNumber } from '@/lib/invoiceNumber';
 import type { ImportBatch, ImportModule, ImportRow } from '@workspace/api-client-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -200,7 +201,7 @@ export function AllocationCell({ r }: { r: ImportRow }) {
     <div className="space-y-0.5 text-xs">
       {allocations.map((a) => (
         <div key={a.id} className="whitespace-nowrap">
-          {a.invoiceNumber ?? `#${a.id}`} — {fmtMoney(a.amount)}
+          {formatSalesInvoiceDisplayNumber(a.invoiceNumber ?? `#${a.id}`)} — {fmtMoney(a.amount)}
         </div>
       ))}
       {advance > 0 && (

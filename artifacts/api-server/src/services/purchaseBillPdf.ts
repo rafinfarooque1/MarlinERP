@@ -14,14 +14,20 @@
 import { jsPDF } from "jspdf";
 import {
   registerFonts, Painter, flowTable, stampFooters, amountInWords,
-  inr, inGrouping, qty, dateIN,
+  inr, inGrouping, qty,
   drawLetterhead,
   NAVY, WHITE, LGRAY, MGRAY, BORDER, TEAL,
   PW, PH, M, CW, type Col,
 } from "@workspace/pdf-kit";
 import type { InvoiceIssuer } from "../lib/billingProfile";
+import { formatDisplayDate } from "../lib/displayDate";
 
 const DASH = "-";
+const displayDate = (v: unknown): string => {
+  if (v == null || v === "") return DASH;
+  const formatted = formatDisplayDate(v instanceof Date || typeof v === "string" || typeof v === "number" ? v : String(v));
+  return formatted || DASH;
+};
 
 /** Blank, null and whitespace all print as a dash. Nothing is invented. */
 function val(v: unknown): string {
@@ -86,7 +92,7 @@ export async function generatePurchaseBillPdf(
     p.txt(val(issuer.tradeName), M, 8.5, { size: 10, bold: true, color: WHITE });
     p.txt("PURCHASE INVOICE (continued)", M, 14.5, { size: 6.8, color: [190, 205, 225] });
     p.txt(docNo, PW - M, 9, { size: 10, bold: true, color: WHITE, align: "right" });
-    p.txt(dateIN(purchase?.purchaseDate), PW - M, 14.5,
+    p.txt(displayDate(purchase?.purchaseDate), PW - M, 14.5,
       { size: 7, color: [190, 205, 225], align: "right" });
     return 26;
   };
@@ -99,7 +105,7 @@ export async function generatePurchaseBillPdf(
     accent: NAVY,
     metaRows: [
       ["Bill No.", docNo],
-      ["Bill Date", dateIN(purchase?.purchaseDate)],
+      ["Bill Date", displayDate(purchase?.purchaseDate)],
     ],
     margin: M,
     width: CW,
@@ -147,10 +153,10 @@ export async function generatePurchaseBillPdf(
   p.box(M, y, CW, stripH, BORDER, 0.25);
   const cells: Array<[string, string]> = [
     ["PURCHASE BILL NO.", docNo],
-    ["BILL DATE", dateIN(purchase?.purchaseDate)],
+    ["BILL DATE", displayDate(purchase?.purchaseDate)],
     ["VENDOR INVOICE REF.", val(purchase?.invoiceNumber)],
     // Absent on historical bills — a dash, never a fabricated date.
-    ["VENDOR INVOICE DATE", purchase?.vendorInvoiceDate ? dateIN(purchase.vendorInvoiceDate) : "\u2014"],
+    ["VENDOR INVOICE DATE", purchase?.vendorInvoiceDate ? displayDate(purchase.vendorInvoiceDate) : "\u2014"],
     ["RATE BASIS", inclusive ? "GST Inclusive" : "GST Exclusive"],
   ];
   const cellW = CW / cells.length;
@@ -178,10 +184,9 @@ export async function generatePurchaseBillPdf(
     { header: `Total (\u20B9)`, width: 18.5, align: "right", wrap: false },
   ];
 
-  /** 28-Jul-2026 -> 28-Jul-26. Two dates share one narrow column. */
+  /** Two date-only labels share one narrow column. */
   const shortDate = (v: unknown): string => {
-    const s = dateIN(v);
-    return s === DASH ? DASH : s.replace(/-\d{2}(\d{2})$/, "-$1");
+    return displayDate(v);
   };
 
   /** Break server-issued batch numbers at the last hyphen, not mid-number. */

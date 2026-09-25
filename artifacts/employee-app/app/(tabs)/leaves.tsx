@@ -18,6 +18,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useColors } from '@/hooks/useColors';
+import { formatDate } from '@/lib/formatting';
 import { useAuth } from '@/contexts/AuthContext';
 import { useListLeaves, useApplyLeave, useCancelLeave } from '@workspace/api-client-react';
 import type { LeaveApplication } from '@workspace/api-client-react';
@@ -49,21 +50,11 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
-function formatDate(d: string | undefined | null): string {
-  if (!d) return '—';
-  try {
-    const date = new Date(d + 'T00:00:00');
-    return date.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
-  } catch { return d; }
-}
-
 /** For ISO timestamps (approvedAt / cancelledAt) rather than plain dates. */
 function formatTimestamp(ts: string | undefined | null): string {
   if (!ts) return '—';
   try {
-    const date = new Date(ts);
-    if (isNaN(date.getTime())) return '—';
-    return date.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+    return formatDate(ts) || '—';
   } catch { return '—'; }
 }
 

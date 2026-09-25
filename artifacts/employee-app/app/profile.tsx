@@ -5,6 +5,7 @@ import { FormScreen, PrimaryButton } from '@/components/ui/FormScreen';
 import { useAuth } from '@/contexts/AuthContext';
 import { useColors } from '@/hooks/useColors';
 import { confirmDialog } from '@/lib/dialogs';
+import { formatDate } from '@/lib/formatting';
 
 export default function ProfileScreen() {
   const colors = useColors();
@@ -64,11 +65,7 @@ export default function ProfileScreen() {
           label="Joined"
           value={
             employee.joinDate
-              ? new Date(employee.joinDate).toLocaleDateString('en-IN', {
-                  day: 'numeric',
-                  month: 'short',
-                  year: 'numeric',
-                })
+              ? formatDate(employee.joinDate)
               : '—'
           }
           colors={colors}

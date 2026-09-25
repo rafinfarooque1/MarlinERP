@@ -30,6 +30,7 @@ import { EmptyState } from '@/components/app/empty-state';
 import { TableSkeleton } from '@/components/app/loading-skeletons';
 import { inr } from '@/lib/currency';
 import { formatDateOrDash } from '@/lib/date';
+import { formatSalesInvoiceDisplayNumber } from '@/lib/invoiceNumber';
 
 const fmt = (n: unknown) => Number(n ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 });
 // Paise rounding — must match the API's r2 so estimates equal the note total.
@@ -79,7 +80,7 @@ function NewSalesReturnDialog({ open, onOpenChange, editing }: { open: boolean; 
   const saleOptions = useMemo(
     () => candidates.map((s: any) => ({
       id: s.id,
-      number: s.invoiceNumber || `Sale #${s.id}`,
+      number: formatSalesInvoiceDisplayNumber(s.invoiceNumber || `Sale #${s.id}`),
       party: s.customerName || 'Walk-in',
       amount: s.totalAmount,
       date: s.saleDate,
@@ -187,7 +188,7 @@ function NewSalesReturnDialog({ open, onOpenChange, editing }: { open: boolean; 
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Invoice</label>
               {editing ? (
-                <Input value={editing.invoiceNumber || `Sale #${editing.saleId}`} disabled className="font-mono" />
+                <Input value={formatSalesInvoiceDisplayNumber(editing.invoiceNumber || `Sale #${editing.saleId}`)} disabled className="font-mono" />
               ) : (
                 <BillCombobox
                   options={saleOptions}
@@ -209,7 +210,7 @@ function NewSalesReturnDialog({ open, onOpenChange, editing }: { open: boolean; 
           {sale && (
             <>
               <div className="rounded-lg border border-border bg-muted/20 px-3 py-2 text-xs flex flex-wrap gap-x-4 gap-y-1">
-                <span><span className="text-muted-foreground">Invoice:</span> <strong className="font-mono">{sale.invoiceNumber || `Sale #${sale.id}`}</strong></span>
+                <span><span className="text-muted-foreground">Invoice:</span> <strong className="font-mono">{formatSalesInvoiceDisplayNumber(sale.invoiceNumber || `Sale #${sale.id}`)}</strong></span>
                 <span><span className="text-muted-foreground">Customer:</span> <strong>{sale.customerName || 'Walk-in'}</strong></span>
                 <span><span className="text-muted-foreground">Sold on:</span> {dfmt(sale.saleDate)}</span>
                 <span><span className="text-muted-foreground">Refund via:</span> <strong>{sale.customerId ? 'Credit Note' : 'Cash refund'}</strong></span>
@@ -656,7 +657,7 @@ export default function Returns() {
                         <tr key={r.id} className="border-t border-border hover:bg-muted/10">
                           <td className="px-4 py-2.5 font-mono font-semibold text-primary">{r.returnNumber}</td>
                           <td className="px-3 py-2.5 whitespace-nowrap">{dfmt(r.returnDate)}</td>
-                          <td className="px-3 py-2.5 font-mono text-xs">{r.invoiceNumber || `Sale #${r.saleId}`}</td>
+                          <td className="px-3 py-2.5 font-mono text-xs">{formatSalesInvoiceDisplayNumber(r.invoiceNumber || `Sale #${r.saleId}`)}</td>
                           <td className="px-3 py-2.5">{r.customerName || 'Walk-in'}</td>
                           <td className="px-3 py-2.5 text-right font-mono font-semibold">{inr(r.totalAmount)}</td>
                           <td className="px-3 py-2.5">
@@ -730,7 +731,7 @@ export default function Returns() {
                 <SheetTitle className="text-primary font-mono">{view.doc.returnNumber}</SheetTitle>
                 <SheetDescription>
                   {view.kind === 'sales'
-                    ? `${(view.doc as SalesReturn).customerName || 'Walk-in'} · against ${(view.doc as SalesReturn).invoiceNumber || `Sale #${(view.doc as SalesReturn).saleId}`} · ${dfmt(view.doc.returnDate)}`
+                    ? `${(view.doc as SalesReturn).customerName || 'Walk-in'} · against ${formatSalesInvoiceDisplayNumber((view.doc as SalesReturn).invoiceNumber || `Sale #${(view.doc as SalesReturn).saleId}`)} · ${dfmt(view.doc.returnDate)}`
                     : `${(view.doc as PurchaseReturn).vendorName} · against ${(view.doc as PurchaseReturn).invoiceNumber || `PB #${(view.doc as PurchaseReturn).purchaseId}`} · ${dfmt(view.doc.returnDate)}`}
                 </SheetDescription>
               </SheetHeader>

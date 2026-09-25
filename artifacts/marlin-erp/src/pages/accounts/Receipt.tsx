@@ -18,6 +18,7 @@ import { downloadCSV } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { usePermission } from '@/lib/usePermission';
+import { formatSalesInvoiceDisplayNumber } from '@/lib/invoiceNumber';
 import { formatDate } from '@/lib/date';
 import { AccountCombobox } from '@/components/ui/account-combobox';
 import { isSystemLedger } from '@/lib/systemLedgers';
@@ -322,7 +323,7 @@ export default function ReceiptPage() {
                         </div>
                         {r.allocations.map((a: any) => (
                           <div key={`${r.id}-${a.saleId}`} className="grid grid-cols-4 gap-2 text-xs py-1">
-                            <span className="font-mono">{a.invoiceNumber || `Sale #${a.saleId}`}</span>
+                            <span className="font-mono">{formatSalesInvoiceDisplayNumber(a.invoiceNumber || `Sale #${a.saleId}`)}</span>
                             <span className="text-right font-mono">{inr(Number(a.originalDue))}</span>
                             <span className="text-right font-mono text-emerald-600">{inr(Number(a.allocated))}</span>
                             <span className="text-right font-mono">{inr(Number(a.remaining))}</span>

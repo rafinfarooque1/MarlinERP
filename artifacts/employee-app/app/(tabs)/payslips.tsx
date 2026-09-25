@@ -18,6 +18,7 @@ import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useColors } from '@/hooks/useColors';
 import { useAuth } from '@/contexts/AuthContext';
+import { formatDate } from '@/lib/formatting';
 import { useListEnrichedPayroll, EnrichedPayrollRecord } from '@workspace/api-client-react';
 
 const MONTHS = [
@@ -96,7 +97,7 @@ function generatePayslipHTML(record: EnrichedPayrollRecord, employeeName: string
 
   <div class="footer">
     This is a computer-generated payslip. No signature required.<br/>
-    Generated on ${new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })}
+     Generated on ${formatDate(new Date())}
   </div>
 </div>
 </body></html>`;

@@ -11,6 +11,13 @@ description: Per-location invoice number formats (short FY, no padding, continuo
 - Stamped `invoice_fy` = the PRINTED segment (`26-27`), so `split_part(invoice_number,'/',2)` and the identity columns always agree. `shortFyLabel` is idempotent.
 - Books-shape predicates match on `SB2B/%`/`SB2C/%` prefixes and receipt↔sale number equality — both survive the format change by construction, but any NEW consumer that regex-parses the FY segment must accept both `\d{4}-\d{2}` and `\d{2}-\d{2}`.
 
+## Legacy number display
+- Existing long-year or padded SB2B/SB2C values may be shortened at presentation boundaries only; preserve the raw stored number for lookup, settlement, accounting, and audit identity.
+
+**Why:** the owner chose to show historical invoices in the short format without changing stored identifiers.
+
+**How to apply:** normalize only values rendered or exported to people, including PDFs and share text. Keep API identity fields and all database comparisons raw.
+
 ## Scope lock protocol (deadlock + escape prevention)
 - `acquireSalesScopeLockShared(q, scope)` in every allocator/reclass, `acquireSalesScopeLockExclusive` in the renumber migration — advisory xact lock on `hashtext('sales_scope:'||scope)`, taken BEFORE any counter or sale-row lock.
 - **Why:** counter-row pre-locking alone cannot block a concurrent sale dated in an FY with no counter row yet (it INSERTs a fresh row and escapes the migration in the old format), and apply-takes-counters-first vs reclass-takes-rows-first is a direct deadlock cycle. Shared/shared is free, so normal sales stay concurrent.

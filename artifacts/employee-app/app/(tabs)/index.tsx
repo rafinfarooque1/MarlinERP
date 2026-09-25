@@ -14,6 +14,7 @@ import { Feather } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useColors } from '@/hooks/useColors';
+import { formatDate } from '@/lib/formatting';
 import { useAuth } from '@/contexts/AuthContext';
 import { useHasErpAccess } from '@/hooks/useErpPermissions';
 import { ChangePasswordModal } from '@/components/ChangePasswordModal';
@@ -289,7 +290,7 @@ export default function HomeScreen() {
             { icon: 'tag' as const, label: 'Username', value: employee?.username ?? '—' },
             { icon: 'briefcase' as const, label: 'Role', value: employee?.hierarchyName ?? '—' },
             { icon: 'map-pin' as const, label: 'Branch', value: employee?.branchName ?? '—' },
-            { icon: 'calendar' as const, label: 'Joined', value: employee?.joinDate ? new Date(employee.joinDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—' },
+            { icon: 'calendar' as const, label: 'Joined', value: employee?.joinDate ? formatDate(employee.joinDate) : '—' },
           ].map((item, idx, arr) => (
             <View key={item.label} style={[styles.detailRow, idx < arr.length - 1 && styles.detailBorder]}>
               <View style={styles.detailLeft}>

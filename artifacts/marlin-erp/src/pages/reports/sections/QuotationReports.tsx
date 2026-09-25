@@ -18,6 +18,7 @@ import { StatusBadge } from '@/components/app/status-badge';
 import { TablePager } from '@/components/ui/table-pager';
 import { usePermission } from '@/lib/usePermission';
 import { downloadCSV } from '@/lib/download';
+import { formatSalesInvoiceDisplayNumber } from '@/lib/invoiceNumber';
 import {
   fmt, fmtDate, titleCase, periodLabel,
   useDateRange, RangeBar, SummaryCards, LocationBadge, RTable, ExportButtons,
@@ -86,7 +87,7 @@ export function QuotationsSection() {
       render: r => (
         <span className="inline-flex items-center gap-1.5">
           <StatusBadge status={r.status} label={titleCase(r.status)} />
-          {r.convertedInvoiceNumber && <span className="text-[10px] text-violet-600 font-mono">→ {r.convertedInvoiceNumber}</span>}
+          {r.convertedInvoiceNumber && <span className="text-[10px] text-violet-600 font-mono">→ {formatSalesInvoiceDisplayNumber(r.convertedInvoiceNumber)}</span>}
         </span>
       ),
     },
@@ -103,7 +104,7 @@ export function QuotationsSection() {
     'Valid Till': r.validTill ?? '', Salesperson: r.salesperson ?? '',
     Subtotal: Number(r.subtotal).toFixed(2), GST: Number(r.taxTotal).toFixed(2),
     Discount: Number(r.discountTotal ?? 0).toFixed(2), Total: Number(r.totalAmount).toFixed(2),
-    'Converted To': r.convertedInvoiceNumber ?? '',
+    'Converted To': formatSalesInvoiceDisplayNumber(r.convertedInvoiceNumber ?? ''),
   }));
 
   const doc = (): ReportDoc => ({
@@ -118,7 +119,7 @@ export function QuotationsSection() {
       ],
       rows: rows.map(r => [
         r.quotationNumber, fmtDate(r.quoteDate), r.customerName || 'Walk-in', r.locationName,
-        titleCase(r.status) + (r.convertedInvoiceNumber ? ` → ${r.convertedInvoiceNumber}` : ''),
+        titleCase(r.status) + (r.convertedInvoiceNumber ? ` → ${formatSalesInvoiceDisplayNumber(r.convertedInvoiceNumber)}` : ''),
         fmtDate(r.validTill), r.salesperson || '—',
         Number(r.taxTotal).toFixed(2), Number(r.totalAmount).toFixed(2),
       ]),
