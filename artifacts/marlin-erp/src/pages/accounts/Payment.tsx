@@ -174,7 +174,7 @@ export default function Payment() {
             <>
               {perm.canDownload && (
                 <Button variant="outline" size="sm" onClick={() => downloadCSV('payments.csv', filtered.map((p: any) => ({
-                  Voucher: p.voucherNumber, Date: p.paymentDate, 'Paid From': p.paidFromName,
+                  Voucher: p.voucherNumber, Date: formatDate(p.paymentDate), 'Paid From': p.paidFromName,
                   'Paid To': p.paidToName, Location: voucherLocationName(locations, p.locationType, p.locationId),
                   Amount: p.amount,
                   Reference: p.referenceNumber || '', Narration: p.narration || '',

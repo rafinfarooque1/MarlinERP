@@ -58,7 +58,7 @@ function RegisterReport({ range, canDownload }: { range: RangeState; canDownload
           canDownload={canDownload}
           disabled={isLoading || rows.length === 0}
           onCSV={() => downloadCSV('purchase-register.csv', rows.map((r) => ({
-            'Bill No': r.billNumber, Date: r.date, Vendor: r.vendorName,
+            'Bill No': r.billNumber, Date: fmtDate(r.date), Vendor: r.vendorName,
             'Taxable (₹)': r.subtotal.toFixed(2), 'Discount (₹)': r.discount.toFixed(2),
             'Gross (₹)': g(r).toFixed(2), 'Input GST (₹)': ig(r).toFixed(2), 'Net (₹)': nt(r).toFixed(2),
           })))}

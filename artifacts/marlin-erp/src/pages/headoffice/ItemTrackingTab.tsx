@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { formatDateOrDash } from '@/lib/date';
-import { formatSalesInvoiceDisplayNumber } from '@/lib/invoiceNumber';
+import { formatSalesInvoiceDisplayNumber, formatGstDocumentDisplayNumber } from '@/lib/invoiceNumber';
 import {
   useListItems, useListMaterials, useListRawMaterials, useItemTracking,
 } from '@workspace/api-client-react';
@@ -180,14 +180,14 @@ export default function ItemTrackingTab() {
     for (const r of data.salesReturns ?? []) {
       rows.push({
         key: `sr-${r.returnId}-${rows.length}`, kind: 'sales_return', date: r.returnDate, docId: r.returnId,
-        ref: r.returnNumber, detail: r.customerName, sub: r.againstInvoice ? `against ${r.againstInvoice}` : undefined,
+        ref: formatGstDocumentDisplayNumber(r.returnNumber), detail: r.customerName, sub: r.againstInvoice ? `against ${formatSalesInvoiceDisplayNumber(r.againstInvoice)}` : undefined,
         qty: Number(r.quantity), amount: r.amount, location: r.location,
       });
     }
     for (const r of data.purchaseReturns ?? []) {
       rows.push({
         key: `pr-${r.returnId}-${rows.length}`, kind: 'purchase_return', date: r.returnDate, docId: r.returnId,
-        ref: r.returnNumber, detail: r.vendorName || '—', sub: r.againstInvoice ? `against ${r.againstInvoice}` : undefined,
+        ref: formatGstDocumentDisplayNumber(r.returnNumber), detail: r.vendorName || '—', sub: r.againstInvoice ? `against ${r.againstInvoice}` : undefined,
         qty: -Number(r.quantity), location: r.location,
       });
     }

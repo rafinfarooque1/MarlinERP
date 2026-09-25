@@ -47,6 +47,8 @@ const today = () => new Date().toISOString().split('T')[0];
 
 import { isSystemLedger } from '@/lib/systemLedgers';
 import { inr } from '@/lib/currency';
+import { formatDateOrDash } from '@/lib/date';
+import { formatGstDocumentDisplayNumber } from '@/lib/invoiceNumber';
 
 type VoucherType = 'payment' | 'receipt' | 'journal' | 'contra' | 'credit_note' | 'debit_note';
 
@@ -113,7 +115,7 @@ function DeleteConfirm({ row, onClose }: { row: UnifiedRow; onClose: () => void 
           </DialogTitle>
         </DialogHeader>
         <p className="text-sm text-muted-foreground">
-          <strong>{row.voucherNumber}</strong> · {inr(row.amount)} · {row.date}<br />
+          <strong>{formatGstDocumentDisplayNumber(row.voucherNumber)}</strong> · {inr(row.amount)} · {formatDateOrDash(row.date)}<br />
           This will also reverse the accounting entry and cannot be undone.
         </p>
         <DialogFooter>
@@ -196,14 +198,14 @@ function NewVoucherDialog({ onClose, defaultType }: { onClose: () => void; defau
       if (!fromId || !toId) { toast.error('Select both accounts'); return; }
       if (!amount || Number(amount) <= 0) { toast.error('Enter amount'); return; }
       createPayment.mutate({ paymentDate: date, paidFromLedgerId: fromId, paidToLedgerId: toId, amount: Number(amount), narration, locationType: loc.locationType, locationId: loc.locationId } as any, {
-        onSuccess: (v: any) => { toast.success(`Payment ${v.voucherNumber} recorded`); invalidate(); },
+        onSuccess: (v: any) => { toast.success(`Payment ${formatGstDocumentDisplayNumber(v.voucherNumber)} recorded`); invalidate(); },
         onError: onErr,
       });
     } else if (type === 'receipt') {
       if (!fromId || !toId) { toast.error('Select both accounts'); return; }
       if (!amount || Number(amount) <= 0) { toast.error('Enter amount'); return; }
       createReceipt.mutate({ receiptDate: date, receivedFromLedgerId: fromId, receivedInLedgerId: toId, amount: Number(amount), narration, locationType: loc.locationType, locationId: loc.locationId } as any, {
-        onSuccess: (v: any) => { toast.success(`Receipt ${v.voucherNumber} recorded`); invalidate(); },
+        onSuccess: (v: any) => { toast.success(`Receipt ${formatGstDocumentDisplayNumber(v.voucherNumber)} recorded`); invalidate(); },
         onError: onErr,
       });
     } else if (type === 'contra') {
@@ -216,7 +218,7 @@ function NewVoucherDialog({ onClose, defaultType }: { onClose: () => void; defau
         fromLedgerId: fromId, toLedgerId: toId, amount: Number(amount),
         locationType: loc.locationType, locationId: loc.locationId,
       } as any, {
-        onSuccess: (v: any) => { toast.success(`Contra ${v.voucherNumber} recorded`); invalidate(); },
+        onSuccess: (v: any) => { toast.success(`Contra ${formatGstDocumentDisplayNumber(v.voucherNumber)} recorded`); invalidate(); },
         onError: onErr,
       });
     } else if (type === 'journal') {
@@ -229,7 +231,7 @@ function NewVoucherDialog({ onClose, defaultType }: { onClose: () => void; defau
         lines: clean.map(l => ({ ledgerId: l.ledgerId, debit: Number(l.debit) || 0, credit: Number(l.credit) || 0 })),
         locationType: loc.locationType, locationId: loc.locationId,
       } as any, {
-        onSuccess: (v: any) => { toast.success(`Journal ${v.voucherNumber} recorded`); invalidate(); },
+        onSuccess: (v: any) => { toast.success(`Journal ${formatGstDocumentDisplayNumber(v.voucherNumber)} recorded`); invalidate(); },
         onError: onErr,
       });
     } else {
@@ -243,7 +245,7 @@ function NewVoucherDialog({ onClose, defaultType }: { onClose: () => void; defau
         reason,
         locationType: loc.locationType, locationId: loc.locationId,
       } as any, {
-        onSuccess: (v: any) => { toast.success(`${TYPE_META[type].label} ${v.voucherNumber} recorded`); invalidate(); },
+        onSuccess: (v: any) => { toast.success(`${TYPE_META[type].label} ${formatGstDocumentDisplayNumber(v.voucherNumber)} recorded`); invalidate(); },
         onError: onErr,
       });
     }
@@ -527,7 +529,7 @@ function EditVoucherDialog({ row, onClose }: { row: UnifiedRow; onClose: () => v
     }));
 
   const onErr = (e: any) => toast.error(e?.data?.error || e.message || 'Could not save the changes');
-  const onOk = () => { toast.success(`${row.voucherNumber} updated`); qc.invalidateQueries(); onClose(); };
+  const onOk = () => { toast.success(`${formatGstDocumentDisplayNumber(row.voucherNumber)} updated`); qc.invalidateQueries(); onClose(); };
 
   const submit = () => {
     if (!date) { toast.error('Date required'); return; }
@@ -600,7 +602,7 @@ function EditVoucherDialog({ row, onClose }: { row: UnifiedRow; onClose: () => v
         <div className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold ${meta.bg}`}>
           <Icon className="h-3.5 w-3.5" />
           {meta.label}
-          <span className="font-mono ml-auto">{row.voucherNumber}</span>
+          <span className="font-mono ml-auto">{formatGstDocumentDisplayNumber(row.voucherNumber)}</span>
         </div>
         <p className="text-xs text-muted-foreground -mt-1">
           The voucher number and type stay as they are — this updates the existing entry rather than
@@ -771,7 +773,7 @@ function EditMoneyVoucherDialog({ row, onClose }: { row: UnifiedRow; onClose: ()
     || (v.locationType ? locKey !== `${v.locationType}:${v.locationId ?? 0}` : false);
 
   const onErr = (e: any) => toast.error(e?.data?.error || e.message || 'Could not save the changes');
-  const onOk  = () => { toast.success(`${row.voucherNumber} updated`); qc.invalidateQueries(); onClose(); };
+  const onOk  = () => { toast.success(`${formatGstDocumentDisplayNumber(row.voucherNumber)} updated`); qc.invalidateQueries(); onClose(); };
 
   const submit = () => {
     if (!date) { toast.error('Date required'); return; }
@@ -814,7 +816,7 @@ function EditMoneyVoucherDialog({ row, onClose }: { row: UnifiedRow; onClose: ()
         <div className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold ${meta.bg}`}>
           <Icon className="h-3.5 w-3.5" />
           {meta.label}
-          <span className="font-mono ml-auto">{row.voucherNumber}</span>
+          <span className="font-mono ml-auto">{formatGstDocumentDisplayNumber(row.voucherNumber)}</span>
         </div>
         <p className="text-xs text-muted-foreground -mt-1">
           The voucher number stays as it is — this updates the existing entry, and the books follow the change.
@@ -1009,8 +1011,8 @@ export default function Vouchers() {
 
   const handleExport = () => {
     downloadCSV('vouchers.csv', filtered.map(r => ({
-      Voucher: r.voucherNumber, Type: TYPE_META[r.type].label,
-      Date: r.date, Description: r.description,
+      Voucher: formatGstDocumentDisplayNumber(r.voucherNumber), Type: TYPE_META[r.type].label,
+      Date: formatDateOrDash(r.date), Description: r.description,
       Reference: r.raw?.referenceNumber || '',
       Narration: r.narration || '', Amount: r.amount,
     })));
@@ -1168,7 +1170,7 @@ export default function Vouchers() {
 
                       <TableCell>{typeBadge(row.type)}</TableCell>
                       <TableCell className="font-mono text-xs font-semibold whitespace-nowrap">
-                        {row.voucherNumber}
+                        {formatGstDocumentDisplayNumber(row.voucherNumber)}
                         {row.raw?.origin === 'system' && (
                           <Badge variant="secondary" className="ml-2 align-middle font-sans font-medium text-[10px] uppercase tracking-wide text-muted-foreground"
                             title="System generated — created by another module (sales, expenses, payroll). Manage it there.">
@@ -1176,7 +1178,7 @@ export default function Vouchers() {
                           </Badge>
                         )}
                       </TableCell>
-                      <TableCell className="text-muted-foreground text-sm">{row.date}</TableCell>
+                      <TableCell className="text-muted-foreground text-sm">{formatDateOrDash(row.date)}</TableCell>
                       <TableCell className="max-w-[200px] truncate text-sm" title={row.description}>{row.description}</TableCell>
                       <TableCell className="max-w-[160px] truncate text-xs text-muted-foreground" title={row.narration}>{row.narration || '—'}</TableCell>
                       <TableCell className={`text-right font-mono font-semibold text-sm ${TYPE_META[row.type].color}`}>

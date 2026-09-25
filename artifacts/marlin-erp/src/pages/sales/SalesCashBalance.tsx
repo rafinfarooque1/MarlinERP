@@ -3,6 +3,7 @@
  * Staff can record deposits to bank directly from here (outlet or warehouse).
  */
 import { useMemo, useState } from 'react';
+import { formatDateOrDash } from '@/lib/date';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { usePermission } from '@/lib/usePermission';
 import { useLocationContext } from '@/lib/locationContext';
@@ -237,7 +238,7 @@ export default function SalesCashBalance() {
                     <TableBody>
                       {sortedDeposits.map((d: any) => (
                         <TableRow key={d.id}>
-                          <TableCell className="text-sm text-muted-foreground">{d.depositDate}</TableCell>
+                          <TableCell className="text-sm text-muted-foreground">{formatDateOrDash(d.depositDate)}</TableCell>
                           <TableCell className="font-mono text-xs">{d.depositReference ?? '—'}</TableCell>
                           <TableCell className="text-sm">{d.bankLedgerName ?? <span className="text-muted-foreground italic text-xs">Not specified</span>}</TableCell>
                           <TableCell className="text-right font-mono font-semibold text-sm">{fmt(d.amount)}</TableCell>

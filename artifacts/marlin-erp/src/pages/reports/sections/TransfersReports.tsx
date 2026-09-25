@@ -13,7 +13,7 @@
  * what the caller is already entitled to see, never widen it.
  */
 import { useState } from 'react';
-import { formatSalesInvoiceDisplayNumber } from '@/lib/invoiceNumber';
+import { formatSalesInvoiceDisplayNumber, formatGstDocumentDisplayNumber } from '@/lib/invoiceNumber';
 import { useQuery } from '@tanstack/react-query';
 import {
   customFetch, useBranchTransfersReport, useListItems,
@@ -142,7 +142,7 @@ function BranchTransferReport({ canDownload }: { canDownload: boolean }) {
       ],
       rows: rows.map((r) => [
         r.challanNumber, fmtDate(r.transferDate), r.sourceName, r.destName,
-         `${r.outwardDocument}${r.documentTreatment === 'internal' ? '' : ` → ${r.inwardDocument}`}`,
+         `${formatGstDocumentDisplayNumber(r.outwardDocument)}${r.documentTreatment === 'internal' ? '' : ` → ${formatGstDocumentDisplayNumber(r.inwardDocument)}`}`,
          formatSalesInvoiceDisplayNumber(r.invoiceNumber ?? '-'), r.itemName, batchLabel(r) || '-', num(r.quantity), r.unit,
          r.invoiceRate == null ? '-' : pdfMoney(r.invoiceRate),
          r.taxableValue == null ? '-' : pdfMoney(r.taxableValue),
@@ -192,10 +192,10 @@ function BranchTransferReport({ canDownload }: { canDownload: boolean }) {
           doc={doc}
           onCSV={() => downloadCSV('branch-transfers.csv', rows.map((r) => ({
             Challan: r.challanNumber,
-            'Transfer Date': r.transferDate,
+            'Transfer Date': fmtDate(r.transferDate),
             'Source Type': titleCase(r.sourceType), Source: r.sourceName,
             'Destination Type': titleCase(r.destType), Destination: r.destName,
-             Treatment: r.documentTreatment === 'internal' ? r.outwardDocument : `${r.outwardDocument} → ${r.inwardDocument}`,
+             Treatment: r.documentTreatment === 'internal' ? formatGstDocumentDisplayNumber(r.outwardDocument) : `${formatGstDocumentDisplayNumber(r.outwardDocument)} → ${formatGstDocumentDisplayNumber(r.inwardDocument)}`,
              'Product Type': r.materialTypeLabel, Item: r.itemName, Batch: batchLabel(r),
              Qty: r.quantity, 'Qty Basis': r.quantityBasis, Unit: r.unit,
              'Invoice Qty': r.invoiceQuantity ?? '', 'Invoice Rate (₹)': r.invoiceRate ?? '',
@@ -241,8 +241,8 @@ function BranchTransferReport({ canDownload }: { canDownload: boolean }) {
           ) },
            { key: 'outwardDocument', label: 'Treatment', render: (r) => (
              <span className={r.documentTreatment === 'internal' ? 'text-muted-foreground' : 'font-semibold text-primary'}>
-               {r.outwardDocument}
-               {r.documentTreatment !== 'internal' && <><br /><span className="text-[10px] font-normal text-muted-foreground">{r.inwardDocument}</span></>}
+               {formatGstDocumentDisplayNumber(r.outwardDocument)}
+               {r.documentTreatment !== 'internal' && <><br /><span className="text-[10px] font-normal text-muted-foreground">{formatGstDocumentDisplayNumber(r.inwardDocument)}</span></>}
              </span>
            ) },
            { key: 'invoiceNumber', label: 'Invoice', render: (r) => r.invoiceNumber

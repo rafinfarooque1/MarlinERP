@@ -99,7 +99,7 @@ export default function AssetDisposal() {
   };
 
   const exportCSV = () => downloadCSV('asset-disposals.csv', disposals.map(d => ({
-    Date: d.disposalDate, Code: d.assetCode, Asset: d.assetName,
+    Date: fmtDate(d.disposalDate), Code: d.assetCode, Asset: d.assetName,
     Type: ASSET_STATUS_LABELS[d.disposalType] ?? d.disposalType,
     Reason: d.reason || '', 'Recorded By': d.createdBy || '',
   })));

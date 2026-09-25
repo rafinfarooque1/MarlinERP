@@ -22,6 +22,7 @@ import { Badge } from '@/components/ui/badge';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { usePermission } from '@/lib/usePermission';
 import { formatDate } from '@/lib/date';
+import { formatGstDocumentDisplayNumber } from '@/lib/invoiceNumber';
 import { AccountCombobox } from '@/components/ui/account-combobox';
 import { entryScopeKeyDown, autoFocusFirst, focusField, useEntryShortcuts } from '@/lib/keyboard-entry';
 import { useVoucherLocationChoice, parseLocKey, LocationSelectField } from '@/lib/voucherLocation';
@@ -88,7 +89,7 @@ function NotesTab({ noteType }: { noteType: 'credit_note' | 'debit_note' }) {
       narration: data.narration?.trim() || undefined,
       locationType: loc.locationType, locationId: loc.locationId,
     } as any, {
-      onSuccess: (v) => { toast.success(`${isCN ? 'Credit' : 'Debit'} note ${v.voucherNumber} recorded`); setIsOpen(false); form.reset(); },
+      onSuccess: (v) => { toast.success(`${isCN ? 'Credit' : 'Debit'} note ${formatGstDocumentDisplayNumber(v.voucherNumber)} recorded`); setIsOpen(false); form.reset(); },
       onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
     });
   };
@@ -139,7 +140,7 @@ function NotesTab({ noteType }: { noteType: 'credit_note' | 'debit_note' }) {
         <div className="flex gap-2">
           {perm.canDownload && (
             <Button variant="outline" size="sm" onClick={() => downloadCSV(`${noteType}s.csv`, filtered.map(v => ({
-              Voucher: v.voucherNumber, Date: v.voucherDate, Party: v.partyName || '',
+              Voucher: formatGstDocumentDisplayNumber(v.voucherNumber), Date: formatDate(v.voucherDate), Party: v.partyName || '',
               Amount: v.totalAmount, Reason: v.reason || '',
             })))}>
               <Download className="w-4 h-4 mr-2" /> Export
@@ -185,7 +186,7 @@ function NotesTab({ noteType }: { noteType: 'credit_note' | 'debit_note' }) {
               </TableCell></TableRow>
             ) : pageRows.map(v => (
               <TableRow key={v.id} className="hover:bg-muted/10">
-                <TableCell className="font-mono text-primary font-bold text-sm">{v.voucherNumber}</TableCell>
+                      <TableCell className="font-mono text-primary font-bold text-sm">{formatGstDocumentDisplayNumber(v.voucherNumber)}</TableCell>
                 <TableCell className="text-sm text-muted-foreground">
                   <div className="flex items-center gap-1"><Calendar className="w-3 h-3" />{formatDate(v.voucherDate)}</div>
                 </TableCell>
@@ -278,7 +279,7 @@ function NotesTab({ noteType }: { noteType: 'credit_note' | 'debit_note' }) {
       <Dialog open={!!deleteTarget} onOpenChange={v => !v && setDeleteTarget(null)}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader><DialogTitle className="text-destructive flex items-center gap-2"><Trash2 className="w-5 h-5" />Delete Note</DialogTitle></DialogHeader>
-          <p className="text-sm text-muted-foreground py-2">Delete <span className="font-semibold text-foreground">{deleteTarget?.voucherNumber}</span> of {inr(Number(deleteTarget?.totalAmount || 0))}? This cannot be undone.</p>
+          <p className="text-sm text-muted-foreground py-2">Delete <span className="font-semibold text-foreground">{formatGstDocumentDisplayNumber(deleteTarget?.voucherNumber)}</span> of {inr(Number(deleteTarget?.totalAmount || 0))}? This cannot be undone.</p>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDeleteTarget(null)}>Cancel</Button>
             <Button variant="destructive" onClick={handleDelete} disabled={deleteMutation.isPending}>Delete</Button>

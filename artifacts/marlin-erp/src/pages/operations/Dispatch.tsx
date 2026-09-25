@@ -10,6 +10,7 @@
  * headers); branch staff only ever see their own queue.
  */
 import { useMemo, useState } from 'react';
+import { formatDateOrDash } from '@/lib/date';
 import { useDispatchQueue, useSetDispatchStatus, customFetch, type DispatchQueueEntry } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
@@ -266,7 +267,7 @@ export default function Dispatch() {
                     <TableRow key={row.saleId}>
                       <TableCell className="font-mono text-xs">{formatSalesInvoiceDisplayNumber(row.invoiceNumber)}</TableCell>
                       <TableCell>
-                        <div className="text-sm">{row.saleDate}</div>
+                        <div className="text-sm">{formatDateOrDash(row.saleDate)}</div>
                         <div className="text-xs text-muted-foreground">{timeSince(row.createdAt)} ago</div>
                       </TableCell>
                       <TableCell className="max-w-[180px]">

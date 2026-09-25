@@ -1574,7 +1574,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                 <Button variant="outline" size="sm" onClick={async () => downloadCSV('sales.csv', (await fetchAllSales(salesListFilters))
                   .filter(s => statusFilter === 'all' || ((s as any).paymentStatus ?? 'paid') === statusFilter)
                   .map(s => ({
-                  Invoice: formatSalesInvoiceDisplayNumber(s.invoiceNumber), Date: s.saleDate, Outlet: s.outletName,
+                  Invoice: formatSalesInvoiceDisplayNumber(s.invoiceNumber), Date: formatDate(s.saleDate), Outlet: s.outletName,
                   Customer: s.customerName || 'Walk-in', Payment: paymentModeLabel(s.paymentMode),
                   Subtotal: s.subtotal, Tax: s.taxTotal,
                   Discount: (Number((s as any).discountTotal ?? 0)
@@ -2929,7 +2929,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                         <div>
                           <span>{p.receivedInLedgerName ?? paymentModeLabel(p.method)}</span>
                           {p.referenceNumber && <span className="font-mono ml-1.5 text-muted-foreground text-[10px]">#{p.referenceNumber}</span>}
-                          <span className="ml-1.5 text-muted-foreground">{p.paymentDate}</span>
+                          <span className="ml-1.5 text-muted-foreground">{formatDate(p.paymentDate)}</span>
                         </div>
                         <span className="font-mono font-semibold">{inr(Number(p.amount))}</span>
                       </div>
@@ -3085,7 +3085,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                   </div>
                   {viewItemPayments.length > 0 ? (
                     <p className="text-[11px] text-muted-foreground mt-1">
-                      Last receipt: {viewItemPayments[viewItemPayments.length - 1].receivedInLedgerName ?? paymentModeLabel(viewItemPayments[viewItemPayments.length - 1].method)} on {viewItemPayments[viewItemPayments.length - 1].paymentDate}
+                      Last receipt: {viewItemPayments[viewItemPayments.length - 1].receivedInLedgerName ?? paymentModeLabel(viewItemPayments[viewItemPayments.length - 1].method)} on {formatDate(viewItemPayments[viewItemPayments.length - 1].paymentDate)}
                       {viewItemPayments[viewItemPayments.length - 1].referenceNumber ? ` · #${viewItemPayments[viewItemPayments.length - 1].referenceNumber}` : ''}
                     </p>
                   ) : (

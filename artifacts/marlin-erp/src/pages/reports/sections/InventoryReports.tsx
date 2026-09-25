@@ -678,7 +678,7 @@ function TransfersReport({ canDownload }: { canDownload: boolean }) {
           canDownload={canDownload}
           disabled={isLoading || rows.length === 0}
           onCSV={() => downloadCSV('stock-transfers.csv', rows.map((t) => ({
-            Challan: t.challanNumber ?? `#${t.id}`, Date: dkey(t.transferDate), From: t.fromName, To: t.toName,
+            Challan: t.challanNumber ?? `#${t.id}`, Date: fmtDate(t.transferDate), From: t.fromName, To: t.toName,
             Lines: (t.lineItems ?? []).length, 'Total Qty': qtyOf(t), Interstate: t.isInterstate ? 'Yes' : 'No', Status: t.status,
           })))}
           onPDF={() => exportReportPdf({

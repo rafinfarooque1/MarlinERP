@@ -4,6 +4,8 @@ import { usePermission } from '@/lib/usePermission';
 import { useOutletsEnabled, useClearOutletSelection } from '@/lib/useFeatureFlags';
 import { useLocationContext } from '@/lib/locationContext';
 import { formatSalesInvoiceDisplayNumber } from '@/lib/invoiceNumber';
+import { formatGstDocumentDisplayNumber } from '@/lib/invoiceNumber';
+import { formatDateOrDash } from '@/lib/date';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -183,7 +185,7 @@ export default function Reconciliation() {
   const selectedMixedAccounts = selectedTransactions.some(t => t.accountId !== selectedAccountId);
   const reconciliationDoc = (): ReportDoc => ({
     title: 'Bank Reconciliation',
-    subtitle: `${fromDate || 'All dates'} to ${toDate || 'All dates'}`,
+    subtitle: `${fromDate ? formatDateOrDash(fromDate) : 'All dates'} to ${toDate ? formatDateOrDash(toDate) : 'All dates'}`,
     orientation: 'landscape',
     metaRows: [
       ['Transactions', String(visibleTransactions.length)],
@@ -198,7 +200,7 @@ export default function Reconciliation() {
         { label: 'Credit', align: 'right' }, { label: 'Amount', align: 'right' }, { label: 'Status' },
       ],
       rows: visibleTransactions.map((t) => [
-        t.date, t.accountName, SOURCE_LABEL[t.source] ?? t.source, t.voucherNumber ?? '-',
+        formatDateOrDash(t.date), t.accountName, SOURCE_LABEL[t.source] ?? t.source, formatGstDocumentDisplayNumber(t.voucherNumber ?? '-'),
         t.description || t.counterpartyName || '-', t.accountLocationName,
         Number(t.debit), Number(t.credit), Number(t.amount), t.reconciliationStatus,
       ]),
@@ -438,9 +440,9 @@ export default function Reconciliation() {
                         aria-label={`Select ${v.voucherNumber || `${v.kind} ${v.id}`}`}
                       />
                     </TableCell>
-                    <TableCell className="text-xs text-muted-foreground">{v.transactionDate}</TableCell>
+                    <TableCell className="text-xs text-muted-foreground">{formatDateOrDash(v.transactionDate)}</TableCell>
                     <TableCell className="text-sm capitalize">{v.kind}</TableCell>
-                    <TableCell className="font-mono text-xs">{v.voucherNumber || `${v.kind} #${v.id}`}</TableCell>
+                    <TableCell className="font-mono text-xs">{formatGstDocumentDisplayNumber(v.voucherNumber || `${v.kind} #${v.id}`)}</TableCell>
                     <TableCell className="text-sm">{v.partyName ?? '—'}</TableCell>
                     <TableCell className="text-sm">{v.locationType === 'headoffice' ? 'Head Office' : `${v.locationType} #${v.locationId}`}</TableCell>
                     <TableCell className="text-right font-mono text-sm">{fmt(v.amount)}</TableCell>
@@ -504,7 +506,7 @@ export default function Reconciliation() {
                         aria-label={`Select ${formatSalesInvoiceDisplayNumber(payment.invoiceNumber)}`}
                       />
                     </TableCell>
-                    <TableCell className="text-xs text-muted-foreground">{String(payment.paymentDate).slice(0, 10)}</TableCell>
+                    <TableCell className="text-xs text-muted-foreground">{formatDateOrDash(payment.paymentDate)}</TableCell>
                     <TableCell className="text-sm font-medium">{paymentModeLabel(payment.method)}</TableCell>
                     <TableCell className="font-mono text-xs">{formatSalesInvoiceDisplayNumber(payment.invoiceNumber)}</TableCell>
                     <TableCell className="text-sm">{payment.customerName ?? 'Walk-in'}</TableCell>
@@ -666,7 +668,7 @@ export default function Reconciliation() {
                           aria-label={`Select ${t.voucherNumber || t.entryId}`}
                         />
                       </TableCell>
-                      <TableCell className="text-xs text-muted-foreground whitespace-nowrap">{t.date}</TableCell>
+                      <TableCell className="text-xs text-muted-foreground whitespace-nowrap">{formatDateOrDash(t.date)}</TableCell>
                       <TableCell className="text-sm">{SOURCE_LABEL[t.source] ?? t.source}</TableCell>
                       <TableCell className="font-mono text-xs">{t.voucherNumber || t.entryId}</TableCell>
                       <TableCell className="text-sm">{t.counterpartyName ?? <span className="text-muted-foreground">—</span>}</TableCell>
@@ -711,7 +713,7 @@ export default function Reconciliation() {
                 {batches.slice(0, 10).map(batch => (
                   <TableRow key={batch.id}>
                     <TableCell className="font-mono text-xs">{batch.batchReference}</TableCell>
-                    <TableCell className="text-xs">{batch.reconciliationDate}</TableCell>
+                    <TableCell className="text-xs">{formatDateOrDash(batch.reconciliationDate)}</TableCell>
                     <TableCell className="text-sm">{batch.bankAccountName} · {batch.locationName}</TableCell>
                     <TableCell className="text-right font-mono text-sm">{fmt(batch.grossAmount)}</TableCell>
                     <TableCell className="text-right font-mono text-sm">{fmt(batch.processingCharge)}</TableCell>

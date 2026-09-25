@@ -99,7 +99,7 @@ export function QuotationsSection() {
 
   // Export must cover the FULL filtered dataset, not the visible page.
   const csvRows = async () => (await fetchAllQuotations(filters)).map(r => ({
-    Quotation: r.quotationNumber, Date: r.quoteDate, Customer: r.customerName || 'Walk-in',
+    Quotation: r.quotationNumber, Date: fmtDate(r.quoteDate), Customer: r.customerName || 'Walk-in',
     Location: r.locationName, Type: r.locationType, Status: titleCase(r.status),
     'Valid Till': r.validTill ?? '', Salesperson: r.salesperson ?? '',
     Subtotal: Number(r.subtotal).toFixed(2), GST: Number(r.taxTotal).toFixed(2),

@@ -129,7 +129,7 @@ function CollectPaymentPanel({ sale, onClose, onDone }: { sale: any; onClose: ()
               <div key={p.id} className="flex justify-between items-center text-xs bg-muted/30 rounded px-3 py-2 border border-border">
                 <div className="space-y-0.5">
                   <p className="font-medium">{p.receivedInLedgerName ?? paymentModeLabel(p.method)}</p>
-                  <p className="text-muted-foreground">{p.paymentDate}
+                  <p className="text-muted-foreground">{formatDate(p.paymentDate)}
                     {p.referenceNumber && <span className="font-mono ml-2">#{p.referenceNumber}</span>}
                   </p>
                   {p.reconciliationStatus === 'pending' && (

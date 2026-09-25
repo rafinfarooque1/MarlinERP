@@ -33,7 +33,7 @@ import { downloadCSV, downloadPDFFromEndpoint } from '@/lib/download';
 import { usePermission } from '@/lib/usePermission';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { useOutletsEnabled, useClearOutletSelection } from '@/lib/useFeatureFlags';
-import { formatDate } from '@/lib/date';
+import { formatDate, formatDateOrDash } from '@/lib/date';
 import { useGetMe } from '@workspace/api-client-react';
 import { PageHeader } from '@/components/app/page-header';
 import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
@@ -620,7 +620,7 @@ function AdvancesSection({ isAdmin, employees }: { isAdmin: boolean; employees: 
                 {shown.map((a: any) => (
                   <TableRow key={a.id}>
                     <TableCell className="font-medium">{a.employeeName}</TableCell>
-                    <TableCell className="text-muted-foreground">{a.date?.split?.('T')[0] ?? a.date}</TableCell>
+                    <TableCell className="text-muted-foreground">{formatDateOrDash(a.date)}</TableCell>
                     <TableCell>{fmt(a.amount)}</TableCell>
                     <TableCell className="text-muted-foreground">{a.note ?? '—'}</TableCell>
                     <TableCell>

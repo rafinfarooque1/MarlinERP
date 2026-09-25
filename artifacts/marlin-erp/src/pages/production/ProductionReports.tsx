@@ -112,13 +112,13 @@ export default function ProductionReports() {
       })));
     } else if (tab === 'wastage') {
       downloadCSV(`production-wastage-${from}-to-${to}.csv`, data.wastage.map(w => ({
-        Batch: w.batchNumber, Date: w.productionDate, Item: w.itemName,
+        Batch: w.batchNumber, Date: formatDate(w.productionDate), Item: w.itemName,
         'Produced Qty': w.producedQty, 'Wastage Qty': w.wastageQty, 'Wastage Value': w.wastageValue,
         Reasons: w.lines.map(l => `${l.quantity} — ${l.reason}`).join('; '),
       })));
     } else {
       downloadCSV(`production-batch-costs-${from}-to-${to}.csv`, data.batches.map(b => ({
-        Batch: b.batchNumber, Date: b.productionDate, Item: b.itemName,
+        Batch: b.batchNumber, Date: formatDate(b.productionDate), Item: b.itemName,
         Location: (b as any).locationName ?? '',
         'Produced Qty': b.producedQty, 'Wastage Qty': b.wastageQty,
         'Raw Material Cost': (b as any).rmCost ?? '', 'Packing Material Cost': (b as any).pmCost ?? '',

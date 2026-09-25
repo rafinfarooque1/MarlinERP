@@ -489,7 +489,7 @@ export default function Expenses() {
               {perm.canDownload && (
               <Button variant="outline" size="sm" onClick={() => downloadCSV('expenses.csv', filtered.map(e => ({
                 Voucher: e.expenseNumber ?? e.voucherNumber ?? '',
-                Date: e.expenseDate,
+                Date: formatDate(e.expenseDate),
                 Description: e.description ?? '',
                 Category: e.category ?? 'Uncategorised',
                 Account: e.ledgerAccountName ?? '',

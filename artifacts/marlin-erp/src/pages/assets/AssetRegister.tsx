@@ -204,10 +204,10 @@ export default function AssetRegister() {
 
   const exportCSV = () => downloadCSV('asset-register.csv', assets.map(a => ({
     Code: a.assetCode, Asset: a.assetName, Category: a.categoryName || '',
-    'Purchase Date': a.purchaseDate, 'Current Location': a.currentLocationName || '',
+    'Purchase Date': fmtDate(a.purchaseDate), 'Current Location': a.currentLocationName || '',
     Vendor: a.vendorName || '', 'Serial No.': a.serialNumber || '', 'Asset Tag': a.assetTag || '',
     Qty: a.quantity, 'Total Cost': a.totalCost,
-    Status: ASSET_STATUS_LABELS[a.status] ?? a.status, 'Warranty End': a.warrantyEnd || '',
+    Status: ASSET_STATUS_LABELS[a.status] ?? a.status, 'Warranty End': a.warrantyEnd ? fmtDate(a.warrantyEnd) : '',
   })));
 
   if (!perm.isLoading && !perm.canView) return <AssetsAccessDenied />;

@@ -30,7 +30,7 @@ import { EmptyState } from '@/components/app/empty-state';
 import { TableSkeleton } from '@/components/app/loading-skeletons';
 import { inr } from '@/lib/currency';
 import { formatDateOrDash } from '@/lib/date';
-import { formatSalesInvoiceDisplayNumber } from '@/lib/invoiceNumber';
+import { formatSalesInvoiceDisplayNumber, formatGstDocumentDisplayNumber } from '@/lib/invoiceNumber';
 
 const fmt = (n: unknown) => Number(n ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 });
 // Paise rounding — must match the API's r2 so estimates equal the note total.
@@ -144,7 +144,7 @@ function NewSalesReturnDialog({ open, onOpenChange, editing }: { open: boolean; 
         { id: editing.id, returnDate, reason: reason.trim() || undefined, lines: selected.map(({ lineIndex, quantity }) => ({ lineIndex, quantity })) },
         {
           onSuccess: (r: any) => {
-            toast.success(`${editing.returnNumber} updated — new value ${inr(r?.totalAmount)}`);
+            toast.success(`${formatGstDocumentDisplayNumber(editing.returnNumber)} updated — new value ${inr(r?.totalAmount)}`);
             invalidateDashboard(queryClient);
             onOpenChange(false);
           },
@@ -160,8 +160,8 @@ function NewSalesReturnDialog({ open, onOpenChange, editing }: { open: boolean; 
         onSuccess: (r: any) => {
           toast.success(
             r?.refundMode === 'cash'
-              ? `${r.returnNumber} recorded — cash refund ${inr(r.totalAmount)}`
-              : `${r?.returnNumber} recorded — Credit Note ${r?.creditNoteNumber ?? ''} issued`,
+              ? `${formatGstDocumentDisplayNumber(r.returnNumber)} recorded — cash refund ${inr(r.totalAmount)}`
+              : `${formatGstDocumentDisplayNumber(r?.returnNumber)} recorded — Credit Note ${formatGstDocumentDisplayNumber(r?.creditNoteNumber)} issued`,
           );
           invalidateDashboard(queryClient);
           reset();
@@ -176,7 +176,7 @@ function NewSalesReturnDialog({ open, onOpenChange, editing }: { open: boolean; 
     <TransactionDialog open={open} dirty={dirty} onOpenChange={v => { if (!v) reset(); onOpenChange(v); }}>
       <TransactionDialogContent className="sm:max-w-3xl">
         <DialogHeader>
-          <DialogTitle>{editing ? `Edit ${editing.returnNumber}` : 'New Sales Return'}</DialogTitle>
+          <DialogTitle>{editing ? `Edit ${formatGstDocumentDisplayNumber(editing.returnNumber)}` : 'New Sales Return'}</DialogTitle>
           <DialogDescription>
             {editing
               ? 'Change the date, reason or quantities. The invoice and the return number stay the same.'
@@ -380,7 +380,7 @@ function NewPurchaseReturnDialog({ open, onOpenChange, editing }: { open: boolea
         { id: editing.id, returnDate, reason: reason.trim() || undefined, lines: selected.map(({ lineIndex, quantity }) => ({ lineIndex, quantity })) },
         {
           onSuccess: (r: any) => {
-            toast.success(`${editing.returnNumber} updated — new value ${inr(r?.totalAmount)}`);
+            toast.success(`${formatGstDocumentDisplayNumber(editing.returnNumber)} updated — new value ${inr(r?.totalAmount)}`);
             invalidateDashboard(queryClient);
             onOpenChange(false);
           },
@@ -394,7 +394,7 @@ function NewPurchaseReturnDialog({ open, onOpenChange, editing }: { open: boolea
       { purchaseId: purchase.id, returnDate, reason: reason.trim() || undefined, lines: selected.map(({ lineIndex, quantity }) => ({ lineIndex, quantity })) },
       {
         onSuccess: (r: any) => {
-          toast.success(`${r?.returnNumber} recorded — Debit Note ${r?.debitNoteNumber ?? ''} issued`);
+          toast.success(`${formatGstDocumentDisplayNumber(r?.returnNumber)} recorded — Debit Note ${formatGstDocumentDisplayNumber(r?.debitNoteNumber)} issued`);
           invalidateDashboard(queryClient);
           reset();
           onOpenChange(false);
@@ -408,7 +408,7 @@ function NewPurchaseReturnDialog({ open, onOpenChange, editing }: { open: boolea
     <TransactionDialog open={open} dirty={dirty} onOpenChange={v => { if (!v) reset(); onOpenChange(v); }}>
       <TransactionDialogContent className="sm:max-w-3xl">
         <DialogHeader>
-          <DialogTitle>{editing ? `Edit ${editing.returnNumber}` : 'New Purchase Return'}</DialogTitle>
+          <DialogTitle>{editing ? `Edit ${formatGstDocumentDisplayNumber(editing.returnNumber)}` : 'New Purchase Return'}</DialogTitle>
           <DialogDescription>
             {editing
               ? 'Change the date, reason or quantities. The bill and the return number stay the same.'
@@ -655,7 +655,7 @@ export default function Returns() {
                   {tab === 'sales'
                     ? srPage.pageRows.map(r => (
                         <tr key={r.id} className="border-t border-border hover:bg-muted/10">
-                          <td className="px-4 py-2.5 font-mono font-semibold text-primary">{r.returnNumber}</td>
+                          <td className="px-4 py-2.5 font-mono font-semibold text-primary">{formatGstDocumentDisplayNumber(r.returnNumber)}</td>
                           <td className="px-3 py-2.5 whitespace-nowrap">{dfmt(r.returnDate)}</td>
                           <td className="px-3 py-2.5 font-mono text-xs">{formatSalesInvoiceDisplayNumber(r.invoiceNumber || `Sale #${r.saleId}`)}</td>
                           <td className="px-3 py-2.5">{r.customerName || 'Walk-in'}</td>
@@ -663,7 +663,7 @@ export default function Returns() {
                           <td className="px-3 py-2.5">
                             {r.refundMode === 'cash'
                               ? <StatusBadge status="partial" label="Cash refund" />
-                              : <StatusBadge status="completed" label={r.creditNoteNumber || 'Credit Note'} className="font-mono" />}
+                              : <StatusBadge status="completed" label={formatGstDocumentDisplayNumber(r.creditNoteNumber || 'Credit Note')} className="font-mono" />}
                           </td>
                           <td className="px-4 py-2.5 text-right whitespace-nowrap">
                             <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setView({ kind: 'sales', doc: r })} data-testid={`button-view-sr-${r.id}`}><Eye className="w-4 h-4" /></Button>
@@ -680,12 +680,12 @@ export default function Returns() {
                       ))
                     : prPage.pageRows.map(r => (
                         <tr key={r.id} className="border-t border-border hover:bg-muted/10">
-                          <td className="px-4 py-2.5 font-mono font-semibold text-primary">{r.returnNumber}</td>
+                          <td className="px-4 py-2.5 font-mono font-semibold text-primary">{formatGstDocumentDisplayNumber(r.returnNumber)}</td>
                           <td className="px-3 py-2.5 whitespace-nowrap">{dfmt(r.returnDate)}</td>
                           <td className="px-3 py-2.5 font-mono text-xs">{r.invoiceNumber || `PB #${String(r.purchaseId).padStart(4, '0')}`}</td>
                           <td className="px-3 py-2.5">{r.vendorName}</td>
                           <td className="px-3 py-2.5 text-right font-mono font-semibold">{inr(r.totalAmount)}</td>
-                          <td className="px-3 py-2.5"><StatusBadge status="converted" label={r.debitNoteNumber || 'Debit Note'} className="font-mono" /></td>
+                          <td className="px-3 py-2.5"><StatusBadge status="converted" label={formatGstDocumentDisplayNumber(r.debitNoteNumber || 'Debit Note')} className="font-mono" /></td>
                           <td className="px-4 py-2.5 text-right whitespace-nowrap">
                             <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setView({ kind: 'purchase', doc: r })} data-testid={`button-view-pr-${r.id}`}><Eye className="w-4 h-4" /></Button>
                             {perm.canDownload && (
@@ -728,7 +728,7 @@ export default function Returns() {
           {view && (
             <>
               <SheetHeader className="mb-4">
-                <SheetTitle className="text-primary font-mono">{view.doc.returnNumber}</SheetTitle>
+                <SheetTitle className="text-primary font-mono">{formatGstDocumentDisplayNumber(view.doc.returnNumber)}</SheetTitle>
                 <SheetDescription>
                   {view.kind === 'sales'
                     ? `${(view.doc as SalesReturn).customerName || 'Walk-in'} · against ${formatSalesInvoiceDisplayNumber((view.doc as SalesReturn).invoiceNumber || `Sale #${(view.doc as SalesReturn).saleId}`)} · ${dfmt(view.doc.returnDate)}`
@@ -781,8 +781,8 @@ export default function Returns() {
                   <span className="text-muted-foreground">{view.kind === 'sales' ? 'Refund' : 'Adjustment'}</span>
                   <span className="font-mono font-semibold">
                     {view.kind === 'sales'
-                      ? ((view.doc as SalesReturn).refundMode === 'cash' ? 'Cash refund' : (view.doc as SalesReturn).creditNoteNumber || 'Credit Note')
-                      : (view.doc as PurchaseReturn).debitNoteNumber || 'Debit Note'}
+                      ? ((view.doc as SalesReturn).refundMode === 'cash' ? 'Cash refund' : formatGstDocumentDisplayNumber((view.doc as SalesReturn).creditNoteNumber || 'Credit Note'))
+                      : formatGstDocumentDisplayNumber((view.doc as PurchaseReturn).debitNoteNumber || 'Debit Note')}
                   </span>
                 </div>
               </div>

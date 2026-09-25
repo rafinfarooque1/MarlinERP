@@ -13,6 +13,7 @@ import { ExportButtons, pdfMoney, type ReportDoc } from '@/pages/reports/shared'
 import { resolveDrill } from '@/lib/drilldown';
 import { usePermission } from '@/lib/usePermission';
 import { formatDate } from '@/lib/date';
+import { formatGstDocumentDisplayNumber } from '@/lib/invoiceNumber';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { useLocationContext, locationFilterParams } from '@/lib/locationContext';
 import { PageHeader } from '@/components/app/page-header';
@@ -91,7 +92,7 @@ export default function DayBook() {
       ],
       rows: entries.map(e => [
         SOURCE_META[e.source]?.label ?? e.source,
-        e.voucherNumber || '',
+        formatGstDocumentDisplayNumber(e.voucherNumber || ''),
         e.particulars,
         e.narration || '',
         pdfMoney(Number(e.amount)),
@@ -135,7 +136,7 @@ export default function DayBook() {
                 disabled={entries.length === 0}
                 doc={doc}
                 onCSV={() => downloadCSV(`day-book-${date}.csv`, entries.map(e => ({
-                  Type: SOURCE_META[e.source]?.label ?? e.source, Voucher: e.voucherNumber || '', Particulars: e.particulars,
+                  Type: SOURCE_META[e.source]?.label ?? e.source, Voucher: formatGstDocumentDisplayNumber(e.voucherNumber || ''), Particulars: e.particulars,
                   Narration: e.narration || '', Amount: e.amount,
                 })))}
               />
@@ -208,7 +209,7 @@ export default function DayBook() {
                   </TableCell>
                   <TableCell className="font-mono text-primary font-semibold text-sm">
                     <span className="inline-flex items-center gap-1.5">
-                      {e.voucherNumber || '—'}
+                      {formatGstDocumentDisplayNumber(e.voucherNumber || '—')}
                       {drill?.kind === 'link' && <ExternalLink className="w-3 h-3 text-muted-foreground/60 shrink-0" />}
                       {drill?.kind === 'info' && <Info className="w-3 h-3 text-muted-foreground/60 shrink-0" />}
                     </span>

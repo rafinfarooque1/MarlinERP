@@ -151,7 +151,7 @@ export default function Contra() {
             <>
               {perm.canDownload && (
                 <Button variant="outline" size="sm" onClick={() => downloadCSV('contra-vouchers.csv', rows.map(v => ({
-                  Voucher: v.voucherNumber, Date: v.voucherDate, From: v.fromName, To: v.toName,
+                  Voucher: v.voucherNumber, Date: formatDate(v.voucherDate), From: v.fromName, To: v.toName,
                   Amount: v.totalAmount, Narration: v.narration || '',
                 })))}>
                   <Download className="w-4 h-4 mr-2" /> Export

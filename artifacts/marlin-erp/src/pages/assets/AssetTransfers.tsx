@@ -92,7 +92,7 @@ export default function AssetTransfers() {
   };
 
   const exportCSV = () => downloadCSV('asset-transfers.csv', transfers.map(t => ({
-    Date: t.transferDate, Code: t.assetCode, Asset: t.assetName,
+    Date: fmtDate(t.transferDate), Code: t.assetCode, Asset: t.assetName,
     From: t.fromName, To: t.toName,
     'Approved By': t.approvedBy || '', Reason: t.reason || '', 'Recorded By': t.createdBy || '',
   })));

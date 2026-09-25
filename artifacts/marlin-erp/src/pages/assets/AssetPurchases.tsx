@@ -251,14 +251,14 @@ export default function AssetPurchases() {
 
   const exportCSV = () => downloadCSV('asset-purchases.csv', purchases.map(p => ({
     Code: p.assetCode, Asset: p.assetName, Category: p.categoryName || '',
-    'Purchase Date': p.purchaseDate, 'Invoice No.': p.invoiceNumber || '',
+    'Purchase Date': fmtDate(p.purchaseDate), 'Invoice No.': p.invoiceNumber || '',
     Vendor: p.vendorName || '', Location: p.locationName || '',
     Qty: p.quantity, 'Unit Cost': p.acquisitionCost, 'GST %': p.gstRate,
     'GST Amount': p.gstAmount, 'Total Cost': p.totalCost,
     'Payment Mode': PAYMENT_MODE_LABELS[p.paymentMode] ?? p.paymentMode,
     'Payment Status': PAYMENT_STATUS_LABELS[p.paymentStatus] ?? p.paymentStatus,
     'Serial No.': p.serialNumber || '', 'Asset Tag': p.assetTag || '',
-    'Warranty End': p.warrantyEnd || '', Voucher: p.voucherNumber || '',
+    'Warranty End': p.warrantyEnd ? fmtDate(p.warrantyEnd) : '', Voucher: p.voucherNumber || '',
   })));
 
   if (!perm.isLoading && !perm.canView) return <AssetsAccessDenied />;

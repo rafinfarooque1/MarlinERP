@@ -143,7 +143,7 @@ export default function Ledger() {
               canDownload={perm.canDownload}
               disabled={!entries.length}
               doc={doc}
-               onCSV={() => downloadCSV('ledger.csv', entries.map((e: any) => ({ Date: e.date, Narration: e.narration ?? e.description, ...(showLocation ? { Location: entryLocationName(e) } : {}), Type: e.entryType, Debit: e.debit || 0, Credit: e.credit || 0, Balance: e.balance || 0 })))}
+               onCSV={() => downloadCSV('ledger.csv', entries.map((e: any) => ({ Date: formatDate(e.date), Narration: e.narration ?? e.description, ...(showLocation ? { Location: entryLocationName(e) } : {}), Type: e.entryType, Debit: e.debit || 0, Credit: e.credit || 0, Balance: e.balance || 0 })))}
             />
           }
         />

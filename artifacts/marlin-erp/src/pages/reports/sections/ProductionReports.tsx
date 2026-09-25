@@ -102,7 +102,7 @@ export default function ProductionSection() {
             canDownload={canDownload}
             disabled={isLoading || batches.length === 0}
             onCSV={() => downloadCSV('batch-costs.csv', batches.map((r) => ({
-              'Batch No': r.batchNumber, Date: r.productionDate, Item: r.itemName, Unit: r.unit,
+              'Batch No': r.batchNumber, Date: fmtDate(r.productionDate), Item: r.itemName, Unit: r.unit,
               'Produced Qty': r.producedQty, 'Wastage Qty': r.wastageQty,
               'Material Cost (₹)': r.materialCost?.toFixed(2) ?? '', 'Overhead (₹)': r.overheadAmount?.toFixed(2) ?? '',
               'Total Cost (₹)': r.totalCost?.toFixed(2) ?? '', 'Cost/Unit (₹)': r.costPerUnit?.toFixed(2) ?? '',
@@ -127,7 +127,7 @@ export default function ProductionSection() {
             canDownload={canDownload}
             disabled={isLoading || wastage.length === 0}
             onCSV={() => downloadCSV('production-wastage.csv', wastage.map((r) => ({
-              'Batch No': r.batchNumber, Date: r.productionDate, Item: r.itemName, Unit: r.unit,
+              'Batch No': r.batchNumber, Date: fmtDate(r.productionDate), Item: r.itemName, Unit: r.unit,
               'Produced Qty': r.producedQty, 'Wastage Qty': r.wastageQty, 'Wastage Value (₹)': r.wastageValue.toFixed(2),
               Reasons: r.lines.map((l) => `${l.reason} (${l.quantity})`).join('; '),
             })))}
