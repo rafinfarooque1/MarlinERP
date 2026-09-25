@@ -493,6 +493,17 @@ if (!srcLoc || !dstLoc) {
 
   const tbBefore = await snapshotTB();
   const pnlBefore = await snapshotPnL();
+  const pairPart = (type, id) =>
+    `${String(type).toUpperCase().replace(/[^A-Z0-9]/g, '')}-${Number(id)}`;
+  const pairCode = side =>
+    `STD-BRANCH-${side}-${pairPart(srcLoc.type, srcLoc.id)}-${pairPart(dstLoc.type, dstLoc.id)}`;
+  const transferBalancesBefore = await get('/accounts/internal-transfer-balances');
+  const pairBalance = (side, data) => {
+    const rows = side === 'DR' ? data?.receivables ?? [] : data?.payables ?? [];
+    return Number(rows.find(row => row.code === pairCode(side))?.balance ?? 0);
+  };
+  const receivableBefore = pairBalance('DR', transferBalancesBefore.data);
+  const payableBefore = pairBalance('CR', transferBalancesBefore.data);
 
   const transferRes = await post('/stock/transfers', {
     fromType:     srcLoc.type,
@@ -568,6 +579,14 @@ if (!srcLoc || !dstLoc) {
           Number(reportRow?.documentTotal ?? 0) > 0,
         JSON.stringify(reportRow).slice(0, 300));
 
+      const transferBalances = await get('/accounts/internal-transfer-balances');
+      const pairReceivable = (transferBalances.data?.receivables ?? [])
+        .find(row => row.code === pairCode('DR'));
+      const invoiceTotal = round2(Number(transfer.transferValue ?? 0) + gstAmount);
+      assert('Invoice mode: receivable posts to the directed location-pair ledger',
+        pairReceivable && Math.abs(Number(pairReceivable.balance) - receivableBefore - invoiceTotal) < 0.05,
+        JSON.stringify(pairReceivable));
+
       const pdfRes = await fetch(`${BASE}/pdf/transfer-invoice`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
@@ -625,8 +644,8 @@ if (!srcLoc || !dstLoc) {
         const dv    = dvRes.data;
         const lines = dv.lines ?? [];
 
-        // Dr line: STD-BRANCH-DEBTOR (total with GST)
-        const drBranchDebtor = lines.find(l => l.ledgerCode === 'STD-BRANCH-DEBTOR' && Number(l.debit) > 0);
+        // Dr line: pair-specific inter-branch receivable (total with GST)
+        const drBranchDebtor = lines.find(l => String(l.ledgerCode).startsWith('STD-BRANCH-DR-') && Number(l.debit) > 0);
 
         // Cr lines: transfer clearing + Output GST heads. The taxable value
         // must never land on Sales in the legacy voucher path.
@@ -640,7 +659,7 @@ if (!srcLoc || !dstLoc) {
           lines.map(l => ({ code: l.ledgerCode, dr: l.debit, cr: l.credit }))
         );
 
-        assert('Dispatch JV debits STD-BRANCH-DEBTOR', !!drBranchDebtor, `lines=${linesSummary}`);
+        assert('Dispatch JV debits the pair-specific inter-branch receivable', !!drBranchDebtor, `lines=${linesSummary}`);
         assert('Dispatch JV credits STD-BRANCH-TRF', !!crTransfer, `lines=${linesSummary}`);
         assert('Dispatch JV has no Sales credit line', !crSales, `lines=${linesSummary}`);
 
@@ -705,6 +724,15 @@ if (!srcLoc || !dstLoc) {
         assert(`Transfer receipt leaves P&L ${key} unchanged`,
           Math.abs(Number(pnlAfterReceipt[key]) - Number(pnlBefore[key])) < 0.01,
           `before=${pnlBefore[key]} after=${pnlAfterReceipt[key]}`);
+      }
+      if (docMode === 'invoice') {
+        const transferBalances = await get('/accounts/internal-transfer-balances');
+        const pairPayable = (transferBalances.data?.payables ?? [])
+          .find(row => row.code === pairCode('CR'));
+        const invoiceTotal = round2(Number(transfer.transferValue ?? 0) + gstAmount);
+        assert('Invoice mode: payable posts to the directed location-pair ledger',
+          pairPayable && Math.abs(Number(pairPayable.balance) - payableBefore - invoiceTotal) < 0.05,
+          JSON.stringify(pairPayable));
       }
     }
   }
