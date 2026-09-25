@@ -10,6 +10,7 @@ import { Wallet, Landmark, AlertTriangle } from 'lucide-react';
 import { downloadCSV } from '@/lib/download';
 import { ExportButtons, pdfMoney, periodLabel, type ReportDoc } from '@/pages/reports/shared';
 import { usePermission } from '@/lib/usePermission';
+import { formatDate } from '@/lib/date';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { useLocationContext, locationFilterParams } from '@/lib/locationContext';
 import { PageHeader } from '@/components/app/page-header';
@@ -119,7 +120,7 @@ export default function CashBankBook({ kind }: { kind: 'cash' | 'bank' }) {
       rows: [
          ['', '', 'Opening Balance', '', '', '', pdfMoney(data?.openingBalance ?? 0), ''] as (string | number)[],
         ...entries.map(e => [
-          new Date(`${e.date}T00:00:00`).toLocaleDateString('en-IN'),
+          formatDate(e.date),
           SOURCE_LABEL[e.source] ?? e.source,
           e.voucherNumber || '',
           e.description,
@@ -259,7 +260,7 @@ export default function CashBankBook({ kind }: { kind: 'cash' | 'bank' }) {
                            <span className="text-xs text-muted-foreground">—</span>
                          )}
                        </TableCell>
-                      <TableCell className="text-sm text-muted-foreground whitespace-nowrap">{new Date(`${e.date}T00:00:00`).toLocaleDateString('en-IN')}</TableCell>
+                      <TableCell className="text-sm text-muted-foreground whitespace-nowrap">{formatDate(e.date)}</TableCell>
                       <TableCell><Badge variant="outline" className="text-xs">{SOURCE_LABEL[e.source] ?? e.source}</Badge></TableCell>
                       <TableCell className="font-mono text-primary text-xs font-semibold">{e.voucherNumber || '—'}</TableCell>
                       <TableCell className="text-sm max-w-[280px] truncate">{e.description}</TableCell>

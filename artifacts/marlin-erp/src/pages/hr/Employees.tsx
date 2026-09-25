@@ -6,6 +6,7 @@ import {
   type PayComponent, type PayComponents,
 } from '@workspace/api-client-react';
 import { usePermission } from '@/lib/usePermission';
+import { formatDate } from '@/lib/date';
 import { useOutletsEnabled, useClearOutletSelection } from '@/lib/useFeatureFlags';
 import { useEnabledOutlets } from '@/lib/locationStructure';
 import { AppLayout } from '@/components/layout/AppLayout';
@@ -351,7 +352,7 @@ export default function Employees() {
       { id: emp.id, data: { employmentStatus: leaveStatus, lastWorkingDate: leaveDate, leavingReason: leaveReason.trim() || null } as any },
       {
         onSuccess: () => {
-          toast.success(`${emp.name} marked as ${leaveStatus} — pay stops after ${new Date(leaveDate).toLocaleDateString('en-IN')}`);
+          toast.success(`${emp.name} marked as ${leaveStatus} — pay stops after ${formatDate(leaveDate)}`);
           queryClient.invalidateQueries({ queryKey: getListEmployeesQueryKey() });
           setConfirmResign(null);
           if (viewItem?.id === emp.id) setViewItem((prev: any) => ({ ...prev, isActive: false, employmentStatus: leaveStatus, lastWorkingDate: leaveDate, leavingReason: leaveReason.trim() || null }));
@@ -537,7 +538,7 @@ export default function Employees() {
                       <div>
                         <StatusBadge status="inactive" label={statusLabel(emp)} />
                         {(emp as any).lastWorkingDate && (
-                          <div className="text-[10px] text-muted-foreground mt-0.5">till {new Date((emp as any).lastWorkingDate).toLocaleDateString('en-IN')}</div>
+                          <div className="text-[10px] text-muted-foreground mt-0.5">till {formatDate((emp as any).lastWorkingDate)}</div>
                         )}
                       </div>
                     )}
@@ -909,9 +910,9 @@ export default function Employees() {
                 ['Phone', viewItem.phone || '—'],
                 ['Basic Salary', `₹${Number(viewItem.salary || 0).toLocaleString('en-IN')}/mo`],
                 ['Production Staff', (viewItem as any).isProductionStaff ? 'Yes — wage charged to batches' : 'No'],
-                ['Join Date', viewItem.joinDate ? new Date(viewItem.joinDate).toLocaleDateString('en-IN') : '—'],
+                ['Join Date', viewItem.joinDate ? formatDate(viewItem.joinDate) : '—'],
                 ...((viewItem as any).lastWorkingDate
-                  ? [['Last Working Day', new Date((viewItem as any).lastWorkingDate).toLocaleDateString('en-IN')]]
+                  ? [['Last Working Day', formatDate((viewItem as any).lastWorkingDate)]]
                   : []),
                 ...((viewItem as any).leavingReason
                   ? [['Leaving Details', (viewItem as any).leavingReason]]

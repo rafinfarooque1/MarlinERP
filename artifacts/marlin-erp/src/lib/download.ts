@@ -4,6 +4,8 @@
  * location's letterhead, so these raw-fetch helpers must carry the context too
  * (it is a view preference the server treats as a filter, never authority).
  */
+import { formatDate } from './date';
+
 function locationHeaders(): Record<string, string> {
   try {
     const raw = localStorage.getItem('marlin_sales_location');
@@ -236,7 +238,7 @@ export function buildGstInvoiceHtml(opts: {
   // A QR is only ever rendered when the caller supplied one AND money is still due.
   const showQr = Boolean(qrDataUrl) && outstandingNum != null && !isSettled;
   const invoiceType = sale.customerGstin ? 'GST INVOICE B2B' : 'GST INVOICE B2C';
-  const dateStr = new Date(sale.saleDate).toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: '2-digit' });
+  const dateStr = formatDate(sale.saleDate);
 
   const lineRows = (sale.lineItems || []).map((li: any, i: number) => {
     const taxable = Number(li.lineSubtotal ?? (li.quantity * li.unitPrice));

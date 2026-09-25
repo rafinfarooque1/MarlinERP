@@ -16,6 +16,7 @@
 import { useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { customFetch } from '@workspace/api-client-react';
+import { formatDate } from '@/lib/date';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -64,7 +65,7 @@ type ApplyResult = {
 
 const fmtDate = (d: string) => {
   const dt = new Date(d);
-  return Number.isNaN(dt.getTime()) ? d : dt.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+  return Number.isNaN(dt.getTime()) ? d : formatDate(dt);
 };
 
 export default function InvoiceRenumberingSection() {

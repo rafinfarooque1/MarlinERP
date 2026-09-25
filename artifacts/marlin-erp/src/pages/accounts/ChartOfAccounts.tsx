@@ -28,6 +28,7 @@ import {
 import { ChartHierarchy } from './ChartHierarchy';
 import { PageHeader } from '@/components/app/page-header';
 import { FinancialIntegrityPanel } from './FinancialIntegrityPanel';
+import { formatDate } from '@/lib/date';
 
 /* The checkbox is presentation-only. This context lets normal, month-wise and
  * recursive rows apply the same filter without changing the books payload or
@@ -99,7 +100,7 @@ function LedgerStatementSheet({ ledgerNode, fromDate, toDate, loc, onClose }: {
   });
 
   const fmtAmt = (n: number) => n === 0 ? '—' : `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
-  const fmtDate = (d: string) => new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+  const fmtDate = (d: string) => formatDate(d);
 
   return (
     <Sheet open onOpenChange={v => !v && onClose()}>
@@ -1467,7 +1468,7 @@ export default function ChartOfAccounts() {
 
       // 5. Period label
       const fmtDate = (d: string) =>
-        new Date(`${d}T00:00:00`).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+        formatDate(d);
       const periodLabel = !fromDate && !toDate ? 'All Dates'
         : fromDate && toDate ? `${fmtDate(fromDate)} – ${fmtDate(toDate)}`
         : fromDate           ? `From ${fmtDate(fromDate)}`

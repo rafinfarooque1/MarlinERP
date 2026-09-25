@@ -15,13 +15,14 @@ import { Boxes, Download, ShieldOff, CheckCircle2, PackageX, Search } from 'luci
 import { downloadCSV } from '@/lib/download';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { usePermission } from '@/lib/usePermission';
+import { formatDateOrDash } from '@/lib/date';
 import { PageHeader } from '@/components/app/page-header';
 import { EmptyState } from '@/components/app/empty-state';
 import { TableSkeleton } from '@/components/app/loading-skeletons';
 
 const fmt = (n: number) => `₹${(Number(n) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const qty = (n: number) => (Number(n) || 0).toLocaleString('en-IN');
-const dateFmt = (d: string | null | undefined) => (d ? new Date(d).toLocaleDateString('en-IN') : '—');
+const dateFmt = (d: string | null | undefined) => formatDateOrDash(d);
 const cap = (s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
 
 function StatCard({ label, value, accent }: { label: string; value: string; accent?: string }) {

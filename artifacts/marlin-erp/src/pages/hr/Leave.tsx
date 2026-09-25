@@ -24,6 +24,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
 import { usePermission } from '@/lib/usePermission';
+import { formatDate } from '@/lib/date';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { useOutletsEnabled, useClearOutletSelection } from '@/lib/useFeatureFlags';
 import { PageHeader } from '@/components/app/page-header';
@@ -51,7 +52,7 @@ const LEAVE_TYPE_LABEL: Record<string, string> = {
 const fmtDate = (d?: string | null) => {
   if (!d) return '—';
   const dt = new Date(String(d).length === 10 ? d + 'T00:00:00' : d);
-  return isNaN(dt.getTime()) ? '—' : dt.toLocaleDateString('en-IN');
+  return isNaN(dt.getTime()) ? '—' : formatDate(dt);
 };
 
 /** Inclusive day count — prefers the server's figure. */

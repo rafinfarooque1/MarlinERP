@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { formatDateOrDash } from '@/lib/date';
 import {
   useListItems, useListMaterials, useListRawMaterials, useItemTracking,
 } from '@workspace/api-client-react';
@@ -21,7 +22,7 @@ import { EmptyState } from '@/components/app/empty-state';
 
 const money = (n: number) => `₹${(Number(n) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const qty3 = (n: number) => Number(n).toLocaleString('en-IN', { maximumFractionDigits: 3 });
-const dateIN = (d: string | null) => (d ? new Date(d).toLocaleDateString('en-IN') : '—');
+const dateIN = (d: string | null) => formatDateOrDash(d);
 
 const KIND_LABELS: Record<string, string> = {
   item: 'Item Name (SKU)',

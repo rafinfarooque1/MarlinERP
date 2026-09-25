@@ -12,6 +12,7 @@ import { downloadCSV } from '@/lib/download';
 import { ExportButtons, pdfMoney, type ReportDoc } from '@/pages/reports/shared';
 import { resolveDrill } from '@/lib/drilldown';
 import { usePermission } from '@/lib/usePermission';
+import { formatDate } from '@/lib/date';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { useLocationContext, locationFilterParams } from '@/lib/locationContext';
 import { PageHeader } from '@/components/app/page-header';
@@ -69,7 +70,7 @@ export default function DayBook() {
   };
 
   // Server-rendered Excel/PDF over the FULL day (the page never paginates).
-  const dayLabel = new Date(`${date}T00:00:00`).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' });
+  const dayLabel = formatDate(date);
   const doc = (): ReportDoc => ({
     title: 'Day Book',
     subtitle: `${dayLabel}${(data as any)?.location && locationState.locationName ? ` · ${locationState.locationName}` : ''}`,
@@ -178,7 +179,7 @@ export default function DayBook() {
           {isLoading ? (
             <TableSkeleton rows={4} cols={5} />
           ) : entries.length === 0 ? (
-            <EmptyState icon={BookOpenCheck} title={`No transactions on ${new Date(`${date}T00:00:00`).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })}`} />
+            <EmptyState icon={BookOpenCheck} title={`No transactions on ${formatDate(date)}`} />
           ) : (
           <Table>
             <TableHeader>

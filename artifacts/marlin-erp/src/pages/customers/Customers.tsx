@@ -1,4 +1,5 @@
 import { useState, useMemo } from 'react';
+import { formatDate } from '@/lib/date';
 import { useListCustomers, useGetCustomerLedger } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
@@ -78,7 +79,7 @@ function CustomerLedger({ customerId }: { customerId: number }) {
               {[...entries].reverse().map((e, i) => (
                 <TableRow key={i} className="hover:bg-muted/10">
                   <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
-                    {new Date(e.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
+                    {formatDate(e.date)}
                   </TableCell>
                   <TableCell className="text-xs">{e.description}</TableCell>
                   <TableCell className="text-xs font-mono text-muted-foreground whitespace-nowrap">{e.voucherNumber ?? '—'}</TableCell>

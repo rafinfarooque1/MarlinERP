@@ -18,6 +18,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import { Plus, Search, Receipt, Download, Eye, Calendar, MapPin, Building2, ChevronRight, ArrowLeft, LayoutList, ShieldOff, Printer, Paperclip } from 'lucide-react';
 import { usePermission } from '@/lib/usePermission';
+import { formatDate } from '@/lib/date';
 import { useOutletsEnabled } from '@/lib/useFeatureFlags';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
@@ -132,7 +133,7 @@ function LocationDrilldown({ loc, onBack, canDownload }: { loc: LocationExpenseS
                 <TableCell className="text-sm text-muted-foreground">
                   <div className="flex items-center gap-1">
                     <Calendar className="w-3 h-3" />
-                    {new Date(e.expenseDate).toLocaleDateString('en-IN')}
+                    {formatDate(e.expenseDate)}
                   </div>
                 </TableCell>
                 <TableCell>
@@ -196,7 +197,7 @@ function LocationDrilldown({ loc, onBack, canDownload }: { loc: LocationExpenseS
               {[
                 ...(viewItem.voucherNumber ? [['Voucher', viewItem.voucherNumber]] : []),
                 ['Amount', `${inr(viewItem.amount)}`],
-                ['Date', new Date(viewItem.expenseDate).toLocaleDateString('en-IN')],
+                ['Date', formatDate(viewItem.expenseDate)],
                 ['Category', viewItem.category || 'Uncategorised'],
                 ['Expense Account', viewItem.expenseLedgerName || '—'],
                 ['Paid From', viewItem.cashLedgerName || '—'],
@@ -571,7 +572,7 @@ export default function Expenses() {
                       <TableCell className="text-sm text-muted-foreground">
                         <div className="flex items-center gap-1">
                           <Calendar className="w-3 h-3" />
-                          {new Date(e.expenseDate).toLocaleDateString('en-IN')}
+                          {formatDate(e.expenseDate)}
                         </div>
                       </TableCell>
                       <TableCell>
@@ -757,7 +758,7 @@ export default function Expenses() {
               {[
                 ['Voucher', viewItem.expenseNumber ?? viewItem.voucherNumber ?? 'Not numbered'],
                 ['Amount', `${inr(Number(viewItem.amount))}`],
-                ['Date', new Date(viewItem.expenseDate).toLocaleDateString('en-IN')],
+                ['Date', formatDate(viewItem.expenseDate)],
                 ['Category', viewItem.category || 'Uncategorised'],
                 ['Expense Account', viewItem.ledgerAccountName || '—'],
                 ['Location', viewItem.locationName || 'Head Office'],

@@ -33,6 +33,7 @@ import { downloadCSV, downloadPDFFromEndpoint } from '@/lib/download';
 import { usePermission } from '@/lib/usePermission';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { useOutletsEnabled, useClearOutletSelection } from '@/lib/useFeatureFlags';
+import { formatDate } from '@/lib/date';
 import { useGetMe } from '@workspace/api-client-react';
 import { PageHeader } from '@/components/app/page-header';
 import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
@@ -546,7 +547,7 @@ function ClassifyAbsencesDialog({ emp, year, month, onClose }: {
           {emp.dates.map(date => (
             <div key={date} className="flex items-center justify-between gap-3 px-3 py-2">
               <span className="font-medium">
-                {new Date(date + 'T00:00:00').toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' })}
+                {formatDate(date)}
               </span>
               <Select value={choices[date] ?? ''} onValueChange={v => setChoices(c => ({ ...c, [date]: v }))}>
                 <SelectTrigger className="w-40"><SelectValue placeholder="—" /></SelectTrigger>
@@ -1000,7 +1001,7 @@ export default function Payroll() {
               <div className="rounded-lg border bg-muted/30 px-3 py-2 max-h-40 overflow-y-auto">
                 {lopConfirm.dates.map(d => (
                   <div key={d} className="py-0.5">
-                    {new Date(d + 'T00:00:00').toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' })}
+                    {formatDate(d)}
                   </div>
                 ))}
               </div>

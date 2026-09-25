@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useListAdvances, useAddAdvance, useUpdateAdvance, useDeleteAdvance, useListEmployees, useCashBankLedgersFlat } from '@workspace/api-client-react';
 import { usePermission } from '@/lib/usePermission';
+import { formatDateOrDash } from '@/lib/date';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -26,7 +27,7 @@ import { inr } from '@/lib/currency';
 const fmt = inr;
 
 const fmtDate = (s?: string | null) =>
-  s ? new Date(s).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
+  formatDateOrDash(s);
 
 // ── New Advance Dialog ────────────────────────────────────────────────────────
 function NewAdvanceDialog({ onClose }: { onClose: () => void }) {

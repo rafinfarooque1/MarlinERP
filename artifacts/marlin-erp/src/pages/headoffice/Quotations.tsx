@@ -23,6 +23,7 @@ import {
 } from '@workspace/api-client-react';
 import { EntityCombobox, type EntityOption } from '@/components/ui/entity-combobox';
 import { usePermission } from '@/lib/usePermission';
+import { formatDateOrDash } from '@/lib/date';
 import { isActiveProduct } from '@/lib/productStatus';
 import { useOutletsEnabled, useFeatureFlags } from '@/lib/useFeatureFlags';
 import { useEnabledOutlets } from '@/lib/locationStructure';
@@ -863,7 +864,7 @@ export default function Quotations() {
   };
 
   const itemsMap = new Map(items.map(i => [i.id, i]));
-  const fmtDay = (d?: string | null) => (d ? new Date(d).toLocaleDateString('en-IN') : '—');
+  const fmtDay = (d?: string | null) => formatDateOrDash(d);
 
   if (!perm.isLoading && !perm.canView) {
     return (

@@ -17,6 +17,7 @@ import { EmptyState } from '@/components/app/empty-state';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
+import { formatDate } from '@/lib/date';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
 import {
@@ -39,7 +40,7 @@ function toDateStr(d: string | Date): string {
 
 function fmtDate(d: string) {
   if (!d) return '—';
-  return new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+  return formatDate(d);
 }
 
 // ── Badges ────────────────────────────────────────────────────────────────────

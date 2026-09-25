@@ -12,6 +12,7 @@ import {
   usePartyAdvance, getPartyAdvanceQueryKey,
 } from '@workspace/api-client-react';
 import { usePermission } from '@/lib/usePermission';
+import { formatDate } from '@/lib/date';
 import { isActiveProduct } from '@/lib/productStatus';
 import { useOutletsEnabled, useFeatureFlags } from '@/lib/useFeatureFlags';
 import { useEnabledOutlets } from '@/lib/locationStructure';
@@ -275,7 +276,7 @@ function PriceHistoryButton({ customerId, itemId }: { customerId?: number | null
             {history.map((h: any) => (
               <div key={h.saleId} className="flex items-center justify-between gap-2 text-xs">
                 <div className="min-w-0 flex-1">
-                  <span className="text-muted-foreground">{new Date(h.saleDate).toLocaleDateString('en-IN')}</span>
+                  <span className="text-muted-foreground">{formatDate(h.saleDate)}</span>
                   <span className="ml-1.5 font-mono text-[10px] text-muted-foreground break-all">{h.invoiceNumber}</span>
                 </div>
                 <div className="shrink-0 text-right">
@@ -1683,7 +1684,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                 <TableRow key={sale.id} className="hover:bg-muted/10">
                   <TableCell className="font-mono text-primary font-bold">{sale.invoiceNumber}</TableCell>
                   <TableCell className="text-sm text-muted-foreground">
-                    <div className="flex items-center gap-1"><Calendar className="w-3 h-3" />{new Date(sale.saleDate).toLocaleDateString('en-IN')}</div>
+                    <div className="flex items-center gap-1"><Calendar className="w-3 h-3" />{formatDate(sale.saleDate)}</div>
                   </TableCell>
                   <TableCell className="text-sm">{sale.outletName}</TableCell>
                   <TableCell className="text-sm">{sale.customerName || 'Walk-in'}</TableCell>
@@ -1764,7 +1765,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                         <div className="min-w-0">
                           <p className="font-mono text-primary font-bold text-sm">{sale.invoiceNumber}</p>
                           <p className="text-xs text-muted-foreground flex items-center gap-1">
-                            <Calendar className="w-3 h-3" />{new Date(sale.saleDate).toLocaleDateString('en-IN')}
+                            <Calendar className="w-3 h-3" />{formatDate(sale.saleDate)}
                           </p>
                         </div>
                         {statusBadge}
@@ -2712,7 +2713,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
             <div className="flex items-start justify-between gap-2">
               <div>
                 <SheetTitle className="flex items-center gap-2"><Receipt className="w-5 h-5 text-primary" />{viewItem?.invoiceNumber}</SheetTitle>
-                <SheetDescription>{viewItem?.outletName} · {viewItem && new Date(viewItem.saleDate).toLocaleDateString('en-IN')}</SheetDescription>
+                <SheetDescription>{viewItem?.outletName} · {viewItem && formatDate(viewItem.saleDate)}</SheetDescription>
                 {viewItem?.quotationNumber && (
                   <p className="text-xs text-violet-600 font-medium mt-1">
                     Converted From: <span className="font-mono">{viewItem.quotationNumber}</span>
@@ -3088,7 +3089,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                     </p>
                   ) : (
                     <p className="text-[11px] text-muted-foreground mt-1">
-                      Settled at the counter by {paymentModeLabel(viewItem.paymentMode) || 'cash'} on {new Date(viewItem.saleDate).toLocaleDateString('en-IN')}.
+                      Settled at the counter by {paymentModeLabel(viewItem.paymentMode) || 'cash'} on {formatDate(viewItem.saleDate)}.
                     </p>
                   )}
                   <p className="text-[11px] text-muted-foreground mt-1">Nothing further is due, so no payment QR is shown.</p>

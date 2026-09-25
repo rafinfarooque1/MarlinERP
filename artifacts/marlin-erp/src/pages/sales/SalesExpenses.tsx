@@ -15,6 +15,7 @@ import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
 import { EmptyState } from '@/components/app/empty-state';
 import { TableSkeleton } from '@/components/app/loading-skeletons';
 import { TablePager, useClientPage } from '@/components/ui/table-pager';
+import { formatDate } from '@/lib/date';
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
@@ -475,7 +476,7 @@ export default function SalesExpenses() {
                         <TableCell className="text-xs text-muted-foreground">
                           <div className="flex items-center gap-1">
                             <Calendar className="w-3 h-3" />
-                            {e.expenseDate ? new Date(e.expenseDate).toLocaleDateString('en-IN') : '—'}
+                            {e.expenseDate ? formatDate(e.expenseDate) : '—'}
                           </div>
                         </TableCell>
                         <TableCell className="text-sm font-medium max-w-xs truncate">
@@ -565,7 +566,7 @@ export default function SalesExpenses() {
                     <TableCell className="text-sm text-muted-foreground">
                       <div className="flex items-center gap-1">
                         <Calendar className="w-3 h-3" />
-                        {e.expenseDate ? new Date(e.expenseDate).toLocaleDateString('en-IN') : '—'}
+                        {e.expenseDate ? formatDate(e.expenseDate) : '—'}
                       </div>
                     </TableCell>
                     <TableCell className="font-medium max-w-xs truncate">

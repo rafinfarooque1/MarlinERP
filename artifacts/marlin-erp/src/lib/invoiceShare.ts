@@ -13,6 +13,7 @@
  */
 
 import { paymentModeLabel } from './paymentModes';
+import { formatDate as displayDate } from './date';
 
 // ── Phone numbers ─────────────────────────────────────────────────────────────
 
@@ -93,7 +94,7 @@ const inr = (n: number | string | null | undefined): string =>
   `₹${Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
 
 const formatDate = (d: string): string =>
-  new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+  displayDate(d);
 
 /**
  * The customer-facing bill summary: itemised lines, totals, how it was paid and

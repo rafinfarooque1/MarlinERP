@@ -30,6 +30,7 @@ import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV, printHTML } from '@/lib/download';
 import { usePermission } from '@/lib/usePermission';
+import { formatDate } from '@/lib/date';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { useIsHeadOffice } from '@/lib/productStatus';
 import { PageHeader } from '@/components/app/page-header';
@@ -55,7 +56,7 @@ const inr0 = inrBase;
 const dmy = (s: string | null | undefined) => {
   if (!s) return '—';
   const d = new Date(s);
-  return Number.isNaN(d.getTime()) ? String(s) : d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+  return Number.isNaN(d.getTime()) ? String(s) : formatDate(d);
 };
 const today = () => new Date().toISOString().split('T')[0];
 

@@ -7,6 +7,7 @@
  * message is composed from the quotation the caller already holds.
  */
 import { useState } from 'react';
+import { formatDate, formatDateTime } from '@/lib/date';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   useQuotationShareLink, getQuotationShareLinkQueryKey,
@@ -31,14 +32,10 @@ interface Props {
 }
 
 const dateTime = (iso: string | null): string =>
-  iso
-    ? new Date(iso).toLocaleString('en-IN', {
-        day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit',
-      })
-    : '—';
+  iso ? formatDateTime(iso) || '—' : '—';
 
 const dateOnly = (iso: string): string =>
-  new Date(iso).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+  formatDate(iso);
 
 async function copyToClipboard(text: string): Promise<boolean> {
   try {

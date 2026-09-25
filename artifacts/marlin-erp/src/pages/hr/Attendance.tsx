@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect } from 'react';
+import { formatDate } from '@/lib/date';
 import {
   useListAttendance, useCheckIn, useCheckOut, getListAttendanceQueryKey,
   useListEmployees, useListWarehouses, useListOutlets,
@@ -755,21 +756,21 @@ export default function Attendance() {
         {viewLeave && (
           <div className="mt-6 space-y-4">
             {[
-              ['From', new Date(viewLeave.fromDate + (String(viewLeave.fromDate).length === 10 ? 'T00:00:00' : '')).toLocaleDateString('en-IN')],
-              ['To',   new Date(viewLeave.toDate + (String(viewLeave.toDate).length === 10 ? 'T00:00:00' : '')).toLocaleDateString('en-IN')],
+              ['From', formatDate(viewLeave.fromDate)],
+              ['To',   formatDate(viewLeave.toDate)],
               ...(viewLeave.days ? [['Days', String(viewLeave.days)]] : []),
-              ['Applied On', viewLeave.createdAt ? new Date(viewLeave.createdAt).toLocaleDateString('en-IN') : '—'],
+              ['Applied On', viewLeave.createdAt ? formatDate(viewLeave.createdAt) : '—'],
               ['Status', viewLeave.status || 'pending'],
               ['Reason', viewLeave.reason || '—'],
               ...(viewLeave.status === 'approved' || viewLeave.status === 'rejected' ? [
                 [viewLeave.status === 'approved' ? 'Approved By' : 'Rejected By', viewLeave.approverName || '—'],
                 [viewLeave.status === 'approved' ? 'Approved On' : 'Rejected On',
-                  viewLeave.approvedAt ? new Date(viewLeave.approvedAt).toLocaleDateString('en-IN') : '—'],
+                  viewLeave.approvedAt ? formatDate(viewLeave.approvedAt) : '—'],
               ] : []),
               ...(viewLeave.status === 'rejected' ? [['Rejection Reason', viewLeave.approvalNote || '—']]
                 : viewLeave.approvalNote ? [['Approval Note', viewLeave.approvalNote]] : []),
               ...(viewLeave.status === 'cancelled' ? [
-                ['Cancelled On', viewLeave.cancelledAt ? new Date(viewLeave.cancelledAt).toLocaleDateString('en-IN') : '—'],
+                ['Cancelled On', viewLeave.cancelledAt ? formatDate(viewLeave.cancelledAt) : '—'],
               ] : []),
             ].map(([k, v]) => (
               <div key={k} className="flex flex-col gap-1 border-b border-border pb-3">
@@ -1212,7 +1213,7 @@ export default function Attendance() {
                       <div>
                         <p className="text-sm font-medium">{h.name}</p>
                         <p className="text-xs text-muted-foreground font-mono">
-                          {new Date(h.date + 'T00:00:00').toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}
+                          {formatDate(h.date)}
                         </p>
                       </div>
                       {perm.canEdit && (
@@ -1345,7 +1346,7 @@ export default function Attendance() {
         <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
           <div className="p-4 border-b border-border bg-muted/20 flex items-center gap-2">
             <Clock className="w-4 h-4 text-muted-foreground" />
-            <span className="font-medium text-sm">Attendance for {new Date(date + 'T00:00:00').toLocaleDateString('en-IN', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</span>
+            <span className="font-medium text-sm">Attendance for {formatDate(date)}</span>
           </div>
           <Table>
             <TableHeader>
@@ -1455,8 +1456,8 @@ export default function Attendance() {
               ) : myLeavesSort.sorted.map(l => (
                 <TableRow key={l.id} className="hover:bg-muted/10">
                   <TableCell><Badge variant="outline" className="capitalize text-xs">{l.leaveType}</Badge></TableCell>
-                  <TableCell className="text-sm">{new Date(l.fromDate + 'T00:00:00').toLocaleDateString('en-IN')}</TableCell>
-                  <TableCell className="text-sm">{new Date(l.toDate + 'T00:00:00').toLocaleDateString('en-IN')}</TableCell>
+                  <TableCell className="text-sm">{formatDate(l.fromDate)}</TableCell>
+                  <TableCell className="text-sm">{formatDate(l.toDate)}</TableCell>
                   <TableCell className="text-sm text-muted-foreground max-w-[200px] truncate">{l.reason || '—'}</TableCell>
                   <TableCell>
                     <Badge variant="outline" className={leaveStatusColor(l.status || 'pending')}>

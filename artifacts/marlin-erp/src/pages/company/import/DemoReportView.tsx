@@ -10,6 +10,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { fmtMoney, fmtTime } from './shared';
 import { Loader2, MapPin } from 'lucide-react';
+import { formatDate } from '@/lib/date';
 
 // ── Light local types for the pack (server is authoritative) ───────────────
 
@@ -71,7 +72,7 @@ function BookView({ title, book }: { title: string; book: Book | null }) {
             <TableBody>
               {book.entries.map((e, i) => (
                 <TableRow key={i}>
-                  <TableCell className="whitespace-nowrap text-xs">{e.date ? new Date(e.date).toLocaleDateString('en-IN') : '—'}</TableCell>
+                  <TableCell className="whitespace-nowrap text-xs">{e.date ? formatDate(e.date) : '—'}</TableCell>
                   <TableCell className="font-mono text-xs whitespace-nowrap">{e.voucherNumber ?? '—'}</TableCell>
                   <TableCell className="text-xs max-w-[18rem] truncate" title={e.description ?? ''}>{e.description ?? '—'}</TableCell>
                   <TableCell className="text-right tabular-nums text-xs">{e.debit ? fmtMoney(e.debit) : '—'}</TableCell>

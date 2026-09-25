@@ -10,6 +10,7 @@ import {
 } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { usePermission } from '@/lib/usePermission';
+import { formatDateTime } from '@/lib/date';
 import { useLocationContext, locationFilterParams, locationKeysParams } from '@/lib/locationContext';
 import {
   Card, CardContent, CardHeader, CardTitle, CardDescription,
@@ -1022,9 +1023,7 @@ export default function Dashboard() {
             locationLabel={reportLocationLabel ?? 'All Locations'}
             periodLabel={pLabel}
             presetLabel={PRESET_LABEL[range.preset] ?? 'Custom range'}
-            generatedAt={new Date().toLocaleString('en-IN', {
-              day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit',
-            })}
+            generatedAt={formatDateTime(new Date())}
             cards={shareCards}
             reportMode={reportMode}
           />
