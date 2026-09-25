@@ -36,6 +36,7 @@ import {
   FileText,
 } from 'lucide-react';
 import { useLocationContext } from '@/lib/locationContext';
+import { formatDate } from '@/lib/date';
 import { useTheme } from '@/lib/theme';
 import { Button } from '@/components/ui/button';
 import { useQueryClient } from '@tanstack/react-query';
@@ -679,7 +680,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
                         <div className="min-w-0">
                           <p className="text-sm font-medium truncate">Quotation {n.quotationNumber} expired</p>
                           <p className="text-xs text-muted-foreground truncate">
-                            {n.customerName || 'Walk-in'} · ₹{Number(n.totalAmount).toLocaleString('en-IN')} · valid till {n.validTill ? new Date(n.validTill).toLocaleDateString('en-IN') : '—'}
+                            {n.customerName || 'Walk-in'} · ₹{Number(n.totalAmount).toLocaleString('en-IN')} · valid till {n.validTill ? formatDate(n.validTill) : '—'}
                           </p>
                         </div>
                       </DropdownMenuItem>

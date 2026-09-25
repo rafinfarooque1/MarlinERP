@@ -18,6 +18,7 @@ import { downloadCSV } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { usePermission } from '@/lib/usePermission';
+import { formatDate } from '@/lib/date';
 import { AccountCombobox } from '@/components/ui/account-combobox';
 import { isSystemLedger } from '@/lib/systemLedgers';
 import { BillSettlementPanel, type SettlementSelection } from '@/components/settlement/BillSettlementPanel';
@@ -238,7 +239,7 @@ export default function Payment() {
                     )}
                   </TableCell>
                   <TableCell className="text-sm text-muted-foreground">
-                    <div className="flex items-center gap-1"><Calendar className="w-3 h-3" />{new Date(p.paymentDate).toLocaleDateString('en-IN')}</div>
+                    <div className="flex items-center gap-1"><Calendar className="w-3 h-3" />{formatDate(p.paymentDate)}</div>
                   </TableCell>
                   <TableCell><Badge variant="outline" className="text-xs">{p.paidFromName}</Badge></TableCell>
                   <TableCell className="font-medium text-sm">{p.paidToName}</TableCell>

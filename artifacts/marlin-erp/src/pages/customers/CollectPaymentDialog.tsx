@@ -16,9 +16,10 @@ import { ReceiveIntoSelect } from '@/components/receive-into-select';
 import { EmptyState } from '@/components/app/empty-state';
 import { toast } from 'sonner';
 import { inr } from '@/lib/currency';
+import { formatDateOrDash } from '@/lib/date';
 
 const fmt = (n: unknown) => Number(n ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 });
-const dfmt = (d?: string | null) => (d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—');
+const dfmt = (d?: string | null) => formatDateOrDash(d);
 const today = () => new Date().toISOString().split('T')[0];
 
 // Collect payment against a single customer's open invoices. Every receipt is

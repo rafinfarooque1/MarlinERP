@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+import { formatDateOrDash } from '@/lib/date';
 import type { StockBatch } from '@workspace/api-client-react';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { Badge } from '@/components/ui/badge';
@@ -15,7 +16,7 @@ import { AlertTriangle, Boxes, Layers, Snowflake, Wallet } from 'lucide-react';
 
 const money = (n: number) => `₹${(Number(n) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const qtyIN = (n: number) => Number(n).toLocaleString('en-IN', { maximumFractionDigits: 3 });
-const dateIN = (d: string | null) => (d ? new Date(d).toLocaleDateString('en-IN') : '—');
+const dateIN = (d: string | null) => formatDateOrDash(d);
 
 const MAT_TYPE_LABELS: Record<string, string> = {
   item: 'Item Name (SKU)',

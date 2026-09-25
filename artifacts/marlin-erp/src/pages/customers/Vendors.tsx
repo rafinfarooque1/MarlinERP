@@ -1,4 +1,5 @@
 import { useState, useMemo } from 'react';
+import { formatDate } from '@/lib/date';
 import {
   useListVendors, useCreateVendor, useUpdateVendor, getListVendorsQueryKey,
   useGetVendorLedger, useGetCashBankLedgers, useRecordVendorPayment,
@@ -111,7 +112,7 @@ function VendorLedger({ vendorId }: { vendorId: number }) {
               {[...entries].reverse().map((e, i) => (
                 <TableRow key={i} className="hover:bg-muted/10">
                   <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
-                    {new Date(e.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
+                    {formatDate(e.date)}
                   </TableCell>
                   <TableCell className="text-xs">
                     <span className="flex items-center gap-1.5">

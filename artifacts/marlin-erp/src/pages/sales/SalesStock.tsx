@@ -16,6 +16,7 @@ import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
 import { EmptyState } from '@/components/app/empty-state';
 import { TableSkeleton } from '@/components/app/loading-skeletons';
 import { TablePager, useClientPage } from '@/components/ui/table-pager';
+import { formatDate } from '@/lib/date';
 
 export default function SalesStock() {
   const perm = usePermission('page:/headoffice/stock');
@@ -246,7 +247,7 @@ export default function SalesStock() {
                           const cls = nb.status === 'expired' ? 'text-red-500 font-medium' : nb.status === 'near_expiry' ? 'text-amber-600 font-medium' : 'text-muted-foreground';
                           return (
                             <span className={`text-xs ${cls}`}>
-                              {new Date(nb.expiryDate!).toLocaleDateString('en-IN')}
+                              {formatDate(nb.expiryDate)}
                               {nb.daysToExpiry != null && <span className="ml-1 font-mono">({nb.daysToExpiry}d)</span>}
                             </span>
                           );

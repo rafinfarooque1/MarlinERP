@@ -12,6 +12,7 @@
  * search, filters, print/PDF and edit/delete for manual vouchers.
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { formatDate } from '@/lib/date';
 import {
   useListPayments, useCreatePayment, useUpdatePayment, useDeletePayment,
   useListReceipts, useCreateReceipt, useUpdateReceipt, useDeleteReceipt,
@@ -726,7 +727,7 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
                     )}
                   </TableCell>
                   <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
-                    <div className="flex items-center gap-1"><Calendar className="w-3 h-3" />{new Date(r[C.dateField]).toLocaleDateString('en-IN')}</div>
+                    <div className="flex items-center gap-1"><Calendar className="w-3 h-3" />{formatDate(r[C.dateField])}</div>
                   </TableCell>
                   <TableCell className="font-medium text-sm">{r[C.partyNameField]}</TableCell>
                   <TableCell><Badge variant="outline" className="text-xs">{r[C.cashNameField]}</Badge></TableCell>

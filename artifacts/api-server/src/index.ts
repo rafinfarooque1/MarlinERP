@@ -2662,20 +2662,30 @@ async function runMigrations() {
   // sales_number_formats: opt-in per-scope printed format (short FY label, no
   // zero padding, continuous serial across FYs). Rows are created ONLY by the
   // admin renumber operation (routes/adminRenumber.ts) — a location migrated
-  // onto its old physical bill-book numbering (e.g. SB2C/26-27/7490). Every
-  // allocator reads this via getSalesNumberFormat(); absence = default format.
+  // onto its old physical bill-book numbering (e.g. SB2C/26-27/7490). The
+  // current global print format is short FY + unpadded serial; continuous
+  // numbering remains a per-scope choice. Every allocator reads this via
+  // getSalesNumberFormat(); absence = current default format.
   // invoice_renumber_log: the permanent OLD → NEW record of every admin
   // renumbering, per invoice — who ran it, when, and both numbers.
   try {
     await pool.query(
       `CREATE TABLE IF NOT EXISTS sales_number_formats (
          number_scope TEXT PRIMARY KEY,
-         fy_short     BOOLEAN NOT NULL DEFAULT false,
-         pad          INTEGER NOT NULL DEFAULT 6,
+         fy_short     BOOLEAN NOT NULL DEFAULT true,
+         pad          INTEGER NOT NULL DEFAULT 0,
          continuous   BOOLEAN NOT NULL DEFAULT false,
          created_by   TEXT,
          created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
        )`
+    );
+    // Keep legacy per-scope format rows on the new global invoice format while
+    // preserving their continuous/per-FY counter policy. This changes future
+    // generated numbers only; existing invoice identities remain untouched.
+    await pool.query(
+      `UPDATE sales_number_formats
+          SET fy_short = TRUE, pad = 0
+        WHERE fy_short IS DISTINCT FROM TRUE OR pad IS DISTINCT FROM 0`,
     );
     await pool.query(
       `CREATE TABLE IF NOT EXISTS invoice_renumber_log (

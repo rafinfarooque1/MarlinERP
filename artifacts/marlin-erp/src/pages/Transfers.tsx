@@ -55,6 +55,7 @@ import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
 import { EmptyState } from '@/components/app/empty-state';
 import { StatusBadge } from '@/components/app/status-badge';
 import { TablePager, useClientPage } from '@/components/ui/table-pager';
+import { formatDate, formatDateTime } from '@/lib/date';
 
 // ── Form schema ───────────────────────────────────────────────────────────────
 const schema = z.object({
@@ -116,7 +117,7 @@ function BatchPicker({ itemId, quantity, unit, fromType, fromId, override, onCha
   const overrideQty = (batchId: number) => override?.find(o => o.batchId === batchId)?.quantity ?? 0;
   const overrideTotal = (override ?? []).reduce((s, o) => s + Number(o.quantity || 0), 0);
   const fmtExp = (b: { expiryDate?: string | null }) =>
-    b.expiryDate ? new Date(b.expiryDate).toLocaleDateString('en-IN') : 'no expiry';
+    b.expiryDate ? formatDate(b.expiryDate) : 'no expiry';
 
   const startManual = () => {
     const seeded = plan.filter(p => p.batchId != null).map(p => ({ batchId: p.batchId!, quantity: Number(p.quantity) }));
@@ -256,7 +257,7 @@ function ApproveDialog({
             <div><p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Challan</p>
               <p className="font-mono font-bold text-primary">{transfer.challanNumber}</p></div>
             <div><p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Date</p>
-              <p>{new Date(transfer.transferDate).toLocaleDateString('en-IN')}</p></div>
+              <p>{formatDate(transfer.transferDate)}</p></div>
             <div><p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Dispatched From</p>
               <p className="font-medium">{transfer.fromName}<span className="text-muted-foreground capitalize ml-1">({transfer.fromType})</span></p></div>
             <div><p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Receiving At</p>
@@ -831,7 +832,7 @@ export default function Transfers() {
                   <TableCell className="font-mono text-primary font-bold text-sm">{t.challanNumber || `DC-${String(t.id).padStart(4, '0')}`}</TableCell>
                   <TableCell className="text-sm text-muted-foreground">
                     <div className="flex items-center gap-1">
-                      <Calendar className="w-3 h-3" />{new Date(t.transferDate).toLocaleDateString('en-IN')}
+                      <Calendar className="w-3 h-3" />{formatDate(t.transferDate)}
                     </div>
                   </TableCell>
                   <TableCell>
@@ -908,7 +909,7 @@ export default function Transfers() {
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 {[
-                  ['Date',  new Date(viewItem.transferDate).toLocaleDateString('en-IN')],
+                  ['Date',  formatDate(viewItem.transferDate)],
                   ['From',  `${viewItem.fromName} (${viewItem.fromType})`],
                   ['To',    `${viewItem.toName} (${viewItem.toType})`],
                   ['Type',  viewItem.transferType === 'interstate' ? 'Interstate (IGST)' : viewItem.transferType === 'intrastate' ? 'Intrastate (CGST+SGST)' : 'Internal'],
@@ -945,7 +946,7 @@ export default function Transfers() {
                           <div className="flex flex-wrap gap-1 mt-2">
                             {li.batchBreakdown.map((bb: any, j: number) => (
                               <span key={j} className="inline-flex items-center gap-1 rounded-full border border-border bg-card px-2 py-0.5 text-[10px] font-mono text-muted-foreground">
-                                {bb.batchNumber || `#${bb.batchId}`} · {Number(bb.quantity)}{bb.expiryDate ? ` · exp ${new Date(bb.expiryDate).toLocaleDateString('en-IN')}` : ''}
+                                {bb.batchNumber || `#${bb.batchId}`} · {Number(bb.quantity)}{bb.expiryDate ? ` · exp ${formatDate(bb.expiryDate)}` : ''}
                               </span>
                             ))}
                           </div>
@@ -975,7 +976,7 @@ export default function Transfers() {
                   })}
                   {viewItem.approvedBy && (
                     <p className="text-xs text-muted-foreground mt-1">
-                      Approved by: {viewItem.approvedBy} · {viewItem.approvedAt ? new Date(viewItem.approvedAt).toLocaleString('en-IN') : ''}
+                      Approved by: {viewItem.approvedBy} · {viewItem.approvedAt ? formatDateTime(viewItem.approvedAt) : ''}
                     </p>
                   )}
                 </div>

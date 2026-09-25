@@ -19,6 +19,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { downloadCSV } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
 import { usePermission } from '@/lib/usePermission';
+import { formatDate } from '@/lib/date';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { AccountCombobox } from '@/components/ui/account-combobox';
 import { entryScopeKeyDown, autoFocusFirst, focusField, useEntryShortcuts } from '@/lib/keyboard-entry';
@@ -200,7 +201,7 @@ export default function Contra() {
                 <TableRow key={v.id} className="hover:bg-muted/10">
                   <TableCell className="font-mono text-primary font-bold text-sm">{v.voucherNumber}</TableCell>
                   <TableCell className="text-sm text-muted-foreground">
-                    <div className="flex items-center gap-1"><Calendar className="w-3 h-3" />{new Date(v.voucherDate).toLocaleDateString('en-IN')}</div>
+                    <div className="flex items-center gap-1"><Calendar className="w-3 h-3" />{formatDate(v.voucherDate)}</div>
                   </TableCell>
                   <TableCell><Badge variant="outline" className="text-xs">{v.fromName}</Badge></TableCell>
                   <TableCell><Badge variant="outline" className="text-xs">{v.toName}</Badge></TableCell>

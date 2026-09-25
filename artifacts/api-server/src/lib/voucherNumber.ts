@@ -122,11 +122,11 @@ export async function nextVoucherNumber(
 //
 // Sales bills run on TWO independent FY-scoped series, decided by the
 // customer's GST registration at billing time:
-//   SB2B/2026-27/000001 — customer holds a GST number (business-to-business)
-//   SB2C/2026-27/000001 — walk-in / retail / unregistered (business-to-consumer)
+//   SB2B/26-27/1 — customer holds a GST number (business-to-business)
+//   SB2C/26-27/1 — walk-in / retail / unregistered (business-to-consumer)
 //
 // The counters live in voucher_sequences under the names below, scoped to the
-// financial year, so each FY restarts both series at 000001. Only SALES bills
+// financial year, so each FY restarts both series at 1. Only SALES bills
 // use these — every other voucher type keeps its own numbering untouched.
 export const SALES_SERIES = {
   b2b: { counter: "sales_invoice_counter_b2b", prefix: "SB2B" },
@@ -161,8 +161,8 @@ export type SalesNumberFormat = {
 };
 
 export const DEFAULT_SALES_NUMBER_FORMAT: SalesNumberFormat = {
-  fyShort: false,
-  pad: 6,
+  fyShort: true,
+  pad: 0,
   continuous: false,
 };
 

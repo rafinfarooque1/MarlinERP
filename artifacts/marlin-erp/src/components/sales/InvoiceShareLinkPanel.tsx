@@ -11,6 +11,7 @@
  * from the sale's line items and the caller already holds them.
  */
 import { useState } from 'react';
+import { formatDate, formatDateTime } from '@/lib/date';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   useInvoiceShareLink, getInvoiceShareLinkQueryKey,
@@ -38,14 +39,10 @@ interface Props {
 }
 
 const dateTime = (iso: string | null): string =>
-  iso
-    ? new Date(iso).toLocaleString('en-IN', {
-        day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit',
-      })
-    : '—';
+  iso ? formatDateTime(iso) || '—' : '—';
 
 const dateOnly = (iso: string): string =>
-  new Date(iso).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+  formatDate(iso);
 
 /**
  * Copy that works inside the app's iframe.

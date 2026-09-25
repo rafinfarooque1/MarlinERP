@@ -21,6 +21,7 @@ import {
 } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { usePermission } from '@/lib/usePermission';
+import { formatDateTime } from '@/lib/date';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -43,10 +44,7 @@ import {
 
 // ── Formatting ─────────────────────────────────────────────────────────────
 
-const fmtTime = (iso: string) =>
-  new Date(iso).toLocaleString('en-IN', {
-    day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit',
-  });
+const fmtTime = (iso: string) => formatDateTime(iso);
 
 /** "3 hours ago" — the unit that matters here is how much work is at risk. */
 function ago(iso: string): string {

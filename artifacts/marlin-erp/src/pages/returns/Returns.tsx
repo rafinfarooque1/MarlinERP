@@ -29,11 +29,12 @@ import { StatusBadge } from '@/components/app/status-badge';
 import { EmptyState } from '@/components/app/empty-state';
 import { TableSkeleton } from '@/components/app/loading-skeletons';
 import { inr } from '@/lib/currency';
+import { formatDateOrDash } from '@/lib/date';
 
 const fmt = (n: unknown) => Number(n ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 });
 // Paise rounding — must match the API's r2 so estimates equal the note total.
 const r2 = (n: number) => Math.round(n * 100) / 100;
-const dfmt = (d?: string | null) => (d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—');
+const dfmt = (d?: string | null) => formatDateOrDash(d);
 const today = () => new Date().toISOString().split('T')[0];
 
 // ─── New Sales Return dialog ──────────────────────────────────────────────────

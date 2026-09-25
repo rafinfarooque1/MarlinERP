@@ -18,6 +18,7 @@ import { EmptyState } from '@/components/app/empty-state';
 import { TableSkeleton } from '@/components/app/loading-skeletons';
 import { ExportButtons, pdfMoney, periodLabel, type ReportDoc } from '@/pages/reports/shared';
 import { resolveDrill } from '@/lib/drilldown';
+import { formatDate } from '@/lib/date';
 
 export default function Ledger() {
   const perm = usePermission('page:/accounts/ledger');
@@ -91,7 +92,7 @@ export default function Ledger() {
         { label: 'Balance', align: 'right', width: 1.4 },
       ],
       rows: (entries as any[]).map((e: any) => [
-        new Date(e.date).toLocaleDateString('en-IN'),
+        formatDate(e.date),
         e.narration ?? e.description,
         ...(showLocation ? [entryLocationName(e)] : []),
         e.entryType,
@@ -206,7 +207,7 @@ export default function Ledger() {
                   title={drill ? (drill.kind === 'link' ? drill.label : 'No document — click for details') : undefined}
                   onClick={() => openRow(e)}
                 >
-                  <TableCell className="text-sm">{new Date(e.date).toLocaleDateString('en-IN')}</TableCell>
+                  <TableCell className="text-sm">{formatDate(e.date)}</TableCell>
                   <TableCell className="text-sm">
                     <span className="inline-flex items-center gap-1.5">
                        {e.narration ?? e.description}

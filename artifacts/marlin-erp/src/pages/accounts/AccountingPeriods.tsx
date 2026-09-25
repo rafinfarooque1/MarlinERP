@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { formatDate, formatDateTime } from '@/lib/date';
 import {
   usePeriodLocks, usePeriodLockEvents, usePeriodSummary,
   useLockPeriod, useUnlockPeriod, PeriodLock,
@@ -169,7 +170,7 @@ export default function AccountingPeriods() {
                 </div>
                 {lock && (
                   <p className="text-xs text-muted-foreground mt-2">
-                    Locked by {lock.lockedBy} on {new Date(lock.lockedAt).toLocaleDateString('en-IN')}
+                    Locked by {lock.lockedBy} on {formatDate(lock.lockedAt)}
                   </p>
                 )}
                 <div className="flex gap-2 mt-3">
@@ -220,7 +221,7 @@ export default function AccountingPeriods() {
                   {events.map((e) => (
                     <TableRow key={e.id}>
                       <TableCell className="whitespace-nowrap text-sm">
-                        {new Date(e.createdAt).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}
+                        {formatDateTime(e.createdAt)}
                       </TableCell>
                       <TableCell className="whitespace-nowrap">{e.monthLabel}</TableCell>
                       <TableCell>

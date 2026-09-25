@@ -18,6 +18,7 @@ import { toast } from 'sonner';
 import { downloadCSV } from '@/lib/download';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { usePermission } from '@/lib/usePermission';
+import { formatDate } from '@/lib/date';
 import { AccountCombobox } from '@/components/ui/account-combobox';
 import { entryScopeKeyDown, autoFocusFirst, focusField, focusAndOpen, useEntryShortcuts } from '@/lib/keyboard-entry';
 import { useVoucherLocationChoice, parseLocKey, LocationSelectField } from '@/lib/voucherLocation';
@@ -254,7 +255,7 @@ export default function Journal() {
                       )}
                     </TableCell>
                     <TableCell className="text-sm text-muted-foreground">
-                      <div className="flex items-center gap-1"><Calendar className="w-3 h-3" />{new Date(v.voucherDate).toLocaleDateString('en-IN')}</div>
+                      <div className="flex items-center gap-1"><Calendar className="w-3 h-3" />{formatDate(v.voucherDate)}</div>
                     </TableCell>
                     <TableCell className="text-muted-foreground text-sm max-w-[280px] truncate">{v.narration || '—'}</TableCell>
                     <TableCell className="text-right font-mono font-bold">{inr(v.totalAmount)}</TableCell>

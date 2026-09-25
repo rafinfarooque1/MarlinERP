@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useListAuditLogs, type AuditLogEntry } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { usePermission } from '@/lib/usePermission';
+import { formatDateTime } from '@/lib/date';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -272,7 +273,7 @@ export default function AuditLog() {
                 sorted.map(log => (
                   <TableRow key={log.id} className="hover:bg-muted/10">
                     <TableCell className="text-xs text-muted-foreground whitespace-nowrap font-mono">
-                      {new Date(log.createdAt).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}
+                      {formatDateTime(log.createdAt)}
                     </TableCell>
                     <TableCell><ActionBadge action={log.action} /></TableCell>
                     <TableCell><ModuleBadge module={log.module} /></TableCell>
@@ -339,7 +340,7 @@ export default function AuditLog() {
               Audit Entry #{viewEntry?.id}
             </SheetTitle>
             <SheetDescription>
-              {viewEntry && new Date(viewEntry.createdAt).toLocaleString('en-IN', { dateStyle: 'full', timeStyle: 'medium' })}
+              {viewEntry && formatDateTime(viewEntry.createdAt)}
             </SheetDescription>
           </SheetHeader>
           {viewEntry && (

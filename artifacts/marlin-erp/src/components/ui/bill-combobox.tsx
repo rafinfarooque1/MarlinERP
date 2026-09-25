@@ -6,6 +6,7 @@ import {
 } from '@/components/ui/command';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { cn } from '@/lib/utils';
+import { formatDate } from '@/lib/date';
 
 /**
  * Searchable, scrollable picker for choosing a source document (sales invoice,
@@ -39,7 +40,7 @@ const MAX_ROWS = 200;
 const money = (n: unknown) =>
   `₹${Number(n ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
 const dshort = (d?: string | null) =>
-  d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '';
+  d ? formatDate(d) : '';
 
 interface Props {
   options: BillOption[];

@@ -13,6 +13,7 @@ import { PageHeader } from '@/components/app/page-header';
 import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
 import { EmptyState } from '@/components/app/empty-state';
 import { TableSkeleton } from '@/components/app/loading-skeletons';
+import { formatDate } from '@/lib/date';
 
 type Tab = 'output' | 'consumption' | 'wastage' | 'batches';
 
@@ -299,7 +300,7 @@ export default function ProductionReports() {
                 ) : wastageSort.sorted.map(w => (
                   <TableRow key={w.productionId} className="hover:bg-muted/10">
                     <TableCell className="font-mono text-primary font-bold">{w.batchNumber}</TableCell>
-                    <TableCell className="text-sm text-muted-foreground">{new Date(w.productionDate).toLocaleDateString('en-IN')}</TableCell>
+                    <TableCell className="text-sm text-muted-foreground">{formatDate(w.productionDate)}</TableCell>
                     <TableCell className="font-medium">{w.itemName}</TableCell>
                     <TableCell className="text-right font-mono">{qty(w.producedQty)}</TableCell>
                     <TableCell className="text-right font-mono font-bold text-destructive">{qty(w.wastageQty)}</TableCell>
@@ -336,7 +337,7 @@ export default function ProductionReports() {
                 ) : batchesSort.sorted.map(b => (
                   <TableRow key={b.id} className="hover:bg-muted/10">
                     <TableCell className="font-mono text-primary font-bold">{b.batchNumber}</TableCell>
-                    <TableCell className="text-sm text-muted-foreground">{new Date(b.productionDate).toLocaleDateString('en-IN')}</TableCell>
+                    <TableCell className="text-sm text-muted-foreground">{formatDate(b.productionDate)}</TableCell>
                     <TableCell className="font-medium">{b.itemName}</TableCell>
                     <TableCell className="text-sm text-muted-foreground">{(b as any).locationName ?? 'Head Office'}</TableCell>
                     <TableCell className="text-right font-mono">{qty(b.producedQty)}{b.wastageQty > 0 && <span className="text-destructive text-xs ml-1">(+{qty(b.wastageQty)} waste)</span>}</TableCell>

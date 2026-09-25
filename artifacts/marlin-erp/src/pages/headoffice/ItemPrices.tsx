@@ -16,6 +16,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV } from '@/lib/download';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { usePermission } from '@/lib/usePermission';
+import { formatDate } from '@/lib/date';
 import { activeProductsWithSelection } from '@/lib/productStatus';
 import { useOutletsEnabled } from '@/lib/useFeatureFlags';
 import { PageHeader } from '@/components/app/page-header';
@@ -255,7 +256,7 @@ export default function ItemPrices() {
                       <StatusBadge status={active ? 'active' : 'inactive'} label={active ? 'Active' : 'Inactive'} />
                     </TableCell>
                     <TableCell className="text-right text-xs text-muted-foreground">
-                      {ip.updatedAt ? new Date(ip.updatedAt).toLocaleDateString('en-IN') : '—'}
+                      {ip.updatedAt ? formatDate(ip.updatedAt) : '—'}
                     </TableCell>
                     {perm.canEdit && (
                       <TableCell className="text-right">

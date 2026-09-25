@@ -18,6 +18,7 @@ import { downloadPDFFromEndpoint, downloadFileFromEndpoint, printPDFFromEndpoint
 import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { useGetCompanySettings } from '@workspace/api-client-react';
 import { toast } from 'sonner';
+import { formatDate, formatDateOrDash } from '@/lib/date';
 
 // ── Formatters ────────────────────────────────────────────────────────────────
 export const fmt = (n: number | null | undefined) =>
@@ -27,12 +28,12 @@ export const num = (n: number | null | undefined) =>
 export const pdfMoney = (n: number | null | undefined) =>
   `Rs. ${Number(n ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 export const fmtDate = (d?: string | null) =>
-  d ? new Date(String(d).length === 10 ? `${d}T00:00:00` : d).toLocaleDateString('en-IN') : '—';
+  d ? formatDateOrDash(String(d).length === 10 ? String(d) : d) : '—';
 export const titleCase = (s: string) => s.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 
 export function periodLabel(from?: string, to?: string): string {
   const f = (d: string) =>
-    new Date(`${d}T00:00:00`).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+    formatDate(d);
   if (from && to) return `${f(from)} – ${f(to)}`;
   if (from) return `From ${f(from)}`;
   if (to) return `Up to ${f(to)}`;

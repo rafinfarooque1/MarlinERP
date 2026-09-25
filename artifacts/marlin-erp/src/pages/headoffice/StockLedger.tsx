@@ -10,6 +10,7 @@ import { Badge } from '@/components/ui/badge';
 import { downloadCSV } from '@/lib/download';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { usePermission } from '@/lib/usePermission';
+import { formatDateTime } from '@/lib/date';
 import { PageHeader } from '@/components/app/page-header';
 import { EmptyState } from '@/components/app/empty-state';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -18,7 +19,7 @@ import { TablePager } from '@/components/ui/table-pager';
 const money = (n: number) => `₹${(Number(n) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const dtIN = (s: string) => {
   const d = new Date(s);
-  return d.toLocaleDateString('en-IN') + ' ' + d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+  return formatDateTime(d);
 };
 const dateIN = (s: string | null | undefined) => {
   if (!s) return '—';

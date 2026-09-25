@@ -17,6 +17,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV } from '@/lib/download';
 import { usePermission } from '@/lib/usePermission';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
+import { formatDate } from '@/lib/date';
 import { PageHeader } from '@/components/app/page-header';
 import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
 import { StatusBadge } from '@/components/app/status-badge';
@@ -159,7 +160,7 @@ export default function Coupons() {
                   </TableCell>
                   <TableCell className="text-sm text-muted-foreground">{(c as any).validDays ?? '—'} days</TableCell>
                   <TableCell className="text-sm">{(c as any).usageCount ?? 0}</TableCell>
-                  <TableCell className="text-sm text-muted-foreground">{(c as any).expiryDate ? new Date((c as any).expiryDate).toLocaleDateString('en-IN') : '—'}</TableCell>
+                  <TableCell className="text-sm text-muted-foreground">{(c as any).expiryDate ? formatDate((c as any).expiryDate) : '—'}</TableCell>
                   <TableCell>
                     <StatusBadge status={isActive(c) ? 'active' : 'expired'} />
                   </TableCell>
@@ -224,7 +225,7 @@ export default function Coupons() {
           </SheetHeader>
           {viewItem && (
             <div className="mt-6 space-y-4">
-              {[['Type', viewItem.discountType === 'percentage' ? 'Percentage' : 'Fixed'], ['Value', viewItem.discountType === 'percentage' ? `${viewItem.discountValue}%` : `₹${viewItem.discountValue}`], ['Valid For', `${viewItem.validDays ?? '—'} days`], ['Used', String(viewItem.usageCount ?? 0)], ['Expires On', viewItem.expiryDate ? new Date(viewItem.expiryDate).toLocaleDateString('en-IN') : '—'], ['Status', isActive(viewItem) ? 'Active' : 'Expired']].map(([k, v]) => (
+              {[['Type', viewItem.discountType === 'percentage' ? 'Percentage' : 'Fixed'], ['Value', viewItem.discountType === 'percentage' ? `${viewItem.discountValue}%` : `₹${viewItem.discountValue}`], ['Valid For', `${viewItem.validDays ?? '—'} days`], ['Used', String(viewItem.usageCount ?? 0)], ['Expires On', viewItem.expiryDate ? formatDate(viewItem.expiryDate) : '—'], ['Status', isActive(viewItem) ? 'Active' : 'Expired']].map(([k, v]) => (
                 <div key={k} className="flex justify-between items-center border-b border-border pb-3">
                   <span className="text-xs text-muted-foreground uppercase tracking-wider">{k}</span>
                   <span className="font-semibold">{v}</span>

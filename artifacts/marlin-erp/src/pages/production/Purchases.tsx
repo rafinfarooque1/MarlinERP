@@ -18,6 +18,7 @@ import { usePermission } from '@/lib/usePermission';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { useActingLocations } from '@/lib/useActingLocation';
 import { useDateRange, RangeBar } from '@/pages/reports/shared';
+import { formatDate } from '@/lib/date';
 import { useLocationContext, locationFilterParams } from '@/lib/locationContext';
 import { Separator } from '@/components/ui/separator';
 import { useQueryClient } from '@tanstack/react-query';
@@ -236,13 +237,13 @@ export default function Purchases() {
                 <TableRow key={p.id} className="hover:bg-muted/10">
                   <TableCell className="font-mono text-primary font-bold text-sm">#{String(p.id).padStart(4, '0')}</TableCell>
                   <TableCell className="text-sm text-muted-foreground">
-                    <div className="flex items-center gap-1"><Calendar className="w-3 h-3" />{new Date(p.purchaseDate).toLocaleDateString('en-IN')}</div>
+                    <div className="flex items-center gap-1"><Calendar className="w-3 h-3" />{formatDate(p.purchaseDate)}</div>
                   </TableCell>
                   <TableCell className="font-medium">{p.vendorName}</TableCell>
                   <TableCell className="text-muted-foreground text-sm">{p.invoiceNumber || '—'}</TableCell>
                   {/* Legacy bills have no vendor invoice date — show a dash, never a fabricated date. */}
                   <TableCell className="text-muted-foreground text-sm">
-                    {(p as any).vendorInvoiceDate ? new Date((p as any).vendorInvoiceDate).toLocaleDateString('en-IN') : '—'}
+                    {(p as any).vendorInvoiceDate ? formatDate((p as any).vendorInvoiceDate) : '—'}
                   </TableCell>
                   {locations.isHeadOffice && (
                     <TableCell className="text-muted-foreground text-sm">{(p as any).locationName ?? 'Head Office'}</TableCell>
@@ -295,11 +296,11 @@ export default function Purchases() {
                     </div>
                     <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
                       <div className="flex items-center gap-1 text-muted-foreground">
-                        <Calendar className="w-3 h-3" />{new Date(p.purchaseDate).toLocaleDateString('en-IN')}
+                        <Calendar className="w-3 h-3" />{formatDate(p.purchaseDate)}
                       </div>
                       <div className="text-muted-foreground truncate">Ref: {p.invoiceNumber || '—'}</div>
                       <div className="text-muted-foreground truncate">
-                        Inv Date: {(p as any).vendorInvoiceDate ? new Date((p as any).vendorInvoiceDate).toLocaleDateString('en-IN') : '—'}
+                        Inv Date: {(p as any).vendorInvoiceDate ? formatDate((p as any).vendorInvoiceDate) : '—'}
                       </div>
                       {locations.isHeadOffice && (
                         <div className="text-muted-foreground truncate">Loc: {(p as any).locationName ?? 'Head Office'}</div>
@@ -351,9 +352,9 @@ export default function Purchases() {
               <SheetHeader className="mb-4">
                 <SheetTitle className="text-primary">Purchase Bill #{String(viewItem.id).padStart(4, '0')}</SheetTitle>
                 <SheetDescription>
-                  {viewItem.vendorName} · {new Date(viewItem.purchaseDate).toLocaleDateString('en-IN')}
+                  {viewItem.vendorName} · {formatDate(viewItem.purchaseDate)}
                   {viewItem.invoiceNumber && ` · Ref: ${viewItem.invoiceNumber}`}
-                  {(viewItem as any).vendorInvoiceDate && ` · Vendor inv. dt: ${new Date((viewItem as any).vendorInvoiceDate).toLocaleDateString('en-IN')}`}
+                  {(viewItem as any).vendorInvoiceDate && ` · Vendor inv. dt: ${formatDate((viewItem as any).vendorInvoiceDate)}`}
                   {` · received at ${(viewItem as any).locationName ?? 'Head Office'}`}
                 </SheetDescription>
               </SheetHeader>
@@ -388,7 +389,7 @@ export default function Purchases() {
                       <tr key={i} className="border-t border-border hover:bg-muted/10">
                         <td className="px-3 py-2 font-medium">
                           {getMaterialName(li)}
-                          {li.batchNumber && <span className="block text-[10px] font-mono text-muted-foreground">Lot {li.batchNumber}{li.expiryDate ? ` · exp ${new Date(li.expiryDate).toLocaleDateString('en-IN')}` : ''}</span>}
+                          {li.batchNumber && <span className="block text-[10px] font-mono text-muted-foreground">Lot {li.batchNumber}{li.expiryDate ? ` · exp ${formatDate(li.expiryDate)}` : ''}</span>}
                         </td>
                         <td className="px-2 py-2 font-mono text-muted-foreground">{li.hsnCode || '—'}</td>
                         <td className="text-right px-2 py-2">{li.quantity}</td>
@@ -415,7 +416,7 @@ export default function Purchases() {
                 {(viewItem as any).vendorInvoiceDate && (
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Vendor Invoice Date</span>
-                    <span className="font-medium">{new Date((viewItem as any).vendorInvoiceDate).toLocaleDateString('en-IN')}</span>
+                    <span className="font-medium">{formatDate((viewItem as any).vendorInvoiceDate)}</span>
                   </div>
                 )}
                 {Number(viewItem.discountTotal || 0) > 0 && (

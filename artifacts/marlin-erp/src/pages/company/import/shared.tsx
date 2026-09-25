@@ -3,6 +3,7 @@
  * (Company › Import Data).
  */
 import { useState } from 'react';
+import { formatDateTime } from '@/lib/date';
 import type { ImportBatch, ImportModule, ImportRow } from '@workspace/api-client-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -154,10 +155,7 @@ export const rowLabel = (m: ImportModule, r: ImportRow) => {
   return r.values.name ?? '—';
 };
 
-export const fmtTime = (iso: string) =>
-  new Date(iso).toLocaleString('en-IN', {
-    day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit',
-  });
+export const fmtTime = (iso: string) => formatDateTime(iso);
 
 export const fmtMoney = (n: number) =>
   `₹${Number(n ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;

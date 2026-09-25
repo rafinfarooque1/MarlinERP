@@ -17,6 +17,7 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { useForm, useFieldArray } from 'react-hook-form';
+import { formatDate } from '@/lib/date';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import { Plus, Search, Factory, Download, Eye, Calendar, Trash2, Edit2, AlertTriangle, Recycle, ClipboardList, Package, IndianRupee } from 'lucide-react';
@@ -408,7 +409,7 @@ export default function ProductionList() {
                 <TableRow key={p.id} className="hover:bg-muted/10">
                   <TableCell className="font-mono text-primary font-bold">{(p as any).batchNumber || `B-${String(p.id).padStart(4, '0')}`}</TableCell>
                   <TableCell className="text-sm text-muted-foreground flex items-center gap-1">
-                    <Calendar className="w-3 h-3" />{new Date(p.productionDate).toLocaleDateString('en-IN')}
+                    <Calendar className="w-3 h-3" />{formatDate(p.productionDate)}
                   </TableCell>
                   <TableCell className="font-medium">{p.itemName}</TableCell>
                   {locations.isHeadOffice && (
@@ -429,9 +430,9 @@ export default function ProductionList() {
                     const e = (p as any).expiryDate;
                     if (!e) return <span className="text-xs text-muted-foreground">—</span>;
                     const days = Math.ceil((new Date(e).getTime() - Date.now()) / 86400000);
-                    if (days < 0) return <Badge variant="destructive" className="text-[10px]">Expired {new Date(e).toLocaleDateString('en-IN')}</Badge>;
-                    if (days <= 30) return <Badge className="text-[10px] bg-amber-500/10 text-amber-600 border-amber-500/20">{new Date(e).toLocaleDateString('en-IN')} · {days}d</Badge>;
-                    return <span className="text-xs text-muted-foreground">{new Date(e).toLocaleDateString('en-IN')}</span>;
+                    if (days < 0) return <Badge variant="destructive" className="text-[10px]">Expired {formatDate(e)}</Badge>;
+                    if (days <= 30) return <Badge className="text-[10px] bg-amber-500/10 text-amber-600 border-amber-500/20">{formatDate(e)} · {days}d</Badge>;
+                    return <span className="text-xs text-muted-foreground">{formatDate(e)}</span>;
                   })()}</TableCell>
                   <TableCell>
                     <div className="flex flex-col gap-0.5">
@@ -818,12 +819,12 @@ export default function ProductionList() {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 {[
                   ['Item', viewItem.itemName],
-                  ['Date', new Date(viewItem.productionDate).toLocaleDateString('en-IN')],
+                  ['Date', formatDate(viewItem.productionDate)],
                   ['Location', (viewItem as any).locationName ?? 'Head Office'],
                   ['Qty Produced', viewItem.producedQuantity],
                   ['Batch #', (viewItem as any).batchNumber || `B-${String(viewItem.id).padStart(4, '0')}`],
-                  ['Mfg Date', (viewItem as any).mfgDate ? new Date((viewItem as any).mfgDate).toLocaleDateString('en-IN') : '—'],
-                  ['Expiry Date', (viewItem as any).expiryDate ? new Date((viewItem as any).expiryDate).toLocaleDateString('en-IN') : '—'],
+                  ['Mfg Date', (viewItem as any).mfgDate ? formatDate((viewItem as any).mfgDate) : '—'],
+                  ['Expiry Date', (viewItem as any).expiryDate ? formatDate((viewItem as any).expiryDate) : '—'],
                 ].map(([k, v]) => (
                   <div key={String(k)} className="flex flex-col gap-1">
                     <span className="text-xs text-muted-foreground uppercase tracking-wider">{k}</span>

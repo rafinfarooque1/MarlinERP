@@ -20,6 +20,7 @@ import { ClipboardCheck, Info, ShieldOff, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { usePermission } from '@/lib/usePermission';
+import { formatDateOrDash } from '@/lib/date';
 import { useOutletsEnabled, useClearOutletSelection } from '@/lib/useFeatureFlags';
 import { PageHeader } from '@/components/app/page-header';
 import { EmptyState } from '@/components/app/empty-state';
@@ -27,7 +28,7 @@ import { EntityCombobox } from '@/components/ui/entity-combobox';
 import { TablePager, useClientPage } from '@/components/ui/table-pager';
 
 const fmtQty = (n: number | string) => Number(n || 0).toLocaleString('en-IN');
-const fmtDate = (d: string) => (d ? new Date(d).toLocaleDateString('en-IN') : '—');
+const fmtDate = (d: string) => formatDateOrDash(d);
 
 const REASON_OPTIONS: { value: VerificationReason; label: string }[] = [
   { value: 'damage', label: 'Damage' },

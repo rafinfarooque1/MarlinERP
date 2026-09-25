@@ -26,6 +26,7 @@ import { TableSkeleton } from '@/components/app/loading-skeletons';
 import { FilterPanel } from '@/components/app/filter-panel';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { usePermission } from '@/lib/usePermission';
+import { formatDateTime } from '@/lib/date';
 import { inr } from '@/lib/currency';
 import { toast } from 'sonner';
 import { Truck, Search, PackageCheck, PackageOpen, Clock, CheckCircle2, Eye, FileDown } from 'lucide-react';
@@ -45,7 +46,7 @@ function timeSince(iso: string): string {
 }
 
 const fmtStamp = (iso: string | null): string =>
-  iso ? new Date(iso).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : '';
+  iso ? formatDateTime(iso) : '';
 
 export default function Dispatch() {
   const perm = usePermission('page:/operations/dispatch');

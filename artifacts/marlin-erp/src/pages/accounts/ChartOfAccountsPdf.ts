@@ -11,6 +11,7 @@
  * re-fetched, re-calculated, or assumed.
  */
 import { jsPDF } from 'jspdf';
+import { formatDateTime } from '@/lib/date';
 import {
   registerFonts, FONT, WHITE, LGRAY, BORDER, NAVY,
   type RGB, Painter, inr, stampFooters,
@@ -466,9 +467,7 @@ export async function generateChartOfAccountsPdf(opts: CoaPdfOpts): Promise<void
 
   // ── Footer on every page ──────────────────────────────────────────────────
 
-  const generated = new Date().toLocaleString('en-IN', {
-    dateStyle: 'medium', timeStyle: 'short',
-  });
+  const generated = formatDateTime(new Date());
   stampFooters(
     doc,
     `${statementLabel}  ·  ${locationLabel}  ·  ${periodLabel}  ·  Generated: ${generated}`,

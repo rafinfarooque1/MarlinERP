@@ -16,6 +16,7 @@ import { customFetch, useGetMe, useGetPublicAppInfo, useListHierarchies } from '
 import { Textarea } from '@/components/ui/textarea';
 import { PageHeader } from '@/components/app/page-header';
 import InvoiceRenumberingSection from './InvoiceRenumberingSection';
+import { formatDate } from '@/lib/date';
 
 interface SettingGroup {
   icon: React.ElementType;
@@ -219,7 +220,7 @@ const SETTING_GROUPS: SettingGroup[] = [
     settings: [
       { key: 'currency', label: 'Currency', type: 'select', options: ['INR', 'USD', 'EUR'], defaultValue: 'INR' },
       { key: 'timezone', label: 'Timezone', type: 'select', options: ['Asia/Kolkata', 'UTC', 'America/New_York'], defaultValue: 'Asia/Kolkata' },
-      { key: 'dateFormat', label: 'Date Format', type: 'select', options: ['DD/MM/YYYY', 'MM/DD/YYYY', 'YYYY-MM-DD'], defaultValue: 'DD/MM/YYYY' },
+      { key: 'dateFormat', label: 'Date Format', type: 'select', options: ['DD-MM-YY'], defaultValue: 'DD-MM-YY' },
     ],
   },
 ];
@@ -259,7 +260,7 @@ function AndroidReleaseCard() {
           </span>
           <span className="text-xs text-muted-foreground whitespace-nowrap">
             {formatBytes(Number(android.size) || 0)}
-            {android.builtAt ? ` · ${new Date(android.builtAt).toLocaleDateString()}` : ''}
+            {android.builtAt ? ` · ${formatDate(android.builtAt)}` : ''}
           </span>
           <Button size="sm" variant="outline" asChild>
             <a href="/api/public/app/apk">Test Download</a>

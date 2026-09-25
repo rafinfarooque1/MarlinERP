@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useLoginHistory } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { usePermission } from '@/lib/usePermission';
+import { formatDateTime } from '@/lib/date';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -23,10 +24,7 @@ const REASON_LABELS: Record<string, string> = {
 
 function fmtTime(iso: string) {
   const d = new Date(iso);
-  return d.toLocaleString('en-IN', {
-    day: '2-digit', month: 'short', year: 'numeric',
-    hour: '2-digit', minute: '2-digit', second: '2-digit',
-  });
+  return formatDateTime(d);
 }
 
 export default function LoginHistory() {

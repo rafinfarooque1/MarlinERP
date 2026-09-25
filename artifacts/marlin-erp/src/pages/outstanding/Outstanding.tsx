@@ -8,8 +8,9 @@ import { HandCoins, ChevronDown, ChevronRight, Search, Wallet, Phone, ShieldOff 
 import { PageHeader } from '@/components/app/page-header';
 import { EmptyState } from '@/components/app/empty-state';
 import { inr } from '@/lib/currency';
+import { formatDateOrDash } from '@/lib/date';
 
-const dfmt = (d?: string | null) => (d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—');
+const dfmt = (d?: string | null) => formatDateOrDash(d);
 
 const BUCKETS: Array<{ key: 'b0_30' | 'b31_60' | 'b61_90' | 'b90p'; label: string; cls: string }> = [
   { key: 'b0_30', label: '0–30 d', cls: 'text-emerald-600' },
