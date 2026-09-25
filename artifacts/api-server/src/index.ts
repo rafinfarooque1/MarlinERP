@@ -50,6 +50,8 @@ import { addWarehouseLifecycle } from "./migrations/warehouseLifecycle";
 import {
   backfillInternalTransferAccounting,
   backfillTransferAccounting,
+  provisionInternalTransferPairLedgers,
+  reclassifyInternalTransferPairLedgerBalances,
   repairInternalTransferLedgerParents,
 } from "./migrations/transferAccounting";
 
@@ -3138,6 +3140,16 @@ try {
   await backfillTransferAccounting(pool);
 } catch (err) {
   console.error("[migration] transfer_accounting_pnl_v1 FAILED (non-fatal, retries next boot):", (err as Error).message);
+}
+try {
+  await provisionInternalTransferPairLedgers(pool);
+} catch (err) {
+  console.error("[migration] internal_transfer_pair_ledgers_v1 FAILED (non-fatal, retries next boot):", (err as Error).message);
+}
+try {
+  await reclassifyInternalTransferPairLedgerBalances(pool);
+} catch (err) {
+  console.error("[migration] internal_transfer_pair_reclass_v1 FAILED (non-fatal, retries next boot):", (err as Error).message);
 }
 try {
   await backfillInternalTransferAccounting(pool);

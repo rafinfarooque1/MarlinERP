@@ -12,7 +12,11 @@
  */
 
 import { salesCounterScope, parseDocNumberIdentity } from "./voucherNumber";
-import { TRANSFER_IN_LEDGER_CODE, TRANSFER_OUT_LEDGER_CODE } from "./transferAccounting";
+import {
+  interBranchTransferLedgerCode,
+  TRANSFER_IN_LEDGER_CODE,
+  TRANSFER_OUT_LEDGER_CODE,
+} from "./transferAccounting";
 
 type PoolLike = { query: (sql: string, params?: any[]) => Promise<{ rows: any[] }> };
 
@@ -392,11 +396,6 @@ export async function ensureClearingLedger(
   }
 }
 
-function pairPart(location: LocationGst): string {
-  const type = String(location.locationType).toUpperCase().replace(/[^A-Z0-9]/g, '');
-  return `${type}-${Number(location.locationId ?? 0)}`;
-}
-
 /** One receivable/payable pair per source and destination location. */
 async function ensureTransferPairLedger(
   db: PoolLike,
@@ -404,7 +403,7 @@ async function ensureTransferPairLedger(
   fromLocation: LocationGst,
   toLocation: LocationGst,
 ): Promise<number | null> {
-  const code = `STD-BRANCH-${side === 'receivable' ? 'DR' : 'CR'}-${pairPart(fromLocation)}-${pairPart(toLocation)}`;
+  const code = interBranchTransferLedgerCode(side, fromLocation, toLocation);
   const name = `${side === 'receivable' ? 'Inter-Branch Receivable' : 'Inter-Branch Payable'} — ${fromLocation.name} → ${toLocation.name}`;
   return ensureClearingLedger(
     db, code, name, side === 'receivable' ? 'asset' : 'liability',

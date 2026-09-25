@@ -302,14 +302,20 @@ router.get(
       const net = balanceIndex.net(Number(row.id));
       const isReceivable = String(row.code).startsWith("STD-BRANCH-DR-")
         || row.code === "STD-BRANCH-DEBTOR";
+      const balance = Math.round((isReceivable ? net : -net) * 100) / 100;
+      const isLegacyGroupedLedger = row.code === "STD-BRANCH-DEBTOR"
+        || row.code === "STD-BRANCH-CREDITOR";
+      if (isLegacyGroupedLedger && Math.abs(balance) < 0.005) return null;
       return {
         ledgerId: Number(row.id),
         code: String(row.code),
-        name: String(row.name),
+        name: isLegacyGroupedLedger
+          ? `Legacy ${String(row.name)} (unallocated history)`
+          : String(row.name),
         kind: isReceivable ? "receivable" : "payable",
-        balance: Math.round((isReceivable ? net : -net) * 100) / 100,
+        balance,
       };
-    });
+    }).filter((row: any) => row !== null);
     res.json({
       receivables: balances.filter((row: any) => row.kind === "receivable"),
       payables: balances.filter((row: any) => row.kind === "payable"),

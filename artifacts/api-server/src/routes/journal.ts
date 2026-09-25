@@ -14,7 +14,11 @@ import { outletWritesBlocked } from "../lib/featureFlags";
 import { respondIfMonthLocked, isMonthLocked, ymOfDate, monthLockedBody } from "../lib/periodLock";
 import { isLevelOneAdmin, ADMIN_DELETE_ERROR } from "../lib/adminGate";
 import { parsePartyLedgerCode } from "../lib/advanceLedgers";
-import { TRANSFER_IN_LEDGER_CODE, TRANSFER_OUT_LEDGER_CODE } from "../lib/transferAccounting";
+import {
+  interBranchTransferLedgerCode,
+  TRANSFER_IN_LEDGER_CODE,
+  TRANSFER_OUT_LEDGER_CODE,
+} from "../lib/transferAccounting";
 
 const router = Router();
 
@@ -1105,10 +1109,28 @@ export async function buildDerivedPostings(opts: { toDate?: string; q?: Q } = {}
   // Inter-branch transfer ledgers. A cross-GSTIN transfer raises a real tax
   // invoice, and its taxable value is shown as a matched Transfer-Out /
   // Transfer-In P&L pair rather than hidden in operational Sales/Purchases.
-  const branchDebtor = idOf("STD-BRANCH-DEBTOR"),
-        branchCreditor = idOf("STD-BRANCH-CREDITOR"),
-        transferIn = idOf(TRANSFER_IN_LEDGER_CODE),
+  const transferIn = idOf(TRANSFER_IN_LEDGER_CODE),
         transferOut = idOf(TRANSFER_OUT_LEDGER_CODE);
+  const transferPairLedgerId = (
+    side: "receivable" | "payable",
+    transfer: {
+      transfer_from_type?: unknown;
+      transfer_from_id?: unknown;
+      transfer_to_type?: unknown;
+      transfer_to_id?: unknown;
+    },
+  ): number => {
+    const fromType = String(transfer.transfer_from_type ?? "");
+    const toType = String(transfer.transfer_to_type ?? "");
+    const fromId = Number(transfer.transfer_from_id);
+    const toId = Number(transfer.transfer_to_id);
+    if (!fromType || !toType || !Number.isInteger(fromId) || !Number.isInteger(toId)) return 0;
+    return idOf(interBranchTransferLedgerCode(
+      side,
+      { locationType: fromType, locationId: fromId },
+      { locationType: toType, locationId: toId },
+    ));
+  };
 
   // Location → cash / sales / purchase ledger mapping. A location's purchases
   // debit its own purchase ledger, so each warehouse's buying shows separately
@@ -1309,12 +1331,15 @@ export async function buildDerivedPostings(opts: { toDate?: string; q?: Q } = {}
     // Cancelled BRANCH-TRANSFER invoices are the deliberate exception and stay
     // in: rejection raises a credit note that reverses them, so dropping the
     // invoice as well would subtract the same amount twice.
-    `SELECT id, invoice_number, sale_date, total_amount, tax_total, amount_paid,
-            payment_mode, customer_id, location_type, location_id, line_items,
-            branch_transfer_id, other_charges
-     FROM sales
-     WHERE (cancelled_at IS NULL OR branch_transfer_id IS NOT NULL)
-       ${upTo("sale_date", sp)}`, sp
+    `SELECT s.id, s.invoice_number, s.sale_date, s.total_amount, s.tax_total, s.amount_paid,
+            s.payment_mode, s.customer_id, s.location_type, s.location_id, s.line_items,
+            s.branch_transfer_id, s.other_charges,
+            st.from_type AS transfer_from_type, st.from_id AS transfer_from_id,
+            st.to_type AS transfer_to_type, st.to_id AS transfer_to_id
+     FROM sales s
+     LEFT JOIN stock_transfers st ON st.id = s.branch_transfer_id
+     WHERE (s.cancelled_at IS NULL OR s.branch_transfer_id IS NOT NULL)
+       ${upTo("s.sale_date", sp)}`, sp
   );
   const spp: any[] = [];
   const { rows: salePays } = await q.query(
@@ -1411,7 +1436,8 @@ export async function buildDerivedPostings(opts: { toDate?: string; q?: Q } = {}
     // ledger. It replaces the dispatch journal voucher that used to be raised
     // for the same transfer — both would double the revenue and the tax.
     const isBranchTransfer = s.branch_transfer_id != null;
-    if (isBranchTransfer && (!transferOut || !branchDebtor)) {
+    const branchReceivable = isBranchTransfer ? transferPairLedgerId("receivable", s) : 0;
+    if (isBranchTransfer && (!transferOut || !branchReceivable)) {
       throw new Error(`Branch-transfer sale ${s.id} cannot be posted: transfer accounting ledgers are missing`);
     }
     const salesLedger = isBranchTransfer
@@ -1456,7 +1482,7 @@ export async function buildDerivedPostings(opts: { toDate?: string; q?: Q } = {}
     // note raised at rejection is what reverses it, and skipping the invoice
     // as well would subtract the same amount twice.
     if (isBranchTransfer) {
-      push({ entryId: eid, date: s.sale_date, ledgerId: branchDebtor || debtors, debit: total, credit: 0, source: "sale", voucherNumber: s.invoice_number, description: `Due from branch — ${inv}`, ...sLoc });
+      push({ entryId: eid, date: s.sale_date, ledgerId: branchReceivable, debit: total, credit: 0, source: "sale", voucherNumber: s.invoice_number, description: `Due from branch — ${inv}`, ...sLoc });
       continue;
     }
 
@@ -1590,9 +1616,13 @@ export async function buildDerivedPostings(opts: { toDate?: string; q?: Q } = {}
   //    Legacy rows without line-level GST detail stay as a single lump debit.
   const pup: any[] = [];
   const { rows: purchases } = await q.query(
-    `SELECT id, vendor_id, purchase_date, invoice_number, total_amount, tax_total, line_items,
-            location_type, location_id, branch_transfer_id, other_charges
-     FROM purchases WHERE 1=1${upTo("purchase_date", pup)}`, pup
+    `SELECT p.id, p.vendor_id, p.purchase_date, p.invoice_number, p.total_amount, p.tax_total, p.line_items,
+            p.location_type, p.location_id, p.branch_transfer_id, p.other_charges,
+            st.from_type AS transfer_from_type, st.from_id AS transfer_from_id,
+            st.to_type AS transfer_to_type, st.to_id AS transfer_to_id
+     FROM purchases p
+     LEFT JOIN stock_transfers st ON st.id = p.branch_transfer_id
+     WHERE 1=1${upTo("p.purchase_date", pup)}`, pup
   );
   for (const p of purchases) {
     const amt = Number(p.total_amount);
@@ -1601,11 +1631,12 @@ export async function buildDerivedPostings(opts: { toDate?: string; q?: Q } = {}
     // taxable value goes to the Transfer-In expense ledger. Replaces the
     // receive journal voucher for the same transfer.
     const isBranchTransfer = p.branch_transfer_id != null;
-    if (isBranchTransfer && (!transferIn || !branchCreditor)) {
+    const branchPayable = isBranchTransfer ? transferPairLedgerId("payable", p) : 0;
+    if (isBranchTransfer && (!transferIn || !branchPayable)) {
       throw new Error(`Branch-transfer purchase ${p.id} cannot be posted: transfer accounting ledgers are missing`);
     }
     const vendLedger = isBranchTransfer
-      ? (branchCreditor || creditors)
+      ? branchPayable
       : (byCode.get(`VEND-${p.vendor_id}`)?.id ?? creditors);
     // A warehouse's bill debits that warehouse's own purchase ledger; Head
     // Office bills (and anything without a location) keep the standard one.

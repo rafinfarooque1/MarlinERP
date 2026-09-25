@@ -10,6 +10,7 @@
 import type { PgPool as Pool } from "@workspace/db";
 import { nextVoucherNumber } from "../lib/voucherNumber";
 import {
+  interBranchTransferLedgerCode,
   TRANSFER_IN_LEDGER_CODE,
   TRANSFER_OUT_LEDGER_CODE,
 } from "../lib/transferAccounting";
@@ -17,6 +18,8 @@ import {
 const MIGRATION_NAME = "transfer_accounting_pnl_v1";
 const INTERNAL_MIGRATION_NAME = "internal_transfer_accounting_v1";
 const INTERNAL_PARENT_REPAIR_NAME = "internal_transfer_ledger_parents_v1";
+const INTERNAL_PAIR_LEDGER_PROVISION_NAME = "internal_transfer_pair_ledgers_v1";
+const INTERNAL_PAIR_LEDGER_RECLASS_NAME = "internal_transfer_pair_reclass_v1";
 const r2 = (n: number) => Math.round(n * 100) / 100;
 
 function dateOnly(value: unknown): string {
@@ -270,17 +273,17 @@ export async function backfillInternalTransferAccounting(pool: Pool): Promise<vo
 
     const { rows: ledgers } = await client.query(
       `SELECT code, id FROM account_ledgers
-        WHERE code = ANY($1::text[])`,
+        WHERE code = ANY($1::text[])
+           OR code LIKE 'STD-BRANCH-DR-%'
+           OR code LIKE 'STD-BRANCH-CR-%'`,
       [["STD-BRANCH-DEBTOR", "STD-BRANCH-CREDITOR", TRANSFER_IN_LEDGER_CODE, TRANSFER_OUT_LEDGER_CODE]],
     );
     const byCode = new Map<string, number>(
       ledgers.map((row: any) => [String(row.code), Number(row.id)]),
     );
-    const debtor = byCode.get("STD-BRANCH-DEBTOR");
-    const creditor = byCode.get("STD-BRANCH-CREDITOR");
     const transferIn = byCode.get(TRANSFER_IN_LEDGER_CODE);
     const transferOut = byCode.get(TRANSFER_OUT_LEDGER_CODE);
-    if (!debtor || !creditor || !transferIn || !transferOut) {
+    if (!transferIn || !transferOut) {
       throw new Error("internal transfer accounting ledgers are not available");
     }
 
@@ -303,6 +306,19 @@ export async function backfillInternalTransferAccounting(pool: Pool): Promise<vo
         0,
       ));
       if (!(value > 0.004)) continue;
+      const debtor = byCode.get(interBranchTransferLedgerCode(
+        "receivable",
+        { locationType: String(transfer.from_type), locationId: locationId(String(transfer.from_type), transfer.from_id) },
+        { locationType: String(transfer.to_type), locationId: locationId(String(transfer.to_type), transfer.to_id) },
+      ));
+      const creditor = byCode.get(interBranchTransferLedgerCode(
+        "payable",
+        { locationType: String(transfer.from_type), locationId: locationId(String(transfer.from_type), transfer.from_id) },
+        { locationType: String(transfer.to_type), locationId: locationId(String(transfer.to_type), transfer.to_id) },
+      ));
+      if (!debtor || !creditor) {
+        throw new Error(`pair-specific inter-branch ledgers are not available for transfer ${transfer.id}`);
+      }
 
       const dispatchId = await createAdjustmentVoucher({
         client,
@@ -395,6 +411,262 @@ export async function repairInternalTransferLedgerParents(pool: Pool): Promise<v
       `[migration] ${INTERNAL_PARENT_REPAIR_NAME} FAILED — rolled back; will retry next boot:`,
       error,
     );
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Add one receivable/payable ledger for every directed location pair already
+ * present in the transfer register. New transfers provision these ledgers in
+ * gstTransfer.ts; this boot migration brings older transfer pairs into the same
+ * chart without editing or deleting any existing ledger or posting.
+ */
+export async function provisionInternalTransferPairLedgers(pool: Pool): Promise<void> {
+  const client = await pool.connect();
+  let created = 0;
+  try {
+    await client.query("BEGIN");
+    const { rows: claimed } = await client.query(
+      `INSERT INTO migration_log (name) VALUES ($1)
+       ON CONFLICT (name) DO NOTHING
+       RETURNING name`,
+      [INTERNAL_PAIR_LEDGER_PROVISION_NAME],
+    );
+    if (claimed.length === 0) {
+      await client.query("ROLLBACK");
+      return;
+    }
+
+    const { rows: parents } = await client.query(
+      `SELECT code, id FROM account_ledgers
+        WHERE code = ANY($1::text[])`,
+      [["SYS-CURA", "SYS-CURL"]],
+    );
+    const parentIdByCode = new Map<string, number>(
+      parents.map((row: any) => [String(row.code), Number(row.id)]),
+    );
+    const receivableParent = parentIdByCode.get("SYS-CURA");
+    const payableParent = parentIdByCode.get("SYS-CURL");
+    if (!receivableParent || !payableParent) {
+      throw new Error("Current Assets or Current Liabilities parent ledger is unavailable");
+    }
+
+    const { rows: pairs } = await client.query(`
+      SELECT DISTINCT
+             t.from_type, t.from_id, t.to_type, t.to_id,
+             COALESCE(
+               from_wh.name, from_out.name,
+               CASE WHEN t.from_type = 'headoffice'
+                    THEN (SELECT company_name FROM company_settings ORDER BY id LIMIT 1)
+                    ELSE t.from_type || ' #' || t.from_id::text END
+             ) AS from_name,
+             COALESCE(
+               to_wh.name, to_out.name,
+               CASE WHEN t.to_type = 'headoffice'
+                    THEN (SELECT company_name FROM company_settings ORDER BY id LIMIT 1)
+                    ELSE t.to_type || ' #' || t.to_id::text END
+             ) AS to_name
+        FROM stock_transfers t
+        LEFT JOIN warehouses from_wh
+          ON t.from_type = 'warehouse' AND from_wh.id = t.from_id
+        LEFT JOIN outlets from_out
+          ON t.from_type = 'outlet' AND from_out.id = t.from_id
+        LEFT JOIN warehouses to_wh
+          ON t.to_type = 'warehouse' AND to_wh.id = t.to_id
+        LEFT JOIN outlets to_out
+          ON t.to_type = 'outlet' AND to_out.id = t.to_id
+       WHERE t.from_type IS NOT NULL AND t.from_id IS NOT NULL
+         AND t.to_type IS NOT NULL AND t.to_id IS NOT NULL
+       ORDER BY t.from_type, t.from_id, t.to_type, t.to_id
+    `);
+
+    for (const pair of pairs) {
+      const fromLocation = {
+        locationType: String(pair.from_type),
+        locationId: locationId(String(pair.from_type), pair.from_id),
+      };
+      const toLocation = {
+        locationType: String(pair.to_type),
+        locationId: locationId(String(pair.to_type), pair.to_id),
+      };
+      const fromName = String(pair.from_name ?? `${fromLocation.locationType} #${fromLocation.locationId}`);
+      const toName = String(pair.to_name ?? `${toLocation.locationType} #${toLocation.locationId}`);
+      const ledgers = [
+        {
+          side: "receivable" as const,
+          name: `Inter-Branch Receivable — ${fromName} → ${toName}`,
+          parentId: receivableParent,
+          type: "asset",
+          code: interBranchTransferLedgerCode("receivable", fromLocation, toLocation),
+          description: `Owed by ${toName} to ${fromName} for inter-branch stock transfers`,
+        },
+        {
+          side: "payable" as const,
+          name: `Inter-Branch Payable — ${fromName} → ${toName}`,
+          parentId: payableParent,
+          type: "liability",
+          code: interBranchTransferLedgerCode("payable", fromLocation, toLocation),
+          description: `Owed to ${fromName} by ${toName} for inter-branch stock transfers`,
+        },
+      ];
+      for (const ledger of ledgers) {
+        const result = await client.query(
+          `INSERT INTO account_ledgers
+             (name, type, code, section, parent_id, is_system_group, description)
+           SELECT $1, $2, $3, 'balance_sheet', $4, false, $5
+            WHERE NOT EXISTS (SELECT 1 FROM account_ledgers WHERE code = $3)`,
+          [ledger.name, ledger.type, ledger.code, ledger.parentId, ledger.description],
+        );
+        created += Number(result.rowCount ?? 0);
+      }
+    }
+
+    await client.query("COMMIT");
+    console.error(
+      `[migration] ${INTERNAL_PAIR_LEDGER_PROVISION_NAME}: provisioned ${created} pair ledgers across ${pairs.length} transfer pairs`,
+    );
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    console.error(
+      `[migration] ${INTERNAL_PAIR_LEDGER_PROVISION_NAME} FAILED — rolled back; will retry next boot:`,
+      error,
+    );
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Move any old voucher-mode branch-transfer balance off the two generic
+ * control ledgers using balanced system vouchers. Original transfer vouchers
+ * and lines remain immutable audit history; invoice-derived entries are moved
+ * by buildDerivedPostings and do not need stored-row edits.
+ */
+export async function reclassifyInternalTransferPairLedgerBalances(pool: Pool): Promise<void> {
+  const client = await pool.connect();
+  const report = { scanned: 0, dispatchAdjusted: 0, receiveAdjusted: 0 };
+  try {
+    await client.query("BEGIN");
+    const { rows: claimed } = await client.query(
+      `INSERT INTO migration_log (name) VALUES ($1)
+       ON CONFLICT (name) DO NOTHING
+       RETURNING name`,
+      [INTERNAL_PAIR_LEDGER_RECLASS_NAME],
+    );
+    if (claimed.length === 0) {
+      await client.query("ROLLBACK");
+      return;
+    }
+
+    const { rows: baseLedgers } = await client.query(
+      `SELECT code, id FROM account_ledgers
+        WHERE code = ANY($1::text[])`,
+      [["STD-BRANCH-DEBTOR", "STD-BRANCH-CREDITOR"]],
+    );
+    const baseLedgerIdByCode = new Map<string, number>(
+      baseLedgers.map((row: any) => [String(row.code), Number(row.id)]),
+    );
+    const baseReceivable = baseLedgerIdByCode.get("STD-BRANCH-DEBTOR");
+    const basePayable = baseLedgerIdByCode.get("STD-BRANCH-CREDITOR");
+    if (!baseReceivable || !basePayable) {
+      throw new Error("legacy inter-branch control ledgers are unavailable");
+    }
+
+    const { rows: transfers } = await client.query(`
+      SELECT t.id, t.challan_number, t.from_type, t.from_id, t.to_type, t.to_id,
+             t.transfer_date, t.received_date,
+             t.dispatch_voucher_id, t.receive_voucher_id,
+             COALESCE(dispatch.voucher_date, t.transfer_date) AS dispatch_voucher_date,
+             COALESCE(receive.voucher_date, t.received_date, t.transfer_date) AS receive_voucher_date
+        FROM stock_transfers t
+        LEFT JOIN journal_vouchers dispatch ON dispatch.id = t.dispatch_voucher_id
+        LEFT JOIN journal_vouchers receive ON receive.id = t.receive_voucher_id
+       WHERE t.dispatch_voucher_id IS NOT NULL
+          OR t.receive_voucher_id IS NOT NULL
+       ORDER BY t.id
+    `);
+
+    for (const transfer of transfers) {
+      report.scanned++;
+      const fromLocation = {
+        locationType: String(transfer.from_type),
+        locationId: locationId(String(transfer.from_type), transfer.from_id),
+      };
+      const toLocation = {
+        locationType: String(transfer.to_type),
+        locationId: locationId(String(transfer.to_type), transfer.to_id),
+      };
+      const receivableCode = interBranchTransferLedgerCode("receivable", fromLocation, toLocation);
+      const payableCode = interBranchTransferLedgerCode("payable", fromLocation, toLocation);
+      const { rows: pairLedgers } = await client.query(
+        `SELECT code, id FROM account_ledgers WHERE code = ANY($1::text[])`,
+        [[receivableCode, payableCode]],
+      );
+      const pairLedgerIdByCode = new Map<string, number>(
+        pairLedgers.map((row: any) => [String(row.code), Number(row.id)]),
+      );
+      const pairReceivable = pairLedgerIdByCode.get(receivableCode);
+      const pairPayable = pairLedgerIdByCode.get(payableCode);
+      if (!pairReceivable || !pairPayable) {
+        throw new Error(`pair-specific ledgers are not available for transfer ${transfer.id}`);
+      }
+
+      if (transfer.dispatch_voucher_id != null) {
+        const totals = await voucherLedgerTotals(
+          client, Number(transfer.dispatch_voucher_id), baseReceivable,
+        );
+        const net = r2(totals.debit - totals.credit);
+        if (Math.abs(net) > 0.004) {
+          const debitLedger = net > 0 ? pairReceivable : baseReceivable;
+          const creditLedger = net > 0 ? baseReceivable : pairReceivable;
+          await createAdjustmentVoucher({
+            client,
+            date: dateOnly(transfer.dispatch_voucher_date),
+            locationType: fromLocation.locationType,
+            locationId: fromLocation.locationId,
+            amount: Math.abs(net),
+            debitLedger,
+            creditLedger,
+            narration: `Reclassify inter-branch receivable — ${transfer.challan_number}`,
+          });
+          report.dispatchAdjusted++;
+        }
+      }
+
+      if (transfer.receive_voucher_id != null) {
+        const totals = await voucherLedgerTotals(
+          client, Number(transfer.receive_voucher_id), basePayable,
+        );
+        const net = r2(totals.debit - totals.credit);
+        if (Math.abs(net) > 0.004) {
+          const debitLedger = net > 0 ? pairPayable : basePayable;
+          const creditLedger = net > 0 ? basePayable : pairPayable;
+          await createAdjustmentVoucher({
+            client,
+            date: dateOnly(transfer.receive_voucher_date),
+            locationType: toLocation.locationType,
+            locationId: toLocation.locationId,
+            amount: Math.abs(net),
+            debitLedger,
+            creditLedger,
+            narration: `Reclassify inter-branch payable — ${transfer.challan_number}`,
+          });
+          report.receiveAdjusted++;
+        }
+      }
+    }
+
+    await client.query("COMMIT");
+    console.error(`[migration] ${INTERNAL_PAIR_LEDGER_RECLASS_NAME}: ${JSON.stringify(report)}`);
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    console.error(
+      `[migration] ${INTERNAL_PAIR_LEDGER_RECLASS_NAME} FAILED — rolled back; will retry next boot:`,
+      error,
+    );
+    throw error;
   } finally {
     client.release();
   }

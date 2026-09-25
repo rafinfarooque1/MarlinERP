@@ -12,3 +12,25 @@
  */
 export const TRANSFER_IN_LEDGER_CODE = "STD-TRF-IN";
 export const TRANSFER_OUT_LEDGER_CODE = "STD-TRF-OUT";
+
+export type InterBranchLedgerSide = "receivable" | "payable";
+
+export interface TransferLocationIdentity {
+  locationType: string;
+  locationId: number;
+}
+
+function transferLocationCodePart(location: TransferLocationIdentity): string {
+  const type = String(location.locationType).toUpperCase().replace(/[^A-Z0-9]/g, "");
+  return `${type}-${Number(location.locationId ?? 0)}`;
+}
+
+/** Stable system code for one directed inter-branch transfer pair. */
+export function interBranchTransferLedgerCode(
+  side: InterBranchLedgerSide,
+  fromLocation: TransferLocationIdentity,
+  toLocation: TransferLocationIdentity,
+): string {
+  const sideCode = side === "receivable" ? "DR" : "CR";
+  return `STD-BRANCH-${sideCode}-${transferLocationCodePart(fromLocation)}-${transferLocationCodePart(toLocation)}`;
+}
