@@ -35,6 +35,7 @@ interface Props {
   id?: string;
   'aria-describedby'?: string;
   'aria-invalid'?: boolean | 'true' | 'false';
+  'aria-required'?: boolean | 'true' | 'false';
 }
 
 export function StateCombobox({
@@ -47,6 +48,7 @@ export function StateCombobox({
   id,
   'aria-describedby': ariaDescribedBy,
   'aria-invalid': ariaInvalid,
+  'aria-required': ariaRequired,
 }: Props) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -80,6 +82,7 @@ export function StateCombobox({
           id={id}
           aria-describedby={ariaDescribedBy}
           aria-invalid={ariaInvalid}
+          aria-required={ariaRequired}
           className={cn(
             'w-full justify-between font-normal',
             !current && 'text-muted-foreground',
