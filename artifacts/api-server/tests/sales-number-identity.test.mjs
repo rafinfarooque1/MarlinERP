@@ -7,7 +7,7 @@
  *     number_scope / invoice_series / invoice_fy / invoice_serial.
  *   Each location runs an independent serial; concurrent bills at three
  *     locations never collide and each location's serials are gapless.
- *   The printed number stays clean (SB2C/2026-27/000001 — no location code).
+ *   The printed number stays clean (SB2C/26-27/1 — no location code).
  *   The DB itself enforces the identity via PLAIN btree unique indexes —
  *     duplicate (scope, number) refused, same number at another location OK.
  *   The publish-breaking CASE-expression index is gone from the database.

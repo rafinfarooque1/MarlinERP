@@ -221,12 +221,12 @@ assert('Converted invoices renumbered into the B2B series 1..3',
   JSON.stringify([after.c1, after.c2, after.c3]));
 assert('Converted invoices carry the customer GSTIN', [after.c1, after.c2, after.c3].every((r) => r.party_gstin === GSTIN));
 assert('Printed numbers follow SB2B/FY/serial',
-  [after.c1, after.c2, after.c3].every((r) => new RegExp(`^SB2B/\\d{4}-\\d{2}/${String(r.invoice_serial).padStart(6, '0')}$`).test(r.invoice_number)),
+  [after.c1, after.c2, after.c3].every((r) => new RegExp(`^SB2B/\\d{2}-\\d{2}/${r.invoice_serial}$`).test(r.invoice_number)),
   JSON.stringify([after.c1.invoice_number, after.c2.invoice_number, after.c3.invoice_number]));
 
 assert('Walk-in bill compacted down to B2C serial 1 (gapless series)',
   after.w1.invoice_series === 'SB2C' && after.w1.invoice_serial === 1 &&
-  after.w1.invoice_number.endsWith('000001'), JSON.stringify(after.w1));
+  after.w1.invoice_number.endsWith('/1'), JSON.stringify(after.w1));
 
 assert('Locked-month invoice untouched: still B2C, same number, no GSTIN stamp',
   after.c4.invoice_series === 'SB2C' && after.c4.invoice_number === before.c4.invoice_number && !after.c4.party_gstin,

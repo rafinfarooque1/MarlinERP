@@ -5,7 +5,7 @@
  * Rules under test:
  *   Every location runs its own independent SB2B/SB2C serial — creating bills
  *     at one location never advances another location's counter.
- *   The printed format stays clean (SB2C/2026-27/000001) — no location code
+ *   The printed format stays clean (SB2C/26-27/1) — no location code
  *     is ever appended to the number.
  *   A location billing a series for the FIRST time starts at 000001, even if
  *     other locations are far ahead (this is also how brand-new locations

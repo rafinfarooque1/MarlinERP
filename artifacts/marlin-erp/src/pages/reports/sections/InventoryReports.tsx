@@ -14,6 +14,7 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { usePermission } from '@/lib/usePermission';
 import { downloadCSV } from '@/lib/download';
+import { formatDate } from '@/lib/date';
 import {
   fmt, num, pdfMoney, fmtDate, titleCase,
   useDateRange, RangeBar, ReportPicker, SummaryCards, LocationBadge, RTable, ExportButtons, exportReportPdf, reportViewFromUrl,
@@ -22,7 +23,7 @@ import {
 
 type InvReport = 'valuation' | 'near_expiry' | 'expired' | 'movement' | 'reorder' | 'transfers' | 'gst_transfers';
 
-const today = () => new Date().toLocaleDateString('en-IN');
+const today = () => formatDate(new Date());
 
 // ── Stock valuation ───────────────────────────────────────────────────────────
 function ValuationReport({ canDownload }: { canDownload: boolean }) {

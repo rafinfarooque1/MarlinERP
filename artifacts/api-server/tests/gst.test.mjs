@@ -209,7 +209,7 @@ if (!outletId || !item) {
       Math.abs(Number(li?.igst) - expectedTax) < 0.02, `expected:${expectedTax} got:${li?.igst}`);
 
     // ── Test 5: Invoice number format ─────────────────────────────────────
-    // Per-location series: SERIES/FY/serial (e.g. SB2C/2026-27/000025).
+    // Per-location series: SERIES/FY/serial (e.g. SB2C/26-27/25).
     console.log('\n[5] Invoice number format');
     const inv = interSale.invoiceNumber || '';
     assert('Invoice matches SERIES/FY/serial format',
