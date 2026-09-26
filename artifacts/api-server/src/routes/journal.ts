@@ -16,6 +16,7 @@ import { isLevelOneAdmin, ADMIN_DELETE_ERROR } from "../lib/adminGate";
 import { parsePartyLedgerCode } from "../lib/advanceLedgers";
 import {
   interBranchTransferLedgerCode,
+  transferPairPostingTargets,
   TRANSFER_IN_LEDGER_CODE,
   TRANSFER_OUT_LEDGER_CODE,
 } from "../lib/transferAccounting";
@@ -1110,9 +1111,10 @@ export async function buildDerivedPostings(opts: { toDate?: string; q?: Q } = {}
   // invoice, and its taxable value is shown as a matched Transfer-Out /
   // Transfer-In P&L pair rather than hidden in operational Sales/Purchases.
   const transferIn = idOf(TRANSFER_IN_LEDGER_CODE),
-        transferOut = idOf(TRANSFER_OUT_LEDGER_CODE);
-  const transferPairLedgerId = (
-    side: "receivable" | "payable",
+        transferOut = idOf(TRANSFER_OUT_LEDGER_CODE),
+        transferClearing = idOf("STD-BRANCH-TRF");
+  const transferPairPostingLedgerId = (
+    side: "dispatch" | "receive",
     transfer: {
       transfer_from_type?: unknown;
       transfer_from_id?: unknown;
@@ -1122,14 +1124,17 @@ export async function buildDerivedPostings(opts: { toDate?: string; q?: Q } = {}
   ): number => {
     const fromType = String(transfer.transfer_from_type ?? "");
     const toType = String(transfer.transfer_to_type ?? "");
-    const fromId = Number(transfer.transfer_from_id);
-    const toId = Number(transfer.transfer_to_id);
-    if (!fromType || !toType || !Number.isInteger(fromId) || !Number.isInteger(toId)) return 0;
-    return idOf(interBranchTransferLedgerCode(
-      side,
-      { locationType: fromType, locationId: fromId },
-      { locationType: toType, locationId: toId },
-    ));
+    const rawFromId = Number(transfer.transfer_from_id);
+    const rawToId = Number(transfer.transfer_to_id);
+    if (!fromType || !toType || !Number.isInteger(rawFromId) || !Number.isInteger(rawToId)) return 0;
+    const fromId = fromType.toLowerCase() === "headoffice" ? 0 : rawFromId;
+    const toId = toType.toLowerCase() === "headoffice" ? 0 : rawToId;
+    const from = { locationType: fromType, locationId: fromId };
+    const to = { locationType: toType, locationId: toId };
+    const pairLedgerId = idOf(interBranchTransferLedgerCode(from, to));
+    if (!pairLedgerId || !transferClearing) return 0;
+    const target = transferPairPostingTargets(from, to)[side];
+    return target === "pair" ? pairLedgerId : transferClearing;
   };
 
   // Location → cash / sales / purchase ledger mapping. A location's purchases
@@ -1436,8 +1441,8 @@ export async function buildDerivedPostings(opts: { toDate?: string; q?: Q } = {}
     // ledger. It replaces the dispatch journal voucher that used to be raised
     // for the same transfer — both would double the revenue and the tax.
     const isBranchTransfer = s.branch_transfer_id != null;
-    const branchReceivable = isBranchTransfer ? transferPairLedgerId("receivable", s) : 0;
-    if (isBranchTransfer && (!transferOut || !branchReceivable)) {
+    const branchDispatchLedger = isBranchTransfer ? transferPairPostingLedgerId("dispatch", s) : 0;
+    if (isBranchTransfer && (!transferOut || !branchDispatchLedger)) {
       throw new Error(`Branch-transfer sale ${s.id} cannot be posted: transfer accounting ledgers are missing`);
     }
     const salesLedger = isBranchTransfer
@@ -1482,7 +1487,7 @@ export async function buildDerivedPostings(opts: { toDate?: string; q?: Q } = {}
     // note raised at rejection is what reverses it, and skipping the invoice
     // as well would subtract the same amount twice.
     if (isBranchTransfer) {
-      push({ entryId: eid, date: s.sale_date, ledgerId: branchReceivable, debit: total, credit: 0, source: "sale", voucherNumber: s.invoice_number, description: `Due from branch — ${inv}`, ...sLoc });
+      push({ entryId: eid, date: s.sale_date, ledgerId: branchDispatchLedger, debit: total, credit: 0, source: "sale", voucherNumber: s.invoice_number, description: `Inter-branch transfer dispatch — ${inv}`, ...sLoc });
       continue;
     }
 
@@ -1631,12 +1636,12 @@ export async function buildDerivedPostings(opts: { toDate?: string; q?: Q } = {}
     // taxable value goes to the Transfer-In expense ledger. Replaces the
     // receive journal voucher for the same transfer.
     const isBranchTransfer = p.branch_transfer_id != null;
-    const branchPayable = isBranchTransfer ? transferPairLedgerId("payable", p) : 0;
-    if (isBranchTransfer && (!transferIn || !branchPayable)) {
+    const branchReceiptLedger = isBranchTransfer ? transferPairPostingLedgerId("receive", p) : 0;
+    if (isBranchTransfer && (!transferIn || !branchReceiptLedger)) {
       throw new Error(`Branch-transfer purchase ${p.id} cannot be posted: transfer accounting ledgers are missing`);
     }
     const vendLedger = isBranchTransfer
-      ? branchPayable
+      ? branchReceiptLedger
       : (byCode.get(`VEND-${p.vendor_id}`)?.id ?? creditors);
     // A warehouse's bill debits that warehouse's own purchase ledger; Head
     // Office bills (and anything without a location) keep the standard one.

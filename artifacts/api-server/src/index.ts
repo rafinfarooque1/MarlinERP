@@ -53,6 +53,7 @@ import {
   provisionInternalTransferPairLedgers,
   reclassifyInternalTransferPairLedgerBalances,
   repairInternalTransferLedgerParents,
+  consolidateInternalTransferPairLedgers,
 } from "./migrations/transferAccounting";
 
 async function runMigrations() {
@@ -935,10 +936,8 @@ async function runMigrations() {
   const productionLedgers: [string, string, string, string, string, string][] = [
     ['Finished Goods Inventory', 'asset',   'STD-FG-INV',   'balance_sheet', 'SYS-CURA',   'Manufactured stock held at cost — debited when a production batch is recorded'],
     ['Production Cost Absorbed', 'expense', 'STD-PROD-ABS', 'profit_loss',   'SYS-DIREXP', 'Contra to purchases, wages and overhead for costs capitalised into manufactured stock'],
-    // Inter-branch transfer clearing remains for legacy vouchers. New transfer
-    // accounting shows the taxable value as a matched Transfer-Out /
-    // Transfer-In P&L pair while GST and inter-branch balances stay separate.
-    ['Inter-Branch Transfer',    'liability', 'STD-BRANCH-TRF', 'balance_sheet', 'SYS-CURL', 'Value of taxable stock transferred between own GSTINs — credited on dispatch, debited on receipt, nets to zero'],
+    // Shared liability counter-account for pair-net inter-branch postings.
+    ['Inter-Branch Payable Clearing', 'liability', 'STD-BRANCH-TRF', 'balance_sheet', 'SYS-CURL', 'Shared liability counterpart used to keep each inter-branch document balanced'],
     ['Transfer-In',              'expense',   'STD-TRF-IN',     'profit_loss',   'SYS-PUR',   'Purchase-like taxable value recognised when stock is received from another warehouse'],
     ['Transfer-Out',             'income',    'STD-TRF-OUT',    'profit_loss',   'SYS-DIRINC', 'P&L offset for taxable stock dispatched to another warehouse'],
   ];
@@ -3160,6 +3159,11 @@ try {
   await repairInternalTransferLedgerParents(pool);
 } catch (err) {
   console.error("[migration] internal_transfer_ledger_parents_v1 FAILED (non-fatal, retries next boot):", (err as Error).message);
+}
+try {
+  await consolidateInternalTransferPairLedgers(pool);
+} catch (err) {
+  console.error("[migration] internal_transfer_single_net_pair_ledgers_v1 FAILED (non-fatal, retries next boot):", (err as Error).message);
 }
 
 // Independent of the block above, on purpose — see convertTextDateColumns().

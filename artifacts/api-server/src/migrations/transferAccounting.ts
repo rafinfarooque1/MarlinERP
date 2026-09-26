@@ -10,7 +10,11 @@
 import type { PgPool as Pool } from "@workspace/db";
 import { nextVoucherNumber } from "../lib/voucherNumber";
 import {
+  canonicalTransferLocationPair,
   interBranchTransferLedgerCode,
+  legacyInterBranchTransferLedgerCode,
+  transferLocationCodePart,
+  transferPairPostingTargets,
   TRANSFER_IN_LEDGER_CODE,
   TRANSFER_OUT_LEDGER_CODE,
 } from "../lib/transferAccounting";
@@ -20,6 +24,7 @@ const INTERNAL_MIGRATION_NAME = "internal_transfer_accounting_v1";
 const INTERNAL_PARENT_REPAIR_NAME = "internal_transfer_ledger_parents_v1";
 const INTERNAL_PAIR_LEDGER_PROVISION_NAME = "internal_transfer_pair_ledgers_v1";
 const INTERNAL_PAIR_LEDGER_RECLASS_NAME = "internal_transfer_pair_reclass_v1";
+const INTERNAL_NET_PAIR_MIGRATION_NAME = "internal_transfer_single_net_pair_ledgers_v1";
 const r2 = (n: number) => Math.round(n * 100) / 100;
 
 function dateOnly(value: unknown): string {
@@ -306,12 +311,12 @@ export async function backfillInternalTransferAccounting(pool: Pool): Promise<vo
         0,
       ));
       if (!(value > 0.004)) continue;
-      const debtor = byCode.get(interBranchTransferLedgerCode(
+      const debtor = byCode.get(legacyInterBranchTransferLedgerCode(
         "receivable",
         { locationType: String(transfer.from_type), locationId: locationId(String(transfer.from_type), transfer.from_id) },
         { locationType: String(transfer.to_type), locationId: locationId(String(transfer.to_type), transfer.to_id) },
       ));
-      const creditor = byCode.get(interBranchTransferLedgerCode(
+      const creditor = byCode.get(legacyInterBranchTransferLedgerCode(
         "payable",
         { locationType: String(transfer.from_type), locationId: locationId(String(transfer.from_type), transfer.from_id) },
         { locationType: String(transfer.to_type), locationId: locationId(String(transfer.to_type), transfer.to_id) },
@@ -498,7 +503,7 @@ export async function provisionInternalTransferPairLedgers(pool: Pool): Promise<
           name: `Inter-Branch Receivable — ${fromName} → ${toName}`,
           parentId: receivableParent,
           type: "asset",
-          code: interBranchTransferLedgerCode("receivable", fromLocation, toLocation),
+          code: legacyInterBranchTransferLedgerCode("receivable", fromLocation, toLocation),
           description: `Owed by ${toName} to ${fromName} for inter-branch stock transfers`,
         },
         {
@@ -506,7 +511,7 @@ export async function provisionInternalTransferPairLedgers(pool: Pool): Promise<
           name: `Inter-Branch Payable — ${fromName} → ${toName}`,
           parentId: payableParent,
           type: "liability",
-          code: interBranchTransferLedgerCode("payable", fromLocation, toLocation),
+          code: legacyInterBranchTransferLedgerCode("payable", fromLocation, toLocation),
           description: `Owed to ${fromName} by ${toName} for inter-branch stock transfers`,
         },
       ];
@@ -598,8 +603,8 @@ export async function reclassifyInternalTransferPairLedgerBalances(pool: Pool): 
         locationType: String(transfer.to_type),
         locationId: locationId(String(transfer.to_type), transfer.to_id),
       };
-      const receivableCode = interBranchTransferLedgerCode("receivable", fromLocation, toLocation);
-      const payableCode = interBranchTransferLedgerCode("payable", fromLocation, toLocation);
+      const receivableCode = legacyInterBranchTransferLedgerCode("receivable", fromLocation, toLocation);
+      const payableCode = legacyInterBranchTransferLedgerCode("payable", fromLocation, toLocation);
       const { rows: pairLedgers } = await client.query(
         `SELECT code, id FROM account_ledgers WHERE code = ANY($1::text[])`,
         [[receivableCode, payableCode]],
@@ -664,6 +669,274 @@ export async function reclassifyInternalTransferPairLedgerBalances(pool: Pool): 
     await client.query("ROLLBACK").catch(() => {});
     console.error(
       `[migration] ${INTERNAL_PAIR_LEDGER_RECLASS_NAME} FAILED — rolled back; will retry next boot:`,
+      error,
+    );
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Consolidate directed receivable/payable ledgers into one net payable per
+ * undirected location pair. Historic journal rows remain untouched; balanced
+ * adjustment vouchers move their current balances to the pair ledger or the
+ * shared liability clearing ledger according to transfer direction.
+ */
+export async function consolidateInternalTransferPairLedgers(pool: Pool): Promise<void> {
+  const client = await pool.connect();
+  const report = { pairs: 0, balancesMoved: 0, legacyLedgersRetired: 0 };
+  try {
+    await client.query("BEGIN");
+    const { rows: claimed } = await client.query(
+      `INSERT INTO migration_log (name) VALUES ($1)
+       ON CONFLICT (name) DO NOTHING
+       RETURNING name`,
+      [INTERNAL_NET_PAIR_MIGRATION_NAME],
+    );
+    if (claimed.length === 0) {
+      await client.query("ROLLBACK");
+      return;
+    }
+
+    const { rows: [liabilities] } = await client.query(
+      `SELECT id FROM account_ledgers WHERE code = 'SYS-CURL'`,
+    );
+    if (!liabilities?.id) throw new Error("Current Liabilities group is unavailable");
+
+    await client.query(
+      `INSERT INTO account_ledgers
+         (name, type, code, section, parent_id, is_system_group, is_group, is_active, description)
+       SELECT 'Inter-Branch Payable', 'liability', 'STD-BRANCH-PAYABLE-GROUP',
+              'balance_sheet', $1, true, true, true,
+              'Net inter-branch balances by undirected warehouse pair'
+        WHERE NOT EXISTS (
+          SELECT 1 FROM account_ledgers WHERE code = 'STD-BRANCH-PAYABLE-GROUP'
+        )`,
+      [liabilities.id],
+    );
+    const { rows: [payableGroup] } = await client.query(
+      `SELECT id, is_group FROM account_ledgers WHERE code = 'STD-BRANCH-PAYABLE-GROUP'`,
+    );
+    if (!payableGroup?.id || payableGroup.is_group !== true) {
+      throw new Error("Inter-Branch Payable chart group is unavailable or has the wrong shape");
+    }
+    const groupId = Number(payableGroup.id);
+
+    await client.query(
+      `INSERT INTO account_ledgers
+         (name, type, code, section, parent_id, is_system_group, is_group, is_active, description)
+       SELECT 'Inter-Branch Payable Clearing', 'liability', 'STD-BRANCH-TRF',
+              'balance_sheet', $1, false, false, true,
+              'Shared liability counterpart used to keep each inter-branch document balanced'
+        WHERE NOT EXISTS (SELECT 1 FROM account_ledgers WHERE code = 'STD-BRANCH-TRF')`,
+      [groupId],
+    );
+    const { rows: [clearingRow] } = await client.query(
+      `SELECT id, is_group FROM account_ledgers WHERE code = 'STD-BRANCH-TRF'`,
+    );
+    if (!clearingRow?.id || clearingRow.is_group === true) {
+      throw new Error("Inter-Branch Payable Clearing ledger is unavailable or has the wrong shape");
+    }
+    const clearingLedgerId = Number(clearingRow.id);
+    await client.query(
+      `UPDATE account_ledgers
+          SET name = 'Inter-Branch Payable Clearing',
+              type = 'liability',
+              section = 'balance_sheet',
+              parent_id = $1,
+              is_group = false,
+              is_system_group = false,
+              is_active = true,
+              description = 'Shared liability counterpart used to keep each inter-branch document balanced'
+        WHERE id = $2`,
+      [groupId, clearingLedgerId],
+    );
+
+    const { rows: pairs } = await client.query(`
+      SELECT DISTINCT
+             t.from_type, t.from_id, t.to_type, t.to_id,
+             COALESCE(
+               from_wh.name, from_out.name,
+               CASE WHEN t.from_type = 'headoffice'
+                    THEN (SELECT company_name FROM company_settings ORDER BY id LIMIT 1)
+                    ELSE t.from_type || ' #' || t.from_id::text END
+             ) AS from_name,
+             COALESCE(
+               to_wh.name, to_out.name,
+               CASE WHEN t.to_type = 'headoffice'
+                    THEN (SELECT company_name FROM company_settings ORDER BY id LIMIT 1)
+                    ELSE t.to_type || ' #' || t.to_id::text END
+             ) AS to_name
+        FROM stock_transfers t
+        LEFT JOIN warehouses from_wh
+          ON t.from_type = 'warehouse' AND from_wh.id = t.from_id
+        LEFT JOIN outlets from_out
+          ON t.from_type = 'outlet' AND from_out.id = t.from_id
+        LEFT JOIN warehouses to_wh
+          ON t.to_type = 'warehouse' AND to_wh.id = t.to_id
+        LEFT JOIN outlets to_out
+          ON t.to_type = 'outlet' AND to_out.id = t.to_id
+       WHERE t.from_type IS NOT NULL AND t.from_id IS NOT NULL
+         AND t.to_type IS NOT NULL AND t.to_id IS NOT NULL
+       ORDER BY t.from_type, t.from_id, t.to_type, t.to_id
+    `);
+
+    const { rows: legacyRows } = await client.query(
+      `SELECT id, code FROM account_ledgers
+        WHERE code = ANY($1::text[])
+           OR code LIKE 'STD-BRANCH-DR-%'
+           OR code LIKE 'STD-BRANCH-CR-%'`,
+      [["STD-BRANCH-DEBTOR", "STD-BRANCH-CREDITOR"]],
+    );
+    const legacyIdByCode = new Map<string, number>(
+      legacyRows.map((row: any) => [String(row.code), Number(row.id)]),
+    );
+    const movedCodes = new Set<string>();
+
+    const moveLedgerBalance = async (
+      code: string,
+      targetLedgerId: number,
+      locationType: string,
+      targetLocationId: number,
+    ) => {
+      const oldLedgerId = legacyIdByCode.get(code);
+      if (!oldLedgerId || movedCodes.has(code)) return;
+      movedCodes.add(code);
+      const { rows: balances } = await client.query(
+        `SELECT voucher.voucher_date::text AS date,
+                COALESCE(voucher.location_type, 'headoffice') AS location_type,
+                COALESCE(voucher.location_id, 0)::int AS location_id,
+                COALESCE(SUM(line.debit), 0)::numeric AS debit,
+                COALESCE(SUM(line.credit), 0)::numeric AS credit
+           FROM journal_voucher_lines AS line
+           JOIN journal_vouchers AS voucher ON voucher.id = line.voucher_id
+          WHERE line.ledger_id = $1
+          GROUP BY voucher.voucher_date, voucher.location_type, voucher.location_id
+         HAVING ABS(SUM(line.debit - line.credit)) > 0.004
+          ORDER BY voucher.voucher_date, voucher.location_type, voucher.location_id`,
+        [oldLedgerId],
+      );
+      for (const balance of balances) {
+        const net = r2(Number(balance.debit ?? 0) - Number(balance.credit ?? 0));
+        if (Math.abs(net) <= 0.004) continue;
+        await createAdjustmentVoucher({
+          client,
+          date: dateOnly(balance.date),
+          locationType: String(balance.location_type || locationType),
+          locationId: Number(balance.location_id ?? targetLocationId),
+          amount: Math.abs(net),
+          debitLedger: net > 0 ? targetLedgerId : oldLedgerId,
+          creditLedger: net > 0 ? oldLedgerId : targetLedgerId,
+          narration: `Move legacy inter-branch balance from ${code}`,
+        });
+        report.balancesMoved++;
+      }
+    };
+
+    for (const row of pairs) {
+      const fromLocation = {
+        locationType: String(row.from_type),
+        locationId: locationId(String(row.from_type), row.from_id),
+      };
+      const toLocation = {
+        locationType: String(row.to_type),
+        locationId: locationId(String(row.to_type), row.to_id),
+      };
+      if (transferLocationCodePart(fromLocation) === transferLocationCodePart(toLocation)) continue;
+
+      const code = interBranchTransferLedgerCode(fromLocation, toLocation);
+      const canonical = canonicalTransferLocationPair(fromLocation, toLocation);
+      const firstName = canonical.first === fromLocation ? String(row.from_name) : String(row.to_name);
+      const secondName = canonical.second === toLocation ? String(row.to_name) : String(row.from_name);
+      await client.query(
+        `INSERT INTO account_ledgers
+           (name, type, code, section, parent_id, is_system_group, is_group, is_active, description)
+         SELECT $1, 'liability', $2, 'balance_sheet', $3, false, false, true, $4
+          WHERE NOT EXISTS (SELECT 1 FROM account_ledgers WHERE code = $2)`,
+        [
+          `Inter-Branch Payable — ${firstName} ↔ ${secondName}`,
+          code,
+          groupId,
+          `Net bilateral transfer position between ${firstName} and ${secondName}`,
+        ],
+      );
+      const { rows: [pairLedger] } = await client.query(
+        `SELECT id, is_group FROM account_ledgers WHERE code = $1`,
+        [code],
+      );
+      if (!pairLedger?.id || pairLedger.is_group === true) {
+        throw new Error(`Inter-Branch Payable ledger is unavailable for ${code}`);
+      }
+      const pairLedgerId = Number(pairLedger.id);
+      await client.query(
+        `UPDATE account_ledgers
+            SET name = $1, type = 'liability', section = 'balance_sheet',
+                parent_id = $2, is_group = false, is_system_group = false,
+                is_active = true, description = $3
+          WHERE id = $4`,
+        [
+          `Inter-Branch Payable — ${firstName} ↔ ${secondName}`,
+          groupId,
+          `Net bilateral transfer position between ${firstName} and ${secondName}`,
+          pairLedgerId,
+        ],
+      );
+
+      const roles = transferPairPostingTargets(fromLocation, toLocation);
+      const dispatchTarget = roles.dispatch === "pair" ? pairLedgerId : clearingLedgerId;
+      const receiveTarget = roles.receive === "pair" ? pairLedgerId : clearingLedgerId;
+      await moveLedgerBalance(
+        legacyInterBranchTransferLedgerCode("receivable", fromLocation, toLocation),
+        dispatchTarget,
+        fromLocation.locationType,
+        fromLocation.locationId,
+      );
+      await moveLedgerBalance(
+        legacyInterBranchTransferLedgerCode("payable", fromLocation, toLocation),
+        receiveTarget,
+        toLocation.locationType,
+        toLocation.locationId,
+      );
+      report.pairs++;
+    }
+
+    // Generic historical control ledgers and orphaned directed pair ledgers
+    // cannot be attributed safely to one pair. Preserve them in the shared
+    // liability clearing account before retiring their old chart entries.
+    for (const code of ["STD-BRANCH-DEBTOR", "STD-BRANCH-CREDITOR"]) {
+      await moveLedgerBalance(code, clearingLedgerId, "headoffice", 0);
+    }
+    for (const row of legacyRows) {
+      const code = String(row.code);
+      if (movedCodes.has(code)) continue;
+      await moveLedgerBalance(code, clearingLedgerId, "headoffice", 0);
+    }
+
+    const { rowCount } = await client.query(
+      `UPDATE account_ledgers
+          SET name = 'Legacy Inter-Branch Payable — ' || code,
+              type = 'liability',
+              section = 'balance_sheet',
+              parent_id = $1,
+              is_group = false,
+              is_system_group = false,
+              is_active = false,
+              description = 'Retired directed or unallocated inter-branch ledger; retained for historical voucher references'
+        WHERE code = 'STD-BRANCH-DEBTOR'
+           OR code = 'STD-BRANCH-CREDITOR'
+           OR code LIKE 'STD-BRANCH-DR-%'
+           OR code LIKE 'STD-BRANCH-CR-%'`,
+      [groupId],
+    );
+    report.legacyLedgersRetired = Number(rowCount ?? 0);
+
+    await client.query("COMMIT");
+    console.error(`[migration] ${INTERNAL_NET_PAIR_MIGRATION_NAME}: ${JSON.stringify(report)}`);
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    console.error(
+      `[migration] ${INTERNAL_NET_PAIR_MIGRATION_NAME} FAILED — rolled back; will retry next boot:`,
       error,
     );
     throw error;

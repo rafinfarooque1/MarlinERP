@@ -317,7 +317,6 @@ export default function Vendors() {
   const { data: internalBalances, isLoading: internalBalancesLoading } = useQuery({
     queryKey: ['/api/accounts/internal-transfer-balances'],
     queryFn: () => customFetch<{
-      receivables: Array<{ ledgerId: number; code: string; name: string; kind: string; balance: number }>;
       payables: Array<{ ledgerId: number; code: string; name: string; kind: string; balance: number }>;
     }>('/api/accounts/internal-transfer-balances'),
   });
@@ -436,33 +435,22 @@ export default function Vendors() {
           <SummaryCard label="Total Payable" value={inr(totalPayable)} icon={Wallet} tone="warning" loading={isLoading} />
         </SummaryCardGrid>
 
-        {!internalBalancesLoading && (internalBalances?.payables?.length || internalBalances?.receivables?.length) ? (
+        {!internalBalancesLoading && internalBalances?.payables?.length ? (
           <div className="rounded-xl border border-border bg-card shadow-sm overflow-hidden">
             <div className="px-4 py-3 border-b border-border bg-muted/20">
-              <h2 className="text-sm font-semibold">Inter-branch balances</h2>
+              <h2 className="text-sm font-semibold">Inter-Branch Payable</h2>
               <p className="text-xs text-muted-foreground mt-0.5">
-                System-generated transfer ledgers shown separately from ordinary vendor masters.
+                One net balance per warehouse pair. A negative amount means the net direction is reversed.
               </p>
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-border">
-              {([
-                ['Payables', internalBalances?.payables ?? [], 'text-amber-600'],
-                ['Receivables', internalBalances?.receivables ?? [], 'text-emerald-600'],
-              ] as Array<[string, any[], string]>).map(([title, rows, tone]) => (
-                <div key={String(title)} className="p-4">
-                  <p className={`text-xs font-semibold uppercase tracking-wide ${tone}`}>{title}</p>
-                  <div className="mt-2 space-y-2">
-                    {(rows as any[]).map((row) => (
-                      <div key={row.ledgerId} className="flex items-center justify-between gap-3 text-sm">
-                        <div className="min-w-0">
-                          <p className="font-medium truncate">{row.name}</p>
-                          <p className="text-[11px] text-muted-foreground font-mono">{row.code}</p>
-                        </div>
-                        <span className="font-mono tabular-nums shrink-0">{inr(Math.abs(Number(row.balance) || 0))}</span>
-                      </div>
-                    ))}
-                    {(rows as any[]).length === 0 && <p className="text-xs text-muted-foreground">No inter-branch ledgers.</p>}
+            <div className="p-4 space-y-2">
+              {internalBalances.payables.map((row) => (
+                <div key={row.ledgerId} className="flex items-center justify-between gap-3 text-sm">
+                  <div className="min-w-0">
+                    <p className="font-medium truncate">{row.name}</p>
+                    <p className="text-[11px] text-muted-foreground font-mono">{row.code}</p>
                   </div>
+                  <span className="font-mono tabular-nums shrink-0">{inr(Number(row.balance) || 0)}</span>
                 </div>
               ))}
             </div>

@@ -13,7 +13,9 @@
 
 import { salesCounterScope, parseDocNumberIdentity } from "./voucherNumber";
 import {
+  canonicalTransferLocationPair,
   interBranchTransferLedgerCode,
+  transferPairPostingTargets,
   TRANSFER_IN_LEDGER_CODE,
   TRANSFER_OUT_LEDGER_CODE,
 } from "./transferAccounting";
@@ -396,19 +398,45 @@ export async function ensureClearingLedger(
   }
 }
 
-/** One receivable/payable pair per source and destination location. */
+/** One net payable ledger per undirected location pair. */
 async function ensureTransferPairLedger(
   db: PoolLike,
-  side: 'receivable' | 'payable',
   fromLocation: LocationGst,
   toLocation: LocationGst,
 ): Promise<number | null> {
-  const code = interBranchTransferLedgerCode(side, fromLocation, toLocation);
-  const name = `${side === 'receivable' ? 'Inter-Branch Receivable' : 'Inter-Branch Payable'} — ${fromLocation.name} → ${toLocation.name}`;
+  const code = interBranchTransferLedgerCode(fromLocation, toLocation);
+  const pair = canonicalTransferLocationPair(fromLocation, toLocation);
+  const firstName = pair.first === fromLocation ? fromLocation.name : toLocation.name;
+  const secondName = pair.second === toLocation ? toLocation.name : fromLocation.name;
+  const name = `Inter-Branch Payable — ${firstName} ↔ ${secondName}`;
   return ensureClearingLedger(
-    db, code, name, side === 'receivable' ? 'asset' : 'liability',
-    'balance_sheet', side === 'receivable' ? 'SYS-CURA' : 'SYS-CURL',
+    db, code, name, 'liability', 'balance_sheet', 'STD-BRANCH-PAYABLE-GROUP',
   );
+}
+
+/**
+ * A shared liability clearing ledger is the contra side of the pair's net
+ * payable. Both transfer documents stay balanced while only one document leg
+ * for each direction changes the bilateral amount.
+ */
+async function ensureTransferPairPostingLedgers(
+  db: PoolLike,
+  fromLocation: LocationGst,
+  toLocation: LocationGst,
+): Promise<{ dispatch: number; receive: number } | null> {
+  const [pairLedgerId, clearingLedgerId] = await Promise.all([
+    ensureTransferPairLedger(db, fromLocation, toLocation),
+    ensureClearingLedger(
+      db, 'STD-BRANCH-TRF', 'Inter-Branch Payable Clearing',
+      'liability', 'balance_sheet', 'STD-BRANCH-PAYABLE-GROUP',
+    ),
+  ]);
+  if (!pairLedgerId || !clearingLedgerId) return null;
+  const targets = transferPairPostingTargets(fromLocation, toLocation);
+  return {
+    dispatch: targets.dispatch === 'pair' ? pairLedgerId : clearingLedgerId,
+    receive: targets.receive === 'pair' ? pairLedgerId : clearingLedgerId,
+  };
 }
 
 // ── Dispatch-side JV (source branch books) ───────────────────────────────────
@@ -427,25 +455,27 @@ export interface DispatchVoucherArgs {
 
 /**
  * Inter-branch source-side accounting entry at dispatch time:
- *   Dr  Inter-Branch Receivable   (total with GST)
+ *   Dr  Pair payable or shared payable clearing (total with GST)
  *   Cr  Transfer-Out              (taxable value)
  *   Cr  Output GST heads          (CGST/SGST or IGST)
  *
  * The taxable value is a Transfer-Out P&L offset. The matching destination
- * Transfer-In expense is posted when the goods are received, so a complete
- * relocation remains P&L-neutral without hiding the two location events.
+ * Transfer-In expense is posted when the goods are received. Canonical
+ * direction selects which balanced document leg changes the pair's net due;
+ * the other leg uses shared clearing.
  */
 export async function createDispatchVoucher(args: DispatchVoucherArgs): Promise<number | null> {
   const { client, challanNumber, transferDate, fromLocation, gst, taxType, narration, createdBy } = args;
   if (!(gst.taxableValue > 0)) return null;
 
-  const [branchDebtorId, transferOutId] = await Promise.all([
-    ensureTransferPairLedger(client, 'receivable', fromLocation, args.toLocation),
+  const [pairPostingLedgers, transferOutId] = await Promise.all([
+    ensureTransferPairPostingLedgers(client, fromLocation, args.toLocation),
     ensureClearingLedger(client, TRANSFER_OUT_LEDGER_CODE, 'Transfer-Out', 'income', 'profit_loss', 'SYS-DIRINC'),
   ]);
-  if (!branchDebtorId || !transferOutId) {
+  if (!pairPostingLedgers || !transferOutId) {
     throw new Error('Cannot create dispatch JV — inter-branch transfer ledgers are unavailable');
   }
+  const dispatchLedgerId = pairPostingLedgers.dispatch;
 
   // Accumulate GST credit lines
   let unresolvedGst = 0;
@@ -464,7 +494,7 @@ export async function createDispatchVoucher(args: DispatchVoucherArgs): Promise<
   }
 
   const lines = [
-    { ledgerId: branchDebtorId, debit: gst.totalWithGst, credit: 0 },
+    { ledgerId: dispatchLedgerId, debit: gst.totalWithGst, credit: 0 },
     { ledgerId: transferOutId, debit: 0, credit: r2(gst.taxableValue + unresolvedGst) },
     ...gstLines,
   ];
@@ -475,7 +505,7 @@ export async function createDispatchVoucher(args: DispatchVoucherArgs): Promise<
        (voucher_type, voucher_number, voucher_date, narration, party_ledger_id, reason, total_amount, created_by,
         origin, source_module, location_type, location_id)
      VALUES ('branch_transfer_sale', $1, $2, $3, $4, $5, $6, $7, 'system', 'branch_transfer', $8, $9) RETURNING id`,
-    [`TRF-${challanNumber}`, transferDate, narration, branchDebtorId,
+    [`TRF-${challanNumber}`, transferDate, narration, dispatchLedgerId,
      'Inter-branch taxable transfer — source side', gst.totalWithGst, createdBy,
      fromLocation.locationType, fromLocation.locationId],
   );
@@ -496,7 +526,7 @@ export async function createDispatchVoucher(args: DispatchVoucherArgs): Promise<
  * Reverse the source-side accounting when an internal transfer is rejected.
  * The stock movement is reversed by the transfer route, but the original
  * dispatch voucher remains immutable audit history. A balanced reversal keeps
- * both the sender's Transfer-Out P&L leg and its internal receivable honest.
+ * both the sender's Transfer-Out P&L leg and its pair/clearing leg honest.
  */
 export async function createDispatchReversalVoucher(args: {
   client: PoolLike;
@@ -510,13 +540,14 @@ export async function createDispatchReversalVoucher(args: {
 }): Promise<number | null> {
   const amount = r2(args.amount);
   if (!(amount > 0.004)) return null;
-  const [branchDebtorId, transferOutId] = await Promise.all([
-    ensureTransferPairLedger(args.client, 'receivable', args.fromLocation, args.toLocation),
+  const [pairPostingLedgers, transferOutId] = await Promise.all([
+    ensureTransferPairPostingLedgers(args.client, args.fromLocation, args.toLocation),
     ensureClearingLedger(args.client, TRANSFER_OUT_LEDGER_CODE, 'Transfer-Out', 'income', 'profit_loss', 'SYS-DIRINC'),
   ]);
-  if (!branchDebtorId || !transferOutId) {
+  if (!pairPostingLedgers || !transferOutId) {
     throw new Error('Cannot reverse internal transfer — inter-branch ledgers are unavailable');
   }
+  const dispatchLedgerId = pairPostingLedgers.dispatch;
   const { rows: [v] } = await args.client.query(
     `INSERT INTO journal_vouchers
        (voucher_type, voucher_number, voucher_date, narration, party_ledger_id,
@@ -526,7 +557,7 @@ export async function createDispatchReversalVoucher(args: {
      RETURNING id`,
     [
       `TRF-REJ-${args.challanNumber}`, args.transferDate, args.narration,
-      branchDebtorId, amount, args.createdBy,
+      dispatchLedgerId, amount, args.createdBy,
       args.fromLocation.locationType, args.fromLocation.locationId,
     ],
   );
@@ -534,7 +565,7 @@ export async function createDispatchReversalVoucher(args: {
   await args.client.query(
     `INSERT INTO journal_voucher_lines (voucher_id, ledger_id, debit, credit)
      VALUES ($1, $2, $3, 0), ($1, $4, 0, $3)`,
-    [v.id, transferOutId, amount, branchDebtorId],
+    [v.id, transferOutId, amount, dispatchLedgerId],
   );
   return Number(v.id);
 }
@@ -558,7 +589,7 @@ export interface ReceiveVoucherArgs {
  * Inter-branch destination-side accounting entry at approval time:
  *   Dr  Transfer-In              (taxable value)
  *   Dr  Input GST heads           (CGST/SGST or IGST)
- *   Cr  Inter-Branch Payable      (total with GST)
+ *   Cr  Pair payable or shared payable clearing (total with GST)
  *
  * The expense is deliberately purchase-like and is offset by the sender's
  * Transfer-Out credit when the transfer is complete.
@@ -567,13 +598,14 @@ export async function createReceiveVoucher(args: ReceiveVoucherArgs): Promise<nu
   const { client, challanNumber, transferDate, fromLocation, toLocation, gst, taxType, narration, createdBy } = args;
   if (!(gst.taxableValue > 0)) return null;
 
-  const [branchCreditorId, transferInId] = await Promise.all([
-    ensureTransferPairLedger(client, 'payable', fromLocation, toLocation),
+  const [pairPostingLedgers, transferInId] = await Promise.all([
+    ensureTransferPairPostingLedgers(client, fromLocation, toLocation),
     ensureClearingLedger(client, TRANSFER_IN_LEDGER_CODE, 'Transfer-In', 'expense', 'profit_loss', 'SYS-PUR'),
   ]);
-  if (!branchCreditorId || !transferInId) {
+  if (!pairPostingLedgers || !transferInId) {
     throw new Error('Cannot create receive JV — inter-branch transfer ledgers are unavailable');
   }
+  const receiveLedgerId = pairPostingLedgers.receive;
 
   let unresolvedGst = 0;
   const gstLines: Array<{ ledgerId: number; debit: number; credit: number }> = [];
@@ -593,7 +625,7 @@ export async function createReceiveVoucher(args: ReceiveVoucherArgs): Promise<nu
   const lines = [
     { ledgerId: transferInId, debit: r2(gst.taxableValue + unresolvedGst), credit: 0 },
     ...gstLines,
-    { ledgerId: branchCreditorId, debit: 0, credit: gst.totalWithGst },
+    { ledgerId: receiveLedgerId, debit: 0, credit: gst.totalWithGst },
   ];
   assertBalancedLines(lines, "Receive transfer voucher");
 
@@ -602,7 +634,7 @@ export async function createReceiveVoucher(args: ReceiveVoucherArgs): Promise<nu
        (voucher_type, voucher_number, voucher_date, narration, party_ledger_id, reason, total_amount, created_by,
         origin, source_module, location_type, location_id)
      VALUES ('branch_transfer_purchase', $1, $2, $3, $4, $5, $6, $7, 'system', 'branch_transfer', $8, $9) RETURNING id`,
-    [`TRF-RCV-${challanNumber}`, transferDate, narration, branchCreditorId,
+    [`TRF-RCV-${challanNumber}`, transferDate, narration, receiveLedgerId,
      'Inter-branch taxable transfer — destination side', gst.totalWithGst, createdBy,
      toLocation.locationType, toLocation.locationId],
   );
@@ -629,9 +661,10 @@ export async function createReceiveVoucher(args: ReceiveVoucherArgs): Promise<nu
 //
 // These invoices REPLACE the dispatch/receive vouchers for a transfer; they are
 // never created alongside them. buildDerivedPostings() recognises a transfer
-// invoice by its branch_transfer_id and posts it to the inter-branch clearing
-// ledgers instead of Sales/Purchases, so turnover and the P&L stay untouched.
-// Creating both would double-count revenue, tax and receivables.
+// invoice by its branch_transfer_id and posts the P&L value to Transfer-Out /
+// Transfer-In plus the inter-branch pair/clearing ledgers, not operational
+// Sales/Purchases. A completed transfer has zero net P&L effect. Creating JVs
+// alongside invoices would double-count the stock value, tax and payable.
 // ═════════════════════════════════════════════════════════════════════════════
 
 /** Master switch. When off, transfers fall back to the journal-voucher path. */
@@ -706,11 +739,11 @@ export async function createTransferSaleInvoice(args: TransferInvoiceArgs): Prom
   // Provision every ledger used by the invoice-mode posting here. The invoice
   // path must not depend on the legacy voucher path having run first, and must
   // never silently fall back to Sales/Purchases if a transfer ledger is absent.
-  const [branchDebtorId, transferOutId] = await Promise.all([
-    ensureTransferPairLedger(client, 'receivable', fromLocation, toLocation),
+  const [pairLedgerId, transferOutId] = await Promise.all([
+    ensureTransferPairLedger(client, fromLocation, toLocation),
     ensureClearingLedger(client, TRANSFER_OUT_LEDGER_CODE, 'Transfer-Out', 'income', 'profit_loss', 'SYS-DIRINC'),
   ]);
-  if (!branchDebtorId || !transferOutId) {
+  if (!pairLedgerId || !transferOutId) {
     throw new Error('Cannot create transfer invoice — inter-branch ledgers are unavailable');
   }
 
@@ -760,11 +793,11 @@ export async function createTransferPurchaseInvoice(args: TransferInvoiceArgs): 
 
   // Provision both destination-side ledgers here as well. A transfer invoice
   // must never fall back to Purchases if setup is incomplete.
-  const [branchCreditorId, transferInId] = await Promise.all([
-    ensureTransferPairLedger(client, 'payable', fromLocation, toLocation),
+  const [pairLedgerId, transferInId] = await Promise.all([
+    ensureTransferPairLedger(client, fromLocation, toLocation),
     ensureClearingLedger(client, TRANSFER_IN_LEDGER_CODE, 'Transfer-In', 'expense', 'profit_loss', 'SYS-PUR'),
   ]);
-  if (!branchCreditorId || !transferInId) {
+  if (!pairLedgerId || !transferInId) {
     throw new Error('Cannot create transfer purchase invoice — inter-branch ledgers are unavailable');
   }
 
@@ -828,13 +861,14 @@ export async function createTransferCreditNote(args: TransferCreditNoteArgs): Pr
           totals, taxType, challanNumber, reason, createdBy } = args;
   if (!(totals.taxableValue > 0)) return null;
 
-  const [branchDebtorId, transferOutId] = await Promise.all([
-    ensureTransferPairLedger(client, 'receivable', fromLocation, toLocation),
+  const [pairPostingLedgers, transferOutId] = await Promise.all([
+    ensureTransferPairPostingLedgers(client, fromLocation, toLocation),
     ensureClearingLedger(client, TRANSFER_OUT_LEDGER_CODE, 'Transfer-Out', 'income', 'profit_loss', 'SYS-DIRINC'),
   ]);
-  if (!branchDebtorId || !transferOutId) {
+  if (!pairPostingLedgers || !transferOutId) {
     throw new Error('Cannot create transfer credit note — inter-branch transfer ledgers are unavailable');
   }
+  const dispatchLedgerId = pairPostingLedgers.dispatch;
 
   // Mirror image of the invoice postings.
   const lines: Array<{ ledgerId: number; debit: number; credit: number }> = [
@@ -850,7 +884,7 @@ export async function createTransferCreditNote(args: TransferCreditNoteArgs): Pr
   if (taxType === 'igst') await addHead('IGST', totals.igst);
   else if (taxType === 'cgst_sgst') { await addHead('CGST', totals.cgst); await addHead('SGST', totals.sgst); }
   if (unresolvedGst > 0.004) lines[0].debit = r2(lines[0].debit + unresolvedGst);
-  lines.push({ ledgerId: branchDebtorId, debit: 0, credit: totals.totalWithGst });
+  lines.push({ ledgerId: dispatchLedgerId, debit: 0, credit: totals.totalWithGst });
   assertBalancedLines(lines, "Transfer credit note");
 
   const { rows: [v] } = await client.query(
@@ -860,7 +894,7 @@ export async function createTransferCreditNote(args: TransferCreditNoteArgs): Pr
      VALUES ('credit_note', $1, $2, $3, $4, $5, $6, $7, 'system', 'branch_transfer') RETURNING id`,
     [`CN-${invoiceNumber}`, transferDate,
      `Credit note against transfer invoice ${invoiceNumber} — ${challanNumber} rejected by ${toLocation.name}`,
-     branchDebtorId,
+     dispatchLedgerId,
      reason ? `Transfer rejected: ${reason}` : 'Inter-branch transfer rejected by receiver',
      totals.totalWithGst, createdBy],
   );
