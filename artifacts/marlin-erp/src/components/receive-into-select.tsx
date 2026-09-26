@@ -59,12 +59,16 @@ export function ReceiveIntoSelect({
   /** h-8 text-sm trigger for dense panels */
   compact?: boolean;
   /** Limit the picker to cash or electronic accounts for POS creation. */
-  mode?: 'cash' | 'electronic' | 'online';
+  mode?: 'cash' | 'upi' | 'bank' | 'electronic' | 'online';
 }) {
   const { options, isLoading } = useReceiveIntoOptions(locationType, locationId);
   const visibleOptions = useMemo(
     () => mode === 'cash'
       ? options.filter(isCashOption)
+      : mode === 'upi'
+        ? options.filter(o => o.accountType === 'upi')
+        : mode === 'bank'
+          ? options.filter(o => o.accountType === 'bank')
       : mode === 'electronic'
         ? options.filter(o => !isCashOption(o))
         : mode === 'online'
@@ -81,6 +85,10 @@ export function ReceiveIntoSelect({
         ? 'Loading accounts…'
         : mode === 'cash'
           ? 'Select cash account'
+          : mode === 'upi'
+            ? 'Select UPI account'
+            : mode === 'bank'
+              ? 'Select bank account'
           : mode === 'online'
             ? 'Select Online platform'
             : mode === 'electronic'

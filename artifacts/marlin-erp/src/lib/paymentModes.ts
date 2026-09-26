@@ -23,7 +23,7 @@ export type SalePaymentMode = (typeof SALE_PAYMENT_MODES)[number];
  * Modes a NEW sale may be created with. The selected Cash & Bank account
  * derives the stored bank/upi method for the combined Bank / UPI choice.
  */
-export const CREATE_SALE_PAYMENT_MODES = ['cash', 'bank', 'online', 'credit'] as const;
+export const CREATE_SALE_PAYMENT_MODES = ['cash', 'upi', 'bank', 'online'] as const;
 
 /** Modes a collection against an existing bill can be recorded in. */
 export const COLLECTION_METHODS = ['cash', 'bank', 'upi', ...ONLINE_PAYMENT_MODES] as const;
@@ -82,9 +82,9 @@ export const PAYMENT_MODE_OPTIONS: ReadonlyArray<{ value: SalePaymentMode; label
  */
 export const CREATE_PAYMENT_MODE_OPTIONS: ReadonlyArray<{ value: SalePaymentMode; label: string }> = [
   { value: 'cash', label: '💵 Cash' },
-  { value: 'bank', label: '🏦 Bank / UPI' },
+  { value: 'upi', label: '📱 UPI' },
+  { value: 'bank', label: '🏦 Bank' },
   { value: 'online', label: '🌐 Online' },
-  { value: 'credit', label: '🕒 Credit (pay later)' },
 ];
 
 /**

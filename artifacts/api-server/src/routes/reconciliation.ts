@@ -1263,6 +1263,9 @@ router.post("/reconciliation/bank-batches", requireModuleAction("page:/accounts/
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    await client.query(
+      `SELECT pg_advisory_xact_lock(hashtext('bank-reconciliation-reset'), 1)`,
+    );
     const access = await bookAccessScope((req as any).employee ?? {});
     const requestedLocation = getLocationFilter(req);
     const requestedPostingLocation = getPostingLocationFilter(req);
@@ -1793,8 +1796,9 @@ router.patch("/reconciliation/bank-batches/:id", requireModuleAction("page:/acco
 });
 
 // ── POST /reconciliation/bank-reset ──────────────────────────────────────────
-// Administrator-only reset of review state. It does not touch any financial
-// document, voucher, ledger, GST, stock, or legacy settlement batch.
+// Administrator-only reset. Accounting-impact batches are reversed with new
+// vouchers, then their source relationships are unlinked; no financial row is
+// deleted and every operation remains visible in the audit trail.
 router.post("/reconciliation/bank-reset", requireModuleAction("page:/accounts/reconciliation", "delete"), async (req, res): Promise<void> => {
   if (!(await isLevelOneAdmin((req as any).employee ?? {}))) {
     res.status(403).json({ error: "Only an Administrator can reset bank reconciliation state." });
@@ -1803,166 +1807,260 @@ router.post("/reconciliation/bank-reset", requireModuleAction("page:/accounts/re
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    const [accountCount, statusTotals, batchTotals, batchItems, bankTreeRows] = await Promise.all([
+    await client.query(`SELECT pg_advisory_xact_lock(hashtext('bank-reconciliation-reset'), 1)`);
+    const requestedBy = (req as any).employee?.username ?? "system";
+    const dateInput = String((req.body ?? {}).reversalDate ?? "").trim();
+    const dateResult = dateInput
+      ? { rows: [{ reversal_date: dateInput }] }
+      : await client.query(`SELECT CURRENT_DATE::text AS reversal_date`);
+    const reversalDate = String(dateResult.rows[0]?.reversal_date ?? "");
+    if (!isIsoDate(reversalDate)) {
+      await client.query("ROLLBACK");
+      res.status(400).json({ error: "reversalDate must be a real YYYY-MM-DD date." });
+      return;
+    }
+
+    const [bankBatches, legacyBatches, unsupported, bankItems, legacyItems, statusTotals] = await Promise.all([
+      client.query(`SELECT * FROM bank_reconciliation_batches WHERE status = 'active' FOR UPDATE`),
+      client.query(`SELECT * FROM reconciliation_batches WHERE status = 'active' FOR UPDATE`),
       client.query(`
-        SELECT COUNT(*)::int AS count
-          FROM cash_bank_accounts cba
-          JOIN account_ledgers al ON al.id = cba.ledger_id
-         WHERE cba.account_type <> 'cash' AND COALESCE(al.is_active, true)
+        SELECT id, accounting_impact FROM bank_reconciliation_batches
+         WHERE status = 'active' AND COALESCE(accounting_impact, 'unknown') NOT IN
+           ('none', 'deferred_voucher_settlement', 'unified_reconciliation_settlement')
+      `),
+      client.query(`
+        SELECT i.*, b.batch_reference, b.accounting_impact
+          FROM bank_reconciliation_batch_items i
+          JOIN bank_reconciliation_batches b ON b.id = i.batch_id
+         WHERE b.status = 'active'
+      `),
+      client.query(`
+        SELECT i.*, b.batch_reference, b.status AS batch_status
+          FROM reconciliation_batch_items i
+          JOIN reconciliation_batches b ON b.id = i.batch_id
+         WHERE b.status = 'active'
       `),
       client.query(`
         SELECT status, COUNT(*)::int AS count,
                COALESCE(SUM(ABS(debit - credit)), 0)::numeric AS amount
-          FROM bank_reconciliation_entries
-         GROUP BY status
-      `),
-      client.query(`
-        SELECT COUNT(*)::int AS count,
-               COALESCE(SUM(gross_amount), 0)::numeric AS gross,
-               COALESCE(SUM(processing_charge), 0)::numeric AS charges,
-               COALESCE(SUM(net_amount), 0)::numeric AS net
-          FROM bank_reconciliation_batches
-      `),
-      client.query(`
-        SELECT COUNT(*)::int AS count,
-               COALESCE(SUM(amount), 0)::numeric AS amount
-          FROM bank_reconciliation_batch_items
-      `),
-      client.query(`
-        WITH RECURSIVE bank_tree AS (
-          SELECT id, parent_id FROM account_ledgers WHERE code = 'STD-BANK'
-          UNION ALL
-          SELECT l.id, l.parent_id
-            FROM account_ledgers l
-            JOIN bank_tree b ON b.id = l.parent_id
-        )
-        SELECT id FROM bank_tree
+          FROM bank_reconciliation_entries GROUP BY status
       `),
     ]);
-    const postings = await buildDerivedPostings({ q: client });
-    const bankLedgerIds = new Set<number>(bankTreeRows.rows.map((r: any) => Number(r.id)));
-    const { rows: assignedBankAccounts } = await client.query(`
-      SELECT cba.id AS account_id, cba.ledger_id
-        FROM cash_bank_accounts cba
-        JOIN account_ledgers al ON al.id = cba.ledger_id
-       WHERE cba.account_type <> 'cash' AND COALESCE(al.is_active, true)
-    `);
-    const assignedLedgers = new Set<number>(assignedBankAccounts.map((r: any) => Number(r.ledger_id)));
-    const identity = new Map<string, { source: string; amount: number }>();
-    for (const posting of postings as any[]) {
-      const ledgerId = Number(posting.ledgerId);
-      if (!bankLedgerIds.has(ledgerId) || posting.source === "opening_balance") continue;
-      const key = `${ledgerId}:${posting.entryId}`;
-      const amount = Math.abs(Number(posting.debit ?? 0) - Number(posting.credit ?? 0));
-      const prior = identity.get(key);
-      if (prior) prior.amount += amount;
-      else identity.set(key, { source: String(posting.source), amount });
+    if (unsupported.rowCount) {
+      throw new Error(`Reset refused: unsupported bank reconciliation accounting impact (${unsupported.rows[0].accounting_impact}).`);
     }
-    const eligibleIdentities = [...identity.values()].filter((_row, index) => {
-      const key = [...identity.keys()][index];
-      return assignedLedgers.has(Number(key.split(":")[0]));
-    });
-    const sourceCounts: Record<string, { count: number; amount: number }> = {};
-    for (const row of eligibleIdentities) {
-      const source = row.source === "sale" ? "SALE"
-        : row.source === "receipt" ? "RECEIPT"
-          : row.source === "payment" ? "PAYMENT"
-            : "OTHER BANK TRANSACTION";
-      sourceCounts[source] ??= { count: 0, amount: 0 };
-      sourceCounts[source].count += 1;
-      sourceCounts[source].amount += row.amount;
+    const impactedBank = bankBatches.rows.filter((b: any) =>
+      ["deferred_voucher_settlement", "unified_reconciliation_settlement"].includes(String(b.accounting_impact)),
+    );
+    const impactedLegacy = legacyBatches.rows;
+    if ((impactedBank.length || impactedLegacy.length)
+      && await respondIfMonthLocked(res, pool, [reversalDate], "reconciliation reset reversal")) {
+      await client.query("ROLLBACK");
+      return;
     }
-    const statusByName = new Map<string, any>(statusTotals.rows.map((r: any) => [String(r.status), r]));
-    const before = {
-      bankAccountCount: Number(accountCount.rows[0]?.count ?? 0),
-      bankLedgerTransactionCount: identity.size,
-      eligibleTransactionCount: eligibleIdentities.length,
-      eligibleTransactionAmount: Math.round(eligibleIdentities.reduce((n, r) => n + r.amount, 0) * 100) / 100,
-      reconciledTransactionCount: Number(statusByName.get("reconciled")?.count ?? 0),
-      reconciledTransactionAmount: Number(statusByName.get("reconciled")?.amount ?? 0),
-      unreconciledTransactionCount: Number(statusByName.get("unreconciled")?.count ?? 0),
-      unreconciledTransactionAmount: Number(statusByName.get("unreconciled")?.amount ?? 0),
-      batchCount: Number(batchTotals.rows[0]?.count ?? 0),
-      batchGrossAmount: Number(batchTotals.rows[0]?.gross ?? 0),
-      batchProcessingCharges: Number(batchTotals.rows[0]?.charges ?? 0),
-      batchNetAmount: Number(batchTotals.rows[0]?.net ?? 0),
-      batchItemCount: Number(batchItems.rows[0]?.count ?? 0),
-      batchItemAmount: Number(batchItems.rows[0]?.amount ?? 0),
-      sourceCounts: Object.fromEntries(Object.entries(sourceCounts).map(([source, value]) => [
-        source, { count: value.count, amount: Math.round(value.amount * 100) / 100 },
-      ])),
-      accountingImpact: "none: account-based reconciliation is metadata-only",
+
+    const bankBatchReferences = impactedBank.map((b: any) => String(b.batch_reference));
+    const { rows: deferredSourceEntries } = bankBatchReferences.length
+      ? await client.query(
+        `SELECT source, entry_id, reconciliation_reference
+           FROM bank_reconciliation_entries
+          WHERE reconciliation_reference = ANY($1::text[])
+            AND source IN ('deferred_payment', 'deferred_receipt')`,
+        [bankBatchReferences],
+      )
+      : { rows: [] as any[] };
+    const sourceVoucherIds = (source: string) => [...new Set(deferredSourceEntries
+      .filter((entry: any) => entry.source === source)
+      .map((entry: any) => Number(String(entry.entry_id).split(":")[1]))
+      .filter((id: number) => Number.isInteger(id) && id > 0))];
+    const deferredPaymentIds = sourceVoucherIds("deferred_payment");
+    const deferredReceiptIds = sourceVoucherIds("deferred_receipt");
+
+    const reversalIds: number[] = [];
+    const reversedSources: any[] = [];
+    const reverseVoucher = async (kind: "payment" | "receipt", original: any, batchReference: string) => {
+      const isPayment = kind === "payment";
+      const voucherNumber = await nextVoucherNumber(client, isPayment ? "receipt" : "payment", reversalDate);
+      const narration = `Reversal of ${kind} ${original.voucher_number ?? original.id} from reconciliation batch ${batchReference}`;
+      const table = isPayment ? "receipts" : "payments";
+      const columns = isPayment
+        ? "(voucher_number, receipt_date, received_from_ledger_id, received_in_ledger_id, amount, narration, source, payment_mode, location_type, location_id, created_by)"
+        : "(voucher_number, payment_date, paid_from_ledger_id, paid_to_ledger_id, amount, narration, source, payment_mode, location_type, location_id, created_by)";
+      const values = isPayment
+        ? [voucherNumber, reversalDate, original.paid_to_ledger_id, original.paid_from_ledger_id, original.amount, narration, "settlement_reversal", "bank", original.location_type ?? "headoffice", Number(original.location_id ?? 0), requestedBy]
+        : [voucherNumber, reversalDate, original.received_in_ledger_id, original.received_from_ledger_id, original.amount, narration, "settlement_reversal", "bank", original.location_type ?? "headoffice", Number(original.location_id ?? 0), requestedBy];
+      const { rows: [created] } = await client.query(
+        `INSERT INTO ${table} ${columns} VALUES (${values.map((_v, i) => `$${i + 1}`).join(",")}) RETURNING id`,
+        values,
+      );
+      const id = Number(created.id);
+      reversalIds.push(id);
+      reversedSources.push({ kind, originalId: Number(original.id), reversalId: id, originalVoucherNumber: original.voucher_number ?? null, batchReference });
     };
-    const requestedBy = (req as any).employee?.username ?? "system";
-    const snapshotInsert = await client.query(
-      `INSERT INTO bank_reconciliation_reset_audits
-         (reason, requested_by, snapshot)
-       VALUES ($1, $2, $3::jsonb)
-       RETURNING id, requested_at`,
-      ["Reconciliation workflow reset/rebuilt", requestedBy, JSON.stringify(before)],
+
+    for (const batch of impactedBank) {
+      const items = bankItems.rows.filter((i: any) => Number(i.batch_id) === Number(batch.id));
+      if (!items.length) throw new Error(`Reset refused: batch ${batch.batch_reference} has no settlement voucher items.`);
+      const source = Array.isArray(batch.source_items)
+        ? batch.source_items
+        : typeof batch.source_items === "string" ? JSON.parse(batch.source_items) : [];
+      const voucherIds = items.map((i: any) => String(i.entry_id)).filter((x: string) => /^(payment|receipt):\d+$/.test(x));
+      if (!voucherIds.length || voucherIds.length !== items.length) {
+        throw new Error(`Reset refused: batch ${batch.batch_reference} has unsupported settlement voucher identities.`);
+      }
+      for (const entryId of voucherIds) {
+        const [kind, rawId] = entryId.split(":");
+        const table = kind === "payment" ? "payments" : "receipts";
+        const { rows: [original] } = await client.query(`SELECT * FROM ${table} WHERE id = $1 AND source = 'settlement' FOR UPDATE`, [Number(rawId)]);
+        if (!original) throw new Error(`Reset refused: generated ${kind} ${rawId} for batch ${batch.batch_reference} is missing.`);
+        await reverseVoucher(kind as "payment" | "receipt", original, String(batch.batch_reference));
+      }
+      if (String(batch.accounting_impact) === "deferred_voucher_settlement") {
+        const batchReceiptIds = sourceVoucherIds("deferred_receipt");
+        if (batchReceiptIds.length) {
+          await client.query(
+            `UPDATE sale_payments SET reconciliation_status='pending'
+              WHERE clearing_receipt_id = ANY($1::int[])`,
+            [batchReceiptIds],
+          );
+        }
+      }
+      await client.query(`UPDATE bank_reconciliation_batches SET status='reversed', source_items='[]'::jsonb WHERE id=$1`, [batch.id]);
+      await client.query(`DELETE FROM bank_reconciliation_batch_items WHERE batch_id=$1`, [batch.id]);
+      for (const item of source) {
+        if (item.kind === "sale_payment") await client.query(`UPDATE sale_payments SET reconciliation_status='pending' WHERE id=$1`, [Number(item.id)]);
+        if (item.kind === "manual_voucher" && item.voucherKind === "receipt") {
+          await client.query(`UPDATE sale_payments SET reconciliation_status='pending' WHERE clearing_receipt_id=$1`, [Number(item.id)]);
+        }
+      }
+    }
+    for (const batch of impactedLegacy) {
+      const { rows: generated } = await client.query(
+        `SELECT 'receipt' AS kind, r.id, r.voucher_number,
+                r.received_from_ledger_id, r.received_in_ledger_id, r.amount,
+                r.narration, r.location_type, r.location_id
+           FROM receipts r
+           JOIN (
+             SELECT DISTINCT ON (entity_id) entity_id
+               FROM activity_log
+              WHERE module='accounts' AND entity_type='receipt_voucher'
+                AND action='CREATE' AND entity_id IS NOT NULL
+                AND metadata->>'source'='reconciliation'
+                AND metadata->>'batchReference'=$1
+              ORDER BY entity_id, id
+           ) a ON a.entity_id = r.id
+          WHERE r.source='settlement'
+         UNION ALL
+         SELECT 'payment' AS kind, p.id, p.voucher_number,
+                p.paid_from_ledger_id, p.paid_to_ledger_id, p.amount,
+                p.narration, p.location_type, p.location_id
+           FROM payments p
+           JOIN (
+             SELECT DISTINCT ON (entity_id) entity_id
+               FROM activity_log
+              WHERE module='accounts' AND entity_type='payment_voucher'
+                AND action='CREATE' AND entity_id IS NOT NULL
+                AND metadata->>'source'='reconciliation'
+                AND metadata->>'batchReference'=$1
+              ORDER BY entity_id, id
+           ) a ON a.entity_id = p.id
+          WHERE p.source='settlement'`,
+        [String(batch.batch_reference)],
+      );
+      if (!generated.length) throw new Error(`Reset refused: legacy batch ${batch.batch_reference} has no generated settlement vouchers.`);
+      for (const original of generated) await reverseVoucher(original.kind, original, String(batch.batch_reference));
+      const { rows: linked } = await client.query(`SELECT sale_payment_id FROM reconciliation_batch_items WHERE batch_id=$1`, [batch.id]);
+      for (const item of linked) await client.query(`UPDATE sale_payments SET reconciliation_status='pending' WHERE id=$1`, [Number(item.sale_payment_id)]);
+      await client.query(`DELETE FROM reconciliation_batch_items WHERE batch_id=$1`, [batch.id]);
+      await client.query(`UPDATE reconciliation_batches SET status='reversed' WHERE id=$1`, [batch.id]);
+    }
+    // Metadata-only bank-book batches have no generated accounting voucher,
+    // but their relationship rows are still reset and their headers retained.
+    const metadataBatches = bankBatches.rows.filter((b: any) => String(b.accounting_impact) === "none");
+    for (const batch of metadataBatches) {
+      await client.query(`UPDATE bank_reconciliation_batches SET status='reversed', source_items='[]'::jsonb WHERE id=$1`, [batch.id]);
+      await client.query(`DELETE FROM bank_reconciliation_batch_items WHERE batch_id=$1`, [batch.id]);
+    }
+    // Older reconciliation runs stamped their source clearing vouchers as
+    // bank_settled. Restrict restoration to source vouchers linked to these
+    // active deferred batches; never rewrite unrelated manual vouchers.
+    if (deferredReceiptIds.length) await client.query(`
+      UPDATE receipts r
+         SET payment_mode = COALESCE((
+           SELECT CASE WHEN sp.method IN ('bank_settled', 'card', 'bank_transfer') THEN 'bank' ELSE sp.method END
+             FROM sale_payments sp
+            WHERE sp.clearing_receipt_id = r.id
+            ORDER BY sp.id LIMIT 1
+         ), 'bank')
+       WHERE r.id = ANY($1::int[])
+         AND r.payment_mode = 'bank_settled'
+    `, [deferredReceiptIds]);
+    if (deferredPaymentIds.length) await client.query(`
+      UPDATE payments
+         SET payment_mode = 'bank'
+       WHERE id = ANY($1::int[])
+         AND payment_mode = 'bank_settled'
+    `, [deferredPaymentIds]);
+    const resetEntries = await client.query(
+      `UPDATE bank_reconciliation_entries
+          SET status='unreconciled', unreconciled_at=now(), unreconciled_by=$1,
+              reconciled_at=NULL, reconciled_by=NULL, reconciliation_reference=NULL
+        WHERE status='reconciled' RETURNING id`,
+      [requestedBy],
     );
-    const deletedItems = await client.query(
-      `DELETE FROM bank_reconciliation_batch_items i
-        USING bank_reconciliation_batches b
-       WHERE i.batch_id = b.id AND b.accounting_impact = 'none'
-       RETURNING i.id`,
-    );
-    const deletedBatches = await client.query(
-      `DELETE FROM bank_reconciliation_batches
-        WHERE accounting_impact = 'none'
-       RETURNING id`,
+    const before = {
+      activeBankBatchCount: bankBatches.rowCount ?? 0,
+      activeLegacyBatchCount: legacyBatches.rowCount ?? 0,
+      bankBatchItemCount: bankItems.rowCount ?? 0,
+      legacyBatchItemCount: legacyItems.rowCount ?? 0,
+      bankBatchItems: bankItems.rows,
+      legacyBatchItems: legacyItems.rows,
+      statusTotals: statusTotals.rows,
+      batches: [
+        ...bankBatches.rows.map((b: any) => ({
+          kind: "bank", id: Number(b.id), batchReference: b.batch_reference,
+          accountingImpact: b.accounting_impact ?? "legacy", sourceItems: b.source_items ?? null,
+        })),
+        ...legacyBatches.rows.map((b: any) => ({
+          kind: "legacy_sale", id: Number(b.id), batchReference: b.batch_reference,
+          sourceItems: null,
+        })),
+      ],
+      deferredSourceEntries,
+    };
+    const snapshot = {
+      before, reversalDate, reversalIds, reversedSources,
+      after: {
+        reconciledEntriesReset: resetEntries.rowCount ?? 0,
+        bankBatchesReversed: bankBatches.rowCount ?? 0,
+        accountingBatchesReversed: impactedBank.length,
+        legacyBatchesReversed: impactedLegacy.length,
+        bankBatchLinksRemoved: bankItems.rowCount ?? 0,
+        legacyBatchLinksRemoved: legacyItems.rowCount ?? 0,
+      },
+    };
+    const { rows: [audit] } = await client.query(
+      `INSERT INTO bank_reconciliation_reset_audits (reason, requested_by, snapshot)
+       VALUES ($1,$2,$3::jsonb) RETURNING id`,
+      ["Reversed reconciliation-created postings and unlinked records", requestedBy, JSON.stringify(snapshot)],
     );
     await client.query(
-      `UPDATE bank_reconciliation_reset_audits
-          SET deleted_batch_count = $2, deleted_item_count = $3
-        WHERE id = $1`,
-      [Number(snapshotInsert.rows[0].id), deletedBatches.rowCount ?? 0, deletedItems.rowCount ?? 0],
-    );
-    await client.query(
-      `UPDATE bank_reconciliation_entries bre
-          SET status='unreconciled', unreconciled_at=now(),
-              unreconciled_by=$1, reconciled_at=NULL, reconciled_by=NULL,
-              reconciliation_reference=NULL
-        WHERE NOT EXISTS (
-          SELECT 1
-            FROM bank_reconciliation_batch_items i
-            JOIN bank_reconciliation_batches b ON b.id = i.batch_id
-           WHERE b.accounting_impact = 'deferred_voucher_settlement'
-             AND i.ledger_id = bre.ledger_id
-             AND i.entry_id = bre.entry_id
-        )`,
-       [requestedBy],
+      `UPDATE bank_reconciliation_reset_audits SET deleted_batch_count=$2, deleted_item_count=$3 WHERE id=$1`,
+      [Number(audit.id), 0, (bankItems.rowCount ?? 0) + (legacyItems.rowCount ?? 0)],
     );
     await logActivityInTransaction(client, {
-      action: "DELETE",
-      module: "reconciliation",
-      entityType: "bank_reconciliation_reset",
-      description: "Reconciliation Reset",
-      metadata: {
-        before: {
-          ...before,
-        },
-        after: { reconciledEntryCount: 0, batchCount: 0, accountingImpact: "none" },
-        resetAuditId: Number(snapshotInsert.rows[0].id),
-        deletedBatchItemCount: deletedItems.rowCount ?? 0,
-        deletedBatchCount: deletedBatches.rowCount ?? 0,
-        legacySettlementBatchesPreserved: true,
-      },
+      action: "UPDATE", module: "reconciliation", entityType: "bank_reconciliation_reset",
+      description: "Reconciliation reset: postings reversed and records unlinked",
+      metadata: { resetAuditId: Number(audit.id), ...snapshot },
       user: requestedBy,
     });
     await client.query("COMMIT");
-    res.json({
-      reset: true,
-      resetAuditId: Number(snapshotInsert.rows[0].id),
-      before,
-      reconciledEntriesReset: Number(before.reconciledTransactionCount),
-      bankBatchesDeleted: deletedBatches.rowCount ?? 0,
-      batchItemsDeleted: deletedItems.rowCount ?? 0,
-      legacySettlementBatchesPreserved: true,
-    });
-  } catch (err) {
+    res.json({ reset: true, resetAuditId: Number(audit.id), reversalDate, reversalIds, reconciledEntriesReset: resetEntries.rowCount ?? 0, bankBatchesReversed: bankBatches.rowCount ?? 0, legacyBatchesReversed: impactedLegacy.length });
+  } catch (err: any) {
     await client.query("ROLLBACK").catch(() => {});
-    throw err;
+    (req as any).log?.error?.({ err }, "Bank reconciliation reset failed");
+    const message = err?.message ?? "Failed to reverse bank reconciliation.";
+    res.status(message.startsWith("Reset refused:") ? 409 : 500).json({ error: message });
   } finally {
     client.release();
   }
@@ -2239,6 +2337,247 @@ router.post(
   },
 );
 
+// ── GET /reconciliation/pending-queue ────────────────────────────────────────
+// One filterable source for both sale collections and manual bank/clearing
+// vouchers. The platform id is recorded on sale_payments at collection time;
+// older rows without one remain available through the "unassigned" filter.
+router.get("/reconciliation/pending-queue", requireModuleView("page:/accounts/reconciliation"), async (req, res): Promise<void> => {
+  const {
+    locationType, locationId, method, platformLedgerId, fromDate, toDate, search,
+  } = req.query as Record<string, string | undefined>;
+
+  const methodValues: Record<string, string[]> = {
+    cash: ["cash"],
+    upi: ["upi"],
+    bank: ["bank", "card", "bank_transfer"],
+    online: ["online", "swiggy", "zomato", "other_online"],
+  };
+  if (method && method !== "all" && !methodValues[method]) {
+    res.status(400).json({ error: "method must be all, cash, upi, bank, or online." });
+    return;
+  }
+  const selectedMethods = method && method !== "all"
+    ? methodValues[method]
+    : ["upi", "bank", "card", "bank_transfer", "online", "swiggy", "zomato", "other_online"];
+
+  let platformId: number | null | undefined;
+  if (platformLedgerId && platformLedgerId !== "unassigned") {
+    platformId = Number(platformLedgerId);
+    if (!Number.isInteger(platformId) || platformId <= 0) {
+      res.status(400).json({ error: "platformLedgerId must be a positive ledger id or 'unassigned'." });
+      return;
+    }
+  } else if (platformLedgerId === "unassigned") {
+    platformId = null;
+  }
+  for (const value of [fromDate, toDate]) {
+    if (value && !isIsoDate(value)) {
+      res.status(400).json({ error: "fromDate and toDate must be real YYYY-MM-DD dates." });
+      return;
+    }
+  }
+
+  const saleParams: any[] = ["pending", selectedMethods];
+  const saleConds: string[] = ["sp.reconciliation_status = $1", "sp.method = ANY($2::text[])"];
+  applyLocationScope(req, saleParams, saleConds, { locationType, locationId });
+  if (fromDate) { saleParams.push(fromDate); saleConds.push(`sp.payment_date >= $${saleParams.length}`); }
+  if (toDate) { saleParams.push(toDate); saleConds.push(`sp.payment_date <= $${saleParams.length}`); }
+  if (search) {
+    saleParams.push(`%${search}%`);
+    saleConds.push(`(
+      s.invoice_number ILIKE $${saleParams.length}
+      OR s.legacy_invoice_number ILIKE $${saleParams.length}
+      OR c.name ILIKE $${saleParams.length}
+      OR sp.reference_number ILIKE $${saleParams.length}
+      OR sp.notes ILIKE $${saleParams.length}
+      OR platform.name ILIKE $${saleParams.length}
+    )`);
+  }
+  if (platformId === null) saleConds.push("sp.online_platform_ledger_id IS NULL");
+  else if (platformId != null) {
+    saleParams.push(platformId);
+    saleConds.push(`sp.online_platform_ledger_id = $${saleParams.length}`);
+  }
+  const { rows: saleRows } = await pool.query(
+    `SELECT sp.id, sp.payment_date AS transaction_date, sp.method,
+            sp.amount::numeric AS amount, sp.reference_number, sp.notes AS narration,
+            sp.online_platform_ledger_id AS platform_ledger_id,
+            platform.name AS platform_name,
+            s.invoice_number, s.location_type, s.location_id::int AS location_id,
+            ${SALE_LOCATION_NAME} AS location_name,
+            c.name AS customer_name
+       FROM sale_payments sp
+       JOIN sales s ON s.id = sp.sale_id
+       ${SALE_LOCATION_JOINS}
+       LEFT JOIN customers c ON c.id = s.customer_id
+       LEFT JOIN account_ledgers platform ON platform.id = sp.online_platform_ledger_id
+      WHERE ${saleConds.join(" AND ")}
+      ORDER BY sp.payment_date DESC, sp.id DESC`,
+    saleParams,
+  );
+
+  const { rows: [clearing] } = await pool.query(
+    `SELECT id FROM account_ledgers WHERE code = 'STD-ELEC-CLR'`,
+  );
+  let manualRows: any[] = [];
+  if (clearing) {
+    const manualParams: any[] = [Number(clearing.id), selectedMethods];
+    const manualConds: string[] = [];
+    const view = getLocationFilter(req);
+    const emp = (req as any).employee;
+    if (emp?.branchType && emp.branchType !== "headoffice" && emp.branchId != null) {
+      manualParams.push(emp.branchType, Number(emp.branchId));
+      manualConds.push(`x.location_type = $${manualParams.length - 1} AND x.location_id = $${manualParams.length}`);
+    } else if (view) {
+      manualParams.push(view.locationType);
+      manualConds.push(`x.location_type = $${manualParams.length}`);
+      if (view.locationType !== "headoffice") {
+        manualParams.push(Number(view.locationId));
+        manualConds.push(`x.location_id = $${manualParams.length}`);
+      }
+    }
+    if (locationType) {
+      manualParams.push(locationType);
+      manualConds.push(`x.location_type = $${manualParams.length}`);
+    }
+    if (locationId && locationType !== "headoffice") {
+      manualParams.push(Number(locationId));
+      manualConds.push(`x.location_id = $${manualParams.length}`);
+    }
+    if (fromDate) { manualParams.push(fromDate); manualConds.push(`x.transaction_date >= $${manualParams.length}`); }
+    if (toDate) { manualParams.push(toDate); manualConds.push(`x.transaction_date <= $${manualParams.length}`); }
+    if (search) {
+      manualParams.push(`%${search}%`);
+      manualConds.push(`(
+        x.voucher_number ILIKE $${manualParams.length}
+        OR x.reference_number ILIKE $${manualParams.length}
+        OR x.narration ILIKE $${manualParams.length}
+        OR x.party_name ILIKE $${manualParams.length}
+        OR platform.name ILIKE $${manualParams.length}
+      )`);
+    }
+    if (platformId === null) manualConds.push("x.platform_ledger_id IS NULL");
+    else if (platformId != null) {
+      manualParams.push(platformId);
+      manualConds.push(`x.platform_ledger_id = $${manualParams.length}`);
+    }
+    const manualWhere = manualConds.length ? `AND ${manualConds.join(" AND ")}` : "";
+    const { rows } = await pool.query(
+      `SELECT 'manual_voucher'::text AS kind,
+              'manual_voucher:' || x.voucher_kind || ':' || x.id::text AS item_key,
+              x.voucher_kind, x.id, x.voucher_number, x.transaction_date,
+              x.payment_mode AS method, x.amount::numeric AS amount,
+              x.reference_number, x.narration, x.party_name,
+              x.location_type, x.location_id,
+              x.platform_ledger_id, platform.name AS platform_name,
+              CASE WHEN x.voucher_kind = 'payment' THEN 'out' ELSE 'in' END AS direction
+         FROM (
+           SELECT 'payment'::text AS voucher_kind, p.id, p.voucher_number,
+                  p.payment_date AS transaction_date, p.amount,
+                  p.payment_mode, p.reference_number, p.narration,
+                  p.location_type, p.location_id,
+                  NULL::integer AS platform_ledger_id,
+                  COALESCE(v.name, c.name, pt.name) AS party_name
+             FROM payments p
+             JOIN account_ledgers pt ON pt.id = p.paid_to_ledger_id
+             LEFT JOIN vendors v ON pt.code = 'VEND-' || v.id::text
+             LEFT JOIN customers c ON pt.code = 'CUST-' || c.id::text
+            WHERE p.paid_from_ledger_id = $1
+              AND p.payment_mode = ANY($2::text[])
+              AND p.source IN ('manual', 'allocation')
+              AND NOT EXISTS (
+                SELECT 1 FROM bank_reconciliation_entries bre
+                 WHERE bre.ledger_id = p.paid_from_ledger_id
+                   AND bre.entry_id = 'payment:' || p.id::text
+                   AND bre.status = 'reconciled'
+              )
+           UNION ALL
+           SELECT 'receipt'::text AS voucher_kind, r.id, r.voucher_number,
+                  r.receipt_date AS transaction_date, r.amount,
+                  r.payment_mode, r.reference_number, r.narration,
+                  r.location_type, r.location_id,
+                  receipt_platform.platform_ledger_id,
+                  COALESCE(c.name, v.name, rf.name) AS party_name
+             FROM receipts r
+             JOIN account_ledgers rf ON rf.id = r.received_from_ledger_id
+             LEFT JOIN customers c ON rf.code = 'CUST-' || c.id::text
+             LEFT JOIN vendors v ON rf.code = 'VEND-' || v.id::text
+             LEFT JOIN LATERAL (
+               SELECT CASE WHEN COUNT(DISTINCT sp.online_platform_ledger_id) = 1
+                           THEN MIN(sp.online_platform_ledger_id) ELSE NULL END AS platform_ledger_id
+                 FROM sale_payments sp
+                WHERE sp.clearing_receipt_id = r.id
+             ) receipt_platform ON true
+            WHERE r.received_in_ledger_id = $1
+              AND r.payment_mode = ANY($2::text[])
+              AND r.source IN ('manual', 'allocation')
+              AND NOT EXISTS (
+                SELECT 1 FROM bank_reconciliation_entries bre
+                 WHERE bre.ledger_id = r.received_in_ledger_id
+                   AND bre.entry_id = 'receipt:' || r.id::text
+                   AND bre.status = 'reconciled'
+              )
+              AND NOT EXISTS (
+                SELECT 1 FROM sale_payments sp
+                 WHERE sp.clearing_receipt_id = r.id
+                   AND sp.reconciliation_status = 'pending'
+              )
+         ) x
+         LEFT JOIN account_ledgers platform ON platform.id = x.platform_ledger_id
+        WHERE 1=1 ${manualWhere}
+        ORDER BY x.transaction_date DESC, x.id DESC`,
+      manualParams,
+    );
+    manualRows = rows;
+  }
+
+  const combined = [
+    ...saleRows.map((r: any) => ({
+      key: `sale_payment:${Number(r.id)}`,
+      kind: "sale_payment",
+      id: Number(r.id),
+      voucherKind: null,
+      transactionDate: String(r.transaction_date).slice(0, 10),
+      method: String(r.method),
+      amount: Number(r.amount),
+      direction: "in",
+      voucherNumber: r.invoice_number ?? null,
+      referenceNumber: r.reference_number ?? null,
+      narration: r.narration ?? null,
+      partyName: r.customer_name ?? null,
+      invoiceNumber: r.invoice_number ?? null,
+      customerName: r.customer_name ?? null,
+      locationType: r.location_type ?? "headoffice",
+      locationId: Number(r.location_id ?? 0),
+      platformLedgerId: r.platform_ledger_id == null ? null : Number(r.platform_ledger_id),
+      platformName: r.platform_name ?? null,
+    })),
+    ...manualRows.map((r: any) => ({
+      key: String(r.item_key),
+      kind: "manual_voucher",
+      id: Number(r.id),
+      voucherKind: String(r.voucher_kind),
+      transactionDate: String(r.transaction_date).slice(0, 10),
+      method: String(r.method),
+      amount: Number(r.amount),
+      direction: r.direction === "out" ? "out" : "in",
+      voucherNumber: r.voucher_number ?? null,
+      referenceNumber: r.reference_number ?? null,
+      narration: r.narration ?? null,
+      partyName: r.party_name ?? null,
+      invoiceNumber: null,
+      customerName: null,
+      locationType: r.location_type ?? "headoffice",
+      locationId: Number(r.location_id ?? 0),
+      platformLedgerId: r.platform_ledger_id == null ? null : Number(r.platform_ledger_id),
+      platformName: r.platform_name ?? null,
+    })),
+  ].sort((a: any, b: any) =>
+    b.transactionDate.localeCompare(a.transactionDate) || a.key.localeCompare(b.key),
+  );
+  res.json(combined);
+});
+
 // ── GET /reconciliation/pending-manual-vouchers ──────────────────────────────
 // Manual Bank vouchers begin with one side on STD-ELEC-CLR because the actual
 // warehouse bank is intentionally not known at entry time. This queue is
@@ -2346,6 +2685,9 @@ router.post("/reconciliation/manual-vouchers", requireModuleAction("page:/accoun
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    await client.query(
+      `SELECT pg_advisory_xact_lock(hashtext('bank-reconciliation-reset'), 1)`,
+    );
     const access = await bookAccessScope((req as any).employee ?? {});
     const { rows: [clearing] } = await client.query(`SELECT id FROM account_ledgers WHERE code = 'STD-ELEC-CLR' FOR SHARE`);
     if (!clearing) { await client.query("ROLLBACK"); res.status(500).json({ error: "Electronic payment clearing ledger not configured." }); return; }
@@ -2429,7 +2771,6 @@ router.post("/reconciliation/manual-vouchers", requireModuleAction("page:/accoun
       const isPayment = row.kind === "payment";
       const voucherType = isPayment ? "payment" : "receipt";
       const voucherNumber = await nextVoucherNumber(client, voucherType, reconciliationDate);
-      const counterparty = isPayment ? Number(clearing.id) : Number(clearing.id);
       const adjustmentText = `Deferred bank reconciliation ${batchReference} for ${row.voucher_number ?? `${row.kind} #${row.id}`}`;
       let adjustmentId: number;
       let debit = 0;
@@ -2481,10 +2822,6 @@ router.post("/reconciliation/manual-vouchers", requireModuleAction("page:/accoun
          adjustmentText, firstLoc.locationType, firstLoc.locationId, (req as any).employee?.username ?? "system", batchReference],
       );
       await client.query(
-        `UPDATE ${isPayment ? "payments" : "receipts"} SET payment_mode = 'bank_settled' WHERE id = $1`,
-        [row.id],
-      );
-      await client.query(
         `INSERT INTO bank_reconciliation_entries
            (entry_id, ledger_id, source, transaction_date, debit, credit, voucher_number,
             description, location_type, location_id, status, reconciled_at, reconciled_by, reconciliation_reference)
@@ -2511,6 +2848,425 @@ router.post("/reconciliation/manual-vouchers", requireModuleAction("page:/accoun
     if (err?.code === "23505") { res.status(409).json({ error: "One or more vouchers were reconciled concurrently. Refresh and try again." }); return; }
     console.error("Deferred voucher reconciliation error:", err);
     res.status(500).json({ error: err?.message ?? "Failed to reconcile pending vouchers." });
+  } finally {
+    client.release();
+  }
+});
+
+// ── POST /reconciliation/settle-queue ────────────────────────────────────────
+// Atomically settles any mix of pending sale collections and manual
+// clearing-account vouchers with exactly one bank receipt or payment.
+router.post("/reconciliation/settle-queue", requireModuleAction("page:/accounts/reconciliation", "add"), async (req, res): Promise<void> => {
+  const body = (req.body ?? {}) as Record<string, any>;
+  const selected = Array.isArray(body.items) ? body.items : [];
+  const bankAccountId = Number(body.bankAccountId);
+  const reconciliationDate = String(body.reconciliationDate ?? "");
+  if (selected.length === 0 || selected.length > 500) {
+    res.status(400).json({ error: "Select between 1 and 500 pending items." }); return;
+  }
+  if (!Number.isInteger(bankAccountId) || bankAccountId <= 0) {
+    res.status(400).json({ error: "bankAccountId is required." }); return;
+  }
+  if (!isIsoDate(reconciliationDate)) {
+    res.status(400).json({ error: "reconciliationDate must be a real YYYY-MM-DD date." }); return;
+  }
+  if (await respondIfMonthLocked(res, pool, [reconciliationDate], "bank reconciliation settlement")) return;
+
+  const identities = selected.map((x: any) => ({
+    kind: String(x?.kind ?? ""),
+    id: Number(x?.id),
+    voucherKind: x?.voucherKind == null ? null : String(x.voucherKind),
+  }));
+  if (identities.some(x =>
+    !["sale_payment", "manual_voucher"].includes(x.kind)
+    || !Number.isInteger(x.id) || x.id <= 0
+    || (x.kind === "manual_voucher" && !["payment", "receipt"].includes(String(x.voucherKind)))
+    || (x.kind === "sale_payment" && x.voucherKind != null)
+  )) {
+    res.status(400).json({ error: "Every selected item must contain a valid kind, id, and voucher kind where applicable." }); return;
+  }
+  const unique = new Set(identities.map(x => `${x.kind}:${x.voucherKind ?? ""}:${x.id}`));
+  if (unique.size !== identities.length) {
+    res.status(400).json({ error: "An item may appear only once in a settlement." }); return;
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    // Reset and every accounting-impact settlement serialize on this key. A
+    // reset therefore cannot miss a batch that commits halfway through it.
+    await client.query(
+      `SELECT pg_advisory_xact_lock(hashtext('bank-reconciliation-reset'), 1)`,
+    );
+    const access = await bookAccessScope((req as any).employee ?? {});
+    const { rows: [clearing] } = await client.query(
+      `SELECT id FROM account_ledgers WHERE code = 'STD-ELEC-CLR' FOR SHARE`,
+    );
+    if (!clearing) {
+      await client.query("ROLLBACK");
+      res.status(500).json({ error: "Electronic payment clearing ledger not configured." }); return;
+    }
+    const { rows: [account] } = await client.query(
+      `SELECT cba.id AS account_id, cba.ledger_id, cba.name,
+              COALESCE(cba.location_type, 'headoffice') AS location_type,
+              COALESCE(cba.location_id, 0) AS location_id,
+              COALESCE(
+                (SELECT json_agg(json_build_object('location_type', l.location_type, 'location_id', l.location_id))
+                   FROM cash_bank_account_locations l WHERE l.account_id = cba.id),
+                json_build_array(json_build_object(
+                  'location_type', COALESCE(cba.location_type, 'headoffice'),
+                  'location_id', COALESCE(cba.location_id, 0)))
+              ) AS locations
+         FROM cash_bank_accounts cba
+         JOIN account_ledgers al ON al.id = cba.ledger_id
+        WHERE cba.id = $1 AND cba.account_type = 'bank' AND COALESCE(al.is_active, true)
+        FOR UPDATE OF cba`,
+      [bankAccountId],
+    );
+    if (!account || (access.ledgerIds && !access.ledgerIds.has(Number(account.ledger_id)))) {
+      await client.query("ROLLBACK");
+      res.status(404).json({ error: "An active bank account you are authorized to use is required." }); return;
+    }
+
+    const saleIds = identities.filter(x => x.kind === "sale_payment").map(x => x.id);
+    const manualPaymentIds = identities.filter(x => x.kind === "manual_voucher" && x.voucherKind === "payment").map(x => x.id);
+    const manualReceiptIds = identities.filter(x => x.kind === "manual_voucher" && x.voucherKind === "receipt").map(x => x.id);
+    const electronicModes = new Set(["upi", "bank", "card", "bank_transfer", "online", "swiggy", "zomato", "other_online"]);
+    let saleRows: any[] = [];
+    if (saleIds.length) {
+      const result = await client.query(
+        `SELECT sp.id, sp.clearing_receipt_id, sp.method, sp.amount::numeric AS amount,
+                sp.reconciliation_status, sp.online_platform_ledger_id, sp.reference_number,
+                sp.notes, s.invoice_number, s.location_type, s.location_id
+           FROM sale_payments sp
+           JOIN sales s ON s.id = sp.sale_id
+          WHERE sp.id = ANY($1::int[])
+          ORDER BY sp.id
+          FOR UPDATE OF sp`,
+        [saleIds],
+      );
+      saleRows = result.rows;
+      if (saleRows.length !== saleIds.length) {
+        await client.query("ROLLBACK");
+        res.status(409).json({ error: "One or more sale collections are no longer pending." }); return;
+      }
+      for (const row of saleRows) {
+        if (row.reconciliation_status !== "pending" || !electronicModes.has(String(row.method))) {
+          await client.query("ROLLBACK");
+          res.status(409).json({ error: `Sale collection ${row.id} is no longer pending electronic reconciliation.` }); return;
+        }
+      }
+      const receiptIds = [...new Set(saleRows
+        .map((row: any) => row.clearing_receipt_id == null ? null : Number(row.clearing_receipt_id))
+        .filter((id: number | null): id is number => id != null))];
+      if (receiptIds.length) {
+        const { rows: linkedPayments } = await client.query(
+          `SELECT id, clearing_receipt_id, amount::numeric AS amount, reconciliation_status
+             FROM sale_payments
+            WHERE clearing_receipt_id = ANY($1::int[])
+            ORDER BY id
+            FOR UPDATE`,
+          [receiptIds],
+        );
+        const selectedSaleIds = new Set(saleIds);
+        for (const receiptId of receiptIds) {
+          const pendingForReceipt = linkedPayments.filter((row: any) =>
+            Number(row.clearing_receipt_id) === receiptId && row.reconciliation_status === "pending",
+          );
+          if (pendingForReceipt.some((row: any) => !selectedSaleIds.has(Number(row.id)))) {
+            await client.query("ROLLBACK");
+            res.status(409).json({ error: "Select every pending allocation linked to the same clearing receipt." }); return;
+          }
+          const { rows: [receipt] } = await client.query(
+            `SELECT id, amount::numeric AS amount, received_in_ledger_id
+               FROM receipts WHERE id = $1 FOR UPDATE`,
+            [receiptId],
+          );
+          const allocated = pendingForReceipt.reduce((sum: number, row: any) => sum + Math.round(Number(row.amount) * 100), 0);
+          if (!receipt || Number(receipt.received_in_ledger_id) !== Number(clearing.id)
+            || allocated !== Math.round(Number(receipt.amount) * 100)) {
+            await client.query("ROLLBACK");
+            res.status(409).json({ error: "A clearing receipt no longer matches its pending collection allocations." }); return;
+          }
+          const { rows: [alreadyReconciled] } = await client.query(
+            `SELECT 1 FROM bank_reconciliation_entries
+              WHERE ledger_id = $1 AND entry_id = $2 AND status = 'reconciled'`,
+            [Number(clearing.id), `receipt:${receiptId}`],
+          );
+          if (alreadyReconciled) {
+            await client.query("ROLLBACK");
+            res.status(409).json({ error: "A selected collection's clearing receipt has already been reconciled." }); return;
+          }
+        }
+      }
+    }
+
+    const loadManualRows = async (kind: "payment" | "receipt", ids: number[]) => {
+      if (!ids.length) return [];
+      const table = kind === "payment" ? "payments" : "receipts";
+      const dateColumn = kind === "payment" ? "payment_date" : "receipt_date";
+      const clearingColumn = kind === "payment" ? "paid_from_ledger_id" : "received_in_ledger_id";
+      const { rows } = await client.query(
+        `SELECT id, voucher_number, ${dateColumn} AS transaction_date,
+                amount::numeric AS amount, ${clearingColumn} AS clearing_ledger_id,
+                location_type, location_id, source, payment_mode, narration, reference_number
+           FROM ${table}
+          WHERE id = ANY($1::int[])
+          ORDER BY id
+          FOR UPDATE`,
+        [ids],
+      );
+      return rows.map((row: any) => ({ ...row, kind, id: Number(row.id) }));
+    };
+    const manualRows = [
+      ...await loadManualRows("payment", manualPaymentIds),
+      ...await loadManualRows("receipt", manualReceiptIds),
+    ];
+    if (manualRows.length !== manualPaymentIds.length + manualReceiptIds.length) {
+      await client.query("ROLLBACK");
+      res.status(409).json({ error: "One or more manual vouchers are no longer pending." }); return;
+    }
+    for (const row of manualRows) {
+      const voucherKind = String(row.kind);
+      const entryId = `${voucherKind}:${row.id}`;
+      if (Number(row.clearing_ledger_id) !== Number(clearing.id)
+        || !electronicModes.has(String(row.payment_mode))
+        || !["manual", "allocation"].includes(String(row.source))) {
+        await client.query("ROLLBACK");
+        res.status(409).json({ error: `${voucherKind} ${row.id} is no longer pending bank reconciliation.` }); return;
+      }
+      const { rows: [alreadyReconciled] } = await client.query(
+        `SELECT 1 FROM bank_reconciliation_entries
+          WHERE ledger_id = $1 AND entry_id = $2 AND status = 'reconciled'`,
+        [Number(clearing.id), entryId],
+      );
+      if (alreadyReconciled) {
+        await client.query("ROLLBACK");
+        res.status(409).json({ error: `${voucherKind} ${row.id} is already reconciled.` }); return;
+      }
+    }
+    const selectedManualReceiptIds = manualRows
+      .filter((row: any) => row.kind === "receipt")
+      .map((row: any) => Number(row.id));
+    if (selectedManualReceiptIds.length) {
+      const { rows: linkedPending } = await client.query(
+        `SELECT id, clearing_receipt_id
+           FROM sale_payments
+          WHERE clearing_receipt_id = ANY($1::int[])
+            AND reconciliation_status = 'pending'
+          FOR UPDATE`,
+        [selectedManualReceiptIds],
+      );
+      if (linkedPending.length) {
+        await client.query("ROLLBACK");
+        res.status(409).json({ error: "Settle pending sale allocations through their collection rows, not the linked receipt." }); return;
+      }
+    }
+
+    for (const row of [...saleRows, ...manualRows]) {
+      const loc = {
+        locationType: row.location_type ?? "headoffice",
+        locationId: Number(row.location_id ?? 0),
+      };
+      if (!isLocationInScope(access.dataScope, loc.locationType, loc.locationId)) {
+        await client.query("ROLLBACK");
+        res.status(404).json({ error: "One or more selected items are outside your location scope." }); return;
+      }
+      if (!matchesAccountLocation(account, loc)) {
+        await client.query("ROLLBACK");
+        res.status(409).json({ error: `The selected bank account is not permitted for the ${loc.locationType} location.` }); return;
+      }
+      row.loc = loc;
+    }
+    const allRows = [...saleRows, ...manualRows];
+    const firstLoc = allRows[0].loc;
+    if (allRows.some(row => row.loc.locationType !== firstLoc.locationType || row.loc.locationId !== firstLoc.locationId)) {
+      await client.query("ROLLBACK");
+      res.status(400).json({ error: "Settle items from one warehouse or outlet at a time." }); return;
+    }
+
+    const year = Number(reconciliationDate.slice(0, 4));
+    await client.query(
+      `SELECT pg_advisory_xact_lock(hashtext('bank-reconciliation-batch-reference'), $1::int)`,
+      [year],
+    );
+    const { rows: [maxRow] } = await client.query(
+      `SELECT COALESCE(MAX((regexp_replace(batch_reference, '^BANK-RECON-\\d+-', ''))::int), 0) AS max_seq
+         FROM bank_reconciliation_batches
+        WHERE batch_reference ~ ('^BANK-RECON-' || $1::text || '-\\d+$')`,
+      [year],
+    );
+    const batchReference = `BANK-RECON-${year}-${String(Number(maxRow.max_seq) + 1).padStart(4, "0")}`;
+
+    const saleReceiptIds = new Set(saleRows
+      .map((row: any) => row.clearing_receipt_id == null ? null : Number(row.clearing_receipt_id))
+      .filter((id: number | null): id is number => id != null));
+    for (const receiptId of saleReceiptIds) {
+      const { rows: [receipt] } = await client.query(
+        `SELECT id, voucher_number, receipt_date, amount::numeric AS amount
+           FROM receipts WHERE id = $1`,
+        [receiptId],
+      );
+      if (!receipt) continue;
+      await client.query(
+        `INSERT INTO bank_reconciliation_entries
+           (entry_id, ledger_id, source, transaction_date, debit, credit, voucher_number,
+            description, location_type, location_id, status, reconciled_at, reconciled_by, reconciliation_reference)
+         VALUES ($1,$2,'sale_receipt',$3,$4,0,$5,$6,$7,$8,'reconciled',now(),$9,$10)
+         ON CONFLICT (ledger_id, entry_id) DO UPDATE
+           SET status='reconciled', reconciled_at=now(), reconciled_by=EXCLUDED.reconciled_by,
+               reconciliation_reference=EXCLUDED.reconciliation_reference`,
+        [`receipt:${receiptId}`, Number(clearing.id), String(receipt.receipt_date).slice(0, 10),
+          Number(receipt.amount), receipt.voucher_number ?? null, `Pending sale collections`,
+          firstLoc.locationType, firstLoc.locationId, (req as any).employee?.username ?? "system",
+           batchReference],
+      );
+    }
+
+    const signedCents = (row: any) => {
+      const cents = Math.round(Number(row.amount) * 100);
+      return row.kind === "payment" ? -cents : cents;
+    };
+    const netCents = allRows.reduce((sum, row) => sum + signedCents(row), 0);
+    if (netCents === 0) {
+      await client.query("ROLLBACK");
+      res.status(400).json({ error: "The selected items offset to zero, so no single bank entry can be posted." }); return;
+    }
+    const grossCents = allRows.reduce((sum, row) => sum + Math.abs(Math.round(Number(row.amount) * 100)), 0);
+    const grossAmount = grossCents / 100;
+    const postingAmount = Math.abs(netCents) / 100;
+    const netDirection = netCents > 0 ? "in" : "out";
+    const sourceItems = [
+      ...saleRows.map((row: any) => ({
+        kind: "sale_payment", id: Number(row.id), amount: Number(row.amount),
+        method: String(row.method), onlinePlatformLedgerId: row.online_platform_ledger_id == null ? null : Number(row.online_platform_ledger_id),
+        clearingReceiptId: row.clearing_receipt_id == null ? null : Number(row.clearing_receipt_id),
+      })),
+      ...manualRows.map((row: any) => ({
+        kind: "manual_voucher", voucherKind: row.kind, id: Number(row.id),
+        amount: Number(row.amount), method: String(row.payment_mode),
+      })),
+    ];
+    const createdBy = (req as any).employee?.username ?? "system";
+    const { rows: [batch] } = await client.query(
+      `INSERT INTO bank_reconciliation_batches
+         (batch_reference, reconciliation_date, bank_account_id, bank_ledger_id,
+          location_type, location_id, gross_amount, processing_charge, net_amount,
+          accounting_impact, created_by, source_items)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,0,$8,'unified_reconciliation_settlement',$9,$10::jsonb)
+       RETURNING id`,
+       [batchReference, reconciliationDate, Number(account.account_id), Number(account.ledger_id),
+         firstLoc.locationType, firstLoc.locationId, grossAmount, postingAmount, createdBy,
+        JSON.stringify(sourceItems)],
+    );
+
+    const voucherType = netCents > 0 ? "receipt" : "payment";
+    const voucherNumber = await nextVoucherNumber(client, voucherType, reconciliationDate);
+    const settlementNarration = `Unified bank reconciliation ${batchReference} — ${allRows.length} item(s)`;
+    let settlementId: number;
+    let debit = 0;
+    let credit = 0;
+    if (voucherType === "receipt") {
+      const { rows: [created] } = await client.query(
+        `INSERT INTO receipts
+           (voucher_number, receipt_date, received_from_ledger_id, received_in_ledger_id,
+            amount, narration, source, payment_mode, location_type, location_id, created_by)
+         VALUES ($1,$2,$3,$4,$5,$6,'settlement','bank',$7,$8,$9)
+         RETURNING id`,
+        [voucherNumber, reconciliationDate, Number(clearing.id), Number(account.ledger_id),
+          postingAmount, settlementNarration, firstLoc.locationType, firstLoc.locationId, createdBy],
+      );
+      settlementId = Number(created.id);
+      debit = postingAmount;
+    } else {
+      const { rows: [created] } = await client.query(
+        `INSERT INTO payments
+           (voucher_number, payment_date, paid_from_ledger_id, paid_to_ledger_id,
+            amount, narration, source, payment_mode, location_type, location_id, created_by)
+         VALUES ($1,$2,$3,$4,$5,$6,'settlement','bank',$7,$8,$9)
+         RETURNING id`,
+        [voucherNumber, reconciliationDate, Number(account.ledger_id), Number(clearing.id),
+          postingAmount, settlementNarration, firstLoc.locationType, firstLoc.locationId, createdBy],
+      );
+      settlementId = Number(created.id);
+      credit = postingAmount;
+    }
+    const settlementEntryId = `${voucherType}:${settlementId}`;
+    await client.query(
+      `INSERT INTO bank_reconciliation_batch_items
+         (batch_id, entry_id, ledger_id, source, transaction_date, debit, credit, amount)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [Number(batch.id), settlementEntryId, Number(account.ledger_id), voucherType,
+        reconciliationDate, debit, credit, postingAmount],
+    );
+    await client.query(
+      `INSERT INTO bank_reconciliation_entries
+         (entry_id, ledger_id, source, transaction_date, debit, credit, voucher_number,
+          description, location_type, location_id, status, reconciled_at, reconciled_by, reconciliation_reference)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'reconciled',now(),$11,$12)
+       ON CONFLICT (ledger_id, entry_id) DO UPDATE
+         SET status='reconciled', reconciled_at=now(), reconciled_by=EXCLUDED.reconciled_by,
+             reconciliation_reference=EXCLUDED.reconciliation_reference`,
+      [settlementEntryId, Number(account.ledger_id), voucherType, reconciliationDate, debit, credit,
+        voucherNumber, settlementNarration, firstLoc.locationType, firstLoc.locationId, createdBy, batchReference],
+    );
+
+    if (saleIds.length) {
+      const { rowCount } = await client.query(
+        `UPDATE sale_payments
+            SET reconciliation_status = 'reconciled'
+          WHERE id = ANY($1::int[]) AND reconciliation_status = 'pending'`,
+        [saleIds],
+      );
+      if (rowCount !== saleIds.length) {
+        await client.query("ROLLBACK");
+        res.status(409).json({ error: "A sale collection changed while the settlement was being created." }); return;
+      }
+    }
+    for (const row of manualRows) {
+      const isPayment = row.kind === "payment";
+      const entryId = `${row.kind}:${row.id}`;
+      await client.query(
+        `INSERT INTO bank_reconciliation_entries
+           (entry_id, ledger_id, source, transaction_date, debit, credit, voucher_number,
+            description, location_type, location_id, status, reconciled_at, reconciled_by, reconciliation_reference)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'reconciled',now(),$11,$12)
+         ON CONFLICT (ledger_id, entry_id) DO UPDATE
+           SET status='reconciled', reconciled_at=now(), reconciled_by=EXCLUDED.reconciled_by,
+               reconciliation_reference=EXCLUDED.reconciliation_reference`,
+        [entryId, Number(clearing.id), `deferred_${row.kind}`,
+          String(row.transaction_date).slice(0, 10),
+          isPayment ? 0 : Number(row.amount), isPayment ? Number(row.amount) : 0,
+          row.voucher_number ?? null, row.narration ?? settlementNarration,
+          firstLoc.locationType, firstLoc.locationId, createdBy, batchReference],
+      );
+    }
+    await logActivityInTransaction(client, {
+      action: "CREATE", module: "reconciliation", entityType: "bank_reconciliation_batch",
+      entityId: Number(batch.id),
+      description: `Unified reconciliation ${batchReference} — ${allRows.length} source item(s), one ${voucherType} entry`,
+      metadata: {
+        batchReference, itemCount: allRows.length, grossAmount, netAmount: postingAmount, netDirection,
+        bankAccountId, bankLedgerId: Number(account.ledger_id), settlementEntryId,
+        accountingImpact: "unified_reconciliation_settlement",
+      },
+      user: createdBy,
+    });
+    await client.query("COMMIT");
+    res.status(201).json({
+      id: Number(batch.id), batchReference, itemCount: allRows.length, grossAmount,
+      netAmount: postingAmount,
+      destinationBankLedgerId: Number(account.ledger_id), reconciliationDate,
+      accountingImpact: "unified_reconciliation_settlement",
+    });
+  } catch (err: any) {
+    await client.query("ROLLBACK").catch(() => {});
+    if (err?.code === "23505") {
+      res.status(409).json({ error: "One or more selected items were reconciled concurrently. Refresh and try again." });
+      return;
+    }
+    (req as any).log?.error?.({ err }, "Unified reconciliation settlement failed");
+    res.status(500).json({ error: err?.message ?? "Failed to settle reconciliation items." });
   } finally {
     client.release();
   }
@@ -2704,6 +3460,9 @@ router.post("/reconciliation/batches", requireModuleAction("page:/accounts/recon
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    await client.query(
+      `SELECT pg_advisory_xact_lock(hashtext('bank-reconciliation-reset'), 1)`,
+    );
 
     // 1. Verify all payments exist, are pending, and lock them
     const { rows: payments } = await client.query(

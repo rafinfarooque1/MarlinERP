@@ -970,8 +970,8 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
   // sale never burns an invoice number.
   const paymentModeIn = parsed.data.paymentMode ?? 'cash';
   // The generated zod schema types paymentMode as a plain string, so the mode
-  // list is enforced here. New POS sales may be Cash, Bank / UPI, or Credit.
-  // The selected Cash & Bank account derives the stored bank/upi spelling.
+  // list is enforced here. New POS sales may use the four payment channels;
+  // Credit remains supported through the separate pay-later control.
   if (!isAllowedNewSaleMode(paymentModeIn)) {
     res.status(400).json({
       error: `paymentMode must be one of: ${CREATE_SALE_PAYMENT_MODES.join(', ')}.`,
@@ -994,7 +994,7 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
   let receiveAccount: ReceiveIntoAccount | null = null;
   // null = "the full remainder after any advance adjustment" (pay in full now).
   let amountReceivedIn: number | null = null;
-  if (receivedInLedgerId || paymentModeIn === 'bank' || isOnlinePaymentMode(paymentModeIn)) {
+  if (receivedInLedgerId || paymentModeIn === 'upi' || paymentModeIn === 'bank' || isOnlinePaymentMode(paymentModeIn)) {
     if (paymentModeIn === 'credit') {
       res.status(400).json({ error: "Pick either Credit (pay later) or a Receive-Into account — not both." });
       return;
@@ -1003,12 +1003,16 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
       const resolvedAcc = await resolveReceiveIntoAccount(pgPool, locationType, locationId, receivedInLedgerId);
       if ('error' in resolvedAcc) { res.status(400).json({ error: resolvedAcc.error }); return; }
       receiveAccount = resolvedAcc;
-      if (paymentModeIn === 'bank' && receiveAccount.method === 'cash') {
-        res.status(400).json({ error: "Bank / UPI sales require a bank or UPI account." });
+      if (paymentModeIn === 'bank' && receiveAccount.method !== 'bank') {
+        res.status(400).json({ error: "Bank sales require a bank account." });
         return;
       }
-      if (isOnlinePaymentMode(paymentModeIn) && receiveAccount.method === 'cash') {
-        res.status(400).json({ error: "Online sales cannot use a cash account." });
+      if (paymentModeIn === 'upi' && receiveAccount.method !== 'upi') {
+        res.status(400).json({ error: "UPI sales require a UPI account." });
+        return;
+      }
+      if (isOnlinePaymentMode(paymentModeIn) && receiveAccount.method !== 'online') {
+        res.status(400).json({ error: "Online sales require an Online platform account." });
         return;
       }
     }
@@ -1154,7 +1158,7 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
     // much of it the advance already covered.
     let counterPay: { amount: number } | null = null;
     let saleMode = paymentModeIn;
-    if (receiveAccount || paymentModeIn === 'bank' || isOnlinePaymentMode(paymentModeIn)) {
+    if (receiveAccount || paymentModeIn === 'upi' || paymentModeIn === 'bank' || isOnlinePaymentMode(paymentModeIn)) {
       const remainderDue = round2(totalAmount - appliedAdvance);
       const amt = amountReceivedIn ?? Math.max(0, remainderDue);
       if (amt <= 0.004) {
@@ -1425,11 +1429,12 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
       }
       await txClient.query(
         `INSERT INTO sale_payments
-           (sale_id, payment_date, method, amount, reference_number, notes, reconciliation_status, clearing_receipt_id, outlet_id, created_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+           (sale_id, payment_date, method, amount, reference_number, notes, reconciliation_status, clearing_receipt_id, outlet_id, created_by, online_platform_ledger_id)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
          [row.id, parsed.data.saleDate, collectionMethod, counterPay.amount, payReferenceNumber,
          `Received at billing — ${invoiceNumber}`, posted.reconciliationStatus, posted.clearingReceiptId,
-         outletIdForInsert, (req as any).employee?.username ?? null]
+          outletIdForInsert, (req as any).employee?.username ?? null,
+          receiveAccount?.method === 'online' ? receiveAccount.ledgerId : null]
       );
     }
 

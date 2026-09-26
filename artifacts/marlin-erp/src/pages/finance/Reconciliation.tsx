@@ -3,7 +3,6 @@ import { AppLayout } from '@/components/layout/AppLayout';
 import { usePermission } from '@/lib/usePermission';
 import { useOutletsEnabled, useClearOutletSelection } from '@/lib/useFeatureFlags';
 import { useLocationContext } from '@/lib/locationContext';
-import { formatSalesInvoiceDisplayNumber } from '@/lib/invoiceNumber';
 import { formatGstDocumentDisplayNumber } from '@/lib/invoiceNumber';
 import { formatDateOrDash } from '@/lib/date';
 import { Button } from '@/components/ui/button';
@@ -17,8 +16,7 @@ import {
   useGetBankReconciliationAudit, useGetBankReconciliationBatches,
   useGetBankReconciliationBatch, useUpdateBankReconciliationBatch,
   useResetBankReconciliation,
-  useGetPendingPayments, useCreateReconciliationBatch,
-  useGetPendingManualVouchers, useReconcilePendingManualVouchers,
+  useGetReconciliationPendingQueue, useSettlePendingReconciliationQueue,
   useListOutlets, useListWarehouses,
 } from '@workspace/api-client-react';
 import { paymentModeLabel } from '@/lib/paymentModes';
@@ -70,14 +68,11 @@ export default function Reconciliation() {
   const [reconciliationDate, setReconciliationDate] = useState(localDateValue);
   const [processingCharge, setProcessingCharge] = useState('0');
   const [pendingSelected, setPendingSelected] = useState<Set<string>>(new Set());
-  const [deferredOpen, setDeferredOpen] = useState(false);
-  const [deferredBankAccountId, setDeferredBankAccountId] = useState('');
-  const [deferredDate, setDeferredDate] = useState(localDateValue);
+  const [pendingOpen, setPendingOpen] = useState(false);
+  const [pendingBankAccountId, setPendingBankAccountId] = useState('');
+  const [pendingDate, setPendingDate] = useState(localDateValue);
   const [pendingMethod, setPendingMethod] = useState('all');
-  const [pendingSaleSelected, setPendingSaleSelected] = useState<Set<number>>(new Set());
-  const [saleBatchOpen, setSaleBatchOpen] = useState(false);
-  const [saleSettlementLedgerId, setSaleSettlementLedgerId] = useState('');
-  const [saleSettlementDate, setSaleSettlementDate] = useState(localDateValue);
+  const [pendingPlatform, setPendingPlatform] = useState('all');
 
   // The page has its own location filter for explicit, auditable account
   // selection. The global selector is still sent by the client as a header.
@@ -98,10 +93,11 @@ export default function Reconciliation() {
     toDate: toDate || undefined,
     search: search.trim() || undefined,
   });
-  const { data: pendingSalePayments = [], isLoading: pendingSalesLoading } = useGetPendingPayments({
+  const { data: pendingQueue = [], isLoading: pendingQueueLoading } = useGetReconciliationPendingQueue({
     locationType: filterType,
     locationId,
     method: pendingMethod !== 'all' ? pendingMethod : undefined,
+    platformLedgerId: pendingMethod === 'online' && pendingPlatform !== 'all' ? pendingPlatform : undefined,
     fromDate: fromDate || undefined,
     toDate: toDate || undefined,
     search: search.trim() || undefined,
@@ -115,9 +111,8 @@ export default function Reconciliation() {
     enabled: editBatchId != null,
   });
   const resetMutation = useResetBankReconciliation();
-  const { data: pendingManualVouchers = [], isLoading: pendingManualLoading } = useGetPendingManualVouchers();
-  const reconcilePendingMutation = useReconcilePendingManualVouchers();
-  const selectedPendingRows = pendingManualVouchers.filter(v => pendingSelected.has(`${v.kind}:${v.id}`));
+  const settlePendingMutation = useSettlePendingReconciliationQueue();
+  const selectedPendingRows = pendingQueue.filter(v => pendingSelected.has(v.key));
   const pendingLocation = selectedPendingRows.length > 0
     ? { type: selectedPendingRows[0].locationType, id: selectedPendingRows[0].locationId }
     : { type: undefined, id: undefined };
@@ -125,13 +120,18 @@ export default function Reconciliation() {
     locationType: pendingLocation.type,
     locationId: pendingLocation.id,
   });
-  const { data: settlementLedgers = [] } = useGetBankLedgers({
-    locationType: filterType,
-    locationId,
-    includeCash: true,
-  });
-  const createSaleBatchMutation = useCreateReconciliationBatch();
-  const selectedPendingSaleRows = pendingSalePayments.filter(p => pendingSaleSelected.has(p.id));
+  const settlementBankLedgers = pendingBankLedgers.filter(account => account.accountType === 'bank');
+  const pendingPlatforms = bankLedgers
+    .filter(account => account.accountType === 'online')
+    .reduce((map, account) => map.set(String(account.ledgerId), account.name), new Map<string, string>());
+  const selectedPendingGross = selectedPendingRows.reduce(
+    (sum, item) => sum + Math.abs(Math.round(Number(item.amount) * 100)),
+    0,
+  ) / 100;
+  const selectedPendingNet = selectedPendingRows.reduce(
+    (sum, item) => sum + (item.direction === 'out' ? -1 : 1) * Math.round(Number(item.amount) * 100),
+    0,
+  ) / 100;
 
   useEffect(() => {
     if (!editingBatch || editBatchId == null) return;
@@ -149,6 +149,10 @@ export default function Reconciliation() {
     setToDate('');
     setSearch('');
   }, [editingBatch, editBatchId]);
+
+  useEffect(() => {
+    setPendingSelected(new Set());
+  }, [filterType, locationId, fromDate, toDate, search, pendingMethod, pendingPlatform]);
 
   const visibleTransactions = transactions.filter((t) =>
     statusFilter === 'all' || t.reconciliationStatus === statusFilter,
@@ -294,8 +298,8 @@ export default function Reconciliation() {
     setAccountFilter('all');
   }
 
-  function togglePending(voucher: typeof pendingManualVouchers[number], checked: boolean) {
-    const key = `${voucher.kind}:${voucher.id}`;
+  function togglePending(voucher: typeof pendingQueue[number], checked: boolean) {
+    const key = voucher.key;
     if (checked && selectedPendingRows.length > 0) {
       const first = selectedPendingRows[0];
       if (first.locationType !== voucher.locationType || first.locationId !== voucher.locationId) {
@@ -310,71 +314,44 @@ export default function Reconciliation() {
     });
   }
 
-  function openDeferredReconciliation() {
-    setDeferredDate(localDateValue());
-    setDeferredBankAccountId('');
-    setDeferredOpen(true);
+  function openPendingReconciliation() {
+    setPendingDate(localDateValue());
+    setPendingBankAccountId('');
+    setPendingOpen(true);
   }
 
-  function togglePendingSale(payment: typeof pendingSalePayments[number], checked: boolean) {
-    setPendingSaleSelected(previous => {
-      const next = new Set(previous);
-      if (checked) next.add(payment.id); else next.delete(payment.id);
-      return next;
-    });
-  }
-
-  function openSaleReconciliation() {
-    setSaleSettlementDate(localDateValue());
-    setSaleSettlementLedgerId('');
-    setSaleBatchOpen(true);
-  }
-
-  async function submitSaleReconciliation() {
-    if (!selectedPendingSaleRows.length || !saleSettlementLedgerId || !saleSettlementDate) return;
+  async function submitPendingReconciliation() {
+    if (!selectedPendingRows.length || !pendingBankAccountId || !pendingDate) return;
     try {
-      await createSaleBatchMutation.mutateAsync({
-        salePaymentIds: selectedPendingSaleRows.map(p => p.id),
-        charges: 0,
-        settlementDate: saleSettlementDate,
-        destinationBankLedgerId: Number(saleSettlementLedgerId),
-      });
-      setPendingSaleSelected(new Set());
-      setSaleBatchOpen(false);
-      toast.success('Online collections cleared into the selected Cash / Bank ledger.');
-    } catch (e: any) {
-      toast.error(e?.data?.error || e?.message || 'Unable to clear online collections.');
-    }
-  }
-
-  async function submitDeferredReconciliation() {
-    if (!selectedPendingRows.length || !deferredBankAccountId || !deferredDate) return;
-    try {
-      await reconcilePendingMutation.mutateAsync({
-        bankAccountId: Number(deferredBankAccountId),
-        reconciliationDate: deferredDate,
-        pendingVoucherIds: selectedPendingRows.map(v => ({ kind: v.kind, id: v.id })),
+      await settlePendingMutation.mutateAsync({
+        bankAccountId: Number(pendingBankAccountId),
+        reconciliationDate: pendingDate,
+        items: selectedPendingRows.map(v => ({
+          kind: v.kind,
+          id: v.id,
+          voucherKind: v.voucherKind,
+        })),
       });
       setPendingSelected(new Set());
-      setDeferredOpen(false);
-      toast.success('Bank vouchers reconciled and posted to the selected bank account.');
+      setPendingOpen(false);
+      toast.success('Selected pending items were settled in one bank batch.');
     } catch (e: any) {
-      toast.error(e?.data?.error || e?.message || 'Unable to reconcile bank vouchers.');
+      toast.error(e?.data?.error || e?.message || 'Unable to settle pending items.');
     }
   }
 
   async function resetReconciliation() {
     const confirmed = window.confirm(
-      'Reset bank reconciliation review state? This clears reconciliation batches and statuses, but does not delete sales, receipts, payments, journals, or bank postings.',
+      'Reset reconciliation? This reverses reconciliation-created postings, unlinks reconciled records, restores originals to pending review, and preserves the originals and audit trail.',
     );
     if (!confirmed) return;
     try {
-      const result = await resetMutation.mutateAsync() as { reconciledEntriesReset: number };
+      const result = await resetMutation.mutateAsync({ reversalDate: localDateValue() }) as { reconciledEntriesReset: number };
       setSelectedKeys(new Set());
       setEditBatchId(null);
       setBatchOpen(false);
       toast.success(
-        `Reset complete: ${result.reconciledEntriesReset} transaction status(es) cleared; financial transactions were preserved.`,
+        'Reset complete: reconciliation postings were reversed, links were cleared, and the original documents were preserved.',
       );
     } catch (e: any) {
       toast.error(e?.data?.error || e?.message || 'Unable to reset reconciliation state.');
@@ -403,116 +380,70 @@ export default function Reconciliation() {
         />
 
         <div className="rounded-xl border border-primary/30 bg-primary/5 overflow-hidden">
-          <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 border-b border-primary/20">
-            <div>
-              <h2 className="font-semibold">Pending bank vouchers</h2>
-              <p className="text-xs text-muted-foreground">
-                Bank vouchers entered without a destination account. Select the actual permitted warehouse bank account to complete posting.
-              </p>
-            </div>
-            <Button
-              size="sm"
-              disabled={!perm.canEdit || selectedPendingRows.length === 0}
-              onClick={openDeferredReconciliation}
-            >
-              <Landmark className="w-4 h-4 mr-2" />
-              Reconcile pending{selectedPendingRows.length ? ` (${selectedPendingRows.length})` : ''}
-            </Button>
-          </div>
-          {pendingManualLoading ? (
-            <div className="px-4 py-5 text-sm text-muted-foreground">Loading pending vouchers…</div>
-          ) : pendingManualVouchers.length === 0 ? (
-            <div className="px-4 py-5 text-sm text-muted-foreground">No deferred bank vouchers.</div>
-          ) : (
-            <Table>
-              <TableHeader><TableRow>
-                <TableHead className="w-12"></TableHead><TableHead>Date</TableHead><TableHead>Type</TableHead>
-                <TableHead>Voucher</TableHead><TableHead>Party</TableHead><TableHead>Location</TableHead><TableHead className="text-right">Amount</TableHead>
-              </TableRow></TableHeader>
-              <TableBody>
-                {pendingManualVouchers.map(v => (
-                  <TableRow key={`${v.kind}:${v.id}`}>
-                    <TableCell>
-                      <Checkbox
-                        checked={pendingSelected.has(`${v.kind}:${v.id}`)}
-                        onCheckedChange={checked => togglePending(v, checked === true)}
-                        disabled={!perm.canEdit}
-                        aria-label={`Select ${v.voucherNumber || `${v.kind} ${v.id}`}`}
-                      />
-                    </TableCell>
-                    <TableCell className="text-xs text-muted-foreground">{formatDateOrDash(v.transactionDate)}</TableCell>
-                    <TableCell className="text-sm capitalize">{v.kind}</TableCell>
-                    <TableCell className="font-mono text-xs">{formatGstDocumentDisplayNumber(v.voucherNumber || `${v.kind} #${v.id}`)}</TableCell>
-                    <TableCell className="text-sm">{v.partyName ?? '—'}</TableCell>
-                    <TableCell className="text-sm">{v.locationType === 'headoffice' ? 'Head Office' : `${v.locationType} #${v.locationId}`}</TableCell>
-                    <TableCell className="text-right font-mono text-sm">{fmt(v.amount)}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-        </div>
-
-        <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 overflow-hidden">
           <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 border-b border-amber-500/20">
             <div>
-              <h2 className="font-semibold">Pending online collections</h2>
+              <h2 className="font-semibold">Pending reconciliation queue</h2>
               <p className="text-xs text-muted-foreground">
-                Swiggy, Zomato, Bank and other electronic collections stay in clearing until you match them to the ledger where the settlement arrived.
+                Bank vouchers and electronic collections can be selected together and settled as one bank entry.
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <Select value={pendingMethod} onValueChange={setPendingMethod}>
                 <SelectTrigger className="h-9 w-40"><SelectValue placeholder="Payment mode" /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">All online modes</SelectItem>
-                  <SelectItem value="bank">Bank</SelectItem>
-                   <SelectItem value="online">Online</SelectItem>
-                  <SelectItem value="swiggy">Swiggy</SelectItem>
-                  <SelectItem value="zomato">Zomato</SelectItem>
-                  <SelectItem value="other_online">Other Online</SelectItem>
+                  <SelectItem value="all">All modes</SelectItem><SelectItem value="cash">Cash</SelectItem>
+                  <SelectItem value="upi">UPI</SelectItem><SelectItem value="bank">Bank</SelectItem><SelectItem value="online">Online</SelectItem>
                 </SelectContent>
               </Select>
+              {pendingMethod === 'online' ? (
+                <Select value={pendingPlatform} onValueChange={setPendingPlatform}>
+                  <SelectTrigger className="h-9 w-48"><SelectValue placeholder="Online platform" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All platforms</SelectItem><SelectItem value="unassigned">Unassigned / legacy</SelectItem>
+                    {[...pendingPlatforms.entries()].map(([id, name]) => <SelectItem key={id} value={id}>{name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              ) : null}
               <Button
                 size="sm"
-                disabled={!perm.canEdit || selectedPendingSaleRows.length === 0}
-                onClick={openSaleReconciliation}
+                disabled={!perm.canEdit || selectedPendingRows.length === 0}
+                onClick={openPendingReconciliation}
               >
                 <Wallet className="w-4 h-4 mr-2" />
-                Clear selected{selectedPendingSaleRows.length ? ` (${selectedPendingSaleRows.length})` : ''}
+                Settle selected{selectedPendingRows.length ? ` (${selectedPendingRows.length})` : ''}
               </Button>
             </div>
           </div>
-          {pendingSalesLoading ? (
-            <div className="px-4 py-5 text-sm text-muted-foreground">Loading pending collections…</div>
-          ) : pendingSalePayments.length === 0 ? (
-            <div className="px-4 py-5 text-sm text-muted-foreground">No pending online or bank collections.</div>
+          {pendingQueueLoading ? (
+            <div className="px-4 py-5 text-sm text-muted-foreground">Loading pending items…</div>
+          ) : pendingQueue.length === 0 ? (
+            <div className="px-4 py-5 text-sm text-muted-foreground">No pending reconciliation items.</div>
           ) : (
             <Table>
               <TableHeader><TableRow>
                 <TableHead className="w-12"></TableHead>
-                <TableHead>Date</TableHead><TableHead>Mode</TableHead><TableHead>Invoice</TableHead>
-                <TableHead>Customer</TableHead><TableHead>Location</TableHead>
+                <TableHead>Date</TableHead><TableHead>Mode</TableHead><TableHead>Document</TableHead>
+                <TableHead>Party</TableHead><TableHead>Location</TableHead>
                 <TableHead>Reference</TableHead><TableHead className="text-right">Amount</TableHead>
               </TableRow></TableHeader>
               <TableBody>
-                {pendingSalePayments.map(payment => (
-                  <TableRow key={payment.id}>
+                {pendingQueue.map(payment => (
+                  <TableRow key={payment.key}>
                     <TableCell>
                       <Checkbox
-                        checked={pendingSaleSelected.has(payment.id)}
-                        onCheckedChange={checked => togglePendingSale(payment, checked === true)}
+                        checked={pendingSelected.has(payment.key)}
+                        onCheckedChange={checked => togglePending(payment, checked === true)}
                         disabled={!perm.canEdit}
-                        aria-label={`Select ${formatSalesInvoiceDisplayNumber(payment.invoiceNumber)}`}
+                        aria-label={`Select ${payment.voucherNumber || payment.invoiceNumber || payment.key}`}
                       />
                     </TableCell>
-                    <TableCell className="text-xs text-muted-foreground">{formatDateOrDash(payment.paymentDate)}</TableCell>
+                    <TableCell className="text-xs text-muted-foreground">{formatDateOrDash(payment.transactionDate)}</TableCell>
                     <TableCell className="text-sm font-medium">{paymentModeLabel(payment.method)}</TableCell>
-                    <TableCell className="font-mono text-xs">{formatSalesInvoiceDisplayNumber(payment.invoiceNumber)}</TableCell>
-                    <TableCell className="text-sm">{payment.customerName ?? 'Walk-in'}</TableCell>
-                    <TableCell className="text-sm">{payment.locationName}</TableCell>
+                    <TableCell className="font-mono text-xs">{formatGstDocumentDisplayNumber(payment.voucherNumber || payment.invoiceNumber || `${payment.kind} #${payment.id}`)}</TableCell>
+                    <TableCell className="text-sm">{payment.partyName ?? payment.customerName ?? '—'}</TableCell>
+                    <TableCell className="text-sm">{payment.locationType === 'headoffice' ? 'Head Office' : `${payment.locationType} #${payment.locationId}`}</TableCell>
                     <TableCell className="font-mono text-xs">{payment.referenceNumber ?? '—'}</TableCell>
-                    <TableCell className="text-right font-mono text-sm">{fmt(payment.amount)}</TableCell>
+                    <TableCell className="text-right font-mono text-sm">{fmt(payment.direction === 'out' ? -Number(payment.amount) : Number(payment.amount))}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -599,7 +530,7 @@ export default function Reconciliation() {
               onClick={resetReconciliation}
             >
               <RotateCcw className="w-4 h-4 mr-2" />
-              {resetMutation.isPending ? 'Resetting…' : 'Reset review state'}
+              {resetMutation.isPending ? 'Resetting…' : 'Reset reconciliation'}
             </Button>
           ) : null}
           <ExportButtons
@@ -702,7 +633,7 @@ export default function Reconciliation() {
         <div className="rounded-xl border border-border bg-card overflow-hidden">
           <div className="px-4 py-3 border-b border-border">
             <h2 className="font-semibold">Recent reconciliation batches</h2>
-            <p className="text-xs text-muted-foreground">Standard bank batches are metadata-only; deferred voucher batches also show the balancing bank posting.</p>
+            <p className="text-xs text-muted-foreground">Standard batches are metadata-only; deferred and unified settlements post to the selected bank account.</p>
           </div>
           {batches.length === 0 ? (
             <p className="px-4 py-5 text-sm text-muted-foreground">No bank reconciliation batches yet.</p>
@@ -777,93 +708,51 @@ export default function Reconciliation() {
           </DialogContent>
         </Dialog>
 
-        <Dialog open={deferredOpen} onOpenChange={setDeferredOpen}>
+        <Dialog open={pendingOpen} onOpenChange={setPendingOpen}>
           <DialogContent className="sm:max-w-md">
             <DialogHeader>
-              <DialogTitle>Complete deferred bank vouchers</DialogTitle>
+              <DialogTitle>Settle pending reconciliation items</DialogTitle>
               <DialogDescription>
-                This posts the balancing bank leg and locks the selected voucher(s). It does not alter the separate metadata-only bank review batches.
+                This posts one bank settlement entry for the selected vouchers and collections.
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-4">
               <div className="grid grid-cols-2 gap-3 text-sm">
-                <div><span className="text-muted-foreground">Vouchers</span><div className="font-semibold">{selectedPendingRows.length}</div></div>
-                <div><span className="text-muted-foreground">Amount</span><div className="font-semibold">{fmt(selectedPendingRows.reduce((s, v) => s + Number(v.amount), 0))}</div></div>
+                <div><span className="text-muted-foreground">Items</span><div className="font-semibold">{selectedPendingRows.length}</div></div>
+                <div><span className="text-muted-foreground">Gross selected</span><div className="font-semibold">{fmt(selectedPendingGross)}</div></div>
+                <div><span className="text-muted-foreground">Net bank entry</span><div className="font-semibold">{fmt(selectedPendingNet)}</div></div>
               </div>
               <label className="space-y-1 block text-sm">
                 <span className="font-medium">Permitted bank account</span>
-                <Select value={deferredBankAccountId} onValueChange={setDeferredBankAccountId}>
+                <Select value={pendingBankAccountId} onValueChange={setPendingBankAccountId}>
                   <SelectTrigger><SelectValue placeholder="Select the warehouse bank account" /></SelectTrigger>
                   <SelectContent>
-                    {pendingBankLedgers.map(account => (
+                    {settlementBankLedgers.map(account => (
                       <SelectItem key={account.accountId} value={String(account.accountId)}>
                         {account.name} · {account.locationName}
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
-                {!pendingBankLedgers.length ? <span className="text-xs text-destructive">No permitted bank account is assigned to this location.</span> : null}
+                {!settlementBankLedgers.length ? <span className="text-xs text-destructive">No permitted bank account is assigned to this location.</span> : null}
               </label>
               <label className="space-y-1 block text-sm">
                 <span className="font-medium">Reconciliation date</span>
-                <Input type="date" value={deferredDate} onChange={e => setDeferredDate(e.target.value)} />
+                <Input type="date" value={pendingDate} onChange={e => setPendingDate(e.target.value)} />
               </label>
             </div>
             <DialogFooter>
-              <Button variant="outline" onClick={() => setDeferredOpen(false)}>Cancel</Button>
+              <Button variant="outline" onClick={() => setPendingOpen(false)}>Cancel</Button>
               <Button
-                onClick={submitDeferredReconciliation}
-                disabled={reconcilePendingMutation.isPending || !deferredBankAccountId || !deferredDate || !selectedPendingRows.length}
+                onClick={submitPendingReconciliation}
+                disabled={settlePendingMutation.isPending || !pendingBankAccountId || !pendingDate || !selectedPendingRows.length}
               >
-                {reconcilePendingMutation.isPending ? 'Posting…' : 'Confirm bank posting'}
+                {settlePendingMutation.isPending ? 'Posting…' : 'Confirm settlement'}
               </Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>
 
-        <Dialog open={saleBatchOpen} onOpenChange={setSaleBatchOpen}>
-          <DialogContent className="sm:max-w-md">
-            <DialogHeader>
-              <DialogTitle>Clear online collections</DialogTitle>
-              <DialogDescription>
-                This moves the selected amount out of Electronic Clearing into the chosen Cash or Bank ledger and marks the sale payments reconciled.
-              </DialogDescription>
-            </DialogHeader>
-            <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-3 text-sm">
-                <div><span className="text-muted-foreground">Collections</span><div className="font-semibold">{selectedPendingSaleRows.length}</div></div>
-                <div><span className="text-muted-foreground">Amount</span><div className="font-semibold">{fmt(selectedPendingSaleRows.reduce((sum, p) => sum + Number(p.amount), 0))}</div></div>
-              </div>
-              <label className="space-y-1 block text-sm">
-                <span className="font-medium">Clear into</span>
-                <Select value={saleSettlementLedgerId} onValueChange={setSaleSettlementLedgerId}>
-                  <SelectTrigger><SelectValue placeholder="Select Cash or Bank ledger" /></SelectTrigger>
-                  <SelectContent>
-                    {settlementLedgers.map(account => (
-                      <SelectItem key={account.ledgerId} value={String(account.ledgerId)}>
-                        {account.name} · {account.accountType === 'cash' ? 'Cash' : account.accountType === 'online' ? 'Online' : 'Bank'} · {account.locationName}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                {!settlementLedgers.length ? <span className="text-xs text-destructive">No permitted Cash or Bank ledger is assigned to this location.</span> : null}
-              </label>
-              <label className="space-y-1 block text-sm">
-                <span className="font-medium">Settlement date</span>
-                <Input type="date" value={saleSettlementDate} onChange={e => setSaleSettlementDate(e.target.value)} />
-              </label>
-            </div>
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setSaleBatchOpen(false)}>Cancel</Button>
-              <Button
-                onClick={submitSaleReconciliation}
-                disabled={createSaleBatchMutation.isPending || !saleSettlementLedgerId || !saleSettlementDate || !selectedPendingSaleRows.length}
-              >
-                {createSaleBatchMutation.isPending ? 'Clearing…' : 'Confirm clearing'}
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
       </div>
     </AppLayout>
   );
