@@ -4300,6 +4300,8 @@ router.get("/accounts/financial-statements/monthly", requireModuleView(["page:/a
     put("salesReturns", pl.incomes.salesReturns);
     put("purchases", pl.expenses.purchases);
     put("purchaseReturns", pl.expenses.purchaseReturns);
+    put("stockTransferIn", pl.expenses.stockTransferIn);
+    put("stockTransferOut", pl.incomes.stockTransferOut);
     put("openingStock", pl.expenses.openingStock);
     put("closingStock", pl.incomes.closingStock);
     put("gp", pl.summary?.grossProfit ?? null);

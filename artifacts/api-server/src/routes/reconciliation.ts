@@ -370,6 +370,7 @@ router.get(
         goodsAvailable: r2(
           books.profitAndLoss.expenses.openingStock
           + books.profitAndLoss.expenses.purchases
+          + books.profitAndLoss.expenses.stockTransferIn
           + books.profitAndLoss.expenses.directExpenses.total,
         ),
         cogs: books.profitAndLoss.summary.costOfGoodsSold,
