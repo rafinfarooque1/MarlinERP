@@ -2860,3 +2860,68 @@ export const SetPermissionResponse = zod.object({
 })
 
 
+/**
+ * @summary List pending sale collections and manual vouchers
+ */
+export const ListReconciliationPendingQueueQueryParams = zod.object({
+  "locationType": zod.coerce.string().optional(),
+  "locationId": zod.coerce.number().optional(),
+  "method": zod.coerce.string().optional(),
+  "platformLedgerId": zod.coerce.string().optional(),
+  "fromDate": zod.date().optional(),
+  "toDate": zod.date().optional(),
+  "search": zod.coerce.string().optional()
+})
+
+export const ListReconciliationPendingQueueResponseItem = zod.object({
+  "key": zod.string(),
+  "kind": zod.enum(['sale_payment', 'manual_voucher']),
+  "id": zod.number(),
+  "voucherKind": zod.union([zod.literal('payment'),zod.literal('receipt'),zod.literal(null)]).nullable(),
+  "transactionDate": zod.coerce.date(),
+  "method": zod.string(),
+  "amount": zod.number(),
+  "direction": zod.enum(['in', 'out']),
+  "voucherNumber": zod.string().nullable(),
+  "referenceNumber": zod.string().nullable(),
+  "narration": zod.string().nullable(),
+  "partyName": zod.string().nullable(),
+  "invoiceNumber": zod.string().nullable(),
+  "customerName": zod.string().nullable(),
+  "locationType": zod.string(),
+  "locationId": zod.number(),
+  "platformLedgerId": zod.number().nullable(),
+  "platformName": zod.string().nullable()
+})
+export const ListReconciliationPendingQueueResponse = zod.array(ListReconciliationPendingQueueResponseItem)
+
+
+/**
+ * @summary Settle selected pending reconciliation queue items
+ */
+export const settleReconciliationPendingQueueBodyItemsMax = 500;
+
+
+
+export const SettleReconciliationPendingQueueBody = zod.object({
+  "bankAccountId": zod.number(),
+  "reconciliationDate": zod.coerce.date(),
+  "items": zod.array(zod.object({
+  "kind": zod.enum(['sale_payment', 'manual_voucher']),
+  "id": zod.number(),
+  "voucherKind": zod.union([zod.literal('payment'),zod.literal('receipt'),zod.literal(null)]).nullable()
+})).min(1).max(settleReconciliationPendingQueueBodyItemsMax)
+})
+
+export const SettleReconciliationPendingQueueResponse = zod.object({
+  "id": zod.number(),
+  "batchReference": zod.string(),
+  "itemCount": zod.number(),
+  "grossAmount": zod.number(),
+  "netAmount": zod.number(),
+  "destinationBankLedgerId": zod.number(),
+  "reconciliationDate": zod.coerce.date(),
+  "accountingImpact": zod.string()
+})
+
+

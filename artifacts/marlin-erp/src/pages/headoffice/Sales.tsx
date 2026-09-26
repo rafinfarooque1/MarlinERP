@@ -876,7 +876,8 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   const [billDiscountMode, setBillDiscountMode] = useState<'amount' | 'percent'>('amount');
   useEffect(() => { if (isOpen) setBillDiscountMode('amount'); }, [isOpen]);
 
-  // New sales use the three counter choices. Edits expose the complete
+  // New sales use the four payment channels. Credit is a separate pay-later
+  // control; edits expose the complete
   // payment-mode picker so historical Cash, Bank, UPI, and Credit rows remain
   // editable without rewriting legacy stored spellings.
   const paymentModeOptions = PAYMENT_MODE_OPTIONS;
@@ -1177,7 +1178,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
     // without them keep the legacy plain-cash submit. The server re-validates
     // everything authoritatively.
     const payNow = !editItem && data.paymentMode !== 'credit'
-      && (data.paymentMode === 'bank'
+      && (data.paymentMode === 'upi' || data.paymentMode === 'bank'
         || (ONLINE_PAYMENT_MODES as readonly string[]).includes(data.paymentMode)
         || formReceiveOptionsForMode.length > 0);
     let payFields: Record<string, unknown> = {};
@@ -1999,14 +2000,36 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                 <FormField control={form.control} name="paymentMode" render={({ field }) => (
                   <FormItem>
                     <FormLabel>Payment Mode <span className="text-destructive">*</span></FormLabel>
-                    <Select onValueChange={field.onChange} value={field.value}>
-                      <FormControl><SelectTrigger><SelectValue placeholder="Select mode" /></SelectTrigger></FormControl>
-                      <SelectContent>
-                        {(editItem ? paymentModeOptions : createModeOptions).map(m => (
-                          <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    <div className="flex items-center gap-2">
+                      <Select onValueChange={v => field.onChange(v)} value={editItem ? field.value : (field.value === 'credit' ? '' : field.value)}>
+                        <FormControl><SelectTrigger><SelectValue placeholder="Select mode" /></SelectTrigger></FormControl>
+                        <SelectContent>
+                          {(editItem ? paymentModeOptions : createModeOptions).map(m => (
+                            <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      {!editItem && watchPaymentMode === 'online' && (
+                        <ReceiveIntoSelect
+                          locationType={watchLocationType}
+                          locationId={watchLocationId}
+                          value={receiveLedgerId}
+                          onChange={setReceiveLedgerId}
+                          mode="online"
+                          compact
+                          className="min-w-0 flex-1"
+                        />
+                      )}
+                    </div>
+                    {!editItem && (
+                      <label className="mt-2 flex items-center gap-2 text-sm font-medium">
+                        <Checkbox
+                          checked={field.value === 'credit'}
+                          onCheckedChange={checked => field.onChange(checked ? 'credit' : 'cash')}
+                        />
+                        <span>Pay later (Credit)</span>
+                      </label>
+                    )}
                     {field.value === 'credit' && !watchCustomerId && (
                       <p className="text-xs text-amber-500 mt-1">Credit sales need a registered customer</p>
                     )}
@@ -2054,7 +2077,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                     <div className="rounded-lg border border-border bg-muted/20 p-3 space-y-3" data-testid="section-payment-collection">
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                       <div className="flex flex-col gap-1.5">
-                        {formReceiveOptionsForMode.length > 0 ? (
+                        {formReceiveOptionsForMode.length > 0 && watchPaymentMode !== 'online' ? (
                           <>
                             <span className="text-sm font-medium">Receive Into <span className="text-destructive">*</span></span>
                             <ReceiveIntoSelect
@@ -2062,7 +2085,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                               locationId={watchLocationId}
                               value={receiveLedgerId}
                               onChange={setReceiveLedgerId}
-                               mode={watchPaymentMode === 'cash' ? 'cash' : watchPaymentMode === 'online' ? 'online' : 'electronic'}
+                              mode={watchPaymentMode === 'cash' ? 'cash' : watchPaymentMode === 'upi' ? 'upi' : watchPaymentMode === 'bank' ? 'bank' : 'online'}
                             />
                           </>
                         ) : (

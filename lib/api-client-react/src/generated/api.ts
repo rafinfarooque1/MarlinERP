@@ -73,6 +73,7 @@ import type {
   ListLeavesParams,
   ListPayrollParams,
   ListQuotationsParams,
+  ListReconciliationPendingQueueParams,
   ListSalesParams,
   ListStockParams,
   LoginInput,
@@ -99,6 +100,9 @@ import type {
   RawMaterial,
   RawMaterialInput,
   RawMaterialUpdate,
+  ReconciliationPendingQueueItem,
+  ReconciliationQueueSettlementRequest,
+  ReconciliationQueueSettlementResult,
   Sale,
   SaleInput,
   SalesSummary,
@@ -7967,5 +7971,160 @@ export const useSetPermission = <TError = ErrorType<unknown>,
         TContext
       > => {
       return useMutation(getSetPermissionMutationOptions(options));
+    }
+
+export const getListReconciliationPendingQueueUrl = (params?: ListReconciliationPendingQueueParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : String(value))
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/reconciliation/pending-queue?${stringifiedParams}` : `/api/reconciliation/pending-queue`
+}
+
+/**
+ * @summary List pending sale collections and manual vouchers
+ */
+export const listReconciliationPendingQueue = async (params?: ListReconciliationPendingQueueParams, options?: RequestInit): Promise<ReconciliationPendingQueueItem[]> => {
+
+  return customFetch<ReconciliationPendingQueueItem[]>(getListReconciliationPendingQueueUrl(params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getListReconciliationPendingQueueQueryKey = (params?: ListReconciliationPendingQueueParams,) => {
+    return [
+    `/api/reconciliation/pending-queue`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getListReconciliationPendingQueueQueryOptions = <TData = Awaited<ReturnType<typeof listReconciliationPendingQueue>>, TError = ErrorType<unknown>>(params?: ListReconciliationPendingQueueParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listReconciliationPendingQueue>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getListReconciliationPendingQueueQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listReconciliationPendingQueue>>> = ({ signal }) => listReconciliationPendingQueue(params, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listReconciliationPendingQueue>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type ListReconciliationPendingQueueQueryResult = NonNullable<Awaited<ReturnType<typeof listReconciliationPendingQueue>>>
+export type ListReconciliationPendingQueueQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary List pending sale collections and manual vouchers
+ */
+
+export function useListReconciliationPendingQueue<TData = Awaited<ReturnType<typeof listReconciliationPendingQueue>>, TError = ErrorType<unknown>>(
+ params?: ListReconciliationPendingQueueParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listReconciliationPendingQueue>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getListReconciliationPendingQueueQueryOptions(params,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getSettleReconciliationPendingQueueUrl = () => {
+
+
+
+
+  return `/api/reconciliation/settle-queue`
+}
+
+/**
+ * @summary Settle selected pending reconciliation queue items
+ */
+export const settleReconciliationPendingQueue = async (reconciliationQueueSettlementRequest: ReconciliationQueueSettlementRequest, options?: RequestInit): Promise<ReconciliationQueueSettlementResult> => {
+
+  return customFetch<ReconciliationQueueSettlementResult>(getSettleReconciliationPendingQueueUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(reconciliationQueueSettlementRequest)
+  }
+);}
+
+
+
+
+
+export const getSettleReconciliationPendingQueueMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof settleReconciliationPendingQueue>>, TError,{data: BodyType<ReconciliationQueueSettlementRequest>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof settleReconciliationPendingQueue>>, TError,{data: BodyType<ReconciliationQueueSettlementRequest>}, TContext> => {
+
+const mutationKey = ['settleReconciliationPendingQueue'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof settleReconciliationPendingQueue>>, {data: BodyType<ReconciliationQueueSettlementRequest>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  settleReconciliationPendingQueue(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type SettleReconciliationPendingQueueMutationResult = NonNullable<Awaited<ReturnType<typeof settleReconciliationPendingQueue>>>
+    export type SettleReconciliationPendingQueueMutationBody = BodyType<ReconciliationQueueSettlementRequest>
+    export type SettleReconciliationPendingQueueMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Settle selected pending reconciliation queue items
+ */
+export const useSettleReconciliationPendingQueue = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof settleReconciliationPendingQueue>>, TError,{data: BodyType<ReconciliationQueueSettlementRequest>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof settleReconciliationPendingQueue>>,
+        TError,
+        {data: BodyType<ReconciliationQueueSettlementRequest>},
+        TContext
+      > => {
+      return useMutation(getSettleReconciliationPendingQueueMutationOptions(options));
     }
 

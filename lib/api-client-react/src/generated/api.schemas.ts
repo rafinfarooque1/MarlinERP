@@ -1660,6 +1660,110 @@ export interface PermissionInput {
   canDownload?: boolean;
 }
 
+export type ReconciliationPendingQueueItemKind = typeof ReconciliationPendingQueueItemKind[keyof typeof ReconciliationPendingQueueItemKind];
+
+
+export const ReconciliationPendingQueueItemKind = {
+  sale_payment: 'sale_payment',
+  manual_voucher: 'manual_voucher',
+} as const;
+
+/**
+ * @nullable
+ */
+export type ReconciliationPendingQueueItemVoucherKind = typeof ReconciliationPendingQueueItemVoucherKind[keyof typeof ReconciliationPendingQueueItemVoucherKind] | null;
+
+
+export const ReconciliationPendingQueueItemVoucherKind = {
+  payment: 'payment',
+  receipt: 'receipt',
+} as const;
+
+export type ReconciliationPendingQueueItemDirection = typeof ReconciliationPendingQueueItemDirection[keyof typeof ReconciliationPendingQueueItemDirection];
+
+
+export const ReconciliationPendingQueueItemDirection = {
+  in: 'in',
+  out: 'out',
+} as const;
+
+export interface ReconciliationPendingQueueItem {
+  key: string;
+  kind: ReconciliationPendingQueueItemKind;
+  id: number;
+  /** @nullable */
+  voucherKind: ReconciliationPendingQueueItemVoucherKind;
+  transactionDate: string;
+  method: string;
+  amount: number;
+  direction: ReconciliationPendingQueueItemDirection;
+  /** @nullable */
+  voucherNumber: string | null;
+  /** @nullable */
+  referenceNumber: string | null;
+  /** @nullable */
+  narration: string | null;
+  /** @nullable */
+  partyName: string | null;
+  /** @nullable */
+  invoiceNumber: string | null;
+  /** @nullable */
+  customerName: string | null;
+  locationType: string;
+  locationId: number;
+  /** @nullable */
+  platformLedgerId: number | null;
+  /** @nullable */
+  platformName: string | null;
+}
+
+export type ReconciliationQueueSettlementItemKind = typeof ReconciliationQueueSettlementItemKind[keyof typeof ReconciliationQueueSettlementItemKind];
+
+
+export const ReconciliationQueueSettlementItemKind = {
+  sale_payment: 'sale_payment',
+  manual_voucher: 'manual_voucher',
+} as const;
+
+/**
+ * @nullable
+ */
+export type ReconciliationQueueSettlementItemVoucherKind = typeof ReconciliationQueueSettlementItemVoucherKind[keyof typeof ReconciliationQueueSettlementItemVoucherKind] | null;
+
+
+export const ReconciliationQueueSettlementItemVoucherKind = {
+  payment: 'payment',
+  receipt: 'receipt',
+} as const;
+
+export interface ReconciliationQueueSettlementItem {
+  kind: ReconciliationQueueSettlementItemKind;
+  id: number;
+  /** @nullable */
+  voucherKind: ReconciliationQueueSettlementItemVoucherKind;
+}
+
+export interface ReconciliationQueueSettlementRequest {
+  bankAccountId: number;
+  reconciliationDate: string;
+  /**
+     * @minItems 1
+     * @maxItems 500
+     */
+  items: ReconciliationQueueSettlementItem[];
+}
+
+export interface ReconciliationQueueSettlementResult {
+  id: number;
+  batchReference: string;
+  itemCount: number;
+  grossAmount: number;
+  netAmount: number;
+  destinationBankLedgerId: number;
+  reconciliationDate: string;
+  accountingImpact: string;
+}
+
 export type ListStockParams = {
 branchId?: number;
 branchType?: ListStockBranchType;
@@ -1771,5 +1875,18 @@ export type DeleteCashBankAccount200 = {
 export type GetGstSummaryParams = {
 fromDate?: string;
 toDate?: string;
+};
+
+export type ListReconciliationPendingQueueParams = {
+locationType?: string;
+locationId?: number;
+method?: string;
+/**
+ * Numeric platform ledger ID or 'unassigned'
+ */
+platformLedgerId?: string;
+fromDate?: string;
+toDate?: string;
+search?: string;
 };
 

@@ -29,14 +29,16 @@ export type OnlinePaymentMode = (typeof ONLINE_PAYMENT_MODES)[number];
 export const SALE_PAYMENT_MODES = ["cash", "bank", "upi", ...ONLINE_PAYMENT_MODES, "credit"] as const;
 
 /**
- * Modes a NEW sale may be created with. The POS presents Bank and UPI as one
- * choice; the selected Cash & Bank account derives the stored bank/upi method.
+ * Modes a NEW sale may be created with. Credit is handled by the POS's
+ * separate pay-later control; these are the four payment channels.
  */
-export const CREATE_SALE_PAYMENT_MODES = ["cash", "bank", "online", "credit"] as const;
+export const CREATE_SALE_PAYMENT_MODES = ["cash", "upi", "bank", "online"] as const;
 
 /** True when `mode` may be used to CREATE a new POS sale. */
 export function isAllowedNewSaleMode(mode: string): boolean {
-  return (CREATE_SALE_PAYMENT_MODES as readonly string[]).includes(mode);
+  // Credit remains accepted for older API clients; the POS exposes it through
+  // its separate pay-later control rather than the channel selector.
+  return mode === "credit" || (CREATE_SALE_PAYMENT_MODES as readonly string[]).includes(mode);
 }
 
 /** Modes that are fully settled the moment the sale is recorded. */

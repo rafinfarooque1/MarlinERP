@@ -46,12 +46,14 @@ router.get("/sales/:id/payments", requireModuleView("page:/sales/pos"), async (r
             rb.batch_reference,
             rb.settlement_date AS reconciled_on,
             rc.received_in_ledger_id AS received_in_id,
-            al.name AS received_in_name
+             al.name AS received_in_name,
+             opl.name AS online_platform_name
      FROM sale_payments sp
      LEFT JOIN reconciliation_batch_items rbi ON rbi.sale_payment_id = sp.id
      LEFT JOIN reconciliation_batches rb ON rb.id = rbi.batch_id
      LEFT JOIN receipts rc ON rc.id = sp.clearing_receipt_id
      LEFT JOIN account_ledgers al ON al.id = rc.received_in_ledger_id
+      LEFT JOIN account_ledgers opl ON opl.id = sp.online_platform_ledger_id
      WHERE sp.sale_id = $1
      ORDER BY sp.created_at ASC`,
     [saleId]
@@ -79,7 +81,8 @@ router.get("/sales/:id/payments", requireModuleView("page:/sales/pos"), async (r
     // The account the money actually landed in (via the receipt). Old rows
     // without a receipt fall back to the method label on the client.
     receivedInLedgerId: p.received_in_id != null ? Number(p.received_in_id) : null,
-    receivedInLedgerName: p.received_in_name ?? null,
+     receivedInLedgerName: p.online_platform_name ?? p.received_in_name ?? null,
+     onlinePlatformLedgerId: p.online_platform_ledger_id != null ? Number(p.online_platform_ledger_id) : null,
   })));
 });
 
@@ -193,6 +196,7 @@ router.post("/sales/:id/payments", requireModuleAction(["page:/sales/pos", "page
           referenceNumber: prior.reference_number,
           notes: prior.notes,
           reconciliationStatus: prior.reconciliation_status,
+           onlinePlatformLedgerId: prior.online_platform_ledger_id != null ? Number(prior.online_platform_ledger_id) : null,
           outletId: prior.outlet_id,
           createdBy: prior.created_by,
           createdAt: prior.created_at,
@@ -329,10 +333,11 @@ router.post("/sales/:id/payments", requireModuleAction(["page:/sales/pos", "page
 
     // 4. Insert sale_payment record
     const { rows: [salePayment] } = await client.query(
-      `INSERT INTO sale_payments (sale_id, payment_date, method, amount, reference_number, notes, reconciliation_status, clearing_receipt_id, outlet_id, created_by, client_request_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
+      `INSERT INTO sale_payments (sale_id, payment_date, method, amount, reference_number, notes, reconciliation_status, clearing_receipt_id, outlet_id, created_by, client_request_id, online_platform_ledger_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *`,
       [saleId, pDate, method, parsedAmount, referenceNumber ?? null, notes ?? null,
-        reconciliationStatus, clearingReceiptId, sale.outlet_id, createdBy, clientRequestId]
+       reconciliationStatus, clearingReceiptId, sale.outlet_id, createdBy, clientRequestId,
+       override?.method === "online" ? override.ledgerId : null]
     );
 
     // 5. Update sales.amount_paid and sales.payment_status
@@ -366,6 +371,7 @@ router.post("/sales/:id/payments", requireModuleAction(["page:/sales/pos", "page
       referenceNumber: salePayment.reference_number,
       notes: salePayment.notes,
       reconciliationStatus: salePayment.reconciliation_status,
+      onlinePlatformLedgerId: salePayment.online_platform_ledger_id != null ? Number(salePayment.online_platform_ledger_id) : null,
       outletId: salePayment.outlet_id,
       createdBy: salePayment.created_by,
       createdAt: salePayment.created_at,

@@ -34,6 +34,7 @@ tags:
   - name: gst
   - name: company
   - name: permissions
+  - name: reconciliation
 paths:
   /healthz:
     get:
@@ -1776,6 +1777,49 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Permission"
+
+  # ── RECONCILIATION ─────────────────────────────────────────────────────────
+  /reconciliation/pending-queue:
+    get:
+      operationId: listReconciliationPendingQueue
+      tags: [reconciliation]
+      summary: List pending sale collections and manual vouchers
+      parameters:
+        - { name: locationType, in: query, schema: { type: string } }
+        - { name: locationId, in: query, schema: { type: integer } }
+        - { name: method, in: query, schema: { type: string } }
+        - { name: platformLedgerId, in: query, schema: { type: string, description: Numeric platform ledger ID or 'unassigned' } }
+        - { name: fromDate, in: query, schema: { type: string, format: date } }
+        - { name: toDate, in: query, schema: { type: string, format: date } }
+        - { name: search, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: Pending reconciliation queue
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ReconciliationPendingQueueItem"
+
+  /reconciliation/settle-queue:
+    post:
+      operationId: settleReconciliationPendingQueue
+      tags: [reconciliation]
+      summary: Settle selected pending reconciliation queue items
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReconciliationQueueSettlementRequest"
+      responses:
+        "201":
+          description: Reconciliation queue settled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReconciliationQueueSettlementResult"
 
 components:
   schemas:
@@ -3878,3 +3922,126 @@ components:
           type: boolean
         canDownload:
           type: boolean
+
+    # RECONCILIATION
+    ReconciliationPendingQueueItem:
+      type: object
+      required:
+        - key
+        - kind
+        - id
+        - voucherKind
+        - transactionDate
+        - method
+        - amount
+        - direction
+        - voucherNumber
+        - referenceNumber
+        - narration
+        - partyName
+        - invoiceNumber
+        - customerName
+        - locationType
+        - locationId
+        - platformLedgerId
+        - platformName
+      properties:
+        key:
+          type: string
+        kind:
+          type: string
+          enum: [sale_payment, manual_voucher]
+        id:
+          type: integer
+        voucherKind:
+          type: ["string", "null"]
+          enum: [payment, receipt, null]
+        transactionDate:
+          type: string
+          format: date
+        method:
+          type: string
+        amount:
+          type: number
+        direction:
+          type: string
+          enum: [in, out]
+        voucherNumber:
+          type: ["string", "null"]
+        referenceNumber:
+          type: ["string", "null"]
+        narration:
+          type: ["string", "null"]
+        partyName:
+          type: ["string", "null"]
+        invoiceNumber:
+          type: ["string", "null"]
+        customerName:
+          type: ["string", "null"]
+        locationType:
+          type: string
+        locationId:
+          type: integer
+        platformLedgerId:
+          type: ["integer", "null"]
+        platformName:
+          type: ["string", "null"]
+
+    ReconciliationQueueSettlementRequest:
+      type: object
+      required: [bankAccountId, reconciliationDate, items]
+      properties:
+        bankAccountId:
+          type: integer
+        reconciliationDate:
+          type: string
+          format: date
+        items:
+          type: array
+          minItems: 1
+          maxItems: 500
+          items:
+            $ref: "#/components/schemas/ReconciliationQueueSettlementItem"
+
+    ReconciliationQueueSettlementItem:
+      type: object
+      required: [kind, id, voucherKind]
+      properties:
+        kind:
+          type: string
+          enum: [sale_payment, manual_voucher]
+        id:
+          type: integer
+        voucherKind:
+          type: ["string", "null"]
+          enum: [payment, receipt, null]
+
+    ReconciliationQueueSettlementResult:
+      type: object
+      required:
+        - id
+        - batchReference
+        - itemCount
+        - grossAmount
+        - netAmount
+        - destinationBankLedgerId
+        - reconciliationDate
+        - accountingImpact
+      properties:
+        id:
+          type: integer
+        batchReference:
+          type: string
+        itemCount:
+          type: integer
+        grossAmount:
+          type: number
+        netAmount:
+          type: number
+        destinationBankLedgerId:
+          type: integer
+        reconciliationDate:
+          type: string
+          format: date
+        accountingImpact:
+          type: string

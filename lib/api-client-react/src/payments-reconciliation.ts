@@ -2,6 +2,15 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { customFetch } from "./custom-fetch";
 import { getListVendorsQueryKey } from "./generated/api";
 import { getPayablesAgingQueryKey } from "./returns";
+import {
+  listReconciliationPendingQueue,
+  settleReconciliationPendingQueue,
+} from "./generated/api";
+import type {
+  ListReconciliationPendingQueueParams,
+  ReconciliationPendingQueueItem as GeneratedReconciliationPendingQueueItem,
+  ReconciliationQueueSettlementRequest as GeneratedReconciliationQueueSettlementRequest,
+} from "./generated/api.schemas";
 
 // ── Customer / Vendor Ledger ───────────────────────────────────────────────────
 export interface LedgerEntry {
@@ -561,17 +570,42 @@ export function useCreateBankReconciliationBatch() {
 export function useResetBankReconciliation() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: () =>
+    mutationFn: (data: { reversalDate: string }) =>
       customFetch("/api/reconciliation/bank-reset", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: "{}",
+        body: JSON.stringify(data),
       }),
     onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["reconciliation-bank-transactions"] });
+      qc.invalidateQueries({ queryKey: ["/api/reconciliation/pending-queue"] });
+      qc.invalidateQueries({ queryKey: ["bank-reconciliation-batches"] });
+      qc.invalidateQueries({ queryKey: ["bank-reconciliation-audit"] });
+      qc.invalidateQueries({ queryKey: ["/api/accounts/cash-bank-book"] });
+    },
+  });
+}
+
+export function useGetReconciliationPendingQueue(params?: ListReconciliationPendingQueueParams) {
+  return useQuery<GeneratedReconciliationPendingQueueItem[]>({
+    queryKey: ["/api/reconciliation/pending-queue", params],
+    queryFn: () => listReconciliationPendingQueue(params),
+  });
+}
+
+export function useSettlePendingReconciliationQueue() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: GeneratedReconciliationQueueSettlementRequest) =>
+      settleReconciliationPendingQueue(data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/reconciliation/pending-queue"] });
       qc.invalidateQueries({ queryKey: ["reconciliation-bank-transactions"] });
       qc.invalidateQueries({ queryKey: ["bank-reconciliation-batches"] });
       qc.invalidateQueries({ queryKey: ["bank-reconciliation-audit"] });
       qc.invalidateQueries({ queryKey: ["/api/accounts/cash-bank-book"] });
+      qc.invalidateQueries({ queryKey: ["/api/accounts/payments"] });
+      qc.invalidateQueries({ queryKey: ["/api/accounts/receipts"] });
     },
   });
 }
