@@ -83,9 +83,12 @@ export function canonicalDocument(request: CanonicalReportRequest, payload: any)
       ], b.assets.total);
     } else {
       // Read the canonical summary, not an independent export COGS/GP/NP formula.
+      const stockTransferIn = Number((e as any).stockTransferIn ?? 0);
+      const stockTransferOut = Number((i as any).stockTransferOut ?? 0);
       sections.push(summary("Authoritative financial summary", {
         "Gross Sales": i.grossSales, "Sales Returns": i.salesReturns, "Net Sales": i.sales,
-        "Opening Stock": e.openingStock, "Net Purchases": e.purchases,
+        "Opening Stock": e.openingStock, "Stock Transfer In": stockTransferIn,
+        "Net Purchases": e.purchases, "Stock Transfer Out": stockTransferOut,
         "Direct Expenses": e.directExpenses.total, "Closing Stock": i.closingStock,
         "Closing Stock In Transit": i.closingStockInTransit,
         "Cost of Goods Sold (COGS)": pl.summary.costOfGoodsSold, "Gross Profit": pl.summary.grossProfit,
@@ -95,8 +98,18 @@ export function canonicalDocument(request: CanonicalReportRequest, payload: any)
         } : {}),
       }));
       if (reportId === "pnl") {
-        statement("Expenses", [["Opening Stock", amount(e.openingStock)], ["Purchases", amount(e.purchases)], ...groupRows(e.directExpenses), ...groupRows(e.indirectExpenses)], e.total);
-        statement("Incomes", [["Sales (net of GST)", amount(i.sales)], ["Closing Stock", amount(i.closingStock)], ...groupRows(i.directIncomes), ...groupRows(i.indirectIncomes)], i.total);
+        statement("Expenses", [
+          ["Opening Stock", amount(e.openingStock)],
+          ...(Math.abs(stockTransferIn) > 0.005 ? [["Stock Transfer In", amount(stockTransferIn)]] : []),
+          ["Purchases", amount(e.purchases)],
+          ...groupRows(e.directExpenses), ...groupRows(e.indirectExpenses),
+        ], e.total);
+        statement("Incomes", [
+          ["Sales (net of GST)", amount(i.sales)],
+          ...(Math.abs(stockTransferOut) > 0.005 ? [["Stock Transfer Out", amount(stockTransferOut)]] : []),
+          ["Closing Stock", amount(i.closingStock)],
+          ...groupRows(i.directIncomes), ...groupRows(i.indirectIncomes),
+        ], i.total);
       }
     }
   } else if (reportId === "trial-balance") {

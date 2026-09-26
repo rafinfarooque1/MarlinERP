@@ -837,6 +837,7 @@ export interface Books {
       /** Period total of debit-note lines hitting the purchases subtree;
        *  `purchases` is already net of these. */
       purchaseReturns: number;
+      /** Full account-chart subtree; `purchases` is the P&L amount after Transfer-In is separated. */
       purchasesGroup: StatementGroup;
       directExpenses: StatementGroup;
       stockTransferIn: number;
@@ -1098,9 +1099,11 @@ export async function buildBooks(
   const directExp = buildGroup("SYS-DIREXP", periodAgg, 1);
   const indirectExp = buildGroup("SYS-INDEXP", periodAgg, 1);
 
+  // Statement-node balances already use their natural-side sign, so keeping
+  // them signed preserves opposite-side transfer reversals.
   const nodeTotal = (group: StatementGroup, names: Set<string>): number => {
     const walk = (nodes: StatementNode[]): number => nodes.reduce((sum, n) =>
-      sum + (names.has(String(n.code ?? '').toUpperCase()) || names.has(n.name.toLowerCase()) ? Math.abs(n.balance) : 0) + walk(n.children), 0);
+      sum + (names.has(String(n.code ?? '').toUpperCase()) || names.has(n.name.toLowerCase()) ? Number(n.balance ?? 0) : 0) + walk(n.children), 0);
     return r2(walk(group.children));
   };
   const stripTransferNodes = (group: StatementGroup, names: Set<string>): StatementGroup => {
@@ -1110,19 +1113,25 @@ export async function buildBooks(
     const transfer = nodeTotal(group, names);
     return { ...group, total: r2(group.total - transfer), children: strip(group.children) };
   };
-  const transferInNames = new Set(["TRANSFER-IN", "transfer-in"]);
-  const transferOutNames = new Set(["TRANSFER-OUT", "transfer-out"]);
-  const stockTransferIn = nodeTotal(directExp, transferInNames);
+  const transferInNames = new Set(["STD-TRF-IN", "TRANSFER-IN", "transfer-in"]);
+  const transferOutNames = new Set(["STD-TRF-OUT", "TRANSFER-OUT", "transfer-out"]);
+  // Transfer-In is normally parented beneath Purchase Account. Extract it
+  // from either legacy location so it gets its own debit-side P&L row and is
+  // not counted again inside purchases or direct expenses.
+  const stockTransferIn = r2(
+    nodeTotal(purchasesGroup, transferInNames) + nodeTotal(directExp, transferInNames),
+  );
   const stockTransferOut = nodeTotal(directInc, transferOutNames);
+  const purchasesForPnl = stripTransferNodes(purchasesGroup, transferInNames);
   const directExpensesForPnl = stripTransferNodes(directExp, transferInNames);
   const directIncomesForPnl = stripTransferNodes(directInc, transferOutNames);
 
-  const totalExpenses = r2(opening.total + purchasesGroup.total + stockTransferIn + directExpensesForPnl.total + indirectExp.total);
+  const totalExpenses = r2(opening.total + purchasesForPnl.total + stockTransferIn + directExpensesForPnl.total + indirectExp.total);
   const totalIncomes = r2(salesGroup.total + closing.total + stockTransferOut + directIncomesForPnl.total + indirectInc.total);
   const netProfit = r2(totalIncomes - totalExpenses);
 
   const revenue = r2(salesGroup.total + stockTransferOut + directIncomesForPnl.total);
-  const cogs = r2(opening.total + purchasesGroup.total + stockTransferIn + directExpensesForPnl.total - closing.total);
+  const cogs = r2(opening.total + purchasesForPnl.total + stockTransferIn + directExpensesForPnl.total - closing.total);
   const grossProfit = r2(revenue - cogs);
   const pct = (part: number, whole: number) => (Math.abs(whole) < 0.005 ? 0 : r2((part / whole) * 100));
 
@@ -1241,8 +1250,10 @@ export async function buildBooks(
         openingStockItems: opening.items,
         openingStockReliable: opening.reliable,
         openingStockNote: opening.note,
-        purchases: purchasesGroup.total,
+        purchases: purchasesForPnl.total,
         purchaseReturns,
+        // Keep the full chart subtree here for ChartHierarchy's ledger index;
+        // `purchases` above is the P&L-only amount with Transfer-In separated.
         purchasesGroup,
         directExpenses: directExpensesForPnl,
         stockTransferIn,

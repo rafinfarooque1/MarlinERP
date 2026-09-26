@@ -877,7 +877,13 @@ function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, on
   const mwMonths   = monthly?.months ?? [];
   const mwSales    = mwS('sales'),     mwSalesRet = mwS('salesReturns');
   const mwPur      = mwS('purchases'), mwPurRet   = mwS('purchaseReturns');
+  const mwStockTransferIn = mwS('stockTransferIn');
+  const mwStockTransferOut = mwS('stockTransferOut');
   const mwGp       = mwS('gp');
+  const showStockTransferIn = Math.abs(stockTransferIn) > 0.005
+    || mwStockTransferIn.some((value) => Math.abs(value) > 0.005);
+  const showStockTransferOut = Math.abs(stockTransferOut) > 0.005
+    || mwStockTransferOut.some((value) => Math.abs(value) > 0.005);
   const mwGrossSales = mwMonths.map((_, i) => (mwSales[i] ?? 0) + (mwSalesRet[i] ?? 0));
   const mwGrossPur   = mwMonths.map((_, i) => (mwPur[i] ?? 0) + (mwPurRet[i] ?? 0));
   const mwNegSalesRet = mwMonths.map((_, i) => -(mwSalesRet[i] ?? 0));
@@ -1086,6 +1092,7 @@ function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, on
                           its Total. Opening/Closing stock per month are the
                           engine's own boundary valuations for that month. */}
                       <MwAutoRow label="Opening Stock" values={mwS('openingStock')} total={exp.openingStock} monthly={monthly} accent="text-foreground/80 font-semibold" />
+                      {showStockTransferIn && <MwAutoRow label="Stock Transfer In" values={mwStockTransferIn} total={stockTransferIn} monthly={monthly} sub="internal transfers" />}
                       {purchaseReturns !== 0 ? (
                         <>
                           <MwAutoRow label="Purchase Account" values={mwGrossPur} total={exp.purchases + purchaseReturns} monthly={monthly} sub="auto" />
@@ -1095,7 +1102,6 @@ function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, on
                       ) : (
                         <MwAutoRow label="Purchase Account" values={mwPur} total={exp.purchases} monthly={monthly} sub="auto" />
                       )}
-                      {stockTransferIn > 0.005 && <MwAutoRow label="Stock Transfer In" values={[]} total={stockTransferIn} monthly={monthly} sub="internal transfers" />}
                       <Divider />
                       <MwGroupBlock group={exp.directExpenses} seriesKey="grp:direxp" monthly={monthly} expansion={plExpansion} />
                       {grossProfit !== null && grossProfit > 0 && (
@@ -1113,6 +1119,7 @@ function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, on
                         items={exp.openingStockItems}
                         total={exp.openingStock}
                       />
+                      {showStockTransferIn && <AutoRow label="Stock Transfer In" amount={stockTransferIn} sub="internal transfers" />}
 
                       {/* Purchase Account (auto) — gross + returns split shown only
                           when debit notes exist; `purchases` is already the net. */}
@@ -1125,8 +1132,6 @@ function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, on
                       ) : (
                         <AutoRow label="Purchase Account" amount={exp.purchases} sub="auto · from purchase orders" />
                       )}
-
-                      {stockTransferIn > 0.005 && <AutoRow label="Stock Transfer In" amount={stockTransferIn} sub="internal transfers" />}
 
                       <Divider />
 
@@ -1165,7 +1170,7 @@ function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, on
                       )}
                       <Divider />
                       <MwGroupBlock group={inc.directIncomes} seriesKey="grp:dirinc" monthly={monthly} expansion={plExpansion} />
-                      {stockTransferOut > 0.005 && <MwAutoRow label="Stock Transfer Out" values={[]} total={stockTransferOut} monthly={monthly} sub="internal transfers" />}
+                      {showStockTransferOut && <MwAutoRow label="Stock Transfer Out" values={mwStockTransferOut} total={stockTransferOut} monthly={monthly} sub="internal transfers" />}
                       <MwAutoRow label="Closing Stock" values={mwS('closingStock')} total={inc.closingStock} monthly={monthly} accent="text-foreground/80 font-semibold" />
                       {grossProfit !== null && grossProfit < 0 && (
                         <>
@@ -1193,7 +1198,7 @@ function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, on
                       {/* Direct Incomes */}
                       <GroupBlock group={inc.directIncomes} onCreated={onCreated} expansion={plExpansion} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={canAdd} canEdit={canEdit} canDelete={canDelete} />
 
-                      {stockTransferOut > 0.005 && <AutoRow label="Stock Transfer Out" amount={stockTransferOut} sub="internal transfers" />}
+                      {showStockTransferOut && <AutoRow label="Stock Transfer Out" amount={stockTransferOut} sub="internal transfers" />}
 
                       {/* Closing Stock */}
                       <StockBlock

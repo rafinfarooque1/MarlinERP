@@ -370,24 +370,32 @@ export async function generateChartOfAccountsPdf(opts: CoaPdfOpts): Promise<void
     const salesReturns    = inc.salesReturns    ?? 0;
     const grossSales      = inc.grossSales      ?? (inc.sales + salesReturns);
     const purchaseReturns = exp.purchaseReturns ?? 0;
+    const stockTransferIn = Number((exp as any).stockTransferIn ?? 0);
+    const stockTransferOut = Number((inc as any).stockTransferOut ?? 0);
     const grossProfit: number = pl.summary?.grossProfit
-      ?? ((inc.sales + inc.closingStock + inc.directIncomes.total)
-         - (exp.openingStock + exp.purchases + exp.directExpenses.total));
+      ?? ((inc.sales + stockTransferOut + inc.closingStock + inc.directIncomes.total)
+         - (exp.openingStock + exp.purchases + stockTransferIn + exp.directExpenses.total));
 
     // Per-month derived arrays — same arithmetic as StatementsView
     const mwSales      = sv('sales');
     const mwSalesRet   = sv('salesReturns');
     const mwPur        = sv('purchases');
     const mwPurRet     = sv('purchaseReturns');
+    const mwStockTransferIn = sv('stockTransferIn');
+    const mwStockTransferOut = sv('stockTransferOut');
     const mwGp         = sv('gp');
     const mwNp         = sv('np');
     const mwGrossSales = add(mwSales, mwSalesRet);
     const mwGrossPur   = add(mwPur,   mwPurRet);
     const mwGpPos      = mwGp.map(v => v > 0 ?  v : 0);
     const mwGpNeg      = mwGp.map(v => v < 0 ? -v : 0);
+    const showStockTransferIn = Math.abs(stockTransferIn) > 0.005
+      || mwStockTransferIn.some(value => Math.abs(value) > 0.005);
+    const showStockTransferOut = Math.abs(stockTransferOut) > 0.005
+      || mwStockTransferOut.some(value => Math.abs(value) > 0.005);
 
-    const tradingExpBase  = exp.openingStock + exp.purchases + exp.directExpenses.total;
-    const tradingIncBase  = inc.sales + inc.closingStock + inc.directIncomes.total;
+    const tradingExpBase  = exp.openingStock + exp.purchases + stockTransferIn + exp.directExpenses.total;
+    const tradingIncBase  = inc.sales + stockTransferOut + inc.closingStock + inc.directIncomes.total;
     const tradingExpTotal = tradingExpBase + (grossProfit > 0 ?  grossProfit : 0);
     const tradingIncTotal = tradingIncBase + (grossProfit < 0 ? -grossProfit : 0);
     const plExpTotal      = exp.indirectExpenses.total + (grossProfit < 0 ? -grossProfit : 0);
@@ -401,6 +409,9 @@ export async function generateChartOfAccountsPdf(opts: CoaPdfOpts): Promise<void
       // ── Trading Account ──
       rowPanel('TRADING ACCOUNT — EXPENSE (DEBIT)'),
       rowAuto('Opening Stock', sv('openingStock'), exp.openingStock),
+      ...(showStockTransferIn
+        ? [rowAuto('Stock Transfer In', mwStockTransferIn, stockTransferIn)]
+        : []),
       ...(purchaseReturns !== 0
         ? [
             rowAuto('Purchase Account',       mwGrossPur,              exp.purchases + purchaseReturns),
@@ -422,6 +433,9 @@ export async function generateChartOfAccountsPdf(opts: CoaPdfOpts): Promise<void
           ]
         : [rowAuto('Sales Account', mwSales, inc.sales)]),
        ...groupRows(inc.directIncomes, 'grp:dirinc', series, N, isOpen, showValuedOnly),
+      ...(showStockTransferOut
+        ? [rowAuto('Stock Transfer Out', mwStockTransferOut, stockTransferOut)]
+        : []),
       rowAuto('Closing Stock', sv('closingStock'), inc.closingStock),
       ...(grossProfit < 0 ? [rowAuto('Gross Loss c/d', mwGpNeg, -grossProfit)] : []),
       rowTotal('Total', tradingIncTotal),
