@@ -292,33 +292,24 @@ router.get(
     const { rows } = await pool.query(
       `SELECT id, code, name, parent_id
          FROM account_ledgers
-        WHERE code = 'STD-BRANCH-DEBTOR'
-           OR code = 'STD-BRANCH-CREDITOR'
-           OR code LIKE 'STD-BRANCH-DR-%'
-           OR code LIKE 'STD-BRANCH-CR-%'
+        WHERE code LIKE 'STD-BRANCH-NET-%'
+          AND COALESCE(is_active, true)
         ORDER BY code`,
     );
     const balances = rows.map((row: any) => {
       const net = balanceIndex.net(Number(row.id));
-      const isReceivable = String(row.code).startsWith("STD-BRANCH-DR-")
-        || row.code === "STD-BRANCH-DEBTOR";
-      const balance = Math.round((isReceivable ? net : -net) * 100) / 100;
-      const isLegacyGroupedLedger = row.code === "STD-BRANCH-DEBTOR"
-        || row.code === "STD-BRANCH-CREDITOR";
-      if (isLegacyGroupedLedger && Math.abs(balance) < 0.005) return null;
+      const balance = Math.round(-net * 100) / 100;
       return {
         ledgerId: Number(row.id),
         code: String(row.code),
-        name: isLegacyGroupedLedger
-          ? `Legacy ${String(row.name)} (unallocated history)`
-          : String(row.name),
-        kind: isReceivable ? "receivable" : "payable",
+        name: String(row.name),
+        kind: "payable",
         balance,
       };
-    }).filter((row: any) => row !== null);
+    });
     res.json({
-      receivables: balances.filter((row: any) => row.kind === "receivable"),
-      payables: balances.filter((row: any) => row.kind === "payable"),
+      receivables: [],
+      payables: balances,
     });
   },
 );

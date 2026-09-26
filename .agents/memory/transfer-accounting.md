@@ -3,18 +3,22 @@ name: Transfer accounting
 description: Accounting policy and migration boundary for taxable inter-warehouse transfers
 ---
 
-Completed transfers recognize stock value as `Transfer-Out` income at dispatch
-and `Transfer-In` expense at receipt. Cross-GSTIN transfers also carry the
-appropriate GST heads; same-GSTIN transfers use tax-free internal vouchers.
-Both remain separate from GST heads and inter-branch receivable/payable
-ledgers, so a completed relocation is P&L-neutral while both location events
-remain visible.
+Completed taxable transfers recognize stock value as `Transfer-Out` income at
+dispatch and `Transfer-In` expense at receipt. Cross-GSTIN transfers also carry
+the appropriate GST heads; same-GSTIN transfers use tax-free internal vouchers.
+P&L recognition stays separate from the inter-branch payable.
 
-**Why:** The old `STD-BRANCH-TRF` clearing presentation hid the transfer cost and offset from P&L, while rewriting historical journal lines would damage the audit trail.
+There is one payable ledger per undirected location pair. The balanced dispatch
+and receipt legs split between that pair ledger and shared clearing so a
+forward transfer increases the pair balance and a reverse transfer decreases
+it; the shared clearing is a contra-account, not another branch payable.
+
+**Why:** Posting both sides of a completed transfer to the pair ledger would
+net the obligation to zero. Splitting the legs preserves each document's
+balance while keeping the actual bilateral position visible; rewriting
+historical journal lines would damage the audit trail.
 
 **How to apply:** Invoice-mode postings use the derived invoice projection and
 must not create duplicate JVs. Legacy voucher-mode history is repaired only
-with additive, balanced adjustment vouchers that reverse the old clearing
-effect and introduce the new P&L leg; internal history is similarly backfilled
-without rewriting existing journal lines. Migrations are marker-guarded and
-atomic.
+with additive, balanced adjustment vouchers; keep existing journal lines
+immutable. Migrations are marker-guarded and atomic.
