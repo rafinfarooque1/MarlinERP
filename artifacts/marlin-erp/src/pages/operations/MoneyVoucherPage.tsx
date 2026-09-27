@@ -103,7 +103,7 @@ const PARTY_TYPES = [
 
 const schema = z.object({
   voucherDate: z.string().min(1, 'Date required'),
-  paymentMode: z.enum(['cash', 'bank', 'online']),
+  paymentMode: z.enum(['cash', 'bank', 'upi', 'online']),
   cashBankLedgerId: z.coerce.number(),
   partyLedgerId: z.coerce.number().min(1, 'Select the party account'),
   amount: z.coerce.number().min(0.01, 'Amount must be greater than 0'),
@@ -111,7 +111,11 @@ const schema = z.object({
   narration: z.string().optional(),
 }).superRefine((v, ctx) => {
   if ((v.paymentMode === 'cash' || v.paymentMode === 'online') && v.cashBankLedgerId < 1) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['cashBankLedgerId'], message: v.paymentMode === 'online' ? 'Select an Online sub-ledger' : 'Select the permitted Cash account' });
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['cashBankLedgerId'],
+      message: v.paymentMode === 'online' ? 'Select an Online sub-ledger' : 'Select the permitted Cash account',
+    });
   }
 });
 type FormValues = z.infer<typeof schema>;
@@ -252,8 +256,16 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
     () => (cashBankAccounts as any[]).filter(a => !selLoc || selLoc.cashBankLedgerIds.includes(a.id)),
     [cashBankAccounts, selLoc],
   );
+  const cashOptions = useMemo(
+    () => tillOptions.filter((a: any) => a.accountType === 'cash'),
+    [tillOptions],
+  );
   const onlineOptions = useMemo(
     () => tillOptions.filter((a: any) => a.accountType === 'online'),
+    [tillOptions],
+  );
+  const upiOptions = useMemo(
+    () => tillOptions.filter((a: any) => a.accountType === 'upi'),
     [tillOptions],
   );
 
@@ -261,14 +273,23 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
   // server-scoped cash/bank list — pre-select it so the voucher can only move
   // their location's money. Head Office keeps the full picker and chooses.
   const isBranchUser = !!me?.branchType && me.branchType !== 'headoffice';
-  const defaultCashId = isBranchUser && (cashBankAccounts as any[]).length === 1
-    ? Number((cashBankAccounts as any[])[0].id) : 0;
+  const defaultCashId = isBranchUser && cashOptions.length === 1
+    ? Number(cashOptions[0].id) : 0;
   useEffect(() => {
     if (defaultCashId && !editing && form.getValues('paymentMode') === 'cash' && !form.getValues('cashBankLedgerId')) {
       form.setValue('cashBankLedgerId', defaultCashId);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [defaultCashId]);
+  useEffect(() => {
+    const selectedId = Number(form.getValues('cashBankLedgerId'));
+    if (form.getValues('paymentMode') === 'upi'
+      && upiOptions.length > 0
+      && !upiOptions.some((option: any) => Number(option.id) === selectedId)) {
+      form.setValue('cashBankLedgerId', Number(upiOptions[0].id));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [upiOptions]);
 
   // Switching location narrows the pickers — clear selections that just
   // became foreign so a hidden value can't ride along into the submit.
@@ -299,8 +320,12 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
     if (row.locationType) setLocKey(`${row.locationType}:${row.locationId ?? 0}`);
     form.reset({
       voucherDate: String(row[C.dateField]).split('T')[0],
-      paymentMode: row.paymentMode === 'online' ? 'online' : row.paymentMode === 'bank' || row.paymentMode === 'bank_settled' ? 'bank' : 'cash',
-      cashBankLedgerId: row.paymentMode === 'bank' || row.paymentMode === 'bank_settled' ? 0 : Number(row[C.cashField]),
+      paymentMode: row.paymentMode === 'online' ? 'online'
+        : row.paymentMode === 'upi' ? 'upi'
+          : row.paymentMode === 'bank' || row.paymentMode === 'bank_settled' ? 'bank' : 'cash',
+      cashBankLedgerId: row.paymentMode === 'bank' || row.paymentMode === 'bank_settled' || row.paymentMode === 'upi'
+        ? (row.paymentMode === 'upi' ? Number(upiOptions[0]?.id ?? 0) : 0)
+        : Number(row[C.cashField]),
       partyLedgerId: partyId,
       amount: Number(row.amount),
       referenceNumber: row.referenceNumber ?? '',
@@ -316,7 +341,10 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
     return {
       [C.dateField]: v.voucherDate,
       paymentMode: v.paymentMode,
-      ...((v.paymentMode === 'cash' || v.paymentMode === 'online') ? { [C.cashField]: v.cashBankLedgerId } : {}),
+      ...((v.paymentMode === 'cash' || v.paymentMode === 'online'
+        || (v.paymentMode === 'upi' && (!editing || editing.paymentMode !== 'upi')))
+         ? { [C.cashField]: v.cashBankLedgerId }
+         : {}),
       [C.partyField]: v.partyLedgerId,
       amount: v.amount,
       referenceNumber: v.referenceNumber ?? '',
@@ -327,6 +355,10 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
 
   const submit = (values: FormValues) => {
     if (!parseLocKey(locKey)) { toast.error('Please select a location.'); return; }
+    if (values.paymentMode === 'upi' && values.cashBankLedgerId < 1 && (!editing || editing.paymentMode !== 'upi')) {
+      toast.error('No default UPI account is assigned to this location.');
+      return;
+    }
     const printTab = printTabRef.current;
     printTabRef.current = null;
     if (editing) {
@@ -520,14 +552,18 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
                       <FormLabel>Payment Mode <span className="text-destructive">*</span></FormLabel>
                       <Select value={field.value} onValueChange={v => {
                         field.onChange(v);
-                         if (v === 'bank') form.setValue('cashBankLedgerId', 0);
-                         else if (v === 'online') form.setValue('cashBankLedgerId', 0);
-                        else if (!form.getValues('cashBankLedgerId') && defaultCashId) form.setValue('cashBankLedgerId', defaultCashId);
+                        if (v === 'bank') form.setValue('cashBankLedgerId', 0);
+                        else if (v === 'online') form.setValue('cashBankLedgerId', 0);
+                        else if (v === 'upi') form.setValue('cashBankLedgerId', Number(upiOptions[0]?.id ?? 0));
+                        else if (v === 'cash' && !cashOptions.some((a: any) => Number(a.id) === Number(form.getValues('cashBankLedgerId')))) {
+                          form.setValue('cashBankLedgerId', defaultCashId);
+                        }
                       }}>
                         <SelectTrigger><SelectValue /></SelectTrigger>
                         <SelectContent>
                           <SelectItem value="cash">Cash</SelectItem>
                           <SelectItem value="bank">Bank</SelectItem>
+                          <SelectItem value="upi">UPI</SelectItem>
                            <SelectItem value="online">Online</SelectItem>
                         </SelectContent>
                       </Select>
@@ -543,9 +579,16 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
                          advanceOnSelect data-field="cashBankLedgerId" />
                       <FormMessage />
                     </FormItem>
-                  )} /> : (
+                  )} /> : paymentMode === 'upi' ? (
                     <div className="rounded-md border border-dashed border-primary/30 bg-primary/5 px-3 py-2 text-sm text-muted-foreground">
-                      Bank account is selected later in Reconciliation after the warehouse statement is available.
+                      {upiOptions.length
+                        ? `Using this location's default UPI account: ${upiOptions[0].name}.`
+                        : 'No UPI account is assigned to this location.'}
+                      {' '}The entry will remain in Reconciliation until settled.
+                    </div>
+                  ) : (
+                    <div className="rounded-md border border-dashed border-primary/30 bg-primary/5 px-3 py-2 text-sm text-muted-foreground">
+                      Bank account is selected later in Reconciliation after the location statement is available.
                     </div>
                   )}
 

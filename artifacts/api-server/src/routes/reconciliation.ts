@@ -2612,7 +2612,7 @@ router.get("/reconciliation/pending-manual-vouchers", requireModuleView("page:/a
          LEFT JOIN vendors v ON pt.code = 'VEND-' || v.id::text
          LEFT JOIN customers c ON pt.code = 'CUST-' || c.id::text
         WHERE p.paid_from_ledger_id = $1
-           AND p.payment_mode IN ('bank', 'online')
+           AND p.payment_mode IN ('bank', 'upi', 'online')
           AND p.source IN ('manual', 'allocation')
           AND NOT EXISTS (
             SELECT 1 FROM bank_reconciliation_entries bre
@@ -2629,7 +2629,7 @@ router.get("/reconciliation/pending-manual-vouchers", requireModuleView("page:/a
          LEFT JOIN customers c ON rf.code = 'CUST-' || c.id::text
          LEFT JOIN vendors v ON rf.code = 'VEND-' || v.id::text
         WHERE r.received_in_ledger_id = $1
-           AND r.payment_mode IN ('bank', 'online')
+           AND r.payment_mode IN ('bank', 'upi', 'online')
           AND r.source IN ('manual', 'allocation')
           AND NOT EXISTS (
             SELECT 1 FROM bank_reconciliation_entries bre
@@ -2725,7 +2725,7 @@ router.post("/reconciliation/manual-vouchers", requireModuleAction("page:/accoun
         [identity.id],
       );
       if (!row || Number(row.clearing_ledger_id) !== Number(clearing.id)
-        || !["bank", "online"].includes(row.payment_mode)
+        || !["bank", "upi", "online"].includes(row.payment_mode)
         || !["manual", "allocation"].includes(String(row.source))) {
         await client.query("ROLLBACK");
         res.status(409).json({ error: `${identity.kind} ${identity.id} is no longer pending bank reconciliation.` }); return;

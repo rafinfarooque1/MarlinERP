@@ -846,14 +846,15 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   }, [isOpen]);
   const formReceiveOptionsForMode = useMemo(() => {
     if (watchPaymentMode === 'cash') return formReceiveOptions.filter(isCashOption);
-    if (watchPaymentMode === 'bank') return formReceiveOptions.filter(o => !isCashOption(o));
+    if (watchPaymentMode === 'bank') return formReceiveOptions.filter(o => o.accountType === 'bank');
+    if (watchPaymentMode === 'upi') return formReceiveOptions.filter(o => o.accountType === 'upi');
     if (watchPaymentMode === 'online') return formReceiveOptions.filter(o => o.accountType === 'online');
     return [];
   }, [formReceiveOptions, watchPaymentMode]);
 
-  // Keep the picked account valid for the form's location and payment mode.
-  // Cash defaults to the location's own active till; Bank and Online default to
-  // the first assigned account in their respective family.
+  // Keep the implicit location account valid for the payment mode. Cash uses
+  // its till; Bank and UPI use the first assigned account of that type. Only
+  // Online exposes a platform picker to the operator.
   useEffect(() => {
     if (!isOpen || editItem) return;
     setReceiveLedgerId(prev => {
@@ -2051,6 +2052,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
               {!editItem && watchPaymentMode !== 'credit' && (
                 formReceiveOptionsForMode.length > 0
                 || watchPaymentMode === 'bank'
+                || watchPaymentMode === 'upi'
                 || (ONLINE_PAYMENT_MODES as readonly string[]).includes(watchPaymentMode)
               ) && (() => {
                 const advApplied = applyAdvance && watchCustomerId
@@ -2065,7 +2067,17 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                     <div className="rounded-lg border border-border bg-muted/20 p-3 space-y-3" data-testid="section-payment-collection">
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                       <div className="flex flex-col gap-1.5">
-                        {formReceiveOptionsForMode.length > 0 ? (
+                        {watchPaymentMode === 'bank' || watchPaymentMode === 'upi' ? (
+                          <>
+                            <span className="text-sm font-medium">Settlement</span>
+                            <div className="h-9 flex items-center rounded-md border border-amber-500/30 bg-amber-500/5 px-3 text-sm text-amber-700">
+                              {selected
+                                ? `Default ${watchPaymentMode === 'upi' ? 'UPI' : 'bank'} account: ${selected.name}`
+                                : `Held for reconciliation · no default ${watchPaymentMode === 'upi' ? 'UPI' : 'bank'} account assigned`}
+                            </div>
+                            <span className="text-xs text-amber-700">Held for reconciliation</span>
+                          </>
+                        ) : formReceiveOptionsForMode.length > 0 ? (
                           <>
                             <span className="text-sm font-medium">
                               {watchPaymentMode === 'online' ? 'Settlement' : 'Receive Into'}
@@ -2076,7 +2088,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                               locationId={watchLocationId}
                               value={receiveLedgerId}
                               onChange={setReceiveLedgerId}
-                              mode={watchPaymentMode === 'cash' ? 'cash' : watchPaymentMode === 'upi' ? 'upi' : watchPaymentMode === 'bank' ? 'bank' : 'online'}
+                              mode={watchPaymentMode === 'cash' ? 'cash' : 'online'}
                             />
                             {watchPaymentMode === 'online' && (
                               <span className="text-xs text-amber-700">Held for reconciliation</span>

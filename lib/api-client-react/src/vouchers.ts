@@ -13,7 +13,7 @@ export const getPartyAdvanceQueryKey = (kind: 'customer' | 'vendor', partyId: nu
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 /** Instrument modes a manual voucher may record (metadata only). */
-export type VoucherPaymentMode = 'cash' | 'upi' | 'bank' | 'bank_settled' | 'card' | 'cheque' | 'neft' | 'rtgs';
+export type VoucherPaymentMode = 'cash' | 'upi' | 'bank' | 'online' | 'bank_settled' | 'card' | 'cheque' | 'neft' | 'rtgs';
 
 export interface Payment {
   id: number;
