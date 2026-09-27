@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   useReceivablesAging, useCreateSalePayment,
@@ -12,12 +12,14 @@ import {
 } from '@/components/ui/dialog';
 import { TransactionDialog, TransactionDialogContent } from '@/components/ui/transaction-dialog';
 import { HandCoins } from 'lucide-react';
-import { ReceiveIntoSelect } from '@/components/receive-into-select';
+import { ReceiveIntoSelect, useReceiveIntoOptions, isCashOption } from '@/components/receive-into-select';
 import { EmptyState } from '@/components/app/empty-state';
 import { toast } from 'sonner';
 import { inr } from '@/lib/currency';
 import { formatDateOrDash } from '@/lib/date';
 import { formatSalesInvoiceDisplayNumber } from '@/lib/invoiceNumber';
+import { CREATE_PAYMENT_MODE_OPTIONS } from '@/lib/paymentModes';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
 const fmt = (n: unknown) => Number(n ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 });
 const dfmt = (d?: string | null) => formatDateOrDash(d);
@@ -47,15 +49,37 @@ export function CollectPaymentDialog({
 
   // Per-invoice form state, keyed by saleId — supports full and partial amounts.
   const [selected, setSelected] = useState<number | null>(null);
+  const [paymentMode, setPaymentMode] = useState<'cash' | 'upi' | 'bank' | 'online'>('cash');
   const [amount, setAmount] = useState('');
   const [ledgerId, setLedgerId] = useState(0);
   const [reference, setReference] = useState('');
   const [paymentDate, setPaymentDate] = useState(today());
 
   const activeInv = invoices.find((inv) => inv.saleId === selected) ?? null;
+  const { options: receiveOptions, isLoading: receiveOptionsLoading } = useReceiveIntoOptions(
+    activeInv?.locationType,
+    activeInv?.locationId,
+  );
+  const modeOptions = useMemo(() => {
+    if (paymentMode === 'cash') return receiveOptions.filter(isCashOption);
+    if (paymentMode === 'bank') return receiveOptions.filter((o) => o.accountType === 'bank');
+    if (paymentMode === 'upi') return receiveOptions.filter((o) => o.accountType === 'upi');
+    return receiveOptions.filter((o) => o.accountType === 'online');
+  }, [paymentMode, receiveOptions]);
+
+  useEffect(() => {
+    if (!activeInv) {
+      setLedgerId(0);
+      return;
+    }
+    setLedgerId((previous) => modeOptions.some((o) => o.id === previous)
+      ? previous
+      : modeOptions[0]?.id ?? 0);
+  }, [activeInv?.saleId, modeOptions]);
 
   const pick = (inv: any) => {
     setSelected(inv.saleId);
+    setPaymentMode('cash');
     setAmount(String(inv.balance ?? ''));
     setLedgerId(0);
     setReference('');
@@ -75,15 +99,25 @@ export function CollectPaymentDialog({
     if (amt > Number(activeInv.balance) + 0.01) {
       toast.error(`Amount exceeds outstanding (${inr(activeInv.balance)})`); return;
     }
-    if (!ledgerId) { toast.error('Pick the Cash / Bank account the money went into'); return; }
+    if (!ledgerId) {
+      toast.error(receiveOptionsLoading
+        ? 'Payment accounts are still loading.'
+        : paymentMode === 'online'
+          ? 'Select an Online sub-platform.'
+          : `No ${paymentMode === 'upi' ? 'UPI' : paymentMode === 'bank' ? 'Bank' : 'Cash'} account is assigned to this location.`);
+      return;
+    }
     createPayment.mutate(
-      { saleId: activeInv.saleId, data: { receivedInLedgerId: ledgerId, amount: amt, referenceNumber: reference.trim() || undefined, paymentDate } },
+      { saleId: activeInv.saleId, data: { method: paymentMode, receivedInLedgerId: ledgerId, amount: amt, referenceNumber: reference.trim() || undefined, paymentDate } },
       {
         onSuccess: () => {
           toast.success(`${inr(amt)} recorded against ${formatSalesInvoiceDisplayNumber(activeInv.invoiceNumber || `Sale #${activeInv.saleId}`)}`);
           invalidate();
           setSelected(null);
           setAmount('');
+          setPaymentMode('cash');
+          setLedgerId(0);
+          setReference('');
         },
         onError: (e: any) => toast.error(e?.data?.error || e.message || 'Could not record the payment'),
       },
@@ -95,7 +129,7 @@ export function CollectPaymentDialog({
   return (
     <TransactionDialog
       open={customerId != null}
-      dirty={selected != null || amount !== '' || ledgerId !== 0 || reference !== ''}
+      dirty={selected != null || amount !== '' || ledgerId !== 0 || reference !== '' || paymentMode !== 'cash'}
       onOpenChange={onOpenChange}
     >
       <TransactionDialogContent className="sm:max-w-2xl">
@@ -160,6 +194,17 @@ export function CollectPaymentDialog({
                 </p>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="space-y-1.5">
+                    <label className="text-sm font-medium">Payment Mode</label>
+                    <Select value={paymentMode} onValueChange={(value) => setPaymentMode(value as typeof paymentMode)}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        {CREATE_PAYMENT_MODE_OPTIONS.map((option) => (
+                          <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1.5">
                     <label className="text-sm font-medium">Amount (₹)</label>
                     <Input type="number" min={0} step="0.01" className="font-mono" value={amount} onChange={(e) => setAmount(e.target.value)} />
                     <p className="text-[11px] text-muted-foreground">Full or partial — capped at outstanding.</p>
@@ -169,13 +214,27 @@ export function CollectPaymentDialog({
                     <Input type="date" value={paymentDate} onChange={(e) => setPaymentDate(e.target.value)} />
                   </div>
                   <div className="space-y-1.5">
-                    <label className="text-sm font-medium">Receive Into <span className="text-muted-foreground font-normal">(Cash / Bank)</span></label>
-                    <ReceiveIntoSelect
-                      locationType={activeInv.locationType}
-                      locationId={activeInv.locationId}
-                      value={ledgerId}
-                      onChange={setLedgerId}
-                    />
+                    <label className="text-sm font-medium">
+                      {paymentMode === 'online' ? 'Online sub-platform' : 'Receive Into'}
+                    </label>
+                    {paymentMode === 'bank' || paymentMode === 'upi' ? (
+                      <div className="min-h-10 rounded-md border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-sm text-amber-700">
+                        {receiveOptionsLoading
+                          ? `Loading this location's default ${paymentMode === 'upi' ? 'UPI' : 'bank'} account…`
+                          : modeOptions[0]
+                            ? `Using this location's default ${paymentMode === 'upi' ? 'UPI' : 'bank'} account: ${modeOptions[0].name}.`
+                            : `No default ${paymentMode === 'upi' ? 'UPI' : 'bank'} account is assigned to this location.`}
+                        {' '}Held for reconciliation.
+                      </div>
+                    ) : (
+                      <ReceiveIntoSelect
+                        locationType={activeInv.locationType}
+                        locationId={activeInv.locationId}
+                        value={ledgerId}
+                        onChange={setLedgerId}
+                        mode={paymentMode === 'cash' ? 'cash' : 'online'}
+                      />
+                    )}
                   </div>
                   <div className="space-y-1.5">
                     <label className="text-sm font-medium">Reference <span className="text-muted-foreground font-normal">(optional)</span></label>
