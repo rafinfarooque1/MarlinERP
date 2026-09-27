@@ -1348,7 +1348,7 @@ export default function ChartOfAccounts() {
   // Month Wise is ONE toggle: ON folds month columns into the statements
   // below; OFF leaves the page exactly as it always was. No separate views.
   const [monthWise, setMonthWise] = useState(false);
-  const [showValuedOnly, setShowValuedOnly] = useState(false);
+  const [showValuedOnly, setShowValuedOnly] = useState(true);
   // The sheet remembers WHICH period asked for it, so a ledger opened from
   // a month cell shows exactly that month's entries.
   const [selectedLedger, setSelectedLedger] = useState<{ node: StatementTarget; fromDate?: string; toDate?: string } | null>(null);
