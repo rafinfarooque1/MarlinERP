@@ -1,12 +1,12 @@
 import { useState } from 'react';
-import { useLocation } from 'wouter';
-import { toast } from 'sonner';
 import { useGetLedgerStatement, useListAccountsFlat, useListWarehouses, useListOutlets } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Input } from '@/components/ui/input';
+import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { AccountCombobox } from '@/components/ui/account-combobox';
-import { FileText, Calendar, ShieldOff, ArrowDownCircle, ArrowUpCircle, ListChecks, ExternalLink, Info } from 'lucide-react';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { FileText, Calendar, ShieldOff, ArrowDownCircle, ArrowUpCircle, ListChecks, Eye } from 'lucide-react';
 import { downloadCSV } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
@@ -17,16 +17,16 @@ import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
 import { EmptyState } from '@/components/app/empty-state';
 import { TableSkeleton } from '@/components/app/loading-skeletons';
 import { ExportButtons, pdfMoney, periodLabel, type ReportDoc } from '@/pages/reports/shared';
-import { resolveDrill } from '@/lib/drilldown';
 import { formatDate } from '@/lib/date';
+import { inr } from '@/lib/currency';
 
 export default function Ledger() {
   const perm = usePermission('page:/accounts/ledger');
-  const [, navigate] = useLocation();
   const { data: accounts = [] } = useListAccountsFlat();
   const { data: warehouses = [] } = useListWarehouses();
   const { data: outlets = [] } = useListOutlets();
   const [accountId, setAccountId] = useState<string>('');
+  const [selectedEntry, setSelectedEntry] = useState<any>(null);
   const now = new Date();
   const [fromDate, setFromDate] = useState(`${now.getFullYear()}-01-01`);
   const [toDate, setToDate] = useState(now.toISOString().split('T')[0]);
@@ -57,15 +57,6 @@ export default function Ledger() {
   };
   const account = (accounts as any[]).find((a: any) => a.id === Number(accountId));
 
-  // Row drill-down: a statement line opens the document that produced it —
-  // derived rows (accruals, advance adjustments) explain themselves instead.
-  const openRow = (e: any) => {
-    const t = resolveDrill(e.entryId, e.entryType);
-    if (!t) return;
-    if (t.kind === 'link') navigate(t.href);
-    else toast.info(t.reason);
-  };
-
   // Server-rendered Excel/PDF — the FULL filtered statement, never the
   // current sort page (entries already hold the whole range).
   const doc = (): ReportDoc => ({
@@ -93,9 +84,9 @@ export default function Ledger() {
       ],
       rows: (entries as any[]).map((e: any) => [
         formatDate(e.date),
-        e.narration ?? e.description,
+        e.displayNarration ?? e.narration ?? e.description,
         ...(showLocation ? [entryLocationName(e)] : []),
-        e.entryType,
+        e.displayEntryType ?? e.entryType,
         e.debit ? pdfMoney(Number(e.debit)) : '',
         e.credit ? pdfMoney(Number(e.credit)) : '',
         pdfMoney(Number(e.balance ?? 0)),
@@ -106,8 +97,8 @@ export default function Ledger() {
 
   const { sorted, sort } = useTableSort(entries as any[], {
     date: (e: any) => e.date,
-    description: (e: any) => e.description,
-    type: (e: any) => e.entryType,
+    description: (e: any) => e.displayNarration ?? e.description,
+    type: (e: any) => e.displayEntryType ?? e.entryType,
     debit: (e: any) => Number(e.debit) || null,
     credit: (e: any) => Number(e.credit) || null,
   });
@@ -143,7 +134,7 @@ export default function Ledger() {
               canDownload={perm.canDownload}
               disabled={!entries.length}
               doc={doc}
-               onCSV={() => downloadCSV('ledger.csv', entries.map((e: any) => ({ Date: formatDate(e.date), Narration: e.narration ?? e.description, ...(showLocation ? { Location: entryLocationName(e) } : {}), Type: e.entryType, Debit: e.debit || 0, Credit: e.credit || 0, Balance: e.balance || 0 })))}
+               onCSV={() => downloadCSV('ledger.csv', entries.map((e: any) => ({ Date: formatDate(e.date), Narration: e.displayNarration ?? e.narration ?? e.description, ...(showLocation ? { Location: entryLocationName(e) } : {}), Type: e.displayEntryType ?? e.entryType, Debit: e.debit || 0, Credit: e.credit || 0, Balance: e.balance || 0 })))}
             />
           }
         />
@@ -195,31 +186,43 @@ export default function Ledger() {
                 <SortableHead k="debit" sort={sort} className="text-right">Debit</SortableHead>
                 <SortableHead k="credit" sort={sort} className="text-right">Credit</SortableHead>
                 <TableHead className="text-right">Balance</TableHead>
+                <TableHead className="w-14 text-right">Details</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {sorted.map((e: any, i: number) => {
-                const drill = resolveDrill(e.entryId, e.entryType);
                 return (
                 <TableRow
                   key={i}
-                  className={`hover:bg-muted/10 ${drill ? 'cursor-pointer' : ''}`}
-                  title={drill ? (drill.kind === 'link' ? drill.label : 'No document — click for details') : undefined}
-                  onClick={() => openRow(e)}
+                  className="hover:bg-muted/10"
                 >
                   <TableCell className="text-sm">{formatDate(e.date)}</TableCell>
                   <TableCell className="text-sm">
                     <span className="inline-flex items-center gap-1.5">
-                       {e.narration ?? e.description}
-                      {drill?.kind === 'link' && <ExternalLink className="w-3 h-3 text-muted-foreground/60 shrink-0" />}
-                      {drill?.kind === 'info' && <Info className="w-3 h-3 text-muted-foreground/60 shrink-0" />}
+                       {e.displayNarration ?? e.narration ?? e.description}
                     </span>
                   </TableCell>
                    {showLocation && <TableCell className="text-sm text-muted-foreground">{entryLocationName(e)}</TableCell>}
-                  <TableCell><Badge variant="outline" className="text-xs capitalize">{e.entryType}</Badge></TableCell>
+                  <TableCell><Badge variant="outline" className="text-xs">{e.displayEntryType ?? e.entryType}</Badge></TableCell>
                   <TableCell className="text-right font-mono text-red-500">{e.debit ? `₹${Number(e.debit).toLocaleString('en-IN')}` : '—'}</TableCell>
                   <TableCell className="text-right font-mono text-emerald-500">{e.credit ? `₹${Number(e.credit).toLocaleString('en-IN')}` : '—'}</TableCell>
                   <TableCell className="text-right font-mono font-bold">₹{Number(e.balance || 0).toLocaleString('en-IN')}</TableCell>
+                  <TableCell className="text-right">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      title="View transaction details"
+                      aria-label={`View transaction details for row ${i + 1}`}
+                      data-testid={`button-ledger-details-${i}`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setSelectedEntry(e);
+                      }}
+                    >
+                      <Eye className="w-4 h-4" />
+                    </Button>
+                  </TableCell>
                 </TableRow>
                 );
               })}
@@ -227,6 +230,96 @@ export default function Ledger() {
           </Table>
           )}
         </div>
+
+        <Dialog open={!!selectedEntry} onOpenChange={(open) => !open && setSelectedEntry(null)}>
+          {selectedEntry && (
+            <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto" data-testid="dialog-ledger-entry-details">
+              <DialogHeader>
+                <DialogTitle>{selectedEntry.displayEntryType ?? selectedEntry.entryType} details</DialogTitle>
+                <DialogDescription>
+                  {formatDate(selectedEntry.date)}
+                  {selectedEntry.reference ? ` · ${selectedEntry.reference}` : ''}
+                </DialogDescription>
+              </DialogHeader>
+
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <div className="rounded-lg border border-border bg-muted/10 p-3">
+                  <p className="text-xs text-muted-foreground">Debit</p>
+                  <p className="mt-1 font-mono text-sm">{inr(Number(selectedEntry.debit) || 0)}</p>
+                </div>
+                <div className="rounded-lg border border-border bg-muted/10 p-3">
+                  <p className="text-xs text-muted-foreground">Credit</p>
+                  <p className="mt-1 font-mono text-sm">{inr(Number(selectedEntry.credit) || 0)}</p>
+                </div>
+                <div className="rounded-lg border border-border bg-muted/10 p-3">
+                  <p className="text-xs text-muted-foreground">Balance</p>
+                  <p className="mt-1 font-mono text-sm">{inr(Number(selectedEntry.balance) || 0)}</p>
+                </div>
+                <div className="rounded-lg border border-border bg-muted/10 p-3">
+                  <p className="text-xs text-muted-foreground">Location</p>
+                  <p className="mt-1 text-sm">{entryLocationName(selectedEntry)}</p>
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <h3 className="text-sm font-semibold">Original transaction</h3>
+                {(selectedEntry.sourceDetails ?? []).length ? (
+                  selectedEntry.sourceDetails.map((detail: any, index: number) => (
+                    <div key={`${detail.type}-${detail.reference ?? index}`} className="rounded-lg border border-border p-4 space-y-3" data-testid={`card-ledger-source-detail-${index}`}>
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <Badge variant="outline">{detail.type}</Badge>
+                          {detail.reference && <span className="font-mono text-sm">{detail.reference}</span>}
+                        </div>
+                        <span className="font-mono text-sm font-semibold">{inr(Number(detail.amount) || 0)}</span>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-2 text-sm">
+                        <div>
+                          <span className="text-muted-foreground">Date: </span>
+                          {detail.date ? formatDate(detail.date) : '—'}
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground">Party: </span>
+                          {detail.partyName || '—'}
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground">Method: </span>
+                          {detail.method || '—'}
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground">Reference: </span>
+                          {detail.referenceNumber || '—'}
+                        </div>
+                      </div>
+                      <p className="text-sm whitespace-pre-wrap break-words">{detail.narration || '—'}</p>
+                      {detail.invoiceAllocations?.length > 0 && (
+                        <div className="border-t border-border pt-3 space-y-2">
+                          <p className="text-xs font-medium text-muted-foreground">Invoice allocations</p>
+                          <div className="space-y-1.5">
+                            {detail.invoiceAllocations.map((allocation: any, allocationIndex: number) => (
+                              <div key={`${allocation.invoiceNumber ?? 'invoice'}-${allocationIndex}`} className="flex items-center justify-between gap-3 text-sm" data-testid={`row-ledger-invoice-allocation-${index}-${allocationIndex}`}>
+                                <span className="min-w-0 break-words">
+                                  {allocation.invoiceNumber || 'Invoice'}
+                                  {allocation.date ? <span className="text-muted-foreground"> · {formatDate(allocation.date)}</span> : ''}
+                                </span>
+                                <span className="shrink-0 font-mono">{inr(Number(allocation.amount) || 0)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))
+                ) : (
+                  <div className="rounded-lg border border-border p-4 space-y-2">
+                    <p className="text-sm">{selectedEntry.displayNarration ?? selectedEntry.narration ?? selectedEntry.description ?? 'No additional source details.'}</p>
+                    <p className="text-xs text-muted-foreground">No linked Sale, Receipt, or Payment record is available for this row.</p>
+                  </div>
+                )}
+              </div>
+            </DialogContent>
+          )}
+        </Dialog>
       </div>
     </AppLayout>
   );

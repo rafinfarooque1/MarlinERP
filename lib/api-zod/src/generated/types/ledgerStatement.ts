@@ -5,12 +5,15 @@
  * Marlin Frozen Fruits ERP API
  * OpenAPI spec version: 0.1.0
  */
-import type { LedgerStatementTransactionsItem } from './ledgerStatementTransactionsItem';
+import type { LedgerStatementEntry } from './ledgerStatementEntry';
 
 export interface LedgerStatement {
   accountId?: number;
   accountName?: string;
   openingBalance?: number;
   closingBalance?: number;
-  transactions?: LedgerStatementTransactionsItem[];
+  totalDebit?: number;
+  totalCredit?: number;
+  entries?: LedgerStatementEntry[];
+  transactions?: LedgerStatementEntry[];
 }

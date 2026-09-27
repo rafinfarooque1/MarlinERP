@@ -2514,19 +2514,69 @@ export const GetLedgerStatementResponse = zod.object({
   "accountName": zod.string().optional(),
   "openingBalance": zod.number().optional(),
   "closingBalance": zod.number().optional(),
-  "transactions": zod.array(zod.object({
-  "id": zod.number().optional(),
+  "totalDebit": zod.number().optional(),
+  "totalCredit": zod.number().optional(),
+  "entries": zod.array(zod.object({
   "date": zod.string().optional(),
   "description": zod.string().optional(),
+  "narration": zod.string().optional().describe('Human-readable narration; mirrors description for legacy posting sources.'),
+  "displayNarration": zod.string().optional(),
+  "entryType": zod.string().optional(),
+  "displayEntryType": zod.string().optional(),
   "debit": zod.number().optional(),
   "credit": zod.number().optional(),
   "balance": zod.number().optional(),
   "reference": zod.string().nullish(),
-  "entryType": zod.string().optional(),
-  "narration": zod.string().optional().describe('Human-readable narration; mirrors description for legacy posting sources.'),
+  "entryId": zod.string().nullish(),
   "locationType": zod.string().nullish(),
   "locationId": zod.number().nullish(),
-  "locationName": zod.string().nullish()
+  "locationName": zod.string().nullish(),
+  "sourceDetails": zod.array(zod.object({
+  "type": zod.enum(['Sale', 'Receipt', 'Payment']).optional(),
+  "date": zod.string().nullish(),
+  "reference": zod.string().nullish(),
+  "partyName": zod.string().nullish(),
+  "narration": zod.string().optional(),
+  "amount": zod.number().optional(),
+  "method": zod.string().nullish(),
+  "referenceNumber": zod.string().nullish(),
+  "invoiceAllocations": zod.array(zod.object({
+  "invoiceNumber": zod.string().nullish(),
+  "date": zod.string().nullish(),
+  "amount": zod.number().optional()
+})).optional()
+})).optional()
+})).optional(),
+  "transactions": zod.array(zod.object({
+  "date": zod.string().optional(),
+  "description": zod.string().optional(),
+  "narration": zod.string().optional().describe('Human-readable narration; mirrors description for legacy posting sources.'),
+  "displayNarration": zod.string().optional(),
+  "entryType": zod.string().optional(),
+  "displayEntryType": zod.string().optional(),
+  "debit": zod.number().optional(),
+  "credit": zod.number().optional(),
+  "balance": zod.number().optional(),
+  "reference": zod.string().nullish(),
+  "entryId": zod.string().nullish(),
+  "locationType": zod.string().nullish(),
+  "locationId": zod.number().nullish(),
+  "locationName": zod.string().nullish(),
+  "sourceDetails": zod.array(zod.object({
+  "type": zod.enum(['Sale', 'Receipt', 'Payment']).optional(),
+  "date": zod.string().nullish(),
+  "reference": zod.string().nullish(),
+  "partyName": zod.string().nullish(),
+  "narration": zod.string().optional(),
+  "amount": zod.number().optional(),
+  "method": zod.string().nullish(),
+  "referenceNumber": zod.string().nullish(),
+  "invoiceAllocations": zod.array(zod.object({
+  "invoiceNumber": zod.string().nullish(),
+  "date": zod.string().nullish(),
+  "amount": zod.number().optional()
+})).optional()
+})).optional()
 })).optional()
 })
 

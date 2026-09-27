@@ -2699,6 +2699,36 @@ router.post("/accounts/receipts/:id/system-delete", requireModuleAction(["page:/
  * payroll, rent or opening balances, so the "Ledger View" disagreed with
  * every other balance surface. One stream, one figure.
  */
+type StatementInvoiceAllocation = { invoiceNumber: string | null; date: string | null; amount: number };
+type StatementSourceDetail = {
+  type: "Sale" | "Receipt" | "Payment";
+  date: string | null;
+  reference: string | null;
+  partyName: string | null;
+  narration: string;
+  amount: number;
+  method: string | null;
+  referenceNumber: string | null;
+  invoiceAllocations?: StatementInvoiceAllocation[];
+};
+type StatementEntry = {
+  date: string;
+  reference: string | null;
+  description: string;
+  narration: string;
+  displayNarration: string;
+  entryType: string;
+  displayEntryType: string;
+  debit: number;
+  credit: number;
+  balance: number;
+  entryId: string | null;
+  locationType: string | null;
+  locationId: number | null;
+  locationName: string | null;
+  sourceDetails: StatementSourceDetail[];
+};
+
 async function postingLedgerStatement(opts: {
   ledgerId: number;
   fromDate?: string;
@@ -2706,16 +2736,46 @@ async function postingLedgerStatement(opts: {
   locFilter: PostingLocationFilter | null;
 }): Promise<{
   opening: number; closing: number; totalDebit: number; totalCredit: number;
-  entries: Array<{ date: string; reference: string | null; description: string; narration: string; entryType: string; debit: number; credit: number; balance: number; entryId: string | null; locationType: string | null; locationId: number | null; locationName: string | null }>;
+  entries: StatementEntry[];
 }> {
   const rnd = (n: number) => Math.round(n * 100) / 100;
+  const dateOnly = (value: unknown): string | null => {
+    if (value == null) return null;
+    if (value instanceof Date) return value.toISOString().slice(0, 10);
+    const text = String(value);
+    return text ? text.slice(0, 10) : null;
+  };
   const dateOpts = opts.toDate && isIsoDate(opts.toDate) ? { toDate: opts.toDate } : {};
   const stream: Array<Record<string, any>> = (await buildDerivedPostings(dateOpts) as Array<Record<string, any>>)
     .concat(await openingBalancePostings(dateOpts));
   const sliced = filterPostingsByLocation(stream as any, opts.locFilter) as Array<Record<string, any>>;
 
-  const mine = sliced
+  const rawMine = sliced
     .filter((p) => Number(p.ledgerId) === opts.ledgerId)
+    .sort((a, b) => String(a.date).localeCompare(String(b.date)) || String(a.entryId ?? "").localeCompare(String(b.entryId ?? "")));
+
+  // One source document may produce several postings on the same ledger (for
+  // example, a receipt allocated across invoices, or the clearing-account
+  // debit and credit legs of one allocation receipt). Keep the books stream
+  // untouched, but present that document as one statement row.
+  const grouped = new Map<string, Record<string, any>>();
+  rawMine.forEach((p, index) => {
+    const date = String(p.date).slice(0, 10);
+    const entryId = p.entryId == null ? null : String(p.entryId);
+    const key = entryId == null
+      ? `unkeyed:${index}`
+      : JSON.stringify([entryId, p.locationType ?? null, p.locationId ?? null]);
+    const debit = Number(p.debit) || 0;
+    const credit = Number(p.credit) || 0;
+    const prior = grouped.get(key);
+    if (prior) {
+      prior.debit = rnd(Number(prior.debit) + debit);
+      prior.credit = rnd(Number(prior.credit) + credit);
+    } else {
+      grouped.set(key, { ...p, date, debit: rnd(debit), credit: rnd(credit) });
+    }
+  });
+  const mine = [...grouped.values()]
     .sort((a, b) => String(a.date).localeCompare(String(b.date)) || String(a.entryId ?? "").localeCompare(String(b.entryId ?? "")));
 
   const from = opts.fromDate && isIsoDate(opts.fromDate) ? opts.fromDate : null;
@@ -2734,7 +2794,7 @@ async function postingLedgerStatement(opts: {
     ...outletRows.rows.map((r: any) => [`outlet:${r.id}`, r.name] as const),
     ["headoffice:0", "Head Office"],
   ]);
-  const entries: Array<{ date: string; reference: string | null; description: string; narration: string; entryType: string; debit: number; credit: number; balance: number; entryId: string | null; locationType: string | null; locationId: number | null; locationName: string | null }> = [];
+  const entries: StatementEntry[] = [];
   for (const p of mine) {
     const debit = Number(p.debit) || 0;
     const credit = Number(p.credit) || 0;
@@ -2755,19 +2815,266 @@ async function postingLedgerStatement(opts: {
       reference: p.voucherNumber == null ? null : String(p.voucherNumber),
       description,
       narration: description,
+      displayNarration: description,
       entryType: String(p.source ?? "journal"),
+      displayEntryType: String(p.source ?? "journal"),
       debit: rnd(debit),
       credit: rnd(credit),
       balance: running,
-      // Provenance for row drill-down: the posting's entry key ("sale:12",
-      // "jv:7", "opening-balance-3"…). The client maps it to the owning
-      // document's page; rows without a reachable document explain why.
       entryId: p.entryId == null ? null : String(p.entryId),
       locationType,
       locationId,
       locationName,
+      sourceDetails: [],
     });
   }
+
+  const idsForPrefix = (prefix: string, rows: StatementEntry[]) => {
+    const ids = new Set<number>();
+    for (const row of rows) {
+      const match = row.entryId?.match(new RegExp(`^${prefix}:(\\d+)$`));
+      if (match) ids.add(Number(match[1]));
+    }
+    return ids;
+  };
+  const saleIds = idsForPrefix("sale", entries);
+  const receiptIds = idsForPrefix("receipt", entries);
+  const paymentIds = idsForPrefix("payment", entries);
+  const salePaymentIds = idsForPrefix("sale_payment", entries);
+
+  // A unified reconciliation journal is a summary posting. Its batch source
+  // records retain the original sale collections and receipt/payment vouchers.
+  const settlementEntryIds = entries
+    .filter((entry) => entry.entryType === "journal" && entry.description.startsWith("Unified bank reconciliation "))
+    .map((entry) => entry.entryId)
+    .filter((id): id is string => id != null);
+  const sourceItemsByEntryId = new Map<string, any[]>();
+  if (settlementEntryIds.length) {
+    const { rows } = await pool.query(
+      `SELECT bri.entry_id, brb.source_items
+         FROM bank_reconciliation_batch_items bri
+         JOIN bank_reconciliation_batches brb ON brb.id = bri.batch_id
+        WHERE bri.entry_id = ANY($1::text[])
+          AND brb.accounting_impact = $2`,
+      [settlementEntryIds, "unified_reconciliation_settlement"],
+    );
+    for (const row of rows) {
+      let items = row.source_items;
+      if (typeof items === "string") {
+        try { items = JSON.parse(items); } catch { items = []; }
+      }
+      sourceItemsByEntryId.set(String(row.entry_id), Array.isArray(items) ? items : []);
+    }
+  }
+
+  const settlementSalePaymentIds = new Set<number>();
+  const settlementReceiptIds = new Set<number>();
+  const settlementPaymentIds = new Set<number>();
+  for (const items of sourceItemsByEntryId.values()) {
+    for (const item of items) {
+      const id = Number(item?.id);
+      if (!Number.isInteger(id) || id <= 0) continue;
+      if (item.kind === "sale_payment") settlementSalePaymentIds.add(id);
+      if (item.kind === "manual_voucher" && item.voucherKind === "receipt") settlementReceiptIds.add(id);
+      if (item.kind === "manual_voucher" && item.voucherKind === "payment") settlementPaymentIds.add(id);
+    }
+  }
+  const allReceiptIds = [...new Set([...receiptIds, ...settlementReceiptIds])];
+  const allSalePaymentIds = [...new Set([...salePaymentIds, ...settlementSalePaymentIds])];
+  const allPaymentIds = [...new Set([...paymentIds, ...settlementPaymentIds])];
+  const saleIdList = [...saleIds];
+
+  const [saleResult, salePaymentResult, receiptResult, paymentResult] = await Promise.all([
+    saleIdList.length
+      ? pool.query(
+        `SELECT s.id, s.sale_date, s.invoice_number, s.total_amount::numeric AS total_amount,
+                c.name AS party_name
+           FROM sales s
+           LEFT JOIN customers c ON c.id = s.customer_id
+          WHERE s.id = ANY($1::int[])`,
+        [saleIdList],
+      )
+      : Promise.resolve({ rows: [] as any[] }),
+    (allSalePaymentIds.length || allReceiptIds.length)
+      ? pool.query(
+        `SELECT sp.id, sp.sale_id, sp.payment_date, sp.method,
+                sp.amount::numeric AS amount, sp.reference_number, sp.notes,
+                s.invoice_number, c.name AS customer_name
+           FROM sale_payments sp
+           JOIN sales s ON s.id = sp.sale_id
+           LEFT JOIN customers c ON c.id = s.customer_id
+          WHERE sp.id = ANY($1::int[])
+             OR sp.clearing_receipt_id = ANY($2::int[])`,
+        [allSalePaymentIds, allReceiptIds],
+      )
+      : Promise.resolve({ rows: [] as any[] }),
+    allReceiptIds.length
+      ? pool.query(
+        `SELECT r.id, r.receipt_date, r.voucher_number, r.amount::numeric AS amount,
+                r.narration, r.payment_mode, r.reference_number, r.source,
+                party.name AS party_name,
+                COALESCE(alloc.invoice_allocations, '[]'::json) AS invoice_allocations
+           FROM receipts r
+           LEFT JOIN account_ledgers party ON party.id = r.received_from_ledger_id
+           LEFT JOIN LATERAL (
+             SELECT json_agg(
+                      json_build_object(
+                        'invoiceNumber', s.invoice_number,
+                        'date', sp.payment_date,
+                        'amount', sp.amount::numeric
+                      ) ORDER BY sp.id
+                    ) AS invoice_allocations
+               FROM sale_payments sp
+               JOIN sales s ON s.id = sp.sale_id
+              WHERE sp.clearing_receipt_id = r.id
+           ) alloc ON true
+          WHERE r.id = ANY($1::int[])`,
+        [allReceiptIds],
+      )
+      : Promise.resolve({ rows: [] as any[] }),
+    allPaymentIds.length
+      ? pool.query(
+        `SELECT p.id, p.payment_date, p.voucher_number, p.amount::numeric AS amount,
+                p.narration, p.payment_mode, p.reference_number,
+                party.name AS party_name
+           FROM payments p
+           LEFT JOIN account_ledgers party ON party.id = p.paid_to_ledger_id
+          WHERE p.id = ANY($1::int[])`,
+        [allPaymentIds],
+      )
+      : Promise.resolve({ rows: [] as any[] }),
+  ]);
+
+  const saleDetailsById = new Map<number, StatementSourceDetail>();
+  for (const row of saleResult.rows) {
+    saleDetailsById.set(Number(row.id), {
+      type: "Sale",
+      date: dateOnly(row.sale_date),
+      reference: row.invoice_number == null ? null : String(row.invoice_number),
+      partyName: row.party_name == null ? null : String(row.party_name),
+      narration: `Sale ${row.invoice_number ?? ""}`.trim(),
+      amount: Number(row.total_amount) || 0,
+      method: null,
+      referenceNumber: null,
+    });
+  }
+
+  const salePaymentDetailsById = new Map<number, StatementSourceDetail>();
+  for (const row of salePaymentResult.rows) {
+    salePaymentDetailsById.set(Number(row.id), {
+      type: "Sale",
+      date: dateOnly(row.payment_date),
+      reference: row.invoice_number == null ? null : String(row.invoice_number),
+      partyName: row.customer_name == null ? null : String(row.customer_name),
+      narration: String(row.notes ?? "").trim() || `Collection against ${row.invoice_number ?? "sale"}`,
+      amount: Number(row.amount) || 0,
+      method: row.method == null ? null : String(row.method),
+      referenceNumber: row.reference_number == null ? null : String(row.reference_number),
+    });
+  }
+
+  const receiptDetailsById = new Map<number, StatementSourceDetail>();
+  for (const row of receiptResult.rows) {
+    let allocations = row.invoice_allocations;
+    if (typeof allocations === "string") {
+      try { allocations = JSON.parse(allocations); } catch { allocations = []; }
+    }
+    const invoiceAllocations: StatementInvoiceAllocation[] = Array.isArray(allocations)
+      ? allocations.map((allocation: any) => ({
+        invoiceNumber: allocation.invoiceNumber == null ? null : String(allocation.invoiceNumber),
+        date: dateOnly(allocation.date),
+        amount: Number(allocation.amount) || 0,
+      }))
+      : [];
+    receiptDetailsById.set(Number(row.id), {
+      type: row.source === "sale" ? "Sale" : "Receipt",
+      date: dateOnly(row.receipt_date),
+      reference: row.voucher_number == null ? null : String(row.voucher_number),
+      partyName: row.party_name == null ? null : String(row.party_name),
+      narration: String(row.narration ?? "").trim() || (row.source === "sale" ? "Sale collection" : "Receipt"),
+      amount: Number(row.amount) || 0,
+      method: row.payment_mode == null ? null : String(row.payment_mode),
+      referenceNumber: row.reference_number == null ? null : String(row.reference_number),
+      invoiceAllocations,
+    });
+  }
+
+  const paymentDetailsById = new Map<number, StatementSourceDetail>();
+  for (const row of paymentResult.rows) {
+    paymentDetailsById.set(Number(row.id), {
+      type: "Payment",
+      date: dateOnly(row.payment_date),
+      reference: row.voucher_number == null ? null : String(row.voucher_number),
+      partyName: row.party_name == null ? null : String(row.party_name),
+      narration: String(row.narration ?? "").trim() || "Payment",
+      amount: Number(row.amount) || 0,
+      method: row.payment_mode == null ? null : String(row.payment_mode),
+      referenceNumber: row.reference_number == null ? null : String(row.reference_number),
+    });
+  }
+
+  const sourceFallback = (item: any): StatementSourceDetail => {
+    const type: StatementSourceDetail["type"] = item?.kind === "sale_payment"
+      ? "Sale"
+      : item?.voucherKind === "receipt" ? "Receipt" : "Payment";
+    return {
+      type,
+      date: null,
+      reference: null,
+      partyName: null,
+      narration: "Original source details are unavailable.",
+      amount: Number(item?.amount) || 0,
+      method: item?.method == null ? null : String(item.method),
+      referenceNumber: null,
+    };
+  };
+  const detailLabel = (detail: StatementSourceDetail) => [
+    detail.type,
+    detail.reference,
+    detail.partyName ? `· ${detail.partyName}` : null,
+    detail.narration ? `— ${detail.narration}` : null,
+  ].filter(Boolean).join(" ");
+
+  for (const entry of entries) {
+    const batchItems = entry.entryId ? sourceItemsByEntryId.get(entry.entryId) ?? [] : [];
+    let details: StatementSourceDetail[] = [];
+    if (batchItems.length) {
+      details = batchItems.map((item: any) => {
+        const id = Number(item?.id);
+        if (item?.kind === "sale_payment") return salePaymentDetailsById.get(id) ?? sourceFallback(item);
+        if (item?.kind === "manual_voucher" && item?.voucherKind === "receipt") {
+          return receiptDetailsById.get(id) ?? sourceFallback(item);
+        }
+        if (item?.kind === "manual_voucher" && item?.voucherKind === "payment") {
+          return paymentDetailsById.get(id) ?? sourceFallback(item);
+        }
+        return sourceFallback(item);
+      });
+    } else {
+      const match = entry.entryId?.match(/^(sale_payment|sale|receipt|payment):(\d+)$/);
+      if (match) {
+        const id = Number(match[2]);
+        const detail = match[1] === "sale_payment"
+          ? salePaymentDetailsById.get(id)
+          : match[1] === "sale"
+            ? saleDetailsById.get(id)
+            : match[1] === "receipt"
+              ? receiptDetailsById.get(id)
+              : paymentDetailsById.get(id);
+        if (detail) details = [detail];
+      }
+    }
+    entry.sourceDetails = details;
+    if (details.length) {
+      entry.displayEntryType = [...new Set(details.map((detail) => detail.type))].join(" / ");
+      const visible = details.slice(0, 2).map(detailLabel);
+      if (details.length > 2) visible.push(`+ ${details.length - 2} more`);
+      const allocationCount = details.length === 1 ? details[0].invoiceAllocations?.length ?? 0 : 0;
+      if (allocationCount > 1) visible.push(`${allocationCount} invoice allocations`);
+      entry.displayNarration = visible.join("; ");
+    }
+  }
+
   return { opening: rnd(opening), closing: running, totalDebit, totalCredit, entries };
 }
 
