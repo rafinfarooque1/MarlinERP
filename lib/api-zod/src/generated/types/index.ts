@@ -139,6 +139,7 @@ export * from './reconciliationQueueSettlementItemKind';
 export * from './reconciliationQueueSettlementItemVoucherKind';
 export * from './reconciliationQueueSettlementRequest';
 export * from './reconciliationQueueSettlementResult';
+export * from './reconciliationQueueSettlementResultNetDirection';
 export * from './sale';
 export * from './saleInput';
 export * from './saleLineItem';

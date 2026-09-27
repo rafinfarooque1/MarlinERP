@@ -59,7 +59,6 @@ function CollectPaymentPanel({ sale, onClose, onDone }: { sale: any; onClose: ()
       ? previous
       : modeOptions[0]?.id ?? 0);
   }, [modeOptions]);
-  const pickedOption = receiveOptions.find(o => o.id === ledgerId);
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
   const [showForm, setShowForm] = useState(Number(sale.balanceDue ?? 0) > 0);
 
@@ -75,18 +74,16 @@ function CollectPaymentPanel({ sale, onClose, onDone }: { sale: any; onClose: ()
   async function handleSubmit() {
     const parsedAmount = Number(amount);
     if (!parsedAmount || parsedAmount <= 0) { toast.error('Enter a valid amount'); return; }
-    if (!ledgerId) {
+    if (paymentMode === 'cash' && !ledgerId) {
       toast.error(receiveOptionsLoading
         ? 'Payment accounts are still loading.'
-        : paymentMode === 'online'
-          ? 'Select the Online platform for this payment.'
-          : `No default ${paymentMode === 'upi' ? 'UPI' : paymentMode === 'bank' ? 'Bank' : 'Cash'} account is assigned to this location.`);
+        : 'No default Cash account is assigned to this location.');
       return;
     }
     try {
       const result: any = await createPaymentMutation.mutateAsync({
         saleId: sale.id,
-        data: { method: paymentMode, receivedInLedgerId: ledgerId, amount: parsedAmount, referenceNumber: ref || undefined, paymentDate: date },
+        data: { method: paymentMode, ...(paymentMode === 'cash' ? { receivedInLedgerId: ledgerId } : {}), amount: parsedAmount, referenceNumber: ref || undefined, paymentDate: date },
       });
       toast.success(`Payment of ${fmt(parsedAmount)} collected`);
       onDone({
@@ -190,24 +187,19 @@ function CollectPaymentPanel({ sale, onClose, onDone }: { sale: any; onClose: ()
                 <Input type="number" min={0.01} step={0.01} value={amount} onChange={e => setAmount(e.target.value)} className="h-8 text-sm font-mono" />
               </div>
             </div>
-            {paymentMode === 'bank' || paymentMode === 'upi' ? (
+            {paymentMode !== 'cash' ? (
               <div className="text-xs text-amber-700 bg-amber-500/5 border border-amber-500/15 rounded px-2.5 py-2">
-                {pickedOption
-                  ? `Using this location's default ${paymentMode === 'upi' ? 'UPI' : 'bank'} account: ${pickedOption.name}.`
-                  : receiveOptionsLoading
-                    ? 'Loading this location’s default account…'
-                    : `No default ${paymentMode === 'upi' ? 'UPI' : 'bank'} account is assigned to this location.`}
-                {' '}Held for reconciliation.
+                Held for reconciliation. Destination is selected during reconciliation.
               </div>
             ) : (
               <div>
-                <p className="text-xs text-muted-foreground mb-1">{paymentMode === 'online' ? 'Online Platform' : 'Receive Into (Cash)'}</p>
+                   <p className="text-xs text-muted-foreground mb-1">Receive Into (Cash)</p>
                 <ReceiveIntoSelect
                   locationType={sale.locationType}
                   locationId={sale.locationId}
                   value={ledgerId}
                   onChange={setLedgerId}
-                  mode={paymentMode}
+                   mode="cash"
                   compact
                 />
               </div>

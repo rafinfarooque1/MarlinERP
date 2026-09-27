@@ -5,13 +5,16 @@
  * Marlin Frozen Fruits ERP API
  * OpenAPI spec version: 0.1.0
  */
+import type { ReconciliationQueueSettlementResultNetDirection } from './reconciliationQueueSettlementResultNetDirection';
 
 export interface ReconciliationQueueSettlementResult {
   id: number;
   batchReference: string;
   itemCount: number;
   grossAmount: number;
+  processingCharge?: number;
   netAmount: number;
+  netDirection?: ReconciliationQueueSettlementResultNetDirection;
   destinationBankLedgerId: number;
   reconciliationDate: Date;
   accountingImpact: string;

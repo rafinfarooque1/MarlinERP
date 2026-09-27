@@ -43,11 +43,11 @@ const schema = z.object({
   referenceNumber: z.string().max(100).optional(),
   narration: z.string().optional(),
 }).superRefine((v, ctx) => {
-  if ((v.paymentMode === 'cash' || v.paymentMode === 'online') && v.receivedInLedgerId < 1) {
+  if (v.paymentMode === 'cash' && v.receivedInLedgerId < 1) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['receivedInLedgerId'],
-      message: v.paymentMode === 'online' ? 'Select an Online platform.' : 'Select a Cash account.',
+       message: 'Select a Cash account.',
     });
   }
 });
@@ -126,7 +126,11 @@ export default function ReceiptPage() {
 
   const onSubmit = (data: FormValues) => {
     if (editTarget) {
-      const updateData: any = { ...data };
+      const { receivedInLedgerId: _receivedInLedgerId, ...receiptData } = data;
+      const updateData: any = {
+        ...receiptData,
+        ...(data.paymentMode === 'cash' ? { receivedInLedgerId: data.receivedInLedgerId } : {}),
+      };
       delete updateData.paymentMode;
       updateMutation.mutate({ id: editTarget.id, ...updateData }, {
         onSuccess: () => {
@@ -139,15 +143,17 @@ export default function ReceiptPage() {
       });
       return;
     }
-    if (data.paymentMode === 'upi' && data.receivedInLedgerId < 1) {
-      toast.error('No default UPI account is assigned to this location.');
-      return;
-    }
     const loc = parseLocKey(locKey);
     if (!loc) { toast.error('Please select a location.'); return; }
     // A customer receipt carries its bill split so the books settle those
     // exact bills; any excess parks as the customer's advance.
-    const body: any = { ...data, locationType: loc.locationType, locationId: loc.locationId };
+     const { receivedInLedgerId: _receivedInLedgerId, ...receiptData } = data;
+     const body: any = {
+       ...receiptData,
+       ...(data.paymentMode === 'cash' ? { receivedInLedgerId: data.receivedInLedgerId } : {}),
+       locationType: loc.locationType,
+       locationId: loc.locationId,
+     };
     if (settlement && settlement.kind === 'customer'
         && (settlement.allocations.length > 0 || settlement.advanceAmount > 0.004)) {
       body.allocations = settlement.allocations.map(a => ({ saleId: a.billId, amount: a.amount }));
@@ -431,7 +437,7 @@ export default function ReceiptPage() {
                 )} />
               )}
 
-              {editTarget ? (
+              {editTarget && paymentMode === 'cash' ? (
                 <FormField control={form.control} name="receivedInLedgerId" render={({ field }) => (
                   <FormItem>
                     <FormLabel>Received In <span className="text-destructive">*</span></FormLabel>
@@ -439,30 +445,19 @@ export default function ReceiptPage() {
                     <FormMessage />
                   </FormItem>
                 )} />
-              ) : paymentMode === 'bank' ? (
+              ) : paymentMode === 'bank' || paymentMode === 'upi' || paymentMode === 'online' ? (
                 <div className="rounded-md border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-sm text-amber-700">
-                  Bank settlement is selected during reconciliation.
+                  Held for reconciliation. Destination is selected during reconciliation.
                 </div>
-              ) : paymentMode === 'upi' ? (
-                <FormField control={form.control} name="receivedInLedgerId" render={() => (
-                  <FormItem>
-                    <FormLabel>Settlement</FormLabel>
-                    <div className="rounded-md border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-sm text-amber-700">
-                      {modeOptions[0] ? `Using this location's default UPI account: ${modeOptions[0].name}.` : 'No UPI account is assigned to this location.'}
-                      {' '}Held for reconciliation.
-                    </div>
-                    <FormMessage />
-                  </FormItem>
-                )} />
               ) : (
                 <FormField control={form.control} name="receivedInLedgerId" render={({ field }) => (
                   <FormItem>
-                    <FormLabel>{paymentMode === 'online' ? 'Online Platform' : 'Received In (Cash)'} <span className="text-destructive">*</span></FormLabel>
+                   <FormLabel>Received In (Cash) <span className="text-destructive">*</span></FormLabel>
                     <AccountCombobox
                       options={modeOptions}
                       value={field.value}
                       onChange={field.onChange}
-                      placeholder={paymentMode === 'online' ? 'Select Online platform' : 'Select Cash account'}
+                     placeholder="Select Cash account"
                     />
                     <FormMessage />
                   </FormItem>

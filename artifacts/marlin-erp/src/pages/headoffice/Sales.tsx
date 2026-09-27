@@ -628,15 +628,11 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
     if (!viewItem) return;
     const validRows = paymentRows.filter(r => Number(r.amount) > 0);
     if (validRows.length === 0) { toast.error('Enter at least one payment amount'); return; }
-    const missingAccount = validRows.find(r => !r.ledgerId);
+    const missingAccount = validRows.find(r => r.mode === 'cash' && !r.ledgerId);
     if (missingAccount) {
       toast.error(receiveOptionsLoading
         ? 'Payment accounts are still loading.'
-        : missingAccount.mode === 'online'
-          ? 'Select an Online sub-platform for each payment.'
-          : missingAccount.mode === 'cash'
-            ? 'Select a Cash account for each payment.'
-            : `No default ${missingAccount.mode === 'upi' ? 'UPI' : 'Bank'} account is assigned to this location.`);
+        : 'Select a Cash account for each payment.');
       return;
     }
     const totalPaying = validRows.reduce((s, r) => s + Number(r.amount), 0);
@@ -666,7 +662,8 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
         lastResult = await createPaymentMutation.mutateAsync({
           saleId: viewItem.id,
           data: {
-            method: row.mode, receivedInLedgerId: row.ledgerId, amount: Number(row.amount),
+            method: row.mode, ...(row.mode === 'cash' && row.ledgerId > 0 ? { receivedInLedgerId: row.ledgerId } : {}),
+            amount: Number(row.amount),
             referenceNumber: row.ref || undefined, paymentDate,
             // Replay protection: the id was minted when the ROW was created,
             // so a retry after a timeout resubmits the same intent instead of
@@ -678,7 +675,9 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
       }
       const label = validRows.length > 1
         ? `${validRows.length} payments totalling ${inr(totalPaying)}`
-        : `${inr(totalPaying)} into ${optionFor(validRows[0].ledgerId)?.name ?? 'the selected account'}`;
+        : validRows[0].mode === 'cash'
+          ? `${inr(totalPaying)} into ${optionFor(validRows[0].ledgerId)?.name ?? 'the selected account'}`
+          : `${inr(totalPaying)} held for reconciliation`;
       toast.success(`Payment collected — ${label}`);
       // Re-read the sale rather than patching the panel by hand: the server owns
       // the outstanding figure (credit notes included) and the QR built from it,
@@ -1223,19 +1222,17 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
       taxAmount: 0, // backend recomputes authoritatively
     }));
     // ── Creation-time collection fields (create mode, non-credit) ───────────
-    // Sent only when the location has assigned Cash & Bank accounts; locations
-    // without them keep the legacy plain-cash submit. The server re-validates
-    // everything authoritatively.
+    // Electronic collections need no destination account at entry time; only
+    // cash includes its selected till. The server routes all electronic modes
+    // through clearing until reconciliation.
     const payNow = !editItem && data.paymentMode !== 'credit'
       && (data.paymentMode === 'upi' || data.paymentMode === 'bank'
         || (ONLINE_PAYMENT_MODES as readonly string[]).includes(data.paymentMode)
         || formReceiveOptionsForMode.length > 0);
     let payFields: Record<string, unknown> = {};
     if (payNow) {
-      if (formReceiveOptionsForMode.length > 0 && !receiveLedgerId) {
-        toast.error(data.paymentMode === 'online'
-          ? 'Select the Online account for this settlement.'
-          : 'Pick the Cash / Bank account the money went into.');
+      if (data.paymentMode === 'cash' && !receiveLedgerId) {
+        toast.error('Pick the Cash account the money went into.');
         return;
       }
       if (amountReceivedStr !== '') {
@@ -1247,7 +1244,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
       }
       const refTrim = payReference.trim();
       payFields = {
-        ...(receiveLedgerId > 0 ? { receivedInLedgerId: receiveLedgerId } : {}),
+          ...(data.paymentMode === 'cash' && receiveLedgerId > 0 ? { receivedInLedgerId: receiveLedgerId } : {}),
         ...(amountReceivedStr !== '' ? { amountReceived: Number(amountReceivedStr) } : {}),
         ...(refTrim ? { referenceNumber: refTrim } : {}),
       };
@@ -2094,9 +2091,8 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                 </FormItem>
               )} />
 
-              {/* Receive Into at billing — create mode, non-credit. The Online
-                  account is selected in the Settlement field and remains held
-                  for reconciliation after the sale is recorded. */}
+              {/* Cash requires a till at billing; electronic collections are
+                  held in clearing until their bank account is selected later. */}
               {!editItem && watchPaymentMode !== 'credit' && (
                 formReceiveOptionsForMode.length > 0
                 || watchPaymentMode === 'bank'
@@ -2110,44 +2106,28 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                 const recvNum = amountReceivedStr === '' ? remainder : (Number(amountReceivedStr) || 0);
                 const paidTotal = Math.round((advApplied + recvNum) * 100) / 100;
                 const due = Math.round((totals.finalAmount - paidTotal) * 100) / 100;
-                const selected = formReceiveOptionsForMode.find(o => o.id === receiveLedgerId);
                 return (
                     <div className="rounded-lg border border-border bg-muted/20 p-3 space-y-3" data-testid="section-payment-collection">
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                       <div className="flex flex-col gap-1.5">
-                        {watchPaymentMode === 'bank' || watchPaymentMode === 'upi' ? (
-                          <>
-                            <span className="text-sm font-medium">Settlement</span>
-                            <div className="h-9 flex items-center rounded-md border border-amber-500/30 bg-amber-500/5 px-3 text-sm text-amber-700">
-                              {selected
-                                ? `Default ${watchPaymentMode === 'upi' ? 'UPI' : 'bank'} account: ${selected.name}`
-                                : `Held for reconciliation · no default ${watchPaymentMode === 'upi' ? 'UPI' : 'bank'} account assigned`}
-                            </div>
-                            <span className="text-xs text-amber-700">Held for reconciliation</span>
-                          </>
-                        ) : formReceiveOptionsForMode.length > 0 ? (
-                          <>
-                            <span className="text-sm font-medium">
-                              {watchPaymentMode === 'online' ? 'Settlement' : 'Receive Into'}
-                              {' '}<span className="text-destructive">*</span>
-                            </span>
-                            <ReceiveIntoSelect
-                              locationType={watchLocationType}
-                              locationId={watchLocationId}
-                              value={receiveLedgerId}
-                              onChange={setReceiveLedgerId}
-                              mode={watchPaymentMode === 'cash' ? 'cash' : 'online'}
-                            />
-                            {watchPaymentMode === 'online' && (
-                              <span className="text-xs text-amber-700">Held for reconciliation</span>
-                            )}
-                          </>
-                        ) : (
+                        {watchPaymentMode !== 'cash' ? (
                           <>
                             <span className="text-sm font-medium">Settlement</span>
                             <div className="h-9 flex items-center rounded-md border border-amber-500/30 bg-amber-500/5 px-3 text-sm text-amber-700">
                               Held for reconciliation
                             </div>
+                            <span className="text-xs text-amber-700">Destination is selected during reconciliation.</span>
+                          </>
+                        ) : (
+                          <>
+                            <span className="text-sm font-medium">Receive Into <span className="text-destructive">*</span></span>
+                            <ReceiveIntoSelect
+                              locationType={watchLocationType}
+                              locationId={watchLocationId}
+                              value={receiveLedgerId}
+                              onChange={setReceiveLedgerId}
+                              mode="cash"
+                            />
                           </>
                         )}
                       </div>
@@ -2161,8 +2141,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                           data-testid="input-amount-received"
                         />
                       </div>
-                      {(selected && !isCashOption(selected))
-                        || (ONLINE_PAYMENT_MODES as readonly string[]).includes(watchPaymentMode) ? (
+                      {watchPaymentMode !== 'cash' ? (
                         <div className="flex flex-col gap-1.5">
                           <span className="text-sm font-medium">Reference <span className="text-xs text-muted-foreground font-normal">(UTR / txn no.)</span></span>
                           <Input
@@ -3058,16 +3037,11 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                                   </div>
                                   <div className="col-span-2">
                                     <p className="text-[10px] text-muted-foreground mb-1">
-                                      {row.mode === 'online' ? 'Online sub-platform' : row.mode === 'cash' ? 'Receive Into (Cash)' : 'Settlement'}
+                                       {row.mode === 'cash' ? 'Receive Into (Cash)' : 'Settlement'}
                                     </p>
-                                    {row.mode === 'bank' || row.mode === 'upi' ? (
+                                     {row.mode !== 'cash' ? (
                                       <div className="min-h-7 rounded-md border border-amber-500/20 bg-amber-500/5 px-2 py-1.5 text-xs text-amber-700">
-                                        {receiveOptionsLoading
-                                          ? `Loading this location's default ${row.mode === 'upi' ? 'UPI' : 'bank'} account…`
-                                          : receiveOptionsByMode[row.mode][0]
-                                            ? `Default ${row.mode === 'upi' ? 'UPI' : 'bank'} account: ${receiveOptionsByMode[row.mode][0].name}.`
-                                            : `No default ${row.mode === 'upi' ? 'UPI' : 'bank'} account is assigned to this location.`}
-                                        {' '}Held for reconciliation.
+                                         Held for reconciliation. Destination is selected during reconciliation.
                                       </div>
                                     ) : (
                                       <ReceiveIntoSelect
@@ -3076,7 +3050,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                                         value={row.ledgerId}
                                         onChange={ledgerId => setPaymentRows(rows => rows.map(r => r.id === row.id ? { ...r, ledgerId } : r))}
                                         disabled={createPaymentMutation.isPending}
-                                        mode={row.mode === 'cash' ? 'cash' : 'online'}
+                                         mode="cash"
                                         className="h-7 text-xs"
                                       />
                                     )}
@@ -3091,7 +3065,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                                   </button>
                                 )}
                               </div>
-                              {row.ledgerId > 0 && !isCashOption(optionFor(row.ledgerId)) && (
+                              {row.mode !== 'cash' && (
                                 <div>
                                   <p className="text-[10px] text-muted-foreground mb-1">Reference / UTR (optional)</p>
                                   <Input
@@ -3146,7 +3120,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                           <p className="text-[10px] text-muted-foreground mb-1">Payment Date</p>
                           <Input type="date" value={paymentDate} onChange={e => setPaymentDate(e.target.value)} className="h-7 text-xs" />
                         </div>
-                        {paymentRows.some(r => r.ledgerId > 0 && !isCashOption(optionFor(r.ledgerId))) && (
+                        {paymentRows.some(r => r.mode !== 'cash') && (
                           <div className="text-[10px] text-amber-600 bg-amber-500/5 rounded px-2 py-1">
                             Bank/UPI collections into accounts with reconciliation turned on appear in Reconciliation until matched.
                           </div>
