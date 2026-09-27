@@ -1359,32 +1359,73 @@ export interface AccountLedgerUpdate {
   description?: string;
 }
 
-export type LedgerStatementTransactionsItem = {
-  id?: number;
+export type LedgerStatementSourceDetailType = typeof LedgerStatementSourceDetailType[keyof typeof LedgerStatementSourceDetailType];
+
+
+export const LedgerStatementSourceDetailType = {
+  Sale: 'Sale',
+  Receipt: 'Receipt',
+  Payment: 'Payment',
+} as const;
+
+export interface LedgerStatementInvoiceAllocation {
+  /** @nullable */
+  invoiceNumber?: string | null;
+  /** @nullable */
+  date?: string | null;
+  amount?: number;
+}
+
+export interface LedgerStatementSourceDetail {
+  type?: LedgerStatementSourceDetailType;
+  /** @nullable */
+  date?: string | null;
+  /** @nullable */
+  reference?: string | null;
+  /** @nullable */
+  partyName?: string | null;
+  narration?: string;
+  amount?: number;
+  /** @nullable */
+  method?: string | null;
+  /** @nullable */
+  referenceNumber?: string | null;
+  invoiceAllocations?: LedgerStatementInvoiceAllocation[];
+}
+
+export interface LedgerStatementEntry {
   date?: string;
   description?: string;
+  /** Human-readable narration; mirrors description for legacy posting sources. */
+  narration?: string;
+  displayNarration?: string;
+  entryType?: string;
+  displayEntryType?: string;
   debit?: number;
   credit?: number;
   balance?: number;
   /** @nullable */
   reference?: string | null;
-  entryType?: string;
-  /** Human-readable narration; mirrors description for legacy posting sources. */
-  narration?: string;
+  /** @nullable */
+  entryId?: string | null;
   /** @nullable */
   locationType?: string | null;
   /** @nullable */
   locationId?: number | null;
   /** @nullable */
   locationName?: string | null;
-};
+  sourceDetails?: LedgerStatementSourceDetail[];
+}
 
 export interface LedgerStatement {
   accountId?: number;
   accountName?: string;
   openingBalance?: number;
   closingBalance?: number;
-  transactions?: LedgerStatementTransactionsItem[];
+  totalDebit?: number;
+  totalCredit?: number;
+  entries?: LedgerStatementEntry[];
+  transactions?: LedgerStatementEntry[];
 }
 
 export type CashBankAccountAccountType = typeof CashBankAccountAccountType[keyof typeof CashBankAccountAccountType];

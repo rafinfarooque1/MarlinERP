@@ -3587,25 +3587,67 @@ components:
           type: number
         closingBalance:
           type: number
+        totalDebit:
+          type: number
+        totalCredit:
+          type: number
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/LedgerStatementEntry"
         transactions:
           type: array
           items:
-            type: object
-            properties:
-              id: { type: integer }
-              date: { type: string }
-              description: { type: string }
-              debit: { type: number }
-              credit: { type: number }
-              balance: { type: number }
-              reference: { type: ["string", "null"] }
-              entryType: { type: string }
-              narration:
-                type: string
-                description: Human-readable narration; mirrors description for legacy posting sources.
-              locationType: { type: ["string", "null"] }
-              locationId: { type: ["integer", "null"] }
-              locationName: { type: ["string", "null"] }
+            $ref: "#/components/schemas/LedgerStatementEntry"
+
+    LedgerStatementEntry:
+      type: object
+      properties:
+        date: { type: string }
+        description: { type: string }
+        narration:
+          type: string
+          description: Human-readable narration; mirrors description for legacy posting sources.
+        displayNarration: { type: string }
+        entryType: { type: string }
+        displayEntryType: { type: string }
+        debit: { type: number }
+        credit: { type: number }
+        balance: { type: number }
+        reference: { type: ["string", "null"] }
+        entryId: { type: ["string", "null"] }
+        locationType: { type: ["string", "null"] }
+        locationId: { type: ["integer", "null"] }
+        locationName: { type: ["string", "null"] }
+        sourceDetails:
+          type: array
+          items:
+            $ref: "#/components/schemas/LedgerStatementSourceDetail"
+
+    LedgerStatementSourceDetail:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [Sale, Receipt, Payment]
+        date: { type: ["string", "null"] }
+        reference: { type: ["string", "null"] }
+        partyName: { type: ["string", "null"] }
+        narration: { type: string }
+        amount: { type: number }
+        method: { type: ["string", "null"] }
+        referenceNumber: { type: ["string", "null"] }
+        invoiceAllocations:
+          type: array
+          items:
+            $ref: "#/components/schemas/LedgerStatementInvoiceAllocation"
+
+    LedgerStatementInvoiceAllocation:
+      type: object
+      properties:
+        invoiceNumber: { type: ["string", "null"] }
+        date: { type: ["string", "null"] }
+        amount: { type: number }
 
     CashBankAccount:
       type: object
