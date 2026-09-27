@@ -203,6 +203,7 @@ export function CollectPaymentDialog({
                   </div>
                   <div className="space-y-4">
                     <PaymentModeSelector
+                      key={`collect-payment-mode-${activeInv.saleId}`}
                       value={paymentMode}
                       onValueChange={setPaymentMode}
                       disabled={createPayment.isPending}
