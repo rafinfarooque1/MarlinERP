@@ -297,6 +297,10 @@ router.get(
         ORDER BY code`,
     );
     const balances = rows.map((row: any) => {
+      const match = /^STD-BRANCH-NET-(WAREHOUSE|OUTLET|HEADOFFICE)-(\d+)-(WAREHOUSE|OUTLET|HEADOFFICE)-(\d+)$/i.exec(String(row.code));
+      if (!match) {
+        throw new Error(`Invalid inter-branch pair ledger code: ${String(row.code)}`);
+      }
       const net = balanceIndex.net(Number(row.id));
       const balance = Math.round(-net * 100) / 100;
       return {
@@ -305,6 +309,14 @@ router.get(
         name: String(row.name),
         kind: "payable",
         balance,
+        firstLocation: {
+          locationType: match[1].toLowerCase(),
+          locationId: Number(match[2]),
+        },
+        secondLocation: {
+          locationType: match[3].toLowerCase(),
+          locationId: Number(match[4]),
+        },
       };
     });
     res.json({
