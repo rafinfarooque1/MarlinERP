@@ -100,6 +100,7 @@ export default function Reconciliation() {
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
   const [batchOpen, setBatchOpen] = useState(false);
   const [editBatchId, setEditBatchId] = useState<number | null>(null);
+  const [batchBankAccountId, setBatchBankAccountId] = useState('');
   const [reconciliationDate, setReconciliationDate] = useState(localDateValue);
   const [processingCharge, setProcessingCharge] = useState('0');
   const [pendingSelected, setPendingSelected] = useState<Set<string>>(new Set());
@@ -114,7 +115,7 @@ export default function Reconciliation() {
   const { data: warehouses = [] } = useListWarehouses();
   const [filterType, filterId] = locationFilter !== 'all' ? locationFilter.split(':') : [];
   const locationId = filterType === 'headoffice' ? 0 : filterId ? Number(filterId) : undefined;
-  const { data: bankLedgers = [] } = useGetBankLedgers({
+  const { data: bankLedgers = [], isLoading: bankLedgersLoading } = useGetBankLedgers({
     locationType: filterType,
     locationId,
   });
@@ -163,6 +164,7 @@ export default function Reconciliation() {
   useEffect(() => {
     if (!editingBatch || editBatchId == null) return;
     setSelectedKeys(new Set(editingBatch.items.map(item => `${item.ledgerId}:${item.entryId}`)));
+    setBatchBankAccountId(String(editingBatch.bankAccountId));
     setReconciliationDate(editingBatch.reconciliationDate);
     setProcessingCharge(String(editingBatch.processingCharge));
     setLocationFilter(
@@ -227,6 +229,17 @@ export default function Reconciliation() {
   const selectedGross = selectedTransactions.reduce((sum, t) => sum + Number(t.amount || 0), 0);
   const selectedAccountId = selectedTransactions[0]?.accountId ?? null;
   const selectedMixedAccounts = selectedTransactions.some(t => t.accountId !== selectedAccountId);
+  // Batch creation must stay attached to the exact Cash & Bank account that
+  // owns the selected ledger postings. Keep the selector's options consistent
+  // with the server's ledger-identity validation.
+  const reconciliationBankAccounts = selectedTransactions.length > 0
+    ? bankLedgers.filter(account =>
+        Number(account.accountId) === Number(selectedAccountId)
+        && Number(account.ledgerId) === Number(selectedTransactions[0].ledgerId))
+    : [];
+  const selectedBatchAccountIsValid = reconciliationBankAccounts.some(
+    account => String(account.accountId) === batchBankAccountId,
+  );
   const reconciliationRows = [
     ...visibleTransactions.map(t => ({
       key: `ledger:${t.id}`,
@@ -361,6 +374,10 @@ export default function Reconciliation() {
 
   async function submitBatch() {
     if (!selectedTransactions.length || !selectedAccountId || selectedMixedAccounts) return;
+    if (!batchBankAccountId || !selectedBatchAccountIsValid) {
+      toast.error('Select the Bank Account that contains the selected transactions.');
+      return;
+    }
     try {
       const transactionsPayload = selectedTransactions.map(t => ({ entryId: t.entryId, ledgerId: t.ledgerId }));
       if (editBatchId != null) {
@@ -370,7 +387,7 @@ export default function Reconciliation() {
         });
       } else {
         await createBatchMutation.mutateAsync({
-          bankAccountId: selectedAccountId,
+          bankAccountId: Number(batchBankAccountId),
           transactions: transactionsPayload,
           reconciliationDate,
           processingCharge,
@@ -393,8 +410,8 @@ export default function Reconciliation() {
 
   function openCreateBatch() {
     setEditBatchId(null);
+    setBatchBankAccountId('');
     setActiveSection('to-reconcile');
-    setSelectedKeys(new Set());
     setReconciliationDate(localDateValue());
     setProcessingCharge('0');
     setBatchOpen(true);
@@ -402,6 +419,7 @@ export default function Reconciliation() {
 
   function openEditBatch(batchId: number) {
     setSelectedKeys(new Set());
+    setBatchBankAccountId('');
     setEditBatchId(batchId);
     setActiveSection('to-reconcile');
     setBatchOpen(true);
@@ -1006,7 +1024,40 @@ export default function Reconciliation() {
             <div className="space-y-4">
               <div className="grid grid-cols-2 gap-3 text-sm">
                 <div><span className="text-muted-foreground">Transactions</span><div className="font-semibold">{selectedTransactions.length}</div></div>
-                <div><span className="text-muted-foreground">Bank account</span><div className="font-semibold">{selectedTransactions[0]?.accountName ?? '—'}</div></div>
+                <div className="space-y-1.5">
+                  <label htmlFor="reconciliation-bank-account" className="text-muted-foreground">
+                    Bank Account <span className="text-destructive">*</span>
+                  </label>
+                  <Select
+                    value={batchBankAccountId}
+                    onValueChange={setBatchBankAccountId}
+                    disabled={editBatchId != null || bankLedgersLoading || reconciliationBankAccounts.length === 0}
+                  >
+                    <SelectTrigger
+                      id="reconciliation-bank-account"
+                      className="h-9"
+                      data-testid="select-reconciliation-bank-account"
+                    >
+                      <SelectValue placeholder={
+                        bankLedgersLoading
+                          ? 'Loading bank accounts…'
+                          : reconciliationBankAccounts.length === 0
+                            ? 'No matching bank account'
+                            : 'Select bank account'
+                      } />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {reconciliationBankAccounts.map(account => (
+                        <SelectItem key={account.accountId} value={String(account.accountId)}>
+                          {account.name} · {account.locationName}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    Choose the account that owns the selected transactions.
+                  </p>
+                </div>
                 <div><span className="text-muted-foreground">Gross amount</span><div className="font-semibold">{fmt(selectedGross)}</div></div>
                 <div><span className="text-muted-foreground">Net amount</span><div className="font-semibold">{fmt(Math.max(0, selectedGross - Number(processingCharge || 0)))}</div></div>
               </div>
@@ -1022,7 +1073,17 @@ export default function Reconciliation() {
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setBatchOpen(false)}>Cancel</Button>
-              <Button onClick={submitBatch} disabled={createBatchMutation.isPending || updateBatchMutation.isPending || !reconciliationDate || selectedMixedAccounts}>
+              <Button
+                onClick={submitBatch}
+                disabled={
+                  createBatchMutation.isPending
+                  || updateBatchMutation.isPending
+                  || !reconciliationDate
+                  || selectedMixedAccounts
+                  || !batchBankAccountId
+                  || !selectedBatchAccountIsValid
+                }
+              >
                 {createBatchMutation.isPending || updateBatchMutation.isPending
                   ? 'Saving…'
                   : editBatchId != null ? 'Save batch changes' : 'Confirm reconciliation'}
