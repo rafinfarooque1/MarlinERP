@@ -10,6 +10,8 @@ import type { ReconciliationQueueSettlementItem } from './reconciliationQueueSet
 export interface ReconciliationQueueSettlementRequest {
   bankAccountId: number;
   reconciliationDate: Date;
+  /** @minimum 0 */
+  processingCharge?: number;
   /**
      * @minItems 1
      * @maxItems 500

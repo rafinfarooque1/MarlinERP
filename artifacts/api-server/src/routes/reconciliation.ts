@@ -3,6 +3,7 @@ import { requireModuleAction, requireModuleView } from "../middleware/permission
 import { pool } from "@workspace/db";
 import { logActivity, logActivityInTransaction } from "../lib/audit";
 import { nextVoucherNumber } from "../lib/voucherNumber";
+import { createJournalVoucherCore } from "../lib/journalCreate";
 import { isIsoDate } from "../lib/dateInput";
 import { LEGACY_BANK_MODES } from "../lib/paymentModes";
 import { getLocationFilter } from "../lib/requestLocation";
@@ -1897,6 +1898,40 @@ router.post("/reconciliation/bank-reset", requireModuleAction("page:/accounts/re
       reversalIds.push(id);
       reversedSources.push({ kind, originalId: Number(original.id), reversalId: id, originalVoucherNumber: original.voucher_number ?? null, batchReference });
     };
+    const reverseJournalVoucher = async (original: any, lines: any[], batchReference: string) => {
+      const reversalLines = lines.map((line: any) => ({
+        ledgerId: Number(line.ledger_id),
+        debit: Number(line.credit),
+        credit: Number(line.debit),
+      }));
+      const debitTotal = reversalLines.reduce((sum: number, line: any) => sum + line.debit, 0);
+      const creditTotal = reversalLines.reduce((sum: number, line: any) => sum + line.credit, 0);
+      if (!reversalLines.length || Math.abs(debitTotal - creditTotal) > 0.005) {
+        throw new Error(`Reset refused: settlement journal voucher ${original.id} is not balanced.`);
+      }
+      const narration = `Reversal of journal ${original.voucher_number ?? original.id} from reconciliation batch ${batchReference}`;
+      const created = await createJournalVoucherCore(client, {
+        voucherType: String(original.voucher_type),
+        voucherDate: reversalDate,
+        narration,
+        partyLedgerId: original.party_ledger_id == null ? null : Number(original.party_ledger_id),
+        reason: `Reconciliation reset for ${batchReference}`,
+        totalAmount: debitTotal,
+        createdBy: requestedBy,
+        locationType: original.location_type ?? "headoffice",
+        locationId: Number(original.location_id ?? 0),
+        lines: reversalLines,
+      });
+      reversalIds.push(created.id);
+      reversedSources.push({
+        kind: "journal_voucher",
+        originalId: Number(original.id),
+        reversalId: created.id,
+        originalVoucherNumber: original.voucher_number ?? null,
+        reversalVoucherNumber: created.voucherNumber,
+        batchReference,
+      });
+    };
 
     for (const batch of impactedBank) {
       const items = bankItems.rows.filter((i: any) => Number(i.batch_id) === Number(batch.id));
@@ -1904,16 +1939,41 @@ router.post("/reconciliation/bank-reset", requireModuleAction("page:/accounts/re
       const source = Array.isArray(batch.source_items)
         ? batch.source_items
         : typeof batch.source_items === "string" ? JSON.parse(batch.source_items) : [];
+      const journalIds = items.map((i: any) => String(i.entry_id)).filter((x: string) => /^jv:\d+$/.test(x));
       const voucherIds = items.map((i: any) => String(i.entry_id)).filter((x: string) => /^(payment|receipt):\d+$/.test(x));
-      if (!voucherIds.length || voucherIds.length !== items.length) {
-        throw new Error(`Reset refused: batch ${batch.batch_reference} has unsupported settlement voucher identities.`);
-      }
-      for (const entryId of voucherIds) {
-        const [kind, rawId] = entryId.split(":");
-        const table = kind === "payment" ? "payments" : "receipts";
-        const { rows: [original] } = await client.query(`SELECT * FROM ${table} WHERE id = $1 AND source = 'settlement' FOR UPDATE`, [Number(rawId)]);
-        if (!original) throw new Error(`Reset refused: generated ${kind} ${rawId} for batch ${batch.batch_reference} is missing.`);
-        await reverseVoucher(kind as "payment" | "receipt", original, String(batch.batch_reference));
+      if (journalIds.length) {
+        if (String(batch.accounting_impact) !== "unified_reconciliation_settlement"
+          || journalIds.length !== 1 || items.length !== 1) {
+          throw new Error(`Reset refused: batch ${batch.batch_reference} has unsupported journal settlement identities.`);
+        }
+        const rawId = Number(journalIds[0].split(":")[1]);
+        const { rows: [original] } = await client.query(
+          `SELECT * FROM journal_vouchers
+            WHERE id = $1 AND voucher_type = 'journal' AND origin = 'manual'
+              AND source_module = 'accounts'
+            FOR UPDATE`,
+          [rawId],
+        );
+        if (!original || !String(original.narration ?? "").includes(String(batch.batch_reference))) {
+          throw new Error(`Reset refused: generated journal voucher ${rawId} for batch ${batch.batch_reference} is missing.`);
+        }
+        const { rows: lines } = await client.query(
+          `SELECT ledger_id, debit::numeric AS debit, credit::numeric AS credit
+             FROM journal_voucher_lines WHERE voucher_id = $1 ORDER BY id FOR UPDATE`,
+          [rawId],
+        );
+        await reverseJournalVoucher(original, lines, String(batch.batch_reference));
+      } else {
+        if (!voucherIds.length || voucherIds.length !== items.length) {
+          throw new Error(`Reset refused: batch ${batch.batch_reference} has unsupported settlement voucher identities.`);
+        }
+        for (const entryId of voucherIds) {
+          const [kind, rawId] = entryId.split(":");
+          const table = kind === "payment" ? "payments" : "receipts";
+          const { rows: [original] } = await client.query(`SELECT * FROM ${table} WHERE id = $1 AND source = 'settlement' FOR UPDATE`, [Number(rawId)]);
+          if (!original) throw new Error(`Reset refused: generated ${kind} ${rawId} for batch ${batch.batch_reference} is missing.`);
+          await reverseVoucher(kind as "payment" | "receipt", original, String(batch.batch_reference));
+        }
       }
       if (String(batch.accounting_impact) === "deferred_voucher_settlement") {
         const batchReceiptIds = sourceVoucherIds("deferred_receipt");
@@ -2657,7 +2717,13 @@ router.get("/reconciliation/pending-manual-vouchers", requireModuleView("page:/a
 });
 
 // ── POST /reconciliation/manual-vouchers ─────────────────────────────────────
-router.post("/reconciliation/manual-vouchers", requireModuleAction("page:/accounts/reconciliation", "add"), async (req, res): Promise<void> => {
+router.post("/reconciliation/manual-vouchers", requireModuleAction("page:/accounts/reconciliation", "add"),
+  (_req, res) => {
+    res.status(410).json({
+      error: "Per-voucher settlement is retired. Use the consolidated pending-queue settlement endpoint.",
+    });
+  },
+  async (req, res): Promise<void> => {
   const body = (req.body ?? {}) as Record<string, any>;
   const selected = Array.isArray(body.pendingVoucherIds) ? body.pendingVoucherIds : [];
   const bankAccountId = Number(body.bankAccountId);
@@ -2861,6 +2927,9 @@ router.post("/reconciliation/settle-queue", requireModuleAction("page:/accounts/
   const selected = Array.isArray(body.items) ? body.items : [];
   const bankAccountId = Number(body.bankAccountId);
   const reconciliationDate = String(body.reconciliationDate ?? "");
+  const processingChargeInput = body.processingCharge == null || body.processingCharge === ""
+    ? 0
+    : Number(body.processingCharge);
   if (selected.length === 0 || selected.length > 500) {
     res.status(400).json({ error: "Select between 1 and 500 pending items." }); return;
   }
@@ -2869,6 +2938,10 @@ router.post("/reconciliation/settle-queue", requireModuleAction("page:/accounts/
   }
   if (!isIsoDate(reconciliationDate)) {
     res.status(400).json({ error: "reconciliationDate must be a real YYYY-MM-DD date." }); return;
+  }
+  if (!Number.isFinite(processingChargeInput) || processingChargeInput < 0
+    || Math.abs(processingChargeInput * 100 - Math.round(processingChargeInput * 100)) > 1e-6) {
+    res.status(400).json({ error: "processingCharge must be a non-negative amount with no more than 2 decimal places." }); return;
   }
   if (await respondIfMonthLocked(res, pool, [reconciliationDate], "bank reconciliation settlement")) return;
 
@@ -3123,19 +3196,35 @@ router.post("/reconciliation/settle-queue", requireModuleAction("page:/accounts/
       );
     }
 
-    const signedCents = (row: any) => {
-      const cents = Math.round(Number(row.amount) * 100);
-      return row.kind === "payment" ? -cents : cents;
-    };
-    const netCents = allRows.reduce((sum, row) => sum + signedCents(row), 0);
-    if (netCents === 0) {
+    const isOutflow = allRows[0].kind === "payment";
+    if (allRows.some(row => (row.kind === "payment") !== isOutflow)) {
       await client.query("ROLLBACK");
-      res.status(400).json({ error: "The selected items offset to zero, so no single bank entry can be posted." }); return;
+      res.status(400).json({ error: "Reconcile incoming receipts and outgoing payments in separate batches." }); return;
     }
     const grossCents = allRows.reduce((sum, row) => sum + Math.abs(Math.round(Number(row.amount) * 100)), 0);
+    const processingChargeCents = Math.round(processingChargeInput * 100);
+    if (!isOutflow && processingChargeCents >= grossCents) {
+      await client.query("ROLLBACK");
+      res.status(400).json({ error: "Processing charges must be less than the gross amount for an incoming batch." }); return;
+    }
+    const bankCents = isOutflow
+      ? grossCents + processingChargeCents
+      : grossCents - processingChargeCents;
     const grossAmount = grossCents / 100;
-    const postingAmount = Math.abs(netCents) / 100;
-    const netDirection = netCents > 0 ? "in" : "out";
+    const processingCharge = processingChargeCents / 100;
+    const postingAmount = bankCents / 100;
+    const netDirection = isOutflow ? "out" : "in";
+    let processingChargeLedgerId: number | null = null;
+    if (processingChargeCents > 0) {
+      const { rows: [chargeLedger] } = await client.query(
+        `SELECT id FROM account_ledgers WHERE code = 'STD-PROC-CHG' AND COALESCE(is_active, true) FOR SHARE`,
+      );
+      if (!chargeLedger) {
+        await client.query("ROLLBACK");
+        res.status(500).json({ error: "Bank & Processor Charges ledger is not configured." }); return;
+      }
+      processingChargeLedgerId = Number(chargeLedger.id);
+    }
     const sourceItems = [
       ...saleRows.map((row: any) => ({
         kind: "sale_payment", id: Number(row.id), amount: Number(row.amount),
@@ -3153,50 +3242,51 @@ router.post("/reconciliation/settle-queue", requireModuleAction("page:/accounts/
          (batch_reference, reconciliation_date, bank_account_id, bank_ledger_id,
           location_type, location_id, gross_amount, processing_charge, net_amount,
           accounting_impact, created_by, source_items)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,0,$8,'unified_reconciliation_settlement',$9,$10::jsonb)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'unified_reconciliation_settlement',$10,$11::jsonb)
        RETURNING id`,
        [batchReference, reconciliationDate, Number(account.account_id), Number(account.ledger_id),
-         firstLoc.locationType, firstLoc.locationId, grossAmount, postingAmount, createdBy,
+        firstLoc.locationType, firstLoc.locationId, grossAmount, processingCharge, postingAmount, createdBy,
         JSON.stringify(sourceItems)],
     );
 
-    const voucherType = netCents > 0 ? "receipt" : "payment";
-    const voucherNumber = await nextVoucherNumber(client, voucherType, reconciliationDate);
     const settlementNarration = `Unified bank reconciliation ${batchReference} — ${allRows.length} item(s)`;
-    let settlementId: number;
-    let debit = 0;
-    let credit = 0;
-    if (voucherType === "receipt") {
-      const { rows: [created] } = await client.query(
-        `INSERT INTO receipts
-           (voucher_number, receipt_date, received_from_ledger_id, received_in_ledger_id,
-            amount, narration, source, payment_mode, location_type, location_id, created_by)
-         VALUES ($1,$2,$3,$4,$5,$6,'settlement','bank',$7,$8,$9)
-         RETURNING id`,
-        [voucherNumber, reconciliationDate, Number(clearing.id), Number(account.ledger_id),
-          postingAmount, settlementNarration, firstLoc.locationType, firstLoc.locationId, createdBy],
-      );
-      settlementId = Number(created.id);
-      debit = postingAmount;
-    } else {
-      const { rows: [created] } = await client.query(
-        `INSERT INTO payments
-           (voucher_number, payment_date, paid_from_ledger_id, paid_to_ledger_id,
-            amount, narration, source, payment_mode, location_type, location_id, created_by)
-         VALUES ($1,$2,$3,$4,$5,$6,'settlement','bank',$7,$8,$9)
-         RETURNING id`,
-        [voucherNumber, reconciliationDate, Number(account.ledger_id), Number(clearing.id),
-          postingAmount, settlementNarration, firstLoc.locationType, firstLoc.locationId, createdBy],
-      );
-      settlementId = Number(created.id);
-      credit = postingAmount;
-    }
-    const settlementEntryId = `${voucherType}:${settlementId}`;
+    const settlementLines = isOutflow
+      ? [
+          { ledgerId: Number(clearing.id), debit: grossAmount, credit: 0 },
+          ...(processingCharge > 0
+            ? [{ ledgerId: Number(processingChargeLedgerId), debit: processingCharge, credit: 0 }]
+            : []),
+          { ledgerId: Number(account.ledger_id), debit: 0, credit: postingAmount },
+        ]
+      : [
+          { ledgerId: Number(account.ledger_id), debit: postingAmount, credit: 0 },
+          ...(processingCharge > 0
+            ? [{ ledgerId: Number(processingChargeLedgerId), debit: processingCharge, credit: 0 }]
+            : []),
+          { ledgerId: Number(clearing.id), debit: 0, credit: grossAmount },
+        ];
+    const settlement = await createJournalVoucherCore(client, {
+      voucherType: "journal",
+      voucherDate: reconciliationDate,
+      narration: settlementNarration,
+      partyLedgerId: null,
+      reason: `Bank reconciliation settlement ${batchReference}`,
+      totalAmount: isOutflow ? postingAmount : grossAmount,
+      createdBy,
+      locationType: firstLoc.locationType,
+      locationId: firstLoc.locationId,
+      lines: settlementLines,
+    });
+    const settlementId = settlement.id;
+    const voucherNumber = settlement.voucherNumber;
+    const debit = isOutflow ? 0 : postingAmount;
+    const credit = isOutflow ? postingAmount : 0;
+    const settlementEntryId = `jv:${settlementId}`;
     await client.query(
       `INSERT INTO bank_reconciliation_batch_items
          (batch_id, entry_id, ledger_id, source, transaction_date, debit, credit, amount)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-      [Number(batch.id), settlementEntryId, Number(account.ledger_id), voucherType,
+      [Number(batch.id), settlementEntryId, Number(account.ledger_id), "journal",
         reconciliationDate, debit, credit, postingAmount],
     );
     await client.query(
@@ -3207,7 +3297,7 @@ router.post("/reconciliation/settle-queue", requireModuleAction("page:/accounts/
        ON CONFLICT (ledger_id, entry_id) DO UPDATE
          SET status='reconciled', reconciled_at=now(), reconciled_by=EXCLUDED.reconciled_by,
              reconciliation_reference=EXCLUDED.reconciliation_reference`,
-      [settlementEntryId, Number(account.ledger_id), voucherType, reconciliationDate, debit, credit,
+      [settlementEntryId, Number(account.ledger_id), "journal", reconciliationDate, debit, credit,
         voucherNumber, settlementNarration, firstLoc.locationType, firstLoc.locationId, createdBy, batchReference],
     );
 
@@ -3244,10 +3334,10 @@ router.post("/reconciliation/settle-queue", requireModuleAction("page:/accounts/
     await logActivityInTransaction(client, {
       action: "CREATE", module: "reconciliation", entityType: "bank_reconciliation_batch",
       entityId: Number(batch.id),
-      description: `Unified reconciliation ${batchReference} — ${allRows.length} source item(s), one ${voucherType} entry`,
+      description: `Unified reconciliation ${batchReference} — ${allRows.length} source item(s), one settlement journal entry`,
       metadata: {
-        batchReference, itemCount: allRows.length, grossAmount, netAmount: postingAmount, netDirection,
-        bankAccountId, bankLedgerId: Number(account.ledger_id), settlementEntryId,
+        batchReference, itemCount: allRows.length, grossAmount, processingCharge, netAmount: postingAmount, netDirection,
+        bankAccountId, bankLedgerId: Number(account.ledger_id), settlementEntryId, voucherNumber,
         accountingImpact: "unified_reconciliation_settlement",
       },
       user: createdBy,
@@ -3255,7 +3345,7 @@ router.post("/reconciliation/settle-queue", requireModuleAction("page:/accounts/
     await client.query("COMMIT");
     res.status(201).json({
       id: Number(batch.id), batchReference, itemCount: allRows.length, grossAmount,
-      netAmount: postingAmount,
+      processingCharge, netAmount: postingAmount, netDirection,
       destinationBankLedgerId: Number(account.ledger_id), reconciliationDate,
       accountingImpact: "unified_reconciliation_settlement",
     });
@@ -3428,7 +3518,13 @@ router.get("/reconciliation/batches/:id", requireModuleView("page:/accounts/reco
 });
 
 // ── POST /reconciliation/batches ──────────────────────────────────────────────
-router.post("/reconciliation/batches", requireModuleAction("page:/accounts/reconciliation", "add"), async (req, res): Promise<void> => {
+router.post("/reconciliation/batches", requireModuleAction("page:/accounts/reconciliation", "add"),
+  (_req, res) => {
+    res.status(410).json({
+      error: "This sale-only settlement endpoint is retired. Use the consolidated pending-queue settlement endpoint.",
+    });
+  },
+  async (req, res): Promise<void> => {
   const {
     salePaymentIds, charges, settlementDate,
     destinationBankLedgerId, externalReference, notes,

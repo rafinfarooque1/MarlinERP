@@ -1746,6 +1746,8 @@ export interface ReconciliationQueueSettlementItem {
 export interface ReconciliationQueueSettlementRequest {
   bankAccountId: number;
   reconciliationDate: string;
+  /** @minimum 0 */
+  processingCharge?: number;
   /**
      * @minItems 1
      * @maxItems 500
@@ -1753,12 +1755,22 @@ export interface ReconciliationQueueSettlementRequest {
   items: ReconciliationQueueSettlementItem[];
 }
 
+export type ReconciliationQueueSettlementResultNetDirection = typeof ReconciliationQueueSettlementResultNetDirection[keyof typeof ReconciliationQueueSettlementResultNetDirection];
+
+
+export const ReconciliationQueueSettlementResultNetDirection = {
+  in: 'in',
+  out: 'out',
+} as const;
+
 export interface ReconciliationQueueSettlementResult {
   id: number;
   batchReference: string;
   itemCount: number;
   grossAmount: number;
+  processingCharge?: number;
   netAmount: number;
+  netDirection?: ReconciliationQueueSettlementResultNetDirection;
   destinationBankLedgerId: number;
   reconciliationDate: string;
   accountingImpact: string;

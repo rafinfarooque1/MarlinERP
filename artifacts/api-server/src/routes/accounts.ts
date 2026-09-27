@@ -764,9 +764,11 @@ router.get("/accounts/payments", requireModuleView(["page:/accounts/vouchers", "
 });
 
 // Manual receipt/payment vouchers use payment_mode for the entry workflow:
-// cash posts directly to the selected permitted cash ledger; bank records the
-// party leg against STD-ELEC-CLR until Reconciliation selects the actual bank.
-// Legacy callers that omit paymentMode retain the old direct-ledger behaviour.
+// cash posts directly to the selected permitted cash ledger; bank, UPI, and
+// online record the party leg against STD-ELEC-CLR until Reconciliation
+// selects the actual bank. Legacy callers that omit paymentMode are classified
+// from their selected ledger where possible, so known bank-family destinations
+// are still routed through clearing.
 
 // ── Employee party legs on money vouchers ───────────────────────────────────
 // The Employee party type offers exactly two ledgers per employee: Salary
@@ -875,10 +877,8 @@ const SYSTEM_SOURCE_LOCK_MESSAGES: Record<string, string> = {
 const money2 = (n: number) => Math.round(n * 100) / 100;
 
 /**
- * Is this ledger inside the STD-CASH subtree? Decides the `method` stamped on
- * the sale_payments legs an allocation receipt writes — display metadata only
- * (the POSTING debits the chosen ledger directly), but collection lists key
- * their labels off it.
+ * Is this ledger inside the STD-CASH subtree? Used to classify cash entries
+ * and legacy vouchers whose payment mode was omitted.
  */
 async function isCashFamilyLedger(q: { query: Function }, ledgerId: number): Promise<boolean> {
   const { rows } = await q.query(
@@ -890,6 +890,32 @@ async function isCashFamilyLedger(q: { query: Function }, ledgerId: number): Pro
     [ledgerId],
   );
   return rows.length > 0;
+}
+
+async function inferMoneyVoucherMode(
+  q: { query: Function },
+  ledgerId: number,
+): Promise<"cash" | "bank" | "upi" | "online" | null> {
+  if (!Number.isInteger(ledgerId) || ledgerId <= 0) return null;
+  const { rows: [account] } = await q.query(
+    `SELECT account_type FROM cash_bank_accounts WHERE ledger_id = $1 LIMIT 1`,
+    [ledgerId],
+  );
+  const accountType = String(account?.account_type ?? "");
+  if (accountType === "cash" || accountType === "bank" || accountType === "upi" || accountType === "online") {
+    return accountType;
+  }
+  if (await isCashFamilyLedger(q, ledgerId)) return "cash";
+  const { rows } = await q.query(
+    `WITH RECURSIVE fam AS (
+       SELECT id FROM account_ledgers WHERE code = 'STD-BANK'
+       UNION ALL
+       SELECT l.id FROM account_ledgers l JOIN fam f ON l.parent_id = f.id
+     )
+     SELECT 1 AS hit FROM fam WHERE id = $1 LIMIT 1`,
+    [ledgerId],
+  );
+  return rows.length ? "bank" : null;
 }
 
 async function isOnlineFamilyLedger(q: { query: Function }, ledgerId: number): Promise<boolean> {
@@ -1136,15 +1162,16 @@ router.post("/accounts/payments", requireModuleAction(["page:/accounts/vouchers"
     advanceAmount?: number;
   };
   let paidFromLedgerId = Number((req.body as any)?.paidFromLedgerId ?? 0);
-  const requestedPaidFromLedgerId = paidFromLedgerId;
   const rawMode = (req.body as any)?.paymentMode;
-  const paymentMode = rawMode == null || String(rawMode).trim() === ""
+  let paymentMode = rawMode == null || String(rawMode).trim() === ""
     ? null
     : String(rawMode).trim().toLowerCase();
+  if (paymentMode === null) paymentMode = await inferMoneyVoucherMode(pool, paidFromLedgerId);
   if (paymentMode !== null && paymentMode !== "cash" && paymentMode !== "bank" && paymentMode !== "upi" && paymentMode !== "online") {
     res.status(400).json({ error: "paymentMode must be cash, bank, upi, or online" }); return;
   }
-  if (!paymentDate || !paidToLedgerId || !amount || (paymentMode !== "bank" && !paidFromLedgerId)) {
+  const isDeferredElectronic = paymentMode === "bank" || paymentMode === "upi" || paymentMode === "online";
+  if (!paymentDate || !paidToLedgerId || !amount || (!isDeferredElectronic && !paidFromLedgerId)) {
     res.status(400).json({ error: "paymentDate, paidToLedgerId and amount are required; a cash account is required for Cash entries" }); return;
   }
   if (!isIsoDate(paymentDate)) {
@@ -1158,29 +1185,22 @@ router.post("/accounts/payments", requireModuleAction(["page:/accounts/vouchers"
   if (Number(paidFromLedgerId) === Number(paidToLedgerId)) {
     res.status(400).json({ error: "Paid From and Paid To cannot be the same account." }); return;
   }
-  const isDeferredBank = paymentMode === "bank";
-  const isDeferredUpi = paymentMode === "upi";
-  if (isDeferredBank || isDeferredUpi) {
-    if (isDeferredUpi && !(await isUpiFamilyLedger(pool, requestedPaidFromLedgerId))) {
-      res.status(400).json({ error: "UPI entries must use this location's assigned UPI account." }); return;
-    }
+  if (isDeferredElectronic) {
     const clearingId = await electronicClearingLedgerId(pool);
     if (!clearingId) { res.status(500).json({ error: "Electronic payment clearing ledger not configured" }); return; }
     paidFromLedgerId = clearingId;
   } else if (paymentMode === "cash" && !(await isCashFamilyLedger(pool, Number(paidFromLedgerId)))) {
     res.status(400).json({ error: "Cash entries must use a permitted Cash account." }); return;
-  } else if (paymentMode === "online" && !(await isOnlineFamilyLedger(pool, Number(paidFromLedgerId)))) {
-    res.status(400).json({ error: "Online entries must use an Online sub-ledger." }); return;
   }
   const accountError = await postableLedgerError(pool, [Number(paidFromLedgerId), Number(paidToLedgerId)]);
   if (accountError) { res.status(400).json({ error: accountError }); return; }
   // A branch user may only pay out of its own cash box, and never into another
   // location's or Head Office's cash/bank accounts.
   const scope = ownLocationScope((req as any).employee);
-  if (!isDeferredBank) {
+  if (!isDeferredElectronic) {
     const legCheck = await checkVoucherLegs(
       scope,
-      isDeferredUpi ? requestedPaidFromLedgerId : Number(paidFromLedgerId),
+      Number(paidFromLedgerId),
       Number(paidToLedgerId),
       'Paid from',
     );
@@ -1193,8 +1213,7 @@ router.post("/accounts/payments", requireModuleAction(["page:/accounts/vouchers"
   const payLocRes = await resolveMoneyVoucherLocation(
     (req as any).employee,
     req.body as any,
-    isDeferredUpi ? requestedPaidFromLedgerId : Number(paidFromLedgerId),
-    isDeferredBank ? callerLocation((req as any).employee) : undefined,
+    Number(paidFromLedgerId),
   );
   if (!payLocRes.ok) { res.status(payLocRes.status).json({ error: payLocRes.error }); return; }
   const { locationType, locationId } = payLocRes.loc;
@@ -1460,31 +1479,15 @@ router.patch("/accounts/payments/:id", requireModuleAction(["page:/accounts/vouc
         }
       }
     }
-     const requestedMode = b.paymentMode === undefined ? String(row.payment_mode ?? "") : String(b.paymentMode).trim().toLowerCase();
+     let requestedMode = b.paymentMode === undefined ? String(row.payment_mode ?? "") : String(b.paymentMode).trim().toLowerCase();
      if (b.paymentMode !== undefined && !["cash", "bank", "upi", "online"].includes(requestedMode)) {
        await client.query("ROLLBACK"); res.status(400).json({ error: "paymentMode must be cash, bank, upi, or online" }); return;
      }
-     const deferredElectronic = requestedMode === "bank" || requestedMode === "upi";
+     if (!requestedMode) requestedMode = (await inferMoneyVoucherMode(client, Number(row.paid_from_ledger_id))) ?? "";
+     const deferredElectronic = ["bank", "upi", "online"].includes(requestedMode);
      let newFrom = b.paidFromLedgerId !== undefined ? Number(b.paidFromLedgerId) : Number(row.paid_from_ledger_id);
     const newTo = b.paidToLedgerId !== undefined ? Number(b.paidToLedgerId) : Number(row.paid_to_ledger_id);
-     const requestedUpiLedgerValue = Number(b.paidFromLedgerId ?? 0);
-     const hasRequestedUpiLedger = requestedUpiLedgerValue > 0
-       && await isUpiFamilyLedger(client, requestedUpiLedgerValue);
-     const requestedUpiLedgerId = hasRequestedUpiLedger ? requestedUpiLedgerValue : 0;
      if (deferredElectronic) {
-       const isStoredUpiClearing = row.payment_mode === "upi"
-         && requestedUpiLedgerValue === Number(row.paid_from_ledger_id);
-       if (requestedMode === "upi" && requestedUpiLedgerValue > 0 && !hasRequestedUpiLedger && !isStoredUpiClearing) {
-         await client.query("ROLLBACK"); res.status(400).json({ error: "UPI entries must use this location's assigned UPI account." }); return;
-       }
-       if (requestedMode === "upi" && requestedUpiLedgerValue <= 0 && row.payment_mode !== "upi") {
-         await client.query("ROLLBACK"); res.status(400).json({ error: "Select this location's default UPI account." }); return;
-       }
-       const upiLocationChanged = (b.locationType !== undefined && String(b.locationType) !== String(row.location_type ?? "headoffice"))
-         || (b.locationId !== undefined && Number(b.locationId) !== Number(row.location_id ?? 0));
-       if (requestedMode === "upi" && !requestedUpiLedgerId && row.payment_mode === "upi" && upiLocationChanged) {
-         await client.query("ROLLBACK"); res.status(400).json({ error: "Choose the destination location's UPI account before changing location." }); return;
-       }
        const clearingId = await electronicClearingLedgerId(client);
        if (!clearingId) { await client.query("ROLLBACK"); res.status(500).json({ error: "Electronic payment clearing ledger not configured" }); return; }
        newFrom = clearingId;
@@ -1506,7 +1509,7 @@ router.patch("/accounts/payments/:id", requireModuleAction(["page:/accounts/vouc
     // explicit body location is validated, otherwise the till's owner speaks,
     // and only an unrecognised till keeps the row's current stamp.
      const locRes = await resolveMoneyVoucherLocation((req as any).employee, b,
-      requestedMode === "upi" && requestedUpiLedgerId > 0 ? requestedUpiLedgerId : newFrom,
+      newFrom,
       { locationType: (row.location_type ?? 'headoffice') as any, locationId: Number(row.location_id ?? 0) });
     if (!locRes.ok) { await client.query("ROLLBACK"); res.status(locRes.status).json({ error: locRes.error }); return; }
     {
@@ -1776,15 +1779,16 @@ router.post("/accounts/receipts", requireModuleAction(["page:/accounts/vouchers"
     advanceAmount?: number;
   };
   let receivedInLedgerId = Number((req.body as any)?.receivedInLedgerId ?? 0);
-  const requestedReceivedInLedgerId = receivedInLedgerId;
   const rawMode = (req.body as any)?.paymentMode;
-  const paymentMode = rawMode == null || String(rawMode).trim() === ""
+  let paymentMode = rawMode == null || String(rawMode).trim() === ""
     ? null
     : String(rawMode).trim().toLowerCase();
+  if (paymentMode === null) paymentMode = await inferMoneyVoucherMode(pool, receivedInLedgerId);
   if (paymentMode !== null && paymentMode !== "cash" && paymentMode !== "bank" && paymentMode !== "upi" && paymentMode !== "online") {
     res.status(400).json({ error: "paymentMode must be cash, bank, upi, or online" }); return;
   }
-  if (!receiptDate || !receivedFromLedgerId || !amount || (paymentMode !== "bank" && !receivedInLedgerId)) {
+  const isDeferredElectronic = paymentMode === "bank" || paymentMode === "upi" || paymentMode === "online";
+  if (!receiptDate || !receivedFromLedgerId || !amount || (!isDeferredElectronic && !receivedInLedgerId)) {
     res.status(400).json({ error: "receiptDate, receivedFromLedgerId and amount are required; a cash account is required for Cash entries" }); return;
   }
   if (!isIsoDate(receiptDate)) {
@@ -1799,26 +1803,19 @@ router.post("/accounts/receipts", requireModuleAction(["page:/accounts/vouchers"
   if (Number(receivedFromLedgerId) === Number(receivedInLedgerId)) {
     res.status(400).json({ error: "Received From and Received In cannot be the same account." }); return;
   }
-  const isDeferredBank = paymentMode === "bank";
-  const isDeferredUpi = paymentMode === "upi";
-  if (isDeferredBank || isDeferredUpi) {
-    if (isDeferredUpi && !(await isUpiFamilyLedger(pool, requestedReceivedInLedgerId))) {
-      res.status(400).json({ error: "UPI entries must use this location's assigned UPI account." }); return;
-    }
+  if (isDeferredElectronic) {
     const clearingId = await electronicClearingLedgerId(pool);
     if (!clearingId) { res.status(500).json({ error: "Electronic payment clearing ledger not configured" }); return; }
     receivedInLedgerId = clearingId;
   } else if (paymentMode === "cash" && !(await isCashFamilyLedger(pool, Number(receivedInLedgerId)))) {
     res.status(400).json({ error: "Cash entries must use a permitted Cash account." }); return;
-  } else if (paymentMode === "online" && !(await isOnlineFamilyLedger(pool, Number(receivedInLedgerId)))) {
-    res.status(400).json({ error: "Online entries must use an Online sub-ledger." }); return;
   }
   // A branch user may only collect into its own cash box.
   const scope = ownLocationScope((req as any).employee);
-  if (!isDeferredBank) {
+  if (!isDeferredElectronic) {
     const legCheck = await checkVoucherLegs(
       scope,
-      isDeferredUpi ? requestedReceivedInLedgerId : Number(receivedInLedgerId),
+      Number(receivedInLedgerId),
       Number(receivedFromLedgerId),
       'Received in',
     );
@@ -1831,8 +1828,7 @@ router.post("/accounts/receipts", requireModuleAction(["page:/accounts/vouchers"
   const rcptLocRes = await resolveMoneyVoucherLocation(
     (req as any).employee,
     req.body as any,
-    isDeferredUpi ? requestedReceivedInLedgerId : Number(receivedInLedgerId),
-    isDeferredBank ? callerLocation((req as any).employee) : undefined,
+    Number(receivedInLedgerId),
   );
   if (!rcptLocRes.ok) { res.status(rcptLocRes.status).json({ error: rcptLocRes.error }); return; }
   const { locationType, locationId } = rcptLocRes.loc;
@@ -1973,7 +1969,7 @@ router.post("/accounts/receipts", requireModuleAction(["page:/accounts/vouchers"
           `INSERT INTO sale_payments (sale_id, payment_date, method, amount, reference_number, notes, reconciliation_status, clearing_receipt_id, outlet_id, created_by)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
           [d.sale.id, receiptDate, method, d.alloc.amount, referenceNumber?.trim() || null,
-          `Receipt voucher ${voucherNumber}`, (isDeferredBank || isDeferredUpi) ? "pending" : null, r.id, d.sale.outlet_id, createdBy],
+          `Receipt voucher ${voucherNumber}`, isDeferredElectronic ? "pending" : null, r.id, d.sale.outlet_id, createdBy],
         );
         const newPaid = money2(Number(d.sale.amount_paid) + d.alloc.amount);
         const newPos = computePaymentPosition({
@@ -2088,7 +2084,7 @@ router.patch("/accounts/receipts/:id", requireModuleAction(["page:/accounts/vouc
         res.status(403).json({ error: "This bank voucher has been settled through Reconciliation and is locked." });
         return;
       }
-      const allocationElectronicPending = ["bank", "upi"].includes(String(b.paymentMode ?? row.payment_mode ?? ""));
+      const allocationElectronicPending = ["bank", "upi", "online"].includes(String(b.paymentMode ?? row.payment_mode ?? ""));
       const allocationMethod = String(b.paymentMode ?? row.payment_mode ?? "bank");
       const newDate = b.receiptDate !== undefined ? String(b.receiptDate) : row.receipt_date;
       for (const d of [row.receipt_date, newDate]) {
@@ -2302,31 +2298,15 @@ router.patch("/accounts/receipts/:id", requireModuleAction(["page:/accounts/vouc
         }
       }
     }
-    const requestedMode = b.paymentMode === undefined ? String(row.payment_mode ?? "") : String(b.paymentMode).trim().toLowerCase();
+    let requestedMode = b.paymentMode === undefined ? String(row.payment_mode ?? "") : String(b.paymentMode).trim().toLowerCase();
     if (b.paymentMode !== undefined && !["cash", "bank", "upi", "online"].includes(requestedMode)) {
       await client.query("ROLLBACK"); res.status(400).json({ error: "paymentMode must be cash, bank, upi, or online" }); return;
     }
-    const deferredElectronic = requestedMode === "bank" || requestedMode === "upi";
+    if (!requestedMode) requestedMode = (await inferMoneyVoucherMode(client, Number(row.received_in_ledger_id))) ?? "";
+    const deferredElectronic = ["bank", "upi", "online"].includes(requestedMode);
     const newFrom = b.receivedFromLedgerId !== undefined ? Number(b.receivedFromLedgerId) : Number(row.received_from_ledger_id);
     let newIn = b.receivedInLedgerId !== undefined ? Number(b.receivedInLedgerId) : Number(row.received_in_ledger_id);
-    const requestedUpiLedgerValue = Number(b.receivedInLedgerId ?? 0);
-    const hasRequestedUpiLedger = requestedUpiLedgerValue > 0
-      && await isUpiFamilyLedger(client, requestedUpiLedgerValue);
-    const requestedUpiLedgerId = hasRequestedUpiLedger ? requestedUpiLedgerValue : 0;
     if (deferredElectronic) {
-      const isStoredUpiClearing = row.payment_mode === "upi"
-        && requestedUpiLedgerValue === Number(row.received_in_ledger_id);
-      if (requestedMode === "upi" && requestedUpiLedgerValue > 0 && !hasRequestedUpiLedger && !isStoredUpiClearing) {
-        await client.query("ROLLBACK"); res.status(400).json({ error: "UPI entries must use this location's assigned UPI account." }); return;
-      }
-      if (requestedMode === "upi" && requestedUpiLedgerValue <= 0 && row.payment_mode !== "upi") {
-        await client.query("ROLLBACK"); res.status(400).json({ error: "Select this location's default UPI account." }); return;
-      }
-      const upiLocationChanged = (b.locationType !== undefined && String(b.locationType) !== String(row.location_type ?? "headoffice"))
-        || (b.locationId !== undefined && Number(b.locationId) !== Number(row.location_id ?? 0));
-      if (requestedMode === "upi" && !requestedUpiLedgerId && row.payment_mode === "upi" && upiLocationChanged) {
-        await client.query("ROLLBACK"); res.status(400).json({ error: "Choose the destination location's UPI account before changing location." }); return;
-      }
       const clearingId = await electronicClearingLedgerId(client);
       if (!clearingId) { await client.query("ROLLBACK"); res.status(500).json({ error: "Electronic payment clearing ledger not configured" }); return; }
       newIn = clearingId;
@@ -2346,7 +2326,7 @@ router.patch("/accounts/receipts/:id", requireModuleAction(["page:/accounts/vouc
     // explicit body location is validated, otherwise the till's owner speaks,
     // and only an unrecognised till keeps the row's current stamp.
     const locRes = await resolveMoneyVoucherLocation((req as any).employee, b,
-      requestedMode === "upi" && requestedUpiLedgerId > 0 ? requestedUpiLedgerId : newIn,
+      newIn,
       { locationType: (row.location_type ?? 'headoffice') as any, locationId: Number(row.location_id ?? 0) });
     if (!locRes.ok) { await client.query("ROLLBACK"); res.status(locRes.status).json({ error: locRes.error }); return; }
     {

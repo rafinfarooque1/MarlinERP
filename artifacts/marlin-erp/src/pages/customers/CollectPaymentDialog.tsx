@@ -98,16 +98,14 @@ export function CollectPaymentDialog({
     if (amt > Number(activeInv.balance) + 0.01) {
       toast.error(`Amount exceeds outstanding (${inr(activeInv.balance)})`); return;
     }
-    if (!ledgerId) {
+    if (paymentMode === 'cash' && !ledgerId) {
       toast.error(receiveOptionsLoading
         ? 'Payment accounts are still loading.'
-        : paymentMode === 'online'
-          ? 'Select an Online sub-platform.'
-          : `No ${paymentMode === 'upi' ? 'UPI' : paymentMode === 'bank' ? 'Bank' : 'Cash'} account is assigned to this location.`);
+        : 'No Cash account is assigned to this location.');
       return;
     }
     createPayment.mutate(
-      { saleId: activeInv.saleId, data: { method: paymentMode, receivedInLedgerId: ledgerId, amount: amt, referenceNumber: reference.trim() || undefined, paymentDate } },
+       { saleId: activeInv.saleId, data: { method: paymentMode, ...(paymentMode === 'cash' ? { receivedInLedgerId: ledgerId } : {}), amount: amt, referenceNumber: reference.trim() || undefined, paymentDate } },
       {
         onSuccess: () => {
           toast.success(`${inr(amt)} recorded against ${formatSalesInvoiceDisplayNumber(activeInv.invoiceNumber || `Sale #${activeInv.saleId}`)}`);
@@ -210,16 +208,11 @@ export function CollectPaymentDialog({
                     />
                     <div className="space-y-1.5">
                       <label className="text-sm font-medium">
-                        {paymentMode === 'online' ? 'Online sub-platform' : 'Receive Into'}
+                        {paymentMode === 'cash' ? 'Receive Into' : 'Electronic settlement'}
                       </label>
-                      {paymentMode === 'bank' || paymentMode === 'upi' ? (
+                      {paymentMode !== 'cash' ? (
                         <div className="min-h-10 rounded-md border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-sm text-amber-700">
-                          {receiveOptionsLoading
-                            ? `Loading this location's default ${paymentMode === 'upi' ? 'UPI' : 'bank'} account…`
-                            : modeOptions[0]
-                              ? `Using this location's default ${paymentMode === 'upi' ? 'UPI' : 'bank'} account: ${modeOptions[0].name}.`
-                              : `No default ${paymentMode === 'upi' ? 'UPI' : 'bank'} account is assigned to this location.`}
-                          {' '}Held for reconciliation.
+                          Held for reconciliation. Destination is selected during reconciliation.
                         </div>
                       ) : (
                         <ReceiveIntoSelect

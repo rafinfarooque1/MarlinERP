@@ -3996,6 +3996,9 @@ components:
         reconciliationDate:
           type: string
           format: date
+        processingCharge:
+          type: number
+          minimum: 0
         items:
           type: array
           minItems: 1
@@ -4036,8 +4039,13 @@ components:
           type: integer
         grossAmount:
           type: number
+        processingCharge:
+          type: number
         netAmount:
           type: number
+        netDirection:
+          type: string
+          enum: [in, out]
         destinationBankLedgerId:
           type: integer
         reconciliationDate:

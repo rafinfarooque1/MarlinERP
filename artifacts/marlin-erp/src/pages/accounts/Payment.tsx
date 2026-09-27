@@ -42,13 +42,11 @@ const schema = z.object({
   referenceNumber: z.string().max(100).optional(),
   narration: z.string().optional(),
 }).superRefine((v, ctx) => {
-  if ((v.paymentMode === 'cash' || v.paymentMode === 'upi' || v.paymentMode === 'online') && v.paidFromLedgerId < 1) {
+  if (v.paymentMode === 'cash' && v.paidFromLedgerId < 1) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['paidFromLedgerId'],
-      message: v.paymentMode === 'upi' ? 'No UPI account is assigned to this location.'
-        : v.paymentMode === 'online' ? 'Select an Online platform.'
-          : 'Select a Cash account.',
+       message: 'Select a Cash account.',
     });
   }
 });
@@ -126,7 +124,13 @@ export default function Payment() {
     if (!loc) { toast.error('Please select a location.'); return; }
     // A vendor payment carries its bill split so the books settle those exact
     // bills; any excess parks as an advance with the vendor.
-    const body: any = { ...data, locationType: loc.locationType, locationId: loc.locationId };
+     const { paidFromLedgerId: _paidFromLedgerId, ...paymentData } = data;
+     const body: any = {
+       ...paymentData,
+       ...(data.paymentMode === 'cash' ? { paidFromLedgerId: data.paidFromLedgerId } : {}),
+       locationType: loc.locationType,
+       locationId: loc.locationId,
+     };
     if (settlement && settlement.kind === 'vendor'
         && (settlement.allocations.length > 0 || settlement.advanceAmount > 0.004)) {
       body.allocations = settlement.allocations.map(a => ({ purchaseId: a.billId, amount: a.amount }));
@@ -336,13 +340,12 @@ export default function Payment() {
                 <div className="rounded-md border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-sm text-amber-700">
                   Bank settlement is selected during reconciliation.
                 </div>
-              ) : paymentMode === 'upi' ? (
+              ) : paymentMode === 'upi' || paymentMode === 'online' ? (
                 <FormField control={form.control} name="paidFromLedgerId" render={() => (
                   <FormItem>
                     <FormLabel>Settlement</FormLabel>
                     <div className="rounded-md border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-sm text-amber-700">
-                      {modeOptions[0] ? `Using this location's default UPI account: ${modeOptions[0].name}.` : 'No UPI account is assigned to this location.'}
-                      {' '}Held for reconciliation.
+                       Held for reconciliation. Destination is selected during reconciliation.
                     </div>
                     <FormMessage />
                   </FormItem>
@@ -350,12 +353,12 @@ export default function Payment() {
               ) : (
                 <FormField control={form.control} name="paidFromLedgerId" render={({ field }) => (
                   <FormItem>
-                    <FormLabel>{paymentMode === 'online' ? 'Online Platform' : 'Paid From (Cash)'} <span className="text-destructive">*</span></FormLabel>
+                   <FormLabel>Paid From (Cash) <span className="text-destructive">*</span></FormLabel>
                     <AccountCombobox
-                      options={modeOptions}
+                       options={modeOptions}
                       value={field.value}
                       onChange={field.onChange}
-                      placeholder={paymentMode === 'online' ? 'Select Online platform' : 'Select Cash account'}
+                       placeholder="Select Cash account"
                     />
                     <FormMessage />
                   </FormItem>

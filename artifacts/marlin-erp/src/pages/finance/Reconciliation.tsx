@@ -107,6 +107,7 @@ export default function Reconciliation() {
   const [pendingOpen, setPendingOpen] = useState(false);
   const [pendingBankAccountId, setPendingBankAccountId] = useState('');
   const [pendingDate, setPendingDate] = useState(localDateValue);
+  const [pendingProcessingCharge, setPendingProcessingCharge] = useState('0');
 
   // The page has its own location filter for explicit, auditable account
   // selection. The global selector is still sent by the client as a header.
@@ -156,10 +157,18 @@ export default function Reconciliation() {
     (sum, item) => sum + Math.abs(Math.round(Number(item.amount) * 100)),
     0,
   ) / 100;
-  const selectedPendingNet = selectedPendingRows.reduce(
-    (sum, item) => sum + (item.direction === 'out' ? -1 : 1) * Math.round(Number(item.amount) * 100),
-    0,
-  ) / 100;
+  const selectedPendingDirection = selectedPendingRows[0]?.direction ?? 'in';
+  const pendingProcessingChargeValue = pendingProcessingCharge.trim() === ''
+    ? 0
+    : Number(pendingProcessingCharge);
+  const pendingProcessingChargeCents = Math.round(pendingProcessingChargeValue * 100);
+  const pendingProcessingChargeValid = Number.isFinite(pendingProcessingChargeValue)
+    && pendingProcessingChargeValue >= 0
+    && Math.abs(pendingProcessingChargeValue * 100 - pendingProcessingChargeCents) < 1e-6
+    && (selectedPendingDirection === 'out' || pendingProcessingChargeCents < Math.round(selectedPendingGross * 100));
+  const selectedPendingBankAmount = selectedPendingDirection === 'out'
+    ? selectedPendingGross + (pendingProcessingChargeValid ? pendingProcessingChargeValue : 0)
+    : selectedPendingGross - (pendingProcessingChargeValid ? pendingProcessingChargeValue : 0);
 
   useEffect(() => {
     if (!editingBatch || editBatchId == null) return;
@@ -475,6 +484,10 @@ export default function Reconciliation() {
     const key = voucher.key;
     if (checked && selectedPendingRows.length > 0) {
       const first = selectedPendingRows[0];
+      if (first.direction !== voucher.direction) {
+        toast.error('Reconcile incoming receipts and outgoing payments in separate batches.');
+        return;
+      }
       if (first.locationType !== voucher.locationType || first.locationId !== voucher.locationId) {
         toast.error('Reconcile vouchers from one warehouse or outlet at a time.');
         return;
@@ -490,15 +503,23 @@ export default function Reconciliation() {
   function openPendingReconciliation() {
     setPendingDate(localDateValue());
     setPendingBankAccountId('');
+    setPendingProcessingCharge('0');
     setPendingOpen(true);
   }
 
   async function submitPendingReconciliation() {
     if (!selectedPendingRows.length || !pendingBankAccountId || !pendingDate) return;
+    if (!pendingProcessingChargeValid) {
+      toast.error(selectedPendingDirection === 'in'
+        ? 'Incoming processing charges must be non-negative, have at most two decimal places, and be less than the gross amount.'
+        : 'Processing charges must be non-negative and have at most two decimal places.');
+      return;
+    }
     try {
       await settlePendingMutation.mutateAsync({
         bankAccountId: Number(pendingBankAccountId),
         reconciliationDate: pendingDate,
+        processingCharge: pendingProcessingChargeValue,
         items: selectedPendingRows.map(v => ({
           kind: v.kind,
           id: v.id,
@@ -1103,9 +1124,27 @@ export default function Reconciliation() {
             <div className="space-y-4">
               <div className="grid grid-cols-2 gap-3 text-sm">
                 <div><span className="text-muted-foreground">Items</span><div className="font-semibold">{selectedPendingRows.length}</div></div>
-                <div><span className="text-muted-foreground">Gross selected</span><div className="font-semibold">{fmt(selectedPendingGross)}</div></div>
-                <div><span className="text-muted-foreground">Net bank entry</span><div className="font-semibold">{fmt(selectedPendingNet)}</div></div>
+                <div><span className="text-muted-foreground">{selectedPendingDirection === 'out' ? 'Payment outflow' : 'Receipt inflow'}</span><div className="font-semibold">{fmt(selectedPendingGross)}</div></div>
+                <div><span className="text-muted-foreground">Processing charge</span><div className="font-semibold">{fmt(pendingProcessingChargeValid ? pendingProcessingChargeValue : 0)}</div></div>
+                <div>
+                  <span className="text-muted-foreground">{selectedPendingDirection === 'out' ? 'Bank outflow' : 'Net bank receipt'}</span>
+                  <div className="font-semibold">{fmt(selectedPendingBankAmount)}</div>
+                </div>
               </div>
+              <label className="space-y-1 block text-sm">
+                <span className="font-medium">Processing charge</span>
+                <Input
+                  inputMode="decimal"
+                  value={pendingProcessingCharge}
+                  onChange={e => setPendingProcessingCharge(e.target.value)}
+                  placeholder="0.00"
+                />
+                <span className="text-xs text-muted-foreground">
+                  {selectedPendingDirection === 'out'
+                    ? 'Added to the bank outflow and recorded as Bank & Processor Charges.'
+                    : 'Deducted from the bank receipt and recorded as Bank & Processor Charges.'}
+                </span>
+              </label>
               <label className="space-y-1 block text-sm">
                 <span className="font-medium">Permitted bank account</span>
                 <Select value={pendingBankAccountId} onValueChange={setPendingBankAccountId}>
@@ -1129,7 +1168,13 @@ export default function Reconciliation() {
               <Button variant="outline" onClick={() => setPendingOpen(false)}>Cancel</Button>
               <Button
                 onClick={submitPendingReconciliation}
-                disabled={settlePendingMutation.isPending || !pendingBankAccountId || !pendingDate || !selectedPendingRows.length}
+                disabled={
+                  settlePendingMutation.isPending
+                  || !pendingBankAccountId
+                  || !pendingDate
+                  || !selectedPendingRows.length
+                  || !pendingProcessingChargeValid
+                }
               >
                 {settlePendingMutation.isPending ? 'Posting…' : 'Confirm settlement'}
               </Button>
