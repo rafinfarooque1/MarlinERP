@@ -132,10 +132,47 @@ export interface DashboardBi {
     bankIn: number; bankOut: number;
     totalIn: number; totalOut: number;
   } | null;
+  financialMatrix: DashboardFinancialMatrix;
   /** Populated only for an explicit All Locations view. */
   locationBreakdown: BiLocationMetric[];
   topItems: BiTopItem[];
   topCustomers: BiTopCustomer[];
+}
+
+export interface DashboardFinancialMatrix {
+  period: { fromDate: string | null; toDate: string | null };
+  locations: Array<{
+    locationType: 'headoffice' | 'warehouse' | 'outlet';
+    locationId: number;
+    name: string;
+  }>;
+  openingCash: number[];
+  openingBank: number[];
+  openingTotal: number[];
+  sales: number[];
+  balance: number[];
+  expenses: number[];
+  expenseLedgers: Array<{
+    ledgerId: number;
+    name: string;
+    code: string | null;
+    values: number[];
+    total: number;
+  }>;
+  closingCash: number[];
+  closingBank: number[];
+  closingTotal: number[];
+  totals: {
+    openingCash: number;
+    openingBank: number;
+    openingTotal: number;
+    sales: number;
+    balance: number;
+    expenses: number;
+    closingCash: number;
+    closingBank: number;
+    closingTotal: number;
+  };
 }
 
 function biQS(params?: DashboardBiFilters): string {

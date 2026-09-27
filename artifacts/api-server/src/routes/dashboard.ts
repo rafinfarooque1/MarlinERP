@@ -790,6 +790,148 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
   // Same rule as the Stock screen: no valuation right, no valuation figure.
   const showValuation = await canViewStockValuation((req as any).employee?.hierarchyId);
 
+  // Cross-location financial matrix: span active locations in the caller's
+  // server-derived data scope, independent of the dashboard's display filter.
+  const { rows: matrixLocationRows } = await pool.query(`
+    SELECT location_type, location_id, name
+      FROM (
+        SELECT 'headoffice'::text AS location_type, 0::int AS location_id, 'Head Office'::text AS name
+        UNION ALL
+        SELECT 'warehouse'::text, w.id, w.name
+          FROM warehouses w
+         WHERE w.disabled_at IS NULL
+        UNION ALL
+        SELECT 'outlet'::text, o.id, o.name
+          FROM outlets o
+          JOIN warehouses w ON w.id = o.warehouse_id
+         WHERE w.disabled_at IS NULL
+      ) active_locations
+     ORDER BY CASE location_type WHEN 'headoffice' THEN 0 WHEN 'warehouse' THEN 1 ELSE 2 END,
+              name, location_id
+  `);
+  const matrixLocations = (matrixLocationRows as Array<{
+    location_type: unknown; location_id: unknown; name: unknown;
+  }>).map((row) => ({
+    locationType: String(row.location_type),
+    locationId: Number(row.location_id),
+    name: String(row.name),
+  })).filter((location) =>
+    scope.isHeadOffice
+      || (location.locationType === "warehouse" && scope.warehouseIds.includes(location.locationId))
+      || (location.locationType === "outlet" && scope.outletIds.includes(location.locationId)));
+
+  const matrixSaleConditions = ["s.branch_transfer_id IS NULL", "s.cancelled_at IS NULL"];
+  const matrixSaleParams: unknown[] = [];
+  if (fromDate) {
+    matrixSaleParams.push(fromDate);
+    matrixSaleConditions.push(`s.sale_date >= $${matrixSaleParams.length}::date`);
+  }
+  if (toDate) {
+    matrixSaleParams.push(toDate);
+    matrixSaleConditions.push(`s.sale_date <= $${matrixSaleParams.length}::date`);
+  }
+  if (!scope.isHeadOffice) matrixSaleConditions.push(scopeSalesWhere(scope, matrixSaleParams));
+  const { rows: matrixSaleRows } = await pool.query(`
+    SELECT COALESCE(s.location_type, 'outlet') AS location_type,
+           CASE WHEN COALESCE(s.location_type, 'outlet') = 'headoffice'
+                THEN 0 ELSE COALESCE(s.location_id, s.outlet_id) END AS location_id,
+           COALESCE(SUM(s.total_amount::numeric), 0)::float AS total
+      FROM sales s
+     WHERE ${matrixSaleConditions.join(" AND ")}
+     GROUP BY 1, 2
+  `, matrixSaleParams);
+  const matrixSalesByLocation = new Map<string, number>();
+  for (const row of matrixSaleRows as Array<{
+    location_type: unknown; location_id: unknown; total: unknown;
+  }>) {
+    matrixSalesByLocation.set(locationKey(String(row.location_type), row.location_id), money(row.total));
+  }
+
+  const matrixOpeningToDate = fromDate
+    ? (() => {
+        const date = new Date(`${fromDate}T00:00:00.000Z`);
+        date.setUTCDate(date.getUTCDate() - 1);
+        return date.toISOString().slice(0, 10);
+      })()
+    : null;
+  const matrixLocationFigures = await Promise.all(matrixLocations.map(async (location) => {
+    const postingLocation = location.locationType === "headoffice"
+      ? ({ type: "headoffice", id: null } as const)
+      : ({ type: location.locationType as "warehouse" | "outlet", id: location.locationId } as const);
+    const [financials, opening] = await Promise.all([
+      companyFinancials(cachedPostings, {
+        fromDate: fromDate || null,
+        toDate: toDate || null,
+        location: postingLocation,
+      }),
+      matrixOpeningToDate
+        ? companyBalances(cachedPostings, { toDate: matrixOpeningToDate, location: postingLocation })
+        : Promise.resolve({ cashBalance: 0, bankBalance: 0 }),
+    ]);
+    return {
+      location,
+      financials,
+      openingCash: money(opening.cashBalance),
+      openingBank: money(opening.bankBalance),
+      sales: matrixSalesByLocation.get(locationKey(location.locationType, location.locationId)) ?? 0,
+    };
+  }));
+  const matrixFinancialsByLocation = new Map(matrixLocationFigures.map((figure) => [
+    locationKey(figure.location.locationType, figure.location.locationId),
+    figure.financials,
+  ]));
+
+  const matrixOpeningCash = matrixLocationFigures.map((figure) => figure.openingCash);
+  const matrixOpeningBank = matrixLocationFigures.map((figure) => figure.openingBank);
+  const matrixOpeningTotal = matrixOpeningCash.map((cash, index) =>
+    money(cash + matrixOpeningBank[index]));
+  const matrixSales = matrixLocationFigures.map((figure) => figure.sales);
+  const matrixBalance = matrixSales.map((sale, index) =>
+    money(matrixOpeningCash[index] + matrixOpeningBank[index] + sale));
+  const matrixExpenses = matrixLocationFigures.map((figure) => money(figure.financials.expenses.total));
+  const matrixClosingCash = matrixLocationFigures.map((figure) => money(figure.financials.cashBalance));
+  const matrixClosingBank = matrixLocationFigures.map((figure) => money(figure.financials.bankBalance));
+  const matrixClosingTotal = matrixClosingCash.map((cash, index) =>
+    money(cash + matrixClosingBank[index]));
+  const matrixSum = (values: number[]) => money(values.reduce((total, value) => total + value, 0));
+
+  const matrixExpenseDefinitions = new Map<number, { name: string; code: string | null }>();
+  for (const { financials } of matrixLocationFigures) {
+    for (const ledger of financials.expenses.ledgers) {
+      matrixExpenseDefinitions.set(ledger.ledgerId, { name: ledger.name, code: ledger.code });
+    }
+  }
+  const matrixExpenseLedgers = Array.from(matrixExpenseDefinitions, ([ledgerId, ledger]) => {
+    const values = matrixLocationFigures.map(({ financials }) =>
+      money(financials.expenses.ledgers.find((row) => row.ledgerId === ledgerId)?.amount ?? 0));
+    return { ledgerId, ...ledger, values, total: matrixSum(values) };
+  });
+  const financialMatrix = {
+    period: { fromDate: fromDate || null, toDate: toDate || null },
+    locations: matrixLocationFigures.map(({ location }) => location),
+    openingCash: matrixOpeningCash,
+    openingBank: matrixOpeningBank,
+    openingTotal: matrixOpeningTotal,
+    sales: matrixSales,
+    balance: matrixBalance,
+    expenses: matrixExpenses,
+    expenseLedgers: matrixExpenseLedgers,
+    closingCash: matrixClosingCash,
+    closingBank: matrixClosingBank,
+    closingTotal: matrixClosingTotal,
+    totals: {
+      openingCash: matrixSum(matrixOpeningCash),
+      openingBank: matrixSum(matrixOpeningBank),
+      openingTotal: matrixSum(matrixOpeningTotal),
+      sales: matrixSum(matrixSales),
+      balance: matrixSum(matrixBalance),
+      expenses: matrixSum(matrixExpenses),
+      closingCash: matrixSum(matrixClosingCash),
+      closingBank: matrixSum(matrixClosingBank),
+      closingTotal: matrixSum(matrixClosingTotal),
+    },
+  };
+
   // The selected-location views above intentionally return only their selected
   // slice. For an explicit All Locations view, build a parallel breakdown from
   // the same source queries and the same derived-posting stream. This keeps the
@@ -846,8 +988,9 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       const postingLocation = loc.locationType === "headoffice"
         ? ({ type: "headoffice", id: null } as const)
         : ({ type: loc.locationType as "warehouse" | "outlet", id: loc.locationId } as const);
+      const cachedFinancials = matrixFinancialsByLocation.get(locationKey(loc.locationType, loc.locationId));
        const [financials, flows, pending] = await Promise.all([
-        companyFinancials(cachedPostings, { fromDate: fromDate || null, toDate: toDate || null, location: postingLocation }),
+        cachedFinancials ?? companyFinancials(cachedPostings, { fromDate: fromDate || null, toDate: toDate || null, location: postingLocation }),
         rangeMoneyFlows(
           (await cachedPostings(toDate ? { toDate } : {})) as never[],
           { fromDate: fromDate || null, toDate: toDate || null, location: postingLocation, subtree: await ledgerSubtreeLookup() },
@@ -1010,6 +1153,7 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
     // build (or the mobile app) keeps rendering during rollout.
     moneyFlows,
     todayMoney: moneyFlows,
+    financialMatrix,
     locationBreakdown,
     topItems: topItemsRows.rows.map((r: any) => ({
       itemId: Number(r.item_id), name: r.name, qty: qty(r.qty), revenue: money(r.revenue),

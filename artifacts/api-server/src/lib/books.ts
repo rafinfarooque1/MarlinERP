@@ -770,6 +770,8 @@ export interface StatementNode {
   type: string;
   isGroup: boolean;
   isSystemGroup: boolean;
+  /** This account's own signed amount, excluding any child accounts. */
+  ownBalance: number;
   /** Signed in the natural direction of the section: positive = expected side. */
   balance: number;
   children: StatementNode[];
@@ -1074,6 +1076,7 @@ export async function buildBooks(
         node: {
           id: node.id, name: node.name, code: node.code, type: node.type,
           isGroup: node.isGroup, isSystemGroup: node.isSystemGroup,
+          ownBalance: own,
           balance: r2(own + kids.reduce((s, k) => s + k.total, 0)),
           children: kids.map((k) => k.node),
         },

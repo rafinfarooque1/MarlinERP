@@ -42,6 +42,8 @@ export interface CompanyFinancials {
   expenses: {
     direct: number; indirect: number; total: number;
     salary: number; rent: number; other: number;
+    /** Own amount per postable expense account, from the same P&L build. */
+    ledgers: Array<{ ledgerId: number; name: string; code: string | null; amount: number }>;
   };
   /**
    * Gross and net profit for the period, straight off the SAME buildBooks
@@ -365,6 +367,28 @@ export async function companyFinancials(
     ...books.profitAndLoss.expenses.indirectExpenses.children,
     ...books.profitAndLoss.expenses.directExpenses.children,
   ] as Node[];
+  const expenseLedgers: Array<{ ledgerId: number; name: string; code: string | null; amount: number }> = [];
+  const collectExpenseLedgers = (nodes: Node[]) => {
+    for (const n of nodes) {
+      const detail = n as Node & {
+        id?: number; name?: string; isGroup?: boolean; ownBalance?: number;
+      };
+      const ownBalance = r2(Number(detail.ownBalance ?? (detail.isGroup ? 0 : detail.balance)));
+      // Ordinary ledgers always get a row, including zeroes. A group account
+      // only gets a row if it actually carries its own postings; its children
+      // are collected separately so parent totals are never double-counted.
+      if (detail.id != null && (!detail.isGroup || Math.abs(ownBalance) >= 0.01)) {
+        expenseLedgers.push({
+          ledgerId: detail.id,
+          name: detail.name ?? detail.code ?? `Ledger ${detail.id}`,
+          code: detail.code,
+          amount: ownBalance,
+        });
+      }
+      collectExpenseLedgers(n.children);
+    }
+  };
+  collectExpenseLedgers(groups);
   const salary = r2(findBalance(groups, "STD-SALARY-EXP") ?? 0);
   const rent = r2(findBalance(groups, "STD-GRP-RENT-EXP") ?? 0);
   const total = r2(direct + indirect);
@@ -373,6 +397,7 @@ export async function companyFinancials(
     expenses: {
       direct: r2(direct), indirect: r2(indirect), total,
       salary, rent, other: r2(total - salary - rent),
+      ledgers: expenseLedgers,
     },
     profit: {
       gross: r2(books.profitAndLoss.summary.grossProfit),
