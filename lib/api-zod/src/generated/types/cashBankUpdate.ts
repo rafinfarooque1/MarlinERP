@@ -16,7 +16,7 @@ export interface CashBankUpdate {
   locationType?: CashBankUpdateLocationType;
   locationId?: number;
   /**
-     * Replaces the bank account's warehouse memberships.
+     * Replaces the Cash, Bank, or Online account's location memberships.
      * @minItems 1
      */
   locations?: CashBankLocation[];

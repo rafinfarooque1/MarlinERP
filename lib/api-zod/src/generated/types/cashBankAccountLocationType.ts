@@ -7,7 +7,7 @@
  */
 
 /**
- * Legacy primary location. Bank accounts may be assigned to multiple warehouses.
+ * Legacy primary location; for multi-location accounts this is the first selected location.
  * @nullable
  */
 export type CashBankAccountLocationType = typeof CashBankAccountLocationType[keyof typeof CashBankAccountLocationType] | null;

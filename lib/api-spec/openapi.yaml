@@ -1594,7 +1594,7 @@ paths:
     post:
       operationId: createCashBankAccount
       tags: [accounts]
-      summary: Create cash or bank account (provisions its ledger under Cash / Bank Accounts)
+      summary: Create a cash, bank, or online account (provisions its ledger under the matching chart head)
       requestBody:
         required: true
         content:
@@ -1613,7 +1613,7 @@ paths:
     patch:
       operationId: updateCashBankAccount
       tags: [accounts]
-      summary: Update a cash/bank account (name changes mirror onto its ledger)
+      summary: Update a cash, bank, or online account (name changes mirror onto its ledger)
       parameters:
         - name: id
           in: path
@@ -3650,14 +3650,14 @@ components:
         locationType:
           type: ["string", "null"]
           enum: [headoffice, warehouse, outlet, null]
-          description: Legacy primary location. Bank accounts may be assigned to multiple warehouses.
+          description: Legacy primary location; for multi-location accounts this is the first selected location.
         locationId:
           type: ["integer", "null"]
         locationName:
           type: ["string", "null"]
         locations:
           type: array
-          description: Locations where this account is available. Bank assignments are warehouse memberships.
+          description: Locations where this account is available.
           items:
             $ref: "#/components/schemas/CashBankLocation"
         source:
@@ -3672,7 +3672,7 @@ components:
         requiresReconciliation:
           type: boolean
           description: >-
-            Bank/UPI accounts only. When true, collections routed into this
+            Bank/Online accounts only. When true, collections routed into this
             account land in Electronic Clearing first and reach the bank
             balance through Reconciliation; when false, they post straight
             into the account's ledger.
@@ -3695,14 +3695,14 @@ components:
         locationType:
           type: string
           enum: [headoffice, warehouse, outlet]
-          description: Legacy single-location input for cash, UPI, other, and older clients.
+          description: Legacy single-location input for older clients; prefer locations for new Cash, Bank, and Online accounts.
         locationId:
           type: integer
           description: Required with locationType when using legacy single-location input.
         locations:
           type: array
           minItems: 1
-          description: Bank accounts can be assigned to one or more warehouses.
+          description: Cash, Bank, and Online accounts can be assigned to one or more locations.
           items:
             $ref: "#/components/schemas/CashBankLocation"
         openingBalance:
@@ -3714,9 +3714,9 @@ components:
         requiresReconciliation:
           type: boolean
           description: >-
-            Bank/UPI accounts only — whether collections into this account
+            Bank/Online accounts only — whether collections into this account
             must pass through Reconciliation before hitting the bank balance.
-            Defaults to true for bank/UPI/other, ignored for cash.
+            Defaults to true for bank/online, ignored for cash.
 
     CashBankUpdate:
       type: object
@@ -3737,7 +3737,7 @@ components:
         locations:
           type: array
           minItems: 1
-          description: Replaces the bank account's warehouse memberships.
+          description: Replaces the Cash, Bank, or Online account's location memberships.
           items:
             $ref: "#/components/schemas/CashBankLocation"
         openingBalance:

@@ -7163,7 +7163,7 @@ export const getCreateCashBankAccountUrl = () => {
 }
 
 /**
- * @summary Create cash or bank account (provisions its ledger under Cash / Bank Accounts)
+ * @summary Create a cash, bank, or online account (provisions its ledger under the matching chart head)
  */
 export const createCashBankAccount = async (cashBankInput: CashBankInput, options?: RequestInit): Promise<CashBankAccount> => {
 
@@ -7212,7 +7212,7 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
     export type CreateCashBankAccountMutationError = ErrorType<unknown>
 
     /**
- * @summary Create cash or bank account (provisions its ledger under Cash / Bank Accounts)
+ * @summary Create a cash, bank, or online account (provisions its ledger under the matching chart head)
  */
 export const useCreateCashBankAccount = <TError = ErrorType<unknown>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createCashBankAccount>>, TError,{data: BodyType<CashBankInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
@@ -7234,7 +7234,7 @@ export const getUpdateCashBankAccountUrl = (id: number,) => {
 }
 
 /**
- * @summary Update a cash/bank account (name changes mirror onto its ledger)
+ * @summary Update a cash, bank, or online account (name changes mirror onto its ledger)
  */
 export const updateCashBankAccount = async (id: number,
     cashBankUpdate: CashBankUpdate, options?: RequestInit): Promise<CashBankAccount> => {
@@ -7284,7 +7284,7 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
     export type UpdateCashBankAccountMutationError = ErrorType<unknown>
 
     /**
- * @summary Update a cash/bank account (name changes mirror onto its ledger)
+ * @summary Update a cash, bank, or online account (name changes mirror onto its ledger)
  */
 export const useUpdateCashBankAccount = <TError = ErrorType<unknown>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateCashBankAccount>>, TError,{id: number;data: BodyType<CashBankUpdate>}, TContext>, request?: SecondParameter<typeof customFetch>}

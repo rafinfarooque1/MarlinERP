@@ -1405,7 +1405,7 @@ export const CashBankAccountBalanceSource = {
 } as const;
 
 /**
- * Legacy primary location. Bank accounts may be assigned to multiple warehouses.
+ * Legacy primary location; for multi-location accounts this is the first selected location.
  * @nullable
  */
 export type CashBankAccountLocationType = typeof CashBankAccountLocationType[keyof typeof CashBankAccountLocationType] | null;
@@ -1472,7 +1472,7 @@ export interface CashBankAccount {
   /** @nullable */
   ledgerId?: number | null;
   /**
-     * Legacy primary location. Bank accounts may be assigned to multiple warehouses.
+     * Legacy primary location; for multi-location accounts this is the first selected location.
      * @nullable
      */
   locationType: CashBankAccountLocationType;
@@ -1480,12 +1480,12 @@ export interface CashBankAccount {
   locationId?: number | null;
   /** @nullable */
   locationName?: string | null;
-  /** Locations where this account is available. Bank assignments are warehouse memberships. */
+  /** Locations where this account is available. */
   locations?: CashBankLocation[];
   /** module = managed on this screen; location = a branch till owned by the Locations module (read-only here); system = the Cash / Bank Accounts head itself; ledger = another ledger in the subtree. */
   source?: CashBankAccountSource;
   readOnly?: boolean;
-  /** Bank/UPI accounts only. When true, collections routed into this account land in Electronic Clearing first and reach the bank balance through Reconciliation; when false, they post straight into the account's ledger. */
+  /** Bank/Online accounts only. When true, collections routed into this account land in Electronic Clearing first and reach the bank balance through Reconciliation; when false, they post straight into the account's ledger. */
   requiresReconciliation?: boolean;
 }
 
@@ -1499,7 +1499,7 @@ export const CashBankInputAccountType = {
 } as const;
 
 /**
- * Legacy single-location input for cash, UPI, other, and older clients.
+ * Legacy single-location input for older clients; prefer locations for new Cash, Bank, and Online accounts.
  */
 export type CashBankInputLocationType = typeof CashBankInputLocationType[keyof typeof CashBankInputLocationType];
 
@@ -1516,18 +1516,18 @@ export interface CashBankInput {
   bankName?: string;
   accountNumber?: string;
   ifscCode?: string;
-  /** Legacy single-location input for cash, UPI, other, and older clients. */
+  /** Legacy single-location input for older clients; prefer locations for new Cash, Bank, and Online accounts. */
   locationType?: CashBankInputLocationType;
   /** Required with locationType when using legacy single-location input. */
   locationId?: number;
   /**
-     * Bank accounts can be assigned to one or more warehouses.
+     * Cash, Bank, and Online accounts can be assigned to one or more locations.
      * @minItems 1
      */
   locations?: CashBankLocation[];
   /** Recorded as the backing ledger's opening balance (debit) through the opening-balances store — never a stored column. Absent or blank means 0. */
   openingBalance?: number;
-  /** Bank/UPI accounts only — whether collections into this account must pass through Reconciliation before hitting the bank balance. Defaults to true for bank/UPI/other, ignored for cash. */
+  /** Bank/Online accounts only — whether collections into this account must pass through Reconciliation before hitting the bank balance. Defaults to true for bank/online, ignored for cash. */
   requiresReconciliation?: boolean;
 }
 
@@ -1548,7 +1548,7 @@ export interface CashBankUpdate {
   locationType?: CashBankUpdateLocationType;
   locationId?: number;
   /**
-     * Replaces the bank account's warehouse memberships.
+     * Replaces the Cash, Bank, or Online account's location memberships.
      * @minItems 1
      */
   locations?: CashBankLocation[];

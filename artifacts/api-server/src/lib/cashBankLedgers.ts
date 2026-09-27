@@ -2,10 +2,10 @@
  * Cash & Bank ↔ Chart of Accounts integration.
  *
  * Every Cash & Bank account is backed by exactly one postable ledger under the
- * system heads Cash (STD-CASH) or Bank Accounts (STD-BANK). The module is the
- * ONLY writer of ledgers inside those two subtrees (branch tills are created by
- * the Locations module and adopted read-only); manual chart edits there are
- * blocked route-side.
+ * system heads Cash (STD-CASH), Bank Accounts (STD-BANK), or Online
+ * (STD-ONLINE). The module is the ONLY writer of managed ledgers inside those
+ * subtrees (branch tills are created by the Locations module and adopted
+ * read-only); manual chart edits there are blocked route-side.
  *
  * Design constraints that shaped this file:
  *  · STD-CASH / STD-BANK are POSTABLE parents carrying direct history (legacy
@@ -31,7 +31,7 @@ type Queryable = {
 type Pool = Queryable & { connect(): Promise<PoolClient> };
 type PoolClient = Queryable & { release(): void };
 
-/** Codes of the two locked heads. */
+/** Codes of the three managed heads. */
 export const CASH_ROOT_CODE = "STD-CASH";
 export const BANK_ROOT_CODE = "STD-BANK";
 export const ONLINE_ROOT_CODE = "STD-ONLINE";
@@ -64,11 +64,12 @@ export function parseCashBankLocations(
   accountType: unknown,
 ): { ok: true; locations: CashBankLocation[] } | { ok: false; error: string } {
   if (body.locations !== undefined) {
-    if (accountType !== "bank" && accountType !== "cash") {
-      return { ok: false, error: "Only Bank and Cash accounts can be assigned to multiple locations." };
+    if (accountType !== "bank" && accountType !== "cash" && accountType !== "online") {
+      return { ok: false, error: "Only Cash, Bank, and Online accounts can be assigned to multiple locations." };
     }
+    const accountTypeLabel = accountType === "cash" ? "Cash" : accountType === "bank" ? "Bank" : "Online";
     if (!Array.isArray(body.locations) || body.locations.length === 0) {
-      return { ok: false, error: `Select at least one location for this ${accountType === "cash" ? "Cash" : "Bank"} account.` };
+      return { ok: false, error: `Select at least one location for this ${accountTypeLabel} account.` };
     }
     const locations: CashBankLocation[] = [];
     const seen = new Set<string>();
@@ -86,7 +87,7 @@ export function parseCashBankLocations(
       locations.push(parsed.location);
     }
     if (locations.length === 0) {
-      return { ok: false, error: `Select at least one location for this ${accountType === "cash" ? "Cash" : "Bank"} account.` };
+      return { ok: false, error: `Select at least one location for this ${accountTypeLabel} account.` };
     }
     return { ok: true, locations };
   }
@@ -96,9 +97,8 @@ export function parseCashBankLocations(
 }
 
 /**
- * Diagnose legacy ownership without selecting an arbitrary membership or
- * repairing data. Bank accounts may now have multiple valid warehouse
- * memberships; Online accounts retain the single-owner invariant.
+ * Diagnose ownership without selecting an arbitrary membership or repairing
+ * data. Cash, Bank, and Online accounts may have multiple valid memberships.
  */
 export function diagnoseCashBankLocation(
   account: { account_type?: unknown; location_type?: unknown; location_id?: unknown },
@@ -107,10 +107,10 @@ export function diagnoseCashBankLocation(
   const owner = parseCashBankLocation({ locationType: account.location_type, locationId: account.location_id });
   const conflict = {
     ok: false as const,
-    error: "Cash/Bank account has ambiguous or invalid location ownership. Writes are blocked; Head Office must review the scalar owner and legacy memberships. No locations have been reassigned.",
+    error: "Cash/Bank/Online account has ambiguous or invalid location ownership. Writes are blocked; Head Office must review the scalar owner and location memberships. No locations have been reassigned.",
   };
   if (!owner.ok) return conflict;
-  if ((account.account_type === "bank" || account.account_type === "cash") && memberships.length > 1) {
+  if (["bank", "cash", "online"].includes(String(account.account_type)) && memberships.length > 1) {
     let ownerIsAssigned = false;
     for (const membership of memberships) {
       const member = parseCashBankLocation(membership);
