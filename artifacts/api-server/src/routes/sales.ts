@@ -1406,7 +1406,12 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
     // cash account/till, electronic money direct-posted or through Electronic
     // Clearing ('pending') by the account's reconciliation switch. Committing
     // with the sale means a replayed clientRequestId can never double-post.
-    if (counterPay && (receiveAccount || paymentModeIn === 'bank' || isOnlinePaymentMode(paymentModeIn))) {
+    if (counterPay && (
+      receiveAccount
+      || paymentModeIn === 'upi'
+      || paymentModeIn === 'bank'
+      || isOnlinePaymentMode(paymentModeIn)
+    )) {
       const collectionMethod = isOnlinePaymentMode(paymentModeIn)
         ? paymentModeIn
         : receiveAccount?.method ?? paymentModeIn;

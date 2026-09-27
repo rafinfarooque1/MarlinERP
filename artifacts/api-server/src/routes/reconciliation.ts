@@ -2437,8 +2437,32 @@ router.get("/reconciliation/pending-queue", requireModuleView("page:/accounts/re
     }
   }
 
+  const { rows: [clearing] } = await pool.query(
+    `SELECT id FROM account_ledgers WHERE code = 'STD-ELEC-CLR'`,
+  );
   const saleParams: any[] = ["pending", selectedMethods];
   const saleConds: string[] = ["sp.reconciliation_status = $1", "sp.method = ANY($2::text[])"];
+  if (clearing) {
+    saleParams.push(Number(clearing.id));
+    const clearingParam = `$${saleParams.length}`;
+    // Receipt-backed sales must actually be held in Electronic Clearing.
+    // Legacy counter rows have no receipt; their electronic method derives to
+    // clearing, so keep those visible without requiring a Cash & Bank account.
+    saleConds.push(`(
+      sp.clearing_receipt_id IS NULL
+      OR pending_receipt.received_in_ledger_id = ${clearingParam}
+    )`);
+    saleConds.push(`NOT EXISTS (
+      SELECT 1
+        FROM bank_reconciliation_entries bre
+       WHERE bre.ledger_id = ${clearingParam}
+         AND bre.status = 'reconciled'
+         AND bre.entry_id IN (
+           'sale_payment:' || sp.id::text,
+           'receipt:' || sp.clearing_receipt_id::text
+         )
+    )`);
+  }
   applyLocationScope(req, saleParams, saleConds, { locationType, locationId });
   if (fromDate) { saleParams.push(fromDate); saleConds.push(`sp.payment_date >= $${saleParams.length}`); }
   if (toDate) { saleParams.push(toDate); saleConds.push(`sp.payment_date <= $${saleParams.length}`); }
@@ -2468,6 +2492,7 @@ router.get("/reconciliation/pending-queue", requireModuleView("page:/accounts/re
             c.name AS customer_name
        FROM sale_payments sp
        JOIN sales s ON s.id = sp.sale_id
+       LEFT JOIN receipts pending_receipt ON pending_receipt.id = sp.clearing_receipt_id
        ${SALE_LOCATION_JOINS}
        LEFT JOIN customers c ON c.id = s.customer_id
        LEFT JOIN account_ledgers platform ON platform.id = sp.online_platform_ledger_id
@@ -2476,9 +2501,6 @@ router.get("/reconciliation/pending-queue", requireModuleView("page:/accounts/re
     saleParams,
   );
 
-  const { rows: [clearing] } = await pool.query(
-    `SELECT id FROM account_ledgers WHERE code = 'STD-ELEC-CLR'`,
-  );
   let manualRows: any[] = [];
   if (clearing) {
     const manualParams: any[] = [Number(clearing.id), selectedMethods];
