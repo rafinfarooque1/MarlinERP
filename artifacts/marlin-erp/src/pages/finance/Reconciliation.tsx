@@ -21,7 +21,9 @@ import {
   useGetReconciliationPendingQueue, useSettlePendingReconciliationQueue,
   useListOutlets, useListWarehouses,
 } from '@workspace/api-client-react';
-import { paymentModeLabel } from '@/lib/paymentModes';
+import {
+  CREATE_SALE_PAYMENT_MODES, ONLINE_PAYMENT_MODES, paymentModeLabel,
+} from '@/lib/paymentModes';
 import { toast } from 'sonner';
 import { trackEvent } from '@/lib/analytics';
 import { CheckSquare, Landmark, Wallet, AlertTriangle, Pencil, RotateCcw, Search, ChevronDown } from 'lucide-react';
@@ -47,26 +49,26 @@ const SOURCE_LABEL: Record<string, string> = {
   debit_note: 'Debit Note',
 };
 
-const RECONCILIATION_CATEGORIES = [
-  { value: 'bank', label: 'Bank' },
-  { value: 'upi', label: 'UPI' },
-  { value: 'online', label: 'Online' },
-  { value: 'sub-online', label: 'Sub-Online platforms' },
-] as const;
+const RECONCILIATION_CATEGORIES = CREATE_SALE_PAYMENT_MODES.map(value => ({
+  value,
+  label: paymentModeLabel(value),
+}));
 
-type ReconciliationCategory = typeof RECONCILIATION_CATEGORIES[number]['value'];
+type ReconciliationCategory = typeof CREATE_SALE_PAYMENT_MODES[number];
 
 function categoryForAccountType(accountType: string): ReconciliationCategory {
-  if (accountType === 'upi') return 'upi';
-  if (accountType === 'online') return 'sub-online';
+  const normalized = accountType.toLowerCase();
+  if (normalized === 'cash') return 'cash';
+  if (normalized === 'upi') return 'upi';
+  if ((ONLINE_PAYMENT_MODES as readonly string[]).includes(normalized)) return 'online';
   return 'bank';
 }
 
-function categoryForPending(method: string, platformLedgerId: number | null): ReconciliationCategory {
-  if (method === 'upi') return 'upi';
-  if (['online', 'swiggy', 'zomato', 'other_online'].includes(method)) {
-    return platformLedgerId == null ? 'online' : 'sub-online';
-  }
+function categoryForPending(method: string): ReconciliationCategory {
+  const normalized = method.toLowerCase();
+  if (normalized === 'cash') return 'cash';
+  if (normalized === 'upi') return 'upi';
+  if ((ONLINE_PAYMENT_MODES as readonly string[]).includes(normalized)) return 'online';
   return 'bank';
 }
 
@@ -211,10 +213,7 @@ export default function Reconciliation() {
   });
   const visiblePendingQueue = activeSection === 'to-reconcile' && editBatchId == null
     ? pendingQueue.filter(item => {
-      const category = categoryForPending(
-        String(item.method),
-        item.platformLedgerId == null ? null : Number(item.platformLedgerId),
-      );
+      const category = categoryForPending(String(item.method));
       return matchesCategory(category)
         && (selectedPlatformIds.size === 0
           || (item.platformLedgerId != null && selectedPlatformIds.has(Number(item.platformLedgerId))));
@@ -250,10 +249,7 @@ export default function Reconciliation() {
     ...visiblePendingQueue.map(item => ({
       key: `pending:${item.key}`,
       kind: 'pending' as const,
-      category: categoryForPending(
-        String(item.method),
-        item.platformLedgerId == null ? null : Number(item.platformLedgerId),
-      ),
+      category: categoryForPending(String(item.method)),
       date: item.transactionDate,
       source: paymentModeLabel(item.method),
       voucher: item.voucherNumber || item.invoiceNumber || `${item.kind} #${item.id}`,
@@ -597,13 +593,13 @@ export default function Reconciliation() {
             </label>
 
             <div className="space-y-1 text-xs font-medium">
-              <span>Categories</span>
+              <span>Payment modes</span>
               <Popover>
                 <PopoverTrigger asChild>
                   <Button variant="outline" className="h-9 w-full justify-between text-sm font-normal" data-testid="filter-reconciliation-categories">
                     {selectedCategories.size === 0 || selectedCategories.size === RECONCILIATION_CATEGORIES.length
-                      ? 'All categories'
-                      : `${selectedCategories.size} categories`}
+                      ? 'All payment modes'
+                      : `${selectedCategories.size} modes`}
                     <ChevronDown className="h-4 w-4 text-muted-foreground" />
                   </Button>
                 </PopoverTrigger>
