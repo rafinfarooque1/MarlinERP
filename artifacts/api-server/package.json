@@ -8,6 +8,7 @@
     "build": "node ./build.mjs",
     "start": "node --enable-source-maps ./dist/index.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "migrate:historical-electronic-clearing": "tsx src/migrations/runHistoricalElectronicClearing.ts",
     "release:android": "tsx scripts/release-android-apk.ts",
     "apk:tool": "tsx scripts/apk-release-tool.ts"
   },
