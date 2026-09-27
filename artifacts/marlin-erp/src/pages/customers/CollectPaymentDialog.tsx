@@ -18,8 +18,7 @@ import { toast } from 'sonner';
 import { inr } from '@/lib/currency';
 import { formatDateOrDash } from '@/lib/date';
 import { formatSalesInvoiceDisplayNumber } from '@/lib/invoiceNumber';
-import { CREATE_PAYMENT_MODE_OPTIONS } from '@/lib/paymentModes';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { PaymentModeSelector, type CollectionPaymentMode } from '@/components/payment-mode-selector';
 
 const fmt = (n: unknown) => Number(n ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 });
 const dfmt = (d?: string | null) => formatDateOrDash(d);
@@ -49,7 +48,7 @@ export function CollectPaymentDialog({
 
   // Per-invoice form state, keyed by saleId — supports full and partial amounts.
   const [selected, setSelected] = useState<number | null>(null);
-  const [paymentMode, setPaymentMode] = useState<'cash' | 'upi' | 'bank' | 'online'>('cash');
+  const [paymentMode, setPaymentMode] = useState<CollectionPaymentMode>('cash');
   const [amount, setAmount] = useState('');
   const [ledgerId, setLedgerId] = useState(0);
   const [reference, setReference] = useState('');
@@ -194,17 +193,6 @@ export function CollectPaymentDialog({
                 </p>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="space-y-1.5">
-                    <label className="text-sm font-medium">Payment Mode</label>
-                    <Select value={paymentMode} onValueChange={(value) => setPaymentMode(value as typeof paymentMode)}>
-                      <SelectTrigger><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        {CREATE_PAYMENT_MODE_OPTIONS.map((option) => (
-                          <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-1.5">
                     <label className="text-sm font-medium">Amount (₹)</label>
                     <Input type="number" min={0} step="0.01" className="font-mono" value={amount} onChange={(e) => setAmount(e.target.value)} />
                     <p className="text-[11px] text-muted-foreground">Full or partial — capped at outstanding.</p>
@@ -213,28 +201,35 @@ export function CollectPaymentDialog({
                     <label className="text-sm font-medium">Date</label>
                     <Input type="date" value={paymentDate} onChange={(e) => setPaymentDate(e.target.value)} />
                   </div>
-                  <div className="space-y-1.5">
-                    <label className="text-sm font-medium">
-                      {paymentMode === 'online' ? 'Online sub-platform' : 'Receive Into'}
-                    </label>
-                    {paymentMode === 'bank' || paymentMode === 'upi' ? (
-                      <div className="min-h-10 rounded-md border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-sm text-amber-700">
-                        {receiveOptionsLoading
-                          ? `Loading this location's default ${paymentMode === 'upi' ? 'UPI' : 'bank'} account…`
-                          : modeOptions[0]
-                            ? `Using this location's default ${paymentMode === 'upi' ? 'UPI' : 'bank'} account: ${modeOptions[0].name}.`
-                            : `No default ${paymentMode === 'upi' ? 'UPI' : 'bank'} account is assigned to this location.`}
-                        {' '}Held for reconciliation.
-                      </div>
-                    ) : (
-                      <ReceiveIntoSelect
-                        locationType={activeInv.locationType}
-                        locationId={activeInv.locationId}
-                        value={ledgerId}
-                        onChange={setLedgerId}
-                        mode={paymentMode === 'cash' ? 'cash' : 'online'}
-                      />
-                    )}
+                  <div className="space-y-4">
+                    <PaymentModeSelector
+                      value={paymentMode}
+                      onValueChange={setPaymentMode}
+                      disabled={createPayment.isPending}
+                    />
+                    <div className="space-y-1.5">
+                      <label className="text-sm font-medium">
+                        {paymentMode === 'online' ? 'Online sub-platform' : 'Receive Into'}
+                      </label>
+                      {paymentMode === 'bank' || paymentMode === 'upi' ? (
+                        <div className="min-h-10 rounded-md border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-sm text-amber-700">
+                          {receiveOptionsLoading
+                            ? `Loading this location's default ${paymentMode === 'upi' ? 'UPI' : 'bank'} account…`
+                            : modeOptions[0]
+                              ? `Using this location's default ${paymentMode === 'upi' ? 'UPI' : 'bank'} account: ${modeOptions[0].name}.`
+                              : `No default ${paymentMode === 'upi' ? 'UPI' : 'bank'} account is assigned to this location.`}
+                          {' '}Held for reconciliation.
+                        </div>
+                      ) : (
+                        <ReceiveIntoSelect
+                          locationType={activeInv.locationType}
+                          locationId={activeInv.locationId}
+                          value={ledgerId}
+                          onChange={setLedgerId}
+                          mode={paymentMode === 'cash' ? 'cash' : 'online'}
+                        />
+                      )}
+                    </div>
                   </div>
                   <div className="space-y-1.5">
                     <label className="text-sm font-medium">Reference <span className="text-muted-foreground font-normal">(optional)</span></label>
