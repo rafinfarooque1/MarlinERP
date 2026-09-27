@@ -11,6 +11,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Checkbox } from '@/components/ui/checkbox';
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
   useGetBankLedgers, useGetBankTransactions, useCreateBankReconciliationBatch,
   useGetBankReconciliationAudit, useGetBankReconciliationBatches,
@@ -22,14 +24,16 @@ import {
 import { paymentModeLabel } from '@/lib/paymentModes';
 import { toast } from 'sonner';
 import { trackEvent } from '@/lib/analytics';
-import { CheckSquare, Landmark, Wallet, AlertTriangle, Pencil, RotateCcw } from 'lucide-react';
+import { CheckSquare, Landmark, Wallet, AlertTriangle, Pencil, RotateCcw, Search, ChevronDown } from 'lucide-react';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { PageHeader } from '@/components/app/page-header';
 import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
+import { StatusBadge } from '@/components/app/status-badge';
 import { EmptyState } from '@/components/app/empty-state';
 import { TableSkeleton } from '@/components/app/loading-skeletons';
 import { TablePager, useClientPage } from '@/components/ui/table-pager';
 import { ExportButtons, type ReportDoc, pdfMoney } from '@/pages/reports/shared';
+import { FilterPanel } from '@/components/app/filter-panel';
 
 const SOURCE_LABEL: Record<string, string> = {
   payment: 'Payment',
@@ -42,6 +46,33 @@ const SOURCE_LABEL: Record<string, string> = {
   credit_note: 'Credit Note',
   debit_note: 'Debit Note',
 };
+
+const RECONCILIATION_CATEGORIES = [
+  { value: 'bank', label: 'Bank' },
+  { value: 'upi', label: 'UPI' },
+  { value: 'online', label: 'Online' },
+  { value: 'sub-online', label: 'Sub-Online platforms' },
+] as const;
+
+type ReconciliationCategory = typeof RECONCILIATION_CATEGORIES[number]['value'];
+
+function categoryForAccountType(accountType: string): ReconciliationCategory {
+  if (accountType === 'upi') return 'upi';
+  if (accountType === 'online') return 'sub-online';
+  return 'bank';
+}
+
+function categoryForPending(method: string, platformLedgerId: number | null): ReconciliationCategory {
+  if (method === 'upi') return 'upi';
+  if (['online', 'swiggy', 'zomato', 'other_online'].includes(method)) {
+    return platformLedgerId == null ? 'online' : 'sub-online';
+  }
+  return 'bank';
+}
+
+function categoryLabel(category: ReconciliationCategory) {
+  return RECONCILIATION_CATEGORIES.find(option => option.value === category)?.label ?? category;
+}
 
 function fmt(n: number) {
   return `₹${Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -57,8 +88,10 @@ export default function Reconciliation() {
   const { outletsEnabled } = useOutletsEnabled();
   const { locationState } = useLocationContext();
   const [locationFilter, setLocationFilter] = useState('all');
-  const [accountFilter, setAccountFilter] = useState('all');
-  const [statusFilter, setStatusFilter] = useState<'all' | 'reconciled' | 'unreconciled'>('all');
+  const [activeSection, setActiveSection] = useState<'to-reconcile' | 'reconciled'>('to-reconcile');
+  const [selectedCategories, setSelectedCategories] = useState<Set<ReconciliationCategory>>(new Set());
+  const [selectedAccountIds, setSelectedAccountIds] = useState<Set<number>>(new Set());
+  const [selectedPlatformIds, setSelectedPlatformIds] = useState<Set<number>>(new Set());
   const [search, setSearch] = useState('');
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
@@ -71,8 +104,6 @@ export default function Reconciliation() {
   const [pendingOpen, setPendingOpen] = useState(false);
   const [pendingBankAccountId, setPendingBankAccountId] = useState('');
   const [pendingDate, setPendingDate] = useState(localDateValue);
-  const [pendingMethod, setPendingMethod] = useState('all');
-  const [pendingPlatform, setPendingPlatform] = useState('all');
 
   // The page has its own location filter for explicit, auditable account
   // selection. The global selector is still sent by the client as a header.
@@ -80,15 +111,14 @@ export default function Reconciliation() {
   const { data: outlets = [] } = useListOutlets();
   const { data: warehouses = [] } = useListWarehouses();
   const [filterType, filterId] = locationFilter !== 'all' ? locationFilter.split(':') : [];
-  const locationId = filterId ? Number(filterId) : undefined;
-  const { data: bankLedgers = [], isLoading: accountsLoading } = useGetBankLedgers({
+  const locationId = filterType === 'headoffice' ? 0 : filterId ? Number(filterId) : undefined;
+  const { data: bankLedgers = [] } = useGetBankLedgers({
     locationType: filterType,
     locationId,
   });
   const { data: transactionResult, isLoading: transactionsLoading } = useGetBankTransactions({
     locationType: filterType,
     locationId,
-    bankAccountId: accountFilter !== 'all' ? Number(accountFilter) : undefined,
     fromDate: fromDate || undefined,
     toDate: toDate || undefined,
     search: search.trim() || undefined,
@@ -96,8 +126,6 @@ export default function Reconciliation() {
   const { data: pendingQueue = [], isLoading: pendingQueueLoading } = useGetReconciliationPendingQueue({
     locationType: filterType,
     locationId,
-    method: pendingMethod !== 'all' ? pendingMethod : undefined,
-    platformLedgerId: pendingMethod === 'online' && pendingPlatform !== 'all' ? pendingPlatform : undefined,
     fromDate: fromDate || undefined,
     toDate: toDate || undefined,
     search: search.trim() || undefined,
@@ -121,9 +149,6 @@ export default function Reconciliation() {
     locationId: pendingLocation.id,
   });
   const settlementBankLedgers = pendingBankLedgers.filter(account => account.accountType === 'bank');
-  const pendingPlatforms = bankLedgers
-    .filter(account => account.accountType === 'online')
-    .reduce((map, account) => map.set(String(account.ledgerId), account.name), new Map<string, string>());
   const selectedPendingGross = selectedPendingRows.reduce(
     (sum, item) => sum + Math.abs(Math.round(Number(item.amount) * 100)),
     0,
@@ -143,32 +168,22 @@ export default function Reconciliation() {
         ? 'headoffice'
         : `${editingBatch.locationType}:${editingBatch.locationId}`,
     );
-    setAccountFilter(String(editingBatch.bankAccountId));
-    setStatusFilter('all');
+    setActiveSection('to-reconcile');
+    setSelectedCategories(new Set());
+    setSelectedAccountIds(new Set([Number(editingBatch.bankAccountId)]));
+    setSelectedPlatformIds(new Set());
     setFromDate('');
     setToDate('');
     setSearch('');
   }, [editingBatch, editBatchId]);
 
   useEffect(() => {
+    if (editBatchId == null) setSelectedKeys(new Set());
     setPendingSelected(new Set());
-  }, [filterType, locationId, fromDate, toDate, search, pendingMethod, pendingPlatform]);
-
-  const visibleTransactions = transactions.filter((t) =>
-    statusFilter === 'all' || t.reconciliationStatus === statusFilter,
-  );
-  const { sorted, sort } = useTableSort(visibleTransactions, {
-    date: t => t.date,
-    source: t => SOURCE_LABEL[t.source] ?? t.source,
-    voucher: t => t.voucherNumber,
-    counterparty: t => t.counterpartyName,
-    account: t => t.accountName,
-    location: t => t.accountLocationName,
-    debit: t => Number(t.debit),
-    credit: t => Number(t.credit),
-    status: t => t.reconciliationStatus,
-  });
-  const { pageRows, pagerProps } = useClientPage(sorted);
+  }, [
+    filterType, locationId, fromDate, toDate, search, activeSection,
+    selectedCategories, selectedAccountIds, selectedPlatformIds, editBatchId,
+  ]);
 
   const authoritativeTotals = transactionResult?.totals;
   const unreconciledAmount = authoritativeTotals?.unreconciledAmount ?? 0;
@@ -179,6 +194,32 @@ export default function Reconciliation() {
   );
   const isEditableBatchItem = (t: typeof transactions[number]) =>
     editBatchId != null && editingItemKeys.has(t.id);
+  const matchesCategory = (category: ReconciliationCategory) =>
+    selectedCategories.size === 0 || selectedCategories.has(category);
+  const onlineAccounts = bankLedgers.filter(account => account.accountType === 'online');
+  const visibleTransactions = transactions.filter(t => {
+    const category = categoryForAccountType(String(t.accountType));
+    const statusMatches = editBatchId != null
+      || (activeSection === 'reconciled'
+        ? t.reconciliationStatus === 'reconciled'
+        : t.reconciliationStatus !== 'reconciled');
+    return statusMatches
+      && matchesCategory(category)
+      && (selectedAccountIds.size === 0 || selectedAccountIds.has(Number(t.accountId)))
+      && (selectedPlatformIds.size === 0
+        || (t.accountType === 'online' && selectedPlatformIds.has(Number(t.ledgerId))));
+  });
+  const visiblePendingQueue = activeSection === 'to-reconcile' && editBatchId == null
+    ? pendingQueue.filter(item => {
+      const category = categoryForPending(
+        String(item.method),
+        item.platformLedgerId == null ? null : Number(item.platformLedgerId),
+      );
+      return matchesCategory(category)
+        && (selectedPlatformIds.size === 0
+          || (item.platformLedgerId != null && selectedPlatformIds.has(Number(item.platformLedgerId))));
+    })
+    : [];
   const selectableVisible = visibleTransactions.filter(t =>
     t.reconciliationEligible
       && (t.reconciliationStatus !== 'reconciled' || isEditableBatchItem(t)),
@@ -187,12 +228,88 @@ export default function Reconciliation() {
   const selectedGross = selectedTransactions.reduce((sum, t) => sum + Number(t.amount || 0), 0);
   const selectedAccountId = selectedTransactions[0]?.accountId ?? null;
   const selectedMixedAccounts = selectedTransactions.some(t => t.accountId !== selectedAccountId);
+  const reconciliationRows = [
+    ...visibleTransactions.map(t => ({
+      key: `ledger:${t.id}`,
+      kind: 'ledger' as const,
+      category: categoryForAccountType(String(t.accountType)),
+      date: t.date,
+      source: SOURCE_LABEL[t.source] ?? t.source,
+      voucher: t.voucherNumber || t.entryId,
+      counterparty: t.counterpartyName ?? '—',
+      account: t.accountName,
+      detail: t.description,
+      location: t.accountLocationName,
+      debit: Number(t.debit),
+      credit: Number(t.credit),
+      amount: Number(t.amount),
+      status: t.reconciliationStatus === 'reconciled' ? 'Reconciled' : 'To reconcile',
+      ledger: t,
+      pending: null,
+    })),
+    ...visiblePendingQueue.map(item => ({
+      key: `pending:${item.key}`,
+      kind: 'pending' as const,
+      category: categoryForPending(
+        String(item.method),
+        item.platformLedgerId == null ? null : Number(item.platformLedgerId),
+      ),
+      date: item.transactionDate,
+      source: paymentModeLabel(item.method),
+      voucher: item.voucherNumber || item.invoiceNumber || `${item.kind} #${item.id}`,
+      counterparty: item.partyName ?? item.customerName ?? '—',
+      account: item.platformName ?? 'Electronic clearing',
+      detail: item.referenceNumber ?? item.narration ?? '',
+      location: item.locationType === 'headoffice'
+        ? 'Head Office'
+        : `${item.locationType} #${item.locationId}`,
+      debit: item.direction === 'in' ? Number(item.amount) : 0,
+      credit: item.direction === 'out' ? Number(item.amount) : 0,
+      amount: Number(item.amount),
+      status: 'Awaiting settlement',
+      ledger: null,
+      pending: item,
+    })),
+  ];
+  const { sorted: sortedRows, sort } = useTableSort(reconciliationRows, {
+    date: row => row.date,
+    category: row => categoryLabel(row.category),
+    source: row => row.source,
+    voucher: row => row.voucher,
+    counterparty: row => row.counterparty,
+    account: row => row.account,
+    location: row => row.location,
+    debit: row => row.debit,
+    credit: row => row.credit,
+    status: row => row.status,
+  });
+  const { pageRows, pagerProps } = useClientPage(sortedRows);
+  const visibleBatches = batches.filter(batch => {
+    const locationMatches = locationFilter === 'all'
+      || (locationFilter === 'headoffice'
+        ? batch.locationType === 'headoffice'
+        : `${batch.locationType}:${batch.locationId}` === locationFilter);
+    const dateMatches = (!fromDate || batch.reconciliationDate >= fromDate)
+      && (!toDate || batch.reconciliationDate <= toDate);
+    const searchNeedle = search.trim().toLowerCase();
+    const searchMatches = !searchNeedle || [
+      batch.batchReference,
+      batch.bankAccountName,
+      batch.locationName,
+    ].some(value => String(value ?? '').toLowerCase().includes(searchNeedle));
+    return locationMatches
+      && dateMatches
+      && searchMatches
+      && (selectedAccountIds.size === 0 || selectedAccountIds.has(Number(batch.bankAccountId)));
+  });
+  const { pageRows: batchPageRows, pagerProps: batchPagerProps } = useClientPage(visibleBatches);
+
   const reconciliationDoc = (): ReportDoc => ({
     title: 'Bank Reconciliation',
     subtitle: `${fromDate ? formatDateOrDash(fromDate) : 'All dates'} to ${toDate ? formatDateOrDash(toDate) : 'All dates'}`,
     orientation: 'landscape',
     metaRows: [
-      ['Transactions', String(visibleTransactions.length)],
+      ['Transactions', String(reconciliationRows.length)],
       ['Unreconciled', pdfMoney(unreconciledAmount)],
       ['Reconciled', pdfMoney(reconciledAmount)],
     ],
@@ -203,12 +320,13 @@ export default function Reconciliation() {
         { label: 'Location', width: 1.3 }, { label: 'Debit', align: 'right' },
         { label: 'Credit', align: 'right' }, { label: 'Amount', align: 'right' }, { label: 'Status' },
       ],
-      rows: visibleTransactions.map((t) => [
-        formatDateOrDash(t.date), t.accountName, SOURCE_LABEL[t.source] ?? t.source, formatGstDocumentDisplayNumber(t.voucherNumber ?? '-'),
-        t.description || t.counterpartyName || '-', t.accountLocationName,
-        Number(t.debit), Number(t.credit), Number(t.amount), t.reconciliationStatus,
+      rows: reconciliationRows.map(row => [
+        formatDateOrDash(row.date), row.account, `${categoryLabel(row.category)} · ${row.source}`,
+        formatGstDocumentDisplayNumber(row.voucher),
+        row.counterparty, row.location, row.debit, row.credit, row.amount, row.status,
       ]),
-      totalsRow: ['', '', '', '', '', 'TOTAL', '', '', Number(visibleTransactions.reduce((s, t) => s + Number(t.amount || 0), 0)), ''],
+      totalsRow: ['', '', '', '', '', 'TOTAL', '', '',
+        Number(reconciliationRows.reduce((sum, row) => sum + row.amount, 0)), ''],
     }],
   });
 
@@ -279,6 +397,7 @@ export default function Reconciliation() {
 
   function openCreateBatch() {
     setEditBatchId(null);
+    setActiveSection('to-reconcile');
     setSelectedKeys(new Set());
     setReconciliationDate(localDateValue());
     setProcessingCharge('0');
@@ -288,14 +407,54 @@ export default function Reconciliation() {
   function openEditBatch(batchId: number) {
     setSelectedKeys(new Set());
     setEditBatchId(batchId);
+    setActiveSection('to-reconcile');
     setBatchOpen(true);
   }
 
   function changeLocation(value: string) {
     setLocationFilter(value);
-    // Account ids are location-specific. Never leave a hidden account selected
-    // after changing the location.
-    setAccountFilter('all');
+    // Account and platform ids are location-specific. Never leave hidden filters selected.
+    setSelectedAccountIds(new Set());
+    setSelectedPlatformIds(new Set());
+  }
+
+  function toggleCategoryFilter(category: ReconciliationCategory, checked: boolean) {
+    setSelectedCategories(previous => {
+      const next = previous.size === 0
+        ? new Set(RECONCILIATION_CATEGORIES.map(option => option.value))
+        : new Set(previous);
+      if (checked) next.add(category); else next.delete(category);
+      return next.size === RECONCILIATION_CATEGORIES.length ? new Set() : next;
+    });
+  }
+
+  function toggleAccountFilter(accountId: number, checked: boolean) {
+    setSelectedAccountIds(previous => {
+      const next = previous.size === 0
+        ? new Set(bankLedgers.map(account => Number(account.accountId)))
+        : new Set(previous);
+      if (checked) next.add(accountId); else next.delete(accountId);
+      return next.size === bankLedgers.length ? new Set() : next;
+    });
+  }
+
+  function togglePlatformFilter(ledgerId: number, checked: boolean) {
+    setSelectedPlatformIds(previous => {
+      const next = previous.size === 0
+        ? new Set(onlineAccounts.map(account => Number(account.ledgerId)))
+        : new Set(previous);
+      if (checked) next.add(ledgerId); else next.delete(ledgerId);
+      return next.size === onlineAccounts.length ? new Set() : next;
+    });
+  }
+
+  function clearFilters() {
+    setLocationFilter('all');
+    setSelectedCategories(new Set());
+    setSelectedAccountIds(new Set());
+    setSelectedPlatformIds(new Set());
+    setFromDate('');
+    setToDate('');
   }
 
   function togglePending(voucher: typeof pendingQueue[number], checked: boolean) {
@@ -379,165 +538,200 @@ export default function Reconciliation() {
           icon={CheckSquare}
         />
 
-        <div className="rounded-xl border border-primary/30 bg-primary/5 overflow-hidden">
-          <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 border-b border-amber-500/20">
-            <div>
-              <h2 className="font-semibold">Pending reconciliation queue</h2>
-              <p className="text-xs text-muted-foreground">
-                Bank vouchers and electronic collections can be selected together and settled as one bank entry.
-              </p>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <Select value={pendingMethod} onValueChange={setPendingMethod}>
-                <SelectTrigger className="h-9 w-40"><SelectValue placeholder="Payment mode" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All modes</SelectItem><SelectItem value="cash">Cash</SelectItem>
-                  <SelectItem value="upi">UPI</SelectItem><SelectItem value="bank">Bank</SelectItem><SelectItem value="online">Online</SelectItem>
-                </SelectContent>
-              </Select>
-              {pendingMethod === 'online' ? (
-                <Select value={pendingPlatform} onValueChange={setPendingPlatform}>
-                  <SelectTrigger className="h-9 w-48"><SelectValue placeholder="Online platform" /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All platforms</SelectItem><SelectItem value="unassigned">Unassigned / legacy</SelectItem>
-                    {[...pendingPlatforms.entries()].map(([id, name]) => <SelectItem key={id} value={id}>{name}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-              ) : null}
-              <Button
-                size="sm"
-                disabled={!perm.canEdit || selectedPendingRows.length === 0}
-                onClick={openPendingReconciliation}
-              >
-                <Wallet className="w-4 h-4 mr-2" />
-                Settle selected{selectedPendingRows.length ? ` (${selectedPendingRows.length})` : ''}
-              </Button>
-            </div>
-          </div>
-          {pendingQueueLoading ? (
-            <div className="px-4 py-5 text-sm text-muted-foreground">Loading pending items…</div>
-          ) : pendingQueue.length === 0 ? (
-            <div className="px-4 py-5 text-sm text-muted-foreground">No pending reconciliation items.</div>
-          ) : (
-            <Table>
-              <TableHeader><TableRow>
-                <TableHead className="w-12"></TableHead>
-                <TableHead>Date</TableHead><TableHead>Mode</TableHead><TableHead>Document</TableHead>
-                <TableHead>Party</TableHead><TableHead>Location</TableHead>
-                <TableHead>Reference</TableHead><TableHead className="text-right">Amount</TableHead>
-              </TableRow></TableHeader>
-              <TableBody>
-                {pendingQueue.map(payment => (
-                  <TableRow key={payment.key}>
-                    <TableCell>
-                      <Checkbox
-                        checked={pendingSelected.has(payment.key)}
-                        onCheckedChange={checked => togglePending(payment, checked === true)}
-                        disabled={!perm.canEdit}
-                        aria-label={`Select ${payment.voucherNumber || payment.invoiceNumber || payment.key}`}
-                      />
-                    </TableCell>
-                    <TableCell className="text-xs text-muted-foreground">{formatDateOrDash(payment.transactionDate)}</TableCell>
-                    <TableCell className="text-sm font-medium">{paymentModeLabel(payment.method)}</TableCell>
-                    <TableCell className="font-mono text-xs">{formatGstDocumentDisplayNumber(payment.voucherNumber || payment.invoiceNumber || `${payment.kind} #${payment.id}`)}</TableCell>
-                    <TableCell className="text-sm">{payment.partyName ?? payment.customerName ?? '—'}</TableCell>
-                    <TableCell className="text-sm">{payment.locationType === 'headoffice' ? 'Head Office' : `${payment.locationType} #${payment.locationId}`}</TableCell>
-                    <TableCell className="font-mono text-xs">{payment.referenceNumber ?? '—'}</TableCell>
-                    <TableCell className="text-right font-mono text-sm">{fmt(payment.direction === 'out' ? -Number(payment.amount) : Number(payment.amount))}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-        </div>
-
         <SummaryCardGrid>
           <SummaryCard label="Eligible transactions" value={String(authoritativeTotals?.eligibleCount ?? 0)} icon={Landmark} loading={transactionsLoading} />
-          <SummaryCard label="Unreconciled" value={fmt(unreconciledAmount)} icon={Wallet} tone="warning" loading={transactionsLoading} />
-          <SummaryCard label="Reconciled" value={fmt(reconciledAmount)} icon={CheckSquare} tone="positive" loading={transactionsLoading} />
-          <SummaryCard label="Bank Accounts" value={String(bankLedgers.length)} icon={Landmark} loading={accountsLoading} />
+          <SummaryCard label="Unreconciled bank activity" value={fmt(unreconciledAmount)} icon={Wallet} tone="warning" loading={transactionsLoading} />
+          <SummaryCard label="Reconciled bank activity" value={fmt(reconciledAmount)} icon={CheckSquare} tone="positive" loading={transactionsLoading} />
+          <SummaryCard label="Pending collections" value={String(pendingQueue.length)} icon={Wallet} tone="info" loading={pendingQueueLoading} />
         </SummaryCardGrid>
 
-        <div className="flex flex-wrap gap-2 items-center">
-          <Input
-            placeholder="Search voucher, customer, vendor…"
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            className="h-9 w-60 max-md:w-full"
-          />
-          <Select value={locationFilter} onValueChange={changeLocation}>
-            <SelectTrigger className="h-9 w-48"><SelectValue placeholder="All locations" /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All locations</SelectItem>
-              <SelectItem value="headoffice">Head Office</SelectItem>
-              {warehouses.length > 0 && (
-                <SelectGroup>
-                  <SelectLabel>Warehouses</SelectLabel>
-                  {warehouses.map((w: any) => (
-                    <SelectItem key={`warehouse:${w.id}`} value={`warehouse:${w.id}`}>{w.name}</SelectItem>
-                  ))}
-                </SelectGroup>
-              )}
-              {outletsEnabled && outlets.length > 0 && (
-                <SelectGroup>
-                  <SelectLabel>Outlets</SelectLabel>
-                  {outlets.map((o: any) => (
-                    <SelectItem key={`outlet:${o.id}`} value={`outlet:${o.id}`}>{o.name}</SelectItem>
-                  ))}
-                </SelectGroup>
-              )}
-            </SelectContent>
-          </Select>
-          <Select value={accountFilter} onValueChange={setAccountFilter}>
-            <SelectTrigger className="h-9 w-64"><SelectValue placeholder="All bank accounts" /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All bank accounts</SelectItem>
-              {bankLedgers.map(account => (
-                <SelectItem key={account.accountId} value={String(account.accountId)}>
-                  {account.name} · {account.locationName}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} className="h-9 w-36" />
-          <span className="text-sm text-muted-foreground">to</span>
-          <Input type="date" value={toDate} onChange={e => setToDate(e.target.value)} className="h-9 w-36" />
-          <select
-            value={statusFilter}
-            onChange={e => setStatusFilter(e.target.value as typeof statusFilter)}
-            className="h-9 rounded-md border border-input bg-background px-3 text-sm"
-            aria-label="Reconciliation status"
+        <div className="space-y-3">
+          <div className="relative w-full">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              placeholder="Search voucher, customer, vendor…"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              className="h-9 pl-9"
+              data-testid="input-reconciliation-search"
+            />
+          </div>
+          <FilterPanel
+            className="w-full"
+            defaultOpen
+            activeCount={
+              Number(locationFilter !== 'all')
+              + Number(selectedCategories.size > 0 && selectedCategories.size < RECONCILIATION_CATEGORIES.length)
+              + Number(selectedAccountIds.size > 0 && selectedAccountIds.size < bankLedgers.length)
+              + Number(selectedPlatformIds.size > 0 && selectedPlatformIds.size < onlineAccounts.length)
+              + Number(Boolean(fromDate))
+              + Number(Boolean(toDate))
+            }
+            onClear={clearFilters}
           >
-            <option value="all">All statuses</option>
-            <option value="unreconciled">Unreconciled</option>
-            <option value="reconciled">Reconciled</option>
-          </select>
-          <Button
-            size="sm"
-            className="h-9"
-            disabled={!perm.canEdit || selectedTransactions.length === 0 || selectedMixedAccounts}
-            onClick={openCreateBatch}
-          >
-            <CheckSquare className="w-4 h-4 mr-2" />
-            Reconcile Selected{selectedTransactions.length ? ` (${selectedTransactions.length})` : ''}
-          </Button>
-          {perm.canDelete ? (
+            <label className="space-y-1 text-xs font-medium">
+              <span>Location</span>
+              <Select value={locationFilter} onValueChange={changeLocation}>
+                <SelectTrigger className="h-9 w-full" data-testid="filter-reconciliation-location"><SelectValue placeholder="All locations" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All locations</SelectItem>
+                  <SelectItem value="headoffice">Head Office</SelectItem>
+                  {warehouses.length > 0 && (
+                    <SelectGroup>
+                      <SelectLabel>Warehouses</SelectLabel>
+                      {warehouses.map((w: any) => (
+                        <SelectItem key={`warehouse:${w.id}`} value={`warehouse:${w.id}`}>{w.name}</SelectItem>
+                      ))}
+                    </SelectGroup>
+                  )}
+                  {outletsEnabled && outlets.length > 0 && (
+                    <SelectGroup>
+                      <SelectLabel>Outlets</SelectLabel>
+                      {outlets.map((o: any) => (
+                        <SelectItem key={`outlet:${o.id}`} value={`outlet:${o.id}`}>{o.name}</SelectItem>
+                      ))}
+                    </SelectGroup>
+                  )}
+                </SelectContent>
+              </Select>
+            </label>
+
+            <div className="space-y-1 text-xs font-medium">
+              <span>Categories</span>
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button variant="outline" className="h-9 w-full justify-between text-sm font-normal" data-testid="filter-reconciliation-categories">
+                    {selectedCategories.size === 0 || selectedCategories.size === RECONCILIATION_CATEGORIES.length
+                      ? 'All categories'
+                      : `${selectedCategories.size} categories`}
+                    <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent align="start" className="w-64 p-2">
+                  {RECONCILIATION_CATEGORIES.map(option => (
+                    <label key={option.value} className="flex cursor-pointer items-center gap-2 rounded px-2 py-2 text-sm hover:bg-muted">
+                      <Checkbox
+                        checked={selectedCategories.size === 0 || selectedCategories.has(option.value)}
+                        onCheckedChange={checked => toggleCategoryFilter(option.value, checked === true)}
+                        data-testid={`filter-category-${option.value}`}
+                      />
+                      <span>{option.label}</span>
+                    </label>
+                  ))}
+                </PopoverContent>
+              </Popover>
+            </div>
+
+            <div className="space-y-1 text-xs font-medium">
+              <span>Bank accounts</span>
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button variant="outline" className="h-9 w-full justify-between text-sm font-normal" data-testid="filter-reconciliation-accounts">
+                    {selectedAccountIds.size === 0 || selectedAccountIds.size === bankLedgers.length
+                      ? 'All accounts'
+                      : `${selectedAccountIds.size} accounts`}
+                    <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent align="start" className="w-80 p-2">
+                  <div className="max-h-64 space-y-1 overflow-y-auto">
+                    {bankLedgers.map(account => (
+                      <label key={account.accountId} className="flex cursor-pointer items-center gap-2 rounded px-2 py-2 text-sm hover:bg-muted">
+                        <Checkbox
+                          checked={selectedAccountIds.size === 0 || selectedAccountIds.has(Number(account.accountId))}
+                          onCheckedChange={checked => toggleAccountFilter(Number(account.accountId), checked === true)}
+                          data-testid={`filter-account-${account.accountId}`}
+                        />
+                        <span className="min-w-0 flex-1 truncate">{account.name}</span>
+                        <span className="shrink-0 text-xs text-muted-foreground">{account.locationName}</span>
+                      </label>
+                    ))}
+                    {bankLedgers.length === 0 ? <p className="px-2 py-3 text-sm text-muted-foreground">No accounts available.</p> : null}
+                  </div>
+                </PopoverContent>
+              </Popover>
+            </div>
+
+            <div className="space-y-1 text-xs font-medium">
+              <span>Online platforms</span>
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button variant="outline" className="h-9 w-full justify-between text-sm font-normal" data-testid="filter-reconciliation-platforms">
+                    {selectedPlatformIds.size === 0 || selectedPlatformIds.size === onlineAccounts.length
+                      ? 'All platforms'
+                      : `${selectedPlatformIds.size} platforms`}
+                    <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent align="start" className="w-80 p-2">
+                  <div className="max-h-64 space-y-1 overflow-y-auto">
+                    {onlineAccounts.map(account => (
+                      <label key={account.ledgerId} className="flex cursor-pointer items-center gap-2 rounded px-2 py-2 text-sm hover:bg-muted">
+                        <Checkbox
+                          checked={selectedPlatformIds.size === 0 || selectedPlatformIds.has(Number(account.ledgerId))}
+                          onCheckedChange={checked => togglePlatformFilter(Number(account.ledgerId), checked === true)}
+                          data-testid={`filter-platform-${account.ledgerId}`}
+                        />
+                        <span className="min-w-0 flex-1 truncate">{account.name}</span>
+                        <span className="shrink-0 text-xs text-muted-foreground">{account.locationName}</span>
+                      </label>
+                    ))}
+                    {onlineAccounts.length === 0 ? <p className="px-2 py-3 text-sm text-muted-foreground">No online platforms available.</p> : null}
+                  </div>
+                </PopoverContent>
+              </Popover>
+            </div>
+
+            <label className="space-y-1 text-xs font-medium">
+              <span>From date</span>
+              <Input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} className="h-9" data-testid="filter-reconciliation-from-date" />
+            </label>
+            <label className="space-y-1 text-xs font-medium">
+              <span>To date</span>
+              <Input type="date" value={toDate} onChange={e => setToDate(e.target.value)} className="h-9" data-testid="filter-reconciliation-to-date" />
+            </label>
+          </FilterPanel>
+
+          <div className="flex flex-wrap items-center gap-2">
             <Button
               size="sm"
-              variant="outline"
-              className="h-9"
-              disabled={resetMutation.isPending}
-              onClick={resetReconciliation}
+              disabled={!perm.canEdit || selectedTransactions.length === 0 || selectedMixedAccounts}
+              onClick={openCreateBatch}
+              data-testid="button-reconcile-selected"
             >
-              <RotateCcw className="w-4 h-4 mr-2" />
-              {resetMutation.isPending ? 'Resetting…' : 'Reset reconciliation'}
+              <CheckSquare className="mr-2 h-4 w-4" />
+              Reconcile selected{selectedTransactions.length ? ` (${selectedTransactions.length})` : ''}
             </Button>
-          ) : null}
-          <ExportButtons
-            canDownload={perm.canDownload}
-            disabled={transactionsLoading || visibleTransactions.length === 0}
-            doc={reconciliationDoc}
-          />
+            {selectedPendingRows.length > 0 ? (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={!perm.canEdit}
+                onClick={openPendingReconciliation}
+                data-testid="button-settle-selected"
+              >
+                <Wallet className="mr-2 h-4 w-4" />
+                Settle selected ({selectedPendingRows.length})
+              </Button>
+            ) : null}
+            {perm.canDelete ? (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={resetMutation.isPending}
+                onClick={resetReconciliation}
+                data-testid="button-reset-reconciliation"
+              >
+                <RotateCcw className="mr-2 h-4 w-4" />
+                {resetMutation.isPending ? 'Resetting…' : 'Reset reconciliation'}
+              </Button>
+            ) : null}
+            <ExportButtons
+              canDownload={perm.canDownload}
+              disabled={transactionsLoading || pendingQueueLoading || reconciliationRows.length === 0}
+              doc={reconciliationDoc}
+            />
+          </div>
         </div>
 
         {audit?.undetermined?.length ? (
@@ -553,122 +747,255 @@ export default function Reconciliation() {
           </p>
         )}
 
+        <Tabs
+          value={activeSection}
+          onValueChange={value => setActiveSection(value as typeof activeSection)}
+          data-testid="tabs-reconciliation-section"
+        >
+          <TabsList>
+            <TabsTrigger value="to-reconcile" data-testid="tab-to-reconcile">To reconcile</TabsTrigger>
+            <TabsTrigger value="reconciled" data-testid="tab-reconciled">Reconciled &amp; settled</TabsTrigger>
+          </TabsList>
+        </Tabs>
+
         <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
-          {transactionsLoading ? (
+          {transactionsLoading || (activeSection === 'to-reconcile' && pendingQueueLoading) ? (
             <TableSkeleton rows={8} cols={10} />
-          ) : visibleTransactions.length === 0 ? (
+          ) : reconciliationRows.length === 0 ? (
             <EmptyState
               icon={Landmark}
-              title="No bank transactions"
-              hint="Transactions in assigned bank and UPI accounts will appear here. Cash accounts are excluded."
+              title={activeSection === 'reconciled' ? 'No reconciled transactions' : 'No transactions to reconcile'}
+              hint={activeSection === 'reconciled'
+                ? 'Completed bank reconciliations will appear here.'
+                : 'Eligible account activity and pending electronic collections will appear here.'}
             />
           ) : (
             <>
+              <div className="space-y-2 p-3 md:hidden">
+                {pageRows.map(row => {
+                  const isLedgerRow = row.kind === 'ledger';
+                  const ledger = row.ledger;
+                  const pending = row.pending;
+                  const checked = isLedgerRow
+                    ? !!ledger && selectedKeys.has(ledger.id)
+                    : !!pending && pendingSelected.has(pending.key);
+                  const disabled = !perm.canEdit || (isLedgerRow
+                    ? !ledger?.reconciliationEligible
+                      || (ledger?.reconciliationStatus === 'reconciled' && !isEditableBatchItem(ledger))
+                    : false);
+                  return (
+                    <article key={`mobile-${row.key}`} className="rounded-lg border border-border bg-card p-3">
+                      <div className="flex items-start gap-3">
+                        <Checkbox
+                          className="mt-1"
+                          checked={checked}
+                          disabled={disabled}
+                          onCheckedChange={value => {
+                            if (isLedgerRow && ledger) toggleSelected(ledger, value === true);
+                            else if (!isLedgerRow && pending) togglePending(pending, value === true);
+                          }}
+                          aria-label={`Select ${row.voucher}`}
+                        />
+                        <div className="min-w-0 flex-1 space-y-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-xs text-muted-foreground">{formatDateOrDash(row.date)}</span>
+                            <span className="rounded border px-2 py-0.5 text-xs">{categoryLabel(row.category)}</span>
+                            <StatusBadge status={row.status} />
+                          </div>
+                          <div className="font-mono text-xs">{formatGstDocumentDisplayNumber(row.voucher)}</div>
+                          <div className="truncate text-sm">{row.counterparty}</div>
+                        </div>
+                      </div>
+                      <div className="mt-3 border-t border-border pt-2 text-xs">
+                        <div className="font-medium">{row.account}</div>
+                        {row.detail ? <div className="text-muted-foreground">{row.detail}</div> : null}
+                        <div className="text-muted-foreground">{row.location}</div>
+                      </div>
+                      <div className="mt-3 flex justify-between gap-3 text-sm">
+                        <span className="text-emerald-600">In {row.debit > 0 ? fmt(row.debit) : '—'}</span>
+                        <span className="text-red-500">Out {row.credit > 0 ? fmt(row.credit) : '—'}</span>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+              <div className="hidden md:block">
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="w-20">
+                    <TableHead className="w-12">
                       <Checkbox
                         checked={selectableVisible.length > 0 && selectableVisible.every(t => selectedKeys.has(t.id))}
                         onCheckedChange={value => toggleAll(value === true)}
                         disabled={!perm.canEdit || selectableVisible.length === 0}
-                        aria-label="Select all visible unreconciled transactions"
+                        aria-label="Select visible eligible bank transactions"
                       />
                     </TableHead>
                     <SortableHead k="date" sort={sort}>Date</SortableHead>
+                    <SortableHead k="category" sort={sort}>Category</SortableHead>
                     <SortableHead k="source" sort={sort}>Type</SortableHead>
-                    <SortableHead k="voucher" sort={sort}>Voucher</SortableHead>
-                    <SortableHead k="counterparty" sort={sort}>Customer / Vendor</SortableHead>
-                    <SortableHead k="account" sort={sort}>Bank Account</SortableHead>
+                    <SortableHead k="voucher" sort={sort}>Document</SortableHead>
+                    <SortableHead k="counterparty" sort={sort}>Party</SortableHead>
+                    <SortableHead k="account" sort={sort}>Account / platform</SortableHead>
                     <SortableHead k="location" sort={sort}>Location</SortableHead>
                     <SortableHead k="debit" sort={sort} className="text-right">In</SortableHead>
                     <SortableHead k="credit" sort={sort} className="text-right">Out</SortableHead>
-                     <SortableHead k="status" sort={sort}>Status</SortableHead>
+                    <SortableHead k="status" sort={sort}>Status</SortableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {pageRows.map(t => (
-                    <TableRow key={t.id}>
-                      <TableCell>
-                        <Checkbox
-                          checked={selectedKeys.has(t.id)}
-                          disabled={!perm.canEdit
-                            || !t.reconciliationEligible
-                            || (t.reconciliationStatus === 'reconciled' && !isEditableBatchItem(t))}
-                          onCheckedChange={value => toggleSelected(t, value === true)}
-                          aria-label={`Select ${t.voucherNumber || t.entryId}`}
-                        />
-                      </TableCell>
-                      <TableCell className="text-xs text-muted-foreground whitespace-nowrap">{formatDateOrDash(t.date)}</TableCell>
-                      <TableCell className="text-sm">{SOURCE_LABEL[t.source] ?? t.source}</TableCell>
-                      <TableCell className="font-mono text-xs">{t.voucherNumber || t.entryId}</TableCell>
-                      <TableCell className="text-sm">{t.counterpartyName ?? <span className="text-muted-foreground">—</span>}</TableCell>
-                      <TableCell className="text-sm">
-                        <div className={t.reconciliationEligible ? undefined : 'text-amber-600'}>{t.accountName}</div>
-                        <div className="text-[11px] text-muted-foreground">{t.description}</div>
-                      </TableCell>
-                      <TableCell className="text-sm">{t.accountLocationName}</TableCell>
-                      <TableCell className="text-right font-mono text-sm text-emerald-600">{t.debit > 0 ? fmt(t.debit) : '—'}</TableCell>
-                      <TableCell className="text-right font-mono text-sm text-red-500">{t.credit > 0 ? fmt(t.credit) : '—'}</TableCell>
-                      <TableCell>
-                        <span className={`text-xs px-2 py-0.5 rounded border font-medium ${
-                          t.reconciliationStatus === 'reconciled'
-                            ? 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20'
-                            : 'bg-amber-500/10 text-amber-600 border-amber-500/20'
-                        }`}>
-                          {t.reconciliationStatus === 'reconciled' ? 'Reconciled' : 'Unreconciled'}
-                        </span>
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                  {pageRows.map(row => {
+                    const isLedgerRow = row.kind === 'ledger';
+                    const ledger = row.ledger;
+                    const pending = row.pending;
+                    const checked = isLedgerRow
+                      ? !!ledger && selectedKeys.has(ledger.id)
+                      : !!pending && pendingSelected.has(pending.key);
+                    const disabled = !perm.canEdit || (isLedgerRow
+                      ? !ledger?.reconciliationEligible
+                        || (ledger?.reconciliationStatus === 'reconciled' && !isEditableBatchItem(ledger))
+                      : false);
+                    return (
+                      <TableRow key={row.key}>
+                        <TableCell>
+                          <Checkbox
+                            checked={checked}
+                            disabled={disabled}
+                            onCheckedChange={value => {
+                              if (isLedgerRow && ledger) toggleSelected(ledger, value === true);
+                              else if (!isLedgerRow && pending) togglePending(pending, value === true);
+                            }}
+                            aria-label={`Select ${row.voucher}`}
+                          />
+                        </TableCell>
+                        <TableCell className="whitespace-nowrap text-xs text-muted-foreground">{formatDateOrDash(row.date)}</TableCell>
+                        <TableCell>
+                          <span className="rounded border px-2 py-0.5 text-xs font-medium">{categoryLabel(row.category)}</span>
+                        </TableCell>
+                        <TableCell className="text-sm">{row.source}</TableCell>
+                        <TableCell className="font-mono text-xs">{formatGstDocumentDisplayNumber(row.voucher)}</TableCell>
+                        <TableCell className="text-sm">{row.counterparty}</TableCell>
+                        <TableCell className="text-sm">
+                          <div>{row.account}</div>
+                          {row.detail ? <div className="text-[11px] text-muted-foreground">{row.detail}</div> : null}
+                        </TableCell>
+                        <TableCell className="text-sm">{row.location}</TableCell>
+                        <TableCell className="text-right font-mono text-sm text-emerald-600">{row.debit > 0 ? fmt(row.debit) : '—'}</TableCell>
+                        <TableCell className="text-right font-mono text-sm text-red-500">{row.credit > 0 ? fmt(row.credit) : '—'}</TableCell>
+                        <TableCell><StatusBadge status={row.status} /></TableCell>
+                      </TableRow>
+                    );
+                  })}
                 </TableBody>
               </Table>
-              <div className="px-4 border-t border-border">
+              </div>
+              <div className="border-t border-border px-4">
                 <TablePager {...pagerProps} />
               </div>
             </>
           )}
         </div>
 
-        <div className="rounded-xl border border-border bg-card overflow-hidden">
-          <div className="px-4 py-3 border-b border-border">
-            <h2 className="font-semibold">Recent reconciliation batches</h2>
-            <p className="text-xs text-muted-foreground">Standard batches are metadata-only; deferred and unified settlements post to the selected bank account.</p>
-          </div>
-          {batches.length === 0 ? (
-            <p className="px-4 py-5 text-sm text-muted-foreground">No bank reconciliation batches yet.</p>
-          ) : (
-            <Table>
-              <TableHeader><TableRow><TableHead>Batch</TableHead><TableHead>Date</TableHead><TableHead>Bank account</TableHead><TableHead className="text-right">Gross</TableHead><TableHead className="text-right">Charge</TableHead><TableHead className="text-right">Net</TableHead><TableHead>Items</TableHead><TableHead className="w-24">Actions</TableHead></TableRow></TableHeader>
-              <TableBody>
-                {batches.slice(0, 10).map(batch => (
-                  <TableRow key={batch.id}>
-                    <TableCell className="font-mono text-xs">{batch.batchReference}</TableCell>
-                    <TableCell className="text-xs">{formatDateOrDash(batch.reconciliationDate)}</TableCell>
-                    <TableCell className="text-sm">{batch.bankAccountName} · {batch.locationName}</TableCell>
-                    <TableCell className="text-right font-mono text-sm">{fmt(batch.grossAmount)}</TableCell>
-                    <TableCell className="text-right font-mono text-sm">{fmt(batch.processingCharge)}</TableCell>
-                    <TableCell className="text-right font-mono text-sm">{fmt(batch.netAmount)}</TableCell>
-                    <TableCell className="text-sm">{batch.itemCount}</TableCell>
-                    <TableCell>
+        {activeSection === 'reconciled' ? (
+          <div className="overflow-hidden rounded-xl border border-border bg-card">
+            <div className="border-b border-border px-4 py-3">
+              <h2 className="font-semibold">Settled batches</h2>
+              <p className="text-xs text-muted-foreground">
+                Account reconciliation batches are review-only. Pending clearing settlements are accounting postings.
+              </p>
+            </div>
+            {visibleBatches.length === 0 ? (
+              <p className="px-4 py-5 text-sm text-muted-foreground">No settled batches match the current location, account, date, and search filters.</p>
+            ) : (
+              <>
+                <div className="space-y-2 p-3 md:hidden">
+                  {batchPageRows.map(batch => (
+                    <article key={`mobile-batch-${batch.id}`} className="rounded-lg border border-border p-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="font-mono text-xs">{batch.batchReference}</div>
+                          <div className="mt-1 text-xs text-muted-foreground">{formatDateOrDash(batch.reconciliationDate)}</div>
+                        </div>
+                        <StatusBadge status={batch.status} />
+                      </div>
+                      <div className="mt-3 text-sm font-medium">{batch.bankAccountName}</div>
+                      <div className="text-xs text-muted-foreground">{batch.locationName}</div>
+                      <div className="mt-3 grid grid-cols-2 gap-2 border-t border-border pt-2 text-xs">
+                        <div><span className="text-muted-foreground">Type</span><div>{batch.accountingImpact === 'none' ? 'Review-only' : 'Settlement posting'}</div></div>
+                        <div><span className="text-muted-foreground">Items</span><div>{batch.itemCount}</div></div>
+                        <div><span className="text-muted-foreground">Gross</span><div className="font-mono">{fmt(batch.grossAmount)}</div></div>
+                        <div><span className="text-muted-foreground">Charge</span><div className="font-mono">{fmt(batch.processingCharge)}</div></div>
+                        <div><span className="text-muted-foreground">Net</span><div className="font-mono">{fmt(batch.netAmount)}</div></div>
+                      </div>
                       {perm.canEdit && batch.status === 'active' && batch.accountingImpact === 'none' ? (
                         <Button
-                          variant="ghost"
+                          variant="outline"
                           size="sm"
-                          className="h-8"
+                          className="mt-3 h-8 w-full"
                           onClick={() => openEditBatch(batch.id)}
                         >
-                          <Pencil className="w-3.5 h-3.5 mr-1" />
-                          Edit
+                          <Pencil className="mr-1 h-3.5 w-3.5" />
+                          Edit batch
                         </Button>
                       ) : null}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-        </div>
+                    </article>
+                  ))}
+                </div>
+                <div className="hidden md:block">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Batch</TableHead>
+                      <TableHead>Date</TableHead>
+                      <TableHead>Bank account</TableHead>
+                      <TableHead>Settlement type</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead className="text-right">Gross</TableHead>
+                      <TableHead className="text-right">Charge</TableHead>
+                      <TableHead className="text-right">Net</TableHead>
+                      <TableHead>Items</TableHead>
+                      <TableHead className="w-24">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {batchPageRows.map(batch => (
+                      <TableRow key={batch.id}>
+                        <TableCell className="font-mono text-xs">{batch.batchReference}</TableCell>
+                        <TableCell className="text-xs">{formatDateOrDash(batch.reconciliationDate)}</TableCell>
+                        <TableCell className="text-sm">{batch.bankAccountName} · {batch.locationName}</TableCell>
+                        <TableCell className="text-sm">
+                          {batch.accountingImpact === 'none' ? 'Review-only' : 'Settlement posting'}
+                        </TableCell>
+                        <TableCell className="text-sm capitalize">{batch.status}</TableCell>
+                        <TableCell className="text-right font-mono text-sm">{fmt(batch.grossAmount)}</TableCell>
+                        <TableCell className="text-right font-mono text-sm">{fmt(batch.processingCharge)}</TableCell>
+                        <TableCell className="text-right font-mono text-sm">{fmt(batch.netAmount)}</TableCell>
+                        <TableCell className="text-sm">{batch.itemCount}</TableCell>
+                        <TableCell>
+                          {perm.canEdit && batch.status === 'active' && batch.accountingImpact === 'none' ? (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-8"
+                              onClick={() => openEditBatch(batch.id)}
+                            >
+                              <Pencil className="mr-1 h-3.5 w-3.5" />
+                              Edit
+                            </Button>
+                          ) : null}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+                </div>
+                <div className="border-t border-border px-4">
+                  <TablePager {...batchPagerProps} />
+                </div>
+              </>
+            )}
+          </div>
+        ) : null}
 
         <Dialog open={batchOpen} onOpenChange={setBatchOpen}>
           <DialogContent className="sm:max-w-md">
