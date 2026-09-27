@@ -35,11 +35,22 @@ import { trackEvent } from '@/lib/analytics';
 
 const schema = z.object({
   paymentDate: z.string().min(1, 'Date required'),
-  paidFromLedgerId: z.coerce.number().min(1, 'Select account'),
+  paymentMode: z.enum(['cash', 'bank', 'upi', 'online']),
+  paidFromLedgerId: z.coerce.number().min(0),
   paidToLedgerId: z.coerce.number().min(1, 'Select account'),
   amount: z.coerce.number().min(0.01, 'Amount > 0'),
   referenceNumber: z.string().max(100).optional(),
   narration: z.string().optional(),
+}).superRefine((v, ctx) => {
+  if ((v.paymentMode === 'cash' || v.paymentMode === 'upi' || v.paymentMode === 'online') && v.paidFromLedgerId < 1) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['paidFromLedgerId'],
+      message: v.paymentMode === 'upi' ? 'No UPI account is assigned to this location.'
+        : v.paymentMode === 'online' ? 'Select an Online platform.'
+          : 'Select a Cash account.',
+    });
+  }
 });
 type FormValues = z.infer<typeof schema>;
 
@@ -72,8 +83,8 @@ export default function Payment() {
   ]), [customerPartyLedgers, vendorPartyLedgers]);
 
   // "Paid From" — only the selected location's Bank / Cash accounts
-  const fromOptions = (cashBankAccounts as any[]).filter(a =>
-    !selLoc || selLoc.cashBankLedgerIds.includes(a.id));
+  const fromOptions = useMemo(() => (cashBankAccounts as any[]).filter(a =>
+    !selLoc || selLoc.cashBankLedgerIds.includes(a.id)), [cashBankAccounts, selLoc]);
   // "Paid To" — all non-system ledgers (expense, payable, vendor, etc.) minus
   // other locations' accounts. Payroll/GST/internal ledgers stay module-owned
   // — salary is paid from the Payroll screen, which can also pay from any till.
@@ -84,8 +95,22 @@ export default function Payment() {
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
-    defaultValues: { paymentDate: new Date().toISOString().split('T')[0], paidFromLedgerId: 0, paidToLedgerId: 0, amount: 0, referenceNumber: '', narration: '' },
+    defaultValues: { paymentDate: new Date().toISOString().split('T')[0], paymentMode: 'cash', paidFromLedgerId: 0, paidToLedgerId: 0, amount: 0, referenceNumber: '', narration: '' },
   });
+  const paymentMode = form.watch('paymentMode');
+  const modeOptions = useMemo(() => fromOptions.filter((a: any) =>
+    a.accountType === (paymentMode === 'cash' ? 'cash' : paymentMode === 'online' ? 'online' : 'upi')),
+  [fromOptions, paymentMode]);
+
+  useEffect(() => {
+    const currentId = Number(form.getValues('paidFromLedgerId'));
+    if (paymentMode === 'bank') {
+      if (currentId !== 0) form.setValue('paidFromLedgerId', 0);
+      return;
+    }
+    if (modeOptions.some((a: any) => Number(a.id) === currentId)) return;
+    form.setValue('paidFromLedgerId', Number(modeOptions[0]?.id ?? 0));
+  }, [paymentMode, modeOptions, form]);
 
   // Switching location narrows the pickers — clear selections that just
   // became foreign so a hidden value can't ride along into the submit.
@@ -184,7 +209,7 @@ export default function Payment() {
               )}
               {perm.canAdd && (
                 <Button onClick={() => {
-                  form.reset({ paymentDate: new Date().toISOString().split('T')[0], paidFromLedgerId: 0, paidToLedgerId: 0, amount: 0, referenceNumber: '', narration: '' });
+                  form.reset({ paymentDate: new Date().toISOString().split('T')[0], paymentMode: 'cash', paidFromLedgerId: 0, paidToLedgerId: 0, amount: 0, referenceNumber: '', narration: '' });
                   setIsOpen(true);
                 }}>
                   <Plus className="w-4 h-4 mr-2" /> New Payment
@@ -291,19 +316,51 @@ export default function Payment() {
                 </FormItem>
               )} />
 
-              {/* Paid From — searchable, Bank/Cash only */}
-              <FormField control={form.control} name="paidFromLedgerId" render={({ field }) => (
+              <FormField control={form.control} name="paymentMode" render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Paid From (Cash / Bank) <span className="text-destructive">*</span></FormLabel>
-                  <AccountCombobox
-                    options={fromOptions}
-                    value={field.value}
-                    onChange={field.onChange}
-                    placeholder="Select Bank or Cash account"
-                  />
+                  <FormLabel>Payment Mode <span className="text-destructive">*</span></FormLabel>
+                  <Select value={field.value} onValueChange={field.onChange}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="cash">Cash</SelectItem>
+                      <SelectItem value="bank">Bank</SelectItem>
+                      <SelectItem value="upi">UPI</SelectItem>
+                      <SelectItem value="online">Online</SelectItem>
+                    </SelectContent>
+                  </Select>
                   <FormMessage />
                 </FormItem>
               )} />
+
+              {paymentMode === 'bank' ? (
+                <div className="rounded-md border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-sm text-amber-700">
+                  Bank settlement is selected during reconciliation.
+                </div>
+              ) : paymentMode === 'upi' ? (
+                <FormField control={form.control} name="paidFromLedgerId" render={() => (
+                  <FormItem>
+                    <FormLabel>Settlement</FormLabel>
+                    <div className="rounded-md border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-sm text-amber-700">
+                      {modeOptions[0] ? `Using this location's default UPI account: ${modeOptions[0].name}.` : 'No UPI account is assigned to this location.'}
+                      {' '}Held for reconciliation.
+                    </div>
+                    <FormMessage />
+                  </FormItem>
+                )} />
+              ) : (
+                <FormField control={form.control} name="paidFromLedgerId" render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{paymentMode === 'online' ? 'Online Platform' : 'Paid From (Cash)'} <span className="text-destructive">*</span></FormLabel>
+                    <AccountCombobox
+                      options={modeOptions}
+                      value={field.value}
+                      onChange={field.onChange}
+                      placeholder={paymentMode === 'online' ? 'Select Online platform' : 'Select Cash account'}
+                    />
+                    <FormMessage />
+                  </FormItem>
+                )} />
+              )}
 
               {/* Paid To — searchable, all non-system ledgers */}
               <FormField control={form.control} name="paidToLedgerId" render={({ field }) => (

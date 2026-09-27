@@ -1,4 +1,5 @@
 - [Marlin ERP architecture](marlin-erp-arch.md) — Full ERP stack: api-server (Express+Drizzle), marlin-erp (React+Vite), shared libs; never assume the admin dev password — clone a temp user for API tests, never re-seed the hash
+- [Patch application checks](patch-application-checks.md) — a reported multi-hunk failure may leave earlier edits applied; inspect target files before retrying
 - [Security hardening](security-hardening.md) + [Phase 1 stabilization](phase1-stabilization.md) — bcryptjs, global requireAuth, rate limits, HMAC v2 tokens, write guards; default-deny perm seeding, 8-hr expiry; QA in phase1-qa-findings.md.
 - [API client hook names](api-client-hooks.md) — Many hook names differ from intuition; several entities are create-only (no update/delete). Always grep the generated file first.
 - [Permission system](permissions.md) — one row per sidebar link keyed `page:<href>`; hierarchies/permissions GETs must stay unguarded; migration fallback must GRANT; duplicates break authz determinism.
