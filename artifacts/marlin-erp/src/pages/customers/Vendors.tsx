@@ -28,6 +28,7 @@ import { usePermission } from '@/lib/usePermission';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { PartyBalance } from '@/lib/partyBalance';
 import { usePartyLocations, rowMatchesLocation, locationValueOf, HEAD_OFFICE_VALUE } from '@/lib/usePartyLocations';
+import { useLocationContext } from '@/lib/locationContext';
 import { PageHeader } from '@/components/app/page-header';
 import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
 import { EmptyState } from '@/components/app/empty-state';
@@ -317,10 +318,29 @@ export default function Vendors() {
   const { data: internalBalances, isLoading: internalBalancesLoading } = useQuery({
     queryKey: ['/api/accounts/internal-transfer-balances'],
     queryFn: () => customFetch<{
-      payables: Array<{ ledgerId: number; code: string; name: string; kind: string; balance: number }>;
+      payables: Array<{
+        ledgerId: number;
+        code: string;
+        name: string;
+        kind: string;
+        balance: number;
+        firstLocation: { locationType: string; locationId: number };
+        secondLocation: { locationType: string; locationId: number };
+      }>;
     }>('/api/accounts/internal-transfer-balances'),
   });
   const loc = usePartyLocations();
+  const { locationState } = useLocationContext();
+  const activeLocation = useMemo(() => {
+    const { locationType, locationId } = locationState;
+    if (locationType === 'headoffice') {
+      return { locationType, locationId: null, name: loc.nameOf(locationType, locationId) };
+    }
+    if ((locationType === 'warehouse' || locationType === 'outlet') && locationId) {
+      return { locationType, locationId, name: loc.nameOf(locationType, locationId) };
+    }
+    return null;
+  }, [locationState.locationType, locationState.locationId, loc.nameOf]);
   const [locFilter, setLocFilter] = useState('all');
   const [search, setSearch] = useState('');
   const [isOpen, setIsOpen] = useState(false);
@@ -375,6 +395,39 @@ export default function Vendors() {
     _locationName: loc.nameOf((v as any).locationType ?? (v as any).location_type, (v as any).locationId ?? (v as any).location_id),
   })), [vendors, search, locFilter, loc]);
 
+  const visibleInterBranchPayables = useMemo(() => {
+    const payables = internalBalances?.payables ?? [];
+    const matchesActiveLocation = (identity: { locationType: string; locationId: number }) =>
+      !!activeLocation &&
+      identity.locationType === activeLocation.locationType &&
+      (activeLocation.locationType === 'headoffice' || identity.locationId === activeLocation.locationId);
+
+    return payables.flatMap(row => {
+      if (!activeLocation) {
+        return [{
+          ...row,
+          displayName: loc.nameOf(row.firstLocation.locationType, row.firstLocation.locationId),
+          displayLocation: loc.nameOf(row.secondLocation.locationType, row.secondLocation.locationId),
+          displayBalance: Number(row.balance) || 0,
+        }];
+      }
+
+      const firstIsActive = matchesActiveLocation(row.firstLocation);
+      const secondIsActive = matchesActiveLocation(row.secondLocation);
+      if (!firstIsActive && !secondIsActive) return [];
+
+      const counterparty = firstIsActive ? row.secondLocation : row.firstLocation;
+      return [{
+        ...row,
+        displayName: loc.nameOf(counterparty.locationType, counterparty.locationId),
+        displayLocation: activeLocation.name,
+        // The stored pair balance is positive when its second location owes
+        // the first; flip it when viewing from the first location.
+        displayBalance: (firstIsActive ? -1 : 1) * (Number(row.balance) || 0),
+      }];
+    });
+  }, [internalBalances?.payables, activeLocation, loc.nameOf]);
+
   const { sorted, sort } = useTableSort(filtered, {
     name: v => v.name,
     phone: v => v.phone,
@@ -385,7 +438,11 @@ export default function Vendors() {
   });
   const { pageRows, pagerProps } = useClientPage(sorted);
 
-  const totalPayable = vendors.reduce((s, v: any) => s + Number(v.outstandingBalance ?? 0), 0);
+  const vendorPayable = vendors.reduce((s, v: any) => s + Number(v.outstandingBalance ?? 0), 0);
+  const interBranchPayableTotal = activeLocation
+    ? visibleInterBranchPayables.reduce((sum, row) => sum + Math.max(0, row.displayBalance), 0)
+    : 0;
+  const totalPayable = vendorPayable + interBranchPayableTotal;
   const withDues = vendors.filter((v: any) => Number(v.outstandingBalance ?? 0) > 0.009).length;
   const inr = (n: number) => `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
 
@@ -432,7 +489,7 @@ export default function Vendors() {
         <SummaryCardGrid>
           <SummaryCard label="Total Vendors" value={vendors.length} icon={Truck} loading={isLoading} />
           <SummaryCard label="With Dues" value={withDues} icon={Truck} tone="warning" loading={isLoading} />
-          <SummaryCard label="Total Payable" value={inr(totalPayable)} icon={Wallet} tone="warning" loading={isLoading} />
+          <SummaryCard label="Total Payable" value={inr(totalPayable)} icon={Wallet} tone="warning" loading={isLoading || internalBalancesLoading} />
         </SummaryCardGrid>
 
         {!internalBalancesLoading && internalBalances?.payables?.length ? (
@@ -440,17 +497,49 @@ export default function Vendors() {
             <div className="px-4 py-3 border-b border-border bg-muted/20">
               <h2 className="text-sm font-semibold">Inter-Branch Payable</h2>
               <p className="text-xs text-muted-foreground mt-0.5">
-                One net balance per warehouse pair. A negative amount means the net direction is reversed.
+                Positive means Location owes Name; a negative balance means the reverse.
               </p>
             </div>
-            <div className="p-4 space-y-2">
-              {internalBalances.payables.map((row) => (
-                <div key={row.ledgerId} className="flex items-center justify-between gap-3 text-sm">
-                  <div className="min-w-0">
-                    <p className="font-medium truncate">{row.name}</p>
-                    <p className="text-[11px] text-muted-foreground font-mono">{row.code}</p>
+            <div className="hidden md:block">
+              <Table>
+                <TableHeader>
+                  <TableRow className="bg-muted/10">
+                    <TableHead>Name</TableHead>
+                    <TableHead>Location</TableHead>
+                    <TableHead className="text-right">Balance</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {visibleInterBranchPayables.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={3} className="py-6 text-center text-sm text-muted-foreground">
+                        No inter-branch balances involve this location.
+                      </TableCell>
+                    </TableRow>
+                  ) : visibleInterBranchPayables.map(row => (
+                    <TableRow key={row.ledgerId} className="hover:bg-muted/10">
+                      <TableCell className="font-medium">{row.displayName}</TableCell>
+                      <TableCell className="text-sm text-muted-foreground">{row.displayLocation}</TableCell>
+                      <TableCell className="text-right font-mono text-sm tabular-nums">{inr(row.displayBalance)}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+            <div className="md:hidden p-3 space-y-2">
+              {visibleInterBranchPayables.length === 0 ? (
+                <p className="py-4 text-center text-sm text-muted-foreground">
+                  No inter-branch balances involve this location.
+                </p>
+              ) : visibleInterBranchPayables.map(row => (
+                <div key={row.ledgerId} className="rounded-lg border border-border p-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="font-medium text-sm break-words">{row.displayName}</p>
+                      <p className="text-xs text-muted-foreground mt-0.5">{row.displayLocation}</p>
+                    </div>
+                    <span className="font-mono text-sm tabular-nums shrink-0">{inr(row.displayBalance)}</span>
                   </div>
-                  <span className="font-mono tabular-nums shrink-0">{inr(Number(row.balance) || 0)}</span>
                 </div>
               ))}
             </div>
