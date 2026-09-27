@@ -49,6 +49,7 @@ import {
   paymentModeLabel, editableSaleMode, ONLINE_PAYMENT_MODES,
 } from '@/lib/paymentModes';
 import { ReceiveIntoSelect, useReceiveIntoOptions, isCashOption } from '@/components/receive-into-select';
+import { PaymentModeSelector, type CollectionPaymentMode } from '@/components/payment-mode-selector';
 import {
   normaliseWhatsAppNumber, composeInvoiceMessage, activeInvoiceShareChannel,
 } from '@/lib/invoiceShare';
@@ -459,20 +460,57 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
 
   // Multi-method payment state — each row has its own method, amount, reference
   // and a stable idempotency key assigned when the row is created.
-  type PRow = { id: number; ledgerId: number; amount: string; ref: string; rid: string };
-  const [paymentRows, setPaymentRows] = useState<PRow[]>([{ id: 1, ledgerId: 0, amount: '', ref: '', rid: newRequestId() }]);
+  type PRow = { id: number; mode: CollectionPaymentMode; ledgerId: number; amount: string; ref: string; rid: string };
+  const [paymentRows, setPaymentRows] = useState<PRow[]>([{ id: 1, mode: 'cash', ledgerId: 0, amount: '', ref: '', rid: newRequestId() }]);
   const [paymentDate, setPaymentDate] = useState(new Date().toISOString().split('T')[0]);
   const [showPaymentForm, setShowPaymentForm] = useState(false);
-  // Real Cash & Bank accounts of the SALE's location — the destinations the
-  // collect form offers. The server re-validates and derives cash/bank/UPI
-  // from the picked account, so no method dropdown exists anywhere.
-  const { options: receiveOptions } = useReceiveIntoOptions(
+  // Payment destinations are scoped to the invoice's selling location. Cash
+  // and Online expose account pickers; Bank and UPI use the location's first
+  // assigned account, matching the POS collection rules.
+  const { options: receiveOptions, isLoading: receiveOptionsLoading } = useReceiveIntoOptions(
     (viewItem as any)?.locationType, (viewItem as any)?.locationId);
+  const receiveOptionsByMode = useMemo(() => ({
+    cash: receiveOptions.filter(isCashOption),
+    upi: receiveOptions.filter(o => o.accountType === 'upi'),
+    bank: receiveOptions.filter(o => o.accountType === 'bank'),
+    online: receiveOptions.filter(o => o.accountType === 'online'),
+  }), [receiveOptions]);
   const optionFor = (ledgerId: number) => receiveOptions.find(o => o.id === ledgerId);
   // Derived values used by the UPI QR effect below
-  const upiRow = paymentRows.find(r => optionFor(r.ledgerId)?.accountType === 'upi');
+  const upiRow = paymentRows.find(r => r.mode === 'upi');
   const paymentMethod = upiRow ? 'upi' : 'cash';
   const paymentAmount = upiRow?.amount ?? paymentRows[0]?.amount ?? '';
+
+  const setPaymentRowMode = (rowId: number, mode: CollectionPaymentMode) => {
+    const ledgerId = receiveOptionsByMode[mode][0]?.id ?? 0;
+    setPaymentRows(rows => rows.map(row => row.id === rowId
+      ? { ...row, mode, ledgerId, ref: '' }
+      : row));
+  };
+
+  // Keep each selected destination valid as location accounts load or the
+  // collection rows change modes. Bank and UPI are pinned to their first
+  // location-assigned account; Cash and Online retain a valid user selection.
+  useEffect(() => {
+    if (!showPaymentForm || !viewItem) return;
+    setPaymentRows(rows => {
+      let changed = false;
+      const nextRows = rows.map(row => {
+        const options = receiveOptionsByMode[row.mode];
+        const firstId = options[0]?.id ?? 0;
+        const isDefaultMode = row.mode === 'bank' || row.mode === 'upi';
+        const nextLedgerId = isDefaultMode
+          ? firstId
+          : options.some(option => option.id === row.ledgerId)
+            ? row.ledgerId
+            : firstId;
+        if (nextLedgerId === row.ledgerId) return row;
+        changed = true;
+        return { ...row, ledgerId: nextLedgerId };
+      });
+      return changed ? nextRows : rows;
+    });
+  }, [receiveOptionsByMode, showPaymentForm, viewItem?.id]);
 
   // QR shown next to the collect-payment form, for a PART amount (below).
   const [collectQrUrl, setCollectQrUrl] = useState<string | null>(null);
@@ -590,7 +628,17 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
     if (!viewItem) return;
     const validRows = paymentRows.filter(r => Number(r.amount) > 0);
     if (validRows.length === 0) { toast.error('Enter at least one payment amount'); return; }
-    if (validRows.some(r => !r.ledgerId)) { toast.error('Pick the Cash / Bank account for each payment'); return; }
+    const missingAccount = validRows.find(r => !r.ledgerId);
+    if (missingAccount) {
+      toast.error(receiveOptionsLoading
+        ? 'Payment accounts are still loading.'
+        : missingAccount.mode === 'online'
+          ? 'Select an Online sub-platform for each payment.'
+          : missingAccount.mode === 'cash'
+            ? 'Select a Cash account for each payment.'
+            : `No default ${missingAccount.mode === 'upi' ? 'UPI' : 'Bank'} account is assigned to this location.`);
+      return;
+    }
     const totalPaying = validRows.reduce((s, r) => s + Number(r.amount), 0);
     const balanceDue = Number((viewItem as any).balanceDue ?? 0);
     if (totalPaying > balanceDue + 0.001) {
@@ -618,7 +666,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
         lastResult = await createPaymentMutation.mutateAsync({
           saleId: viewItem.id,
           data: {
-            receivedInLedgerId: row.ledgerId, amount: Number(row.amount),
+            method: row.mode, receivedInLedgerId: row.ledgerId, amount: Number(row.amount),
             referenceNumber: row.ref || undefined, paymentDate,
             // Replay protection: the id was minted when the ROW was created,
             // so a retry after a timeout resubmits the same intent instead of
@@ -643,7 +691,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
         setViewItem((prev: any) => prev ? { ...prev, paymentStatus: lastResult.newPaymentStatus, amountPaid: lastResult.newAmountPaid } : null);
       }
       invalidateSalesData();
-      setPaymentRows([{ id: Date.now(), ledgerId: 0, amount: '', ref: '', rid: newRequestId() }]);
+       setPaymentRows([{ id: Date.now(), mode: 'cash', ledgerId: 0, amount: '', ref: '', rid: newRequestId() }]);
       setShowPaymentForm(false);
     } catch (e: any) {
       toast.error(e?.data?.error || e?.message || 'Failed to collect payment');
