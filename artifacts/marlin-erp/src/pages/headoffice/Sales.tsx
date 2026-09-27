@@ -1184,7 +1184,9 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
     let payFields: Record<string, unknown> = {};
     if (payNow) {
       if (formReceiveOptionsForMode.length > 0 && !receiveLedgerId) {
-        toast.error('Pick the Cash / Bank account the money went into.');
+        toast.error(data.paymentMode === 'online'
+          ? 'Select the Online account for this settlement.'
+          : 'Pick the Cash / Bank account the money went into.');
         return;
       }
       if (amountReceivedStr !== '') {
@@ -2000,27 +2002,14 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                 <FormField control={form.control} name="paymentMode" render={({ field }) => (
                   <FormItem>
                     <FormLabel>Payment Mode <span className="text-destructive">*</span></FormLabel>
-                    <div className="flex items-center gap-2">
-                      <Select onValueChange={v => field.onChange(v)} value={editItem ? field.value : (field.value === 'credit' ? '' : field.value)}>
-                        <FormControl><SelectTrigger><SelectValue placeholder="Select mode" /></SelectTrigger></FormControl>
-                        <SelectContent>
-                          {(editItem ? paymentModeOptions : createModeOptions).map(m => (
-                            <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      {!editItem && watchPaymentMode === 'online' && (
-                        <ReceiveIntoSelect
-                          locationType={watchLocationType}
-                          locationId={watchLocationId}
-                          value={receiveLedgerId}
-                          onChange={setReceiveLedgerId}
-                          mode="online"
-                          compact
-                          className="min-w-0 flex-1"
-                        />
-                      )}
-                    </div>
+                    <Select onValueChange={v => field.onChange(v)} value={editItem ? field.value : (field.value === 'credit' ? '' : field.value)}>
+                      <FormControl><SelectTrigger><SelectValue placeholder="Select mode" /></SelectTrigger></FormControl>
+                      <SelectContent>
+                        {(editItem ? paymentModeOptions : createModeOptions).map(m => (
+                          <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                     {!editItem && (
                       <label className="mt-2 flex items-center gap-2 text-sm font-medium">
                         <Checkbox
@@ -2056,10 +2045,9 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                 </FormItem>
               )} />
 
-              {/* Receive Into at billing — create mode, non-credit. Cash uses
-                  the location's active cash account; Bank uses an assigned
-                  electronic account. Named online modes go to Electronic
-                  Clearing and are selected later in Reconciliation. */}
+              {/* Receive Into at billing — create mode, non-credit. The Online
+                  account is selected in the Settlement field and remains held
+                  for reconciliation after the sale is recorded. */}
               {!editItem && watchPaymentMode !== 'credit' && (
                 formReceiveOptionsForMode.length > 0
                 || watchPaymentMode === 'bank'
@@ -2077,9 +2065,12 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                     <div className="rounded-lg border border-border bg-muted/20 p-3 space-y-3" data-testid="section-payment-collection">
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                       <div className="flex flex-col gap-1.5">
-                        {formReceiveOptionsForMode.length > 0 && watchPaymentMode !== 'online' ? (
+                        {formReceiveOptionsForMode.length > 0 ? (
                           <>
-                            <span className="text-sm font-medium">Receive Into <span className="text-destructive">*</span></span>
+                            <span className="text-sm font-medium">
+                              {watchPaymentMode === 'online' ? 'Settlement' : 'Receive Into'}
+                              {' '}<span className="text-destructive">*</span>
+                            </span>
                             <ReceiveIntoSelect
                               locationType={watchLocationType}
                               locationId={watchLocationId}
@@ -2087,6 +2078,9 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                               onChange={setReceiveLedgerId}
                               mode={watchPaymentMode === 'cash' ? 'cash' : watchPaymentMode === 'upi' ? 'upi' : watchPaymentMode === 'bank' ? 'bank' : 'online'}
                             />
+                            {watchPaymentMode === 'online' && (
+                              <span className="text-xs text-amber-700">Held for reconciliation</span>
+                            )}
                           </>
                         ) : (
                           <>
