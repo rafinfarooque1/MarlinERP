@@ -36,6 +36,7 @@ import {
 } from '@/pages/reports/shared';
 import { DashboardShareReport, type ShareKpi } from './DashboardShareReport';
 import { DashboardLocationBreakdown } from './DashboardLocationBreakdown';
+import { DashboardFinancialMatrixSection } from './DashboardFinancialMatrix';
 
 // ── Small helpers ───────────────────────────────────────────────────────────
 
@@ -1012,6 +1013,13 @@ export default function Dashboard() {
             onOpenExpiry={drillTo('/reports/inventory', 'near_expiry')}
           />
         </div>
+        <DashboardFinancialMatrixSection
+          data={bi?.financialMatrix}
+          isLoading={isLoading}
+          isError={isError}
+          fromDate={range.from || undefined}
+          toDate={range.to || undefined}
+        />
       </div>
       {/* Off-screen KPI share report — exists only to be photographed by the
           Share button. Fixed left offset keeps it out of view and out of the
