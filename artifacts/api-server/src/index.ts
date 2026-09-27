@@ -4800,27 +4800,29 @@ await pool.query(`
   }
 }
 
-// Cash & Bank ownership is one account → one location. Do not silently
-// canonicalize legacy multi-location memberships at boot: choosing a member
-// changes the meaning of future vouchers and can make historical ownership
-// appear to move. The account routes reject ambiguous writes and the remaining
-// rows are reported for an explicit, reviewed data migration.
+// Cash, Bank, and Online memberships describe availability and may be
+// multi-location. Do not canonicalize memberships at boot: choosing a member
+// changes future voucher availability. Legacy UPI/Other rows are included in
+// the multi-location allowlist because the Online migration below converts
+// them; only unknown account types should be reported here.
 try {
   const { rows } = await pool.query(`
-    SELECT account_id, COUNT(*)::int AS memberships
-      FROM cash_bank_account_locations
-     GROUP BY account_id
+    SELECT l.account_id, COUNT(*)::int AS memberships
+      FROM cash_bank_account_locations l
+      JOIN cash_bank_accounts c ON c.id = l.account_id
+     WHERE c.account_type NOT IN ('cash', 'bank', 'online', 'upi', 'other')
+     GROUP BY l.account_id
     HAVING COUNT(*) > 1
-    ORDER BY account_id
+    ORDER BY l.account_id
     LIMIT 50
   `);
   if (rows.length > 0) {
     console.error(
-      `[migration] cash_bank_single_location_v2 NOT APPLIED: ${rows.length} account(s) still have multiple memberships; no existing data was reassigned`,
+      `[migration] unsupported multi-location memberships found on ${rows.length} account(s); no existing data was reassigned`,
     );
   }
 } catch (e) {
-  console.error(`[migration] cash_bank_single_location_v2 diagnostic unavailable: ${(e as Error).message}`);
+  console.error(`[migration] cash-bank location-membership diagnostic unavailable: ${(e as Error).message}`);
 }
 
 // One-time: seed a ready-to-use "Packing & Delivery Recovery" ledger under

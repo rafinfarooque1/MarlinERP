@@ -37,7 +37,7 @@ export interface CashBankAccount {
   /** @nullable */
   ledgerId?: number | null;
   /**
-     * Legacy primary location. Bank accounts may be assigned to multiple warehouses.
+     * Legacy primary location; for multi-location accounts this is the first selected location.
      * @nullable
      */
   locationType: CashBankAccountLocationType;
@@ -45,11 +45,11 @@ export interface CashBankAccount {
   locationId?: number | null;
   /** @nullable */
   locationName?: string | null;
-  /** Locations where this account is available. Bank assignments are warehouse memberships. */
+  /** Locations where this account is available. */
   locations?: CashBankLocation[];
   /** module = managed on this screen; location = a branch till owned by the Locations module (read-only here); system = the Cash / Bank Accounts head itself; ledger = another ledger in the subtree. */
   source?: CashBankAccountSource;
   readOnly?: boolean;
-  /** Bank/UPI accounts only. When true, collections routed into this account land in Electronic Clearing first and reach the bank balance through Reconciliation; when false, they post straight into the account's ledger. */
+  /** Bank/Online accounts only. When true, collections routed into this account land in Electronic Clearing first and reach the bank balance through Reconciliation; when false, they post straight into the account's ledger. */
   requiresReconciliation?: boolean;
 }

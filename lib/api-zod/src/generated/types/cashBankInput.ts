@@ -15,17 +15,17 @@ export interface CashBankInput {
   bankName?: string;
   accountNumber?: string;
   ifscCode?: string;
-  /** Legacy single-location input for cash, UPI, other, and older clients. */
+  /** Legacy single-location input for older clients; prefer locations for new Cash, Bank, and Online accounts. */
   locationType?: CashBankInputLocationType;
   /** Required with locationType when using legacy single-location input. */
   locationId?: number;
   /**
-     * Bank accounts can be assigned to one or more warehouses.
+     * Cash, Bank, and Online accounts can be assigned to one or more locations.
      * @minItems 1
      */
   locations?: CashBankLocation[];
   /** Recorded as the backing ledger's opening balance (debit) through the opening-balances store — never a stored column. Absent or blank means 0. */
   openingBalance?: number;
-  /** Bank/UPI accounts only — whether collections into this account must pass through Reconciliation before hitting the bank balance. Defaults to true for bank/UPI/other, ignored for cash. */
+  /** Bank/Online accounts only — whether collections into this account must pass through Reconciliation before hitting the bank balance. Defaults to true for bank/online, ignored for cash. */
   requiresReconciliation?: boolean;
 }

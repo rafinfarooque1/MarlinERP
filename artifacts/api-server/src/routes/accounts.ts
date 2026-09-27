@@ -2819,7 +2819,15 @@ router.get("/accounts/cash-bank", requireModuleView("page:/accounts/cash-bank"),
 
   const [{ rows: accounts }, { rows: whs }, { rows: outs }, { rows: tree }] = await Promise.all([
     pool.query(`SELECT c.*,
-      COALESCE((SELECT json_agg(json_build_object('location_type', l.location_type, 'location_id', l.location_id))
+      COALESCE((SELECT json_agg(
+                          json_build_object('location_type', l.location_type, 'location_id', l.location_id)
+                          ORDER BY CASE
+                            WHEN l.location_type = c.location_type
+                             AND l.location_id = COALESCE(c.location_id, 0) THEN 0
+                            ELSE 1
+                          END,
+                          l.location_type, l.location_id
+                        )
                 FROM cash_bank_account_locations l WHERE l.account_id = c.id), '[]'::json) AS memberships
       FROM cash_bank_accounts c ORDER BY c.id`),
     pool.query(`SELECT id, name, cash_ledger_id FROM warehouses`),
@@ -3225,10 +3233,17 @@ router.patch("/accounts/cash-bank/:id", requireModuleAction("page:/accounts/cash
     await rebalanceCashBankOpeningEquity(pool);
   }
 
-  const [{ rows: [fresh] }, { rows: freshMemberships }] = await Promise.all([
-    pool.query(`SELECT * FROM cash_bank_accounts WHERE id = $1`, [id]),
-    pool.query(`SELECT location_type, location_id FROM cash_bank_account_locations WHERE account_id = $1 ORDER BY location_type, location_id`, [id]),
-  ]);
+  const { rows: [fresh] } = await pool.query(`SELECT * FROM cash_bank_accounts WHERE id = $1`, [id]);
+  const { rows: freshMemberships } = await pool.query(
+    `SELECT location_type, location_id
+       FROM cash_bank_account_locations
+      WHERE account_id = $1
+      ORDER BY CASE
+        WHEN location_type = $2 AND location_id = $3 THEN 0
+        ELSE 1
+      END, location_type, location_id`,
+    [id, fresh.location_type ?? "headoffice", Number(fresh.location_id ?? 0)],
+  );
   // The response carries the DERIVED balance (postings + openings), same as the
   // list — a stale zero here would flash a wrong figure onto the screen.
   let derived: number | null = null;

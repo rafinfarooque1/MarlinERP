@@ -30,6 +30,8 @@ import { TableSkeleton } from '@/components/app/loading-skeletons';
 import { TablePager, useClientPage } from '@/components/ui/table-pager';
 
 const BAD_BALANCE = 'Please enter a valid opening balance.';
+const supportsMultipleLocations = (accountType: string) =>
+  accountType === 'cash' || accountType === 'bank' || accountType === 'online';
 
 const schema = z.object({
   name: z.string().min(2, 'Name required (at least 2 characters)'),
@@ -42,7 +44,7 @@ const schema = z.object({
   accountNumber: z.string().optional(),
   bankName: z.string().optional(),
   ifscCode: z.string().optional(),
-  // Bank/UPI only: ON = default-routed collections pass through Reconciliation;
+  // Bank/Online only: ON = default-routed collections pass through Reconciliation;
   // an explicit Receive-Into account selection always posts to that account.
   requiresReconciliation: z.boolean(),
   // Coercion turns the input element's string into a number, and blank into 0
@@ -56,12 +58,10 @@ const schema = z.object({
     .multipleOf(0.01, 'Opening balance can have at most two decimal places.')
     .max(9999999999.99, 'Opening balance is larger than this field can store.'),
 }).superRefine((value, ctx) => {
-  if (value.accountType === 'bank' || value.accountType === 'cash') {
+  if (supportsMultipleLocations(value.accountType)) {
     if (value.locationKeys.length === 0) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['locationKeys'], message: 'Select at least one location.' });
     }
-  } else if (!value.locationKey) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['locationKey'], message: 'Select a location.' });
   }
 });
 type FormValues = z.infer<typeof schema>;
@@ -130,7 +130,7 @@ export default function CashBank() {
   };
 
   const onSubmit = (data: FormValues) => {
-    const location = data.locationKey ? splitLocationKey(data.locationKey) : null;
+    const locations = data.locationKeys.map((key) => splitLocationKey(key));
     if (isEdit) {
       // Opening balance is only sent when the user typed one — 0 would
       // otherwise silently wipe an existing opening figure on every rename.
@@ -139,9 +139,7 @@ export default function CashBank() {
         id: editing.id,
         data: {
            name: data.name, bankName: data.bankName, accountNumber: data.accountNumber, ifscCode: data.ifscCode,
-            ...((data.accountType === 'bank' || data.accountType === 'cash')
-              ? { locations: data.locationKeys.map((key) => splitLocationKey(key)) }
-             : location ? { locationType: location.locationType, locationId: location.locationId } : {}),
+          locations,
           ...(dirty.openingBalance ? { openingBalance: data.openingBalance } : {}),
           // Cash accounts never send the flag — the server rejects it for them.
           ...(data.accountType !== 'cash' ? { requiresReconciliation: data.requiresReconciliation } : {}),
@@ -155,9 +153,7 @@ export default function CashBank() {
       createMutation.mutate({
         data: {
           ...rest,
-           ...((data.accountType === 'bank' || data.accountType === 'cash')
-             ? { locations: data.locationKeys.map((key) => splitLocationKey(key)) }
-            : location ? location : {}),
+          locations,
         } as any,
       }, {
         onSuccess: () => { toast.success('Account added — its ledger now appears under Chart of Accounts'); refresh(); setIsOpen(false); form.reset(); },
@@ -405,7 +401,7 @@ export default function CashBank() {
             <DialogDescription>
               {isEdit
                 ? 'Renaming the account renames its ledger too — the chart and this screen never disagree.'
-                : 'A ledger is created automatically under Cash or Bank Accounts in the chart.'}
+                : 'A ledger is created automatically under Cash, Bank Accounts, or Online in the chart.'}
             </DialogDescription>
           </DialogHeader>
           <Form {...form}>
@@ -427,7 +423,7 @@ export default function CashBank() {
                     {isEdit && <p className="text-xs text-muted-foreground">Type decides the ledger's group and cannot change.</p>}
                     <FormMessage /></FormItem>
                 )} />
-                {watchType === 'bank' || watchType === 'cash' ? (
+                {supportsMultipleLocations(watchType) && (
                   <FormField control={form.control} name="locationKeys" render={({ field }) => (
                     <FormItem className="sm:col-span-2">
                       <FormLabel>Available at locations <span className="text-destructive">*</span></FormLabel>
@@ -452,24 +448,7 @@ export default function CashBank() {
                           );
                         })}
                       </div>
-                      <p className="text-xs text-muted-foreground">This {watchType === 'cash' ? 'Cash' : 'Bank'} account will be available in every selected location.</p>
-                      <FormMessage />
-                    </FormItem>
-                  )} />
-                ) : (
-                  <FormField control={form.control} name="locationKey" render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Location <span className="text-destructive">*</span></FormLabel>
-                      <Select onValueChange={field.onChange} value={field.value}>
-                        <FormControl><SelectTrigger><SelectValue placeholder="Select location" /></SelectTrigger></FormControl>
-                        <SelectContent>
-                          {locationOptions.map((location) => (
-                            <SelectItem key={location.key} value={location.key}>
-                              {location.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                       <p className="text-xs text-muted-foreground">This {watchType === 'cash' ? 'Cash' : watchType === 'bank' ? 'Bank' : 'Online'} account will be available in every selected location.</p>
                       <FormMessage />
                     </FormItem>
                   )} />
