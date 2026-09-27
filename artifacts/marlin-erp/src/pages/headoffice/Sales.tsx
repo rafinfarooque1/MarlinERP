@@ -3022,7 +3022,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                     {!showPaymentForm ? (
                       <Button size="sm" className="w-full h-8" onClick={() => {
                         const bal = Number((viewItem as any).balanceDue ?? 0).toFixed(2);
-                        setPaymentRows([{ id: Date.now(), ledgerId: 0, amount: bal, ref: '', rid: newRequestId() }]);
+                        setPaymentRows([{ id: Date.now(), mode: 'cash', ledgerId: 0, amount: bal, ref: '', rid: newRequestId() }]);
                         setPaymentDate(new Date().toISOString().split('T')[0]);
                         setShowPaymentForm(true);
                       }}>
@@ -3041,16 +3041,12 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                             <div key={row.id} className="border border-border/60 rounded-lg p-2 bg-muted/10 space-y-1.5">
                               <div className="flex items-center gap-1.5">
                                 <div className="flex-1 grid grid-cols-2 gap-1.5">
-                                  <div>
-                                    <p className="text-[10px] text-muted-foreground mb-1">Receive Into</p>
-                                    <ReceiveIntoSelect
-                                      locationType={(viewItem as any)?.locationType}
-                                      locationId={(viewItem as any)?.locationId}
-                                      value={row.ledgerId}
-                                      onChange={v => setPaymentRows(rs => rs.map(r => r.id === row.id ? { ...r, ledgerId: v } : r))}
-                                      className="h-7 text-xs"
-                                    />
-                                  </div>
+                                  <PaymentModeSelector
+                                    key={`sale-collect-mode-${row.id}`}
+                                    value={row.mode}
+                                    onValueChange={mode => setPaymentRowMode(row.id, mode)}
+                                    disabled={createPaymentMutation.isPending}
+                                  />
                                   <div>
                                     <p className="text-[10px] text-muted-foreground mb-1">Amount (₹)</p>
                                     <Input
@@ -3059,6 +3055,31 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                                       onChange={e => setPaymentRows(rs => rs.map(r => r.id === row.id ? { ...r, amount: e.target.value } : r))}
                                       className="h-7 text-xs font-mono"
                                     />
+                                  </div>
+                                  <div className="col-span-2">
+                                    <p className="text-[10px] text-muted-foreground mb-1">
+                                      {row.mode === 'online' ? 'Online sub-platform' : row.mode === 'cash' ? 'Receive Into (Cash)' : 'Settlement'}
+                                    </p>
+                                    {row.mode === 'bank' || row.mode === 'upi' ? (
+                                      <div className="min-h-7 rounded-md border border-amber-500/20 bg-amber-500/5 px-2 py-1.5 text-xs text-amber-700">
+                                        {receiveOptionsLoading
+                                          ? `Loading this location's default ${row.mode === 'upi' ? 'UPI' : 'bank'} account…`
+                                          : receiveOptionsByMode[row.mode][0]
+                                            ? `Default ${row.mode === 'upi' ? 'UPI' : 'bank'} account: ${receiveOptionsByMode[row.mode][0].name}.`
+                                            : `No default ${row.mode === 'upi' ? 'UPI' : 'bank'} account is assigned to this location.`}
+                                        {' '}Held for reconciliation.
+                                      </div>
+                                    ) : (
+                                      <ReceiveIntoSelect
+                                        locationType={(viewItem as any)?.locationType}
+                                        locationId={(viewItem as any)?.locationId}
+                                        value={row.ledgerId}
+                                        onChange={ledgerId => setPaymentRows(rows => rows.map(r => r.id === row.id ? { ...r, ledgerId } : r))}
+                                        disabled={createPaymentMutation.isPending}
+                                        mode={row.mode === 'cash' ? 'cash' : 'online'}
+                                        className="h-7 text-xs"
+                                      />
+                                    )}
                                   </div>
                                 </div>
                                 {paymentRows.length > 1 && (
@@ -3091,7 +3112,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                           const remaining = bal - total;
                           return remaining > 0.001 ? (
                             <button
-                              onClick={() => setPaymentRows(rs => [...rs, { id: Date.now(), ledgerId: 0, amount: remaining.toFixed(2), ref: '', rid: newRequestId() }])}
+                              onClick={() => setPaymentRows(rs => [...rs, { id: Date.now(), mode: 'cash', ledgerId: 0, amount: remaining.toFixed(2), ref: '', rid: newRequestId() }])}
                               className="flex items-center gap-1 text-xs text-primary hover:underline"
                             >
                               <Plus className="w-3 h-3" /> Split into another account
