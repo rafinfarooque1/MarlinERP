@@ -1,0 +1,19 @@
+Address the four primary workflow and presentation issues identified in the September 28 ERP audit.
+
+CONSTRAINTS:
+- Do not run DROP, TRUNCATE, or destructive DDL on existing tables.
+- Use parameterized raw SQL or existing migration patterns in `artifacts/api-server/src/migrations/`.
+
+TASKS:
+1. GST Report Adjustments (High Priority):
+   - Update the endpoints/calculations for GSTR-1, GSTR-3B, and HSN summaries to actively query and incorporate credit-note and debit-note adjustments into the return-period totals. Ensure tax liabilities are accurately reduced by sales returns.
+2. Invoice Audit Scoping (Medium Priority):
+   - Fix the reconciliation audit query that checks for duplicate invoices. Update the `GROUP BY` clause to include both `invoice_number` AND `location_id` (or the relevant location identifier) to prevent false-positive collisions across different branches.
+3. Financial Matrix Opening Balances (Presentation):
+   - Update the Dashboard Financial Matrix data aggregation. For opening cash/bank balances that lack a specific location attribution (company-level balances), render them in an "Unallocated" or "Head Office" column. Ensure the matrix's Grand Total row includes these amounts so it matches the true ledger position.
+4. Dashboard Hydration & Share Feature Fix (Frontend):
+   - Locate and fix the invalid DOM nesting (e.g., `<div>` inside `<p>`) causing the React hydration warning on the dashboard.
+   - Debug and resolve the failed image capture logic for the Financial Matrix "Share" button. If using html2canvas/dom-to-image, ensure the target ref is correctly isolated and rendered, or fallback to a styled `window.print()` targeting just that component.
+5. Verification:
+   - Run `pnpm --filter @workspace/api-server run typecheck` and `pnpm --filter @workspace/marlin-erp run typecheck` to ensure no errors.
+   - Run `pnpm --filter @workspace/marlin-erp run build` to verify the frontend compiles without the previous chunk/sourcemap failure.
