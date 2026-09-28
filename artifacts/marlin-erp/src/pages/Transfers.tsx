@@ -8,7 +8,7 @@
  * Branch employees (warehouse / outlet) — server already scopes the list to
  *   their branch; "From" is locked to their location in the create form.
  */
-import { useState, useMemo, useRef } from 'react';
+import { useState, useMemo, useRef, useEffect } from 'react';
 import { SearchableItemSelect } from '@/components/ui/searchable-item-select';
 import {
   useListStockTransfers, useCreateStockTransfer,
@@ -180,6 +180,14 @@ function BatchPicker({ itemId, quantity, unit, fromType, fromId, override, onCha
   );
 }
 
+function todayDateInputValue(): string {
+  const today = new Date();
+  const year = today.getFullYear();
+  const month = String(today.getMonth() + 1).padStart(2, '0');
+  const day = String(today.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 // ── Approve / Reject dialog ───────────────────────────────────────────────────
 function ApproveDialog({
   transfer, allItemsMap, open, onClose,
@@ -188,6 +196,11 @@ function ApproveDialog({
   const rejectMutation  = useRejectTransfer();
   const qc = useQueryClient();
   const { data: me } = useGetMe();
+  const [receivedDate, setReceivedDate] = useState(todayDateInputValue);
+
+  useEffect(() => {
+    if (open) setReceivedDate(todayDateInputValue());
+  }, [open, transfer?.id]);
 
   // A transfer line can repeat the same product for a different batch. Keep
   // receive state keyed by the server-issued line identity, not product id.
@@ -212,7 +225,12 @@ function ApproveDialog({
       materialType: li.materialType ?? 'item',
     }));
     approveMutation.mutate(
-      { id: transfer.id, receivedLineItems, approvedBy: (me as any)?.name ?? (me as any)?.username ?? 'admin' },
+      {
+        id: transfer.id,
+        receivedLineItems,
+        approvedBy: (me as any)?.name ?? (me as any)?.username ?? 'admin',
+        receivedDate,
+      },
       {
         onSuccess: () => {
           toast.success('Transfer approved — stock credited');
@@ -250,7 +268,7 @@ function ApproveDialog({
               <PackageCheck className="w-5 h-5 text-primary" /> Receive &amp; Approve Transfer
             </DialogTitle>
             <DialogDescription>
-              Verify the physical stock received. Adjust quantities if anything is short, then approve.
+              Verify the physical stock and actual receipt date. The receipt date is used for stock-ledger posting.
             </DialogDescription>
           </DialogHeader>
 
@@ -263,6 +281,16 @@ function ApproveDialog({
               <p className="font-medium">{transfer.fromName}<span className="text-muted-foreground capitalize ml-1">({transfer.fromType})</span></p></div>
             <div><p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Receiving At</p>
               <p className="font-medium">{transfer.toName}<span className="text-muted-foreground capitalize ml-1">({transfer.toType})</span></p></div>
+            <div>
+              <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Received Date</p>
+              <Input
+                type="date"
+                value={receivedDate}
+                onChange={e => setReceivedDate(e.target.value)}
+                className="h-9"
+                required
+              />
+            </div>
             <div className="col-span-2">
               {(transfer as any).transferType === 'interstate'
                 ? <Badge variant="outline" className="text-orange-400 border-orange-400/40 text-xs">Interstate Transfer (IGST)</Badge>
@@ -330,7 +358,7 @@ function ApproveDialog({
             <Button variant="destructive" type="button" onClick={() => setShowRejectConfirm(true)}>
               <XCircle className="w-4 h-4 mr-2" /> Reject
             </Button>
-            <Button type="button" onClick={handleApprove} disabled={approveMutation.isPending}
+            <Button type="button" onClick={handleApprove} disabled={approveMutation.isPending || !receivedDate}
               className="bg-emerald-600 hover:bg-emerald-700 text-white">
               <CheckCircle2 className="w-4 h-4 mr-2" />
               {approveMutation.isPending ? 'Approving…' : 'Approve & Credit Stock'}

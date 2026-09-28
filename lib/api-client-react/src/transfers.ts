@@ -14,11 +14,16 @@ export interface ReceivedLineItem {
 export function useApproveTransfer() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, receivedLineItems, approvedBy }: { id: number; receivedLineItems: ReceivedLineItem[]; approvedBy?: string }) =>
+    mutationFn: ({ id, receivedLineItems, approvedBy, receivedDate }: {
+      id: number;
+      receivedLineItems: ReceivedLineItem[];
+      approvedBy?: string;
+      receivedDate?: string;
+    }) =>
       customFetch<{ success: boolean; status: string }>(`/api/stock/transfers/${id}/approve`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ receivedLineItems, approvedBy }),
+        body: JSON.stringify({ receivedLineItems, approvedBy, receivedDate }),
       }),
     onSuccess: () => {
       // Transfers list
