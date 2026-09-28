@@ -32,7 +32,7 @@ import { startBackupScheduler } from "./lib/backup/scheduler";
 import { PasswordService } from "./lib/password";
 import { PRODUCT_KINDS, PRODUCT_TABLE, nextProductIdentity } from "./lib/productIdentity";
 import { nextVoucherNumber, financialYearLabel, salesInvoiceNumber, SALES_SERIES, type SalesSeries } from "./lib/voucherNumber";
-import { provisionSalaryLedgers } from "./lib/payrollLedgers";
+import { provisionSalaryLedgers, provisionSalaryLedgersForAllEmployees } from "./lib/payrollLedgers";
 import { PAGE_PERM_KEYS, LEGACY_MODULE_TO_PAGES } from "./lib/pagePermissions";
 import { ensureChartStructure } from "./lib/chartGroups";
 import { DATE_COLUMNS } from "./lib/dateColumns";
@@ -4961,6 +4961,7 @@ await addWarehouseRent(pool);
 // Daily salary accrual. Runs after the ledger tables exist so the per-employee
 // salary ledgers can be provisioned on an employee's first accrued day.
 await addSalaryAccrual(pool);
+await provisionSalaryLedgersForAllEmployees(pool);
 
 // Invoice share links: the stateful layer behind customer-facing invoice URLs.
 await addInvoiceShareLinks(pool);

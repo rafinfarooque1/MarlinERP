@@ -27,6 +27,7 @@ export const employeesTable = pgTable("employees", {
   branchType: text("branch_type").notNull(), // headoffice, warehouse, outlet
   branchId: integer("branch_id").notNull(),
   salary: numeric("salary", { precision: 10, scale: 2 }).notNull().default("0"),
+  dailyWage: numeric("daily_wage", { precision: 15, scale: 2 }),
   joinDate: date("join_date", { mode: "string" }).notNull(),
   photoUrl: text("photo_url"),
   isActive: boolean("is_active").notNull().default(true),

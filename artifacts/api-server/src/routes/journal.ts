@@ -1779,6 +1779,11 @@ export async function buildDerivedPostings(opts: { toDate?: string; q?: Q } = {}
      JOIN employees e ON e.id = a.employee_id
      JOIN account_ledgers le ON le.code = 'SAL-EMP-' || a.employee_id
      JOIN account_ledgers lp ON lp.code = 'SAL-PAY-' || a.employee_id
+     AND NOT EXISTS (
+       SELECT 1 FROM salary_accrual_journal_links salink
+        WHERE salink.employee_id = a.employee_id
+          AND salink.accrual_date = a.accrual_date
+     )
      WHERE TRUE ${upTo("a.accrual_date", sap)}`, sap
   );
   for (const s of salaryRows) {

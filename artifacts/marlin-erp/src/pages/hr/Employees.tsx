@@ -37,6 +37,11 @@ import { EmptyState } from '@/components/app/empty-state';
 import { TableSkeleton } from '@/components/app/loading-skeletons';
 import { Wallet, UserMinus } from 'lucide-react';
 
+const dailyWageValue = z.preprocess(
+  value => value === '' ? null : value,
+  z.coerce.number().min(0).nullable().optional(),
+);
+
 const schema = z.object({
   name: z.string().min(1, 'Name required'),
   username: z.string().min(1, 'Username required'),
@@ -46,6 +51,7 @@ const schema = z.object({
   branchType: z.enum(['headoffice', 'warehouse', 'outlet']),
   branchId: z.coerce.number().min(0),
   salary: z.coerce.number().min(0),
+  dailyWage: dailyWageValue,
   isProductionStaff: z.boolean().default(false),
   joinDate: z.string().min(1, 'Join date required'),
 });
@@ -59,6 +65,7 @@ const editSchema = z.object({
   branchType: z.enum(['headoffice', 'warehouse', 'outlet']),
   branchId: z.coerce.number().min(0),
   salary: z.coerce.number().min(0),
+  dailyWage: dailyWageValue,
   isProductionStaff: z.boolean().default(false),
   // Why the salary changed. Salary accrues daily, so a revision rewrites every
   // unapproved month at the new figure — the reason is kept with that audit entry.
@@ -129,8 +136,9 @@ function PayStructureEditor({ employee }: { employee: any }) {
     else setDeductions(effectiveDeductions.filter((_, i) => i !== idx));
   };
 
-  const basicSalary = employee.salary;
-  const perDay = basicSalary / effectiveWD;
+  const dailyWage = employee.dailyWage == null ? null : Number(employee.dailyWage);
+  const basicSalary = dailyWage == null ? Number(employee.salary) : dailyWage * effectiveWD;
+  const perDay = dailyWage ?? basicSalary / effectiveWD;
   const grossWithAllowances = effectiveAllowances.reduce((sum, a) => {
     if (a.enabled === false) return sum;
     return sum + (a.type === 'fixed' ? a.value : basicSalary * a.value / 100);
@@ -287,13 +295,13 @@ export default function Employees() {
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
-    defaultValues: { name: '', username: '', email: '', phone: '', hierarchyId: 0, branchType: 'headoffice', branchId: 0, salary: 0, isProductionStaff: false, joinDate: new Date().toISOString().split('T')[0] },
+    defaultValues: { name: '', username: '', email: '', phone: '', hierarchyId: 0, branchType: 'headoffice', branchId: 0, salary: 0, dailyWage: null, isProductionStaff: false, joinDate: new Date().toISOString().split('T')[0] },
   });
   const watchBranchType = form.watch('branchType');
 
   const editForm = useForm<EditFormValues>({
     resolver: zodResolver(editSchema),
-    defaultValues: { name: '', email: '', phone: '', hierarchyId: 0, branchType: 'headoffice', branchId: 0, salary: 0, isProductionStaff: false },
+    defaultValues: { name: '', email: '', phone: '', hierarchyId: 0, branchType: 'headoffice', branchId: 0, salary: 0, dailyWage: null, isProductionStaff: false },
   });
   const watchEditBranchType = editForm.watch('branchType');
 
@@ -305,6 +313,7 @@ export default function Employees() {
       // Legacy records may still say 'production' — that branch type was retired into Head Office
       branchType: emp.branchType === 'production' ? 'headoffice' : emp.branchType,
       branchId: emp.branchId, salary: Number(emp.salary),
+      dailyWage: emp.dailyWage == null ? null : Number(emp.dailyWage),
       isProductionStaff: !!emp.isProductionStaff,
       revisionReason: '',
     });
@@ -401,7 +410,11 @@ export default function Employees() {
 
   const activeCount   = employees.filter(e => e.isActive).length;
   const inactiveCount = employees.filter(e => !e.isActive).length;
-  const activeMonthlySalary = employees.filter(e => e.isActive).reduce((sum, e) => sum + Number((e as any).salary || 0), 0);
+  const currentDays = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate();
+  const activeMonthlySalary = employees.filter(e => e.isActive).reduce((sum, e) => {
+    const wage = (e as any).dailyWage;
+    return sum + (wage == null ? Number((e as any).salary || 0) : Number(wage) * currentDays);
+  }, 0);
 
   if (!perm.isLoading && !perm.canView) {
     return (
@@ -425,12 +438,12 @@ export default function Employees() {
           actions={
             <>
               {perm.canDownload && (
-                <Button variant="outline" size="sm" onClick={() => downloadCSV('employees.csv', filtered.map(e => ({ Name: e.name, Username: e.username, Role: e.hierarchyName, Branch: e.branchName, Type: e.branchType, Salary: e.salary, 'Production Staff': (e as any).isProductionStaff ? 'Yes' : 'No', Status: statusLabel(e), 'Last Working Day': (e as any).lastWorkingDate || '' })))}>
+                <Button variant="outline" size="sm" onClick={() => downloadCSV('employees.csv', filtered.map(e => ({ Name: e.name, Username: e.username, Role: e.hierarchyName, Branch: e.branchName, Type: e.branchType, Salary: e.salary, 'Daily Wage': (e as any).dailyWage ?? '', 'Production Staff': (e as any).isProductionStaff ? 'Yes' : 'No', Status: statusLabel(e), 'Last Working Day': (e as any).lastWorkingDate || '' })))}>
                   <Download className="w-4 h-4 mr-2" /> Export
                 </Button>
               )}
               {perm.canAdd && (
-                <Button onClick={() => { form.reset({ name: '', username: '', email: '', phone: '', hierarchyId: 0, branchType: 'headoffice', branchId: 0, salary: 0, joinDate: new Date().toISOString().split('T')[0] }); setIsOpen(true); }}>
+                <Button onClick={() => { form.reset({ name: '', username: '', email: '', phone: '', hierarchyId: 0, branchType: 'headoffice', branchId: 0, salary: 0, dailyWage: null, joinDate: new Date().toISOString().split('T')[0] }); setIsOpen(true); }}>
                   <Plus className="w-4 h-4 mr-2" /> Add Employee
                 </Button>
               )}
@@ -498,7 +511,7 @@ export default function Employees() {
                 <SortableHead k="employee" sort={sort}>Employee</SortableHead>
                 <SortableHead k="role" sort={sort}>Role</SortableHead>
                 <SortableHead k="location" sort={sort}>Location</SortableHead>
-                <SortableHead k="salary" sort={sort}>Salary</SortableHead>
+                <SortableHead k="salary" sort={sort}>Basic / Wage</SortableHead>
                 <SortableHead k="status" sort={sort}>Status</SortableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
@@ -530,7 +543,10 @@ export default function Employees() {
                     <div className="text-sm">{emp.branchName}</div>
                     <Badge variant="outline" className="text-[10px] capitalize">{emp.branchType}</Badge>
                   </TableCell>
-                  <TableCell className="font-mono text-sm">₹{Number(emp.salary || 0).toLocaleString('en-IN')}</TableCell>
+                  <TableCell className="font-mono text-sm">
+                    <div>₹{Number(emp.salary || 0).toLocaleString('en-IN')}/mo</div>
+                    {(emp as any).dailyWage != null && <div className="text-xs text-muted-foreground">₹{Number((emp as any).dailyWage).toFixed(2)}/day</div>}
+                  </TableCell>
                   <TableCell>
                     {emp.isActive ? (
                       <StatusBadge status="active" label="Active" />
@@ -647,6 +663,17 @@ export default function Employees() {
                 )} />
                 <FormField control={editForm.control} name="salary" render={({ field }) => (
                   <FormItem><FormLabel>Monthly Basic Salary ₹</FormLabel><FormControl><Input type="number" min={0} {...field} /></FormControl></FormItem>
+                )} />
+                <FormField control={editForm.control} name="dailyWage" render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Daily Wage ₹</FormLabel>
+                    <FormControl>
+                      <Input type="number" min={0} step="0.01" value={field.value ?? ''}
+                        onChange={e => field.onChange(e.target.value === '' ? null : e.target.value)} />
+                    </FormControl>
+                    <p className="text-xs text-muted-foreground">When set, this rate drives attendance accrual and payroll. Leave blank to use monthly salary.</p>
+                    <FormMessage />
+                  </FormItem>
                 )} />
               </div>
               <FormField control={editForm.control} name="revisionReason" render={({ field }) => (
@@ -830,6 +857,17 @@ export default function Employees() {
                 <FormField control={form.control} name="salary" render={({ field }) => (
                   <FormItem><FormLabel>Monthly Basic Salary ₹</FormLabel><FormControl><Input type="number" min={0} {...field} /></FormControl></FormItem>
                 )} />
+                <FormField control={form.control} name="dailyWage" render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Daily Wage ₹</FormLabel>
+                    <FormControl>
+                      <Input type="number" min={0} step="0.01" value={field.value ?? ''}
+                        onChange={e => field.onChange(e.target.value === '' ? null : e.target.value)} />
+                    </FormControl>
+                    <p className="text-xs text-muted-foreground">When set, this rate drives attendance accrual and payroll. Leave blank to use monthly salary.</p>
+                    <FormMessage />
+                  </FormItem>
+                )} />
                 <FormField control={form.control} name="joinDate" render={({ field }) => (
                   <FormItem><FormLabel>Join Date <span className="text-destructive">*</span></FormLabel><FormControl><Input type="date" {...field} /></FormControl><FormMessage /></FormItem>
                 )} />
@@ -909,6 +947,7 @@ export default function Employees() {
                 ['Email', viewItem.email || '—'],
                 ['Phone', viewItem.phone || '—'],
                 ['Basic Salary', `₹${Number(viewItem.salary || 0).toLocaleString('en-IN')}/mo`],
+                ['Daily Wage', viewItem.dailyWage == null ? 'Uses monthly salary rate' : `₹${Number(viewItem.dailyWage).toFixed(2)}/day`],
                 ['Production Staff', (viewItem as any).isProductionStaff ? 'Yes — wage charged to batches' : 'No'],
                 ['Join Date', viewItem.joinDate ? formatDate(viewItem.joinDate) : '—'],
                 ...((viewItem as any).lastWorkingDate
@@ -968,7 +1007,9 @@ export default function Employees() {
               <Settings2 className="w-5 h-5 text-primary" /> Pay Structure
             </SheetTitle>
             <SheetDescription>
-              {payStructureEmp?.name} · Basic ₹{Number(payStructureEmp?.salary || 0).toLocaleString('en-IN')}/mo
+              {payStructureEmp?.name} · {payStructureEmp?.dailyWage == null
+                ? `Basic ₹${Number(payStructureEmp?.salary || 0).toLocaleString('en-IN')}/mo`
+                : `Daily wage ₹${Number(payStructureEmp.dailyWage).toFixed(2)}`}
             </SheetDescription>
           </SheetHeader>
           {payStructureEmp && <PayStructureEditor employee={payStructureEmp} />}

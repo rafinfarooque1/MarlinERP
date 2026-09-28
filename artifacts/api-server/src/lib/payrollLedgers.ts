@@ -86,3 +86,14 @@ export async function provisionSalaryLedgers(
   );
   return { expenseLedgerId, payableLedgerId };
 }
+
+/** Provision both per-employee ledgers for every existing employee at boot. */
+export async function provisionSalaryLedgersForAllEmployees(pool: Pool): Promise<void> {
+  const { rows } = await pool.query(`SELECT id, name FROM employees ORDER BY id`);
+  for (const employee of rows) {
+    const ledgers = await provisionSalaryLedgers(pool, Number(employee.id), String(employee.name));
+    if (!ledgers.expenseLedgerId || !ledgers.payableLedgerId) {
+      throw new Error(`Could not provision salary ledgers for employee ${employee.id}`);
+    }
+  }
+}

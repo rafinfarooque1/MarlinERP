@@ -21,6 +21,11 @@ export interface Employee {
   branchId: number;
   branchName?: string;
   salary?: number;
+  /**
+     * @minimum 0
+     * @nullable
+     */
+  dailyWage?: number | null;
   joinDate?: string;
   /** @nullable */
   photoUrl?: string | null;

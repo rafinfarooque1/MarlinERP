@@ -16,5 +16,10 @@ export interface EmployeeInput {
   branchType: EmployeeInputBranchType;
   branchId: number;
   salary: number;
+  /**
+     * @minimum 0
+     * @nullable
+     */
+  dailyWage?: number | null;
   joinDate: string;
 }

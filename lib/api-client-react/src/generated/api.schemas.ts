@@ -56,6 +56,11 @@ export interface Employee {
   branchId: number;
   branchName?: string;
   salary?: number;
+  /**
+     * @minimum 0
+     * @nullable
+     */
+  dailyWage?: number | null;
   joinDate?: string;
   /** @nullable */
   photoUrl?: string | null;
@@ -957,6 +962,11 @@ export interface EmployeeInput {
   branchType: EmployeeInputBranchType;
   branchId: number;
   salary: number;
+  /**
+     * @minimum 0
+     * @nullable
+     */
+  dailyWage?: number | null;
   joinDate: string;
 }
 
@@ -977,6 +987,11 @@ export interface EmployeeUpdate {
   branchType?: EmployeeUpdateBranchType;
   branchId?: number;
   salary?: number;
+  /**
+     * @minimum 0
+     * @nullable
+     */
+  dailyWage?: number | null;
   isActive?: boolean;
   photoUrl?: string;
 }

@@ -23,6 +23,13 @@ type Pool = typeof _pool;
  * earlier version of the table already exists.
  */
 export async function addSalaryAccrual(pool: Pool): Promise<void> {
+  // Employee daily wage is an explicit per-day payroll rate. NULL deliberately
+  // preserves the existing monthly-salary calculation for employees not yet
+  // migrated by the business; it is not backfilled from historical salary.
+  await pool.query(
+    `ALTER TABLE employees ADD COLUMN IF NOT EXISTS daily_wage NUMERIC(15,2)`,
+  );
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS salary_accruals (
       id             SERIAL PRIMARY KEY,
@@ -87,20 +94,82 @@ export async function addSalaryAccrual(pool: Pool): Promise<void> {
   await pool.query(
     `ALTER TABLE salary_accruals ADD COLUMN IF NOT EXISTS attendance_basis TEXT`,
   );
-
-  // The engine now recomputes an open day in place when attendance changes, so
-  // a day can legitimately fall to zero. The old engine only ever inserted
-  // positive amounts, and a stale CHECK from an earlier revision would block
-  // that — assert the column simply allows it.
   await pool.query(
-    `ALTER TABLE salary_accruals ALTER COLUMN amount DROP NOT NULL`,
-  ).catch(() => {});
+    `ALTER TABLE salary_accruals ADD COLUMN IF NOT EXISTS daily_wage NUMERIC(15,2)`,
+  );
+
+  // Zero is a valid amount, but NULL is not. Normalize any legacy nulls first,
+  // then restore the table's original non-null contract if an older migration
+  // had loosened it.
   await pool.query(
     `UPDATE salary_accruals SET amount = 0 WHERE amount IS NULL`,
   );
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+         WHERE table_schema = current_schema()
+           AND table_name = 'salary_accruals'
+           AND column_name = 'amount'
+           AND is_nullable = 'YES'
+      ) THEN
+        ALTER TABLE salary_accruals ALTER COLUMN amount SET NOT NULL;
+      END IF;
+    END $$;
+  `);
 
   await addAttendanceUniqueness(pool);
   await addAttendanceAccrualCutover(pool);
+
+  // Immutable, source-linked system vouchers hold attendance accrual changes.
+  // The signed amount is positive for Dr Salary Expense / Cr Salary Payable
+  // and negative for the correcting reverse. This table is additive and never
+  // deletes or rewrites an existing voucher.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS salary_accrual_journal_links (
+      id           SERIAL PRIMARY KEY,
+      employee_id  INTEGER NOT NULL,
+      accrual_date DATE NOT NULL,
+      voucher_id   INTEGER NOT NULL UNIQUE REFERENCES journal_vouchers(id),
+      signed_amount NUMERIC(15,2) NOT NULL,
+      location_type TEXT NOT NULL DEFAULT 'headoffice',
+      location_id   INTEGER NOT NULL DEFAULT 0,
+      created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+         WHERE conname = 'salary_accrual_journal_links_employee_fk'
+      ) THEN
+        ALTER TABLE salary_accrual_journal_links
+          ADD CONSTRAINT salary_accrual_journal_links_employee_fk
+          FOREIGN KEY (employee_id) REFERENCES employees(id);
+      END IF;
+    END $$;
+  `);
+  await pool.query(
+    `ALTER TABLE salary_accrual_journal_links
+       ADD COLUMN IF NOT EXISTS location_type TEXT NOT NULL DEFAULT 'headoffice',
+       ADD COLUMN IF NOT EXISTS location_id INTEGER NOT NULL DEFAULT 0`,
+  );
+  // Preserve the original branch for links created before these columns were
+  // introduced; a later employee move then reverses in the old branch and
+  // recognises the revised amount in the new one.
+  await pool.query(
+    `UPDATE salary_accrual_journal_links l
+        SET location_type = COALESCE(v.location_type, l.location_type),
+            location_id = COALESCE(v.location_id, l.location_id)
+       FROM journal_vouchers v
+      WHERE v.id = l.voucher_id`,
+  );
+  await pool.query(
+    `CREATE INDEX IF NOT EXISTS salary_accrual_journal_links_source_idx
+       ON salary_accrual_journal_links (employee_id, accrual_date)`,
+  );
 }
 
 /**
