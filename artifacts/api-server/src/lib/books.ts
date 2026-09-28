@@ -548,7 +548,8 @@ async function inceptionDate(q: Q = pool): Promise<string | null> {
  * When a persisted cost checkpoint exists it supplies both the dated quantity
  * and value. Older periods without a checkpoint fall back to the quantity
  * rewind, but are explicitly marked unreliable rather than being presented as
- * historical cost truth.
+ * historical cost truth. Sender-owned in-transit stock is added from the
+ * reservation lifecycle and its recorded receipt date.
  */
 export async function stockAsOf(asOf: string | null | undefined, scope?: StockBranchScope | null, q: Q = pool): Promise<StockAtDate> {
   if (!isDate(asOf)) {
@@ -664,15 +665,33 @@ export async function stockAsOf(asOf: string | null | undefined, scope?: StockBr
     const [materialType, refId] = key.split(":");
     return { materialType: materialType as ValuedItem["materialType"], refId: Number(refId) };
   };
-  // Cost comes from the product master, the same avg-cost-else-cost rule
-  // `stockValuation()` applies, so both paths value a product identically.
-  const meta = await resolveProductNames(q as any, [...keys].map(parseKey));
+  // A dispatched transfer remains owned by its sender until its recorded
+  // receipt date. Reservation rows preserve the dispatch cost, so do not use a
+  // mutable product-master cost when rebuilding this historical position.
+  const transitRows = (await activeInTransit(q as any, { asOf }))
+    .filter((t) => !scope || (
+      scope.branchPairs?.length
+        ? scope.branchPairs.some((pair) =>
+            pair.type === t.branchType && Number(pair.id) === Number(t.branchId))
+        : scope.branchType === t.branchType
+          && (scope.branchId == null || Number(scope.branchId) === Number(t.branchId))
+    ));
+
+  // Cost for on-hand rows comes from persisted checkpoints where available,
+  // then the same avg-cost-else-cost product-master fallback as stockValuation.
+  // Transit rows use this lookup only for product identity and display names.
+  const meta = await resolveProductNames(q as any, [
+    ...[...keys].map(parseKey),
+    ...transitRows.map((t) => ({ materialType: t.materialType, refId: t.refId })),
+  ]);
 
   const byProduct = new Map<string, ValuedItem>();
   let total = 0;
+  let inTransit = 0;
   let unreconciled = 0;
   let unvalued = 0;
   let noCostHistory = 0;
+  let missingTransitCost = 0;
 
   for (const key of keys) {
     const todayQty = todayByKey.get(key) ?? 0;
@@ -713,6 +732,45 @@ export async function stockAsOf(asOf: string | null | undefined, scope?: StockBr
     }
   }
 
+  for (const transit of transitRows) {
+    const quantity = r3(Number(transit.quantity));
+    if (!(quantity > 0)) continue;
+    const unitCost = Number(transit.unitCost);
+    if (!Number.isFinite(unitCost) || unitCost <= 0) {
+      missingTransitCost += 1;
+      continue;
+    }
+
+    const info = meta.get(`${transit.materialType}:${transit.refId}`);
+    if (!info) {
+      unvalued += 1;
+      continue;
+    }
+
+    const value = r2(quantity * unitCost);
+    total = r2(total + value);
+    inTransit = r2(inTransit + value);
+    const key = `${transit.materialType}:${transit.refId}`;
+    const previous = byProduct.get(key);
+    if (previous) {
+      previous.stock = r3(previous.stock + quantity);
+      previous.total = r2(previous.total + value);
+      previous.unitCost = previous.stock > 0 ? r2(previous.total / previous.stock) : unitCost;
+    } else {
+      byProduct.set(key, {
+        id: transit.refId,
+        name: info.name,
+        unit: info.unit,
+        stock: quantity,
+        unitCost,
+        total: value,
+        materialType: transit.materialType,
+        typeLabel: transit.materialType === "item" ? "Finished Good"
+          : transit.materialType === "material" ? "Raw Material" : "Packing Material",
+      });
+    }
+  }
+
   // The rewind is only sound when the log explains today's quantity on every
   // line, because today's quantity is the starting point it rewinds from. A log
   // that falls short is younger than the stock (or has lost fire-and-forget
@@ -738,11 +796,14 @@ export async function stockAsOf(asOf: string | null | undefined, scope?: StockBr
   if (noCostHistory > 0) {
     reasons.push(`${noCostHistory} product/location line${noCostHistory === 1 ? "" : "s"} has no persisted cost checkpoint for that date`);
   }
+  if (missingTransitCost > 0) {
+    reasons.push(`${missingTransitCost} in-transit line${missingTransitCost === 1 ? "" : "s"} has no positive evidenced dispatch cost`);
+  }
   const complete = reasons.length === 0;
 
   return {
     total,
-    inTransit: 0,
+    inTransit,
     items: [...byProduct.values()].sort((a, b) => a.name.localeCompare(b.name)),
     reliable: complete,
     note: complete ? null
@@ -754,14 +815,13 @@ export async function stockAsOf(asOf: string | null | undefined, scope?: StockBr
 
 /**
  * A closing position for a past date is rewound from `stock_ledger` rather than
- * read from `stock_entries`, and goods that were in transit on that date cannot
- * be recovered at all — a transfer records when it was dispatched but not when
- * it was received, so there is no way to tell which shipments were still in
- * flight. Saying so is better than quietly reporting a smaller number.
+ * read from `stock_entries`. Reservation history and the recorded receipt date
+ * identify sender-owned goods still in transit at that cutoff; legacy transfers
+ * without reservation evidence cannot be reconstructed.
  */
 const HISTORICAL_CLOSE_NOTE =
   "Closing stock for a past date uses persisted cost checkpoints where available. "
-  + "Periods before checkpoint history are explicitly marked derived and unreliable; goods in transit on that date are excluded because transfers record a dispatch date but no receipt date.";
+  + "Periods before checkpoint history are explicitly marked derived and unreliable. In-transit stock is included where reservation and receipt-date history proves it; legacy transfers without that evidence cannot be reconstructed.";
 
 export interface StatementNode {
   id: number;
@@ -1105,14 +1165,24 @@ export async function buildBooks(
   // Statement-node balances already use their natural-side sign, so keeping
   // them signed preserves opposite-side transfer reversals.
   const nodeTotal = (group: StatementGroup, names: Set<string>): number => {
-    const walk = (nodes: StatementNode[]): number => nodes.reduce((sum, n) =>
-      sum + (names.has(String(n.code ?? '').toUpperCase()) || names.has(n.name.toLowerCase()) ? Number(n.balance ?? 0) : 0) + walk(n.children), 0);
+    const walk = (nodes: StatementNode[]): number => nodes.reduce((sum, n) => {
+      const matches = names.has(String(n.code ?? '').toUpperCase()) || names.has(n.name.toLowerCase());
+      // balance is already the node's signed, rolled-up value. If the whole
+      // matching subtree is being extracted, count it once and stop descending.
+      return sum + (matches ? Number(n.balance ?? 0) : walk(n.children));
+    }, 0);
     return r2(walk(group.children));
   };
   const stripTransferNodes = (group: StatementGroup, names: Set<string>): StatementGroup => {
-    const strip = (nodes: StatementNode[]): StatementNode[] => nodes
-      .filter((n) => !names.has(String(n.code ?? '').toUpperCase()) && !names.has(n.name.toLowerCase()))
-      .map((n) => ({ ...n, children: strip(n.children) }));
+    const strip = (nodes: StatementNode[]): StatementNode[] => nodes.flatMap((n) => {
+      if (names.has(String(n.code ?? '').toUpperCase()) || names.has(n.name.toLowerCase())) return [];
+      const children = strip(n.children);
+      return [{
+        ...n,
+        balance: r2(Number(n.ownBalance ?? 0) + children.reduce((sum, child) => sum + child.balance, 0)),
+        children,
+      }];
+    });
     const transfer = nodeTotal(group, names);
     return { ...group, total: r2(group.total - transfer), children: strip(group.children) };
   };

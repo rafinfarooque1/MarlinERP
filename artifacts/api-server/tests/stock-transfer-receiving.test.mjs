@@ -343,6 +343,24 @@ try {
   if (thirdId) transferIds.push(thirdId);
   assert('Third transfer created', third.status === 201 && thirdId > 0);
   assert('Third pending transfer does not credit destination', (await locationQty(destinationId)) === 5);
+  const historicalSource = await get(
+    `/accounts/financial-statements?fromDate=${D0}&toDate=${D3}&locationType=warehouse&locationId=${sourceId}`,
+  );
+  const historicalSourceIncome = historicalSource.data?.profitAndLoss?.incomes;
+  assert('Historical source closing includes on-hand and sender-owned transit',
+    historicalSource.status === 200 &&
+    Number(historicalSourceIncome?.closingStock) === 700 &&
+    Number(historicalSourceIncome?.closingStockInTransit) === 200,
+    JSON.stringify(historicalSourceIncome));
+  const historicalDestination = await get(
+    `/accounts/financial-statements?fromDate=${D0}&toDate=${D3}&locationType=warehouse&locationId=${destinationId}`,
+  );
+  const historicalDestinationIncome = historicalDestination.data?.profitAndLoss?.incomes;
+  assert('Historical destination excludes the sender-owned transit value',
+    historicalDestination.status === 200 &&
+    Number(historicalDestinationIncome?.closingStock) === 500 &&
+    Number(historicalDestinationIncome?.closingStockInTransit) === 0,
+    JSON.stringify(historicalDestinationIncome));
   const rejected = await patch(`/stock/transfers/${thirdId}/reject`, { rejectionReason: `${TAG} test rejection` });
   assert('Transfer rejection succeeds', rejected.status === 200 && rejected.data?.status === 'rejected', JSON.stringify(rejected.data));
   assert('Rejection restores source stock', (await locationQty(sourceId)) === 6);
