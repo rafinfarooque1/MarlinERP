@@ -4,6 +4,7 @@ import { customFetch } from './custom-fetch';
 export const getTransfersQueryKey = () => ['/api/stock/transfers'] as const;
 
 export interface ReceivedLineItem {
+  transferLineId: string;
   itemId: number;
   quantity: number;
   costPrice?: number;
