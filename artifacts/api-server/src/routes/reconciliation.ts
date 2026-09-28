@@ -2575,7 +2575,7 @@ router.get("/reconciliation/pending-queue", requireModuleView("page:/accounts/re
                   p.payment_date AS transaction_date, p.amount,
                   p.payment_mode, p.reference_number, p.narration,
                   p.location_type, p.location_id,
-                  NULL::integer AS platform_ledger_id,
+                  p.online_platform_ledger_id AS platform_ledger_id,
                   COALESCE(v.name, c.name, pt.name) AS party_name
              FROM payments p
              JOIN account_ledgers pt ON pt.id = p.paid_to_ledger_id
@@ -2595,7 +2595,7 @@ router.get("/reconciliation/pending-queue", requireModuleView("page:/accounts/re
                   r.receipt_date AS transaction_date, r.amount,
                   r.payment_mode, r.reference_number, r.narration,
                   r.location_type, r.location_id,
-                  receipt_platform.platform_ledger_id,
+                  COALESCE(r.online_platform_ledger_id, receipt_platform.platform_ledger_id) AS platform_ledger_id,
                   COALESCE(c.name, v.name, rf.name) AS party_name
              FROM receipts r
              JOIN account_ledgers rf ON rf.id = r.received_from_ledger_id

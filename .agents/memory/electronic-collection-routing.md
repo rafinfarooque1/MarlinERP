@@ -19,6 +19,13 @@ The receipt row alone is NOT the books. `buildDerivedPostings()` (journal.ts) ex
 
 **Why:** any new destination for sale money must be taught to the derivation, not just the receipt writer — the receipt is display, the derivation is truth.
 
+## Online Platform attribution on money vouchers
+Payment and Receipt vouchers that use Online keep Electronic Clearing as the posted ledger. Store the selected platform separately on the voucher for reconciliation filtering; allocation receipts also copy it to their linked `sale_payments` rows. The reconciliation queue reads the voucher field first and can derive it from linked payments for older allocation receipts.
+
+**Why:** the platform selector identifies where an electronic transaction belongs for reconciliation; changing the posting ledger would change the established accounting flow.
+
+**How to apply:** validate the selected platform against the voucher's location, persist and return its ledger ID, and preserve the Electronic Clearing leg. Do not apply POS direct-account routing semantics to money vouchers.
+
 ## Known limits (deliberate)
 - Multiple same-type accounts on one location: oldest silently receives everything. If this matters, add a primary/routing flag rather than a second query.
 - Counter-settled electronic sales at creation and importers still post to clearing; new sales only allow cash/credit so this is mostly moot.
