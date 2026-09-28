@@ -19,9 +19,9 @@ export function isCashOption(o: ReceiveIntoOption | undefined): boolean {
 /**
  * "Receive Into" — the ONE destination selector for every customer collection
  * screen. Lists the real Cash & Bank accounts of the SALE's location (its cash
- * till plus any bank/UPI/cash accounts assigned to it), exactly like the
- * account picker on the Vendor Payment screen. The server derives the
- * cash/bank/UPI method from the picked account, so no method dropdown exists.
+ * till plus any assigned cash/bank/UPI/Online accounts), exactly like the
+ * account picker on the Vendor Payment screen. The server derives the payment
+ * method from the picked account, so no method dropdown exists.
  *
  * Head Office sales use the head-office set; its placeholder location id
  * differs per table (sales use 1, vouchers 0), so HO is matched on TYPE alone.
@@ -48,7 +48,7 @@ export function useReceiveIntoOptions(
 }
 
 export function ReceiveIntoSelect({
-  locationType, locationId, value, onChange, disabled, className, compact, mode,
+  locationType, locationId, value, onChange, disabled, className, compact, mode, testId,
 }: {
   locationType?: string | null;
   locationId?: number | null;
@@ -58,6 +58,8 @@ export function ReceiveIntoSelect({
   className?: string;
   /** h-8 text-sm trigger for dense panels */
   compact?: boolean;
+  /** Override the default test id for context-specific destination selectors. */
+  testId?: string;
   /** Limit the picker to cash or electronic accounts for POS creation. */
   mode?: 'cash' | 'upi' | 'bank' | 'electronic' | 'online';
 }) {
@@ -96,7 +98,7 @@ export function ReceiveIntoSelect({
             : 'Select Cash / Bank account'}
       disabled={disabled}
       className={`${compact ? 'h-8 text-sm' : ''} ${className ?? ''}`.trim() || undefined}
-      data-testid="select-receive-into"
+      data-testid={testId ?? 'select-receive-into'}
     />
   );
 }

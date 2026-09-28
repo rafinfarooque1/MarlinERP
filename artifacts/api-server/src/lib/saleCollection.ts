@@ -11,7 +11,7 @@ type Queryable = { query: (text: string, params?: any[]) => Promise<any> };
  *   · POST /sales/:id/payments — collecting against an existing bill;
  *   · POST /sales — a creation-time payment ("Receive Into" at the counter).
  *
- * Both must resolve the destination account, derive the cash/bank/upi method
+ * Both must resolve the destination account, derive the cash/bank/upi/online method
  * from it, and write the receipt the same way — a second engine would drift on
  * exactly the details that make the books reconcile (clearing vs direct-post,
  * reconciliation status, location stamping).
@@ -33,7 +33,7 @@ export interface ReceiveIntoAccount {
  *  · must belong to the sale's location — HO gets the company-wide cash+bank
  *    tree minus every branch-owned ledger, a branch gets its own assigned set;
  *  · method: cash account type (or membership of the STD-CASH subtree for
- *    tills) → cash, 'upi' → upi, anything else → bank.
+ *    tills) → cash, 'online' → online, 'upi' → upi, otherwise → bank.
  */
 export async function resolveReceiveIntoAccount(
   q: Queryable,
@@ -61,9 +61,21 @@ export async function resolveReceiveIntoAccount(
     const owned = await locationOwnedLedgerMap();
     allowed = new Set([...tree].filter((id) => !owned.has(id)));
     const { rows: hoAccounts } = await q.query(
-      `SELECT cba.ledger_id
+      `SELECT DISTINCT cba.ledger_id
          FROM cash_bank_accounts cba
-        WHERE cba.location_type = 'headoffice' AND cba.ledger_id IS NOT NULL`,
+         LEFT JOIN cash_bank_account_locations l
+           ON l.account_id = cba.id AND l.location_type = 'headoffice'
+        WHERE cba.ledger_id IS NOT NULL
+          AND (
+            l.account_id IS NOT NULL
+            OR (
+              NOT EXISTS (
+                SELECT 1 FROM cash_bank_account_locations any_l
+                 WHERE any_l.account_id = cba.id
+              )
+              AND cba.location_type = 'headoffice'
+            )
+          )`,
     );
     for (const account of hoAccounts) allowed.add(Number(account.ledger_id));
   } else {
