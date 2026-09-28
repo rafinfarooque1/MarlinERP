@@ -905,7 +905,7 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
     const values = matrixLocationFigures.map(({ financials }) =>
       money(financials.expenses.ledgers.find((row) => row.ledgerId === ledgerId)?.amount ?? 0));
     return { ledgerId, ...ledger, values, total: matrixSum(values) };
-  });
+  }).filter((ledger) => ledger.values.some((value) => value !== 0));
   const financialMatrix = {
     period: { fromDate: fromDate || null, toDate: toDate || null },
     locations: matrixLocationFigures.map(({ location }) => location),
