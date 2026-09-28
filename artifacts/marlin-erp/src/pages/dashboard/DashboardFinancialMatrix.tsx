@@ -93,22 +93,31 @@ export function DashboardFinancialMatrixSection({
           ? `all-time-through-${data.period.toDate}`
           : 'all-time';
       const file = new File([blob], `financial-summary-matrix-${dateSlug}.png`, { type: 'image/png' });
-      if (typeof navigator.canShare === 'function' && navigator.canShare({ files: [file] })) {
-        await navigator.share({ files: [file], title: 'Cross-Warehouse Financial Summary' });
-      } else {
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = file.name;
-        link.click();
-        window.setTimeout(() => URL.revokeObjectURL(url), 0);
-        toast.success('Financial matrix image downloaded');
+      const canShareFile = typeof navigator.share === 'function'
+        && typeof navigator.canShare === 'function'
+        && navigator.canShare({ files: [file] });
+      if (canShareFile) {
+        try {
+          await navigator.share({ files: [file], title: 'Cross-Warehouse Financial Summary' });
+          return;
+        } catch (shareError: any) {
+          if (shareError?.name === 'AbortError') return;
+          console.warn(
+            '[dashboard] financial matrix native share failed; downloading image instead',
+            shareError?.message ?? String(shareError),
+          );
+        }
       }
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = file.name;
+      link.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 0);
+      toast.success('Financial matrix image downloaded');
     } catch (error: any) {
-      if (error?.name !== 'AbortError') {
-        console.error('[dashboard] financial matrix share failed', error?.message ?? String(error));
-        toast.error('Could not capture the financial matrix');
-      }
+      console.error('[dashboard] financial matrix capture failed', error?.message ?? String(error));
+      toast.error('Could not capture the financial matrix');
     } finally {
       setPreparingCapture(false);
       setSharing(false);
