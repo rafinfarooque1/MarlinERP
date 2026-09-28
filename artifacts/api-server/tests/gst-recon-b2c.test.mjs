@@ -148,8 +148,12 @@ async function main() {
 
   // Totals still equal the section sums (regression: no math change)
   const sum = (rows, k) => r2(rows.reduce((s, r) => s + Number(r[k] ?? 0), 0));
-  check("totals.taxableValue == Σ b2b + Σ b2cs",
-    near(g1.totals.taxableValue, r2(sum(g1.b2b, "taxableValue") + sum(g1.b2cs, "taxableValue")), 0.05));
+  check("totals.taxableValue includes B2B, B2CS, and signed note adjustments",
+    near(g1.totals.taxableValue, r2(
+      sum(g1.b2b, "taxableValue") +
+      sum(g1.b2cs, "taxableValue") +
+      sum(g1.noteAdjustments ?? [], "taxableValue"),
+    ), 0.05));
   check("totals.taxAmount == Σ b2b + Σ b2cs",
     near(g1.totals.taxAmount, r2(sum(g1.b2b, "taxAmount") + sum(g1.b2cs, "taxAmount")), 0.05));
   check("totals.cgst+sgst+igst == taxAmount",

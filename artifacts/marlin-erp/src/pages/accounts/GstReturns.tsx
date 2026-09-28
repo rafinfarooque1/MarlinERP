@@ -3,7 +3,7 @@ import { useLocation } from 'wouter';
 import { toast } from 'sonner';
 import {
   useGetHsnSummary, useGetGstr1, useGetGstr3b, useGetGstReconciliation, useGetGstFilters,
-  type HsnSummaryRow, type Gstr3bResponse, type GstReconMismatchDoc,
+  type HsnSummaryRow, type GstNoteAdjustmentRow, type Gstr3bResponse, type GstReconMismatchDoc,
 } from '@workspace/api-client-react';
 import { resolveDrill } from '@/lib/drilldown';
 import { AppLayout } from '@/components/layout/AppLayout';
@@ -29,7 +29,10 @@ import { formatDateOrDash } from '@/lib/date';
 const payStatusLabel = (s?: string) =>
   s === 'na' ? '—' : s === 'paid' ? 'Paid' : s === 'partially_paid' ? 'Partial' : 'Unpaid';
 
-const fmt = (n: number) => `₹${Math.abs(Number(n) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const fmt = (n: number) => {
+  const value = Number(n) || 0;
+  return `${value < 0 ? '−' : ''}₹${Math.abs(value).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+};
 const monthLabel = (m: string) => {
   const d = new Date(`${m}-01T00:00:00`);
   return isNaN(d.getTime()) ? m : d.toLocaleString('en-IN', { month: 'long', year: 'numeric' });
@@ -104,6 +107,56 @@ function HsnTable({ title, rows, loading }: { title: string; rows: HsnSummaryRow
   );
 }
 
+function NoteAdjustmentsTable({ title, rows }: { title: string; rows: GstNoteAdjustmentRow[] }) {
+  return (
+    <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
+      <div className="p-4 border-b border-border bg-muted/20">
+        <h3 className="font-semibold text-sm">{title}</h3>
+      </div>
+      {rows.length === 0 ? (
+        <EmptyState title="No credit/debit note adjustments in this period" compact />
+      ) : (
+        <div className="overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow className="bg-muted/10">
+                <TableHead>Note</TableHead>
+                <TableHead>Return No.</TableHead>
+                <TableHead>Date</TableHead>
+                <TableHead>Original Doc</TableHead>
+                <TableHead>Party</TableHead>
+                <TableHead className="text-right">Taxable</TableHead>
+                <TableHead className="text-right">CGST</TableHead>
+                <TableHead className="text-right">SGST</TableHead>
+                <TableHead className="text-right">IGST</TableHead>
+                <TableHead className="text-right">Total Tax</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rows.map((row, index) => (
+                <TableRow key={`${row.entryId ?? row.voucherNumber ?? row.returnNumber}:${index}`}>
+                  <TableCell className="font-mono text-xs">
+                    {formatGstDocumentDisplayNumber(row.voucherNumber ?? row.entryId ?? row.returnNumber ?? '—')}
+                  </TableCell>
+                  <TableCell className="font-mono text-xs">{row.returnNumber || '—'}</TableCell>
+                  <TableCell className="text-xs">{formatDateOrDash(row.date)}</TableCell>
+                  <TableCell className="font-mono text-xs">{row.originalDocument || '—'}</TableCell>
+                  <TableCell className="text-xs">{row.partyName || row.description || '—'}</TableCell>
+                  <TableCell className="text-right font-mono text-xs">{fmt(row.taxableValue)}</TableCell>
+                  <TableCell className="text-right font-mono text-xs">{fmt(row.cgst)}</TableCell>
+                  <TableCell className="text-right font-mono text-xs">{fmt(row.sgst)}</TableCell>
+                  <TableCell className="text-right font-mono text-xs">{fmt(row.igst)}</TableCell>
+                  <TableCell className="text-right font-mono text-xs font-bold">{fmt(row.totalTax)}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Gstr3bCard({ title, heads, total, totalLabel, accent }: {
   title: string;
   heads: { cgst: number; sgst: number; igst: number };
@@ -164,6 +217,7 @@ export default function GstReturns() {
   const b2b = g1.data?.b2b ?? [];
   const b2c = g1.data?.b2c ?? [];
   const b2cs = g1.data?.b2cs ?? [];
+  const gstr1NoteAdjustments = g1.data?.noteAdjustments ?? [];
   const d3b: Gstr3bResponse | undefined = g3b.data;
   const reconRows = recon.data?.rows ?? [];
   const mismatchDocs = [
@@ -279,6 +333,14 @@ export default function GstReturns() {
         'Taxable Value': r.taxableValue, CGST: r.cgst, SGST: r.sgst, IGST: r.igst,
         'Total Tax': r.taxAmount, 'Invoice Value': '', 'Payment Status': '', 'Payment Mode': '',
       })),
+      ...gstr1NoteAdjustments.map(r => ({
+        Section: 'Credit/debit note adjustment',
+        'Invoice No': formatGstDocumentDisplayNumber(r.voucherNumber ?? r.entryId ?? r.returnNumber),
+        'Return No': r.returnNumber, Date: formatDateOrDash(r.date), Customer: r.partyName,
+        GSTIN: r.gstin, 'Place of Supply': r.placeOfSupply, Warehouse: '', 'Rate %': '',
+        'Taxable Value': r.taxableValue, CGST: r.cgst, SGST: r.sgst, IGST: r.igst,
+        'Total Tax': r.totalTax, 'Invoice Value': r.invoiceValue, 'Payment Status': '', 'Payment Mode': '',
+      })),
     ]);
   };
   const exportGstr3b = () => {
@@ -289,6 +351,16 @@ export default function GstReturns() {
       { Section: '4(A) Eligible ITC', 'Taxable Value': '', CGST: d3b.itc.cgst, SGST: d3b.itc.sgst, IGST: d3b.itc.igst, Total: d3b.itc.totalItc },
       { Section: '6.1 Net tax payable (after ITC set-off)', 'Taxable Value': '', CGST: d3b.netPayable.cgst, SGST: d3b.netPayable.sgst, IGST: d3b.netPayable.igst, Total: d3b.netPayable.total },
       { Section: 'ITC carried forward', 'Taxable Value': '', CGST: d3b.itcCarriedForward.cgst, SGST: d3b.itcCarriedForward.sgst, IGST: d3b.itcCarriedForward.igst, Total: d3b.itcCarriedForward.total },
+      ...d3b.noteAdjustments.outward.map(r => ({
+        Section: '3.1(a) Outward note adjustment', Document: formatGstDocumentDisplayNumber(r.voucherNumber ?? r.entryId ?? r.returnNumber),
+        Date: formatDateOrDash(r.date), Party: r.partyName, 'Taxable Value': r.taxableValue,
+        CGST: r.cgst, SGST: r.sgst, IGST: r.igst, Total: r.totalTax,
+      })),
+      ...d3b.noteAdjustments.inward.map(r => ({
+        Section: '4(A) ITC note adjustment', Document: formatGstDocumentDisplayNumber(r.voucherNumber ?? r.entryId ?? r.returnNumber),
+        Date: formatDateOrDash(r.date), Party: r.partyName, 'Taxable Value': r.taxableValue,
+        CGST: r.cgst, SGST: r.sgst, IGST: r.igst, Total: r.totalTax,
+      })),
     ]);
   };
   const exportRecon = () => {
@@ -347,6 +419,7 @@ export default function GstReturns() {
       { heading: 'Outward Supplies (Sales)', columns: hsnCols, rows: (hsn.data?.outward ?? []).map(r => hsnRow(r, 'Outward')) },
       { heading: 'Inward Supplies (Purchases)', columns: hsnCols, rows: (hsn.data?.inward ?? []).map(r => hsnRow(r, 'Inward')) },
     ],
+    footerNote: 'Figures include signed posted credit/debit-note adjustments. Negative values reduce the period supplies.',
   });
   const gstr1Doc = (): ReportDoc => ({
     title: 'GSTR-1 Working', subtitle: `${formatDateOrDash(fromDate)} to ${formatDateOrDash(toDate)}`, metaRows, orientation: 'landscape',
@@ -393,7 +466,21 @@ export default function GstReturns() {
         rows: b2cs.map(r => [r.placeOfSupply || '—', `${r.taxRate}%`, r.taxableValue, r.cgst, r.sgst, r.igst, r.taxAmount]),
       },
     ],
-    footerNote: 'Credit/debit notes are reported separately as vouchers and are not netted against GSTR-1 figures under the current rules.',
+    ...(gstr1NoteAdjustments.length ? [{
+      heading: 'Credit/debit note adjustments',
+      columns: [
+        { label: 'Note' }, { label: 'Return No.' }, { label: 'Date' }, { label: 'Original Doc' },
+        { label: 'Party' }, { label: 'GSTIN' }, { label: 'Taxable', align: 'right' as const },
+        { label: 'CGST', align: 'right' as const }, { label: 'SGST', align: 'right' as const },
+        { label: 'IGST', align: 'right' as const }, { label: 'Total Tax', align: 'right' as const },
+      ],
+      rows: gstr1NoteAdjustments.map(r => [
+        formatGstDocumentDisplayNumber(r.voucherNumber ?? r.entryId ?? r.returnNumber),
+        r.returnNumber, formatDateOrDash(r.date), r.originalDocument, r.partyName, r.gstin,
+        r.taxableValue, r.cgst, r.sgst, r.igst, r.totalTax,
+      ]),
+    }] : []),
+    footerNote: 'GSTR-1 totals include signed posted note adjustments; the invoice tables remain invoice-wise.',
   });
   const gstr3bDoc = (): ReportDoc => ({
     title: 'GSTR-3B Working', subtitle: month, metaRows, filename: `gstr3b-${month}`,
@@ -410,7 +497,26 @@ export default function GstReturns() {
         ['6.1 Net tax payable (after ITC set-off)', '', d3b.netPayable.cgst, d3b.netPayable.sgst, d3b.netPayable.igst, d3b.netPayable.total],
         ['ITC carried forward', '', d3b.itcCarriedForward.cgst, d3b.itcCarriedForward.sgst, d3b.itcCarriedForward.igst, d3b.itcCarriedForward.total],
       ] : [],
+    }, {
+      heading: 'Credit/debit note adjustments',
+      columns: [
+        { label: 'Section' }, { label: 'Document' }, { label: 'Date' }, { label: 'Party' },
+        { label: 'Taxable Value', align: 'right' as const },
+        { label: 'CGST', align: 'right' as const }, { label: 'SGST', align: 'right' as const },
+        { label: 'IGST', align: 'right' as const }, { label: 'Total Tax', align: 'right' as const },
+      ],
+      rows: d3b ? [
+        ...d3b.noteAdjustments.outward.map(r => [
+          'Outward', formatGstDocumentDisplayNumber(r.voucherNumber ?? r.entryId ?? r.returnNumber),
+          formatDateOrDash(r.date), r.partyName, r.taxableValue, r.cgst, r.sgst, r.igst, r.totalTax,
+        ]),
+        ...d3b.noteAdjustments.inward.map(r => [
+          'Inward ITC', formatGstDocumentDisplayNumber(r.voucherNumber ?? r.entryId ?? r.returnNumber),
+          formatDateOrDash(r.date), r.partyName, r.taxableValue, r.cgst, r.sgst, r.igst, r.totalTax,
+        ]),
+      ] : [],
     }],
+    footerNote: 'Outward and eligible input-tax-credit figures include signed posted note adjustments.',
   });
   const reconDoc = (): ReportDoc => ({
     title: 'GST Reconciliation', subtitle: `${formatDateOrDash(fromDate)} to ${formatDateOrDash(toDate)}`,
@@ -512,6 +618,9 @@ export default function GstReturns() {
             </div>
             <HsnTable title="Outward Supplies (Sales)" rows={hsn.data?.outward ?? []} loading={hsn.isLoading} />
             <HsnTable title="Inward Supplies (Purchases)" rows={hsn.data?.inward ?? []} loading={hsn.isLoading} />
+            <p className="text-xs text-muted-foreground">
+              HSN totals include signed posted credit/debit-note adjustments. Negative values reduce supplies or eligible inputs.
+            </p>
           </TabsContent>
 
           {/* ── GSTR-1 ──────────────────────────────────────────────────── */}
@@ -521,6 +630,7 @@ export default function GstReturns() {
                 <Badge variant="secondary">{g1.data?.totals.invoiceCount ?? 0} invoices</Badge>
                 <Badge variant="secondary">{g1.data?.totals.b2bInvoices ?? 0} B2B</Badge>
                 <Badge variant="secondary">{g1.data?.totals.b2cInvoices ?? 0} B2C</Badge>
+                <Badge variant="secondary">{gstr1NoteAdjustments.length} note adjustments</Badge>
                 <Badge variant="outline" className="font-mono">Tax: {fmt(g1.data?.totals.taxAmount ?? 0)}</Badge>
               </div>
               <ExportButtons onCSV={exportGstr1} doc={gstr1Doc} canDownload={perms.canDownload} disabled={g1.isLoading} />
@@ -670,8 +780,9 @@ export default function GstReturns() {
               )}
             </div>
 
+            <NoteAdjustmentsTable title="Credit/debit note adjustments · outward supplies" rows={gstr1NoteAdjustments} />
             <p className="text-xs text-muted-foreground">
-              Credit/debit notes are reported separately as vouchers and are not netted against these GSTR-1 figures under the current rules.
+              GSTR-1 summary totals include the signed posted note adjustments shown here; invoice tables above remain invoice-wise.
             </p>
           </TabsContent>
 
@@ -713,6 +824,12 @@ export default function GstReturns() {
                 <p className="text-xs text-muted-foreground">
                   Net payable applies the standard ITC set-off order: IGST credit against IGST → CGST → SGST; CGST credit against CGST → IGST; SGST credit against SGST → IGST.
                 </p>
+                {(d3b.noteAdjustments.outward.length > 0 || d3b.noteAdjustments.inward.length > 0) && (
+                  <div className="space-y-4">
+                    <NoteAdjustmentsTable title="Credit/debit note adjustments · outward supplies" rows={d3b.noteAdjustments.outward} />
+                    <NoteAdjustmentsTable title="Credit/debit note adjustments · eligible ITC" rows={d3b.noteAdjustments.inward} />
+                  </div>
+                )}
               </>
             ) : (
               <div className="text-center py-12 text-muted-foreground text-sm">Pick a month to compute GSTR-3B</div>

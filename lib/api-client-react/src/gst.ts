@@ -72,11 +72,32 @@ export interface Gstr1B2csRow {
   taxAmount: number;
 }
 
+export interface GstNoteAdjustmentRow {
+  entryId: string | null;
+  source: string;
+  voucherNumber: string | null;
+  date: string;
+  description: string;
+  returnNumber: string;
+  originalDocument: string;
+  partyName: string;
+  gstin: string;
+  placeOfSupply: string;
+  taxableValue: number;
+  invoiceValue: number;
+  cgst: number;
+  sgst: number;
+  igst: number;
+  totalTax: number;
+}
+
 export interface Gstr1Response {
   b2b: Gstr1B2bRow[];
   /** Invoice-wise B2C detail behind the aggregated b2cs table. */
   b2c: Gstr1B2cRow[];
   b2cs: Gstr1B2csRow[];
+  /** Signed posted credit/debit-note adjustments included in period totals. */
+  noteAdjustments: GstNoteAdjustmentRow[];
   totals: {
     invoiceCount: number;
     b2bInvoices: number;
@@ -103,6 +124,7 @@ export interface Gstr3bResponse {
   outwardSupplies: GstHeads & { taxableValue: number; totalTax: number };
   nilRatedSupplies: { taxableValue: number };
   itc: GstHeads & { totalItc: number };
+  noteAdjustments: { outward: GstNoteAdjustmentRow[]; inward: GstNoteAdjustmentRow[] };
   netPayable: GstHeads & { total: number };
   itcCarriedForward: GstHeads & { total: number };
   counts: { sales: number; purchases: number };

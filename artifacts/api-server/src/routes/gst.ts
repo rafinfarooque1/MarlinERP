@@ -75,6 +75,308 @@ async function parseGstScope(req: any): Promise<GstScope | null> {
   return null;
 }
 
+type GstHeadAmounts = { cgst: number; sgst: number; igst: number };
+type GstNoteSide = "outward" | "inward";
+type GstNotePosting = {
+  entryId: string;
+  noteId: number | null;
+  source: string;
+  voucherNumber: string | null;
+  date: string;
+  description: string;
+  outward: GstHeadAmounts;
+  inward: GstHeadAmounts;
+};
+type GstReturnMemo = {
+  noteId: number;
+  voucherNumber: string | null;
+  source: "credit_note" | "debit_note";
+  side: GstNoteSide;
+  returnNumber: string;
+  date: string;
+  originalDocument: string;
+  partyName: string;
+  gstin: string;
+  placeOfSupply: string;
+  subtotal: number;
+  totalAmount: number;
+  lineItems: any[];
+  sourceLines: any[];
+};
+
+const zeroGstHeads = (): GstHeadAmounts => ({ cgst: 0, sgst: 0, igst: 0 });
+const gstHeadTotal = (heads: GstHeadAmounts) => round2(heads.cgst + heads.sgst + heads.igst);
+const signedHeads = (heads: GstHeadAmounts, sign: number): GstHeadAmounts => ({
+  cgst: round2(heads.cgst * sign),
+  sgst: round2(heads.sgst * sign),
+  igst: round2(heads.igst * sign),
+});
+const addHeads = (to: GstHeadAmounts, from: GstHeadAmounts) => {
+  to.cgst = round2(to.cgst + from.cgst);
+  to.sgst = round2(to.sgst + from.sgst);
+  to.igst = round2(to.igst + from.igst);
+};
+const subtractHeads = (left: GstHeadAmounts, right: GstHeadAmounts): GstHeadAmounts => ({
+  cgst: round2(left.cgst - right.cgst),
+  sgst: round2(left.sgst - right.sgst),
+  igst: round2(left.igst - right.igst),
+});
+
+function postingMatchesGstScope(posting: any, scope: GstScope | null): boolean {
+  if (!scope) return true;
+  const type = String(posting.locationType ?? "");
+  if (type === "headoffice") return scope.includeHeadOffice;
+  const id = Number(posting.locationId);
+  return scope.pairs.some((pair) => pair.type === type && pair.id === id);
+}
+
+function noteIdFromEntryId(entryId: string): number | null {
+  const match = entryId.match(/(?:^|:)(\d+)$/);
+  if (!match) return null;
+  const id = Number(match[1]);
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
+}
+
+/**
+ * Tax-note adjustments come from the actual derived ledger postings. Output
+ * heads use credit − debit; input heads use debit − credit, so returns carry a
+ * negative sign. Location filtering follows the source posting, not the
+ * currently selected display location.
+ */
+async function loadGstNotePostings(
+  fromDate: string | undefined,
+  toDate: string | undefined,
+  scope: GstScope | null,
+): Promise<GstNotePosting[]> {
+  const codes = [
+    "STD-OUT-CGST", "STD-OUT-SGST", "STD-OUT-IGST",
+    "STD-INP-CGST", "STD-INP-SGST", "STD-INP-IGST",
+  ];
+  const { rows: ledgers } = await pool.query(
+    `SELECT id, code FROM account_ledgers WHERE code = ANY($1::text[])`,
+    [codes],
+  );
+  const headLedger = new Map<number, { head: keyof GstHeadAmounts; side: GstNoteSide }>();
+  const bind = (code: string, head: keyof GstHeadAmounts, side: GstNoteSide) => {
+    const ledger = ledgers.find((row: any) => row.code === code);
+    if (ledger) headLedger.set(Number(ledger.id), { head, side });
+  };
+  bind("STD-OUT-CGST", "cgst", "outward");
+  bind("STD-OUT-SGST", "sgst", "outward");
+  bind("STD-OUT-IGST", "igst", "outward");
+  bind("STD-INP-CGST", "cgst", "inward");
+  bind("STD-INP-SGST", "sgst", "inward");
+  bind("STD-INP-IGST", "igst", "inward");
+
+  const postings = await buildDerivedPostings(toDate ? { toDate } : {});
+  const byEntry = new Map<string, GstNotePosting>();
+  for (const posting of postings) {
+    if (posting.source !== "credit_note" && posting.source !== "debit_note") continue;
+    const date = iso(posting.date);
+    if (fromDate && date < fromDate) continue;
+    if (toDate && date > toDate) continue;
+    if (!postingMatchesGstScope(posting, scope)) continue;
+    const ledger = headLedger.get(Number(posting.ledgerId));
+    if (!ledger) continue;
+    const entryId = String(posting.entryId);
+    let entry = byEntry.get(entryId);
+    if (!entry) {
+      entry = {
+        entryId,
+        noteId: noteIdFromEntryId(entryId),
+        source: String(posting.source),
+        voucherNumber: posting.voucherNumber == null ? null : String(posting.voucherNumber),
+        date,
+        description: String(posting.description ?? ""),
+        outward: zeroGstHeads(),
+        inward: zeroGstHeads(),
+      };
+      byEntry.set(entryId, entry);
+    }
+    const heads = ledger.side === "outward" ? entry.outward : entry.inward;
+    const signedAmount = ledger.side === "outward"
+      ? Number(posting.credit) - Number(posting.debit)
+      : Number(posting.debit) - Number(posting.credit);
+    heads[ledger.head] += signedAmount;
+  }
+  return [...byEntry.values()]
+    .map((entry) => ({
+      ...entry,
+      outward: signedHeads(entry.outward, 1),
+      inward: signedHeads(entry.inward, 1),
+    }))
+    .sort((a, b) => a.date.localeCompare(b.date) || a.entryId.localeCompare(b.entryId));
+}
+
+async function loadSalesCreditReturnMemos(
+  fromDate: string | undefined,
+  toDate: string | undefined,
+  scope: GstScope | null,
+): Promise<GstReturnMemo[]> {
+  const params: any[] = [];
+  const scopeSql = scope ? salesScopeCond("s", scope, params) : "";
+  const { rows } = await pool.query(
+    `SELECT sr.id, sr.return_number, sr.credit_note_id, sr.return_date, sr.line_items,
+            sr.subtotal, sr.total_amount, jv.voucher_number,
+            s.invoice_number, s.line_items AS source_lines,
+            COALESCE(s.party_name, c.name, 'Walk-in') AS party_name,
+            COALESCE(s.party_gstin, c.gst_number, '') AS party_gstin,
+            COALESCE(s.party_state, c.state, '') AS party_state
+       FROM sales_returns sr
+       JOIN sales s ON s.id = sr.sale_id
+       JOIN journal_vouchers jv ON jv.id = sr.credit_note_id
+       LEFT JOIN customers c ON c.id = s.customer_id
+      WHERE sr.credit_note_id IS NOT NULL${rangeFilter("sr.return_date", fromDate, toDate, params)}${scopeSql}
+      ORDER BY sr.return_date, sr.id`,
+    params,
+  );
+  return rows.map((row: any) => ({
+    noteId: Number(row.credit_note_id),
+    voucherNumber: row.voucher_number == null ? null : String(row.voucher_number),
+    source: "credit_note" as const,
+    side: "outward" as const,
+    returnNumber: String(row.return_number ?? ""),
+    date: iso(row.return_date),
+    originalDocument: String(row.invoice_number ?? ""),
+    partyName: String(row.party_name ?? "Walk-in"),
+    gstin: String(row.party_gstin ?? "").trim(),
+    placeOfSupply: String(row.party_state ?? "").trim(),
+    subtotal: Number(row.subtotal ?? 0),
+    totalAmount: Number(row.total_amount ?? 0),
+    lineItems: Array.isArray(row.line_items) ? row.line_items : [],
+    sourceLines: Array.isArray(row.source_lines) ? row.source_lines : [],
+  }));
+}
+
+async function loadPurchaseDebitReturnMemos(
+  fromDate: string | undefined,
+  toDate: string | undefined,
+  scope: GstScope | null,
+): Promise<GstReturnMemo[]> {
+  const params: any[] = [];
+  const scopeSql = scope ? purchaseScopeCond("p", scope, params) : "";
+  const { rows } = await pool.query(
+    `SELECT pr.id, pr.return_number, pr.debit_note_id, pr.return_date, pr.line_items,
+            pr.subtotal, pr.total_amount, jv.voucher_number,
+            p.invoice_number, p.line_items AS source_lines,
+            COALESCE(p.party_name, v.name, '') AS party_name
+       FROM purchase_returns pr
+       JOIN purchases p ON p.id = pr.purchase_id
+       JOIN journal_vouchers jv ON jv.id = pr.debit_note_id
+       LEFT JOIN vendors v ON v.id = p.vendor_id
+      WHERE pr.debit_note_id IS NOT NULL${rangeFilter("pr.return_date", fromDate, toDate, params)}${scopeSql}
+      ORDER BY pr.return_date, pr.id`,
+    params,
+  );
+  return rows.map((row: any) => ({
+    noteId: Number(row.debit_note_id),
+    voucherNumber: row.voucher_number == null ? null : String(row.voucher_number),
+    source: "debit_note" as const,
+    side: "inward" as const,
+    returnNumber: String(row.return_number ?? ""),
+    date: iso(row.return_date),
+    originalDocument: String(row.invoice_number ?? ""),
+    partyName: String(row.party_name ?? ""),
+    gstin: "",
+    placeOfSupply: "",
+    subtotal: Number(row.subtotal ?? 0),
+    totalAmount: Number(row.total_amount ?? 0),
+    lineItems: Array.isArray(row.line_items) ? row.line_items : [],
+    sourceLines: Array.isArray(row.source_lines) ? row.source_lines : [],
+  }));
+}
+
+function memoTaxAdjustment(memo: GstReturnMemo): GstHeadAmounts {
+  const heads = zeroGstHeads();
+  for (const line of memo.lineItems) addHeads(heads, signedHeads(lineTaxHeads(line), -1));
+  return heads;
+}
+
+function memoForPosting(posting: GstNotePosting, memos: GstReturnMemo[]): GstReturnMemo | undefined {
+  if (posting.noteId != null) {
+    const byId = memos.find((memo) => memo.noteId === posting.noteId && memo.source === posting.source);
+    if (byId) return byId;
+  }
+  return posting.voucherNumber
+    ? memos.find((memo) => memo.source === posting.source && memo.voucherNumber === posting.voucherNumber)
+    : undefined;
+}
+
+function makeGstNoteRows(
+  side: GstNoteSide,
+  postings: GstNotePosting[],
+  memos: GstReturnMemo[],
+): Array<{
+  entryId: string | null;
+  source: string;
+  voucherNumber: string | null;
+  date: string;
+  description: string;
+  returnNumber: string;
+  originalDocument: string;
+  partyName: string;
+  gstin: string;
+  placeOfSupply: string;
+  taxableValue: number;
+  invoiceValue: number;
+  cgst: number;
+  sgst: number;
+  igst: number;
+  totalTax: number;
+}> {
+  const sideHeads = (posting: GstNotePosting) => posting[side];
+  const byId = new Map(postings
+    .filter((posting) => posting.noteId != null)
+    .map((posting) => [posting.noteId!, posting]));
+  const bySourceAndVoucher = new Map(postings
+    .filter((posting) => posting.voucherNumber)
+    .map((posting) => [`${posting.source}|${posting.voucherNumber}`, posting]));
+  const used = new Set<string>();
+  const rows = memos.filter((memo) => memo.side === side).map((memo) => {
+    const posting = byId.get(memo.noteId)
+      ?? (memo.voucherNumber ? bySourceAndVoucher.get(`${memo.source}|${memo.voucherNumber}`) : undefined);
+    if (posting) used.add(posting.entryId);
+    const heads = posting ? sideHeads(posting) : memoTaxAdjustment(memo);
+    return {
+      entryId: posting?.entryId ?? null,
+      source: posting?.source ?? memo.source,
+      voucherNumber: posting?.voucherNumber ?? memo.voucherNumber,
+      date: memo.date,
+      description: posting?.description || `${memo.returnNumber} against ${memo.originalDocument}`,
+      returnNumber: memo.returnNumber,
+      originalDocument: memo.originalDocument,
+      partyName: memo.partyName,
+      gstin: memo.gstin,
+      placeOfSupply: memo.placeOfSupply,
+      taxableValue: round2(-memo.subtotal),
+      invoiceValue: round2(-memo.totalAmount),
+      ...heads,
+      totalTax: gstHeadTotal(heads),
+    };
+  });
+  for (const posting of postings) {
+    const heads = sideHeads(posting);
+    if (used.has(posting.entryId) || Math.abs(gstHeadTotal(heads)) < 0.01) continue;
+    rows.push({
+      entryId: posting.entryId,
+      source: posting.source,
+      voucherNumber: posting.voucherNumber,
+      date: posting.date,
+      description: posting.description,
+      returnNumber: "",
+      originalDocument: "",
+      partyName: posting.description,
+      gstin: "",
+      placeOfSupply: "",
+      taxableValue: 0,
+      invoiceValue: 0,
+      ...heads,
+      totalTax: gstHeadTotal(heads),
+    });
+  }
+  return rows.sort((a, b) => a.date.localeCompare(b.date) || (a.entryId ?? a.voucherNumber ?? "").localeCompare(b.entryId ?? b.voucherNumber ?? ""));
+}
+
 /**
  * Payment status + mode summary per sale, from the actual settlement records.
  * Modes come from sale_payments in first-receipt order; a counter-settled
@@ -145,6 +447,9 @@ router.get("/gst/hsn-summary", requireModuleView("page:/accounts/gst-returns"), 
   // LBAC: branch sessions are pinned to their own registration by parseGstScope.
   const { fromDate, toDate } = parseRange(req);
   const scope = await parseGstScope(req);
+  const salesReturnMemos = await loadSalesCreditReturnMemos(fromDate, toDate, scope);
+  const purchaseReturnMemos = await loadPurchaseDebitReturnMemos(fromDate, toDate, scope);
+  const notePostings = await loadGstNotePostings(fromDate, toDate, scope);
 
   const sp: any[] = [];
   const { rows: sales } = await pool.query(
@@ -152,6 +457,7 @@ router.get("/gst/hsn-summary", requireModuleView("page:/accounts/gst-returns"), 
   );
   type HsnAgg = { hsnCode: string; taxRate: number; unit: string; quantity: number; taxableValue: number; cgst: number; sgst: number; igst: number; taxAmount: number };
   const outward = new Map<string, HsnAgg>();
+  const salesMemoTaxById = new Map<number, GstHeadAmounts>();
   for (const s of sales) {
     for (const li of (s.line_items ?? []) as any[]) {
       const hsn = String(li.hsnCode || "").trim() || "N/A";
@@ -169,6 +475,25 @@ router.get("/gst/hsn-summary", requireModuleView("page:/accounts/gst-returns"), 
       outward.set(key, e);
     }
   }
+  for (const memo of salesReturnMemos) {
+    salesMemoTaxById.set(memo.noteId, memoTaxAdjustment(memo));
+    for (const line of memo.lineItems) {
+      const sourceLine = memo.sourceLines[Number(line.lineIndex)] ?? {};
+      const hsn = String(sourceLine.hsnCode || line.hsnCode || "").trim() || "N/A";
+      const rate = Number(sourceLine.taxRate ?? line.taxRate ?? 0);
+      const key = `${hsn}|${rate}`;
+      const e = outward.get(key) ?? { hsnCode: hsn, taxRate: rate, unit: "", quantity: 0, taxableValue: 0, cgst: 0, sgst: 0, igst: 0, taxAmount: 0 };
+      if (!e.unit) e.unit = String(line.unit || sourceLine.unit || "");
+      const h = lineTaxHeads(line);
+      e.quantity -= Number(line.quantity ?? 0);
+      e.taxableValue -= Number(line.taxableAmount ?? 0);
+      e.cgst -= h.cgst;
+      e.sgst -= h.sgst;
+      e.igst -= h.igst;
+      e.taxAmount -= Number(line.taxAmount ?? gstHeadTotal(h));
+      outward.set(key, e);
+    }
+  }
 
   const pp: any[] = [];
   const { rows: purchases } = await pool.query(
@@ -176,6 +501,7 @@ router.get("/gst/hsn-summary", requireModuleView("page:/accounts/gst-returns"), 
   );
   const matMap = await materialHsnMap();
   const inward = new Map<string, HsnAgg>();
+  const purchaseMemoTaxById = new Map<number, GstHeadAmounts>();
   for (const p of purchases) {
     for (const li of (p.line_items ?? []) as any[]) {
       const mat = matMap.get(`${li.materialType}:${li.materialId}`);
@@ -193,6 +519,46 @@ router.get("/gst/hsn-summary", requireModuleView("page:/accounts/gst-returns"), 
       e.taxAmount += Number(li.taxAmount ?? 0);
       inward.set(key, e);
     }
+  }
+  for (const memo of purchaseReturnMemos) {
+    purchaseMemoTaxById.set(memo.noteId, memoTaxAdjustment(memo));
+    for (const line of memo.lineItems) {
+      const sourceLine = memo.sourceLines[Number(line.lineIndex)] ?? {};
+      const material = matMap.get(`${line.materialType}:${line.materialId}`);
+      const hsn = String(sourceLine.hsnCode || line.hsnCode || material?.hsn || "").trim() || "N/A";
+      const rate = Number(line.gstRate ?? sourceLine.gstRate ?? 0);
+      const key = `${hsn}|${rate}`;
+      const e = inward.get(key) ?? { hsnCode: hsn, taxRate: rate, unit: "", quantity: 0, taxableValue: 0, cgst: 0, sgst: 0, igst: 0, taxAmount: 0 };
+      if (!e.unit) e.unit = String(line.unit || sourceLine.unit || material?.unit || "");
+      const h = lineTaxHeads(line);
+      e.quantity -= Number(line.quantity ?? 0);
+      e.taxableValue -= Number(line.taxableAmount ?? 0);
+      e.cgst -= h.cgst;
+      e.sgst -= h.sgst;
+      e.igst -= h.igst;
+      e.taxAmount -= Number(line.taxAmount ?? gstHeadTotal(h));
+      inward.set(key, e);
+    }
+  }
+
+  // Memo line tax is shown against its HSN/rate. Reconcile it to the posted
+  // note tax; unmatched/manual note postings and any rounding remainder stay
+  // visible in an N/A row instead of being dropped from the HSN totals.
+  const addTaxOnly = (target: Map<string, HsnAgg>, heads: GstHeadAmounts) => {
+    if (Math.abs(heads.cgst) < 0.005 && Math.abs(heads.sgst) < 0.005 && Math.abs(heads.igst) < 0.005) return;
+    const key = "N/A|0";
+    const e = target.get(key) ?? { hsnCode: "N/A", taxRate: 0, unit: "", quantity: 0, taxableValue: 0, cgst: 0, sgst: 0, igst: 0, taxAmount: 0 };
+    e.cgst += heads.cgst;
+    e.sgst += heads.sgst;
+    e.igst += heads.igst;
+    e.taxAmount += gstHeadTotal(heads);
+    target.set(key, e);
+  };
+  for (const posting of notePostings) {
+    const salesMemo = memoForPosting(posting, salesReturnMemos);
+    const purchaseMemo = memoForPosting(posting, purchaseReturnMemos);
+    addTaxOnly(outward, subtractHeads(posting.outward, salesMemo ? salesMemoTaxById.get(salesMemo.noteId) ?? zeroGstHeads() : zeroGstHeads()));
+    addTaxOnly(inward, subtractHeads(posting.inward, purchaseMemo ? purchaseMemoTaxById.get(purchaseMemo.noteId) ?? zeroGstHeads() : zeroGstHeads()));
   }
 
   const finalize = (m: Map<string, HsnAgg>) =>
@@ -219,6 +585,8 @@ router.get("/gst/gstr1", requireModuleView("page:/accounts/gst-returns"), async 
   // LBAC: branch sessions are pinned to their own registration by parseGstScope.
   const { fromDate, toDate } = parseRange(req);
   const scope = await parseGstScope(req);
+  const salesReturnMemos = await loadSalesCreditReturnMemos(fromDate, toDate, scope);
+  const notePostings = await loadGstNotePostings(fromDate, toDate, scope);
 
   const sp: any[] = [];
   const { rows: sales } = await pool.query(
@@ -320,16 +688,17 @@ router.get("/gst/gstr1", requireModuleView("page:/accounts/gst-returns"), async 
   const b2cs = [...b2csMap.values()].sort((a, b) => a.placeOfSupply.localeCompare(b.placeOfSupply) || a.taxRate - b.taxRate);
 
   const sumRows = (rows: any[], k: string) => round2(rows.reduce((s, r) => s + Number(r[k] ?? 0), 0));
+  const noteAdjustments = makeGstNoteRows("outward", notePostings, salesReturnMemos);
   res.json({
-    b2b, b2c, b2cs,
+    b2b, b2c, b2cs, noteAdjustments,
     totals: {
       invoiceCount: sales.length, b2bInvoices: b2bCount, b2cInvoices: b2cCount,
-      taxableValue: round2(sumRows(b2b, "taxableValue") + sumRows(b2cs, "taxableValue")),
-      cgst: round2(sumRows(b2b, "cgst") + sumRows(b2cs, "cgst")),
-      sgst: round2(sumRows(b2b, "sgst") + sumRows(b2cs, "sgst")),
-      igst: round2(sumRows(b2b, "igst") + sumRows(b2cs, "igst")),
-      taxAmount: round2(sumRows(b2b, "taxAmount") + sumRows(b2cs, "taxAmount")),
-      invoiceValue: round2(sales.reduce((s: number, r: any) => s + Number(r.total_amount), 0)),
+      taxableValue: round2(sumRows(b2b, "taxableValue") + sumRows(b2cs, "taxableValue") + sumRows(noteAdjustments, "taxableValue")),
+      cgst: round2(sumRows(b2b, "cgst") + sumRows(b2cs, "cgst") + sumRows(noteAdjustments, "cgst")),
+      sgst: round2(sumRows(b2b, "sgst") + sumRows(b2cs, "sgst") + sumRows(noteAdjustments, "sgst")),
+      igst: round2(sumRows(b2b, "igst") + sumRows(b2cs, "igst") + sumRows(noteAdjustments, "igst")),
+      taxAmount: round2(sumRows(b2b, "taxAmount") + sumRows(b2cs, "taxAmount") + sumRows(noteAdjustments, "totalTax")),
+      invoiceValue: round2(sales.reduce((s: number, r: any) => s + Number(r.total_amount), 0) + sumRows(noteAdjustments, "invoiceValue")),
     },
   });
 });
@@ -347,6 +716,9 @@ router.get("/gst/gstr3b", requireModuleView("page:/accounts/gst-returns"), async
   const fromDate = `${month}-01`;
   const toDate = `${month}-${String(new Date(y, m, 0).getDate()).padStart(2, "0")}`;
   const scope = await parseGstScope(req);
+  const salesReturnMemos = await loadSalesCreditReturnMemos(fromDate, toDate, scope);
+  const purchaseReturnMemos = await loadPurchaseDebitReturnMemos(fromDate, toDate, scope);
+  const notePostings = await loadGstNotePostings(fromDate, toDate, scope);
 
   const sp: any[] = [];
   const { rows: sales } = await pool.query(
@@ -383,6 +755,28 @@ router.get("/gst/gstr3b", requireModuleView("page:/accounts/gst-returns"), async
     }
   }
 
+  const outwardNoteAdjustments = makeGstNoteRows("outward", notePostings, salesReturnMemos);
+  const inwardNoteAdjustments = makeGstNoteRows("inward", notePostings, purchaseReturnMemos);
+  for (const adjustment of outwardNoteAdjustments) {
+    outCgst += adjustment.cgst;
+    outSgst += adjustment.sgst;
+    outIgst += adjustment.igst;
+  }
+  for (const memo of salesReturnMemos) {
+    for (const line of memo.lineItems) {
+      const sourceLine = memo.sourceLines[Number(line.lineIndex)] ?? {};
+      const rate = Number(sourceLine.taxRate ?? line.taxRate ?? 0);
+      const taxable = Number(line.taxableAmount ?? 0);
+      if (rate > 0) outTaxable -= taxable;
+      else nilTaxable -= taxable;
+    }
+  }
+  for (const adjustment of inwardNoteAdjustments) {
+    itcCgst += adjustment.cgst;
+    itcSgst += adjustment.sgst;
+    itcIgst += adjustment.igst;
+  }
+
   outTaxable = round2(outTaxable); outCgst = round2(outCgst); outSgst = round2(outSgst); outIgst = round2(outIgst);
   nilTaxable = round2(nilTaxable); itcCgst = round2(itcCgst); itcSgst = round2(itcSgst); itcIgst = round2(itcIgst);
 
@@ -390,6 +784,11 @@ router.get("/gst/gstr3b", requireModuleView("page:/accounts/gst-returns"), async
   // CGST credit → CGST, IGST; SGST credit → SGST, IGST.
   let liabC = outCgst, liabS = outSgst, liabI = outIgst;
   let credC = itcCgst, credS = itcSgst, credI = itcIgst;
+  // A purchase debit note reverses eligible ITC. A negative head is a reversal,
+  // not credit available for set-off; move it into that head's payable first.
+  if (credC < 0) { liabC = round2(liabC - credC); credC = 0; }
+  if (credS < 0) { liabS = round2(liabS - credS); credS = 0; }
+  if (credI < 0) { liabI = round2(liabI - credI); credI = 0; }
   const take = (cred: number, liab: number) => Math.min(cred, liab);
   let u = take(credI, liabI); credI = round2(credI - u); liabI = round2(liabI - u);
   u = take(credI, liabC); credI = round2(credI - u); liabC = round2(liabC - u);
@@ -404,6 +803,7 @@ router.get("/gst/gstr3b", requireModuleView("page:/accounts/gst-returns"), async
     outwardSupplies: { taxableValue: outTaxable, cgst: outCgst, sgst: outSgst, igst: outIgst, totalTax: round2(outCgst + outSgst + outIgst) },
     nilRatedSupplies: { taxableValue: nilTaxable },
     itc: { cgst: itcCgst, sgst: itcSgst, igst: itcIgst, totalItc: round2(itcCgst + itcSgst + itcIgst) },
+    noteAdjustments: { outward: outwardNoteAdjustments, inward: inwardNoteAdjustments },
     netPayable: { cgst: liabC, sgst: liabS, igst: liabI, total: round2(liabC + liabS + liabI) },
     itcCarriedForward: { cgst: credC, sgst: credS, igst: credI, total: round2(credC + credS + credI) },
     counts: { sales: sales.length, purchases: purchases.length },

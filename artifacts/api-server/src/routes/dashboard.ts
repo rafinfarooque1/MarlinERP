@@ -876,6 +876,31 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       sales: matrixSalesByLocation.get(locationKey(location.locationType, location.locationId)) ?? 0,
     };
   }));
+  // Company-level openings and unlocated postings are a separate posting
+  // bucket, not part of any branch slice. Only callers with company-wide data
+  // scope may see it; adding it as a matrix column makes the location slices
+  // plus this bucket reconcile to the consolidated cash/bank position.
+  if (scope.isHeadOffice) {
+    const location = { locationType: "company", locationId: 0, name: "Unallocated" };
+    const postingLocation = { type: "company", id: null } as const;
+    const [financials, opening] = await Promise.all([
+      companyFinancials(cachedPostings, {
+        fromDate: fromDate || null,
+        toDate: toDate || null,
+        location: postingLocation,
+      }),
+      matrixOpeningToDate
+        ? companyBalances(cachedPostings, { toDate: matrixOpeningToDate, location: postingLocation })
+        : Promise.resolve({ cashBalance: 0, bankBalance: 0 }),
+    ]);
+    matrixLocationFigures.push({
+      location,
+      financials,
+      openingCash: money(opening.cashBalance),
+      openingBank: money(opening.bankBalance),
+      sales: 0,
+    });
+  }
   const matrixFinancialsByLocation = new Map(matrixLocationFigures.map((figure) => [
     locationKey(figure.location.locationType, figure.location.locationId),
     figure.financials,

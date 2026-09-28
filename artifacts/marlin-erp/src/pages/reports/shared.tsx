@@ -339,7 +339,7 @@ export function SummaryCards({
             <p className="text-xs max-md:text-sm text-muted-foreground mb-1">{c.label}</p>
             <p className={`font-bold font-mono text-sm max-md:text-xl ${TONE_CLS[c.tone ?? 'default']}`}>{c.value}</p>
             {c.hint ? (
-              <p className="text-[10px] max-md:text-xs text-muted-foreground/70 mt-1 leading-tight">{c.hint}</p>
+              <div className="text-[10px] max-md:text-xs text-muted-foreground/70 mt-1 leading-tight">{c.hint}</div>
             ) : null}
           </>
         );

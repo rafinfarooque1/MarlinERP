@@ -142,7 +142,7 @@ export interface DashboardBi {
 export interface DashboardFinancialMatrix {
   period: { fromDate: string | null; toDate: string | null };
   locations: Array<{
-    locationType: 'headoffice' | 'warehouse' | 'outlet';
+    locationType: 'headoffice' | 'warehouse' | 'outlet' | 'company';
     locationId: number;
     name: string;
   }>;
