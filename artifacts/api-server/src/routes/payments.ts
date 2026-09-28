@@ -119,6 +119,10 @@ router.post("/sales/:id/payments", requireModuleAction(["page:/sales/pos", "page
     if (!validMethods.includes(method)) {
       res.status(400).json({ error: `method must be one of: ${validMethods.join(", ")}` }); return;
     }
+    if (method === "online") {
+      res.status(400).json({ error: "Select an Online Platform account for online payments." });
+      return;
+    }
   }
 
   // payment_date is a real DATE column: blank falls back to today, malformed is

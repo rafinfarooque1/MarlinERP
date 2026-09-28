@@ -30,6 +30,7 @@ import {
   resolveMoneyVoucherLocation, voucherPartyLocationWhere, checkVoucherPartyLocation,
   type VoucherPartyKind,
 } from "../lib/moneyScope";
+import { resolveReceiveIntoAccount } from "../lib/saleCollection";
 import { loadLedgerUsage, deleteBlockReason } from "../lib/chartGroups";
 import { respondIfMonthLocked, isMonthLocked, ymOfDate, monthLockedBody } from "../lib/periodLock";
 import { loadPaymentPosition, computePaymentPosition, outstandingExpr } from "../lib/salePaymentPosition";
@@ -65,6 +66,28 @@ async function postableLedgerError(
     if (row.is_group) return `Account "${row.name}" is a group and cannot receive postings.`;
   }
   return null;
+}
+
+async function resolveVoucherOnlinePlatform(
+  q: { query: (text: string, params?: any[]) => Promise<any> },
+  location: { locationType: string; locationId: number },
+  rawLedgerId: unknown,
+): Promise<{ id: number } | { error: string }> {
+  const ledgerId = Number(rawLedgerId);
+  if (!Number.isInteger(ledgerId) || ledgerId <= 0) {
+    return { error: "Select an Online Platform account." };
+  }
+  const account = await resolveReceiveIntoAccount(
+    q,
+    location.locationType,
+    Number(location.locationId),
+    ledgerId,
+  );
+  if ("error" in account) return account;
+  if (account.method !== "online") {
+    return { error: "The selected account is not an Online Platform account." };
+  }
+  return { id: account.ledgerId };
 }
 
 /**
@@ -764,6 +787,7 @@ router.get("/accounts/payments", requireModuleView(["page:/accounts/vouchers", "
       amount: Number(r.amount),
       narration: r.narration,
       paymentMode: r.payment_mode ?? null,
+      onlinePlatformLedgerId: r.online_platform_ledger_id == null ? null : Number(r.online_platform_ledger_id),
       referenceNumber: r.reference_number ?? null,
       createdBy: r.created_by ?? null,
       origin: isSystem ? 'system' : 'manual',
@@ -1174,6 +1198,7 @@ router.post("/accounts/payments", requireModuleAction(["page:/accounts/vouchers"
     advanceAmount?: number;
   };
   let paidFromLedgerId = Number((req.body as any)?.paidFromLedgerId ?? 0);
+  let onlinePlatformLedgerId: number | null = null;
   const rawMode = (req.body as any)?.paymentMode;
   let paymentMode = rawMode == null || String(rawMode).trim() === ""
     ? null
@@ -1229,6 +1254,11 @@ router.post("/accounts/payments", requireModuleAction(["page:/accounts/vouchers"
   );
   if (!payLocRes.ok) { res.status(payLocRes.status).json({ error: payLocRes.error }); return; }
   const { locationType, locationId } = payLocRes.loc;
+  if (paymentMode === "online") {
+    const platform = await resolveVoucherOnlinePlatform(pool, payLocRes.loc, (req.body as any)?.onlinePlatformLedgerId);
+    if ("error" in platform) { res.status(400).json({ error: platform.error }); return; }
+    onlinePlatformLedgerId = platform.id;
+  }
   {
     const { rows: [toLedger] } = await pool.query(
       `SELECT code FROM account_ledgers WHERE id = $1`, [Number(paidToLedgerId)],
@@ -1367,11 +1397,11 @@ router.post("/accounts/payments", requireModuleAction(["page:/accounts/vouchers"
       const voucherNumber = await nextVoucherNumber(client, "payment", paymentDate);
       const { rows: [r] } = await client.query(
          `INSERT INTO payments (voucher_number, payment_date, paid_from_ledger_id, paid_to_ledger_id, amount, narration, location_type, location_id,
-                                reference_number, created_by, source, payment_mode, advance_amount, advance_ledger_id)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'allocation', $11, $12, $13) RETURNING *`,
+                                reference_number, created_by, source, payment_mode, advance_amount, advance_ledger_id, online_platform_ledger_id)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'allocation', $11, $12, $13, $14) RETURNING *`,
         [voucherNumber, paymentDate, Number(paidFromLedgerId), Number(paidToLedgerId), av.amount,
           narration ?? null, locationType, locationId, referenceNumber?.trim() || null, createdBy, paymentMode ?? (await isCashFamilyLedger(client, Number(paidFromLedgerId)) ? "cash" : "bank"),
-          advance > 0.004 ? advance : 0, advanceLedgerId],
+          advance > 0.004 ? advance : 0, advanceLedgerId, onlinePlatformLedgerId],
       );
       for (const d of details) {
         await client.query(
@@ -1396,6 +1426,7 @@ router.post("/accounts/payments", requireModuleAction(["page:/accounts/vouchers"
         paidFromLedgerId: r.paid_from_ledger_id, paidFromName: pf?.name ?? "",
         paidToLedgerId: r.paid_to_ledger_id, paidToName: toLedger?.name ?? "",
         amount: Number(r.amount), narration: r.narration,
+        onlinePlatformLedgerId: r.online_platform_ledger_id == null ? null : Number(r.online_platform_ledger_id),
         referenceNumber: r.reference_number, createdBy: r.created_by,
         locationType: r.location_type ?? "headoffice", locationId: r.location_id ?? 0,
         createdAt: r.created_at,
@@ -1418,10 +1449,11 @@ router.post("/accounts/payments", requireModuleAction(["page:/accounts/vouchers"
     const voucherNumber = await nextVoucherNumber(client, 'payment', paymentDate);
     const result = await client.query(
        `INSERT INTO payments (voucher_number, payment_date, paid_from_ledger_id, paid_to_ledger_id, amount, narration, location_type, location_id,
-                              reference_number, created_by, source, payment_mode)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'manual', $11) RETURNING *`,
+                              reference_number, created_by, source, payment_mode, online_platform_ledger_id)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'manual', $11, $12) RETURNING *`,
       [voucherNumber, paymentDate, paidFromLedgerId, paidToLedgerId, av.amount, narration ?? null, locationType, locationId,
-        referenceNumber?.trim() || null, (req as any).employee?.username ?? null, paymentMode ?? (await isCashFamilyLedger(client, Number(paidFromLedgerId)) ? "cash" : "bank")]
+        referenceNumber?.trim() || null, (req as any).employee?.username ?? null, paymentMode ?? (await isCashFamilyLedger(client, Number(paidFromLedgerId)) ? "cash" : "bank"),
+        onlinePlatformLedgerId]
     );
     r = result.rows[0];
     await logActivityInTransaction(client, {
@@ -1444,6 +1476,7 @@ router.post("/accounts/payments", requireModuleAction(["page:/accounts/vouchers"
     paidFromLedgerId: r.paid_from_ledger_id, paidFromName: pf?.name ?? '',
     paidToLedgerId: r.paid_to_ledger_id, paidToName: pt?.name ?? '',
     amount: Number(r.amount), narration: r.narration,
+    onlinePlatformLedgerId: r.online_platform_ledger_id == null ? null : Number(r.online_platform_ledger_id),
     referenceNumber: r.reference_number, createdBy: r.created_by,
     locationType: r.location_type ?? 'headoffice', locationId: r.location_id ?? 0,
     createdAt: r.created_at,
@@ -1524,6 +1557,20 @@ router.patch("/accounts/payments/:id", requireModuleAction(["page:/accounts/vouc
       newFrom,
       { locationType: (row.location_type ?? 'headoffice') as any, locationId: Number(row.location_id ?? 0) });
     if (!locRes.ok) { await client.query("ROLLBACK"); res.status(locRes.status).json({ error: locRes.error }); return; }
+    let onlinePlatformLedgerId: number | null = null;
+    if (requestedMode === "online") {
+      const platform = await resolveVoucherOnlinePlatform(
+        client,
+        locRes.loc,
+        b.onlinePlatformLedgerId !== undefined ? b.onlinePlatformLedgerId : row.online_platform_ledger_id,
+      );
+      if ("error" in platform) {
+        await client.query("ROLLBACK");
+        res.status(400).json({ error: platform.error });
+        return;
+      }
+      onlinePlatformLedgerId = platform.id;
+    }
     {
       const { rows: [toLedger] } = await client.query(
         `SELECT code FROM account_ledgers WHERE id = $1`, [newTo],
@@ -1553,7 +1600,8 @@ router.patch("/accounts/payments/:id", requireModuleAction(["page:/accounts/vouc
     const upd = await client.query(
       `UPDATE payments SET
          payment_date = $2, paid_from_ledger_id = $3, paid_to_ledger_id = $4, amount = $5,
-          narration = $6, reference_number = $7, location_type = $8, location_id = $9, payment_mode = $10
+          narration = $6, reference_number = $7, location_type = $8, location_id = $9, payment_mode = $10,
+          online_platform_ledger_id = $11
        WHERE id = $1 RETURNING *`,
       [id,
        b.paymentDate !== undefined ? String(b.paymentDate) : row.payment_date,
@@ -1562,6 +1610,7 @@ router.patch("/accounts/payments/:id", requireModuleAction(["page:/accounts/vouc
        b.narration !== undefined ? (String(b.narration).trim() || null) : row.narration,
        b.referenceNumber !== undefined ? (String(b.referenceNumber).trim() || null) : row.reference_number,
         locRes.loc.locationType, Number(locRes.loc.locationId), deferredElectronic ? requestedMode : (b.paymentMode !== undefined ? String(b.paymentMode) : (row.payment_mode ?? null)),
+       onlinePlatformLedgerId,
       ],
     );
     const r = upd.rows[0];
@@ -1582,6 +1631,7 @@ router.patch("/accounts/payments/:id", requireModuleAction(["page:/accounts/vouc
       paidFromLedgerId: r.paid_from_ledger_id, paidFromName: pf?.name ?? '',
       paidToLedgerId: r.paid_to_ledger_id, paidToName: pt?.name ?? '',
       amount: Number(r.amount), narration: r.narration,
+      onlinePlatformLedgerId: r.online_platform_ledger_id == null ? null : Number(r.online_platform_ledger_id),
       referenceNumber: r.reference_number, createdBy: r.created_by,
       locationType: r.location_type ?? 'headoffice', locationId: r.location_id ?? 0,
       createdAt: r.created_at,
@@ -1760,6 +1810,7 @@ router.get("/accounts/receipts", requireModuleView(["page:/accounts/vouchers", "
       amount: Number(r.amount),
       narration: r.narration,
       paymentMode: r.payment_mode ?? null,
+      onlinePlatformLedgerId: r.online_platform_ledger_id == null ? null : Number(r.online_platform_ledger_id),
       referenceNumber: r.reference_number ?? null,
       createdBy: r.created_by ?? null,
       origin: isSystem ? 'system' : 'manual',
@@ -1791,6 +1842,7 @@ router.post("/accounts/receipts", requireModuleAction(["page:/accounts/vouchers"
     advanceAmount?: number;
   };
   let receivedInLedgerId = Number((req.body as any)?.receivedInLedgerId ?? 0);
+  let onlinePlatformLedgerId: number | null = null;
   const rawMode = (req.body as any)?.paymentMode;
   let paymentMode = rawMode == null || String(rawMode).trim() === ""
     ? null
@@ -1844,6 +1896,11 @@ router.post("/accounts/receipts", requireModuleAction(["page:/accounts/vouchers"
   );
   if (!rcptLocRes.ok) { res.status(rcptLocRes.status).json({ error: rcptLocRes.error }); return; }
   const { locationType, locationId } = rcptLocRes.loc;
+  if (paymentMode === "online") {
+    const platform = await resolveVoucherOnlinePlatform(pool, rcptLocRes.loc, (req.body as any)?.onlinePlatformLedgerId);
+    if ("error" in platform) { res.status(400).json({ error: platform.error }); return; }
+    onlinePlatformLedgerId = platform.id;
+  }
   {
     const { rows: [fromLedger] } = await pool.query(
       `SELECT code FROM account_ledgers WHERE id = $1`, [Number(receivedFromLedgerId)],
@@ -1967,21 +2024,21 @@ router.post("/accounts/receipts", requireModuleAction(["page:/accounts/vouchers"
       const voucherNumber = await nextVoucherNumber(client, "receipt", receiptDate);
       const { rows: [r] } = await client.query(
        `INSERT INTO receipts (voucher_number, receipt_date, received_from_ledger_id, received_in_ledger_id, amount, narration, location_type, location_id,
-                              reference_number, created_by, source, payment_mode, advance_amount, advance_ledger_id)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'allocation', $11, $12, $13) RETURNING *`,
+                              reference_number, created_by, source, payment_mode, advance_amount, advance_ledger_id, online_platform_ledger_id)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'allocation', $11, $12, $13, $14) RETURNING *`,
         [voucherNumber, receiptDate, Number(receivedFromLedgerId), Number(receivedInLedgerId), av.amount,
         narration ?? null, locationType, locationId, referenceNumber?.trim() || null, createdBy, method,
-        advance > 0.004 ? advance : 0, advanceLedgerId],
+        advance > 0.004 ? advance : 0, advanceLedgerId, onlinePlatformLedgerId],
       );
 
       for (const d of details) {
         // Deferred bank receipts remain pending until Reconciliation posts the
         // clearing-to-bank leg. Cash receipts are already settled.
         await client.query(
-          `INSERT INTO sale_payments (sale_id, payment_date, method, amount, reference_number, notes, reconciliation_status, clearing_receipt_id, outlet_id, created_by)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+          `INSERT INTO sale_payments (sale_id, payment_date, method, amount, reference_number, notes, reconciliation_status, clearing_receipt_id, outlet_id, created_by, online_platform_ledger_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
           [d.sale.id, receiptDate, method, d.alloc.amount, referenceNumber?.trim() || null,
-          `Receipt voucher ${voucherNumber}`, isDeferredElectronic ? "pending" : null, r.id, d.sale.outlet_id, createdBy],
+          `Receipt voucher ${voucherNumber}`, isDeferredElectronic ? "pending" : null, r.id, d.sale.outlet_id, createdBy, onlinePlatformLedgerId],
         );
         const newPaid = money2(Number(d.sale.amount_paid) + d.alloc.amount);
         const newPos = computePaymentPosition({
@@ -2011,6 +2068,7 @@ router.post("/accounts/receipts", requireModuleAction(["page:/accounts/vouchers"
         receivedFromLedgerId: r.received_from_ledger_id, receivedFromName: fromLedger?.name ?? "",
         receivedInLedgerId: r.received_in_ledger_id, receivedInName: ri?.name ?? "",
         amount: Number(r.amount), narration: r.narration,
+        onlinePlatformLedgerId: r.online_platform_ledger_id == null ? null : Number(r.online_platform_ledger_id),
         referenceNumber: r.reference_number, createdBy: r.created_by,
         locationType: r.location_type ?? "headoffice", locationId: r.location_id ?? 0,
         createdAt: r.created_at,
@@ -2033,10 +2091,11 @@ router.post("/accounts/receipts", requireModuleAction(["page:/accounts/vouchers"
     const voucherNumber = await nextVoucherNumber(client, 'receipt', receiptDate);
     const result = await client.query(
        `INSERT INTO receipts (voucher_number, receipt_date, received_from_ledger_id, received_in_ledger_id, amount, narration, location_type, location_id,
-                              reference_number, created_by, source, payment_mode)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'manual', $11) RETURNING *`,
+                              reference_number, created_by, source, payment_mode, online_platform_ledger_id)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'manual', $11, $12) RETURNING *`,
       [voucherNumber, receiptDate, receivedFromLedgerId, receivedInLedgerId, av.amount, narration ?? null, locationType, locationId,
-        referenceNumber?.trim() || null, (req as any).employee?.username ?? null, paymentMode ?? (await isCashFamilyLedger(client, Number(receivedInLedgerId)) ? "cash" : "bank")]
+        referenceNumber?.trim() || null, (req as any).employee?.username ?? null, paymentMode ?? (await isCashFamilyLedger(client, Number(receivedInLedgerId)) ? "cash" : "bank"),
+        onlinePlatformLedgerId]
     );
     r = result.rows[0];
     await logActivityInTransaction(client, {
@@ -2059,6 +2118,7 @@ router.post("/accounts/receipts", requireModuleAction(["page:/accounts/vouchers"
     receivedFromLedgerId: r.received_from_ledger_id, receivedFromName: rf?.name ?? '',
     receivedInLedgerId: r.received_in_ledger_id, receivedInName: ri?.name ?? '',
     amount: Number(r.amount), narration: r.narration,
+    onlinePlatformLedgerId: r.online_platform_ledger_id == null ? null : Number(r.online_platform_ledger_id),
     referenceNumber: r.reference_number, createdBy: r.created_by,
     locationType: r.location_type ?? 'headoffice', locationId: r.location_id ?? 0,
     createdAt: r.created_at,
@@ -2096,8 +2156,8 @@ router.patch("/accounts/receipts/:id", requireModuleAction(["page:/accounts/vouc
         res.status(403).json({ error: "This bank voucher has been settled through Reconciliation and is locked." });
         return;
       }
-      const allocationElectronicPending = ["bank", "upi", "online"].includes(String(b.paymentMode ?? row.payment_mode ?? ""));
-      const allocationMethod = String(b.paymentMode ?? row.payment_mode ?? "bank");
+      const allocationMethod = String(b.paymentMode ?? row.payment_mode ?? "bank").trim().toLowerCase();
+      const allocationElectronicPending = ["bank", "upi", "online"].includes(allocationMethod);
       const newDate = b.receiptDate !== undefined ? String(b.receiptDate) : row.receipt_date;
       for (const d of [row.receipt_date, newDate]) {
         const ym = ymOfDate(d);
@@ -2118,6 +2178,20 @@ router.patch("/accounts/receipts/:id", requireModuleAction(["page:/accounts/vouc
         await client.query("ROLLBACK");
         res.status(400).json({ error: "Allocation receipts cannot change location." });
         return;
+      }
+      let onlinePlatformLedgerId: number | null = null;
+      if (allocationMethod === "online") {
+        const platform = await resolveVoucherOnlinePlatform(
+          client,
+          { locationType: row.location_type ?? "headoffice", locationId: Number(row.location_id ?? 0) },
+          b.onlinePlatformLedgerId !== undefined ? b.onlinePlatformLedgerId : row.online_platform_ledger_id,
+        );
+        if ("error" in platform) {
+          await client.query("ROLLBACK");
+          res.status(400).json({ error: platform.error });
+          return;
+        }
+        onlinePlatformLedgerId = platform.id;
       }
       const { rows: [fromLedger] } = await client.query(
         `SELECT id, code, name FROM account_ledgers WHERE id = $1`, [newFrom],
@@ -2234,10 +2308,11 @@ router.patch("/accounts/receipts/:id", requireModuleAction(["page:/accounts/vouc
           return;
         }
         await client.query(
-          `INSERT INTO sale_payments (sale_id, payment_date, method, amount, reference_number, notes, reconciliation_status, clearing_receipt_id, outlet_id, created_by)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+          `INSERT INTO sale_payments (sale_id, payment_date, method, amount, reference_number, notes, reconciliation_status, clearing_receipt_id, outlet_id, created_by, online_platform_ledger_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
           [saleId, newDate, method, allocationAmount, b.referenceNumber !== undefined ? (String(b.referenceNumber).trim() || null) : row.reference_number,
-          `Receipt voucher ${row.voucher_number}`, allocationElectronicPending ? "pending" : null, id, sale.outlet_id, (req as any).employee?.username ?? row.created_by ?? null],
+          `Receipt voucher ${row.voucher_number}`, allocationElectronicPending ? "pending" : null, id, sale.outlet_id,
+          (req as any).employee?.username ?? row.created_by ?? null, onlinePlatformLedgerId],
         );
         const newPaid = money2(Number(sale.amount_paid) + allocationAmount);
         const newPos = computePaymentPosition({
@@ -2256,12 +2331,13 @@ router.patch("/accounts/receipts/:id", requireModuleAction(["page:/accounts/vouc
       }
       const updated = await client.query(
         `UPDATE receipts SET receipt_date = $2, amount = $3, narration = $4,
-                reference_number = $5, advance_amount = $6, payment_mode = $7
+                reference_number = $5, advance_amount = $6, payment_mode = $7, online_platform_ledger_id = $8
           WHERE id = $1 RETURNING *`,
         [id, newDate, newAmount,
          b.narration !== undefined ? (String(b.narration).trim() || null) : row.narration,
          b.referenceNumber !== undefined ? (String(b.referenceNumber).trim() || null) : row.reference_number,
-         advance, allocationElectronicPending ? allocationMethod : (b.paymentMode !== undefined ? String(b.paymentMode) : row.payment_mode)],
+         advance, allocationElectronicPending ? allocationMethod : (b.paymentMode !== undefined ? String(b.paymentMode) : row.payment_mode),
+         onlinePlatformLedgerId],
       );
       await logActivityInTransaction(client, {
         action: "UPDATE", module: "accounts", entityType: "receipt_voucher", entityId: id,
@@ -2280,6 +2356,8 @@ router.patch("/accounts/receipts/:id", requireModuleAction(["page:/accounts/vouc
         receivedFromName: fromLedger.name,
         receivedInLedgerId: updated.rows[0].received_in_ledger_id,
         amount: Number(updated.rows[0].amount), narration: updated.rows[0].narration,
+        onlinePlatformLedgerId: updated.rows[0].online_platform_ledger_id == null
+          ? null : Number(updated.rows[0].online_platform_ledger_id),
         referenceNumber: updated.rows[0].reference_number,
         createdBy: updated.rows[0].created_by,
         locationType: updated.rows[0].location_type ?? "headoffice",
@@ -2341,6 +2419,20 @@ router.patch("/accounts/receipts/:id", requireModuleAction(["page:/accounts/vouc
       newIn,
       { locationType: (row.location_type ?? 'headoffice') as any, locationId: Number(row.location_id ?? 0) });
     if (!locRes.ok) { await client.query("ROLLBACK"); res.status(locRes.status).json({ error: locRes.error }); return; }
+    let onlinePlatformLedgerId: number | null = null;
+    if (requestedMode === "online") {
+      const platform = await resolveVoucherOnlinePlatform(
+        client,
+        locRes.loc,
+        b.onlinePlatformLedgerId !== undefined ? b.onlinePlatformLedgerId : row.online_platform_ledger_id,
+      );
+      if ("error" in platform) {
+        await client.query("ROLLBACK");
+        res.status(400).json({ error: platform.error });
+        return;
+      }
+      onlinePlatformLedgerId = platform.id;
+    }
     {
       const { rows: [fromLedger] } = await client.query(
         `SELECT code FROM account_ledgers WHERE id = $1`, [newFrom],
@@ -2368,7 +2460,8 @@ router.patch("/accounts/receipts/:id", requireModuleAction(["page:/accounts/vouc
     const upd = await client.query(
       `UPDATE receipts SET
          receipt_date = $2, received_from_ledger_id = $3, received_in_ledger_id = $4, amount = $5,
-         narration = $6, reference_number = $7, location_type = $8, location_id = $9, payment_mode = $10
+         narration = $6, reference_number = $7, location_type = $8, location_id = $9, payment_mode = $10,
+         online_platform_ledger_id = $11
        WHERE id = $1 RETURNING *`,
       [id,
        b.receiptDate !== undefined ? String(b.receiptDate) : row.receipt_date,
@@ -2378,6 +2471,7 @@ router.patch("/accounts/receipts/:id", requireModuleAction(["page:/accounts/vouc
        b.referenceNumber !== undefined ? (String(b.referenceNumber).trim() || null) : row.reference_number,
         locRes.loc.locationType, Number(locRes.loc.locationId),
         deferredElectronic ? requestedMode : (b.paymentMode !== undefined ? String(b.paymentMode) : (row.payment_mode ?? null)),
+        onlinePlatformLedgerId,
       ],
     );
     const r = upd.rows[0];
@@ -2398,6 +2492,7 @@ router.patch("/accounts/receipts/:id", requireModuleAction(["page:/accounts/vouc
       receivedFromLedgerId: r.received_from_ledger_id, receivedFromName: rf?.name ?? '',
       receivedInLedgerId: r.received_in_ledger_id, receivedInName: ri?.name ?? '',
       amount: Number(r.amount), narration: r.narration,
+      onlinePlatformLedgerId: r.online_platform_ledger_id == null ? null : Number(r.online_platform_ledger_id),
       referenceNumber: r.reference_number, createdBy: r.created_by,
       locationType: r.location_type ?? 'headoffice', locationId: r.location_id ?? 0,
       createdAt: r.created_at,

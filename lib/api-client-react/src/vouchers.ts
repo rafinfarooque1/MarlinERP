@@ -26,6 +26,7 @@ export interface Payment {
   amount: number;
   narration?: string;
   paymentMode?: VoucherPaymentMode | null;
+  onlinePlatformLedgerId?: number | null;
   referenceNumber?: string | null;
   attachmentUrl?: string | null;
   createdBy?: string | null;
@@ -45,6 +46,7 @@ export interface Receipt {
   amount: number;
   narration?: string;
   paymentMode?: VoucherPaymentMode | null;
+  onlinePlatformLedgerId?: number | null;
   referenceNumber?: string | null;
   attachmentUrl?: string | null;
   createdBy?: string | null;

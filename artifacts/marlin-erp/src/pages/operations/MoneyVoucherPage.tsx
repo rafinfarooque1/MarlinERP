@@ -43,6 +43,7 @@ import { Badge } from '@/components/ui/badge';
 import { usePermission } from '@/lib/usePermission';
 import { AccountCombobox } from '@/components/ui/account-combobox';
 import { isSystemLedger } from '@/lib/systemLedgers';
+import { ReceiveIntoSelect } from '@/components/receive-into-select';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { PageHeader } from '@/components/app/page-header';
 import { BillSettlementPanel, type SettlementSelection } from '@/components/settlement/BillSettlementPanel';
@@ -105,6 +106,7 @@ const schema = z.object({
   voucherDate: z.string().min(1, 'Date required'),
   paymentMode: z.enum(['cash', 'bank', 'upi', 'online']),
   cashBankLedgerId: z.coerce.number(),
+  onlinePlatformLedgerId: z.coerce.number(),
   partyLedgerId: z.coerce.number().min(1, 'Select the party account'),
   amount: z.coerce.number().min(0.01, 'Amount must be greater than 0'),
   referenceNumber: z.string().max(100).optional(),
@@ -117,12 +119,19 @@ const schema = z.object({
        message: 'Select the permitted Cash account',
     });
   }
+  if (v.paymentMode === 'online' && v.onlinePlatformLedgerId < 1) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['onlinePlatformLedgerId'],
+      message: 'Select an Online Platform account',
+    });
+  }
 });
 type FormValues = z.infer<typeof schema>;
 
 const today = () => new Date().toISOString().split('T')[0];
 const EMPTY: FormValues = {
-  voucherDate: today(), paymentMode: 'cash', cashBankLedgerId: 0, partyLedgerId: 0,
+  voucherDate: today(), paymentMode: 'cash', cashBankLedgerId: 0, onlinePlatformLedgerId: 0, partyLedgerId: 0,
   amount: 0, referenceNumber: '', narration: '',
 };
 
@@ -170,7 +179,7 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
   // balance tiles must refresh without a manual reload.
   const queryClient = useQueryClient();
   const { data: allAccounts = [] } = useListAccountsFlat();
-  const { data: cashBankAccounts = [] } = useCashBankLedgersFlat();
+  const { data: cashBankAccounts = [], isLoading: cashBankLoading } = useCashBankLedgersFlat();
   const { data: me } = useGetMe();
   // Voucher deletion is Administrator-only (the API returns 403 for everyone
   // else); other actions keep the page's role permissions.
@@ -260,6 +269,10 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
     () => tillOptions.filter((a: any) => a.accountType === 'cash'),
     [tillOptions],
   );
+  const onlineOptions = useMemo(
+    () => tillOptions.filter((a: any) => a.accountType === 'online'),
+    [tillOptions],
+  );
 
   // Branch users (warehouse/outlet) get exactly their own till from the
   // server-scoped cash/bank list — pre-select it so the voucher can only move
@@ -279,6 +292,10 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
   useEffect(() => {
     const cashId = Number(form.getValues('cashBankLedgerId'));
     if (cashId && !tillOptions.some((a: any) => Number(a.id) === cashId)) form.setValue('cashBankLedgerId', 0);
+    const onlineId = Number(form.getValues('onlinePlatformLedgerId'));
+    if (!cashBankLoading && onlineId && !onlineOptions.some((a: any) => Number(a.id) === onlineId)) {
+      form.setValue('onlinePlatformLedgerId', 0);
+    }
     const partyId = Number(form.getValues('partyLedgerId'));
     if (partyId && foreignLedgerIds.has(partyId)) form.setValue('partyLedgerId', 0);
     // An employee that just became ineligible (location switch) must not ride
@@ -288,7 +305,7 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
       form.setValue('partyLedgerId', 0);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [locKey, tillOptions, foreignLedgerIds, partyOptions]);
+  }, [locKey, tillOptions, onlineOptions, cashBankLoading, foreignLedgerIds, partyOptions]);
 
   const resetForm = () => {
     form.reset({ ...EMPTY, voucherDate: today(), cashBankLedgerId: defaultCashId });
@@ -307,8 +324,10 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
         : row.paymentMode === 'upi' ? 'upi'
           : row.paymentMode === 'bank' || row.paymentMode === 'bank_settled' ? 'bank' : 'cash',
        cashBankLedgerId: row.paymentMode === 'bank' || row.paymentMode === 'bank_settled' || row.paymentMode === 'upi'
+          || row.paymentMode === 'online'
          ? 0
         : Number(row[C.cashField]),
+       onlinePlatformLedgerId: Number(row.onlinePlatformLedgerId ?? 0),
       partyLedgerId: partyId,
       amount: Number(row.amount),
       referenceNumber: row.referenceNumber ?? '',
@@ -324,7 +343,8 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
     return {
       [C.dateField]: v.voucherDate,
       paymentMode: v.paymentMode,
-       ...(v.paymentMode === 'cash' ? { [C.cashField]: v.cashBankLedgerId } : {}),
+      ...(v.paymentMode === 'cash' ? { [C.cashField]: v.cashBankLedgerId } : {}),
+      onlinePlatformLedgerId: v.paymentMode === 'online' ? v.onlinePlatformLedgerId : null,
       [C.partyField]: v.partyLedgerId,
       amount: v.amount,
       referenceNumber: v.referenceNumber ?? '',
@@ -528,9 +548,7 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
                       <FormLabel>Payment Mode <span className="text-destructive">*</span></FormLabel>
                       <Select value={field.value} onValueChange={v => {
                         field.onChange(v);
-                        if (v === 'bank') form.setValue('cashBankLedgerId', 0);
-                        else if (v === 'online') form.setValue('cashBankLedgerId', 0);
-                         else if (v === 'upi' || v === 'bank' || v === 'online') form.setValue('cashBankLedgerId', 0);
+                        if (v !== 'cash') form.setValue('cashBankLedgerId', 0);
                         else if (v === 'cash' && !cashOptions.some((a: any) => Number(a.id) === Number(form.getValues('cashBankLedgerId')))) {
                           form.setValue('cashBankLedgerId', defaultCashId);
                         }
@@ -546,7 +564,7 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
                       <FormMessage />
                     </FormItem>
                   )} />
-                   {paymentMode === 'cash' ? <FormField control={form.control} name="cashBankLedgerId" render={({ field }) => (
+                  {paymentMode === 'cash' ? <FormField control={form.control} name="cashBankLedgerId" render={({ field }) => (
                     <FormItem>
                       <FormLabel>{C.cashLabel} <span className="text-destructive">*</span></FormLabel>
                         <AccountCombobox options={tillOptions.filter((a: any) => a.accountType === 'cash' || !a.accountType)}
@@ -555,9 +573,26 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
                          advanceOnSelect data-field="cashBankLedgerId" />
                       <FormMessage />
                     </FormItem>
-                   )} /> : (
+                  )} /> : paymentMode === 'online' ? <FormField control={form.control} name="onlinePlatformLedgerId" render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Online Platform <span className="text-destructive">*</span></FormLabel>
+                      <ReceiveIntoSelect
+                        locationType={selLoc?.locationType}
+                        locationId={Number(selLoc?.locationId ?? 0)}
+                        value={field.value}
+                        onChange={field.onChange}
+                        disabled={busy || !selLoc}
+                        mode="online"
+                        testId="select-online-platform-voucher"
+                      />
+                      {!cashBankLoading && onlineOptions.length === 0 && (
+                        <p className="text-xs text-muted-foreground">No Online Platform accounts are assigned to this location.</p>
+                      )}
+                      <FormMessage />
+                    </FormItem>
+                  )} /> : (
                     <div className="rounded-md border border-dashed border-primary/30 bg-primary/5 px-3 py-2 text-sm text-muted-foreground">
-                         Held for reconciliation. Destination is selected during reconciliation.
+                      Held for reconciliation. Destination is selected during reconciliation.
                     </div>
                   )}
 

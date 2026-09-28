@@ -482,7 +482,9 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   const paymentAmount = upiRow?.amount ?? paymentRows[0]?.amount ?? '';
 
   const setPaymentRowMode = (rowId: number, mode: CollectionPaymentMode) => {
-    const ledgerId = receiveOptionsByMode[mode][0]?.id ?? 0;
+    // Online must be an explicit platform choice; Bank and UPI retain their
+    // location-default account, while Cash and Online use the picker.
+    const ledgerId = mode === 'online' ? 0 : receiveOptionsByMode[mode][0]?.id ?? 0;
     setPaymentRows(rows => rows.map(row => row.id === rowId
       ? { ...row, mode, ledgerId, ref: '' }
       : row));
@@ -499,11 +501,13 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
         const options = receiveOptionsByMode[row.mode];
         const firstId = options[0]?.id ?? 0;
         const isDefaultMode = row.mode === 'bank' || row.mode === 'upi';
-        const nextLedgerId = isDefaultMode
-          ? firstId
-          : options.some(option => option.id === row.ledgerId)
-            ? row.ledgerId
-            : firstId;
+        const nextLedgerId = row.mode === 'online'
+          ? (options.some(option => option.id === row.ledgerId) ? row.ledgerId : 0)
+          : isDefaultMode
+            ? firstId
+            : options.some(option => option.id === row.ledgerId)
+              ? row.ledgerId
+              : firstId;
         if (nextLedgerId === row.ledgerId) return row;
         changed = true;
         return { ...row, ledgerId: nextLedgerId };
@@ -635,6 +639,13 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
         : 'Select a Cash account for each payment.');
       return;
     }
+    const missingOnlinePlatform = validRows.find(r => r.mode === 'online' && !r.ledgerId);
+    if (missingOnlinePlatform) {
+      toast.error(receiveOptionsLoading
+        ? 'Payment accounts are still loading.'
+        : 'Select an Online Platform for each online payment.');
+      return;
+    }
     const totalPaying = validRows.reduce((s, r) => s + Number(r.amount), 0);
     const balanceDue = Number((viewItem as any).balanceDue ?? 0);
     if (totalPaying > balanceDue + 0.001) {
@@ -662,7 +673,10 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
         lastResult = await createPaymentMutation.mutateAsync({
           saleId: viewItem.id,
           data: {
-            method: row.mode, ...(row.mode === 'cash' && row.ledgerId > 0 ? { receivedInLedgerId: row.ledgerId } : {}),
+            method: row.mode,
+            ...((row.mode === 'cash' || row.mode === 'online') && row.ledgerId > 0
+              ? { receivedInLedgerId: row.ledgerId }
+              : {}),
             amount: Number(row.amount),
             referenceNumber: row.ref || undefined, paymentDate,
             // Replay protection: the id was minted when the ROW was created,
@@ -677,6 +691,8 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
         ? `${validRows.length} payments totalling ${inr(totalPaying)}`
         : validRows[0].mode === 'cash'
           ? `${inr(totalPaying)} into ${optionFor(validRows[0].ledgerId)?.name ?? 'the selected account'}`
+          : validRows[0].mode === 'online'
+            ? `${inr(totalPaying)} via ${optionFor(validRows[0].ledgerId)?.name ?? 'the selected platform'} (pending reconciliation)`
           : `${inr(totalPaying)} held for reconciliation`;
       toast.success(`Payment collected — ${label}`);
       // Re-read the sale rather than patching the panel by hand: the server owns
@@ -3069,11 +3085,26 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                                   </div>
                                   <div className="col-span-2">
                                     <p className="text-[10px] text-muted-foreground mb-1">
-                                       {row.mode === 'cash' ? 'Receive Into (Cash)' : 'Settlement'}
+                                      {row.mode === 'cash'
+                                        ? 'Receive Into (Cash)'
+                                        : row.mode === 'online'
+                                          ? <>Online Platform <span className="text-destructive">*</span></>
+                                          : 'Settlement'}
                                     </p>
-                                     {row.mode !== 'cash' ? (
+                                    {row.mode === 'online' ? (
+                                      <ReceiveIntoSelect
+                                        locationType={(viewItem as any)?.locationType}
+                                        locationId={(viewItem as any)?.locationId}
+                                        value={row.ledgerId}
+                                        onChange={ledgerId => setPaymentRows(rows => rows.map(r => r.id === row.id ? { ...r, ledgerId } : r))}
+                                        disabled={createPaymentMutation.isPending}
+                                        mode="online"
+                                        className="h-7 text-xs"
+                                        testId={`select-collect-online-platform-${row.id}`}
+                                      />
+                                    ) : row.mode !== 'cash' ? (
                                       <div className="min-h-7 rounded-md border border-amber-500/20 bg-amber-500/5 px-2 py-1.5 text-xs text-amber-700">
-                                         Held for reconciliation. Destination is selected during reconciliation.
+                                        Held for reconciliation. Destination is selected during reconciliation.
                                       </div>
                                     ) : (
                                       <ReceiveIntoSelect

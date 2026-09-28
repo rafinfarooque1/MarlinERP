@@ -44,6 +44,7 @@ import { repairOrphanPaymentLegs } from "./migrations/repairOrphanPaymentLegs";
 import { backfillSalePaymentLegs } from "./migrations/salePaymentLegsBackfill";
 import { backfillSalePaymentLegsV2 } from "./migrations/salePaymentLegsBackfillV2";
 import { addSalePaymentOnlinePlatform } from "./migrations/salePaymentOnlinePlatform";
+import { addMoneyVoucherOnlinePlatforms } from "./migrations/moneyVoucherOnlinePlatforms";
 import { addReconciliationBatchSources } from "./migrations/reconciliationBatchSources";
 import { addStorageLocationsSetup } from "./migrations/storageLocationsSetup";
 import { cleanupOrphanStockRows, ensureStockMasterGuardTrigger } from "./migrations/orphanStockCleanup";
@@ -5084,6 +5085,12 @@ try {
   await addSalePaymentOnlinePlatform(pool);
 } catch (err) {
   console.error("[migration] sale_payment_online_platform FAILED (non-fatal):", (err as Error).message);
+}
+
+try {
+  await addMoneyVoucherOnlinePlatforms(pool);
+} catch (err) {
+  console.error("[migration] money_voucher_online_platforms FAILED (non-fatal):", (err as Error).message);
 }
 
 try {
