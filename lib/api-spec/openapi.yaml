@@ -2792,6 +2792,12 @@ components:
             $ref: "#/components/schemas/SaleLineItem"
         paymentMode:
           type: string
+        receivedInLedgerId:
+          type: integer
+          minimum: 1
+          description: >-
+            Location-assigned Cash account for cash payments, or required
+            Online platform sub-ledger for an Online POS payment.
         couponCode:
           type: string
         billDiscount:

@@ -1098,6 +1098,7 @@ export const ListSalesResponse = zod.array(ListSalesResponseItem)
 /**
  * @summary Create sale (auto-fills price from outlet price)
  */
+
 export const createSaleBodyNotesMax = 2000;
 
 
@@ -1119,6 +1120,7 @@ export const CreateSaleBody = zod.object({
   "masterMrp": zod.number().optional().describe('QUOTATION lines only, server-stamped: the Item Master MRP as of the moment the quotation was saved. A line whose unitPrice exceeds its masterMrp is a deliberate quotation-level MRP raise (the master item is never modified). Absent on sale lines and on quotations saved before this field existed.\n')
 })),
   "paymentMode": zod.string(),
+  "receivedInLedgerId": zod.number().min(1).optional().describe('Location-assigned Cash account for cash payments, or required Online platform sub-ledger for an Online POS payment.'),
   "couponCode": zod.string().optional(),
   "billDiscount": zod.number().optional().describe('Pre-tax invoice-level discount, allocated across lines.'),
   "otherCharges": zod.array(zod.object({

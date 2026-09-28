@@ -983,11 +983,15 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
   // went into (the same selector payment collection uses) and the server
   // derives the cash/bank/upi method from the account itself — ONE collection
   // engine (lib/saleCollection), shared with POST /sales/:id/payments.
-  // CreateSaleBody strips unknown keys, so read the raw body like
-  // clientRequestId/billDiscount above.
+  // SaleInput declares receivedInLedgerId for typed clients; read rawBody for
+  // this value and the other optional creation-time payment fields.
   const receivedInLedgerIdRaw = Number(rawBody.receivedInLedgerId);
   const receivedInLedgerId = Number.isInteger(receivedInLedgerIdRaw) && receivedInLedgerIdRaw > 0
     ? receivedInLedgerIdRaw : null;
+  if (isOnlinePaymentMode(paymentModeIn) && !receivedInLedgerId) {
+    res.status(400).json({ error: "Online sales require an Online platform account." });
+    return;
+  }
   const allowOverpayment = rawBody.allowOverpayment === true;
   const payReferenceNumber = typeof rawBody.referenceNumber === 'string'
     ? String(rawBody.referenceNumber).trim() || null : null;

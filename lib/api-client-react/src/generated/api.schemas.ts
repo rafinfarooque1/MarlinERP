@@ -744,6 +744,11 @@ export interface SaleInput {
   saleDate: string;
   lineItems: SaleLineItem[];
   paymentMode: string;
+  /**
+     * Location-assigned Cash account for cash payments, or required Online platform sub-ledger for an Online POS payment.
+     * @minimum 1
+     */
+  receivedInLedgerId?: number;
   couponCode?: string;
   /** Pre-tax invoice-level discount, allocated across lines. */
   billDiscount?: number;

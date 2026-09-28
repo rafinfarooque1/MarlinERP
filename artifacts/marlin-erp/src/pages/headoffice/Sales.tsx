@@ -875,8 +875,8 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   // ── Creation-time collection ("Receive Into" at billing) ──────────────────
   // The FORM's location drives which Cash & Bank accounts are offered — the
   // same location-assigned set (and the same component) the collect flow uses.
-  // The server re-validates the account and derives cash/bank/UPI from it.
-  const { options: formReceiveOptions } = useReceiveIntoOptions(watchLocationType, watchLocationId);
+  // The server re-validates the account and derives the payment method from it.
+  const { options: formReceiveOptions, isLoading: formReceiveOptionsLoading } = useReceiveIntoOptions(watchLocationType, watchLocationId);
   const [receiveLedgerId, setReceiveLedgerId] = useState(0);
   // '' = "the full remainder after any advance" (pay in full — the default).
   const [amountReceivedStr, setAmountReceivedStr] = useState('');
@@ -899,16 +899,17 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
     return [];
   }, [formReceiveOptions, watchPaymentMode]);
 
-  // Keep the implicit location account valid for the payment mode. Cash uses
-  // its till; Bank and UPI use the first assigned account of that type. Only
-  // Online exposes a platform picker to the operator.
+  // Keep the location account valid for the payment mode. Cash uses its till;
+  // Bank and UPI use the first assigned account. Online stays blank until the
+  // cashier explicitly selects the platform that will label reconciliation.
   useEffect(() => {
     if (!isOpen || editItem) return;
     setReceiveLedgerId(prev => {
       if (prev > 0 && formReceiveOptionsForMode.some(o => o.id === prev)) return prev;
+      if (watchPaymentMode === 'online') return 0;
       return formReceiveOptionsForMode[0]?.id ?? 0;
     });
-  }, [isOpen, editItem, formReceiveOptionsForMode]);
+  }, [isOpen, editItem, formReceiveOptionsForMode, watchPaymentMode]);
 
   // Advance adjustment: does the selected customer have money parked with us?
   // Only queried for registered customers; walk-ins have no advance ledger.
@@ -1222,17 +1223,21 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
       taxAmount: 0, // backend recomputes authoritatively
     }));
     // ── Creation-time collection fields (create mode, non-credit) ───────────
-    // Electronic collections need no destination account at entry time; only
-    // cash includes its selected till. The server routes all electronic modes
-    // through clearing until reconciliation.
+    // Online requires its selected platform identity; the server still posts
+    // the money to Electronic Clearing until the bank reconciliation step.
     const payNow = !editItem && data.paymentMode !== 'credit'
       && (data.paymentMode === 'upi' || data.paymentMode === 'bank'
         || (ONLINE_PAYMENT_MODES as readonly string[]).includes(data.paymentMode)
         || formReceiveOptionsForMode.length > 0);
     let payFields: Record<string, unknown> = {};
     if (payNow) {
+      const isOnlineMode = (ONLINE_PAYMENT_MODES as readonly string[]).includes(data.paymentMode);
       if (data.paymentMode === 'cash' && !receiveLedgerId) {
         toast.error('Pick the Cash account the money went into.');
+        return;
+      }
+      if (isOnlineMode && !receiveLedgerId) {
+        toast.error('Select an Online platform for this selling location.');
         return;
       }
       if (amountReceivedStr !== '') {
@@ -1244,7 +1249,9 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
       }
       const refTrim = payReference.trim();
       payFields = {
-          ...(data.paymentMode === 'cash' && receiveLedgerId > 0 ? { receivedInLedgerId: receiveLedgerId } : {}),
+        ...((data.paymentMode === 'cash' || isOnlineMode) && receiveLedgerId > 0
+          ? { receivedInLedgerId: receiveLedgerId }
+          : {}),
         ...(amountReceivedStr !== '' ? { amountReceived: Number(amountReceivedStr) } : {}),
         ...(refTrim ? { referenceNumber: refTrim } : {}),
       };
@@ -2049,7 +2056,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                   <FormItem>
                     <FormLabel>Payment Mode <span className="text-destructive">*</span></FormLabel>
                     <Select onValueChange={v => field.onChange(v)} value={editItem ? field.value : (field.value === 'credit' ? '' : field.value)}>
-                      <FormControl><SelectTrigger><SelectValue placeholder="Select mode" /></SelectTrigger></FormControl>
+                      <FormControl><SelectTrigger data-testid="select-payment-mode"><SelectValue placeholder="Select mode" /></SelectTrigger></FormControl>
                       <SelectContent>
                         {(editItem ? paymentModeOptions : createModeOptions).map(m => (
                           <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
@@ -2064,6 +2071,27 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                         />
                         <span>Pay later (Credit)</span>
                       </label>
+                    )}
+                    {!editItem && field.value === 'online' && (
+                      <div className="mt-3 space-y-1.5">
+                        <span className="text-sm font-medium">
+                          Online Platform <span className="text-destructive">*</span>
+                        </span>
+                        <ReceiveIntoSelect
+                          locationType={watchLocationType}
+                          locationId={watchLocationId}
+                          value={receiveLedgerId}
+                          onChange={setReceiveLedgerId}
+                          mode="online"
+                          compact
+                          testId="select-online-platform"
+                        />
+                        {!formReceiveOptionsLoading && watchLocationId > 0 && formReceiveOptionsForMode.length === 0 && (
+                          <p className="text-xs text-amber-600" data-testid="status-no-online-platforms">
+                            No Online platforms are assigned to this selling location.
+                          </p>
+                        )}
+                      </div>
                     )}
                     {field.value === 'credit' && !watchCustomerId && (
                       <p className="text-xs text-amber-500 mt-1">Credit sales need a registered customer</p>
@@ -2116,7 +2144,11 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                             <div className="h-9 flex items-center rounded-md border border-amber-500/30 bg-amber-500/5 px-3 text-sm text-amber-700">
                               Held for reconciliation
                             </div>
-                            <span className="text-xs text-amber-700">Destination is selected during reconciliation.</span>
+                            <span className="text-xs text-amber-700">
+                              {watchPaymentMode === 'online'
+                                ? 'Platform is selected above; choose the bank destination during reconciliation.'
+                                : 'Destination is selected during reconciliation.'}
+                            </span>
                           </>
                         ) : (
                           <>
