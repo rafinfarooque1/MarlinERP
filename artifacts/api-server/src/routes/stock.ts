@@ -487,6 +487,42 @@ const stripLineCost = (lines: unknown): unknown[] =>
     return rest;
   });
 
+/** Give every stored JSON line a stable identity, including pre-id legacy rows. */
+const withTransferLineIds = (transferId: number, lines: unknown): any[] => {
+  const used = new Set<string>();
+  return (Array.isArray(lines) ? lines : []).map((line: any, index: number) => {
+    if (!line || typeof line !== "object" || Array.isArray(line)) return line;
+    const fallback = `TRF-${transferId}-LINE-${index + 1}`;
+    let transferLineId = String(line.transferLineId ?? "").trim() || fallback;
+    if (used.has(transferLineId)) transferLineId = fallback;
+    let suffix = 2;
+    while (used.has(transferLineId)) transferLineId = `${fallback}-${suffix++}`;
+    used.add(transferLineId);
+    return { ...line, transferLineId };
+  });
+};
+
+async function receivedLineDescription(
+  client: { query: (sql: string, params?: unknown[]) => Promise<{ rows: any[] }> },
+  line: any,
+): Promise<string> {
+  const itemId = Number(line.itemId);
+  const materialType = String(line.materialType ?? "item");
+  const meta = await batchResolveMeta(client, [{ materialType, refId: itemId }]);
+  const name = meta.get(`${materialType}:${itemId}`)?.name?.trim()
+    || String(line.itemName ?? line.name ?? "").trim()
+    || `Product #${itemId}`;
+  const batches = Array.isArray(line.batchBreakdown) ? line.batchBreakdown : [];
+  const batchDetails = batches.length
+    ? batches.map((batch: any) => {
+        const batchName = String(batch.batchNumber ?? "").trim()
+          || (batch.batchId != null ? `Batch #${batch.batchId}` : "Untracked batch");
+        return `${batchName}: ${Number(batch.quantity ?? 0)} dispatched`;
+      }).join(", ")
+    : "batch details not recorded";
+  return `${name} (batches: ${batchDetails})`;
+}
+
 router.get("/stock/transfers", requireModuleView("page:/transfers"), async (req, res): Promise<void> => {
   // Optional ?from&to (YYYY-MM-DD, inclusive), ?status and ?limit filters so
   // heavy consumers (e.g. the Reports Center) don't pull the entire history.
@@ -555,7 +591,9 @@ router.get("/stock/transfers", requireModuleView("page:/transfers"), async (req,
     toType: r.to_type,
     toId: r.to_id,
     transferDate: r.transfer_date,
-    lineItems: showValuation ? (r.line_items ?? []) : stripLineCost(r.line_items),
+    lineItems: showValuation
+      ? withTransferLineIds(Number(r.id), r.line_items)
+      : stripLineCost(withTransferLineIds(Number(r.id), r.line_items)),
     isInterstate: r.is_interstate,
     status: r.status,
     notes: r.notes,
@@ -658,7 +696,7 @@ router.post("/stock/transfers", requireModuleAction("page:/transfers", "add"), a
   const client = await pool.connect();
   let row: any;
   const branchFn = await buildBranchMaps();
-  const enrichedLines: any[] = [];
+  let enrichedLines: any[] = [];
   const dispatchLedgerEntries: any[] = [];
   let transferInvoiceNumber: string | null = null;
   try {
@@ -896,6 +934,7 @@ router.post("/stock/transfers", requireModuleAction("page:/transfers", "add"), a
         dispatchLedgerEntries.push({ txnType: 'transfer_out', materialType: 'item', refId: li.itemId, itemName: itemMeta?.name ?? '', unit: itemMeta?.unit ?? '', branchType: row.from_type, branchId: row.from_id, branchName: branchFn(row.from_type, row.from_id), qtyChange: -Number(li.quantity), unitCost: itemCost, docType: 'stock_transfer', docId: row.id, txnDate: toTxnDate(row.transfer_date) });
       }
     }
+    enrichedLines = withTransferLineIds(Number(row.id), enrichedLines);
     await writeStockLedger(client, dispatchLedgerEntries);
     // The request's line items are not authoritative for later receive/reject
     // operations. Persist the server-enriched lines so those operations carry
@@ -1049,7 +1088,7 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction("page:/transfer
     approvedBy,
     receivedDate,
   } = req.body as {
-    receivedLineItems?: Array<{ itemId: number; quantity: number; costPrice?: number }>;
+    receivedLineItems?: Array<{ transferLineId?: string; itemId: number; quantity: number; costPrice?: number }>;
     approvedBy?: string;
     /** Business date on which the destination actually received the goods. */
     receivedDate?: string;
@@ -1062,8 +1101,8 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction("page:/transfer
 
   const client = await pool.connect();
   let row: any;
-  let linesToCredit: Array<{ itemId: number; quantity: number; costPrice: number; materialType?: string }>;
-  const shortReceived: Array<{ itemId: number; materialType: string; dispatched: number; received: number; shortfall: number }> = [];
+  let linesToCredit: Array<{ transferLineId: string; itemId: number; quantity: number; costPrice: number; materialType?: string }>;
+  const shortReceived: Array<{ transferLineId: string; itemId: number; materialType: string; dispatched: number; received: number; shortfall: number }> = [];
   try {
     await client.query("BEGIN");
     // Receiving is authorized by the destination, not merely by either side of
@@ -1129,7 +1168,14 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction("page:/transfer
       notes: `Received on challan ${row.challan_number}`,
     });
 
-    const dispatchedLines = (row.line_items ?? []) as Array<{ itemId: number; quantity: number; costPrice?: number; batchBreakdown?: BatchBreakdownEntry[]; materialType?: string }>;
+    const dispatchedLines = withTransferLineIds(id, row.line_items) as Array<{
+      transferLineId: string;
+      itemId: number;
+      quantity: number;
+      costPrice?: number;
+      batchBreakdown?: BatchBreakdownEntry[];
+      materialType?: string;
+    }>;
 
     // Received lines may only confirm (or short-receive) what was dispatched —
     // never new items, never more than dispatched, and cost always comes from
@@ -1140,13 +1186,12 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction("page:/transfer
         res.status(400).json({ error: "receivedLineItems must be an array" });
         return;
       }
-      // Items, materials and packing materials share one id space, so a single
-      // transfer can legitimately carry the same numeric id twice under two
-      // different kinds. Every lookup below therefore resolves on the
-      // (materialType, itemId) pair — keying on the id alone would reject valid
-      // transfers and credit the wrong lots.
+      // Product IDs are not transfer-line identities: the same product may
+      // appear on multiple lines with distinct batch breakdowns. Resolve by the
+      // server-issued transferLineId, using ordered legacy matching only for
+      // older clients that do not send one.
       const seen = new Set<string>();
-      const validated: Array<{ itemId: number; quantity: number; costPrice: number; materialType?: string }> = [];
+      const validated: Array<{ transferLineId: string; itemId: number; quantity: number; costPrice: number; materialType?: string }> = [];
       for (const li of receivedLineItems) {
         const itemId = Number(li?.itemId);
         const qty = Number(li?.quantity);
@@ -1156,36 +1201,60 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction("page:/transfer
           return;
         }
         const rawType = typeof (li as any)?.materialType === 'string' ? (li as any).materialType : null;
-        const candidates = dispatchedLines.filter(x => Number(x.itemId) === itemId);
-        const d = rawType
-          ? candidates.find(x => (x.materialType ?? 'item') === rawType)
-          : candidates.length === 1 ? candidates[0] : undefined;
+        const transferLineId = String((li as any)?.transferLineId ?? "").trim();
+        const candidates = dispatchedLines.filter(x =>
+          Number(x.itemId) === itemId && (!rawType || (x.materialType ?? 'item') === rawType)
+        );
+        const d = transferLineId
+          ? dispatchedLines.find(x => x.transferLineId === transferLineId)
+          : candidates.find(x => !seen.has(x.transferLineId));
         if (!d) {
           await client.query("ROLLBACK");
           res.status(400).json({
-            error: candidates.length > 1
-              ? `This transfer carries item ${itemId} under more than one product type — each received line must name its materialType`
-              : `Item ${itemId} was not part of this transfer`,
+            error: transferLineId
+              ? `Transfer line ${transferLineId} was not part of this transfer`
+              : candidates.length > 1
+                ? `Each received line for item ${itemId} must include its transferLineId`
+                : `Item ${itemId} was not part of this transfer`,
           });
           return;
         }
-        const key = `${d.materialType ?? 'item'}:${itemId}`;
-        if (seen.has(key)) {
+        if (Number(d.itemId) !== itemId || (rawType && (d.materialType ?? 'item') !== rawType)) {
           await client.query("ROLLBACK");
-          res.status(400).json({ error: `Duplicate received line for item ${itemId}` });
+          res.status(400).json({ error: "The received item does not match its transferLineId" });
           return;
         }
-        seen.add(key);
+        if (seen.has(d.transferLineId)) {
+          await client.query("ROLLBACK");
+          res.status(400).json({ error: `Duplicate received line ${d.transferLineId}` });
+          return;
+        }
         if (qty > Number(d.quantity) + 0.001) {
           await client.query("ROLLBACK");
-          res.status(400).json({ error: `Received quantity for item ${itemId} (${qty}) exceeds dispatched quantity (${d.quantity})` });
+          const description = await receivedLineDescription(client, d);
+          res.status(400).json({
+            error: `Received quantity for ${description} (${qty}) exceeds the dispatched quantity (${d.quantity})`,
+          });
           return;
         }
-        validated.push({ itemId, quantity: qty, costPrice: Number(d.costPrice ?? 0), materialType: d.materialType ?? 'item' });
+        seen.add(d.transferLineId);
+        validated.push({
+          transferLineId: d.transferLineId,
+          itemId,
+          quantity: qty,
+          costPrice: Number(d.costPrice ?? 0),
+          materialType: d.materialType ?? 'item',
+        });
       }
       linesToCredit = validated;
     } else {
-      linesToCredit = dispatchedLines.map(d => ({ itemId: Number(d.itemId), quantity: Number(d.quantity), costPrice: Number(d.costPrice ?? 0), materialType: d.materialType ?? 'item' }));
+      linesToCredit = dispatchedLines.map(d => ({
+        transferLineId: d.transferLineId,
+        itemId: Number(d.itemId),
+        quantity: Number(d.quantity),
+        costPrice: Number(d.costPrice ?? 0),
+        materialType: d.materialType ?? 'item',
+      }));
     }
 
     const destType = row.to_type === "headoffice" ? "warehouse" : row.to_type;
@@ -1213,9 +1282,7 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction("page:/transfer
         // land the dispatched lots at the destination, allocated across a
         // partial receipt, and fall back to a challan-named lot when the
         // dispatch predates material lot tracking.
-        const matDispatched = dispatchedLines.find(
-          d => Number(d.itemId) === Number(li.itemId) && (d.materialType ?? 'item') === matType
-        );
+        const matDispatched = dispatchedLines.find(d => d.transferLineId === li.transferLineId);
         const matBreakdown = matDispatched?.batchBreakdown ?? [];
         if (matBreakdown.length > 0) {
           for (const b of allocateReceived(matBreakdown, Number(li.quantity))) {
@@ -1290,9 +1357,7 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction("page:/transfer
         // Batches travel with the goods. Match on the (kind, id) pair: a
         // material line can share this numeric id, and inheriting its lots
         // would credit the finished item with another product's provenance.
-        const dispatched = dispatchedLines.find(
-          d => Number(d.itemId) === Number(li.itemId) && (d.materialType ?? 'item') === 'item'
-        );
+        const dispatched = dispatchedLines.find(d => d.transferLineId === li.transferLineId);
         const breakdown = dispatched?.batchBreakdown ?? [];
         if (breakdown.length > 0) {
           const allocation = allocateReceived(breakdown, Number(li.quantity));
@@ -1392,12 +1457,11 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction("page:/transfer
     // not something to do silently here.
     for (const d of dispatchedLines) {
       const kind = (d.materialType ?? 'item') as 'item' | 'material' | 'raw_material';
-      const received = linesToCredit.find(
-        l => Number(l.itemId) === Number(d.itemId) && (l.materialType ?? 'item') === kind
-      );
+      const received = linesToCredit.find(l => l.transferLineId === d.transferLineId);
       const shortfall = r3(Number(d.quantity) - Number(received?.quantity ?? 0));
       if (shortfall <= 0.001) continue;
       shortReceived.push({
+        transferLineId: d.transferLineId,
         itemId: Number(d.itemId), materialType: kind,
         dispatched: r3(Number(d.quantity)),
         received: r3(Number(received?.quantity ?? 0)),
@@ -1687,7 +1751,9 @@ router.get("/stock/transfers/:id", requireModuleView("page:/transfers"), async (
     toType: r.to_type,
     toId: r.to_id,
     transferDate: r.transfer_date,
-    lineItems: showValuation ? (r.line_items ?? []) : stripLineCost(r.line_items),
+    lineItems: showValuation
+      ? withTransferLineIds(Number(r.id), r.line_items)
+      : stripLineCost(withTransferLineIds(Number(r.id), r.line_items)),
     isInterstate: r.is_interstate,
     status: r.status,
     notes: r.notes,

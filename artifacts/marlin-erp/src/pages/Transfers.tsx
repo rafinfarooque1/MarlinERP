@@ -189,13 +189,13 @@ function ApproveDialog({
   const qc = useQueryClient();
   const { data: me } = useGetMe();
 
-  // Keyed by "materialType:itemId", never by id alone: the three product tables
-  // share an id space, so an id-only key would let two lines overwrite each
-  // other's received quantity.
-  const lineKey = (li: any) => `${li.materialType ?? 'item'}:${li.itemId}`;
+  // A transfer line can repeat the same product for a different batch. Keep
+  // receive state keyed by the server-issued line identity, not product id.
+  const lineKey = (li: any, index: number) =>
+    `${transfer?.id ?? 'unknown'}:${String(li.transferLineId ?? `legacy-line-${index + 1}`)}`;
   const [received, setReceived] = useState<Record<string, number>>(() => {
     const init: Record<string, number> = {};
-    (transfer?.lineItems ?? []).forEach((li: any) => { init[lineKey(li)] = li.quantity; });
+    (transfer?.lineItems ?? []).forEach((li: any, index: number) => { init[lineKey(li, index)] = li.quantity; });
     return init;
   });
   const [rejectReason, setRejectReason] = useState('');
@@ -204,9 +204,10 @@ function ApproveDialog({
   if (!transfer) return null;
 
   const handleApprove = () => {
-    const receivedLineItems = (transfer.lineItems ?? []).map((li: any) => ({
+    const receivedLineItems = (transfer.lineItems ?? []).map((li: any, index: number) => ({
+      transferLineId: String(li.transferLineId ?? `TRF-${transfer.id}-LINE-${index + 1}`),
       itemId: li.itemId,
-      quantity: received[lineKey(li)] ?? li.quantity,
+      quantity: received[lineKey(li, index)] ?? li.quantity,
       costPrice: li.costPrice ?? 0,
       materialType: li.materialType ?? 'item',
     }));
@@ -277,12 +278,12 @@ function ApproveDialog({
               <span className="text-xs text-muted-foreground">— enter actual quantity physically received</span>
             </div>
             <div className="space-y-2">
-              {(transfer.lineItems ?? []).map((li: any) => {
+              {(transfer.lineItems ?? []).map((li: any, index: number) => {
                 const item = allItemsMap.get(`${li.materialType ?? 'item'}:${li.itemId}`);
-                const recvQty = received[lineKey(li)] ?? li.quantity;
+                const recvQty = received[lineKey(li, index)] ?? li.quantity;
                 const isShort = recvQty < li.quantity;
                 return (
-                  <div key={lineKey(li)}
+                  <div key={lineKey(li, index)}
                     className={`grid grid-cols-12 gap-3 items-center p-3 rounded-lg border ${isShort ? 'border-amber-500/40 bg-amber-500/5' : 'border-border bg-muted/20'}`}>
                     <div className="col-span-5">
                       <p className="font-medium text-sm">{item?.name ?? `Item #${li.itemId}`}</p>
@@ -302,7 +303,7 @@ function ApproveDialog({
                       <p className="text-xs text-muted-foreground mb-1">Received <span className="text-destructive">*</span></p>
                       <Input
                         type="number" min={0} max={li.quantity} value={recvQty}
-                        onChange={e => setReceived(r => ({ ...r, [lineKey(li)]: Number(e.target.value) }))}
+                        onChange={e => setReceived(r => ({ ...r, [lineKey(li, index)]: Number(e.target.value) }))}
                         className={`h-8 text-sm font-mono ${isShort ? 'border-amber-500 focus-visible:ring-amber-500' : ''}`}
                       />
                       {isShort && (
@@ -961,9 +962,13 @@ export default function Transfers() {
                 <div>
                   <p className="text-sm font-semibold mb-2 text-emerald-400">Actually Received</p>
                   {viewItem.receivedLineItems.map((li: any, i: number) => {
-                    const matType = li.materialType || viewItem.lineItems?.find((d: any) => d.itemId === li.itemId)?.materialType || 'item';
+                    const dispatchedLine = viewItem.lineItems?.find((d: any) => li.transferLineId
+                      ? d.transferLineId === li.transferLineId
+                      : Number(d.itemId) === Number(li.itemId)
+                        && (!li.materialType || (d.materialType ?? 'item') === li.materialType));
+                    const matType = li.materialType || dispatchedLine?.materialType || 'item';
                     const item = allItemsMap.get(`${matType}:${li.itemId}`);
-                    const dispatched = viewItem.lineItems?.find((d: any) => d.itemId === li.itemId)?.quantity ?? li.quantity;
+                    const dispatched = dispatchedLine?.quantity ?? li.quantity;
                     const isShort = li.quantity < dispatched;
                     return (
                       <div key={i} className={`flex justify-between p-3 rounded-lg text-sm mb-2 border ${isShort ? 'border-amber-500/40 bg-amber-500/5' : 'bg-muted/20 border-border'}`}>
