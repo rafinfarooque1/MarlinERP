@@ -1896,6 +1896,7 @@ router.post("/reconciliation/bank-reset", requireModuleAction("page:/accounts/re
 
     const reversalIds: number[] = [];
     const reversedSources: any[] = [];
+    const orphanedLegacyBatches: any[] = [];
     const reverseVoucher = async (kind: "payment" | "receipt", original: any, batchReference: string) => {
       const isPayment = kind === "payment";
       const voucherNumber = await nextVoucherNumber(client, isPayment ? "receipt" : "payment", reversalDate);
@@ -2017,34 +2018,74 @@ router.post("/reconciliation/bank-reset", requireModuleAction("page:/accounts/re
                 r.received_from_ledger_id, r.received_in_ledger_id, r.amount,
                 r.narration, r.location_type, r.location_id
            FROM receipts r
-           JOIN (
-             SELECT DISTINCT ON (entity_id) entity_id
-               FROM activity_log
-              WHERE module='accounts' AND entity_type='receipt_voucher'
-                AND action='CREATE' AND entity_id IS NOT NULL
-                AND metadata->>'source'='reconciliation'
-                AND metadata->>'batchReference'=$1
-              ORDER BY entity_id, id
-           ) a ON a.entity_id = r.id
-          WHERE r.source='settlement'
+          WHERE COALESCE(r.source, 'manual') IN ('settlement', 'manual')
+            AND (
+              EXISTS (
+                SELECT 1 FROM activity_log a
+                 WHERE a.module='accounts' AND a.entity_type='receipt_voucher'
+                   AND a.action='CREATE' AND a.entity_id=r.id
+                   AND a.metadata->>'source'='reconciliation'
+                   AND a.metadata->>'batchReference'=$1
+              )
+              OR r.narration LIKE 'Cash settlement ' || $1 || ' — %'
+              OR r.narration LIKE 'Bank settlement ' || $1 || ' — %'
+            )
          UNION ALL
          SELECT 'payment' AS kind, p.id, p.voucher_number,
                 p.paid_from_ledger_id, p.paid_to_ledger_id, p.amount,
                 p.narration, p.location_type, p.location_id
            FROM payments p
-           JOIN (
-             SELECT DISTINCT ON (entity_id) entity_id
-               FROM activity_log
-              WHERE module='accounts' AND entity_type='payment_voucher'
-                AND action='CREATE' AND entity_id IS NOT NULL
-                AND metadata->>'source'='reconciliation'
-                AND metadata->>'batchReference'=$1
-              ORDER BY entity_id, id
-           ) a ON a.entity_id = p.id
-          WHERE p.source='settlement'`,
+          WHERE COALESCE(p.source, 'manual') IN ('settlement', 'manual')
+            AND (
+              EXISTS (
+                SELECT 1 FROM activity_log a
+                 WHERE a.module='accounts' AND a.entity_type='payment_voucher'
+                   AND a.action='CREATE' AND a.entity_id=p.id
+                   AND a.metadata->>'source'='reconciliation'
+                   AND a.metadata->>'batchReference'=$1
+              )
+              OR p.narration = 'Processor charges for ' || $1
+            )`,
         [String(batch.batch_reference)],
       );
-      if (!generated.length) throw new Error(`Reset refused: legacy batch ${batch.batch_reference} has no generated settlement vouchers.`);
+      if (!generated.some((voucher: any) => voucher.kind === "receipt")) {
+        const linkedItems = legacyItems.rows.filter((item: any) => Number(item.batch_id) === Number(batch.id));
+        if (
+          generated.length === 0
+          && linkedItems.length === 0
+          && Number(batch.charges ?? 0) <= 0.004
+          && Math.abs(Number(batch.gross_amount ?? 0) - Number(batch.net_amount ?? 0)) <= 0.004
+        ) {
+          const { rows: [orphanCheck] } = await client.query(
+            `SELECT
+               EXISTS (
+                 SELECT 1 FROM bank_reconciliation_entries
+                  WHERE reconciliation_reference=$1
+               ) AS has_bank_references,
+               (
+                 SELECT COUNT(*)::int
+                   FROM sale_payments
+                  WHERE reconciliation_status='reconciled'
+                    AND amount::numeric=$2::numeric
+               ) AS reconciled_payment_count`,
+            [String(batch.batch_reference), batch.gross_amount],
+          );
+          if (!orphanCheck.has_bank_references && Number(orphanCheck.reconciled_payment_count ?? 0) === 0) {
+            await client.query(`UPDATE reconciliation_batches SET status='reversed' WHERE id=$1`, [batch.id]);
+            orphanedLegacyBatches.push({
+              id: Number(batch.id),
+              batchReference: String(batch.batch_reference),
+              reason: "No generated vouchers, batch items, bank-entry links, or currently reconciled source payment at the batch amount.",
+            });
+            continue;
+          }
+        }
+        throw new Error(`Reset refused: legacy batch ${batch.batch_reference} is missing its generated settlement receipt.`);
+      }
+      if (Number(batch.charges ?? 0) > 0.004
+        && !generated.some((voucher: any) => voucher.kind === "payment")) {
+        throw new Error(`Reset refused: legacy batch ${batch.batch_reference} is missing its processor-charge voucher.`);
+      }
       for (const original of generated) await reverseVoucher(original.kind, original, String(batch.batch_reference));
       const { rows: linked } = await client.query(`SELECT sale_payment_id FROM reconciliation_batch_items WHERE batch_id=$1`, [batch.id]);
       for (const item of linked) await client.query(`UPDATE sale_payments SET reconciliation_status='pending' WHERE id=$1`, [Number(item.sale_payment_id)]);
@@ -2107,6 +2148,7 @@ router.post("/reconciliation/bank-reset", requireModuleAction("page:/accounts/re
     };
     const snapshot = {
       before, reversalDate, reversalIds, reversedSources,
+      orphanedLegacyBatches,
       after: {
         reconciledEntriesReset: resetEntries.rowCount ?? 0,
         bankBatchesReversed: bankBatches.rowCount ?? 0,
