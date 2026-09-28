@@ -29,3 +29,11 @@ The dashboard Share button captures the page client-side and downloads a PNG
 - `navigator.share`/`canShare` are `undefined` in desktop/headless Chromium —
   the download branch is the one tests exercise; AbortError from a dismissed
   share sheet is not an error.
+
+- **Measure table capture height through the final rendered row**, not only
+  from the wrapper's `scrollHeight`, and keep overflow visible.
+  **Why:** A shared financial matrix image clipped the final Bank row even
+  though it remained visible in the page.
+  **How to apply:** For table captures, include the last row's bottom edge in
+  the explicit image height; if native sharing fails after asynchronous
+  preparation, download the already-rendered image as a fallback.
