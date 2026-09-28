@@ -21,8 +21,9 @@ export function DashboardFinancialMatrixSection({
   fromDate?: string;
   toDate?: string;
 }) {
-  const tableRef = useRef<HTMLTableElement>(null);
+  const captureRef = useRef<HTMLDivElement>(null);
   const [sharing, setSharing] = useState(false);
+  const [preparingCapture, setPreparingCapture] = useState(false);
 
   const shareMatrix = async () => {
     if (sharing) return;
@@ -30,19 +31,30 @@ export function DashboardFinancialMatrixSection({
       toast.info('The financial matrix is still loading — try again in a moment');
       return;
     }
-    const table = tableRef.current;
-    if (!table) {
-      console.error('[dashboard] financial matrix share: table node not mounted');
+    const captureTarget = captureRef.current;
+    if (!captureTarget) {
+      console.error('[dashboard] financial matrix share: capture node not mounted');
       toast.error('Could not capture the financial matrix');
       return;
     }
 
     setSharing(true);
+    setPreparingCapture(true);
     try {
+      // Give React time to remove sticky positioning before serializing the
+      // whole horizontally-scrollable table. Sticky cells are useful onscreen
+      // but overlap when an image renderer captures the full-width table.
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      });
       await document.fonts.ready;
       const { toBlob } = await import('html-to-image');
-      const blob = await toBlob(table, {
+      const width = Math.max(captureTarget.scrollWidth, Math.ceil(captureTarget.getBoundingClientRect().width));
+      const height = Math.max(captureTarget.scrollHeight, Math.ceil(captureTarget.getBoundingClientRect().height));
+      const blob = await toBlob(captureTarget, {
         backgroundColor: '#ffffff',
+        width,
+        height,
         pixelRatio: 2,
         cacheBust: true,
       });
@@ -63,15 +75,16 @@ export function DashboardFinancialMatrixSection({
         link.href = url;
         link.download = file.name;
         link.click();
-        URL.revokeObjectURL(url);
+        window.setTimeout(() => URL.revokeObjectURL(url), 0);
         toast.success('Financial matrix image downloaded');
       }
     } catch (error: any) {
       if (error?.name !== 'AbortError') {
-        console.error('[dashboard] financial matrix share failed', error);
+        console.error('[dashboard] financial matrix share failed', error?.message ?? String(error));
         toast.error('Could not capture the financial matrix');
       }
     } finally {
+      setPreparingCapture(false);
       setSharing(false);
     }
   };
@@ -101,7 +114,7 @@ export function DashboardFinancialMatrixSection({
     >
       <th
         scope="row"
-        className={`sticky left-0 z-10 min-w-[220px] border-b border-border bg-inherit px-3 py-2 text-left ${
+        className={`${preparingCapture ? '' : 'sticky left-0 z-10'} min-w-[220px] border-b border-border bg-inherit px-3 py-2 text-left ${
           options.nested ? 'pl-7 font-normal text-muted-foreground' : ''
         }`}
       >
@@ -115,7 +128,7 @@ export function DashboardFinancialMatrixSection({
           {fmt(values[index] ?? 0)}
         </td>
       ))}
-      <td className="sticky right-0 z-10 min-w-[160px] border-b border-border bg-muted/30 px-3 py-2 text-right font-mono text-sm font-semibold tabular-nums">
+      <td className={`${preparingCapture ? '' : 'sticky right-0 z-10'} min-w-[160px] border-b border-border bg-muted/30 px-3 py-2 text-right font-mono text-sm font-semibold tabular-nums`}>
         {fmt(total)}
       </td>
     </tr>
@@ -130,7 +143,7 @@ export function DashboardFinancialMatrixSection({
         </CardTitle>
         <CardDescription>
           {periodText} · {openingDescription} Balance = Opening Cash + Opening Bank + Sale.
-          Columns include active locations available to your account.
+          Columns include active locations available to your account and, for company-wide access, an Unallocated column for company-level balances.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -148,24 +161,29 @@ export function DashboardFinancialMatrixSection({
         ) : (
           <>
             <div className="overflow-x-auto rounded-lg border border-border">
-              <table ref={tableRef} className="w-full min-w-max border-separate border-spacing-0 text-sm">
+              <div
+                ref={captureRef}
+                data-testid="financial-matrix-capture"
+                className="inline-block w-max min-w-full bg-card text-foreground"
+              >
+              <table className="w-full min-w-max border-separate border-spacing-0 text-sm">
                 <caption className="caption-top border-b border-border bg-card px-3 py-2 text-left font-semibold">
                   Financial summary · {periodText}
                 </caption>
                 <thead>
                   <tr className="bg-muted/40">
-                    <th className="sticky left-0 top-0 z-30 min-w-[220px] border-b border-border bg-muted/40 px-3 py-2 text-left font-semibold">
+                    <th className={`${preparingCapture ? '' : 'sticky left-0 top-0 z-30'} min-w-[220px] border-b border-border bg-muted/40 px-3 py-2 text-left font-semibold`}>
                       Particulars
                     </th>
                     {data.locations.map((location) => (
                       <th
                         key={`${location.locationType}:${location.locationId}`}
-                        className="sticky top-0 z-20 min-w-[145px] max-w-[220px] border-b border-border bg-muted/40 px-3 py-2 text-right font-semibold"
+                        className={`${preparingCapture ? '' : 'sticky top-0 z-20'} min-w-[145px] max-w-[220px] border-b border-border bg-muted/40 px-3 py-2 text-right font-semibold`}
                       >
                         <span className="block whitespace-normal">{location.name}</span>
                       </th>
                     ))}
-                    <th className="sticky right-0 top-0 z-30 min-w-[160px] border-b border-border bg-muted/50 px-3 py-2 text-right font-semibold">
+                    <th className={`${preparingCapture ? '' : 'sticky right-0 top-0 z-30'} min-w-[160px] border-b border-border bg-muted/50 px-3 py-2 text-right font-semibold`}>
                       Total
                     </th>
                   </tr>
@@ -185,9 +203,10 @@ export function DashboardFinancialMatrixSection({
                   {amountRow('closing-bank', 'Bank', data.closingBank, data.totals.closingBank, { nested: true })}
                 </tbody>
               </table>
+              </div>
             </div>
             <div className="mt-4 flex justify-end">
-              <Button variant="outline" onClick={shareMatrix} disabled={sharing} className="gap-2">
+              <Button variant="outline" onClick={shareMatrix} disabled={sharing} className="gap-2" data-testid="button-share-financial-matrix">
                 {sharing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Share2 className="h-4 w-4" />}
                 {sharing ? 'Preparing image…' : 'Share matrix'}
               </Button>

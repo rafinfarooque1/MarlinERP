@@ -248,17 +248,34 @@ router.get(
          ORDER BY material_type, item_id, branch_type, branch_id
          LIMIT 200
       `),
-      pool.query(`
-        SELECT invoice_number, COUNT(*)::int AS count
-          FROM sales
-         WHERE cancelled_at IS NULL
-           AND invoice_number IS NOT NULL
-           AND invoice_number <> ''
-         GROUP BY invoice_number
-        HAVING COUNT(*) > 1
-         ORDER BY count DESC, invoice_number
-         LIMIT 200
-      `),
+       pool.query(`
+         WITH scoped_sales AS (
+           SELECT id,
+                  invoice_number,
+                  COALESCE(
+                    number_scope,
+                    CASE
+                      WHEN COALESCE(location_type, 'outlet') = 'headoffice' THEN 'headoffice'
+                      WHEN COALESCE(location_id, outlet_id) IS NOT NULL
+                        THEN COALESCE(location_type, 'outlet') || ':' ||
+                             COALESCE(location_id, outlet_id)::text
+                      ELSE 'legacy-sale:' || id::text
+                    END
+                  ) AS effective_number_scope
+             FROM sales
+            WHERE cancelled_at IS NULL
+              AND invoice_number IS NOT NULL
+              AND invoice_number <> ''
+         )
+         SELECT effective_number_scope AS number_scope,
+                invoice_number,
+                COUNT(*)::int AS count
+           FROM scoped_sales
+          GROUP BY effective_number_scope, invoice_number
+         HAVING COUNT(*) > 1
+          ORDER BY count DESC, number_scope, invoice_number
+          LIMIT 200
+       `),
       pool.query(`
         WITH refs AS (
           SELECT 'payment' AS source, id, voucher_number,
