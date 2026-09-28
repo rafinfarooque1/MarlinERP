@@ -24,6 +24,10 @@ export const LoginBody = zod.object({
   "password": zod.string()
 })
 
+export const loginResponseEmployeeDailyWageMin = 0;
+
+
+
 export const LoginResponse = zod.object({
   "token": zod.string(),
   "employee": zod.object({
@@ -38,6 +42,7 @@ export const LoginResponse = zod.object({
   "branchId": zod.number(),
   "branchName": zod.string().optional(),
   "salary": zod.number().optional(),
+  "dailyWage": zod.number().min(loginResponseEmployeeDailyWageMin).nullish(),
   "joinDate": zod.string().optional(),
   "photoUrl": zod.string().nullish(),
   "isActive": zod.boolean().optional()
@@ -65,6 +70,10 @@ export const ChangePasswordResponse = zod.unknown()
 /**
  * @summary Get current user profile
  */
+export const getMeResponseDailyWageMin = 0;
+
+
+
 export const GetMeResponse = zod.object({
   "id": zod.number(),
   "name": zod.string(),
@@ -77,6 +86,7 @@ export const GetMeResponse = zod.object({
   "branchId": zod.number(),
   "branchName": zod.string().optional(),
   "salary": zod.number().optional(),
+  "dailyWage": zod.number().min(getMeResponseDailyWageMin).nullish(),
   "joinDate": zod.string().optional(),
   "photoUrl": zod.string().nullish(),
   "isActive": zod.boolean().optional()
@@ -1762,6 +1772,10 @@ export const DeleteHierarchyResponse = zod.void()
 /**
  * @summary List all employees
  */
+export const listEmployeesResponseDailyWageMin = 0;
+
+
+
 export const ListEmployeesResponseItem = zod.object({
   "id": zod.number(),
   "name": zod.string(),
@@ -1774,6 +1788,7 @@ export const ListEmployeesResponseItem = zod.object({
   "branchId": zod.number(),
   "branchName": zod.string().optional(),
   "salary": zod.number().optional(),
+  "dailyWage": zod.number().min(listEmployeesResponseDailyWageMin).nullish(),
   "joinDate": zod.string().optional(),
   "photoUrl": zod.string().nullish(),
   "isActive": zod.boolean().optional()
@@ -1784,6 +1799,10 @@ export const ListEmployeesResponse = zod.array(ListEmployeesResponseItem)
 /**
  * @summary Create employee
  */
+export const createEmployeeBodyDailyWageMin = 0;
+
+
+
 export const CreateEmployeeBody = zod.object({
   "name": zod.string(),
   "username": zod.string(),
@@ -1793,8 +1812,13 @@ export const CreateEmployeeBody = zod.object({
   "branchType": zod.enum(['headoffice', 'warehouse', 'outlet']),
   "branchId": zod.number(),
   "salary": zod.number(),
+  "dailyWage": zod.number().min(createEmployeeBodyDailyWageMin).nullish(),
   "joinDate": zod.string()
 })
+
+export const createEmployeeResponseDailyWageMin = 0;
+
+
 
 export const CreateEmployeeResponse = zod.object({
   "id": zod.number(),
@@ -1808,6 +1832,7 @@ export const CreateEmployeeResponse = zod.object({
   "branchId": zod.number(),
   "branchName": zod.string().optional(),
   "salary": zod.number().optional(),
+  "dailyWage": zod.number().min(createEmployeeResponseDailyWageMin).nullish(),
   "joinDate": zod.string().optional(),
   "photoUrl": zod.string().nullish(),
   "isActive": zod.boolean().optional()
@@ -1817,6 +1842,10 @@ export const CreateEmployeeResponse = zod.object({
 export const GetEmployeeParams = zod.object({
   "id": zod.coerce.number()
 })
+
+export const getEmployeeResponseDailyWageMin = 0;
+
+
 
 export const GetEmployeeResponse = zod.object({
   "id": zod.number(),
@@ -1830,6 +1859,7 @@ export const GetEmployeeResponse = zod.object({
   "branchId": zod.number(),
   "branchName": zod.string().optional(),
   "salary": zod.number().optional(),
+  "dailyWage": zod.number().min(getEmployeeResponseDailyWageMin).nullish(),
   "joinDate": zod.string().optional(),
   "photoUrl": zod.string().nullish(),
   "isActive": zod.boolean().optional()
@@ -1840,6 +1870,10 @@ export const UpdateEmployeeParams = zod.object({
   "id": zod.coerce.number()
 })
 
+export const updateEmployeeBodyDailyWageMin = 0;
+
+
+
 export const UpdateEmployeeBody = zod.object({
   "name": zod.string().optional(),
   "email": zod.string().optional(),
@@ -1848,9 +1882,14 @@ export const UpdateEmployeeBody = zod.object({
   "branchType": zod.enum(['headoffice', 'warehouse', 'outlet']).optional(),
   "branchId": zod.number().optional(),
   "salary": zod.number().optional(),
+  "dailyWage": zod.number().min(updateEmployeeBodyDailyWageMin).nullish(),
   "isActive": zod.boolean().optional(),
   "photoUrl": zod.string().optional()
 })
+
+export const updateEmployeeResponseDailyWageMin = 0;
+
+
 
 export const UpdateEmployeeResponse = zod.object({
   "id": zod.number(),
@@ -1864,6 +1903,7 @@ export const UpdateEmployeeResponse = zod.object({
   "branchId": zod.number(),
   "branchName": zod.string().optional(),
   "salary": zod.number().optional(),
+  "dailyWage": zod.number().min(updateEmployeeResponseDailyWageMin).nullish(),
   "joinDate": zod.string().optional(),
   "photoUrl": zod.string().nullish(),
   "isActive": zod.boolean().optional()

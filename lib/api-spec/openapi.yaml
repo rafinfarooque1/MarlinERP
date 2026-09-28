@@ -3112,6 +3112,9 @@ components:
           type: string
         salary:
           type: number
+        dailyWage:
+          type: ["number", "null"]
+          minimum: 0
         joinDate:
           type: string
         photoUrl:
@@ -3140,6 +3143,9 @@ components:
           type: integer
         salary:
           type: number
+        dailyWage:
+          type: ["number", "null"]
+          minimum: 0
         joinDate:
           type: string
 
@@ -3161,6 +3167,9 @@ components:
           type: integer
         salary:
           type: number
+        dailyWage:
+          type: ["number", "null"]
+          minimum: 0
         isActive:
           type: boolean
         photoUrl:

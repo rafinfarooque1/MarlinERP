@@ -29,6 +29,7 @@ export const TXN_RESET_TABLES = [
   "receipts",
   "payments",
   "expenses",
+  "salary_accrual_journal_links",
   "journal_voucher_lines",
   "journal_vouchers",
   "stock_reservations",

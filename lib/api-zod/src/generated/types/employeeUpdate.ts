@@ -15,6 +15,11 @@ export interface EmployeeUpdate {
   branchType?: EmployeeUpdateBranchType;
   branchId?: number;
   salary?: number;
+  /**
+     * @minimum 0
+     * @nullable
+     */
+  dailyWage?: number | null;
   isActive?: boolean;
   photoUrl?: string;
 }

@@ -29,6 +29,7 @@
 // difference, so the pair always nets to the value actually held in stock.
 
 import { nextVoucherNumber } from "./voucherNumber";
+import { effectiveDailyBasicRate } from "./payrollRates";
 
 export type Queryable = { query: (text: string, params?: any[]) => Promise<{ rows: any[]; rowCount?: number | null }> };
 
@@ -54,9 +55,10 @@ export interface DayLabourPool {
  * The day's production wage cost at one location, derived from attendance.
  *
  * Only employees flagged as production staff count — an office or sales
- * salary is not a manufacturing cost. A day is valued at salary ÷ working
- * days per month, scaled by the fraction of the day actually worked. Leave is
- * paid by payroll but produces nothing, so it contributes no batch cost.
+  * salary is not a manufacturing cost. A configured daily wage is used
+  * directly; legacy employees use monthly salary ÷ calendar days in that
+  * month. The rate is scaled by the fraction of the day actually worked.
+  * Leave is paid by payroll but produces nothing, so it contributes no batch cost.
  */
 export async function labourPoolForDay(
   c: Queryable,
@@ -72,12 +74,10 @@ export async function labourPoolForDay(
   // there; warehouses and outlets match both type and id.
   const isHo = loc.type === "headoffice";
   const { rows } = await c.query(
-    `SELECT e.id, COALESCE(e.salary, 0)::numeric AS salary,
-            a.status, a.check_in, a.check_out,
-            COALESCE(pc.working_days_per_month, 26) AS working_days
+    `SELECT e.id, COALESCE(e.salary, 0)::numeric AS salary, e.daily_wage,
+            a.status, a.check_in, a.check_out
      FROM employees e
      JOIN attendance a ON a.employee_id = e.id AND a.date = $1::date
-     LEFT JOIN pay_components pc ON pc.employee_id = e.id
      WHERE e.is_active = TRUE
        AND e.is_production_staff = TRUE
        AND e.branch_type = $2
@@ -85,6 +85,8 @@ export async function labourPoolForDay(
     [date, loc.type, isHo, loc.id],
   );
 
+  const [year, month] = date.split("-").map(Number);
+  const workingDays = new Date(Date.UTC(year, month, 0)).getUTCDate();
   let amount = 0;
   let staffDays = 0;
   const seen = new Set<number>();
@@ -102,8 +104,8 @@ export async function labourPoolForDay(
     }
     // 'leave' and 'absent' → 0: paid or not, no production work happened.
     if (fraction <= 0) continue;
-    const workingDays = Math.max(1, Number(r.working_days) || 26);
-    amount += (Number(r.salary) / workingDays) * fraction;
+    const dailyWage = r.daily_wage == null ? null : Number(r.daily_wage);
+    amount += effectiveDailyBasicRate(Number(r.salary), dailyWage, workingDays) * fraction;
     staffDays += fraction;
     seen.add(Number(r.id));
   }

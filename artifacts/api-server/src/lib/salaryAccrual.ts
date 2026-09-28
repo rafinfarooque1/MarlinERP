@@ -1,6 +1,10 @@
 import { pool as _pool } from "@workspace/db";
 import { provisionSalaryLedgers } from "./payrollLedgers";
 import {
+  loadSalaryAccrualJournalBalances, syncSalaryAccrualJournal,
+} from "./salaryAccrualJournals";
+import { effectiveDailyBasicRate, effectiveMonthlyBasic } from "./payrollRates";
+import {
   dayContribution, calendarDayInfo, loadPayrollSettings, PUNCHED_HOURS_JOIN,
   type AttendanceDay, type PayrollSettings,
 } from "./attendanceFactor";
@@ -201,10 +205,13 @@ interface EmployeeRow {
   id: number;
   name: string;
   salary: string | number;
+  daily_wage: string | number | null;
   join_date: unknown;
   created_at: unknown;
   salary_accrual_resume_from: unknown;
   last_working_date: unknown;
+  branch_type: string;
+  branch_id: number;
 }
 
 /**
@@ -282,11 +289,11 @@ export async function runSalaryAccrual(
   // policy moves, and any day written beyond it must be torn down. Legacy
   // deactivations without a date keep the old behaviour.
   const { rows: employees } = await pool.query<EmployeeRow>(
-    `SELECT e.id, e.name, e.salary, e.join_date, e.created_at, e.salary_accrual_resume_from,
-            e.last_working_date
+    `SELECT e.id, e.name, e.salary, e.daily_wage, e.join_date, e.created_at, e.salary_accrual_resume_from,
+            e.last_working_date, e.branch_type, e.branch_id
        FROM employees e
       WHERE (e.is_active = TRUE OR e.last_working_date IS NOT NULL)
-        AND e.salary > 0${only.replace(" AND id =", " AND e.id =")}
+        AND COALESCE(e.daily_wage, e.salary) > 0${only.replace(" AND id =", " AND e.id =")}
       ORDER BY e.id`,
     params,
   );
@@ -311,7 +318,8 @@ export async function runSalaryAccrual(
     if (!startDate || startDate > asOf) continue;
 
     const monthlySalary = Number(e.salary);
-    if (!(monthlySalary > 0)) continue;
+    const dailyWage = e.daily_wage == null ? null : Number(e.daily_wage);
+    if (!((dailyWage ?? monthlySalary) > 0)) continue;
 
     // Ledgers are provisioned outside the lock: it needs its own writes, and
     // doing it here means a failure to provision skips the employee before any
@@ -325,7 +333,12 @@ export async function runSalaryAccrual(
     const perEmployee = await withEmployeeAccrualLock(pool, e.id, (q) =>
       accrueEmployee(
         q,
-        { id: e.id, startDate, monthlySalary, lastWorkingDate: ymd(e.last_working_date) },
+        {
+          id: e.id, name: e.name, startDate, monthlySalary, dailyWage,
+          lastWorkingDate: ymd(e.last_working_date),
+          salaryExpenseLedgerId: expenseLedgerId, salaryPayableLedgerId: payableLedgerId,
+          locationType: e.branch_type, locationId: Number(e.branch_id),
+        },
         { asOf, settings, attendanceFrom },
       ),
     );
@@ -374,7 +387,11 @@ export interface AccrueOutcome {
  */
 async function accrueEmployee(
   q: Querier,
-  e: { id: number; startDate: string; monthlySalary: number; lastWorkingDate?: string | null },
+  e: {
+    id: number; name: string; startDate: string; monthlySalary: number; dailyWage: number | null;
+    lastWorkingDate?: string | null; salaryExpenseLedgerId: number; salaryPayableLedgerId: number;
+    locationType: string; locationId: number;
+  },
   opts: { asOf: string; settings: PayrollSettings; attendanceFrom: string },
 ): Promise<AccrueOutcome> {
   const { policy, thresholds } = opts.settings;
@@ -385,7 +402,33 @@ async function accrueEmployee(
   // before the leaving date was recorded) are deleted here, inside the same
   // lock — except in approved or paid months, which are financially final.
   const asOf = e.lastWorkingDate && e.lastWorkingDate < opts.asOf ? e.lastWorkingDate : opts.asOf;
+  const journalBalances = await loadSalaryAccrualJournalBalances(q as any, e.id, opts.asOf);
   if (e.lastWorkingDate) {
+    const { rows: expiredRows } = await q.query(
+      `SELECT accrual_date, amount
+         FROM salary_accruals a
+        WHERE a.employee_id = $1
+          AND a.accrual_date > $2
+          AND NOT EXISTS (
+            SELECT 1 FROM payroll p
+             WHERE p.employee_id = a.employee_id AND p.year = a.year AND p.month = a.month
+               AND p.status IN ('approved', 'paid')
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM accounting_period_locks l
+             WHERE l.year = a.year AND l.month = a.month
+          )`,
+      [e.id, e.lastWorkingDate],
+    );
+    for (const row of expiredRows) {
+      const date = ymd(row.accrual_date);
+      if (!date || date < opts.attendanceFrom) continue;
+      await syncSalaryAccrualJournal(q as any, {
+        employeeId: e.id, employeeName: e.name, accrualDate: date, amount: 0,
+        expenseLedgerId: e.salaryExpenseLedgerId, payableLedgerId: e.salaryPayableLedgerId,
+        locationType: e.locationType, locationId: e.locationId,
+      }, journalBalances);
+    }
     await q.query(
       `DELETE FROM salary_accruals a
         WHERE a.employee_id = $1
@@ -441,17 +484,23 @@ async function accrueEmployee(
   // write at all. Without this the hourly sweep would rewrite every historical
   // row on every pass.
   const { rows: existingRows } = await q.query(
-    `SELECT accrual_date, amount, attendance_factor, working_days, attendance_basis
+    `SELECT id, accrual_date, amount, monthly_salary, daily_wage, attendance_factor, working_days, attendance_basis
        FROM salary_accruals
       WHERE employee_id = $1 AND accrual_date >= $2 AND accrual_date <= $3`,
     [e.id, e.startDate, asOf],
   );
-  const existing = new Map<string, { amount: number; factor: number; workingDays: number | null; basis: string | null }>();
+  const existing = new Map<string, {
+    id: number; amount: number; monthlySalary: number; dailyWage: number | null;
+    factor: number; workingDays: number | null; basis: string | null;
+  }>();
   for (const r of existingRows) {
     const d = ymd(r.accrual_date);
     if (!d) continue;
     existing.set(d, {
+      id: Number(r.id),
       amount: Number(r.amount ?? 0),
+      monthlySalary: Number(r.monthly_salary ?? 0),
+      dailyWage: r.daily_wage == null ? null : Number(r.daily_wage),
       factor: Number(r.attendance_factor ?? 1),
       workingDays: r.working_days == null ? null : Number(r.working_days),
       basis: r.attendance_basis ?? null,
@@ -501,7 +550,7 @@ async function accrueEmployee(
     if (mk !== curMonth) {
       curMonth = mk;
       workingDays = daysInMonth(y, m);
-      perDayRate = workingDays > 0 ? e.monthlySalary / workingDays : 0;
+      perDayRate = effectiveDailyBasicRate(e.monthlySalary, e.dailyWage, workingDays);
       cumWork = 0; cumCasual = 0; cumSick = 0; cumPaidOff = 0; prevPayable = 0; prevExpected = 0;
     }
     if (locked.has(mk)) continue;
@@ -574,7 +623,8 @@ async function accrueEmployee(
     cumPaidOff += c.paidOff;
     const payable = monthPayable();
     const lopDays = Math.max(0, workingDays - payable);
-    const expected = round2(e.monthlySalary - round2(lopDays * perDayRate));
+    const monthlyBasic = effectiveMonthlyBasic(e.monthlySalary, e.dailyWage, workingDays);
+    const expected = round2(monthlyBasic - round2(lopDays * perDayRate));
     const amount = round2(expected - prevExpected);
     // The stored factor is the day's payable increment, so a month's factors
     // still sum to its paid days — which is what the accrual report shows.
@@ -590,28 +640,49 @@ async function accrueEmployee(
     const unchanged = prev
       && Math.abs(prev.amount - amount) < 0.005
       && Math.abs(prev.factor - factor) < 0.005
+      && Math.abs(prev.monthlySalary - monthlyBasic) < 0.005
+      && (prev.dailyWage == null ? e.dailyWage == null : e.dailyWage != null && Math.abs(prev.dailyWage - e.dailyWage) < 0.005)
       && prev.workingDays === workingDays
       && prev.basis === basis;
-    if (unchanged) continue;
+    if (unchanged) {
+      // The first run after the attendance-accrual cutover converts the current
+      // derived row into its source-linked JV without changing the books. Future
+      // attendance changes reconcile by appending only the signed difference.
+      await syncSalaryAccrualJournal(q as any, {
+        employeeId: e.id, employeeName: e.name, accrualDate: day, amount,
+        expenseLedgerId: e.salaryExpenseLedgerId, payableLedgerId: e.salaryPayableLedgerId,
+        locationType: e.locationType, locationId: e.locationId,
+      }, journalBalances);
+      continue;
+    }
 
     // A zero-value day is still written. It is the audit record that the day was
     // evaluated and earned nothing, and it is what a later correction updates
     // instead of inserting alongside. The derived-posting stream skips amounts
     // at or below zero, so it reaches the books as no entry at all.
-    await q.query(
+    const { rows: [saved] } = await q.query(
       `INSERT INTO salary_accruals
-         (employee_id, accrual_date, year, month, amount, monthly_salary, days_in_month,
+         (employee_id, accrual_date, year, month, amount, monthly_salary, daily_wage, days_in_month,
           attendance_factor, working_days, attendance_basis)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
        ON CONFLICT (employee_id, accrual_date) DO UPDATE
           SET amount            = EXCLUDED.amount,
               monthly_salary    = EXCLUDED.monthly_salary,
+               daily_wage        = EXCLUDED.daily_wage,
               days_in_month     = EXCLUDED.days_in_month,
               attendance_factor = EXCLUDED.attendance_factor,
               working_days      = EXCLUDED.working_days,
-              attendance_basis  = EXCLUDED.attendance_basis`,
-      [e.id, day, y, m, amount, e.monthlySalary, daysInMonth(y, m), factor, workingDays, basis],
+               attendance_basis  = EXCLUDED.attendance_basis
+       RETURNING id`,
+      [e.id, day, y, m, amount, monthlyBasic, e.dailyWage, daysInMonth(y, m), factor, workingDays, basis],
     );
+    const savedId = Number(saved?.id);
+    if (!Number.isInteger(savedId) || savedId <= 0) throw new Error(`Could not read salary accrual row for ${e.id} on ${day}`);
+    await syncSalaryAccrualJournal(q as any, {
+      employeeId: e.id, employeeName: e.name, accrualDate: day, amount,
+      expenseLedgerId: e.salaryExpenseLedgerId, payableLedgerId: e.salaryPayableLedgerId,
+      locationType: e.locationType, locationId: e.locationId,
+    }, journalBalances);
     changed++;
   }
 
@@ -685,16 +756,18 @@ export async function recalcUnapprovedSalaryAccruals(
   );
   if (!head) return empty;
   const ledgers = await provisionSalaryLedgers(pool, employeeId, head.name);
-  if (!ledgers.expenseLedgerId || !ledgers.payableLedgerId) {
-    console.error(`[salary] could not provision salary ledgers for employee ${employeeId}`);
+  const salaryExpenseLedgerId = ledgers.expenseLedgerId;
+  const salaryPayableLedgerId = ledgers.payableLedgerId;
+  if (salaryExpenseLedgerId == null || salaryPayableLedgerId == null) {
+    throw new Error(`Could not provision salary ledgers for employee ${employeeId}`);
   }
 
   return withEmployeeAccrualLock(pool, employeeId, async (q) => {
     // Read the employee inside the lock: this runs straight after the PATCH that
     // changed the salary, and the revised figure is the whole point of rebuilding.
     const { rows } = await q.query(
-      `SELECT id, name, salary, join_date, created_at, salary_accrual_resume_from,
-              is_active, last_working_date
+      `SELECT id, name, salary, daily_wage, join_date, created_at, salary_accrual_resume_from,
+              is_active, last_working_date, branch_type, branch_id
          FROM employees WHERE id = $1`,
       [employeeId],
     );
@@ -710,6 +783,8 @@ export async function recalcUnapprovedSalaryAccruals(
     const employedFrom = ymd(e.join_date) ?? ymd(e.created_at);
     const startDate = maxDate(employedFrom, ymd(e.salary_accrual_resume_from)) ?? null;
     const monthlySalary = Number(e.salary);
+    const dailyWage = e.daily_wage == null ? null : Number(e.daily_wage);
+    const effectiveRate = dailyWage ?? monthlySalary;
     // With no defensible start date there is nothing to rebuild from, so nothing
     // may be torn down either.
     if (!startDate) return empty;
@@ -738,7 +813,33 @@ export async function recalcUnapprovedSalaryAccruals(
     // old rate. Scoped to this stint — `salary_accrual_resume_from` stops the
     // clear reaching days accrued during an earlier one, which could never be
     // regenerated.
-    if (!(monthlySalary > 0)) {
+    if (!(effectiveRate > 0)) {
+      const attendanceFrom = await loadAccrualCutover(pool);
+      const { rows: rowsToClear } = await q.query(
+        `SELECT accrual_date FROM salary_accruals
+          WHERE employee_id = $1 AND accrual_date >= $2
+            AND NOT EXISTS (
+              SELECT 1 FROM payroll p
+               WHERE p.employee_id = salary_accruals.employee_id
+                 AND p.year = salary_accruals.year AND p.month = salary_accruals.month
+                 AND p.status IN ('approved', 'paid')
+            )
+            AND NOT EXISTS (
+              SELECT 1 FROM accounting_period_locks l
+               WHERE l.year = salary_accruals.year AND l.month = salary_accruals.month
+            )`,
+        [employeeId, startDate],
+      );
+      const journalBalances = await loadSalaryAccrualJournalBalances(q as any, employeeId, asOf);
+      for (const row of rowsToClear) {
+        const date = ymd(row.accrual_date);
+        if (!date || date < attendanceFrom) continue;
+        await syncSalaryAccrualJournal(q as any, {
+          employeeId, employeeName: e.name, accrualDate: date, amount: 0,
+          expenseLedgerId: salaryExpenseLedgerId, payableLedgerId: salaryPayableLedgerId,
+          locationType: e.branch_type, locationId: Number(e.branch_id),
+        }, journalBalances);
+      }
       const { rows: removed } = await q.query(
         `DELETE FROM salary_accruals a
           WHERE a.employee_id = $1
@@ -777,7 +878,12 @@ export async function recalcUnapprovedSalaryAccruals(
     const attendanceFrom = await loadAccrualCutover(pool);
     const rebuilt = await accrueEmployee(
       q,
-      { id: employeeId, startDate, monthlySalary, lastWorkingDate },
+      {
+        id: employeeId, name: e.name, startDate, monthlySalary, dailyWage, lastWorkingDate,
+        salaryExpenseLedgerId,
+        salaryPayableLedgerId,
+        locationType: e.branch_type, locationId: Number(e.branch_id),
+      },
       { asOf, settings, attendanceFrom },
     );
 

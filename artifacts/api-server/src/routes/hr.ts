@@ -19,6 +19,7 @@ import { outletWritesBlocked, OUTLETS_DISABLED_MESSAGE, OUTLETS_DISABLED_CODE } 
 import { parsePaging, setPagingHeaders, applyPaging } from "../lib/paging";
 import { resolveChartParentId } from "../lib/chartGroups";
 import { provisionSalaryLedgers } from "../lib/payrollLedgers";
+import { effectiveMonthlyBasic } from "../lib/payrollRates";
 import {
   accruedForMonth, lockSalaryAccrual, recalcUnapprovedSalaryAccruals,
   runSalaryAccrual, dailyAccrualRate, reaccrueForAttendanceChange,
@@ -986,12 +987,26 @@ async function postSalaryApproval(opts: {
     const monthLast = `${pr.year}-${mStr}-${String(lastDay).padStart(2, "0")}`;
     const { rows: [empEmployment] } = await client.query(
       `SELECT to_char(last_working_date, 'YYYY-MM-DD') AS lwd,
-              to_char(join_date, 'YYYY-MM-DD') AS join_date
+              to_char(join_date, 'YYYY-MM-DD') AS join_date,
+              salary, daily_wage
          FROM employees WHERE id = $1`,
       [employeeId],
     );
     const liveLwd: string | null = empEmployment?.lwd ?? null;
     const liveJoinDate: string | null = empEmployment?.join_date ?? null;
+    const liveDailyWage = empEmployment?.daily_wage == null ? null : Number(empEmployment.daily_wage);
+    const liveBasic = effectiveMonthlyBasic(Number(empEmployment?.salary ?? 0), liveDailyWage, wd);
+    const storedSnapshot = typeof pr.statutory_snapshot === "string"
+      ? JSON.parse(pr.statutory_snapshot)
+      : (pr.statutory_snapshot ?? {});
+    const snapshotHasDailyWage = Object.prototype.hasOwnProperty.call(storedSnapshot, "dailyWage");
+    const snapshotDailyWage = storedSnapshot.dailyWage == null ? null : Number(storedSnapshot.dailyWage);
+    const wageMoved = Math.abs(liveBasic - Number(pr.base_salary ?? 0)) > 0.005
+      || (snapshotHasDailyWage
+        ? (snapshotDailyWage == null
+          ? liveDailyWage != null
+          : liveDailyWage == null || Math.abs(snapshotDailyWage - liveDailyWage) > 0.005)
+        : liveDailyWage != null);
     const liveAtt = liveLwd
       ? attRows.filter((a: any) => attDateStr(a.date) <= liveLwd)
       : attRows;
@@ -1020,13 +1035,16 @@ async function postSalaryApproval(opts: {
       drift(pr.paid_leave_used, liveSummary.paidLeaveUsed) ||
       drift(pr.paid_leave_allowed, livePolicy.paidCasualLeavesPerMonth) ||
       drift(pr.sick_leave_used, liveSummary.paidSickLeaveUsed) ||
-      drift(pr.sick_leave_allowed, livePolicy.paidSickLeavesPerMonth);
+      drift(pr.sick_leave_allowed, livePolicy.paidSickLeavesPerMonth) ||
+      wageMoved;
     if (attendanceMoved || policyMoved) {
       throw Object.assign(new Error(
         (attendanceMoved
           ? `Attendance for ${mStr}/${pr.year} changed after this payroll was generated ` +
             `(${storedPresentDays} paid day(s) on the payroll, ${livePresentDays} in attendance now). `
-          : `The company payroll policy (working days / paid leave / LOP) changed after this payroll was generated. `) +
+          : wageMoved
+            ? `The employee's daily or monthly basic-pay rate changed after this payroll was generated. `
+            : `The company payroll policy (working days / paid leave / LOP) changed after this payroll was generated. `) +
         `Regenerate the payroll so it matches, then approve it.`,
       ), { conflict: true });
     }
@@ -1512,7 +1530,7 @@ router.get("/hr/employees", requireModuleView("page:/hr/employees"), async (req,
     pool.query(
       `SELECT e.id, e.name, e.username, e.email, e.phone,
               e.hierarchy_id AS "hierarchyId", e.branch_type AS "branchType", e.branch_id AS "branchId",
-              e.salary, e.join_date AS "joinDate", e.photo_url AS "photoUrl",
+              e.salary, e.daily_wage AS "dailyWage", e.join_date AS "joinDate", e.photo_url AS "photoUrl",
               e.is_active AS "isActive", e.must_change_password AS "mustChangePassword",
               e.is_production_staff AS "isProductionStaff",
               e.employment_status AS "employmentStatus",
@@ -1533,7 +1551,8 @@ router.get("/hr/employees", requireModuleView("page:/hr/employees"), async (req,
     hierarchyId: e.hierarchyId, hierarchyName: hMap.get(e.hierarchyId) ?? "",
     branchType: e.branchType, branchId: e.branchId,
     branchName: await getBranchName(e.branchType, e.branchId),
-    salary: Number(e.salary), joinDate: e.joinDate, photoUrl: e.photoUrl ?? null, isActive: e.isActive, mustChangePassword: e.mustChangePassword ?? false,
+     salary: Number(e.salary), dailyWage: e.dailyWage == null ? null : Number(e.dailyWage),
+     joinDate: e.joinDate, photoUrl: e.photoUrl ?? null, isActive: e.isActive, mustChangePassword: e.mustChangePassword ?? false,
     isProductionStaff: e.isProductionStaff ?? false,
     employmentStatus: e.employmentStatus ?? "active",
     lastWorkingDate: e.lastWorkingDate ?? null,
@@ -1652,11 +1671,16 @@ router.post("/hr/employees", requireModuleAction("page:/hr/employees", "add"), a
     ...parsed.data,
     username: newUsername,
     salary: String(parsed.data.salary),
+    dailyWage: parsed.data.dailyWage == null ? null : String(parsed.data.dailyWage),
     passwordHash: await PasswordService.hash(DEFAULT_INITIAL_PASSWORD),
     mustChangePassword: true,
   }).returning();
   const [h] = await db.select().from(hierarchiesTable).where(eq(hierarchiesTable.id, row.hierarchyId)).limit(1);
   const isProductionStaff = (await saveProductionStaffFlag(row.id, req.body)) ?? false;
+  const salaryLedgers = await provisionSalaryLedgers(pool, row.id, row.name);
+  if (!salaryLedgers.expenseLedgerId || !salaryLedgers.payableLedgerId) {
+    throw new Error(`Could not provision salary ledgers for employee ${row.id}`);
+  }
 
   // Give the employee a real pay structure row straight away. Payroll reads its
   // allowances and deductions from this table, so an employee without a row
@@ -1677,7 +1701,8 @@ router.post("/hr/employees", requireModuleAction("page:/hr/employees", "add"), a
     hierarchyId: row.hierarchyId, hierarchyName: h?.name ?? "",
     branchType: row.branchType, branchId: row.branchId,
     branchName: await getBranchName(row.branchType, row.branchId),
-    salary: Number(row.salary), joinDate: row.joinDate, photoUrl: row.photoUrl ?? null,
+     salary: Number(row.salary), dailyWage: row.dailyWage == null ? null : Number(row.dailyWage),
+     joinDate: row.joinDate, photoUrl: row.photoUrl ?? null,
     isActive: row.isActive, mustChangePassword: row.mustChangePassword ?? true,
     isProductionStaff,
     employmentStatus: "active", lastWorkingDate: null,
@@ -1694,7 +1719,8 @@ router.get("/hr/employees/:id", requireModuleView("page:/hr/employees"), async (
     hierarchyId: row.hierarchyId, hierarchyName: h?.name ?? "",
     branchType: row.branchType, branchId: row.branchId,
     branchName: await getBranchName(row.branchType, row.branchId),
-    salary: Number(row.salary), joinDate: row.joinDate, photoUrl: row.photoUrl ?? null, isActive: row.isActive,
+     salary: Number(row.salary), dailyWage: row.dailyWage == null ? null : Number(row.dailyWage),
+     joinDate: row.joinDate, photoUrl: row.photoUrl ?? null, isActive: row.isActive,
     isProductionStaff: await readProductionStaffFlag(id),
     ...(await readEmploymentFields(id).then((f) => ({
       employmentStatus: f.status, lastWorkingDate: f.lastWorkingDate,
@@ -1771,6 +1797,9 @@ router.patch("/hr/employees/:id", requireModuleAction("page:/hr/employees", "edi
   if (nextStatus !== undefined) (parsed.data as any).isActive = nextStatus === "active";
   const updateData: Record<string, unknown> = { ...parsed.data };
   if (parsed.data.salary !== undefined) updateData.salary = String(parsed.data.salary);
+  if (parsed.data.dailyWage !== undefined) {
+    updateData.dailyWage = parsed.data.dailyWage == null ? null : String(parsed.data.dailyWage);
+  }
   const beforeFlag = await readProductionStaffFlag(id);
   // The production-staff flag lives outside the validated body, so a request
   // that only toggles it has nothing for drizzle to set — read the row instead
@@ -1820,6 +1849,13 @@ router.patch("/hr/employees/:id", requireModuleAction("page:/hr/employees", "edi
   const prevSalary = before ? Number(before.salary) : 0;
   const newSalary = Number(row.salary);
   const salaryChanged = parsed.data.salary !== undefined && Math.abs(newSalary - prevSalary) > 0.004;
+  const prevDailyWage = before?.dailyWage == null ? null : Number(before.dailyWage);
+  const newDailyWage = row.dailyWage == null ? null : Number(row.dailyWage);
+  const dailyWageChanged = parsed.data.dailyWage !== undefined
+    && (prevDailyWage == null
+      ? newDailyWage != null
+      : newDailyWage == null || Math.abs(newDailyWage - prevDailyWage) > 0.004);
+  const wageChanged = salaryChanged || dailyWageChanged;
   const reactivated = Boolean(before) && before!.isActive === false && row.isActive === true;
 
   // Bringing someone back must not backfill the months they spent deactivated as
@@ -1830,7 +1866,7 @@ router.patch("/hr/employees/:id", requireModuleAction("page:/hr/employees", "edi
     ).catch((e) => console.error("[hr] could not stamp the accrual resume date:", e));
   }
 
-  if (salaryChanged) {
+  if (wageChanged) {
     // A revision rewrites every unapproved month's daily accrual at the new
     // salary: an open month is recalculated in full rather than running at two
     // rates. Approved and paid months are financially final and are left alone.
@@ -1856,7 +1892,8 @@ router.patch("/hr/employees/:id", requireModuleAction("page:/hr/employees", "edi
         action: "UPDATE", module: "payroll", entityType: "salary_accrual", entityId: id,
         user: req.employee?.username ?? "system",
         description:
-          `Salary revised for ${row.name} — ₹${prevSalary.toLocaleString("en-IN")} → ₹${newSalary.toLocaleString("en-IN")}; `
+          `Pay rate revised for ${row.name} — monthly ₹${prevSalary.toLocaleString("en-IN")} → ₹${newSalary.toLocaleString("en-IN")}, `
+          + `daily ₹${prevDailyWage?.toLocaleString("en-IN") ?? "legacy"} → ₹${newDailyWage?.toLocaleString("en-IN") ?? "legacy"}; `
           + `${recalc.entriesReversed} daily accrual entr${recalc.entriesReversed === 1 ? "y" : "ies"} reversed, `
           + `${recalc.entriesRegenerated} regenerated`
           + (months.length ? ` for ${months.join(", ")}` : " (nothing accrued yet)")
@@ -1864,8 +1901,10 @@ router.patch("/hr/employees/:id", requireModuleAction("page:/hr/employees", "edi
         metadata: {
           employeeId: id, employeeName: row.name,
           previousAmount: prevSalary, newAmount: newSalary,
-          previousDailyAccrual: dailyAccrualRate(prevSalary, revWorkingDays),
-          newDailyAccrual: dailyAccrualRate(newSalary, revWorkingDays),
+          previousDailyAccrual: prevDailyWage ?? dailyAccrualRate(prevSalary, revWorkingDays),
+          newDailyAccrual: newDailyWage ?? dailyAccrualRate(newSalary, revWorkingDays),
+          previousDailyWage: prevDailyWage,
+          newDailyWage,
           dailyRateBasisMonth: asLabel(basis),
           dailyRateWorkingDays: revWorkingDays,
           reason: reason || null,
@@ -1893,8 +1932,14 @@ router.patch("/hr/employees/:id", requireModuleAction("page:/hr/employees", "edi
     action: "UPDATE", module: "hr", entityType: "employee", entityId: row.id,
     description: `Employee ${row.name} updated`,
     metadata: {
-      before: before ? { name: before.name, salary: Number(before.salary), isActive: before.isActive, isProductionStaff: beforeFlag } : undefined,
-      after: { name: row.name, salary: Number(row.salary), isActive: row.isActive, isProductionStaff },
+      before: before ? {
+        name: before.name, salary: Number(before.salary),
+        dailyWage: prevDailyWage, isActive: before.isActive, isProductionStaff: beforeFlag,
+      } : undefined,
+      after: {
+        name: row.name, salary: Number(row.salary), dailyWage: newDailyWage,
+        isActive: row.isActive, isProductionStaff,
+      },
       changes: Object.keys(parsed.data),
     },
   }).catch(() => {});
@@ -1904,7 +1949,8 @@ router.patch("/hr/employees/:id", requireModuleAction("page:/hr/employees", "edi
     hierarchyId: row.hierarchyId, hierarchyName: h?.name ?? "",
     branchType: row.branchType, branchId: row.branchId,
     branchName: await getBranchName(row.branchType, row.branchId),
-    salary: Number(row.salary), joinDate: row.joinDate, photoUrl: row.photoUrl ?? null, isActive: row.isActive, mustChangePassword: row.mustChangePassword ?? false,
+     salary: Number(row.salary), dailyWage: newDailyWage,
+     joinDate: row.joinDate, photoUrl: row.photoUrl ?? null, isActive: row.isActive, mustChangePassword: row.mustChangePassword ?? false,
     isProductionStaff,
     employmentStatus: effStatus, lastWorkingDate: effLwd, leavingReason: effReason,
   });
@@ -1928,7 +1974,7 @@ router.delete("/hr/employees/:id", requireModuleAction("page:/hr/employees", "de
     await client.query("ROLLBACK").catch(() => {});
     if (e?.code === '23503') {
       res.status(400).json({
-        error: "This employee has attendance, payroll, leave or advance history and cannot be deleted. Mark them inactive instead — history stays intact and they can no longer sign in.",
+        error: "This employee has attendance, payroll, leave, advance or salary accrual history and cannot be deleted. Mark them inactive instead — history stays intact and they can no longer sign in.",
       });
       return;
     }
@@ -2293,7 +2339,8 @@ async function refreshPayrollDraftsLocked(opts: { year: number; month: number; e
         [emp.id],
       );
 
-    const baseSalary = Number(emp.salary);
+    const dailyWage = emp.dailyWage == null ? null : Number(emp.dailyWage);
+    const baseSalary = effectiveMonthlyBasic(Number(emp.salary), dailyWage, workingDays);
     const computed = computePayroll({ baseSalary, workingDays, presentDays: effectivePresentDays, allowances, deductions, rates });
 
     // Recovery can never push take-home pay below zero, and an advance is only
@@ -2317,6 +2364,7 @@ async function refreshPayrollDraftsLocked(opts: { year: number; month: number; e
 
     const snapshot = {
       ...rates,
+      dailyWage,
       basicPay: computed.effectiveBasic,
       grossPay: computed.grossPay,
       pfEmployee: computed.pfEmployee, pfEmployer: computed.pfEmployer,
@@ -2596,6 +2644,7 @@ router.get("/hr/salary-accruals", requireModuleView("page:/hr/payroll"), async (
             COUNT(*)::int AS days,
             SUM(a.amount)::numeric(15,2) AS accrued,
             MAX(a.monthly_salary)::numeric(15,2) AS monthly_salary,
+            MAX(a.daily_wage)::numeric(15,2) AS daily_wage,
             MAX(a.days_in_month)::int AS days_in_month,
             MAX(a.working_days)::int AS working_days,
             SUM(a.attendance_factor)::numeric(6,2) AS paid_days,
@@ -2626,10 +2675,9 @@ router.get("/hr/salary-accruals", requireModuleView("page:/hr/payroll"), async (
     earningDays: Number(r.earning_days ?? 0),
     paidDays: Number(r.paid_days ?? 0),
     workingDays: Number(r.working_days ?? DEFAULT_WORKING_DAYS),
-    dailyAccrual: dailyAccrualRate(
-      Number(r.monthly_salary),
-      Number(r.working_days ?? DEFAULT_WORKING_DAYS),
-    ),
+    dailyAccrual: r.daily_wage == null
+      ? dailyAccrualRate(Number(r.monthly_salary), Number(r.working_days ?? DEFAULT_WORKING_DAYS))
+      : Number(r.daily_wage),
     firstDay: r.first_day instanceof Date ? r.first_day.toISOString().slice(0, 10) : r.first_day,
     lastDay: r.last_day instanceof Date ? r.last_day.toISOString().slice(0, 10) : r.last_day,
     payrollStatus: r.payroll_status,
