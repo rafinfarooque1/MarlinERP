@@ -49,14 +49,40 @@ export function DashboardFinancialMatrixSection({
       });
       await document.fonts.ready;
       const { toBlob } = await import('html-to-image');
-      const width = Math.max(captureTarget.scrollWidth, Math.ceil(captureTarget.getBoundingClientRect().width));
-      const height = Math.max(captureTarget.scrollHeight, Math.ceil(captureTarget.getBoundingClientRect().height));
+      const table = captureTarget.querySelector<HTMLTableElement>('table');
+      if (!table) throw new Error('financial matrix table not found');
+      const captureRect = captureTarget.getBoundingClientRect();
+      const tableRect = table.getBoundingClientRect();
+      const lastRow = table.tBodies[0]?.rows[table.tBodies[0].rows.length - 1];
+      const lastRowBottom = lastRow?.getBoundingClientRect().bottom ?? captureRect.bottom;
+      const width = Math.ceil(Math.max(
+        captureTarget.scrollWidth,
+        captureRect.width,
+        table.scrollWidth,
+        tableRect.width,
+      ));
+      // Measure through the last rendered row, not only the wrapper's scroll
+      // size: table layout can report a height that clips the final row in the
+      // serialized image even though it remains visible in the page.
+      const height = Math.ceil(Math.max(
+        captureTarget.scrollHeight,
+        captureRect.height,
+        table.scrollHeight,
+        tableRect.height,
+        lastRowBottom - captureRect.top,
+      )) + 2;
+      console.debug('[dashboard] financial matrix share: capture bounds', {
+        rows: table.rows.length,
+        width,
+        height,
+      });
       const blob = await toBlob(captureTarget, {
         backgroundColor: '#ffffff',
         width,
         height,
         pixelRatio: 2,
         cacheBust: true,
+        style: { overflow: 'visible' },
       });
       if (!blob) throw new Error('empty matrix image');
       const dateSlug = data.period.fromDate && data.period.toDate
