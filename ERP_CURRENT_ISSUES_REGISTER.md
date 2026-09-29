@@ -1,11 +1,11 @@
 # Frozen Fruits ERP — Current Issues Register
 
-**Audit status:** IN PROGRESS — Phase 1 only  
+**Audit status:** IN PROGRESS — Phases 1–6 partial
 **Snapshot date:** 2026-09-29  
 **Functional code changes:** none during this documentation audit  
 **Production database:** NOT QUERIED
 
-This register separates confirmed documentation defects from unverified historical code findings. “No confirmed code issue yet” means the code audit is incomplete; it does not mean the ERP has no code issues.
+This register separates confirmed documentation defects, source-verified implementation divergences and test gaps from unverified historical findings. A parity risk is not called a proven user-facing defect unless impact is demonstrated.
 
 ## Confirmed documentation findings
 
@@ -14,6 +14,36 @@ This register separates confirmed documentation defects from unverified historic
 | DOC-001 | Existing master documentation | `ERP_COMPLETE_DOCUMENTATION.md` contains eight byte-identical copies of the same 1,195-line document (9,560 lines total). | One maintained copy with a clear current snapshot and progress state. | Eight consecutive 1,195-line blocks have the same SHA-256 digest; verified 2026-09-29. | MEDIUM | Makes edits ambiguous, wastes review effort, and can hide stale information. Documentation issue only. | CONFIRMED |
 | DOC-002 | Historical schema inventory | `docs/ERP_SYSTEM_AUDIT.md` states 69 tables and no triggers. The read-only development schema snapshot on 2026-09-29 found 93 public base tables and three trigger objects. | Schema counts and triggers should be dated and scoped to the environment they describe. | `docs/ERP_SYSTEM_AUDIT.md` §3; development `information_schema.tables` and `information_schema.triggers`. | MEDIUM | Readers may rely on an obsolete table/trigger inventory. Production schema was not queried. | CONFIRMED STALE |
 | DOC-003 | Readiness / integrity status | `ERP_FINAL_HARDENING_REPORT.md` (2026-09-18) says FI-08–FI-27 remain WARN. Current source and development schema include a later FI-08 daily-close implementation and its tables. | Readiness reports should distinguish historical status from current code/evidence. | Report §“Remaining release blockers”; current `artifacts/api-server/src/routes/integrity.ts`, `src/lib/dailyStockClosures.ts`, and development schema metadata. | MEDIUM | Readers may mistake a pre-change report for the current FI-08 status. Runtime close coverage itself is not asserted by this documentation finding. | CONFIRMED STALE |
+
+## Confirmed implementation differences and coverage gaps
+
+These findings describe current code paths, not changes to make. The impact should be rechecked with UI/report parity evidence during the final phase.
+
+| ID | Area | Current behavior | Expected / canonical comparison | Evidence | Severity | Risk / user impact | Status |
+|---|---|---|---|---|---|---|---|
+| GAP-001 | Stock value list | `/stock` list values use product master average-cost fields for displayed value. | The shared valuation path uses dated location-cost checkpoints and is the source used by stock valuation and financial statements. | `artifacts/api-server/src/routes/stock.ts:279-308`; `src/lib/valuation.ts:213-339`. | MEDIUM | A stock list value can differ from canonical valuation where locations have different costs. | IMPLEMENTATION DIVERGENCE CONFIRMED; parity impact not quantified |
+| GAP-002 | Sales-by-salesperson outstanding | The report independently calculates `max(0,total-paid-creditAdjustments)` after query-side cancellation filtering. | The shared sale payment-position helper also uses a ₹0.005 threshold and emits paid/unpaid/cancelled/overpaid state. | `artifacts/api-server/src/routes/reports.ts:165-223`; `src/lib/salePaymentPosition.ts:69-104`. | LOW | Small rounding-edge differences are possible; larger differences were not demonstrated. | DUPLICATE FORMULA CONFIRMED; defect NOT CONFIRMED |
+| GAP-003 | Fixed-asset depreciation verification | Monthly straight-line depreciation is implemented, but no depreciation-specific automated test was identified in the inspected test search. | Amount, idempotency, period locking and journal parity should have focused regression evidence. | `artifacts/api-server/src/routes/assets.ts:1090-1197`; test search under `artifacts/api-server/tests` found no depreciation-specific match. | MEDIUM | Changes to depreciation can affect P&L and Balance Sheet without a dedicated test gate. | TEST GAP |
+| GAP-004 | FEFO ordering verification | `planFEFO` implements expiry-ordered lot consumption; no dedicated FEFO-ordering test was identified by the inspected search. | Expiry order, NULL-last behavior, reservations, concurrency and untracked shortfall should be pinned by tests. | `artifacts/api-server/src/lib/batches.ts:82-110`; inventory test search. | LOW | A future ordering regression could change which lot is consumed while indirect tests still pass. | TEST GAP |
+| GAP-005 | OpenAPI coverage | OpenAPI contains 66 path keys / 110 operation keys; route source contains 410 explicit route declaration expressions. OpenAPI generation is not runtime-derived and completeness is not established. | Every supported runtime operation should be represented in the published contract, or omissions should be documented. | `lib/api-spec/openapi.yaml`; `artifacts/api-server/src/routes`; `lib/api-spec/orval.config.ts`. | LOW | Generated clients and external consumers may lack documented operations. The 410 count is not deduplicated and the exact missing-operation list is NOT VERIFIED. | SPEC-COVERAGE GAP CONFIRMED; runtime impact NOT VERIFIED |
+| GAP-006 | PDF/XLSX report contract wiring | A canonical report contract/parser exists, but the PDF/XLSX handlers use a different body validator; the canonical contract rejects `monthWise`. | PDF, XLSX and CSV outputs should use compatible validated filters and report definitions. | `artifacts/api-server/src/lib/reportExportContract.ts:11-66`; `src/routes/pdfGen.ts:199,298-330`; web `reports/shared.tsx:495-511`. | MEDIUM | Export filters or content may diverge from screen/CSV behavior. A runtime mismatch has not yet been reproduced. | CONTRACT-WIRING DIVERGENCE CONFIRMED; OUTPUT DEFECT NOT VERIFIED |
+| INFO-001 | Sale stock-ledger cost field | The sale write path records selling `unitPrice` as the movement's `unitCost`. Canonical valuation uses location checkpoints, not this value, for inventory valuation. | Consumers must not interpret this field as sale COGS or authoritative stock cost. | `artifacts/api-server/src/routes/sales.ts:1492-1507`; `src/lib/valuation.ts`. | MEDIUM | A reader/export that treats the field as actual inventory cost could misstate margin. All consumers are not yet audited. | CURRENT SEMANTICS CONFIRMED; downstream misuse NOT VERIFIED |
+| INFO-002 | Purchase goods total vs payable | Purchase row `total_amount` is the whole-rupee goods total; other charges are separate. Payable/settlement includes goods + charges, while returns prorate goods lines only. | Readers should label goods value, charges and total payable separately; returns do not reverse charges. | `artifacts/api-server/src/routes/purchases.ts:698-721,780-817`; `src/routes/accounts.ts:1373-1385`; `src/routes/returns.ts:1243-1319`. | INFO | A bill's displayed goods total may differ from amount due; this is current accounting design, not a confirmed defect. | CURRENT POLICY CONFIRMED |
+| INFO-003 | Bank reconciliation meaning | Reconciliation selects internal ledger posting identities and stores review metadata; no external bank-statement ending balance or outstanding-items formula exists in the inspected flow. | Documentation should not describe it as statement-balance reconciliation unless another flow is found. | `artifacts/api-server/src/routes/reconciliation.ts:1117-1122,1237-1240,1635-1697`. | INFO | Users may expect external statement matching from the label; no accounting posting is created by review batches. | CURRENT SCOPE CONFIRMED |
+| INFO-004 | Outlet cash availability | `availableBalance = max(0, ledger balance)`; pending deposits are exposed separately and not subtracted by this calculation. | Product copy should distinguish ledger cash from cash net of pending deposits. | `artifacts/api-server/src/routes/cash-in-outlet.ts:87-109,116-130`. | INFO | Meaning of “available” relative to pending deposits is not established as a product requirement. | CURRENT FORMULA CONFIRMED; DEFINITIVE PRODUCT SEMANTICS NOT VERIFIED |
+| INFO-005 | Location-filtered opening balances | Shared ledger balance and financial-report location splits exclude/filter company-level openings, while Cash/Bank Book has a branch-only exception to include authorized ledger openings under location filter. | Report comparisons should account for the reader-specific opening-balance policy. | `artifacts/api-server/src/lib/ledgerBalances.ts:136-141`; `src/routes/financialReports.ts:61-82`; `src/routes/journal.ts:1976-1989`. | INFO | A location-filtered book may not equal another report's opening/closing figure. Intentionality is not established. | CROSS-SURFACE DIFFERENCE CONFIRMED |
+| INFO-006 | Chart endpoint balance fields | `/accounts/chart` builds the hierarchy and initializes each node's displayed balance to zero; it is not a live ledger-balance reader. | Use posting/ledger/report endpoints for balances. | `artifacts/api-server/src/routes/accounts.ts:187-217`; chart construction `src/lib/books.ts:107-169`. | INFO | A consumer treating chart balances as computed values would display zeros. | CURRENT RESPONSE SEMANTICS CONFIRMED |
+
+## Observed risks requiring verification
+
+These are source observations or missing verification evidence, not confirmed operational/security failures.
+
+| ID | Area | Observation | Evidence | Severity | What remains unknown | Status |
+|---|---|---|---|---|---|---|
+| GAP-007 | Backup startup timing | Backup scheduler starts even when bootstrap/core migration failure is recorded; financial schedulers wait for successful startup. The first scheduled run is delayed. | `artifacts/api-server/src/index.ts:5142-5159`; `src/lib/backup/scheduler.ts:125-179`. | MEDIUM | Whether a backup can be produced from an incomplete/unready schema and whether that artifact is misleading. | RISK OBSERVED; IMPACT NOT VERIFIED |
+| GAP-008 | Multi-instance scheduled work | Timers run in-process; no leader lock was evident in inspected scheduler wrappers. Per-entity advisory locks exist for rent/salary accrual. | `src/lib/rentAccrual.ts:161-203`; `src/lib/salaryAccrual.ts:269-358`; `src/lib/dailyStockClosures.ts:385-423`; `src/lib/backup/scheduler.ts:125-179`. | LOW | Deployment instance count and cross-process idempotency/locking for every scheduled operation. | NOT VERIFIED |
+| GAP-009 | Public share-link security tests | Public invoice/quotation/share/mobile paths are global-auth exceptions and rely on route-specific controls. A link-specific test was not found in the inspected test-name scan. | `artifacts/api-server/src/app.ts:100-129`; share routes; test-name search. | MEDIUM | Every public handler's token/expiry/revocation enforcement and whether coverage exists under non-obvious test names. | TEST/COVERAGE EVIDENCE NOT VERIFIED |
+| GAP-010 | Web permission loading state | The web permission hook can temporarily return full access while permissions load; the route guard shows a loading state and server guards remain authoritative. | `artifacts/marlin-erp/src/lib/usePermission.ts:117-134`; `components/RoutePermissionGuard.tsx:48-68`; server `middleware/permissions.ts`. | LOW | Whether any individual page briefly renders sensitive data before its protected query is blocked. | UI EXPOSURE RISK OBSERVED; API BYPASS NOT OBSERVED |
 
 ## Historical findings pending source verification
 
@@ -29,11 +59,14 @@ These are leads from earlier documentation, not current confirmed defects. They 
 - `SOURCE_OF_TRUTH.md` contains stock-ledger and accounting statements that conflict with later repository documentation. Inspect the current writers, `buildDerivedPostings` consumers and report routes before calling any statement a product defect.
 - `ERP_COMPLETE_DOCUMENTATION.md` and `ERP_FINAL_HARDENING_REPORT.md` predate some current code. No severity or release-readiness conclusion is carried forward without revalidation.
 
-## Phase 1 totals
+## Current interim totals
 
 - Confirmed documentation issues: **3**
-- Confirmed functional/code issues: **NOT ASSESSED**
+- Source-confirmed divergence / contract / test-gap records: **6** (GAP-001 through GAP-006); not all are demonstrated user-facing defects
+- Additional observed risks with impact NOT VERIFIED: **4** (GAP-007 through GAP-010)
+- Confirmed downstream user-facing defects: **NOT ESTABLISHED**
+- Informational data-semantic constraints: **6** (INFO-001 through INFO-006)
 - Historical issue candidates: **2**, not included in confirmed totals
 - Critical/high functional issues: **NOT ASSESSED**
 
-**DOCUMENTATION PROGRESS:** Phase 1 complete; module-by-module issue review remains.
+**DOCUMENTATION PROGRESS:** Phases 1–6 partial; remaining domains, downstream impact, severity confirmation and final issue cross-check are pending.
