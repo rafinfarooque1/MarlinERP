@@ -261,16 +261,48 @@ try {
   assert('Historical destination opening is zero before receipt', (await qtyAsOf(destinationId, D0)) === 0);
   assert('Historical destination closing includes receipt', (await qtyAsOf(destinationId, D1)) === 4);
 
-  // Legacy transfer rows can have a non-null zero unit cost even though the
-  // product's authoritative inventory valuation has a real weighted-average
-  // cost. The books must use that fallback or a transfer manufactures COGS.
+  // Older transfer rows can carry a lot cost instead of the sender's
+  // location-authoritative dispatch cost. The original reservation preserves
+  // the valuation and must win over both movement and lot costs.
   await sql(
     `UPDATE stock_ledger
-        SET unit_cost = 0
+        SET unit_cost = CASE WHEN txn_type = 'transfer_out' THEN 90 ELSE 0 END
       WHERE doc_type = 'stock_transfer' AND doc_id = $1`,
     [firstId],
   );
-  assert('Zero-cost legacy transfer fixture is prepared', true);
+  await sql(
+    `UPDATE stock_transfers t
+        SET line_items = (
+          SELECT COALESCE(jsonb_agg(jsonb_set(
+                   line.value - 'costPrice',
+                   '{batchBreakdown,0,unitCost}',
+                   '90'::jsonb,
+                   true
+                 )), '[]'::jsonb)
+            FROM jsonb_array_elements(t.line_items) AS line(value)
+        )
+      WHERE t.id = $1`,
+    [firstId],
+  );
+  const { rows: [savedTransfer] } = await sql(
+    `SELECT line_items FROM stock_transfers WHERE id = $1`, [firstId],
+  );
+  const { rows: [savedDispatchReservation] } = await sql(
+    `SELECT unit_cost::numeric AS unit_cost FROM stock_reservations
+      WHERE doc_type = 'stock_transfer' AND doc_id = $1
+        AND kind = 'in_transit'
+      ORDER BY created_at, id LIMIT 1`,
+    [firstId],
+  );
+  const savedBreakdownCost = Number(savedTransfer?.line_items?.[0]?.batchBreakdown?.[0]?.unitCost ?? 0);
+  assert('Saved dispatch reservation outranks conflicting ledger and lot costs',
+    savedBreakdownCost === 90 &&
+    savedTransfer?.line_items?.[0]?.costPrice == null &&
+    Number(savedDispatchReservation?.unit_cost) === 100,
+    JSON.stringify({
+      line: savedTransfer?.line_items?.[0],
+      dispatchReservationCost: savedDispatchReservation?.unit_cost,
+    }));
 
   const destinationLedger = await get(
     `/stock/ledger?from=${D1}&to=${D1}&txnType=transfer_in&branchType=warehouse`,
@@ -329,6 +361,15 @@ try {
     [secondId],
   );
   assert('Shortfall remains visible as one active in-transit unit', Number(inTransit.quantity) === 1);
+  // A legacy replacement row may carry a stale line/lot cost. Transit valuation
+  // must retain the cost saved on the original dispatch reservation.
+  await sql(
+    `UPDATE stock_reservations
+        SET unit_cost = 150
+      WHERE doc_type = 'stock_transfer' AND doc_id = $1
+        AND kind = 'in_transit' AND status = 'active'`,
+    [secondId],
+  );
   assert('Historical destination closing includes both receipts', (await qtyAsOf(destinationId, D2)) === 5);
 
   console.log('\n[4] Rejection restores source and never credits destination');
@@ -401,6 +442,17 @@ try {
   };
   const sourceDay = await statement(D0, D1, sourceId);
   const destinationDay = await statement(D0, D1, destinationId);
+  assert('Opening-stock transfer values follow dispatch cost, not stale ledger/lot cost',
+    sourceDay?.profitAndLoss?.expenses?.openingStockReliable === true &&
+    destinationDay?.profitAndLoss?.expenses?.openingStockReliable === true &&
+    ![...(sourceDay?.integrity?.issues ?? []), ...(destinationDay?.integrity?.issues ?? [])]
+      .some((issue) => String(issue).includes('Opening stock as at')),
+    JSON.stringify({
+      source: sourceDay?.profitAndLoss?.expenses,
+      destination: destinationDay?.profitAndLoss?.expenses,
+      sourceIssues: sourceDay?.integrity?.issues,
+      destinationIssues: destinationDay?.integrity?.issues,
+    }));
   assert('Source opening is reduced by dispatched transfer value',
     Number(sourceDay?.profitAndLoss?.expenses?.openingStock) === 800,
     JSON.stringify(sourceDay?.profitAndLoss?.expenses));

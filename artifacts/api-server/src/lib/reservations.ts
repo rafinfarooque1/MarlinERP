@@ -202,7 +202,10 @@ export interface InTransitRow {
  * Active in-transit stock, attributed to the sender that dispatched it. This is
  * the only place in-flight goods can be counted: they left the source's
  * stock_entries row at dispatch and do not reach the destination's until it is
- * received, so without this they belong to no location at all.
+ * received, so without this they belong to no location at all. A partial-receipt
+ * replacement row must keep the original dispatch valuation; older rows could
+ * otherwise inherit a different line or lot cost when only the shortfall stayed
+ * in transit.
  */
 export async function activeInTransit(c: Queryable, opts: {
   branchType?: string; branchId?: number; materialType?: ReservationProductKind; refId?: number;
@@ -243,10 +246,39 @@ export async function activeInTransit(c: Queryable, opts: {
 
   const { rows } = await c.query(
     `SELECT r.ref_id, r.material_type, r.branch_type, r.branch_id, r.batch_number,
-            r.quantity::numeric AS quantity, r.unit_cost::numeric AS unit_cost,
+            r.quantity::numeric AS quantity,
+            COALESCE(
+              CASE WHEN dispatch_cost.total_qty > 0
+                         AND dispatch_cost.known_qty >= dispatch_cost.total_qty - 0.001
+                   THEN dispatch_cost.unit_cost END,
+              r.unit_cost::numeric
+            ) AS unit_cost,
             r.doc_type, r.doc_id
        FROM stock_reservations r
        ${opts.asOf ? "LEFT JOIN stock_transfers t ON r.doc_type = 'stock_transfer' AND t.id = r.doc_id" : ""}
+       LEFT JOIN LATERAL (
+         SELECT SUM(original.quantity::numeric) AS total_qty,
+                SUM(original.quantity::numeric)
+                  FILTER (WHERE original.quantity::numeric > 0 AND original.unit_cost::numeric > 0) AS known_qty,
+                SUM(original.quantity::numeric * original.unit_cost::numeric)
+                  FILTER (WHERE original.quantity::numeric > 0 AND original.unit_cost::numeric > 0)
+                  / NULLIF(SUM(original.quantity::numeric)
+                    FILTER (WHERE original.quantity::numeric > 0 AND original.unit_cost::numeric > 0), 0) AS unit_cost
+           FROM stock_reservations original
+          WHERE r.doc_type = 'stock_transfer'
+            AND original.doc_type = 'stock_transfer'
+            AND original.doc_id = r.doc_id
+            AND original.kind = 'in_transit'
+            AND original.material_type = r.material_type
+            AND original.ref_id = r.ref_id
+            AND original.created_at = (
+              SELECT MIN(first_r.created_at)
+                FROM stock_reservations first_r
+               WHERE first_r.doc_type = original.doc_type
+                 AND first_r.doc_id = original.doc_id
+                 AND first_r.kind = original.kind
+            )
+       ) dispatch_cost ON TRUE
       WHERE ${conds.join(" AND ")}
       ORDER BY r.doc_id, r.id`,
     params,
