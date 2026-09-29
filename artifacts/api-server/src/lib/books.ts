@@ -250,23 +250,74 @@ export async function stockTransferOpeningAdjustment(
 
   const { rows } = await q.query(
     `SELECT sl.material_type, sl.ref_id::int AS ref_id,
-            sl.doc_type, sl.doc_id,
+            sl.txn_type, sl.doc_type, sl.doc_id, transfer_doc.status AS transfer_status,
             sl.branch_type, sl.branch_id,
             sl.qty_change::numeric AS qty_change,
             COALESCE(
-              NULLIF(sl.unit_cost::numeric, 0),
-              CASE WHEN checkpoint.quantity > 0
+              CASE WHEN dispatch_cost.total_qty > 0
+                         AND dispatch_cost.known_qty >= dispatch_cost.total_qty - 0.001
+                         AND dispatch_cost.total_qty >= ABS(sl.qty_change::numeric) - 0.001
+                   THEN dispatch_cost.unit_cost END,
+              CASE WHEN checkpoint.quantity > 0 AND checkpoint.value > 0
                    THEN checkpoint.value::numeric / checkpoint.quantity::numeric
-                   ELSE checkpoint.unit_cost::numeric END
+                   WHEN checkpoint.unit_cost > 0 THEN checkpoint.unit_cost::numeric END,
+              CASE WHEN sl.unit_cost::numeric > 0 THEN sl.unit_cost::numeric END,
+              CASE WHEN transfer_line_cost.known_qty >= ABS(sl.qty_change::numeric) - 0.001
+                   THEN transfer_line_cost.unit_cost END
             ) AS unit_cost
        FROM stock_ledger sl
+       LEFT JOIN stock_transfers transfer_doc
+         ON sl.doc_type = 'stock_transfer' AND transfer_doc.id = sl.doc_id
+       LEFT JOIN LATERAL (
+         SELECT SUM(original.quantity::numeric) AS total_qty,
+                SUM(original.quantity::numeric)
+                  FILTER (WHERE original.quantity::numeric > 0 AND original.unit_cost::numeric > 0) AS known_qty,
+                SUM(original.quantity::numeric * original.unit_cost::numeric)
+                  FILTER (WHERE original.quantity::numeric > 0 AND original.unit_cost::numeric > 0)
+                  / NULLIF(SUM(original.quantity::numeric)
+                    FILTER (WHERE original.quantity::numeric > 0 AND original.unit_cost::numeric > 0), 0) AS unit_cost
+           FROM stock_reservations original
+          WHERE sl.doc_type = 'stock_transfer'
+            AND original.doc_type = 'stock_transfer'
+            AND original.doc_id = sl.doc_id
+            AND original.kind = 'in_transit'
+            AND original.material_type = sl.material_type
+            AND original.ref_id = sl.ref_id
+            AND original.created_at = (
+              SELECT MIN(first_r.created_at)
+                FROM stock_reservations first_r
+               WHERE first_r.doc_type = original.doc_type
+                 AND first_r.doc_id = original.doc_id
+                 AND first_r.kind = original.kind
+            )
+       ) dispatch_cost ON TRUE
+       LEFT JOIN LATERAL (
+         SELECT SUM(costed.line_qty * costed.line_cost)
+                  / NULLIF(SUM(costed.line_qty), 0) AS unit_cost,
+                SUM(costed.line_qty) AS known_qty
+           FROM (
+              SELECT NULLIF(transfer_line.value->>'quantity', '')::numeric AS line_qty,
+                     NULLIF(transfer_line.value->>'costPrice', '')::numeric AS line_cost
+                FROM jsonb_array_elements(COALESCE(transfer_doc.line_items, '[]'::jsonb))
+                       AS transfer_line(value)
+               WHERE NULLIF(transfer_line.value->>'itemId', '')::int = sl.ref_id
+                 AND COALESCE(NULLIF(transfer_line.value->>'materialType', ''), 'item') = sl.material_type
+           ) costed
+           WHERE costed.line_qty > 0 AND costed.line_cost > 0
+       ) transfer_line_cost ON TRUE
        LEFT JOIN LATERAL (
          SELECT scs.quantity, scs.value, scs.unit_cost
            FROM stock_cost_snapshots scs
           WHERE scs.material_type = sl.material_type
             AND scs.ref_id = sl.ref_id
-            AND scs.branch_type = sl.branch_type
-            AND scs.branch_id = sl.branch_id
+             AND scs.branch_type = CASE
+                   WHEN sl.txn_type = 'transfer_in' THEN transfer_doc.from_type
+                   ELSE sl.branch_type
+                 END
+             AND scs.branch_id = CASE
+                   WHEN sl.txn_type = 'transfer_in' THEN transfer_doc.from_id
+                   ELSE sl.branch_id
+                 END
             AND scs.as_of_date <= COALESCE(sl.txn_date, sl.created_at::date)
           ORDER BY scs.as_of_date DESC, scs.id DESC
           LIMIT 1
@@ -331,7 +382,15 @@ export async function stockTransferOpeningAdjustment(
     byKey.set(key, line);
   };
 
-  let missingCost = 0;
+  const unknownMovements: Array<{
+    docId: number | null;
+    docType: string;
+    transferStatus: string | null;
+    materialType: ValuedItem["materialType"];
+    refId: number;
+    txnType: string;
+    qty: number;
+  }> = [];
   const missingTransitCosts = new Set<string>();
   const addTransitBoundary = (transit: typeof openingTransit[number], sign: 1 | -1) => {
     if (!(transit.unitCost > 0) && Math.abs(transit.quantity) > 0.001) {
@@ -356,10 +415,49 @@ export async function stockTransferOpeningAdjustment(
     const ledgerQty = Number(row.qty_change ?? 0);
     const recordedUnitCost = Number(row.unit_cost ?? 0);
     // A missing dated cost cannot be reconstructed from today's mutable master.
-    // Keep the missing amount explicit via reliability, never fabricate it.
-    if (!(recordedUnitCost > 0) && ledgerQty !== 0) missingCost++;
+    // Keep it explicit unless both sides of a completed company-wide transfer
+    // cancel exactly; that transfer cannot change consolidated inventory value.
+    if (!(recordedUnitCost > 0) && ledgerQty !== 0) {
+      unknownMovements.push({
+        docId: row.doc_id == null ? null : Number(row.doc_id),
+        docType: String(row.doc_type ?? ""),
+        transferStatus: row.transfer_status == null ? null : String(row.transfer_status),
+        materialType,
+        refId,
+        txnType: String(row.txn_type ?? ""),
+        qty: ledgerQty,
+      });
+    }
     const unitCost = recordedUnitCost > 0 ? recordedUnitCost : 0;
     addLine(materialType, refId, ledgerQty, r2(ledgerQty * unitCost), unitCost);
+  }
+
+  let missingCost = unknownMovements.length;
+  if (!scope && unknownMovements.length) {
+    const byTransfer = new Map<string, typeof unknownMovements>();
+    for (const movement of unknownMovements) {
+      if (movement.docId == null || movement.docType !== "stock_transfer") continue;
+      const key = `${movement.docId}:${movement.materialType}:${movement.refId}`;
+      const group = byTransfer.get(key) ?? [];
+      group.push(movement);
+      byTransfer.set(key, group);
+    }
+    for (const group of byTransfer.values()) {
+      const first = group[0];
+      const balancedUnknownPair = first.transferStatus === "completed"
+        && group.some((movement) => movement.txnType === "transfer_out" && movement.qty < -0.001)
+        && group.some((movement) => movement.txnType === "transfer_in" && movement.qty > 0.001)
+        && Math.abs(group.reduce((sum, movement) => sum + movement.qty, 0)) <= 0.001
+        && ![...openingTransit, ...closingTransit].some((transit) =>
+          transit.docId === first.docId
+          && transit.materialType === first.materialType
+          && transit.refId === first.refId
+          && Math.abs(transit.quantity) > 0.001);
+      // No cost is assigned to these rows. Their unknown transfer values cancel
+      // because every side is inside the consolidated scope and no shipment
+      // remains in transit at either boundary.
+      if (balancedUnknownPair) missingCost -= group.length;
+    }
   }
 
   const lines = [...byKey.values()].filter((line) => Math.abs(line.value) > 0.005 || Math.abs(line.qty) > 0.001);
