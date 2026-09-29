@@ -1,0 +1,338 @@
+CONTINUE DOCUMENTATION-ONLY ERP RECONNAISSANCE.
+
+Do NOT modify application code, database schema, migrations, production data, business logic, permissions, UI, tests, or configuration.
+
+We are still building a complete CURRENT SYSTEM UNDERSTANDING before making any fixes.
+
+CURRENT CHECKPOINT:
+- 410 source route operations inventoried.
+- 110 OpenAPI operations inventoried.
+- 300 source-only route identities remain.
+- 94 high-risk route records have now been mapped:
+  - 55 mutation routes
+  - 39 read routes
+- All 94 route identities reconcile with the source-only API inventory.
+- 0/94 are considered fully verified end-to-end contracts.
+- P&L / Balance Sheet / closing-stock / COGS dependency tracing has been documented.
+- Historical stock valuation differences and evidence limitations are documented.
+- 40 report slots, 32 formula groups, 9 relationship families, and 10 workflow groups are documented.
+- No application code has been changed.
+- No production access.
+- Do not claim runtime/database/test verification unless actually performed.
+
+NEXT PRIORITY:
+Continue mapping the remaining SOURCE-ONLY INVENTORY AND STOCK-TRANSFER routes.
+
+==================================================
+1. INVENTORY ROUTES
+==================================================
+
+Identify every remaining source-only inventory-related route.
+
+For each exact method/path, record ONE row containing:
+
+- HTTP method
+- Exact source path
+- Source router/file
+- Handler/function name if identifiable
+- Request parameters/body shape if explicitly visible
+- Response shape if explicitly visible
+- Authentication requirement if explicitly visible
+- Permission/module requirement if explicitly visible
+- Location-scope behavior if explicitly visible
+- Warehouse/HO behavior if explicitly visible
+- Database tables read
+- Database tables written
+- Stock mutations
+- Batch/expiry/FIFO/FEFO implications
+- Accounting implications
+- GST implications
+- Audit-log behavior
+- Related UI consumer(s), if source-identifiable
+- Related report/export consumer(s), if source-identifiable
+- Related workflow
+- Existing test evidence, if explicitly found
+- Verification status
+
+Use ONLY source-backed facts.
+
+If any field cannot be established from source:
+write:
+"UNKNOWN — not established from source"
+
+Do NOT infer behavior from route names.
+
+==================================================
+2. STOCK TRANSFER ROUTES
+==================================================
+
+Map every source-only stock-transfer route, including:
+
+- creation
+- dispatch
+- approval
+- rejection
+- receiving
+- cancellation
+- editing
+- listing
+- detail
+- in-transit
+- stock adjustment related to transfer
+- batch movement
+- quantity movement
+- valuation/cost movement
+- GST-related transfer behavior
+- audit/history
+- PDFs/Delivery Challan if connected through APIs
+
+For each route determine, only from source:
+
+A. Source location handling
+B. Destination location handling
+C. Location permission checks
+D. Whether source stock is reduced
+E. Whether destination stock is increased
+F. Whether stock ledger entries are created
+G. Whether batch quantities move
+H. Whether FIFO/FEFO layers move
+I. Whether in-transit stock is represented
+J. Whether accounting vouchers are created
+K. Whether P&L is affected
+L. Whether GST is affected
+M. Whether same-GST and different-GST behavior is distinguished
+N. Whether cancellation reverses the original movement
+O. Whether audit logging is transaction-bound
+P. Whether duplicate execution is prevented
+Q. Whether idempotency/locking exists
+R. Whether transfer cost is preserved
+S. Whether reports consume transfer data
+
+Do not assume any of these merely because the business requirement says they should exist.
+
+Clearly separate:
+
+"Documented business rule"
+
+from
+
+"Current source implementation"
+
+from
+
+"Not verified"
+
+==================================================
+3. INVENTORY FORMULA / VALUATION TRACE
+==================================================
+
+Continue the existing formula register.
+
+Trace:
+
+stock quantity
+→ stock ledger
+→ batches/layers
+→ stock valuation
+→ COGS
+→ P&L
+→ Balance Sheet
+→ dashboard stock values
+→ inventory reports
+→ transfer valuation
+
+For each consumer identify:
+
+- exact source function/route
+- source table(s)
+- formula
+- date/as-of behavior
+- location behavior
+- treatment of in-transit stock
+- treatment of missing historical evidence
+- whether current master cost is used
+- whether persisted historical cost is used
+- whether the result is marked unreliable
+- whether the same calculation is reused elsewhere or independently reimplemented
+
+Pay particular attention to duplicated valuation logic.
+
+Do NOT label two implementations as "same" unless their formulas and inputs are actually verified.
+
+==================================================
+4. STOCK ADJUSTMENT ROUTES
+==================================================
+
+Map all remaining stock adjustment / opening stock / inventory correction routes.
+
+Determine:
+
+- who can create them
+- location scope
+- quantity effect
+- valuation effect
+- accounting effect
+- opening balance effect
+- audit behavior
+- whether historical dates are allowed
+- whether month locking is enforced
+- whether batch/expiry is supported
+- whether negative stock is prevented
+- whether adjustment reversal exists
+- whether deletion is possible
+- whether reports consume these entries
+
+Again, source-backed only.
+
+==================================================
+5. SOURCE-ONLY ROUTE RECONCILIATION
+==================================================
+
+After mapping this tranche:
+
+1. Reconcile every newly documented route against the 300 source-only route inventory.
+2. Report:
+   - previous documented count
+   - newly documented count
+   - remaining source-only count
+   - duplicates
+   - unresolved identities
+3. Do not inflate counts by creating aliases for the same route.
+4. Preserve exact method/path identity.
+
+==================================================
+6. TEST EVIDENCE
+==================================================
+
+For every important inventory/transfer behavior, search the existing tests and documentation.
+
+Classify evidence as exactly one of:
+
+- SOURCE-ONLY
+- TEST-EVIDENCED
+- RUNTIME-VERIFIED
+- DATABASE-VERIFIED
+- END-TO-END VERIFIED
+- UNKNOWN
+
+Do not call something verified merely because a test file exists.
+
+If a test exists but its pass/fail result is not known:
+record:
+"TEST EXISTS — RESULT NOT ESTABLISHED"
+
+==================================================
+7. UPDATE DOCUMENTATION
+==================================================
+
+Update only the documentation artifacts created for this reconnaissance:
+
+- ERP_CURRENT_SYSTEM_MASTER.md
+- ERP_CURRENT_ISSUES_REGISTER.md
+- ERP_CURRENT_FORMULA_REGISTER.md
+- ERP_API_ROUTE_INVENTORY.md
+- ERP_DATABASE_RELATIONSHIP_MAP.md
+- ERP_WORKFLOW_MAP.md
+- ERP_REPORT_PARITY_MATRIX.md
+- any dedicated inventory/transfer documentation already created
+
+Do not create duplicate documentation files unless necessary.
+
+Keep terminology consistent across all documents.
+
+==================================================
+8. ISSUE REGISTER
+==================================================
+
+Only add an issue when supported by source evidence.
+
+Classify as:
+
+- DOCUMENTATION
+- GAP
+- INFO
+- RISK
+- HISTORICAL CANDIDATE
+
+Do NOT call something a bug merely because it differs from the intended business rule.
+
+Where implementation differs from the documented business rule, record both sides:
+
+Expected/documented behavior:
+...
+
+Current source behavior:
+...
+
+Evidence:
+...
+
+Impact:
+KNOWN / UNKNOWN
+
+Do not invent severity.
+
+==================================================
+9. REQUIRED FINAL CHECKPOINT
+==================================================
+
+At the end report:
+
+A. Route inventory
+- total source routes
+- OpenAPI routes
+- source-only routes
+- high-risk routes mapped
+- inventory routes mapped
+- transfer routes mapped
+- remaining source-only routes
+
+B. Inventory coverage
+- inventory mutation routes
+- inventory read routes
+- transfer routes
+- adjustment routes
+- valuation routes
+
+C. Formula coverage
+- stock quantity
+- valuation
+- COGS
+- P&L
+- Balance Sheet
+- dashboard
+- reports
+
+D. Verification state
+- source-backed
+- test-evidenced
+- runtime-verified
+- DB-verified
+- end-to-end verified
+- unknown
+
+E. Issues
+- documentation
+- gap
+- risk
+- informational
+- historical candidate
+- confirmed critical/high only if actually established
+
+F. Remaining work
+
+G. Explicitly confirm:
+- application code changed: YES/NO
+- database changed: YES/NO
+- migrations changed: YES/NO
+- production accessed: YES/NO
+- tests executed: YES/NO
+- runtime checks executed: YES/NO
+- database queries executed: YES/NO
+- git diff --check result
+
+IMPORTANT:
+Do not stop merely because the current tranche is large.
+Continue until the inventory/transfer tranche is substantially mapped or you reach a concrete source limitation.
+
+Do not ask whether to continue unless there is a genuine ambiguity that blocks source-backed documentation.
