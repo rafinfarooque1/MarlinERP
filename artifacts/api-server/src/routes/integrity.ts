@@ -197,9 +197,17 @@ router.get(
       date: toDate, location: locJson, source: "buildBooks.profitAndLoss.summary",
       explanation: "Gross profit uses the P&L's own net-sales and COGS values.",
     }));
-    checks.push(check("FI-05", "Gross Profit + other income - expenses - depreciation = Net Profit", "UNVERIFIED", {
-      date: toDate, location: locJson, source: "buildBooks.profitAndLoss.summary",
-      explanation: "The current canonical statement exposes operating expenses as a combined group; it does not expose depreciation as a separately proven component for this diagnostic. No green result is claimed.",
+    const fi05Actual = r2(
+      pl.summary.grossProfit + pl.summary.otherIncome - pl.summary.operatingExpenses,
+    );
+    const fi05Expected = r2(pl.summary.netProfit);
+    const fi05Pass = close(fi05Actual, fi05Expected);
+    checks.push(check("FI-05", "Gross Profit + other income - operating expenses = Net Profit", fi05Pass ? "PASS" : "FAIL", {
+      actual: fi05Actual, expected: fi05Expected, date: toDate, location: locJson,
+      source: "buildBooks.profitAndLoss.summary",
+      explanation: fi05Pass
+        ? "Gross profit plus other income less the complete indirect-expense total equals net profit; depreciation remains included in that total and is not subtracted twice."
+        : "The canonical P&L totals do not reconcile: gross profit plus other income less operating expenses differs from net profit.",
     }));
     const stockValue = valuation.grandTotal;
     const stockDiff = r2(pl.incomes.closingStock - stockValue);

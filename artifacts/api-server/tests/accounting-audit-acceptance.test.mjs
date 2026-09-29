@@ -341,6 +341,31 @@ async function main() {
     closeEnough(afterFigures.purchases, taxableValue),
     `purchases=${afterFigures.purchases} expected=${taxableValue}`);
   assertIntegrity("After disposable purchase", afterBooks.response, afterTrialBalance);
+  const financialIntegrity = await get(
+    `/accounts/integrity?fromDate=${quietDate}&toDate=${quietDate}` +
+    `&locationType=warehouse&locationId=${warehouseId}`,
+  );
+  const fi05 = financialIntegrity.data?.checks?.find((item) => item.id === "FI-05");
+  const fi05Evidence = fi05?.evidence?.[0];
+  const summary = afterBooks.response.data?.profitAndLoss?.summary ?? {};
+  const expectedFi05Actual = money(
+    Number(summary.grossProfit ?? 0) +
+    Number(summary.otherIncome ?? 0) -
+    Number(summary.operatingExpenses ?? 0),
+  );
+  assert("FI-05 measures the canonical P&L totals and passes",
+    financialIntegrity.status === 200 &&
+    fi05?.status === "PASS" &&
+    fi05?.title === "Gross Profit + other income - operating expenses = Net Profit",
+    JSON.stringify(fi05).slice(0, 400));
+  assert("FI-05 evidence matches gross profit + other income - operating expenses",
+    typeof fi05Evidence?.actual === "number" &&
+    typeof fi05Evidence?.expected === "number" &&
+    typeof fi05?.difference === "number" &&
+    closeEnough(fi05Evidence.actual, expectedFi05Actual) &&
+    closeEnough(fi05Evidence.expected, money(summary.netProfit)) &&
+    closeEnough(fi05.difference, 0),
+    JSON.stringify({ fi05, expectedFi05Actual, summary }).slice(0, 600));
 
   const ownedIds = {
     purchaseId, vendorId, materialId, warehouseId,
