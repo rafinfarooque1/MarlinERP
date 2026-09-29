@@ -94,6 +94,14 @@ filter cannot creep back in.
 
 **How to apply:** Historical FI-08 PASS requires complete, independently reconciled movement/source history with a validated opening anchor, or independently authoritative daily closing records. Otherwise retain UNVERIFIED and describe current-balance reconciliation separately.
 
+## Future-only daily closes
+
+**Rule:** A new daily-close system must take one explicit baseline from `stock_entries` after startup repairs, then persist company-local end-of-day snapshots from that point forward. FI-08 may pass only fully covered ranges on or after the baseline; older ranges remain UNVERIFIED. Never create missed snapshots by replaying an unverified ledger.
+
+**Why:** `stock_entries` is current quantity truth, while older ledger history may be incomplete or edited. A current-state catch-up is safe only when no later movement obscures the missed date; otherwise a ledger-derived “close” would present uncertainty as fact.
+
+**How to apply:** On Autoscale, pair a company-local timer with request-time catch-up. Serialize closes and stock writers, refuse writes on closed dates, and keep current-date corrections available if an overdue interval cannot be proven. Pin the timezone used by the baseline; changing it needs an explicit reviewed transition.
+
 Related: product ids are only unique **within** a kind — a finished good, a
 material and a packing material can all be id `1`. Anything keyed by stock item
 (maps, React keys, dedupe) must key on `materialType:id`.

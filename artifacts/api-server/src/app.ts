@@ -4,6 +4,8 @@ import pinoHttp from "pino-http";
 import router from "./routes";
 import { logger } from "./lib/logger";
 import { requireAuth } from "./middleware/auth";
+import { pool } from "@workspace/db";
+import { ensureDailyStockClosures } from "./lib/dailyStockClosures";
 
 const app: Express = express();
 
@@ -63,6 +65,37 @@ app.use("/api/imports/parse", express.raw({ type: () => true, limit: "10mb" }));
 // 1 MB cap prevents memory-exhaustion attacks via enormous request bodies.
 app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true, limit: "1mb" }));
+
+// Catch up elapsed company-local daily stock closes before serving API traffic.
+// Autoscale instances can be idle at midnight, so the scheduler is not the
+// only trigger. A failed close is logged but reads remain available; stock
+// writes fail closed in writeStockLedger and at the database trigger.
+let lastStockCloseWarningAt = 0;
+app.use("/api", async (req, res, next) => {
+  if (
+    req.path === "/health" ||
+    req.path === "/healthz" ||
+    req.path === "/healthz/live" ||
+    (req.method === "GET" && req.path === "/healthz/schema")
+  ) {
+    next();
+    return;
+  }
+  if (app.locals.migrationsReady === false) {
+    res.status(503).json({ error: "The API is starting up; retry shortly." });
+    return;
+  }
+  try {
+    await ensureDailyStockClosures(pool);
+  } catch (err) {
+    const now = Date.now();
+    if (now - lastStockCloseWarningAt > 60_000) {
+      logger.error({ err }, "Daily stock close catch-up failed; backdated stock writes remain blocked");
+      lastStockCloseWarningAt = now;
+    }
+  }
+  next();
+});
 
 // ── Authentication guard ───────────────────────────────────────────────────
 // All /api routes require a valid Bearer token except the health check,
@@ -131,6 +164,26 @@ app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
     res.status(409).json({
       error: (err as any).message || "This historical stock edit cannot be replayed after a newer inventory checkpoint.",
       code: (err as any).code,
+    });
+    return;
+  }
+  const message = String((err as any).message ?? "");
+  const explicitStockCode = String((err as any).code ?? "");
+  const triggerStockCode = message.match(/^(STOCK_[A-Z0-9_]+):/)?.[1] ?? "";
+  const stockCode = explicitStockCode.startsWith("STOCK_") ? explicitStockCode : triggerStockCode;
+  const stockStatus = new Map<string, number>([
+    ["STOCK_DATE_BEFORE_BASELINE", 409],
+    ["STOCK_DAILY_DATE_CLOSED", 409],
+    ["STOCK_DAILY_CLOSE_REQUIRED", 409],
+    ["STOCK_DAILY_CLOSE_GAP", 503],
+    ["STOCK_DAILY_CLOSE_RECONCILIATION", 503],
+    ["STOCK_DAILY_BASELINE_MISSING", 503],
+    ["STOCK_DAILY_TIMEZONE_CHANGED", 503],
+  ]).get(stockCode);
+  if (stockStatus) {
+    res.status(stockStatus).json({
+      error: message.replace(/^STOCK_[A-Z0-9_]+:\s*/, "") || "This stock date is not available for changes.",
+      code: stockCode,
     });
     return;
   }

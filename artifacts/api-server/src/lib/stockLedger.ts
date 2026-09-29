@@ -1,12 +1,12 @@
 import { isIsoDate } from "./dateInput";
+import { assertStockDatesOpen } from "./dailyStockClosures";
 
 /**
  * Immutable Stock Ledger — every inventory movement writes one or more entries here.
  * Entries are append-only; no UPDATE or DELETE on this table, with ONE narrow,
  * deliberate exception: `txn_date` (the document's BUSINESS date) follows its
- * document. When a document's date is corrected without touching its lines, all
- * of that document's rows are restated to the new date in one statement, so
- * reversal/apply pairs move together and date-based stock stays continuous.
+ * document. Date restatements are allowed only while both the old and new
+ * business dates remain open; closed dates are immutable.
  * `created_at` is the immutable insert-time audit stamp and is never rewritten;
  * document edits themselves are recorded in the activity log.
  */
@@ -28,10 +28,9 @@ export interface LedgerEntry {
   /**
    * The BUSINESS date of the movement (the document's own date), YYYY-MM-DD.
    * created_at records when the row was inserted; txn_date records when the
-   * movement happened commercially. A backdated purchase edit inserts rows
-   * "today" but they belong to the bill's date — date-based stock reports
-   * (opening/closing stock, stock-as-of) read txn_date, not created_at.
-   * Omitted → defaults to CURRENT_DATE (the insert day IS the business day).
+   * movement happened commercially. Dates before the future-only baseline and
+   * dates already closed by the daily close are refused.
+   * Omitted → the current company-local business date.
    */
   txnDate?: string | null;
   snapshotUnitCost?: number | null;
@@ -39,14 +38,19 @@ export interface LedgerEntry {
 
 /** Bulk-insert ledger entries. Silently skips empty arrays. */
 export async function writeStockLedger(
-  db: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
+  db: { query: (...args: any[]) => Promise<any> },
   entries: LedgerEntry[],
 ): Promise<void> {
   if (!entries.length) return;
   // Callers must pass their transaction client: refusing a non-replayable
   // backdate must also roll back the quantity mutation preceding this writer.
-  // Validate the whole batch before appending any audit/checkpoint records.
-  for (const e of entries) {
+  // Validate the complete date set before appending audit/checkpoint records.
+  const { normalizedDates } = await assertStockDatesOpen(db, entries.map(e => e.txnDate));
+  const normalizedEntries = entries.map((entry, index) => ({
+    ...entry,
+    txnDate: normalizedDates[index],
+  }));
+  for (const e of normalizedEntries) {
     if (e.txnDate != null && !isIsoDate(e.txnDate)) throw new Error("Invalid stock business date");
     const result = await db.query(
       `SELECT MAX(as_of_date)::text AS latest_date
@@ -63,7 +67,7 @@ export async function writeStockLedger(
       ), { status: 409, statusCode: 409, code: "STOCK_CHECKPOINT_BACKDATE" });
     }
   }
-  for (const e of entries) {
+  for (const e of normalizedEntries) {
     await db.query(
       `INSERT INTO stock_ledger
          (txn_type, material_type, ref_id, item_name, unit,

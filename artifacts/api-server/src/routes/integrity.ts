@@ -229,10 +229,100 @@ router.get(
       explanation: valuation.reliable ? "Balance-sheet inventory is compared with the same dated valuation service." : valuation.note ?? "Historical valuation evidence is incomplete.",
     }));
 
+    const { rows: [closeState] } = await pool.query(
+      `SELECT b.baseline_date::text AS baseline_date,
+              b.time_zone AS baseline_time_zone,
+              COALESCE(NULLIF(c.general_settings->>'timeZone', ''), 'Asia/Kolkata') AS current_time_zone,
+              (SELECT MAX(r.close_date)::text
+                 FROM stock_daily_close_runs r
+                WHERE r.completed_at IS NOT NULL) AS closed_through
+         FROM stock_daily_close_baseline b
+         LEFT JOIN LATERAL (
+           SELECT general_settings FROM company_settings LIMIT 1
+         ) c ON TRUE
+        WHERE b.id = 1`,
+    );
+    let dailyStockStatus: Status = "UNVERIFIED";
+    let dailyStockActual: number | null = null;
+    let dailyStockExpected: number | null = null;
+    let dailyStockSource = "future-only stock baseline and persisted daily close snapshots";
+    let dailyStockExplanation = "No authoritative daily stock baseline is available.";
+    if (closeState?.baseline_date) {
+      const baselineDate = String(closeState.baseline_date);
+      const baselineTimeZone = String(closeState.baseline_time_zone);
+      const currentTimeZone = String(closeState.current_time_zone);
+      const closedThrough = closeState.closed_through == null ? null : String(closeState.closed_through);
+      if (baselineTimeZone !== currentTimeZone) {
+        dailyStockExplanation =
+          `The company timezone changed from ${baselineTimeZone} to ${currentTimeZone} after the stock baseline; daily continuity is unverified until the date basis is reviewed.`;
+      } else if (fromDate < baselineDate) {
+        dailyStockExplanation =
+          `The selected range starts before the future-only stock baseline (${baselineDate}); earlier history remains unverified.`;
+      } else if (!closedThrough || toDate > closedThrough) {
+        dailyStockExplanation = closedThrough
+          ? `Daily stock snapshots are complete only through ${closedThrough}; the selected range extends beyond the latest closed date.`
+          : `The future-only baseline was captured on ${baselineDate}; no company-local daily close has completed yet.`;
+      } else {
+        const { rows: [coverage] } = await pool.query(
+          `WITH requested_days AS (
+             SELECT days.close_date::date AS close_date
+               FROM generate_series($1::date, $2::date, interval '1 day') AS days(close_date)
+           ),
+           day_evidence AS (
+             SELECT d.close_date, r.completed_at, r.snapshot_rows,
+                    r.time_zone, r.baseline_date,
+                    COALESCE(entries.row_count, 0)::int AS actual_rows
+               FROM requested_days d
+               LEFT JOIN stock_daily_close_runs r ON r.close_date = d.close_date
+               LEFT JOIN LATERAL (
+                 SELECT COUNT(*)::int AS row_count
+                   FROM stock_daily_close_entries e
+                  WHERE e.close_date = d.close_date
+               ) entries ON TRUE
+           )
+           SELECT COUNT(*)::int AS expected_days,
+                  COUNT(*) FILTER (
+                    WHERE completed_at IS NOT NULL
+                      AND snapshot_rows = actual_rows
+                      AND time_zone = $3
+                      AND baseline_date = $4::date
+                  )::int AS complete_days,
+                  COUNT(*) FILTER (
+                    WHERE completed_at IS NOT NULL
+                      AND (
+                        snapshot_rows <> actual_rows
+                        OR time_zone IS DISTINCT FROM $3
+                        OR baseline_date IS DISTINCT FROM $4::date
+                      )
+                  )::int AS corrupt_days
+             FROM day_evidence`,
+          [fromDate, toDate, baselineTimeZone, baselineDate],
+        );
+        dailyStockExpected = Number(coverage?.expected_days ?? 0);
+        dailyStockActual = Number(coverage?.complete_days ?? 0);
+        const corruptDays = Number(coverage?.corrupt_days ?? 0);
+        if (corruptDays > 0) {
+          dailyStockStatus = "FAIL";
+          dailyStockExplanation =
+            `${corruptDays} persisted daily close(s) do not match their recorded row count or pinned baseline identity.`;
+        } else if (dailyStockActual === dailyStockExpected) {
+          dailyStockStatus = "PASS";
+          dailyStockExplanation =
+            `Every date in the selected range has a committed company-local quantity snapshot, and each snapshot matches its recorded row count. Dates before ${baselineDate} are not certified by this check.`;
+        } else {
+          dailyStockExplanation =
+            `Only ${dailyStockActual} of ${dailyStockExpected} dates in the selected range have complete persisted quantity snapshots.`;
+        }
+      }
+    }
+    checks.push(check("FI-08", "Daily stock continuity", dailyStockStatus, {
+      actual: dailyStockActual, expected: dailyStockExpected, unit: "days",
+      date: toDate, location: locJson, source: dailyStockSource,
+      explanation: dailyStockExplanation,
+    }));
     const unavailable = (id: string, title: string, explanation: string) =>
       checks.push(check(id, title, "UNVERIFIED", { date: toDate, location: locJson, source: "diagnostic evidence not yet materialized", explanation }));
-    unavailable("FI-08", "Daily stock continuity", "No persisted daily quantity closing table is currently authoritative for every product/location.");
-    unavailable("FI-09", "Opening/closing continuity", "Universal Closing(D)=Opening(D+1) cannot be proven without a persisted daily closing ledger.");
+    unavailable("FI-09", "Opening/closing continuity", "Universal Closing(D)=Opening(D+1) still needs a separately validated opening-position comparison; pre-baseline dates remain unverified.");
     unavailable("FI-10", "Customer balances", "Customer control balances require a dedicated reconciliation query for all customer ledgers and settlement metadata.");
     unavailable("FI-11", "Vendor balances", "Vendor control balances require a dedicated reconciliation query for all vendor ledgers, returns and advances.");
     unavailable("FI-12", "Cash", "Cash ledger control parity is not independently recomputed by this endpoint.");
