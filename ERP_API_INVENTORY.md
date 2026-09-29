@@ -1,7 +1,7 @@
 # Frozen Fruits ERP — API Inventory
 
 **Audit status:** PARTIAL — static route manifest, OpenAPI reconciliation, and source review of route-level guards/effects completed; exact per-operation contracts, callers, and end-to-end effects remain open
-**Snapshot date:** 2026-09-29  
+**Snapshot date:** 2026-09-30
 **Production database:** NOT QUERIED  
 **Functional changes:** none
 
@@ -12,7 +12,7 @@ This inventory is a static source scan, not a live HTTP probe. `artifacts/api-se
 - **410 unique method/path route declarations** across 42 route modules; no duplicate method/path pairs in the scanned declarations.
 - OpenAPI declares 66 path keys and 110 HTTP operations. All 110 matched a route declaration after parameter-name normalization; 300 declared operations are absent from OpenAPI; no OpenAPI-only operation was found.
 - The 110 OpenAPI operations' operation IDs, declared parameters, request bodies, and success response shapes are indexed in `ERP_API_OPENAPI_CONTRACTS.md`. These are specification declarations, not runtime-verified contracts.
-- Priority 1 financial/asset/payroll mutations and financial-report/GST/dashboard/party-ledger/stock-valuation reads have per-operation records for 94 source-only identities (55 mutations and 39 reads) in `ERP_HIGH_RISK_API_SCOPE_REGISTER.md`. The records explicitly retain unknowns; this is not full contract verification.
+- Priority 1 financial/asset/payroll operations and Priority 2 inventory/transfer/production/import operations have per-operation records for 134 source-only identities (73 mutations and 61 reads) in `ERP_HIGH_RISK_API_SCOPE_REGISTER.md`. The records explicitly retain unknowns; this is not full contract verification.
 - These counts do not prove every route is reachable at runtime under all mount conditions, nor do they prove that an absent frontend caller means an endpoint is unused.
 
 ### OpenAPI operation coverage by router
@@ -331,3 +331,12 @@ This list is the normalized source route set minus the normalized OpenAPI operat
 - Route declarations: `artifacts/api-server/src/routes/*.ts`.
 - OpenAPI: `lib/api-spec/openapi.yaml`; generated client config: `lib/api-spec/orval.config.ts`.
 - Permission middleware: `artifacts/api-server/src/middleware/permissions.ts`.
+
+## Inventory and stock-transfer reconciliation — 2026-09-30
+
+- The static manifest remains **410** unique operations: **110 OpenAPI-present** and **300 source-only**. The per-operation register now contains **134** source-only identities (73 mutations, 61 reads); **166** source-only identities remain outside that register. These are documentation counts, not runtime reachability or test coverage.
+- The direct inventory/transfer candidate census contained 83 identities: 27 OpenAPI-present and 56 source-only. Three source-only `/outstanding/*` readers are financial settlement/worklist routes, not stock/batch/reservation/valuation routes, so they are excluded from the inventory/transfer count. Of the remaining 53 source-only inventory-related identities, 19 were already in the high-risk register and 34 are newly recorded there.
+- Six additional source-only import lifecycle operations can process or reverse opening-stock, purchase or sales stock: `POST /imports/batches/:id/demo`, `POST /imports/batches/:id/approve`, `POST /imports/batches/:id/rollback`, and the corresponding `POST /imports/migrations/:id/{demo,approve,rollback}` operations. The demos roll back transaction-module effects; approve/rollback can make durable inventory changes. This produces 59 source-only inventory-related identities, 19 previously recorded and 40 newly recorded, with no duplicate method/path identities in the tranche.
+- Direct stock-transfer lifecycle has five operations: `GET /stock/transfers`, `POST /stock/transfers`, `GET /stock/transfers/:id` are OpenAPI-present; `PATCH /stock/transfers/:id/approve` and `PATCH /stock/transfers/:id/reject` are source-only. No separate opening-stock URL exists; opening stock is a transaction-import module. `POST /imports/batches/:id/commit` rejects transaction modules and is not an inventory writer.
+- The three `/outstanding/*` routes remain source-only operations in the overall API manifest and are not part of the 59 inventory-related identities. Their exclusion is purpose-based, not an assertion that their endpoints have been fully audited.
+- All statements above are source-only reconciliation. Tests, runtime routes, current permission rows, databases and numeric report parity were not checked or executed.
