@@ -17,6 +17,14 @@ description: Integrity checks must separate proven equality from unavailable evi
 
 **How to apply:** Keep the distinction in both the API summary and the integrity panel; a reliable inventory mismatch is FAIL, while an unreliable historical valuation is UNVERIFIED.
 
+## FI-05 net-profit identity
+
+**Rule:** Compare `grossProfit + otherIncome - operatingExpenses` with `netProfit`. The canonical `operatingExpenses` value is the complete indirect-expense total and already includes depreciation; do not subtract depreciation a second time. Keep depreciation-specific reconciliation under FI-16.
+
+**Why:** The P&L summary proves the combined totals identity, while depreciation is nested inside the indirect-expense group. An extra subtraction would double-count it and manufacture a mismatch.
+
+**How to apply:** Read all four values from `buildBooks.profitAndLoss.summary`, return measured actual/expected/difference evidence, and reserve depreciation idempotency and accumulated-balance checks for asset-specific evidence.
+
 ## Stock comparison must use the statement's ownership scope
 
 **Rule:** Inventory integrity comparisons must use the same valuation options as the canonical statements, including sender-owned in-transit stock.
