@@ -1,0 +1,632 @@
+CONTINUE FROM 83% CHECKPOINT — COMPLETE SOURCE-ONLY API AUDIT
+
+Continue the existing documentation-only audit.
+
+CURRENT STATUS:
+- 410 source operations
+- 110 OpenAPI operations
+- 300 source-only route identities
+- 40 report slots
+- 32 formula groups
+- 9 database relationship families
+- 10 workflow groups
+- ERP_DATABASE_RELATIONSHIP_MAP.md created
+- ERP_WORKFLOW_MAP.md created
+- ERP_REPORT_PARITY_MATRIX.md created
+
+DO NOT restart the audit.
+
+DO NOT modify application code.
+DO NOT modify database schema.
+DO NOT modify database data.
+DO NOT modify accounting formulas.
+DO NOT run migrations.
+DO NOT fix bugs.
+DO NOT query production.
+DO NOT publish.
+DO NOT run destructive tests.
+
+This remains a DOCUMENTATION / SOURCE AUDIT.
+
+============================================================
+1. PRIORITY ORDER
+============================================================
+
+Because this is Replit Free Tier, do NOT spend the entire run generating
+large documentation for low-risk utility endpoints first.
+
+Audit the 300 source-only routes in this order:
+
+PRIORITY 1 — FINANCIAL
+- sales
+- purchases
+- sales returns
+- purchase returns
+- receipts
+- payments
+- journal
+- expenses
+- cash
+- bank
+- reconciliation
+- customer ledger
+- vendor ledger
+- accounting
+- P&L
+- Balance Sheet
+- Trial Balance
+- GST
+- payroll
+- fixed assets
+
+PRIORITY 2 — INVENTORY
+- stock
+- stock ledger
+- batches
+- valuation
+- transfers
+- reservations
+- production
+- raw materials
+- finished goods
+- inventory reports
+
+PRIORITY 3 — SECURITY / LOCATION
+- customer
+- vendor
+- employee
+- location
+- permissions
+- dashboard
+- reports
+- exports
+- All Locations
+
+PRIORITY 4 — OTHER BUSINESS ROUTES
+- quotations
+- POS
+- masters
+- company
+- settings
+- backup
+- mobile
+- miscellaneous
+
+============================================================
+2. PER-OPERATION CONTRACT MAP
+============================================================
+
+For every source-only route, document only what can be established from
+source code.
+
+Use this compact format:
+
+ROUTE:
+METHOD:
+PATH:
+ROUTER:
+HANDLER:
+PURPOSE:
+
+AUTH:
+PERMISSION:
+ROLE:
+LOCATION SCOPE:
+
+REQUEST:
+PATH PARAMS:
+QUERY PARAMS:
+BODY:
+
+RESPONSE:
+SUCCESS STATUS:
+RESPONSE SHAPE:
+ERROR SHAPE:
+
+DATABASE:
+TABLES:
+ACCOUNTING EFFECT:
+INVENTORY EFFECT:
+GST EFFECT:
+AUDIT EFFECT:
+
+FRONTEND CONSUMER:
+TEST EVIDENCE:
+
+OPENAPI:
+MISSING / PRESENT
+
+STATUS:
+ACTIVE / LEGACY / UNUSED / UNKNOWN
+
+If something cannot be established:
+
+NOT VERIFIED
+
+Do NOT guess.
+
+============================================================
+3. PERMISSION AND LOCATION CLASSIFICATION
+============================================================
+
+This is more important than writing verbose request schemas.
+
+For every financial/inventory/report/customer/vendor route determine:
+
+AUTHENTICATION:
+YES / NO / UNKNOWN
+
+PERMISSION:
+EXPLICIT / IMPLICIT / NONE / UNKNOWN
+
+LOCATION FILTER:
+SERVER-SIDE / CLIENT-SIDE / BOTH / NONE / UNKNOWN
+
+HEAD OFFICE:
+ALL LOCATIONS / SPECIFIC LOCATION / UNKNOWN
+
+WAREHOUSE:
+OWN LOCATION / CROSS LOCATION / UNKNOWN
+
+EXPORT:
+SCOPED / UNSCOPED / UNKNOWN
+
+For each route identify the actual source function implementing the scope.
+
+Pay special attention to:
+
+GET /customers/:id
+GET /vendors/:id
+
+and all:
+
+/reports
+/dashboard
+/stock
+/inventory
+/sales
+/purchases
+/receipts
+/payments
+/ledger
+/GST
+/payroll
+/assets
+/exports
+
+Do not fix anything.
+
+============================================================
+4. HIGH-RISK ROUTES
+============================================================
+
+Create a separate section:
+
+HIGH_RISK_API_SCOPE_REGISTER
+
+Include every route that can:
+
+- read financial data
+- create financial data
+- edit financial data
+- delete/cancel financial data
+- read customer/vendor PII
+- read stock
+- modify stock
+- read payroll
+- read bank/cash
+- export reports
+- access All Locations
+- perform accounting postings
+
+For each:
+
+ROUTE
+RISK
+AUTH
+PERMISSION
+LOCATION SCOPE
+AUDIT
+TRANSACTION
+STATUS
+SOURCE EVIDENCE
+
+============================================================
+5. FINANCIAL POSTING ROUTES
+============================================================
+
+Identify every endpoint that can indirectly or directly create:
+
+Journal entries
+Journal lines
+Receipts
+Payments
+Sales
+Purchases
+Expenses
+GST postings
+Payroll postings
+Depreciation
+Asset disposal
+Stock valuation changes
+
+For each document:
+
+API
+→ Service
+→ Posting function
+→ Accounts
+→ Journal
+→ Ledger
+→ Audit
+
+Do not fix.
+
+============================================================
+6. INVENTORY-MUTATION ROUTES
+============================================================
+
+Identify every endpoint that can change:
+
+Stock quantity
+Stock cost
+Batch quantity
+Reservations
+Transfers
+Production
+Consumption
+Returns
+Adjustments
+
+For each:
+
+API
+→ Service
+→ Stock function
+→ Stock ledger
+→ Batch
+→ Accounting if applicable
+→ Audit
+
+============================================================
+7. REPORT / EXPORT ROUTES
+============================================================
+
+Identify every source-only route involved in:
+
+P&L
+Balance Sheet
+Trial Balance
+Stock
+Inventory
+GST
+Customer ledger
+Vendor ledger
+Sales
+Purchases
+Cash
+Bank
+Payroll
+Assets
+Dashboard
+
+For each determine:
+
+screen source
+API source
+PDF source
+XLSX source
+CSV source
+
+Classify:
+
+CANONICAL
+DUPLICATE
+LEGACY
+UNKNOWN
+
+Do not fix.
+
+============================================================
+8. DO NOT REPEAT ALREADY DOCUMENTED ROUTES
+============================================================
+
+Use the existing:
+
+ERP_API_INVENTORY.md
+
+as the current registry.
+
+Only add missing information.
+
+Keep the documentation compact.
+
+Do not create duplicate entries.
+
+============================================================
+9. CURRENT PERMISSION GRANTS
+============================================================
+
+The reorder-report finding currently says:
+
+non-Head-Office roles can technically reach the report if granted the page
+permission, but actual current grants/exposure are unknown.
+
+Do NOT query production.
+
+Inspect development source/configuration only.
+
+Determine whether current development grants are statically defined.
+
+If actual current grants cannot be established:
+
+CURRENT GRANTS: NOT VERIFIED
+
+Do not infer them from the permission definition alone.
+
+============================================================
+10. AFTER API AUDIT — RETURN TO THE MAJOR ACCOUNTING GAPS
+============================================================
+
+Do not stop after documenting routes.
+
+After the route inventory reaches a useful completion point, continue the
+source-only audit of:
+
+P&L
+Balance Sheet
+Inventory
+GST
+Payroll
+Fixed Assets
+Dashboard
+
+For each, trace:
+
+DATABASE
+→ QUERY
+→ SERVICE
+→ FORMULA
+→ API
+→ SCREEN
+→ PDF
+→ XLSX
+→ CSV
+
+Record every alternative calculation path.
+
+============================================================
+11. P&L MUST BE SOURCE-TRACED
+============================================================
+
+Document exact implementation of:
+
+Gross Sales
+Sales Returns
+Net Sales
+Opening Stock
+Purchases
+Purchase Returns
+Direct Costs
+COGS
+Closing Stock
+Gross Profit
+Other Income
+Indirect Expenses
+Depreciation
+Net Profit
+
+For each:
+
+SOURCE FILE
+FUNCTION
+DATABASE
+FORMULA
+CONSUMERS
+
+If there are two formulas:
+
+record both.
+
+Do not decide which is correct.
+
+============================================================
+12. INVENTORY MUST BE SOURCE-TRACED
+============================================================
+
+Document:
+
+Opening Stock
+Closing Stock
+Opening Value
+Closing Value
+COGS
+FIFO
+FEFO
+Weighted Average
+Cost Checkpoints
+Stock Ledger
+Batch
+Transfer
+In-Transit
+Production
+Returns
+Adjustments
+
+Identify historical valuation sources.
+
+============================================================
+13. DASHBOARD MUST BE SOURCE-TRACED
+============================================================
+
+Document exact implementation of:
+
+Sales
+COGS
+Gross Profit
+Net Profit
+Stock
+Cash
+Bank
+Receivables
+Payables
+
+Identify whether each uses:
+
+P&L source
+legacy dashboard source
+independent calculation
+unknown
+
+============================================================
+14. TEST EVIDENCE
+============================================================
+
+Do NOT run the entire test suite.
+
+Inventory existing tests and source evidence.
+
+For each major area record:
+
+TEST FILE
+WHAT IT TESTS
+WHICH ROUTE/SERVICE
+PASS RESULT KNOWN?
+LAST AVAILABLE EVIDENCE
+
+Important:
+
+"Test exists" is NOT the same as "test passed".
+
+Use:
+
+PASS EVIDENCE
+NO RESULT
+NOT TESTED
+UNKNOWN
+
+Do not fabricate test results.
+
+============================================================
+15. UPDATE DOCUMENTS
+============================================================
+
+Update:
+
+ERP_CURRENT_SYSTEM_MASTER.md
+ERP_CURRENT_ISSUES_REGISTER.md
+ERP_CURRENT_FORMULA_REGISTER.md
+ERP_API_INVENTORY.md
+ERP_REPORT_INVENTORY.md
+ERP_DATABASE_RELATIONSHIP_MAP.md
+ERP_WORKFLOW_MAP.md
+ERP_REPORT_PARITY_MATRIX.md
+
+Create if useful:
+
+ERP_HIGH_RISK_API_SCOPE_REGISTER.md
+
+============================================================
+16. CHECKPOINT SAFETY
+============================================================
+
+If the Free Tier execution limit approaches:
+
+SAVE ALL PROGRESS.
+
+Do not claim completion.
+
+Write an exact checkpoint such as:
+
+AUDIT STATUS: 90%
+COMPLETED:
+...
+REMAINING:
+...
+
+Do not lose previous work.
+
+============================================================
+17. FINAL OUTPUT FOR THIS RUN
+============================================================
+
+Report:
+
+AUDIT STATUS:
+exact percentage
+
+SOURCE ROUTES:
+410
+
+OPENAPI:
+110
+
+SOURCE-ONLY:
+300
+
+SOURCE-ONLY ROUTES FULLY CONTRACT-MAPPED:
+X / 300
+
+HIGH-RISK ROUTES MAPPED:
+X
+
+PERMISSION/LOCATION ROUTES MAPPED:
+X
+
+REPORT ROUTES MAPPED:
+X
+
+P&L TRACE:
+COMPLETE / PARTIAL
+
+BALANCE SHEET TRACE:
+COMPLETE / PARTIAL
+
+INVENTORY TRACE:
+COMPLETE / PARTIAL
+
+GST TRACE:
+COMPLETE / PARTIAL
+
+PAYROLL TRACE:
+COMPLETE / PARTIAL
+
+ASSET TRACE:
+COMPLETE / PARTIAL
+
+DASHBOARD TRACE:
+COMPLETE / PARTIAL
+
+TEST EVIDENCE:
+COMPLETE / PARTIAL
+
+CRITICAL ISSUES:
+number confirmed
+
+HIGH ISSUES:
+number confirmed
+
+UNVERIFIED:
+list
+
+IMPORTANT:
+
+Do not classify something as a critical/high issue merely because it is
+unverified.
+
+Keep:
+
+CONFIRMED ISSUE
+
+separate from:
+
+NOT VERIFIED
+
+============================================================
+
+Continue from the existing 83% checkpoint now.
+
+DO NOT FIX ANYTHING.
+
+The purpose is to finish understanding exactly how the current ERP works
+before we begin making individual controlled changes.
