@@ -86,6 +86,14 @@ movement log. A key the log knows about but that has no `stock_entries` row is a
 (avg-cost-else-cost) rather than from a positive-only valuation view, so the
 filter cannot creep back in.
 
+## FI-08 must not self-validate from the movement log
+
+**Rule:** Do not mark daily stock continuity PASS solely from a `SUM(qty_change)` over `stock_ledger`, or from daily snapshots generated from that same unverified log. Exact reconciliation to today's `stock_entries` is necessary but cannot detect offsetting missing movements or validate edited historical line quantities. Event-level `stock_cost_snapshots` are not automatically a complete daily closing authority.
+
+**Why:** A derived balance can be internally consistent while repeating omissions in its source. Edited documents may retain only their current line detail, and audit metadata may preserve totals without preserving the prior stock quantities.
+
+**How to apply:** Historical FI-08 PASS requires complete, independently reconciled movement/source history with a validated opening anchor, or independently authoritative daily closing records. Otherwise retain UNVERIFIED and describe current-balance reconciliation separately.
+
 Related: product ids are only unique **within** a kind — a finished good, a
 material and a packing material can all be id `1`. Anything keyed by stock item
 (maps, React keys, dedupe) must key on `materialType:id`.
