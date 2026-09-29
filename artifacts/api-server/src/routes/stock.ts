@@ -1109,7 +1109,8 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction("page:/transfer
     // the transfer. Lock first so the scope check and status transition refer to
     // the same immutable endpoints.
     const { rows: [visible] } = await client.query(
-      `SELECT to_type, to_id FROM stock_transfers WHERE id = $1 FOR UPDATE`,
+      `SELECT to_type, to_id, transfer_date::text AS transfer_date
+         FROM stock_transfers WHERE id = $1 FOR UPDATE`,
       [id],
     );
     if (!visible) {
@@ -1119,6 +1120,13 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction("page:/transfer
     if (!isLocationInScope(approveScope, visible.to_type, Number(visible.to_id))) {
       await client.query("ROLLBACK");
       res.status(404).json({ error: "Transfer not found" }); return;
+    }
+    const dispatchDate = String(visible.transfer_date ?? "").slice(0, 10);
+    const receiptDate = receivedDate ?? dispatchDate;
+    if (receiptDate < dispatchDate) {
+      await client.query("ROLLBACK");
+      res.status(400).json({ error: "receivedDate cannot be earlier than transferDate" });
+      return;
     }
 
     // Atomic claim: flips status only if still in transit, so a concurrent
@@ -1145,7 +1153,6 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction("page:/transfer
     // A historical receive is a distinct business event from the HTTP approval
     // timestamp. Older clients do not send receivedDate, so retain the
     // transfer's business date rather than silently booking the event today.
-    const receiptDate = receivedDate ?? String(row.transfer_date ?? '').slice(0, 10);
     await client.query(
       `UPDATE stock_transfers SET received_date = $1::date WHERE id = $2`,
       [receiptDate, id],

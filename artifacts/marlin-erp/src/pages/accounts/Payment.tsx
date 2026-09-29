@@ -49,6 +49,13 @@ const schema = z.object({
        message: 'Select a Cash account.',
     });
   }
+  if (v.paymentMode === 'online' && v.paidFromLedgerId < 1) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['paidFromLedgerId'],
+      message: 'Select an Online Platform account.',
+    });
+  }
 });
 type FormValues = z.infer<typeof schema>;
 
@@ -128,6 +135,7 @@ export default function Payment() {
      const body: any = {
        ...paymentData,
        ...(data.paymentMode === 'cash' ? { paidFromLedgerId: data.paidFromLedgerId } : {}),
+        ...(data.paymentMode === 'online' ? { onlinePlatformLedgerId: Number(data.paidFromLedgerId) } : {}),
        locationType: loc.locationType,
        locationId: loc.locationId,
      };

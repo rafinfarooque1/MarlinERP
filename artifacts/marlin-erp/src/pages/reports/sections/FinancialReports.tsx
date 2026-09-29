@@ -380,10 +380,8 @@ function PnlReport({ range, loc, canDownload }: { range: RangeState; loc: Locati
   const salesReturns = Number((pl?.incomes as any)?.salesReturns ?? 0);
   const grossSales = Number((pl?.incomes as any)?.grossSales ?? (pl?.incomes.sales ?? 0));
   const directIncome = pl?.incomes.directIncomes.total ?? 0;
-  const stockTransferIn = Number((pl?.expenses as any)?.stockTransferIn ?? 0);
-  const stockTransferOut = Number((pl?.incomes as any)?.stockTransferOut ?? 0);
   const goodsAvailable = pl
-    ? pl.expenses.openingStock + pl.expenses.purchases + stockTransferIn + pl.expenses.directExpenses.total
+    ? pl.expenses.openingStock + pl.expenses.purchases + pl.expenses.directExpenses.total
     : 0;
   // Financial charges and depreciation are ordinary indirect-expense ledgers;
   // they get their own statement lines when such ledgers exist. Topmost match
@@ -415,9 +413,7 @@ function PnlReport({ range, loc, canDownload }: { range: RangeState; loc: Locati
     { name: 'Less: Sales Returns', amount: salesReturns, less: true },
     { name: 'Net Sales', amount: pl.incomes.sales, kind: 'sub' },
     ...(Math.abs(directIncome) > 0.005 ? [{ name: 'Add: Direct Income', amount: directIncome }] : []),
-    ...(Math.abs(stockTransferOut) > 0.005 ? [{ name: 'Stock Transfer Out', amount: stockTransferOut }] : []),
     { name: 'Opening Stock', amount: pl.expenses.openingStock },
-    ...(Math.abs(stockTransferIn) > 0.005 ? [{ name: 'Stock Transfer In', amount: stockTransferIn }] : []),
     { name: 'Add: Purchases (net of returns)', amount: pl.expenses.purchases },
     { name: 'Add: Direct Expenses', amount: pl.expenses.directExpenses.total },
     { name: 'Goods Available for Sale', amount: goodsAvailable, kind: 'sub' },

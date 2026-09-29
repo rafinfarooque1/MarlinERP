@@ -202,17 +202,16 @@ export interface StockTransferOpeningAdjustment {
 }
 
 /**
- * Transfer movements are part of physical stock, but they are not purchases or
- * sales. The periodic P&L formula needs them in its opening-stock term so a
- * transfer does not masquerade as COGS:
+ * Transfers only move inventory between locations. The opening adjustment
+ * reconciles the period's stock-ledger movements with sender-owned transit at
+ * both boundaries:
  *
- *   adjusted opening = normal opening + transfer-in value - transfer-out value
+ *   adjustment = period transfer movements + closing transit - opening transit
  *
- * This is deliberately period-scoped. A transfer is applied in the period
- * containing its stock-ledger movement, and the next period starts from the
- * previous period's closing position without applying it again. A dispatch
- * portion that is still in transit at the period end is excluded from the
- * adjustment because that value remains in the sender-owned closing valuation.
+ * This makes the adjusted opening position equal the closing physical position
+ * for transfers, including dispatches that remain in transit and receipts of
+ * shipments dispatched before the period. Transfer account postings remain
+ * available as audit values, but do not create revenue or COGS.
  */
 export async function stockTransferOpeningAdjustment(
   fromDate: string | null,
@@ -277,16 +276,12 @@ export async function stockTransferOpeningAdjustment(
     params,
   );
 
-  if (rows.length === 0) {
-    return { total: 0, lines: [], reliable: true, note: null };
-  }
-
-  // Active in-transit reservations are the authoritative end-of-period
-  // ownership record for dispatched goods that have not yet arrived. The
-  // sender's transfer_out ledger row is still present, but that active portion
-  // must not also reduce opening stock: closing valuation includes it as
-  // sender-owned in-transit stock.
-  const transitRows = await activeInTransit(q as any, toDate ? { asOf: toDate } : {});
+  // Transit belongs to the sending location at each cutoff. Its value comes
+  // from the dispatch reservation, not the mutable product master.
+  const openingTransitRows = fromDate
+    ? await activeInTransit(q as any, { asOf: previousDay(fromDate) })
+    : [];
+  const closingTransitRows = await activeInTransit(q as any, toDate ? { asOf: toDate } : {});
   const inScope = (branchType: string, branchId: number): boolean => {
     if (!scope) return true;
     if (scope.branchPairs?.length) {
@@ -296,23 +291,23 @@ export async function stockTransferOpeningAdjustment(
     return scope.branchType === branchType
       && (scope.branchId == null || Number(scope.branchId) === Number(branchId));
   };
-  const transitByMovement = new Map<string, { quantity: number; value: number }>();
-  for (const transit of transitRows) {
-    if (!inScope(transit.branchType, transit.branchId)) continue;
-    const key = `${transit.docType}:${transit.docId}:${transit.materialType}:${transit.refId}:${transit.branchType}:${transit.branchId}`;
-    const existing = transitByMovement.get(key) ?? { quantity: 0, value: 0 };
-    existing.quantity = existing.quantity + transit.quantity;
-    existing.value = r2(existing.value + transit.value);
-    transitByMovement.set(key, existing);
-  }
+  const openingTransit = openingTransitRows.filter((transit) => inScope(transit.branchType, transit.branchId));
+  const closingTransit = closingTransitRows.filter((transit) => inScope(transit.branchType, transit.branchId));
 
-  // Transfer value belongs in the opening term only. Closing stock is valued
-  // independently from the movement adjustment, and active in-transit stock is
-  // included because it remains owned by the sending location.
-  const refs = rows.map((r: any) => ({
-    materialType: String(r.material_type) as ValuedItem["materialType"],
-    refId: Number(r.ref_id),
-  }));
+  const refs = [
+    ...rows.map((r: any) => ({
+      materialType: String(r.material_type) as ValuedItem["materialType"],
+      refId: Number(r.ref_id),
+    })),
+    ...openingTransit.map((transit) => ({
+      materialType: transit.materialType,
+      refId: transit.refId,
+    })),
+    ...closingTransit.map((transit) => ({
+      materialType: transit.materialType,
+      refId: transit.refId,
+    })),
+  ];
   const meta = await resolveProductNames(q as any, refs);
   const byKey = new Map<string, StockTransferOpeningAdjustmentLine>();
 
@@ -337,6 +332,24 @@ export async function stockTransferOpeningAdjustment(
   };
 
   let missingCost = 0;
+  const missingTransitCosts = new Set<string>();
+  const addTransitBoundary = (transit: typeof openingTransit[number], sign: 1 | -1) => {
+    if (!(transit.unitCost > 0) && Math.abs(transit.quantity) > 0.001) {
+      missingTransitCosts.add(
+        `${transit.docType}:${transit.docId}:${transit.materialType}:${transit.refId}:${transit.branchType}:${transit.branchId}`,
+      );
+    }
+    addLine(
+      transit.materialType,
+      transit.refId,
+      r3(sign * transit.quantity),
+      r2(sign * transit.value),
+      transit.unitCost,
+    );
+  };
+  for (const transit of openingTransit) addTransitBoundary(transit, -1);
+  for (const transit of closingTransit) addTransitBoundary(transit, 1);
+
   for (const row of rows) {
     const materialType = String(row.material_type) as ValuedItem["materialType"];
     const refId = Number(row.ref_id);
@@ -346,22 +359,15 @@ export async function stockTransferOpeningAdjustment(
     // Keep the missing amount explicit via reliability, never fabricate it.
     if (!(recordedUnitCost > 0) && ledgerQty !== 0) missingCost++;
     const unitCost = recordedUnitCost > 0 ? recordedUnitCost : 0;
-    let qty = ledgerQty;
-    let value = r2(ledgerQty * unitCost);
-    if (ledgerQty < 0) {
-      const key = `${row.doc_type}:${row.doc_id}:${materialType}:${refId}:${row.branch_type}:${row.branch_id}`;
-      const inTransit = transitByMovement.get(key);
-      if (inTransit) {
-        qty = r3(qty + inTransit.quantity);
-        value = r2(value + inTransit.value);
-      }
-    }
-    addLine(materialType, refId, qty, value, unitCost);
+    addLine(materialType, refId, ledgerQty, r2(ledgerQty * unitCost), unitCost);
   }
 
   const lines = [...byKey.values()].filter((line) => Math.abs(line.value) > 0.005 || Math.abs(line.qty) > 0.001);
   const notes = [
     missingCost ? `${missingCost} transfer movement(s) have no recorded positive cost; their value is unknown, not zero-cost stock.` : null,
+    missingTransitCosts.size
+      ? `${missingTransitCosts.size} in-transit transfer(s) have no positive dispatch cost; their value is unknown, not zero-cost stock.`
+      : null,
   ].filter(Boolean);
   return {
     total: r2(lines.reduce((sum, line) => sum + line.value, 0)),
@@ -1188,9 +1194,9 @@ export async function buildBooks(
   };
   const transferInNames = new Set(["STD-TRF-IN", "TRANSFER-IN", "transfer-in"]);
   const transferOutNames = new Set(["STD-TRF-OUT", "TRANSFER-OUT", "transfer-out"]);
-  // Transfer-In is normally parented beneath Purchase Account. Extract it
-  // from either legacy location so it gets its own debit-side P&L row and is
-  // not counted again inside purchases or direct expenses.
+  // Transfer-In can be parented beneath Purchase Account or Direct Expenses.
+  // Preserve the posted balance as an audit value and strip it from operating
+  // totals below so it cannot distort COGS or Gross Profit.
   const stockTransferIn = r2(
     nodeTotal(purchasesGroup, transferInNames) + nodeTotal(directExp, transferInNames),
   );
@@ -1199,12 +1205,15 @@ export async function buildBooks(
   const directExpensesForPnl = stripTransferNodes(directExp, transferInNames);
   const directIncomesForPnl = stripTransferNodes(directInc, transferOutNames);
 
-  const totalExpenses = r2(opening.total + purchasesForPnl.total + stockTransferIn + directExpensesForPnl.total + indirectExp.total);
-  const totalIncomes = r2(salesGroup.total + closing.total + stockTransferOut + directIncomesForPnl.total + indirectInc.total);
+  // Transfer-In/Out account balances are internal-movement audit values, not
+  // purchases, expenses, sales, or income. Physical stock and the boundary
+  // adjustment above carry the goods value exactly once, including transit.
+  const totalExpenses = r2(opening.total + purchasesForPnl.total + directExpensesForPnl.total + indirectExp.total);
+  const totalIncomes = r2(salesGroup.total + closing.total + directIncomesForPnl.total + indirectInc.total);
   const netProfit = r2(totalIncomes - totalExpenses);
 
-  const revenue = r2(salesGroup.total + stockTransferOut + directIncomesForPnl.total);
-  const cogs = r2(opening.total + purchasesForPnl.total + stockTransferIn + directExpensesForPnl.total - closing.total);
+  const revenue = r2(salesGroup.total + directIncomesForPnl.total);
+  const cogs = r2(opening.total + purchasesForPnl.total + directExpensesForPnl.total - closing.total);
   const grossProfit = r2(revenue - cogs);
   const pct = (part: number, whole: number) => (Math.abs(whole) < 0.005 ? 0 : r2((part / whole) * 100));
 
