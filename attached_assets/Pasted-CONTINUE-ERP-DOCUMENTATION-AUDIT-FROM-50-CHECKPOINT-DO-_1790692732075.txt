@@ -1,0 +1,878 @@
+CONTINUE ERP DOCUMENTATION AUDIT FROM 50% CHECKPOINT — DO NOT MODIFY ERP
+
+We are currently at a 50% documentation checkpoint.
+
+Existing files:
+
+ERP_CURRENT_SYSTEM_MASTER.md
+ERP_CURRENT_ISSUES_REGISTER.md
+ERP_CURRENT_FORMULA_REGISTER.md
+
+The previous audit correctly stopped at 50%.
+
+DO NOT restart the audit from zero.
+
+DO NOT modify ERP functionality.
+
+DO NOT change formulas.
+
+DO NOT change accounting.
+
+DO NOT change database schema.
+
+DO NOT modify business data.
+
+DO NOT run migrations.
+
+DO NOT modify production.
+
+DO NOT publish.
+
+This task is ONLY to continue the current-state code/documentation audit from the saved checkpoint and reach 100% coverage.
+
+============================================================
+1. READ THE EXISTING CHECKPOINT FIRST
+============================================================
+
+Read:
+
+ERP_CURRENT_SYSTEM_MASTER.md
+ERP_CURRENT_ISSUES_REGISTER.md
+ERP_CURRENT_FORMULA_REGISTER.md
+
+Identify exactly what has already been completed and what remains.
+
+Do not duplicate completed work.
+
+Continue from the recorded "remaining audit work".
+
+============================================================
+2. COMPLETE MODULE INVENTORY
+============================================================
+
+The previous audit found:
+
+55 module-registry entries.
+
+This is NOT yet the number of distinct business modules.
+
+Now inspect:
+
+- module registry
+- frontend routes
+- frontend pages
+- sidebar/navigation
+- backend routes
+- API services
+- permission registry
+- database tables
+
+Build the complete distinct business-module inventory.
+
+For each module:
+
+Module Name
+Purpose
+Frontend Route
+Frontend Components
+Backend Route(s)
+API Service
+Database Tables
+Permissions
+Location Scope
+Accounting Effect
+Inventory Effect
+GST Effect
+Reports
+PDF
+XLSX
+CSV
+Current Status
+
+Identify:
+
+ACTIVE
+LEGACY
+HIDDEN
+DUPLICATE
+DEPRECATED
+UNKNOWN
+
+Do not count technical components as business modules unless appropriate.
+
+============================================================
+3. COMPLETE WORKFLOW MAP
+============================================================
+
+The previous audit found only 14 partial workflow sketches.
+
+Complete the actual workflow inventory.
+
+Trace every major business workflow from UI to database and accounting.
+
+At minimum inspect:
+
+Company setup
+Location setup
+Employee creation
+Customer creation
+Vendor creation
+Item creation
+Raw material
+Material master
+Purchase Request
+Purchase Order
+Purchase
+Purchase Receipt
+Purchase Return
+Vendor Payment
+Vendor Advance
+Quotation
+Sale
+POS
+Sales Return
+Customer Receipt
+Customer Advance
+Expense
+Cash
+Bank
+Bank Reconciliation
+Journal Voucher
+Stock Adjustment
+Stock Transfer
+Transfer Dispatch
+Transfer Receipt
+In-Transit Stock
+Batch
+Expiry
+Production
+Raw Material Consumption
+Finished Goods Production
+Fixed Asset Purchase
+Depreciation
+Asset Disposal
+Attendance
+Payroll
+GST
+Reports
+Backup
+Restore
+Permissions
+Audit
+
+Do not assume all exist.
+
+Document the actual current implementation.
+
+For each workflow:
+
+START
+→ UI
+→ API
+→ backend service
+→ database
+→ accounting
+→ inventory
+→ GST
+→ final result
+
+============================================================
+4. COMPLETE FORMULA INVENTORY
+============================================================
+
+Previous audit found 30 formula/algorithm groups.
+
+This is not exhaustive.
+
+Continue source inspection until all important financial, inventory, tax, payroll, asset and dashboard formulas are documented.
+
+Search actual source code for:
+
+- arithmetic
+- totals
+- subtotal
+- tax
+- discount
+- charges
+- outstanding
+- balance
+- opening
+- closing
+- valuation
+- COGS
+- profit
+- depreciation
+- payroll
+- GST
+- stock
+- transfer
+- reconciliation
+- dashboard KPI
+- report calculations
+
+For EVERY formula:
+
+Formula ID
+Name
+Exact formula
+Source file
+Function
+Inputs
+Output
+Used by
+Accounting effect
+Inventory effect
+Known duplicate/alternative formula
+
+IMPORTANT:
+
+If two modules calculate the same value differently, document both.
+
+Do not fix the difference.
+
+============================================================
+5. COMPLETE API INVENTORY
+============================================================
+
+Previous audit found:
+
+410 explicit route declarations
+110 OpenAPI operation keys
+
+This is not yet a deduplicated runtime API inventory.
+
+Inspect:
+
+- Express routes
+- routers
+- mounted routers
+- route prefixes
+- generated API clients
+- frontend API calls
+- OpenAPI
+- legacy routes
+- aliases
+
+Create:
+
+ERP_API_INVENTORY.md
+
+For every unique runtime API:
+
+METHOD
+PATH
+PURPOSE
+AUTH
+ROLE
+LOCATION SCOPE
+INPUT
+OUTPUT
+SERVICE
+DATABASE
+ACCOUNTING EFFECT
+INVENTORY EFFECT
+GST EFFECT
+AUDIT
+USED BY UI
+
+Identify:
+
+DUPLICATE
+LEGACY
+UNUSED
+MISSING FROM OPENAPI
+OPENAPI ONLY
+UNKNOWN
+
+Do not modify routes.
+
+============================================================
+6. COMPLETE DATABASE MAP
+============================================================
+
+Previous audit found:
+
+93 public base tables in the development schema snapshot.
+
+Now complete the important relationship map.
+
+For each important table:
+
+Table
+Purpose
+Primary Key
+Foreign Keys
+Location ID
+Company ID
+Accounting references
+Stock references
+Created/Updated
+Status/cancellation fields
+
+Build relationships for at least:
+
+Sales
+Sale Items
+Sales Returns
+Purchases
+Purchase Items
+Purchase Returns
+Customers
+Vendors
+Receipts
+Payments
+Allocations
+Journal
+Journal Lines
+Accounts
+Ledger
+Stock
+Stock Ledger
+Stock Batches
+Transfers
+Reservations
+Production
+Production Consumption
+Expenses
+Payroll
+Attendance
+Employees
+Assets
+Depreciation
+GST
+Reconciliation
+Audit
+Backup metadata
+Permissions
+Locations
+
+Identify orphan/reference risks from CODE only where possible.
+
+Do not modify data.
+
+Do not query production.
+
+============================================================
+7. COMPLETE REPORT INVENTORY
+============================================================
+
+Previous audit found:
+
+34 report-oriented API declarations.
+
+This is NOT the complete report count.
+
+Find every report through:
+
+- frontend report pages
+- report registry
+- routes
+- API services
+- export functions
+- PDF generators
+- XLSX generators
+- CSV generators
+- dashboard reports
+
+Create:
+
+ERP_REPORT_INVENTORY.md
+
+For every report:
+
+Report Name
+Frontend Page
+API
+Service
+Database Source
+Formula Source
+Location Filter
+Date Filter
+All Locations
+PDF
+XLSX
+CSV
+Print
+Dashboard Relationship
+Accounting Source
+Status
+
+Identify legacy/duplicate report implementations.
+
+DO NOT fix them yet.
+
+============================================================
+8. EXPORT INVENTORY
+============================================================
+
+Find EVERY official:
+
+PDF
+XLSX
+CSV
+Print
+Share
+
+export path.
+
+For each:
+
+UI
+API
+Backend
+Data source
+Calculation
+Permission
+Location scope
+
+Determine whether it uses:
+
+canonical server data
+
+or
+
+independent/client-prepared data.
+
+Do not modify.
+
+This is documentation only.
+
+============================================================
+9. P&L TRACE
+============================================================
+
+This is a mandatory deep audit.
+
+Trace P&L completely.
+
+Document exact source for:
+
+Revenue
+Gross Sales
+Sales Returns
+Net Sales
+Opening Stock
+Purchases
+Purchase Returns
+Direct Costs
+COGS
+Closing Stock
+Gross Profit
+Other Income
+Indirect Expenses
+Depreciation
+Net Profit
+
+For each value:
+
+Database
+→ query
+→ service
+→ calculation
+→ API
+→ UI
+→ PDF
+→ XLSX
+→ CSV
+
+Identify any different calculation path.
+
+Do not correct it.
+
+Only document.
+
+============================================================
+10. BALANCE SHEET TRACE
+============================================================
+
+Trace:
+
+Assets
+Liabilities
+Equity
+
+Document exact source and formula for:
+
+Cash
+Bank
+Inventory
+Receivables
+Fixed Assets
+Payables
+GST
+Salary Payable
+Loans
+Capital
+Retained Earnings
+Current Profit/Loss
+
+Identify whether the Balance Sheet uses:
+
+journal postings
+derived postings
+ledger balances
+inventory valuation
+other sources.
+
+============================================================
+11. INVENTORY TRACE
+============================================================
+
+Document exact implementation for:
+
+Opening quantity
+Closing quantity
+Opening valuation
+Closing valuation
+COGS
+Batch valuation
+FIFO
+FEFO
+Weighted Average
+Cost checkpoints
+Stock snapshots
+Stock ledger
+Transfer
+In-transit
+Production
+Consumption
+Returns
+Adjustments
+
+Identify historical valuation limitations.
+
+Do not fix.
+
+============================================================
+12. GST TRACE
+============================================================
+
+Find every GST calculation path.
+
+Document:
+
+CGST
+SGST
+IGST
+Taxable value
+Tax amount
+Tax posting
+GST register
+GST reports
+
+Identify multiple GST representations/calculation paths.
+
+============================================================
+13. PAYROLL TRACE
+============================================================
+
+Document exact formulas for:
+
+Attendance
+LOP
+Salary
+Advance
+Deductions
+PF
+ESI
+Payable
+Payment
+P&L salary expense
+
+Identify date/business-day handling.
+
+============================================================
+14. FIXED ASSET TRACE
+============================================================
+
+Document:
+
+Asset cost
+Depreciation
+Accumulated depreciation
+NBV
+Disposal
+Gain/loss
+Balance Sheet
+P&L
+
+Find exact source functions.
+
+============================================================
+15. DASHBOARD TRACE
+============================================================
+
+Document exact source and formula for:
+
+Sales
+COGS
+Gross Profit
+Net Profit
+Stock
+Cash
+Bank
+Receivables
+Payables
+
+For each:
+
+API
+Service
+Formula
+Database
+Location behavior
+
+Identify whether it matches P&L/report source.
+
+============================================================
+16. PERMISSION / LOCATION TRACE
+============================================================
+
+Map:
+
+Head Office
+Warehouse
+All Locations
+Employee
+Role
+Permission
+Location
+
+For every major module determine:
+
+UI enforcement
+API enforcement
+Database filtering
+Export enforcement
+
+Identify any UI-only controls.
+
+Do not fix.
+
+============================================================
+17. BACKGROUND JOBS
+============================================================
+
+Inventory:
+
+Schedulers
+Cron
+Workers
+Migration jobs
+Repair jobs
+Depreciation
+Payroll
+Backup
+Other financial jobs
+
+Document:
+
+Trigger
+Frequency
+Function
+DB effect
+Financial effect
+Idempotency
+Locking
+
+============================================================
+18. AUDIT LOGGING
+============================================================
+
+Identify every critical mutation.
+
+Document:
+
+mutation
+audit function
+transaction boundary
+failure behavior
+
+Mark:
+
+TRANSACTION-BOUND
+BEST-EFFORT
+UNKNOWN
+
+Do not change anything.
+
+============================================================
+19. BACKUP / RESTORE
+============================================================
+
+Document current implementation:
+
+Backup
+Manifest
+Checksums
+Files
+Database
+Restore
+Validation
+Retention
+
+Identify what is actually proven vs merely implemented.
+
+============================================================
+20. TEST COVERAGE
+============================================================
+
+Inventory existing tests.
+
+Do not run the entire test suite unnecessarily on Free Tier.
+
+Document:
+
+Test file
+Area
+Coverage
+Assertions
+Known gaps
+Last-known result if available
+
+Do not change tests.
+
+============================================================
+21. COMPLETE ISSUE REGISTER
+============================================================
+
+Update:
+
+ERP_CURRENT_ISSUES_REGISTER.md
+
+Separate:
+
+A. Confirmed implementation issue
+B. Confirmed formula divergence
+C. Confirmed security issue
+D. Confirmed accounting risk
+E. Test coverage gap
+F. Documentation gap
+G. Unverified candidate
+H. Informational behavior
+
+Do NOT label something as an error unless source evidence supports it.
+
+For each issue:
+
+ID
+Area
+Description
+Evidence
+Source file
+Function
+Severity
+Impact
+Status
+
+============================================================
+22. DO NOT INVENT
+============================================================
+
+If the code does not prove something:
+
+write:
+
+NOT VERIFIED
+
+If the implementation is ambiguous:
+
+write:
+
+AMBIGUOUS
+
+If documentation conflicts with source:
+
+write:
+
+DOCUMENTATION / SOURCE DIVERGENCE
+
+Do not silently choose one.
+
+============================================================
+23. PRODUCTION
+============================================================
+
+Do not query production.
+
+Do not modify production.
+
+Do not run production migrations.
+
+Do not publish.
+
+This is a source-code/development documentation audit.
+
+============================================================
+24. FREE TIER LIMITS
+============================================================
+
+Optimize for Replit Free Tier.
+
+Work in batches.
+
+After each major section save the Markdown files.
+
+Do not repeatedly restart services.
+
+Do not perform expensive full builds unless necessary.
+
+Do not create large temporary datasets.
+
+If execution time becomes limited:
+
+save the exact checkpoint.
+
+Do not claim 100%.
+
+============================================================
+25. COMPLETION REQUIREMENT
+============================================================
+
+Continue until all practical source-code documentation areas are covered.
+
+Then update:
+
+ERP_CURRENT_SYSTEM_MASTER.md
+ERP_CURRENT_ISSUES_REGISTER.md
+ERP_CURRENT_FORMULA_REGISTER.md
+ERP_API_INVENTORY.md
+ERP_REPORT_INVENTORY.md
+
+At the end provide:
+
+DOCUMENTATION STATUS: COMPLETE / PARTIAL
+
+MODULES:
+WORKFLOWS:
+FORMULAS:
+UNIQUE APIs:
+DATABASE TABLES:
+REPORTS:
+EXPORT PATHS:
+ISSUES:
+CRITICAL:
+HIGH:
+MEDIUM:
+LOW:
+NOT VERIFIED:
+
+Also state exactly what could not be established.
+
+============================================================
+26. FINAL RULE
+============================================================
+
+DO NOT FIX ANY ERP ISSUE DURING THIS TASK.
+
+First we need a complete and accurate picture of the current ERP.
+
+Only after this documentation audit reaches completion will we begin the next stage:
+
+ONE ISSUE
+→ ONE CHANGE
+→ TEST
+→ VERIFY
+→ NEXT ISSUE
+
+START FROM THE EXISTING 50% CHECKPOINT NOW.
