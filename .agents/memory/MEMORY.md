@@ -113,7 +113,7 @@
 - [Shared Cash/Bank/Online availability](cash-bank-multilocation.md) — availability is a location junction; every new money root must reach account trees, voucher locations, and ownership guards.
 - [Located import compare pack](import-compare-pack.md) — pack scopes via opt-in identity sets on owning filter types; wizard location is picked at TRIAL time and approval refuses any other location.
 - [Collections & voucher attribution](electronic-collection-routing.md) + [Receive Into](receive-into-collections.md) — sales route by ledger; vouchers keep Electronic Clearing postings and store platform IDs for reconciliation.
-- [Transfer opening-stock adjustments](transfer-opening-adjustments.md) — transfer neutrality belongs in dated opening adjustments; active in-transit value stays in closing valuation and uses movement cost for the adjustment.
+- [Transfer opening-stock adjustments](transfer-opening-adjustments.md) — adjustment = dated transfer movements + closing transit − opening transit; keep transfer postings out of operating P&L totals.
 - [Warehouse lifecycle](warehouse-lifecycle.md) — disabled_at raw cols; EVERY new transaction producer needs the disabled guard (effective location, ROLLBACK in-txn); permanent delete = 1 txn cascade + in-txn validation; cross-location = blocker.
 - [Company holidays & weekly offs](holidays-weekly-offs.md) — stored rows outvote the calendar; untracked months never synthesise; `until` bounds balance views only; moved cutover fakes "accrual writes ₹0" suite failures.
 - [Expo Metro in pnpm monorepo](expo-metro-pnpm.md) — watchFolders must include root node_modules or every import fails (blank app, JSON bundle error); it's config, not cache.

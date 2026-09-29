@@ -1129,11 +1129,10 @@ router.get("/reports/branch-transfers", requireModuleView("page:/reports/sales")
             t.transfer_type, t.tax_type, t.transfer_value, t.gst_amount,
             t.document_mode, t.transfer_invoice_number, t.sale_id, t.purchase_id,
             t.credit_note_voucher_id, s.line_items AS invoice_line_items,
-            -- There is no dispatch timestamp column: the row is written at
-            -- dispatch, so created_at IS the dispatch moment. Receipt is
-            -- stamped by the approve transition.
-            to_char(t.created_at,'YYYY-MM-DD')           AS dispatch_date,
-            to_char(t.approved_at,'YYYY-MM-DD')          AS received_date,
+            -- These are the business dates used by stock movements, not the
+            -- row-created or HTTP-approval timestamps.
+            to_char(t.transfer_date,'YYYY-MM-DD')         AS dispatch_date,
+            to_char(t.received_date,'YYYY-MM-DD')         AS received_date,
             t.approved_by, e.name                        AS handled_by_name
        FROM stock_transfers t
        LEFT JOIN sales s ON s.id = t.sale_id

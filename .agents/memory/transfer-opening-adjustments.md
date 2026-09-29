@@ -3,15 +3,14 @@ name: Transfer opening-stock adjustments
 description: How periodic books keep stock transfers neutral without double-counting closing inventory
 ---
 
-Periodic statements treat transfer movements as opening-stock adjustments, not as separate closing-stock corrections:
+For each scoped location, the period transfer adjustment is:
 
-- dispatch from a location reduces adjusted opening by the transfer-ledger value;
-- receipt increases adjusted opening by the transfer-ledger value;
-- rejected transfers net through their return movement;
-- active in-transit quantities are removed from the dispatch adjustment because they remain sender-owned in closing valuation;
-- active shipments from before the requested period are carried into the sender's opening position.
-- legacy transfer rows with a non-null zero unit cost use the authoritative product weighted-average/manual cost fallback; zero is missing data, not free stock.
+`dated transfer-ledger movement value + closing sender-owned transit value - opening sender-owned transit value`
 
-**Why:** The statement formula is opening stock + purchases − closing stock. Changing both opening and closing for the same transfer, or using reservation valuation instead of the movement's traceable cost, creates artificial P&L changes and breaks dispatch/receipt neutrality.
+Use the day before `fromDate` for the opening transit boundary and `toDate` for the closing boundary. Closing stock valuation still includes transit owned by the sender. The boundary delta handles transfers dispatched before the period, transfers still pending at both ends, and partial receipts without double-counting. Transfer ledger postings remain available for audit but must not enter operating revenue, expenses, COGS, or Gross Profit.
 
-**How to apply:** Derive the adjustment from dated transfer rows in `stock_ledger`, scope it with the same location identities as stock valuation, use positive movement cost when present and the product valuation fallback when it is zero, and keep closing stock owned by the shared valuation layer.
+Use recorded positive movement cost or a dated cost checkpoint. For transit, use the dispatch reservation's cost/value. If historical cost is unavailable, mark the valuation unreliable; do not invent it from today's mutable product master.
+
+**Why:** Movement-only adjustments omit old shipments received during the period and misstate Gross Profit; treating Transfer-In/Out account balances as trading activity also creates artificial profit from internal relocation. Applying both transit boundaries makes the adjusted opening position reconcile to physical closing stock.
+
+**How to apply:** Keep the same location identity scope as stock valuation, derive each transfer's dated movement values from `stock_ledger`, and derive in-transit boundary values from active reservations. Keep the raw account postings as memo/audit data, outside all operating subtotals.

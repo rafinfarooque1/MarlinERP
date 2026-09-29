@@ -50,6 +50,13 @@ const schema = z.object({
        message: 'Select a Cash account.',
     });
   }
+  if (v.paymentMode === 'online' && v.receivedInLedgerId < 1) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['receivedInLedgerId'],
+      message: 'Select an Online Platform account.',
+    });
+  }
 });
 type FormValues = z.infer<typeof schema>;
 
@@ -130,6 +137,7 @@ export default function ReceiptPage() {
       const updateData: any = {
         ...receiptData,
         ...(data.paymentMode === 'cash' ? { receivedInLedgerId: data.receivedInLedgerId } : {}),
+        ...(data.paymentMode === 'online' ? { onlinePlatformLedgerId: Number(data.receivedInLedgerId) } : {}),
       };
       delete updateData.paymentMode;
       updateMutation.mutate({ id: editTarget.id, ...updateData }, {
@@ -151,6 +159,7 @@ export default function ReceiptPage() {
      const body: any = {
        ...receiptData,
        ...(data.paymentMode === 'cash' ? { receivedInLedgerId: data.receivedInLedgerId } : {}),
+        ...(data.paymentMode === 'online' ? { onlinePlatformLedgerId: Number(data.receivedInLedgerId) } : {}),
        locationType: loc.locationType,
        locationId: loc.locationId,
      };
@@ -332,7 +341,9 @@ export default function ReceiptPage() {
                                 paymentMode: r.paymentMode === 'online' ? 'online'
                                   : r.paymentMode === 'upi' ? 'upi'
                                     : r.paymentMode === 'bank' || r.paymentMode === 'bank_settled' ? 'bank' : 'cash',
-                                receivedInLedgerId: Number(r.receivedInLedgerId),
+                                receivedInLedgerId: Number(r.paymentMode === 'online'
+                                  ? r.onlinePlatformLedgerId
+                                  : r.receivedInLedgerId),
                                 amount: Number(r.amount),
                                 referenceNumber: r.referenceNumber || '',
                                 narration: r.narration || '',
