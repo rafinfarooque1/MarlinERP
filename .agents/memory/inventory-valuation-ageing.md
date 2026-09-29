@@ -5,9 +5,11 @@ description: The one at-cost valuation (all three product kinds + in-transit) an
 
 # Valuation
 
-One function serves the stock valuation report, the dashboard stock tile and P&L closing stock.
-It covers **all three product kinds** (finished goods, raw materials, packing materials) across
-every location, and appends in-transit rows at their dispatched cost, owned by the sender.
+`stockValuation()` serves the live stock valuation report, dashboard stock tile and current/no-end-date P&L closing stock. Historical P&L/Balance Sheet uses a separate `stockAsOf()` reconstruction; the historic reader paths are not identical.
+
+The live valuation covers **all three product kinds** (finished goods, raw materials, packing
+materials) across every location, and appends in-transit rows at their dispatched cost, owned
+by the sender.
 
 Every roll-up (per location, per kind, per product, grand total) is derived from the same row
 set, so a drill-down always sums to the headline. A new `SUM(quantity * cost)` anywhere is a
@@ -22,6 +24,24 @@ an otherwise neutral transfer appear to create or destroy inventory while it is 
 
 **How to apply:** preserve lot cost/date/batch identity on the transfer and destination rows, but
 pass the product valuation cost to in-transit reservation valuation.
+
+## Historical statement and valuation readers are distinct
+
+The as-of stock valuation report uses checkpoint-backed evidence and excludes rows with missing
+or mismatched checkpoints, negative historical quantity, or missing historical cost. Its route
+disables in-transit rows when an `asOf` cutoff is supplied. In the live path, transit without a
+positive dispatch cost is omitted and reported. Historical P&L/Balance Sheet instead rewinds
+current quantity through `stock_ledger`, uses a persisted checkpoint when present, and falls
+back to current product-master cost when no dated checkpoint exists while marking the result
+unreliable. That statement path also adds sender-owned in-transit stock using the historical
+transfer lifecycle.
+
+**Why:** the two readers answer related but not identical historical questions. Treating their
+numbers as interchangeable can hide a difference in evidence policy or transit inclusion.
+
+**How to apply:** keep each route's evidence and transit policy explicit; compare historical
+outputs only against a declared rule and verified fixtures before sharing or replacing either
+implementation.
 
 **Valued at cost, never MRP.** Closing stock used to be MRP-priced and read from a retired
 counter.
