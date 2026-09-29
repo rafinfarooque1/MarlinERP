@@ -5,7 +5,7 @@
 **Production database:** NOT QUERIED
 **Tests/runtime probes:** NOT RUN
 
-This supplement records grouped route-level findings from source review across all 410 declarations. It is not a one-row-per-operation contract catalogue: some repetitive declarations are abbreviated or combined, and the tables retain only details explicit in the inspected source. The matrices are not a live contract or authorization certification. Review the source citation before relying on any individual row. See `ERP_API_INVENTORY.md` for the canonical 410-operation route manifest and OpenAPI reconciliation.
+This supplement records grouped route-level findings from source review across all 410 declarations. It is not a one-row-per-operation contract catalogue: some repetitive declarations are abbreviated or combined, and the tables retain only details explicit in the inspected source. `ERP_HIGH_RISK_API_SCOPE_REGISTER.md` adds 94 per-operation records for source-only financial, asset, settlement, payroll, report, GST, dashboard, party-ledger and stock-valuation routes; unresolved contract fields remain marked NOT VERIFIED. The matrices are not a live contract or authorization certification. Review the source citation before relying on any individual row. See `ERP_API_INVENTORY.md` for the canonical 410-operation route manifest and OpenAPI reconciliation.
 
 ## Pass A — sales, inventory, production, and storage (84 operations)
 

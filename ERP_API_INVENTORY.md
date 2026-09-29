@@ -12,6 +12,7 @@ This inventory is a static source scan, not a live HTTP probe. `artifacts/api-se
 - **410 unique method/path route declarations** across 42 route modules; no duplicate method/path pairs in the scanned declarations.
 - OpenAPI declares 66 path keys and 110 HTTP operations. All 110 matched a route declaration after parameter-name normalization; 300 declared operations are absent from OpenAPI; no OpenAPI-only operation was found.
 - The 110 OpenAPI operations' operation IDs, declared parameters, request bodies, and success response shapes are indexed in `ERP_API_OPENAPI_CONTRACTS.md`. These are specification declarations, not runtime-verified contracts.
+- Priority 1 financial/asset/payroll mutations and financial-report/GST/dashboard/party-ledger/stock-valuation reads have per-operation records for 94 source-only identities (55 mutations and 39 reads) in `ERP_HIGH_RISK_API_SCOPE_REGISTER.md`. The records explicitly retain unknowns; this is not full contract verification.
 - These counts do not prove every route is reachable at runtime under all mount conditions, nor do they prove that an absent frontend caller means an endpoint is unused.
 
 ### OpenAPI operation coverage by router

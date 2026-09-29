@@ -12,8 +12,9 @@ For a statement period with no stock-ledger transfer movements, the transfer-ope
 For a same-day statement ending today, if the scoped stock ledger has no movement
 on that date, use the live closing valuation for both stock boundaries. This is
 stronger than rewinding the prior-day checkpoint: late-recorded backdated
-documents can leave that checkpoint stale. The statement closing valuation is
-on-hand only; in-transit quantities are not part of the P&L closing figure.
+documents can leave that checkpoint stale. The current `closingStockAt` path
+includes sender-owned in-transit value by default; the same-day shortcut carries
+that same closing value to both boundaries and skips the transfer adjustment.
 
 **Why:** otherwise a stale prior-day checkpoint plus unchanged in-transit stock
 appears as gross profit even though the physical on-hand position did not
