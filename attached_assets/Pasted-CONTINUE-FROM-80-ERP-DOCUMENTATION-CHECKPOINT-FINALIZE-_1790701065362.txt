@@ -1,0 +1,837 @@
+CONTINUE FROM 80% ERP DOCUMENTATION CHECKPOINT — FINALIZE SOURCE AUDIT
+
+Continue the existing documentation-only audit.
+
+Current status:
+- 410 declared route operations reconciled
+- 110 OpenAPI operations mapped
+- 300 source routes missing from OpenAPI identified
+- 40 report slots mapped
+- 32 formula groups documented
+- Issue register reconciled
+- Current estimated completion: 80%
+
+Existing files:
+ERP_CURRENT_SYSTEM_MASTER.md
+ERP_CURRENT_ISSUES_REGISTER.md
+ERP_CURRENT_FORMULA_REGISTER.md
+ERP_API_INVENTORY.md
+ERP_REPORT_INVENTORY.md
+
+DO NOT MODIFY ERP FUNCTIONALITY.
+
+DO NOT:
+- change application code
+- change accounting formulas
+- change database schema
+- change database data
+- run migrations
+- fix bugs
+- modify production
+- query production
+- publish
+- change tests
+
+This is the FINAL DOCUMENTATION / SOURCE AUDIT ONLY.
+
+============================================================
+1. CONTINUE FROM THE 80% CHECKPOINT
+============================================================
+
+Read all existing audit documents first.
+
+Do not redo completed sections.
+
+Identify the exact remaining gaps and continue from there.
+
+The objective is to reach:
+
+DOCUMENTATION STATUS: COMPLETE
+
+not merely another percentage checkpoint.
+
+============================================================
+2. COMPLETE THE 300 SOURCE-ONLY ROUTES
+============================================================
+
+The current audit has identified exactly 300 source operations that are not represented in OpenAPI.
+
+Do NOT blindly add all 300 to OpenAPI.
+
+Instead, document them.
+
+For every source-only route record:
+
+METHOD
+PATH
+ROUTER FILE
+HANDLER
+PURPOSE
+AUTHENTICATION
+ROLE CHECK
+PERMISSION CHECK
+LOCATION SCOPE
+REQUEST PARAMETERS
+REQUEST BODY
+RESPONSE SHAPE
+ERROR RESPONSES
+DATABASE TABLES
+ACCOUNTING EFFECT
+INVENTORY EFFECT
+GST EFFECT
+AUDIT EFFECT
+REPORT EFFECT
+FRONTEND CONSUMER
+TEST COVERAGE
+OPENAPI STATUS
+
+Classify each:
+
+- PUBLIC/UNAUTHENTICATED
+- AUTHENTICATED
+- ROLE-RESTRICTED
+- PERMISSION-RESTRICTED
+- LOCATION-SCOPED
+- HEAD-OFFICE ONLY
+- UNKNOWN
+
+Also classify:
+
+- ACTIVE
+- LEGACY
+- UNUSED
+- DUPLICATE
+- UNKNOWN
+
+DO NOT modify the routes.
+
+============================================================
+3. REQUEST / RESPONSE CONTRACTS
+============================================================
+
+For the 300 source-only routes, derive contracts from actual source code.
+
+Do not invent schemas.
+
+For each route document:
+
+REQUEST:
+- path params
+- query params
+- body
+- headers where relevant
+
+RESPONSE:
+- success status
+- response object
+- arrays
+- pagination
+- totals
+- error shape
+
+If the response cannot be established confidently:
+
+NOT VERIFIED
+
+Do not guess.
+
+============================================================
+4. PERMISSION + LOCATION SCOPE
+============================================================
+
+This is a major remaining gap.
+
+For EVERY financial, inventory, customer, vendor, report and administrative route determine:
+
+Authentication:
+YES / NO / UNKNOWN
+
+Permission:
+EXPLICIT / IMPLICIT / NONE / UNKNOWN
+
+Location filtering:
+SERVER-SIDE / CLIENT-SIDE / BOTH / NONE / UNKNOWN
+
+Head Office behavior:
+ALL LOCATIONS / SPECIFIC LOCATION / UNKNOWN
+
+Warehouse behavior:
+OWN LOCATION / OTHER LOCATIONS / UNKNOWN
+
+Test evidence:
+PRESENT / ABSENT
+
+Pay special attention to:
+
+Customers
+Vendors
+Sales
+Purchases
+Receipts
+Payments
+Expenses
+Stock
+Inventory
+Transfers
+Reports
+Dashboard
+GST
+Payroll
+Assets
+Cash
+Bank
+Reconciliation
+Exports
+
+Do not fix anything.
+
+Document only.
+
+============================================================
+5. REPORT PARITY SOURCE AUDIT
+============================================================
+
+There are currently 40 report slots.
+
+For every one of the 40:
+
+REPORT NAME
+
+SCREEN:
+source/service
+
+API:
+source/service
+
+CALCULATION:
+source/service
+
+PDF:
+source/service
+
+XLSX:
+source/service
+
+CSV:
+source/service
+
+PRINT:
+source/service
+
+LOCATION FILTER:
+source
+
+DATE FILTER:
+source
+
+ALL LOCATIONS:
+source
+
+ACCOUNTING SOURCE:
+source
+
+INVENTORY SOURCE:
+source
+
+TEST COVERAGE:
+present/absent
+
+Then classify:
+
+CANONICAL PATH
+DUPLICATE CALCULATION
+LEGACY PATH
+UNKNOWN
+NOT APPLICABLE
+
+Do NOT modify report implementations.
+
+============================================================
+6. P&L DEEP SOURCE TRACE
+============================================================
+
+This is mandatory.
+
+Trace the actual implementation of:
+
+Gross Sales
+Sales Returns
+Net Sales
+Opening Stock
+Purchases
+Purchase Returns
+Direct Costs
+COGS
+Closing Stock
+Gross Profit
+Other Income
+Indirect Expenses
+Depreciation
+Net Profit
+
+For every value document:
+
+DB source
+→ query
+→ backend service
+→ formula
+→ API
+→ frontend
+→ PDF
+→ XLSX
+→ CSV
+
+Identify every alternate calculation.
+
+Do not reconcile or choose between them.
+
+If two formulas differ:
+
+DOCUMENTATION / SOURCE DIVERGENCE
+
+============================================================
+7. BALANCE SHEET DEEP TRACE
+============================================================
+
+Trace:
+
+Cash
+Bank
+Inventory
+Receivables
+Fixed Assets
+Other Assets
+
+Payables
+GST liabilities
+Salary payable
+Other liabilities
+
+Capital
+Retained earnings
+Current profit/loss
+Other equity
+
+Document the exact source and calculation.
+
+Identify whether each number originates from:
+
+Journal
+Derived posting
+Ledger
+Inventory valuation
+Other source
+
+============================================================
+8. INVENTORY DEEP TRACE
+============================================================
+
+Complete documentation for:
+
+Stock quantity
+Stock value
+Opening quantity
+Closing quantity
+Opening value
+Closing value
+COGS
+Batch
+FIFO
+FEFO
+Weighted Average
+Cost snapshots
+Cost checkpoints
+Stock ledger
+Reservations
+Transfers
+In-transit
+Production
+Consumption
+Returns
+Adjustments
+
+Document historical valuation behavior.
+
+Document exactly where current mutable item cost is used, if anywhere.
+
+Do not fix.
+
+============================================================
+9. COMPLETE WORKFLOW RELATIONSHIPS
+============================================================
+
+Complete any partially mapped workflows.
+
+For each workflow trace:
+
+UI
+→ API
+→ Service
+→ DB
+→ Accounting
+→ Inventory
+→ GST
+→ Audit
+→ Report
+
+Focus especially on:
+
+Purchase Request
+Purchase Order
+Purchase
+Purchase Return
+
+Quotation
+Sale
+POS
+Sales Return
+
+Receipt
+Advance Receipt
+Payment
+Advance Payment
+
+Stock Transfer
+Dispatch
+Receipt
+In Transit
+
+Production
+Consumption
+Finished Goods
+
+Expense
+Cash
+Bank
+Reconciliation
+
+Fixed Asset
+Depreciation
+Disposal
+
+Attendance
+Payroll
+
+GST
+
+Backup
+Restore
+
+============================================================
+10. DATABASE RELATIONSHIP COMPLETION
+============================================================
+
+Complete the important-table relationship map.
+
+Do not merely list tables.
+
+For each important relationship:
+
+PARENT
+→ CHILD
+→ FOREIGN KEY
+→ BUSINESS PURPOSE
+
+Cover:
+
+Customer
+→ Sales
+→ Receipts
+→ Allocations
+
+Vendor
+→ Purchases
+→ Payments
+→ Allocations
+
+Item
+→ Stock
+→ Stock Ledger
+→ Batches
+→ Sales Items
+→ Purchase Items
+
+Transfer
+→ Source
+→ Destination
+→ Dispatch
+→ Receipt
+→ Reservation
+
+Journal
+→ Journal Lines
+→ Account
+
+Employee
+→ Attendance
+→ Payroll
+→ Salary
+→ Payment
+
+Asset
+→ Depreciation
+→ Disposal
+
+GST
+→ Transactions
+→ Tax postings
+→ GST reports
+
+Audit
+→ Financial mutation
+
+============================================================
+11. FORMULA REGISTER COMPLETION
+============================================================
+
+Current formula register has 32 groups.
+
+Continue until all important formula/algorithm groups are documented.
+
+Search source code for:
+
+- totals
+- balance
+- outstanding
+- tax
+- discount
+- charges
+- valuation
+- stock
+- COGS
+- profit
+- depreciation
+- salary
+- GST
+- reconciliation
+- dashboard KPIs
+- report calculations
+
+For every discovered formula:
+
+ID
+NAME
+FORMULA
+FILE
+FUNCTION
+INPUTS
+OUTPUT
+USED BY
+ALTERNATIVE FORMULA
+STATUS
+
+If exact formula cannot be established:
+
+NOT VERIFIED
+
+============================================================
+12. DASHBOARD SOURCE TRACE
+============================================================
+
+Document exact source for:
+
+Sales
+Net Sales
+COGS
+Gross Profit
+Net Profit
+Closing Stock
+Cash
+Bank
+Receivables
+Payables
+
+For each:
+
+API
+Service
+Database
+Formula
+Location behavior
+All Locations behavior
+
+Identify legacy/parallel paths.
+
+============================================================
+13. GST SOURCE TRACE
+============================================================
+
+Document all tax calculation paths:
+
+CGST
+SGST
+IGST
+Taxable amount
+Tax amount
+Tax posting
+GST register
+GST report
+
+Identify whether different modules use different GST calculation logic.
+
+Do not fix.
+
+============================================================
+14. PAYROLL SOURCE TRACE
+============================================================
+
+Document:
+
+Attendance
+LOP
+Salary
+Advance
+Deductions
+PF
+ESI
+Payable
+Payment
+P&L
+
+Find actual date/business-date handling.
+
+============================================================
+15. FIXED ASSET SOURCE TRACE
+============================================================
+
+Document:
+
+Asset acquisition
+Cost
+Depreciation
+Accumulated depreciation
+NBV
+Disposal
+Gain/loss
+Balance Sheet
+P&L
+
+============================================================
+16. AUDIT SOURCE TRACE
+============================================================
+
+For each critical mutation determine:
+
+Mutation
+Audit function
+Transaction boundary
+Failure handling
+
+Classify:
+
+TRANSACTION-BOUND
+BEST-EFFORT
+UNKNOWN
+
+Do not fix.
+
+============================================================
+17. BACKGROUND JOB SOURCE TRACE
+============================================================
+
+Inventory:
+
+Schedulers
+Cron
+Workers
+Depreciation jobs
+Payroll jobs
+Backup jobs
+Repair jobs
+Migration jobs
+
+Document:
+
+trigger
+frequency
+function
+DB effects
+financial effects
+idempotency
+locking
+
+============================================================
+18. TEST COVERAGE MAP
+============================================================
+
+Inspect existing test files.
+
+Document coverage for:
+
+Accounting
+P&L
+Balance Sheet
+Inventory
+Stock
+Transfers
+Sales
+Purchases
+Returns
+GST
+Payroll
+Assets
+Settlement
+Permissions
+Location isolation
+Reports
+PDF
+XLSX
+CSV
+Dashboard
+Backup
+Audit
+
+Do NOT execute expensive tests.
+
+Document existing evidence only.
+
+============================================================
+19. FINAL ISSUE CLASSIFICATION
+============================================================
+
+Update:
+
+ERP_CURRENT_ISSUES_REGISTER.md
+
+Do not call every gap an error.
+
+Use:
+
+CONFIRMED IMPLEMENTATION ISSUE
+CONFIRMED FORMULA DIVERGENCE
+CONFIRMED SECURITY ISSUE
+CONFIRMED ACCOUNTING RISK
+TEST GAP
+DOCUMENTATION GAP
+UNVERIFIED CANDIDATE
+INFORMATIONAL
+
+Every issue must include source evidence.
+
+============================================================
+20. FINAL COMPLETENESS CHECK
+============================================================
+
+Before declaring COMPLETE verify:
+
+[ ] Modules mapped
+[ ] Workflows mapped
+[ ] Formulas mapped
+[ ] 410 routes reconciled
+[ ] 110 OpenAPI operations mapped
+[ ] 300 source-only routes documented
+[ ] Request contracts documented
+[ ] Response contracts documented
+[ ] Permission scope documented
+[ ] Location scope documented
+[ ] 40 reports mapped
+[ ] PDF paths mapped
+[ ] XLSX paths mapped
+[ ] CSV paths mapped
+[ ] Print paths mapped
+[ ] P&L fully traced
+[ ] Balance Sheet fully traced
+[ ] Inventory fully traced
+[ ] GST fully traced
+[ ] Payroll fully traced
+[ ] Assets fully traced
+[ ] Dashboard fully traced
+[ ] Database relationships mapped
+[ ] Background jobs mapped
+[ ] Audit behavior mapped
+[ ] Test coverage mapped
+[ ] Issues classified
+
+============================================================
+21. FINAL DOCUMENTATION FILES
+============================================================
+
+Update:
+
+ERP_CURRENT_SYSTEM_MASTER.md
+ERP_CURRENT_ISSUES_REGISTER.md
+ERP_CURRENT_FORMULA_REGISTER.md
+ERP_API_INVENTORY.md
+ERP_REPORT_INVENTORY.md
+
+If useful, create:
+
+ERP_DATABASE_RELATIONSHIP_MAP.md
+ERP_WORKFLOW_MAP.md
+ERP_PERMISSION_SCOPE_MAP.md
+
+Do not modify ERP source code.
+
+============================================================
+22. FINAL SUMMARY
+============================================================
+
+Only after completing the source audit report:
+
+DOCUMENTATION STATUS:
+COMPLETE / PARTIAL
+
+MODULES:
+exact documented count
+
+WORKFLOWS:
+exact documented count
+
+FORMULA GROUPS:
+exact documented count
+
+SOURCE ROUTES:
+410
+
+OPENAPI OPERATIONS:
+110
+
+SOURCE-ONLY ROUTES:
+300
+
+REPORT SLOTS:
+40
+
+EXPORT PATHS:
+exact count
+
+IMPORTANT DATABASE TABLES:
+exact documented count
+
+ISSUES:
+exact count by category
+
+CRITICAL:
+HIGH:
+MEDIUM:
+LOW:
+
+NOT VERIFIED:
+exact list
+
+DOCUMENTATION COMPLETION:
+100% or exact percentage
+
+If anything remains incomplete, explicitly list it.
+
+============================================================
+IMPORTANT
+============================================================
+
+DO NOT FIX ANYTHING.
+
+DO NOT RUN MIGRATIONS.
+
+DO NOT TOUCH PRODUCTION.
+
+DO NOT CHANGE TESTS.
+
+DO NOT CHANGE DATABASE DATA.
+
+DO NOT CHANGE APPLICATION CODE.
+
+This phase exists only to establish exactly how the CURRENT ERP works.
+
+Once this reaches COMPLETE, we will use the resulting documentation to make changes ONE BY ONE with separate prompts and regression tests.
+
+Continue now from the existing 80% checkpoint.
