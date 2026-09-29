@@ -2,7 +2,7 @@
 
 **Audit status:** IN PROGRESS — Phases 1–6 partial
 **Snapshot date:** 2026-09-29
-**Verified formula/algorithm groups:** 30 (partial audit; not a total count of all ERP formulas)
+**Verified formula/algorithm groups:** 32 (partial audit; not a total count of all ERP formulas)
 **Production database:** NOT QUERIED
 
 No formula is recorded as verified until its current implementation and inputs are traced. Test filenames below were inspected but the tests were not executed in this documentation pass. Prior documents and memory are discovery aids, not proof.
@@ -41,6 +41,8 @@ No formula is recorded as verified until its current implementation and inputs a
 | F-028 | Ledger raw net = Σ(debit − credit). Natural display: vendor payable = `−net`; customer receivable = `+net`; cash/bank = `+net`. A subtree balance sums its descendants. | `artifacts/api-server/src/lib/ledgerBalances.ts:34-46,119-186,239-300` | Opening balances are converted to debit/credit postings; location slices intentionally exclude company-level openings in this index. |
 | F-029 | Cash/Bank Book opening = pre-window Σ(Dr−Cr); running/closing = opening + in-window Σ(Dr−Cr), after authorized location filtering. Trial Balance shows positive net on debit and negative net on credit; it is balanced when `abs(totalDebit-totalCredit) < 0.01`. | `artifacts/api-server/src/routes/journal.ts:1939-2047,2098-2169` | Cash/Bank Book has a branch-only special rule for authorized ledger openings under location filter; opening entries are not bank-reconciliation eligible. |
 | F-030 | Bank review batch selected gross = Σ abs(Dr−Cr); processing charge may not exceed gross; selected net = gross − charge. Reconciliation identity is exact `(ledger_id, entry_id)` and a batch updates metadata/status rather than creating accounting postings. | `artifacts/api-server/src/routes/reconciliation.ts:1237-1240,1580-1597,1635-1697,1726-1756` | This is internal posting review, not a bank-statement closing-balance reconciliation; no external statement ending-balance formula was found in the inspected path. |
+| F-031 | Legacy dashboard `totalSalesAmount` = `SUM(sales.total_amount)` over the dashboard's filtered sales set; the source excludes cancelled and branch-transfer sales. `total_amount` is the invoice total including GST and sale charges. | `artifacts/api-server/src/routes/dashboard.ts:163-168,200`; invoice total in `routes/sales.ts:898-937` | Gross invoice turnover is not P&L net-of-GST revenue. Dashboard BI GP/NP/COGS use `buildBooks()`; do not compare its profit figures to this gross sales tile as though the bases match. |
+| F-032 | Dashboard BI operating expenses = canonical `buildBooks()` direct-expense total + indirect-expense total, with production overlay excluded. Salary and rent subtrees are separately derived; dashboard “other” expense = total operating expenses − salary − rent. | `artifacts/api-server/src/lib/dashboardFinancials.ts:350-400`; canonical group totals `src/lib/books.ts:1293-1316` | Reuses the P&L group totals rather than re-summing an unrelated expense subtree. The split is a dashboard presentation, not a new posting. No tests were run in this audit. |
 
 “Verified” means source traced, not tests executed or legal/accounting correctness certified.
 
@@ -81,6 +83,7 @@ The following areas still need full route-to-reader coverage:
 | Transfers / production | all transfer posting cases and production route callers of cost helpers | PARTIAL |
 | Fixed assets | report parity and depreciation/disposal test evidence | PARTIAL |
 | Payroll | payments/advances, statutory applicability and all payroll reports | PARTIAL |
+| Dashboard | reconcile direct operational tiles, gross `totalSalesAmount`, and financial KPIs to their named reports across date/location scopes | PARTIAL |
 
 ## Formula record template
 
@@ -94,4 +97,4 @@ Each verified formula will get a stable ID and include:
 - Related tests and verification result.
 - Known alternative implementations or mismatches.
 
-**DOCUMENTATION PROGRESS:** 30 source-backed groups recorded. Remaining items are coverage work, not a claim that unlisted code contains no other formulas.
+**DOCUMENTATION PROGRESS:** 32 source-backed groups recorded. Remaining items are coverage work, not a claim that unlisted code contains no other formulas.
