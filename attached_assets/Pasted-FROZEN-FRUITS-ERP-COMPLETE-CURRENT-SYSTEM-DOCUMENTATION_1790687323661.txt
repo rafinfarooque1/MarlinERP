@@ -1,0 +1,1227 @@
+FROZEN FRUITS ERP — COMPLETE CURRENT-SYSTEM DOCUMENTATION & FUNCTION MAP
+
+IMPORTANT:
+This is a DOCUMENTATION + CODE AUDIT task ONLY.
+
+DO NOT modify the ERP functionality.
+DO NOT change accounting formulas.
+DO NOT change database data.
+DO NOT run production migrations.
+DO NOT delete data.
+DO NOT publish.
+DO NOT "fix" anything yet.
+
+I want to completely understand how the CURRENT Frozen Fruits ERP works before making any changes.
+
+This project is running on Replit Free Tier, so work efficiently in small phases and save the findings to a Markdown file instead of generating a huge chat response.
+
+============================================================
+1. FIRST READ EXISTING DOCUMENTATION
+============================================================
+
+If these files exist, read them first:
+
+ERP_COMPLETE_DOCUMENTATION.md
+ERP_FINAL_HARDENING_REPORT.md
+ERP_RELEASE_GATE_REPORT.md
+
+Also inspect the actual current source code.
+
+IMPORTANT:
+
+The existing documentation may be outdated.
+
+The SOURCE CODE + CURRENT DATABASE SCHEMA + CURRENT ROUTES are the authority for documenting the CURRENT implementation.
+
+Do not assume the old documentation is still correct.
+
+============================================================
+2. CREATE ONE MASTER DOCUMENT
+============================================================
+
+Create/update:
+
+ERP_CURRENT_SYSTEM_MASTER.md
+
+This must become the single master reference for understanding the CURRENT ERP.
+
+Do not write generic ERP explanations.
+
+Document what THIS ERP actually does.
+
+For every feature clearly state:
+
+- What it does
+- Who can use it
+- Where it is in the UI
+- Frontend route/component
+- API endpoint
+- Backend service
+- Database tables
+- Accounting effect
+- Stock effect
+- GST effect
+- Location effect
+- Permission effect
+- Audit effect
+- Report effect
+- PDF/XLSX/CSV effect
+- Formula used
+- Related modules
+- Current limitations
+- Known bugs
+- Whether it is verified by tests
+
+If something cannot be confirmed from code, write:
+
+NOT VERIFIED
+
+Do NOT guess.
+
+============================================================
+3. SYSTEM ARCHITECTURE
+============================================================
+
+Document the current architecture:
+
+Frontend
+Backend
+Database
+ORM
+Authentication
+Authorization
+API structure
+Shared libraries
+Accounting engine
+Inventory engine
+Report engine
+Export engine
+Background jobs
+Schedulers
+Backup system
+Mobile application
+File storage
+External services
+
+Show the actual data flow:
+
+USER
+↓
+FRONTEND
+↓
+API
+↓
+SERVICE
+↓
+DATABASE
+↓
+ACCOUNTING / INVENTORY
+↓
+REPORT
+↓
+PDF/XLSX/CSV
+
+Document actual file paths wherever possible.
+
+============================================================
+4. COMPLETE MODULE LIST
+============================================================
+
+Find EVERY module in the current ERP.
+
+Do not rely only on sidebar navigation.
+
+Inspect:
+
+module registry
+routes
+frontend pages
+backend routes
+API services
+database tables
+
+Document modules such as, where they actually exist:
+
+Dashboard
+Company
+Locations
+Employees
+HR
+Attendance
+Payroll
+Customers
+Vendors
+Items
+Raw Materials
+Materials
+Production
+Inventory
+Stock
+Stock Transfers
+Batches
+Sales
+POS
+Quotations
+Sales Returns
+Purchases
+Purchase Orders
+Purchase Returns
+Receipts
+Payments
+Expenses
+Cash
+Bank
+Bank Reconciliation
+Chart of Accounts
+Ledgers
+Journal Vouchers
+Trial Balance
+Profit & Loss
+Trading Account
+Balance Sheet
+GST
+Fixed Assets
+Depreciation
+Reports
+Backup
+Restore
+Permissions
+Audit
+Settings
+Mobile App
+
+Also document any other modules actually present.
+
+============================================================
+5. FOR EVERY MODULE
+============================================================
+
+Use this structure:
+
+MODULE NAME
+
+Purpose:
+UI Location:
+Frontend Route:
+Frontend Components:
+API Routes:
+Backend Services:
+Database Tables:
+
+Create:
+Read:
+Update:
+Delete:
+
+Permissions:
+Location Scope:
+
+Business Rules:
+
+Accounting Effect:
+
+Inventory Effect:
+
+GST Effect:
+
+Customer/Vendor Effect:
+
+Cash/Bank Effect:
+
+Audit Effect:
+
+Reports Affected:
+
+PDF:
+XLSX:
+CSV:
+
+Formulas:
+
+Dependencies:
+
+Current Status:
+PASS / PARTIAL / NOT VERIFIED / ISSUE
+
+Known Issues:
+
+============================================================
+6. COMPLETE BUSINESS WORKFLOWS
+============================================================
+
+Map the actual ERP workflows.
+
+For example:
+
+PURCHASE WORKFLOW
+
+Purchase Request
+→ Purchase Order
+→ Purchase
+→ Stock Receipt
+→ Batch
+→ Vendor Payable
+→ Payment
+→ Ledger
+→ GST
+→ Reports
+
+But DO NOT assume this exact flow exists.
+
+Inspect the actual implementation and document the real flow.
+
+Do the same for:
+
+Sales
+POS
+Quotation → Sale
+Purchase
+Purchase Return
+Sales Return
+Customer Receipt
+Customer Advance
+Vendor Payment
+Vendor Advance
+Expense
+Stock Transfer
+Production
+Raw Material Consumption
+Finished Goods Production
+Inventory Adjustment
+Fixed Asset Purchase
+Depreciation
+Asset Disposal
+Payroll
+Attendance
+Bank Reconciliation
+GST
+Journal Voucher
+
+For each workflow document:
+
+START
+→ STEP 1
+→ STEP 2
+→ STEP 3
+→ ACCOUNTING
+→ INVENTORY
+→ GST
+→ FINAL RESULT
+
+============================================================
+7. ACCOUNTING ENGINE — VERY IMPORTANT
+============================================================
+
+Fully document how accounting currently works.
+
+Find the actual accounting/posting engine.
+
+Document:
+
+Chart of Accounts
+Journal Entries
+Journal Lines
+Debit
+Credit
+Posting
+Derived Postings
+Financial Report calculations
+Ledger calculations
+
+Identify the actual source-of-truth functions/files.
+
+For every transaction document:
+
+Transaction
+→ Debit Account
+→ Credit Account
+→ Amount
+→ Tax
+→ Location
+→ Date
+→ Reference
+→ Journal
+→ Ledger
+
+============================================================
+8. ALL ACCOUNTING FORMULAS
+============================================================
+
+Find EVERY accounting formula currently used in code.
+
+Do not invent formulas.
+
+Document the exact implementation.
+
+Especially:
+
+Sales Total
+
+Net Sales
+
+Purchase Total
+
+Purchase Return
+
+Sales Return
+
+COGS
+
+Opening Stock
+
+Closing Stock
+
+Gross Profit
+
+Gross Profit %
+
+Net Profit
+
+Net Profit %
+
+Customer Outstanding
+
+Vendor Outstanding
+
+Cash Balance
+
+Bank Balance
+
+Trial Balance
+
+Balance Sheet
+
+Assets
+
+Liabilities
+
+Equity
+
+Working Capital if present
+
+GST
+
+CGST
+
+SGST
+
+IGST
+
+Taxable Value
+
+Fixed Asset NBV
+
+Depreciation
+
+Payroll
+
+Salary Payable
+
+Advances
+
+Stock Valuation
+
+FIFO / FEFO / Weighted Average if used
+
+Transfer valuation
+
+Production valuation
+
+For every formula write:
+
+FORMULA NAME
+
+Actual formula in code:
+
+SOURCE FILE:
+
+FUNCTION:
+
+INPUTS:
+
+OUTPUT:
+
+ACCOUNTING EFFECT:
+
+EXAMPLE:
+
+IMPORTANT:
+If two different formulas are used in different parts of the ERP, document BOTH and identify the difference.
+
+============================================================
+9. P&L — COMPLETE TRACE
+============================================================
+
+Trace P&L from database to screen.
+
+Document:
+
+Revenue source
+
+Sales source
+
+Sales returns
+
+Net sales
+
+Opening stock
+
+Purchases
+
+Purchase returns
+
+Direct expenses
+
+COGS
+
+Closing stock
+
+Gross profit
+
+Other income
+
+Indirect expenses
+
+Depreciation
+
+Net profit
+
+Find the exact code that calculates each value.
+
+Document:
+
+Database
+→ Query
+→ Service
+→ Calculation
+→ API
+→ Frontend
+
+Also document what Dashboard uses for:
+
+Sales
+COGS
+Gross Profit
+Net Profit
+
+Check whether Dashboard and P&L use the same source.
+
+Do not fix differences yet.
+
+============================================================
+10. BALANCE SHEET
+============================================================
+
+Document exactly how Balance Sheet is calculated.
+
+Assets:
+
+Cash
+Bank
+Inventory
+Receivables
+Fixed Assets
+Other Assets
+
+Liabilities:
+
+Payables
+Salary Payable
+GST Payable
+Loans
+Other Liabilities
+
+Equity:
+
+Capital
+Retained Earnings
+Current Profit/Loss
+Other Equity
+
+Document the actual implementation.
+
+Identify whether:
+
+Assets = Liabilities + Equity
+
+is directly calculated or derived from journal balances.
+
+============================================================
+11. INVENTORY
+============================================================
+
+Document the complete inventory engine.
+
+Track:
+
+Item
+Location
+Quantity
+Cost
+Batch
+Manufacturing Date
+Expiry
+FIFO
+FEFO
+Weighted Average
+Stock Ledger
+Stock Entry
+Stock Batch
+Reservations
+Transfers
+In Transit
+Production
+Consumption
+Returns
+Adjustments
+
+Document exactly how:
+
+Opening Quantity
+Closing Quantity
+Opening Value
+Closing Value
+COGS
+
+are calculated.
+
+Identify any historical valuation limitations.
+
+============================================================
+12. STOCK TRANSFERS
+============================================================
+
+Document:
+
+Transfer creation
+Dispatch
+Approval
+Receipt
+Rejection
+Cancellation
+In-transit
+
+Source location
+Destination location
+
+Same GST registration
+Different GST registration
+
+Accounting impact
+GST impact
+Inventory impact
+P&L impact
+
+Document actual implementation, not assumptions.
+
+============================================================
+13. SALES
+============================================================
+
+Document:
+
+Quotation
+Sale
+POS
+Payment
+Credit
+Customer balance
+Returns
+Cancellation
+Refund
+
+Find exact formulas for:
+
+Subtotal
+Discount
+Other Charges
+Tax
+Grand Total
+Paid
+Outstanding
+COGS
+Profit
+
+Document accounting postings.
+
+============================================================
+14. PURCHASES
+============================================================
+
+Document:
+
+Purchase Request if present
+Purchase Order
+Purchase
+Receipt
+Vendor Bill
+Payment
+Return
+
+Find formulas:
+
+Subtotal
+Discount
+Other Charges
+Tax
+Grand Total
+Paid
+Outstanding
+Inventory Cost
+
+Document accounting postings.
+
+============================================================
+15. CUSTOMER / VENDOR LEDGERS
+============================================================
+
+Document exact balance formulas.
+
+Customer:
+
+Opening
+Sales
+Returns
+Receipts
+Credits
+Advances
+Closing
+
+Vendor:
+
+Opening
+Purchases
+Returns
+Payments
+Advances
+Credits
+Closing
+
+Identify source tables and services.
+
+============================================================
+16. GST
+============================================================
+
+Document the complete GST implementation.
+
+Find:
+
+GST calculation function
+Tax rate source
+CGST
+SGST
+IGST
+Taxable amount
+Tax posting
+GST reports
+GST register
+
+Identify whether multiple GST calculation paths exist.
+
+Document differences if found.
+
+============================================================
+17. PAYROLL / HR
+============================================================
+
+Document:
+
+Employee
+Attendance
+LOP
+Salary
+Advance
+Payroll
+Salary Payable
+Payment
+PF
+ESI
+Other deductions if present
+
+Find actual salary formula.
+
+Document date handling.
+
+Document accounting postings.
+
+============================================================
+18. FIXED ASSETS
+============================================================
+
+Document:
+
+Asset purchase
+Asset creation
+Cost
+Useful life
+Depreciation
+Accumulated depreciation
+NBV
+Disposal
+Gain/loss
+
+Find exact formulas and posting logic.
+
+============================================================
+19. CASH / BANK
+============================================================
+
+Document:
+
+Cash accounts
+Bank accounts
+Cash Book
+Bank Book
+Receipts
+Payments
+Bank reconciliation
+
+Find actual balance formulas.
+
+Document location assignment.
+
+============================================================
+20. REPORTS
+============================================================
+
+Find EVERY report.
+
+For each:
+
+Report Name
+API
+Backend service
+Database source
+Calculation
+Screen
+PDF
+XLSX
+CSV
+
+Determine whether:
+
+Screen
+API
+PDF
+XLSX
+CSV
+
+use the same source.
+
+Identify duplicate report calculation paths.
+
+============================================================
+21. DASHBOARD
+============================================================
+
+Document every dashboard KPI.
+
+For each KPI:
+
+Name
+Formula
+API
+Source
+Database
+Location behavior
+
+Especially:
+
+Sales
+COGS
+GP
+NP
+Stock
+Cash
+Bank
+Receivables
+Payables
+
+Document All Locations behavior.
+
+============================================================
+22. PERMISSIONS / LOCATION SECURITY
+============================================================
+
+Document:
+
+Roles
+Permissions
+Location access
+Head Office
+Warehouse
+All Locations
+
+For each module explain:
+
+Who can View
+Who can Create
+Who can Edit
+Who can Delete
+Which locations can be accessed
+
+Also inspect server-side enforcement.
+
+Identify any UI-only permission checks.
+
+============================================================
+23. DATABASE
+============================================================
+
+Document all important tables.
+
+For each table:
+
+Table name
+Purpose
+Primary key
+Important columns
+Foreign keys
+Location field
+Accounting references
+Stock references
+Created/updated fields
+
+Create a relationship map.
+
+Especially:
+
+Sales
+Purchases
+Customers
+Vendors
+Stock
+Stock Ledger
+Batches
+Transfers
+Journal
+Journal Lines
+Accounts
+Expenses
+Payroll
+Assets
+GST
+Audit
+
+============================================================
+24. API MAP
+============================================================
+
+Create a complete API inventory.
+
+For each endpoint:
+
+METHOD
+PATH
+PURPOSE
+AUTH
+ROLE
+LOCATION SCOPE
+INPUT
+OUTPUT
+DATABASE
+ACCOUNTING EFFECT
+INVENTORY EFFECT
+
+Identify duplicate or legacy APIs.
+
+============================================================
+25. BACKGROUND JOBS
+============================================================
+
+Find all:
+
+Schedulers
+Cron jobs
+Background workers
+Repair jobs
+Migration jobs
+Depreciation jobs
+Payroll jobs
+Backup jobs
+
+Document:
+
+Trigger
+Frequency
+Function
+Database effect
+Financial effect
+Idempotency
+Locking
+
+============================================================
+26. AUDIT LOGGING
+============================================================
+
+Document:
+
+What is audited
+What is not audited
+Audit table
+Audit function
+Transaction behavior
+Failure behavior
+
+Identify any critical financial mutation where audit durability is not guaranteed.
+
+Do not fix it yet.
+
+============================================================
+27. BACKUP / RESTORE
+============================================================
+
+Document:
+
+Backup process
+Files
+Database
+Manifest
+Checksum
+Version
+Restore process
+Validation
+Retention
+
+Identify what is verified and what is not.
+
+============================================================
+28. MOBILE APP
+============================================================
+
+Document current mobile implementation:
+
+Framework
+Authentication
+API
+Screens
+Features
+Build system
+APK
+iOS
+Distribution
+
+Do not modify it.
+
+============================================================
+29. ERROR / GAP REGISTER
+============================================================
+
+Create a complete table:
+
+ID
+AREA
+CURRENT BEHAVIOR
+EXPECTED BEHAVIOR
+SOURCE FILE
+FUNCTION
+SEVERITY
+ACCOUNTING RISK
+DATA RISK
+LOCATION RISK
+USER IMPACT
+CURRENT STATUS
+
+Classify:
+
+CRITICAL
+HIGH
+MEDIUM
+LOW
+INFORMATIONAL
+
+Do NOT fix the issues yet.
+
+============================================================
+30. FORMULA REGISTER
+============================================================
+
+Create a dedicated section:
+
+ERP_FORMULA_REGISTER
+
+List every formula discovered.
+
+For example:
+
+F-001 Sales Total
+F-002 Net Sales
+F-003 COGS
+F-004 Gross Profit
+F-005 Net Profit
+F-006 Customer Outstanding
+F-007 Vendor Outstanding
+F-008 Closing Stock
+F-009 Stock Valuation
+F-010 Depreciation
+...
+
+Continue until all actual formulas are documented.
+
+Include exact source code location for every formula.
+
+============================================================
+31. SOURCE-OF-TRUTH MAP
+============================================================
+
+Create a table:
+
+BUSINESS VALUE
+SOURCE OF TRUTH
+FILE
+FUNCTION
+DATABASE
+USED BY DASHBOARD
+USED BY REPORT
+USED BY PDF
+USED BY XLSX
+USED BY CSV
+
+Include:
+
+Sales
+Net Sales
+COGS
+Gross Profit
+Net Profit
+Opening Stock
+Closing Stock
+Inventory
+Cash
+Bank
+Receivables
+Payables
+GST
+Fixed Assets
+Payroll
+
+============================================================
+32. TEST COVERAGE
+============================================================
+
+Inspect current tests.
+
+Document:
+
+Test file
+What it tests
+PASS/FAIL if known
+Missing coverage
+
+Do not run expensive or destructive tests unnecessarily on Replit Free Tier.
+
+Run lightweight checks where practical.
+
+============================================================
+33. FREE-TIER OPTIMIZATION
+============================================================
+
+Because this is Replit Free Tier:
+
+DO NOT:
+
+- run massive scans repeatedly
+- run destructive tests against the normal development DB
+- run production tests
+- run unnecessary rebuild loops
+- create huge generated files
+- repeatedly restart services without need
+
+Work in phases.
+
+After each major phase, save findings to:
+
+ERP_CURRENT_SYSTEM_MASTER.md
+
+If the task becomes too large for one execution:
+
+STOP SAFELY.
+
+Save progress.
+
+Write:
+
+DOCUMENTATION PROGRESS:
+Phase X completed
+Phase Y remaining
+
+Do not pretend the audit is complete.
+
+============================================================
+34. DO NOT CHANGE FUNCTIONALITY
+============================================================
+
+This task is strictly:
+
+READ
+INSPECT
+TRACE
+DOCUMENT
+VERIFY
+
+Do NOT:
+
+- modify formulas
+- change accounting
+- change stock
+- change permissions
+- change UI
+- change database schema
+- migrate production
+- delete records
+- fix bugs
+
+We will use the resulting documentation later to make changes ONE BY ONE.
+
+============================================================
+35. FINAL OUTPUT
+============================================================
+
+Create/update:
+
+ERP_CURRENT_SYSTEM_MASTER.md
+
+Also create:
+
+ERP_CURRENT_ISSUES_REGISTER.md
+
+and:
+
+ERP_CURRENT_FORMULA_REGISTER.md
+
+At the end give a SHORT summary in chat:
+
+1. Total modules found
+2. Total workflows found
+3. Total formulas found
+4. Total APIs found
+5. Total important database tables found
+6. Total reports found
+7. Total known issues
+8. Critical issues
+9. High issues
+10. Areas not verified
+11. Documentation completion percentage
+
+Most importantly:
+
+DO NOT FIX ANYTHING YET.
+
+I want to first understand exactly:
+
+WHAT THE ERP CURRENTLY DOES
+HOW IT DOES IT
+WHAT FORMULAS IT USES
+WHERE DATA COMES FROM
+HOW ACCOUNTING WORKS
+HOW INVENTORY WORKS
+HOW P&L WORKS
+HOW BALANCE SHEET WORKS
+HOW GST WORKS
+HOW PAYROLL WORKS
+HOW PERMISSIONS WORK
+HOW REPORTS WORK
+AND EXACTLY WHAT IS WRONG.
+
+START WITH CODE INSPECTION AND DOCUMENTATION ONLY.

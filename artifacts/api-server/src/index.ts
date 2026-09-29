@@ -48,6 +48,8 @@ import { addMoneyVoucherOnlinePlatforms } from "./migrations/moneyVoucherOnlineP
 import { addReconciliationBatchSources } from "./migrations/reconciliationBatchSources";
 import { addStorageLocationsSetup } from "./migrations/storageLocationsSetup";
 import { cleanupOrphanStockRows, ensureStockMasterGuardTrigger } from "./migrations/orphanStockCleanup";
+import { addStockDailyClosures } from "./migrations/stockDailyClosures";
+import { startDailyStockCloseScheduler } from "./lib/dailyStockClosures";
 import { addDataImport } from "./migrations/dataImport";
 import { addWarehouseLifecycle } from "./migrations/warehouseLifecycle";
 import {
@@ -5126,12 +5128,24 @@ try {
   console.error("[migration] stock_master_guard_trigger FAILED (non-fatal):", (err as Error).message);
 }
 
+// Establish a future-only quantity baseline only after all startup stock
+// cleanup/backfills have completed. This is required for stock writes to be
+// safely enabled; a failure leaves the API unready rather than inventing data.
+try {
+  await addStockDailyClosures(pool);
+} catch (err) {
+  migrationsError = (err as Error).message ?? String(err);
+  console.error("[migration] stock_daily_closures_baseline_v1 FAILED:", migrationsError);
+  console.error((err as Error).stack ?? "(no stack available)");
+}
+
 // Start financial schedulers only after every schema and repair step above has
 // completed. Starting them inside runMigrations allowed a later migration
 // failure to leave money-writing jobs active against a partial schema.
 if (!bootstrapError && !migrationsError) {
   startRentAccrualScheduler(pool);
   startSalaryAccrualScheduler(pool);
+  startDailyStockCloseScheduler(pool);
 } else {
   console.error("[startup] financial schedulers disabled because boot is not ready");
 }

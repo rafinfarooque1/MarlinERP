@@ -150,20 +150,28 @@ console.log('\n[2] A NEW location cash ledger lands under Cash automatically');
   assert('…and its parent is the Cash group', led?.parent_code === 'STD-CASH', `parent=${led?.parent_code}`);
 }
 
-console.log('\n[3] Backdated purchase enters stock history on the BILL date');
-const daysAgo = (days) => {
-  const d = new Date();
-  d.setUTCDate(d.getUTCDate() - days);
+console.log('\n[3] Open-date purchase edits preserve business-date stock history');
+const addDays = (isoDate, days) => {
+  const d = new Date(`${isoDate}T00:00:00.000Z`);
+  d.setUTCDate(d.getUTCDate() + days);
   return d.toISOString().slice(0, 10);
 };
-const D0 = daysAgo(11), D1 = daysAgo(10), D2 = daysAgo(8), D3 = daysAgo(6), D4 = daysAgo(5);
+const { rows: [stockBaseline] } = await sql(
+  `SELECT baseline_date::text AS baseline_date, time_zone
+     FROM stock_daily_close_baseline WHERE id = 1`);
+if (!stockBaseline) { console.error('Daily stock baseline is not available'); process.exit(1); }
+const COMPANY_TZ = stockBaseline.time_zone || 'Asia/Kolkata';
+const TODAY = new Date().toLocaleDateString('en-CA', { timeZone: COMPANY_TZ });
+// Business writes may use today or a future open date; historical dates before
+// the baseline or at/before a completed daily close are intentionally blocked.
+const D0 = addDays(TODAY, -1), D1 = TODAY, D2 = addDays(TODAY, 1), D3 = addDays(TODAY, 2), D4 = addDays(TODAY, 3);
 let billId = 0;
 {
   const mk = await post('/purchases', {
     vendorId: fixtures.vendorId, purchaseDate: D1, vendorInvoiceDate: D1, invoiceNumber: `${TAG}-INV-1`,
     locationType: 'warehouse', locationId: WH_A, lineItems: [lineA()],
   });
-  assert('Backdated bill created', mk.status === 200 || mk.status === 201, JSON.stringify(mk.data).slice(0, 200));
+  assert('Current-date bill created', mk.status === 200 || mk.status === 201, JSON.stringify(mk.data).slice(0, 200));
   billId = mk.data?.id ?? 0;
   if (billId) createdPurchases.push(billId);
   const { rows } = await sql(
