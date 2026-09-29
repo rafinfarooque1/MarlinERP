@@ -257,7 +257,7 @@ The source-level map establishes principal UI/API ownership and key state. Exact
 
 ### Selected persisted-data relationships
 
-The following are the relationships that can be stated from the traced source paths. These are application-level relationships; not every link is a PostgreSQL foreign key. The development schema snapshot is 93 public base tables, while Drizzle is only a partial schema view.
+The following are the relationships that can be stated from the traced source paths. These are application-level relationships; not every link is a PostgreSQL foreign key. The development schema snapshot is 93 public base tables, while Drizzle is only a partial schema view. `ERP_DATABASE_RELATIONSHIP_MAP.md` adds a source-backed parent/child/key/FK-status map for the checklist’s nine core relationship families; it does not certify live database constraints.
 
 | Domain | Persisted sources and relationships | Authority / limitation |
 |---|---|---|
@@ -283,7 +283,7 @@ The following are the relationships that can be stated from the traced source pa
 
 ### Partially mapped business flows
 
-These are source-backed path sketches, not an exhaustive workflow catalogue. Full UI permission, DB relationship, report/export and audit-event mapping remains pending.
+These are source-backed path sketches, not an exhaustive workflow catalogue. `ERP_WORKFLOW_MAP.md` adds high-level traces for ten workflow groups and records missing links. Full UI permission, DB relationship, report/export and audit-event mapping remains pending.
 
 | Flow | Current source trace | Status / limit |
 |---|---|---|
@@ -328,10 +328,10 @@ The scoped source scan did not find a purchase request/order workflow, a standal
 | 3 | Inventory, costing/valuation, batches, reservations, transfers, production, sales and purchases | **IN PROGRESS** — core stock/cost paths traced; module-level end-to-end coverage remains |
 | 4 | GST, customer/vendor settlement, cash/bank, assets, payroll and HR | **IN PROGRESS** — GST, sale/purchase settlement, cash/bank readers, payroll and fixed-asset formulas traced; remaining flows pending |
 | 5 | Permissions/location security, audit logging, background jobs, backup/restore, mobile and external services | **IN PROGRESS** — authz/LBAC, jobs, backup/import/reset and core mobile paths traced; exhaustive coverage pending |
-| 6 | Full report/export/API inventory, tests, issue cross-check, final counts and verification | **IN PROGRESS** — API inventories, 110 OpenAPI contract rows, all 300 source-only operation identities, route-level guards/effects review, and UI export/filter mapping for all 40 report slots recorded; source-only contracts, report-result parity, test execution, and remaining issue cross-check pending |
+| 6 | Full report/export/API inventory, tests, issue cross-check, final counts and verification | **IN PROGRESS** — API inventories, 110 OpenAPI contract rows, all 300 source-only operation identities, grouped route-level guards/effects, 40 report-slot UI export/filter map and path/test-evidence classifications, nine-family DB relationship map, and ten-group workflow map recorded; per-operation contracts, report-result parity, test execution, and remaining issue cross-check pending |
 
-**DOCUMENTATION PROGRESS:** Phase 1 complete; source-backed passes cover selected paths in Phases 2–6. Static API/report inventories, the 110-operation OpenAPI contract map, grouped route-level guard/effect review, and source-mapped export/filter controls for all 40 Reports Center slots are recorded; API contract and report-result parity remain incomplete.
-**Completion estimate:** 80% — the 55 registry keys are mapped to principal pages/router owners; 410 API declarations have route-level guard/effect review; all 300 source-only operation identities are enumerated; and the 110 OpenAPI operations have spec-declared contract summaries. Source inventories cover all 40 Reports Center slots and 32 formula groups, including current UI filter/export actions. Source-only request/response contracts, remaining workflow/table relationships, report-result parity, issue/test cross-checks and runtime verification remain open. This is not a 100% completion claim.
+**DOCUMENTATION PROGRESS:** Phase 1 complete; source-backed passes cover selected paths in Phases 2–6. Static API/report inventories, the 110-operation OpenAPI contract map, grouped route-level guard/effect review, source-mapped export/filter controls and slot-by-slot path/test-evidence classifications for all 40 Reports Center slots, and focused workflow/relationship maps are recorded; per-operation API contracts and report-result parity remain incomplete.
+**Completion estimate:** 83% — the 55 registry keys are mapped to principal pages/router owners; 410 API declarations have grouped route-level guard/effect review; all 300 source-only operation identities are enumerated; and the 110 OpenAPI operations have spec-declared contract summaries. Source inventories cover all 40 Reports Center slots and 32 formula groups, including current UI filter/export actions and source-based path/test-evidence classification. Nine key relationship families and ten workflow groups now have source maps, but not exhaustive field/caller traces. Source-only request/response contracts, report-result parity, remaining workflow/table relationships, issue/test cross-checks and runtime verification remain open. This is not a 100% completion claim.
 
 ## 7. Inventory status and remaining counts
 
@@ -348,10 +348,10 @@ The scoped source scan did not find a purchase request/order workflow, a standal
 
 ### Not yet established
 
-- Active business modules and complete workflows without double-counting shared components.
+- Active business modules and complete end-to-end workflows without double-counting shared components; `ERP_WORKFLOW_MAP.md` is a high-level partial trace, not exhaustive caller/effect coverage.
 - Per-operation request/response contracts, route-local permission/action roles, location classification, caller mapping and business/database effects for all 410 API operations.
-- Complete report, export and screen-to-route mapping, with output parity.
-- Important table relationships and a full current data dictionary.
+- Report result/format parity and exhaustive screen-to-route mapping; UI filter/export actions are documented in `ERP_REPORT_INVENTORY.md`, while slot classifications and direct test-source evidence are in `ERP_REPORT_PARITY_MATRIX.md`.
+- Exhaustive table relationships and a full current data dictionary; nine core relationship families have a source/FK-status map in `ERP_DATABASE_RELATIONSHIP_MAP.md`.
 - Exhaustive formula count and remaining per-module formula families.
 - Full code issue inventory and final severity/release-readiness assessment.
 - 57 permission keys reconciled to active, hidden, legacy/satellite and retired page/module surfaces with complete module ownership.
