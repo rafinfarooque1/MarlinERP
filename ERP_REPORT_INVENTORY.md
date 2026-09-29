@@ -14,7 +14,7 @@
 
 ## Reports Center — 40 report slots
 
-All `/reports/:category` views share the permission `page:/reports/sales`. The shared `RangeBar` supports date filters; report-specific location controls narrow data only within server-authorized scope. Doc-based views expose generic XLSX/PDF/Print over preformatted UI rows; callback-only views expose CSV and, where supplied, a PDF callback; some views expose CSV only or PDF only. The generic PDF/XLSX endpoint rejects more than 3,000 total rows with HTTP 413. Share is not a generic report export. Exact filters and export actions below are source-mapped from the current row component; this is not a runtime verification.
+All `/reports/:category` views share the permission `page:/reports/sales`. The shared `RangeBar` supports date filters; report-specific location controls narrow data only within server-authorized scope. Doc-based views expose generic XLSX/PDF/Print over preformatted UI rows; callback-only views expose CSV and, where supplied, a PDF callback; some views expose CSV only or PDF only. The generic PDF/XLSX endpoint rejects more than 3,000 total rows with HTTP 413. Share is not a generic report export. Exact filters and export actions below are source-mapped from the current row component; this is not a runtime verification. `ERP_REPORT_PARITY_MATRIX.md` adds the slot-by-slot path classification and direct test-source evidence; it is not a passed test or output-parity certification.
 
 | Category / report | Frontend source | API and principal source | Filters / scope | Output |
 |---|---|---|---|---|
