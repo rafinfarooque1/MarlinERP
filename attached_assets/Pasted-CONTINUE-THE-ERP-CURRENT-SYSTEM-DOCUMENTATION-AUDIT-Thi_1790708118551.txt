@@ -1,0 +1,439 @@
+CONTINUE THE ERP CURRENT-SYSTEM DOCUMENTATION AUDIT.
+
+This is still a DOCUMENTATION-ONLY phase.
+
+DO NOT modify application behavior, database schema, migrations, production data, permissions, UI, tests, configuration, or business logic.
+
+CURRENT BASELINE:
+- 410 total source route operations
+- 110 OpenAPI operations
+- 300 source-only operations
+- 134 source-only operations now mapped
+- 166 source-only operations remain
+- 73 mapped mutations
+- 61 mapped reads
+- 94 previous high-risk routes were mapped
+- Inventory/transfer tranche is complete
+- 3 transfer lifecycle routes are OpenAPI-present
+- 2 transfer lifecycle routes are source-only
+- GAP-013 documents stock-verification batch shortfalls and zero-cost negative adjustment behavior without declaring a confirmed defect
+- F-033 = physical-verification trace
+- F-034 = opening-stock-import trace
+- No application/database/schema/migration/UI/permission changes
+- No tests/runtime/database queries were executed
+- git diff --check passed
+
+NEXT PRIORITY:
+Map the remaining source-only FINANCIAL, ACCOUNTING, GST, PAYROLL, FIXED-ASSET, RECEIPT/PAYMENT, SETTLEMENT, CASH/BANK and REPORTING routes.
+
+Do not redo already documented routes unless needed to correct a contradiction.
+
+==================================================
+1. FINANCIAL / ACCOUNTING MUTATION ROUTES
+==================================================
+
+Find the remaining source-only routes affecting:
+
+- sales accounting
+- purchase accounting
+- sales returns
+- purchase returns
+- receipts
+- payments
+- advances
+- customer/vendor allocations
+- journal vouchers
+- expenses
+- cash transactions
+- bank transactions
+- opening balances
+- account adjustments
+- ledger corrections
+- month locking
+- accounting reversals
+- cancellation
+- settlement
+- reconciliation
+
+For every exact method/path document:
+
+- method/path
+- source file/router
+- handler
+- request/body
+- response
+- authentication
+- permission
+- location scope
+- tables read
+- tables written
+- accounting entries
+- debit/credit behavior
+- source document relationship
+- reversal/cancellation behavior
+- audit behavior
+- month-lock behavior
+- duplicate/idempotency behavior
+- UI consumer
+- report consumer
+- test evidence
+- verification status
+
+Never infer an accounting effect from the route name.
+
+==================================================
+2. CUSTOMER/VENDOR SETTLEMENT
+==================================================
+
+Trace the complete lifecycle:
+
+Invoice
+→ outstanding
+→ receipt/payment
+→ allocation
+→ customer/vendor ledger
+→ cash/bank
+→ reconciliation
+→ reports
+
+Explicitly determine from source:
+
+- whether one receipt creates one financial receipt
+- whether allocations are separate financial transactions or settlement metadata
+- advance-only receipt behavior
+- overpayment/credit handling
+- partial settlement
+- multi-invoice allocation
+- allocation correction
+- cancellation
+- duplicate prevention
+- customer/vendor location scope
+- ledger impact
+- dashboard impact
+
+Also identify whether the implementation matches the documented accounting rules already present in the system documentation.
+
+If different, document:
+
+EXPECTED/DOCUMENTED RULE
+vs
+CURRENT SOURCE IMPLEMENTATION
+
+Do not label the difference a bug without sufficient evidence.
+
+==================================================
+3. CASH / BANK
+==================================================
+
+Map remaining routes for:
+
+- cash
+- petty cash
+- bank accounts
+- bank transactions
+- bank reconciliation
+- reconciliation batches
+- processing charges
+- transfers between cash/bank
+- settlement-related bank entries
+
+Trace:
+
+source transaction
+→ ledger
+→ cash/bank balance
+→ reconciliation
+→ reports
+
+Determine location assignment rules and whether they are server-enforced.
+
+Pay particular attention to:
+- bank-account location assignment
+- eligible transactions for reconciliation
+- bank receipts versus cash receipts
+- duplicate reconciliation
+- reset behavior
+- atomicity
+- audit trail
+
+==================================================
+4. GST
+==================================================
+
+Map every remaining source-only GST route and consumer.
+
+Trace:
+
+sales/purchases/returns
+→ tax calculation
+→ tax ledger/posting
+→ GST summary
+→ GST reports
+→ export
+
+Identify whether the application has multiple independent GST calculation/reporting paths.
+
+Document:
+
+- CGST
+- SGST
+- IGST
+- input tax
+- output tax
+- credit/debit notes
+- interstate behavior
+- same-GST internal transfers
+- different-GST transfers
+- B2B/B2C
+- tax rounding
+- tax period/date
+- location/GST registration
+- report source of truth
+
+Do NOT claim GST parity unless it is actually demonstrated by source/test/runtime evidence.
+
+==================================================
+5. PAYROLL / HR
+==================================================
+
+Map remaining source-only payroll and HR financial routes:
+
+- employee salary
+- attendance
+- payroll calculation
+- advances
+- deductions
+- PF
+- ESI
+- salary payment
+- payroll journal
+- employee ledger
+- corrections
+- month locking
+
+Trace:
+
+attendance
+→ payroll
+→ deductions
+→ net salary
+→ payment
+→ journal
+→ P&L / Balance Sheet
+
+Identify exact formulas only where source establishes them.
+
+Record whether calculations use:
+- rupees
+- paise/integer arithmetic
+- rounding
+- cumulative rounding
+- monthly business date
+- location
+
+Do not infer statutory compliance from field names.
+
+==================================================
+6. FIXED ASSETS
+==================================================
+
+Map remaining routes for:
+
+- asset purchase
+- capitalization
+- depreciation
+- depreciation run
+- accumulated depreciation
+- disposal
+- disposal loss/gain
+- asset ledger
+- fixed asset reports
+- journal posting
+
+Trace:
+
+purchase
+→ capitalization
+→ fixed asset register
+→ depreciation
+→ accumulated depreciation
+→ Balance Sheet
+→ disposal
+
+Document idempotency and month-lock behavior where source establishes it.
+
+==================================================
+7. REPORTING DEPENDENCY TRACE
+==================================================
+
+For each major report identify the authoritative source path:
+
+- P&L
+- Balance Sheet
+- Trial Balance
+- General Ledger
+- Customer Ledger
+- Vendor Ledger
+- Cash Book
+- Bank Book
+- Inventory Valuation
+- Stock Ledger
+- COGS
+- GST
+- Payroll
+- Fixed Assets
+- Dashboard financial totals
+
+For each:
+
+- UI route
+- API route
+- calculation function
+- source tables
+- formula
+- location filter
+- date filter
+- All Locations behavior
+- export path
+- PDF path
+- XLSX path
+- CSV path
+- print path
+- whether export reuses screen data or independently reconstructs it
+
+This is particularly important because the previous audit already identified potentially separate reporting paths.
+
+==================================================
+8. FORMULA REGISTER
+==================================================
+
+Extend the formula register only with source-backed formulas.
+
+For every formula:
+
+- formula name
+- exact expression if available
+- source function/file
+- inputs
+- outputs
+- date semantics
+- location semantics
+- rounding
+- downstream consumers
+
+Flag duplicated formulas when two implementations independently calculate the same business quantity.
+
+Do not call them equivalent unless inputs/formula/rounding are verified.
+
+==================================================
+9. TEST EVIDENCE
+==================================================
+
+Search existing tests for each high-risk behavior.
+
+Use exactly:
+
+SOURCE-ONLY
+TEST EXISTS — RESULT NOT ESTABLISHED
+TEST-EVIDENCED
+RUNTIME-VERIFIED
+DATABASE-VERIFIED
+END-TO-END VERIFIED
+UNKNOWN
+
+Do not execute tests in this documentation phase.
+
+Do not claim that a passing test exists unless the source clearly establishes the result.
+
+==================================================
+10. ISSUE REGISTER
+==================================================
+
+Only add source-supported findings.
+
+Categories:
+
+DOCUMENTATION
+GAP
+INFO
+RISK
+HISTORICAL CANDIDATE
+
+Keep severity/impact UNKNOWN where it has not been established.
+
+Do not convert differences from intended business rules into confirmed bugs without sufficient evidence.
+
+==================================================
+11. RECONCILE COUNTS
+==================================================
+
+At completion report:
+
+- total source operations
+- OpenAPI operations
+- source-only operations
+- mapped source-only operations
+- remaining source-only operations
+- mutation/read split
+- high-risk mapped count
+- financial routes mapped
+- GST routes mapped
+- payroll routes mapped
+- asset routes mapped
+- settlement routes mapped
+- cash/bank routes mapped
+
+Check for:
+- duplicate method/path identities
+- missing source-only identities
+- inconsistent numbering
+- conflicting documentation
+
+==================================================
+12. DOCUMENTATION FILES
+==================================================
+
+Update existing documentation only:
+
+- ERP_CURRENT_SYSTEM_MASTER.md
+- ERP_CURRENT_ISSUES_REGISTER.md
+- ERP_CURRENT_FORMULA_REGISTER.md
+- ERP_API_ROUTE_INVENTORY.md
+- ERP_DATABASE_RELATIONSHIP_MAP.md
+- ERP_WORKFLOW_MAP.md
+- ERP_REPORT_PARITY_MATRIX.md
+- any existing dedicated financial/GST/payroll/asset documentation
+
+Do not create redundant parallel documents.
+
+==================================================
+13. FINAL CHECKPOINT
+==================================================
+
+Report:
+
+A. What was documented
+B. What remains undocumented
+C. Confirmed source divergences
+D. Unverified risks
+E. Formula gaps
+F. Report-source inconsistencies
+G. Test evidence status
+H. Remaining source-only route count
+
+Explicitly state:
+
+Application code changed: NO
+Database changed: NO
+Schema changed: NO
+Migration changed: NO
+Permissions changed: NO
+UI changed: NO
+Tests executed: NO
+Runtime requests executed: NO
+Database queries executed: NO
+Production accessed: NO
+
+Run only documentation consistency checks such as git diff --check.
+
+Do not stop to ask for approval unless a genuine source ambiguity prevents further documentation.
