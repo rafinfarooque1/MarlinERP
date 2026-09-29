@@ -1,9 +1,9 @@
 # Frozen Fruits ERP — Current System Master
 
 **Audit status:** IN PROGRESS — Phases 1–6 partial
-**Snapshot date:** 2026-09-29  
-**Evidence scope:** current repository source and read-only development-database schema metadata  
-**Production database:** NOT QUERIED  
+**Snapshot date:** 2026-09-29
+**Evidence scope:** current repository source and read-only development-database schema metadata
+**Production database:** NOT QUERIED
 **Functional changes during this audit:** none
 
 > This is the new working master document. It does not replace code as the authority. Findings labelled **NOT VERIFIED** are deliberately left open until the relevant route, service, schema and tests are traced.

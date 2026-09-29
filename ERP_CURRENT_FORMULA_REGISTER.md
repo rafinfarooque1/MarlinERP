@@ -1,7 +1,7 @@
 # Frozen Fruits ERP — Current Formula Register
 
 **Audit status:** IN PROGRESS — Phases 1–6 partial
-**Snapshot date:** 2026-09-29  
+**Snapshot date:** 2026-09-29
 **Verified formula/algorithm groups:** 30 (partial audit; not a total count of all ERP formulas)
 **Production database:** NOT QUERIED
 
