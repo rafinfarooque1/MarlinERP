@@ -1,7 +1,7 @@
 # Frozen Fruits ERP — Current Issues Register
 
 **Audit status:** IN PROGRESS — Phases 1–6 partial
-**Snapshot date:** 2026-09-29
+**Snapshot date:** 2026-09-30
 **Functional code changes:** none during this documentation audit
 **Production database:** NOT QUERIED
 
@@ -50,6 +50,7 @@ These are source observations or missing verification evidence, not confirmed op
 | GAP-009 | Public share-token lifecycle test coverage | Positive-path tests exist for invoice public-token/share-link PDFs and public quotation PDFs. The inspected content search did not find negative cases for expiry, revocation, malformed/mismatched-context, or tampered tokens. | `artifacts/api-server/src/app.ts:100-129`; `tests/invoice-pdf.test.mjs:451-470`; `tests/quotation-other-charges.test.mjs:208-217,281-300`; public/share routes. | MEDIUM | Whether such negative coverage exists under non-obvious test names; whether the source tests pass in the current environment. Tests were not run. | POSITIVE-PATH TEST SOURCE CONFIRMED; NEGATIVE LIFECYCLE COVERAGE NOT VERIFIED |
 | GAP-010 | Web permission loading state | The web permission hook can temporarily return full access while permissions load; the route guard shows a loading state and server guards remain authoritative. | `artifacts/marlin-erp/src/lib/usePermission.ts:117-134`; `components/RoutePermissionGuard.tsx:48-68`; server `middleware/permissions.ts`. | LOW | Whether any individual page briefly renders sensitive data before its protected query is blocked. | UI EXPOSURE RISK OBSERVED; API BYPASS NOT OBSERVED |
 | GAP-012 | Stock reorder report location scope | `GET /stock/reorder-report` returns qualifying `stock_entries` across all branches without a visible authenticated-location predicate. Any hierarchy with the page view grant can reach it; administrators can grant the right, and the legacy seed may have granted it to existing non-level-1 roles. Static source review confirms intended seed behavior (Management view/download and one-time legacy seeds), but does not establish current development permission rows. | `artifacts/api-server/src/routes/inventory-batches.ts:484-510`; `middleware/permissions.ts:35-77`; `routes/company.ts:705-765`; seed/default-deny in `src/index.ts:3739-3812,3839-3886`; `src/migrations/orgHierarchyRestructure.ts:57-76,125-149`; page registration in `moduleRegistry.ts:420-423`. | MEDIUM | **CURRENT GRANTS: NOT VERIFIED.** Actual development rows and data exposure were not queried or runtime-tested. New hierarchies default-deny, but this does not establish grants on existing roles. | UNSCOPED QUERY CONFIRMED; NON-HO REACHABILITY TECHNICALLY POSSIBLE; CURRENT GRANTS/IMPACT NOT VERIFIED |
+| GAP-013 | Physical stock verification batch/cost trail | For a negative count variance, the handler sets `stock_entries` to the counted quantity even when FEFO batch consumption cannot cover the full reduction; the residual can remain untracked. The negative adjustment ledger row uses unit cost 0. Positive adjustment uses master average/manual-cost fallback. No direct JV/P&L/GST write is visible in the handler. | `artifacts/api-server/src/routes/inventory-batches.ts:553-639`; `src/lib/batches.ts:82-110,113-165,309-316`; `src/lib/stockLedger.ts:40-114`; formula F-033. | NOT ASSESSED | Expected handling of a batch shortfall is **UNKNOWN — not established from source**. Whether the residual affects valuation, reports or downstream books, whether this behavior is intentional, and whether any live rows exhibit it are NOT VERIFIED. Direct route test result is NOT ESTABLISHED. | SOURCE BEHAVIOR CONFIRMED; BUSINESS/REPORT IMPACT NOT VERIFIED |
 
 ## Historical findings pending source verification
 
@@ -69,10 +70,10 @@ These are leads from earlier documentation, not current confirmed defects. They 
 
 - Confirmed documentation issues: **4**
 - Source-confirmed divergence / contract / test-gap records: **7** (GAP-001 through GAP-006 and GAP-011); not all are demonstrated user-facing defects
-- Additional observed risks with impact NOT VERIFIED: **5** (GAP-007 through GAP-010 and GAP-012)
+- Additional observed risks with impact NOT VERIFIED: **6** (GAP-007 through GAP-010 and GAP-012–GAP-013)
 - Confirmed downstream user-facing defects: **NOT ESTABLISHED**
 - Informational data-semantic and operational constraints: **9** (INFO-001 through INFO-009)
 - Historical issue candidates: **2**, not included in confirmed totals
 - Critical/high functional issues: **NOT ASSESSED**
 
-**DOCUMENTATION PROGRESS:** Phases 1–6 partial; current source-backed relationship/workflow maps, a 40-slot report path/test-evidence matrix, 94 per-operation high-risk API mutation/read records, and the P&L/Balance Sheet consumer-chain plus historical stock valuation reader trace are linked from the master. Static seed intent for reorder-report permissions was inspected; actual development permission rows remain NOT VERIFIED. Remaining domains, downstream impact, severity confirmation and final issue cross-check are pending. Issue totals above are unchanged; the additions are documentation evidence, not new implementation findings.
+**DOCUMENTATION PROGRESS:** Phases 1–6 partial; current source-backed relationship/workflow maps, a 40-slot report path/test-evidence matrix, 134 per-operation high-risk API mutation/read records, inventory verification/opening-stock formula traces, and the P&L/Balance Sheet consumer-chain plus historical stock valuation reader trace are linked from the master. Static seed intent for reorder-report permissions was inspected; actual development permission rows remain NOT VERIFIED. Remaining domains, downstream impact, severity confirmation and final issue cross-check are pending. GAP-013 records source behavior and unresolved impact, not a proven functional defect.

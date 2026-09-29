@@ -1,7 +1,7 @@
 # Frozen Fruits ERP — Current System Master
 
 **Audit status:** IN PROGRESS — Phases 1–6 partial
-**Snapshot date:** 2026-09-29
+**Snapshot date:** 2026-09-30
 **Evidence scope:** current repository source and read-only development-database schema metadata
 **Production database:** NOT QUERIED
 **Functional changes during this audit:** none
@@ -137,6 +137,8 @@ The older documents are useful as leads and historical evidence only. In particu
 - Availability subtracts active reservations from on-hand quantity and clamps at zero. A `hold` reduces availability; `in_transit` is already deducted from the sender and remains sender-owned for valuation.
 - `lib/valuation.ts:213-399` is the canonical valuation path. Current location cost prefers dated product/location checkpoints, then master weighted-average/manual cost where allowed. Historical valuation uses dated checkpoints and movements; missing evidence is excluded and surfaced, not replaced with a current master cost. On-hand value uses the unrounded cost for multiplication; in-transit value uses dispatch cost.
 - FEFO batches are ordered by expiry ascending, NULL expiry last, then batch ID; each take is the lesser of available lot quantity and remaining request. Any remaining quantity without covered lot evidence is untracked.
+- Physical stock verification sets location quantity to the counted value and writes a signed ledger row/checkpoint. Positive variance creates an adjustment lot; negative variance consumes available batches FEFO, but an uncovered residual does not block the quantity update, and the negative adjustment ledger unit cost is 0. No direct JV/P&L/GST write is visible in the handler. Intent and downstream parity are NOT VERIFIED; see F-033 and GAP-013.
+- Opening-stock import is an additive finished-item transaction module, not an absolute correction. Generic import demo/approve/rollback routes run it; no dedicated opening-stock URL exists. Demo stock writes roll back, approve commits, and rollback is blocked when the imported OPN lot was consumed. It writes verification metadata, stock entries, an OPN batch, dated stock ledger and HO production mirror, with no direct accounting/GST posting. Its average-cost update uses global item quantity across locations; see F-034. Dedicated opening-stock test evidence was not identified; test result is NOT ESTABLISHED.
 - Potential location-scope exception: `GET /stock/reorder-report` requires `page:/headoffice/inventory-reports` but has no visible authenticated-location predicate and returns qualifying rows across locations. A non-Head-Office hierarchy with the view grant can reach it; the page is administrator-grantable, and the legacy seed may have granted it to existing roles. New hierarchies default-deny. Current grants and actual exposure were not queried or tested; see GAP-012.
 - `lib/productionCosting.ts:218-275` computes material cost, overhead, daily payroll labour allocation, total cost, unit cost and wastage value. Route-level producer coverage is still to be completed.
 - Daily stock close is future-only. A baseline and completed daily snapshots support `FI-08`; the write guard rejects uncovered/backdated movements. Development schema includes four stock-close tables and a trigger. The baseline does not establish a reconstructed historical daily stock record.
@@ -283,7 +285,7 @@ The following are the relationships that can be stated from the traced source pa
 
 ### Partially mapped business flows
 
-These are source-backed path sketches, not an exhaustive workflow catalogue. `ERP_WORKFLOW_MAP.md` adds high-level traces for ten workflow groups and records missing links. Full UI permission, DB relationship, report/export and audit-event mapping remains pending.
+These are source-backed path sketches, not an exhaustive workflow catalogue. `ERP_WORKFLOW_MAP.md` adds high-level traces for twelve workflow groups and records missing links. Full UI permission, DB relationship, report/export and audit-event mapping remains pending.
 
 | Flow | Current source trace | Status / limit |
 |---|---|---|
@@ -318,7 +320,7 @@ These are source-backed path sketches, not an exhaustive workflow catalogue. `ER
 
 ### Route-search negatives (product intent NOT VERIFIED)
 
-The scoped source scan did not find a purchase request/order workflow, a standalone stock-adjustment endpoint (physical stock verification is present), a transfer-cancel endpoint, a GST return filing/submission write route, or a separate material-consumption API outside production create/edit. These are documented as **not found in the inspected routes**, not as confirmed defects or claims that the business does not need them.
+The scoped source scan did not find a purchase request/order workflow, a generic stock-adjustment API distinct from physical stock verification (`POST /stock/verifications` is present), a dedicated opening-stock URL (opening stock is an import module), a separate transfer edit/cancel route within the inspected `stock.ts` router, a GST return filing/submission write route, or a separate material-consumption API outside production create/edit. Transfer rejection is the in-transit terminal reversal; these are documented as **not found in the inspected routes**, not as confirmed defects or claims that the business does not need them.
 
 ## 6. Phase plan
 
@@ -326,13 +328,13 @@ The scoped source scan did not find a purchase request/order workflow, a standal
 |---|---|---|
 | 1 | Existing-document audit, architecture, code/module/API/table inventory baseline | **COMPLETE** |
 | 2 | Accounting engine, source-of-truth functions, exact formula register, P&L and Balance Sheet | **IN PROGRESS** — core posting/P&L/BS/GST paths and the Reports Center/Chart statement consumer chain are source-mapped; report exceptions, monthly presentation and full consumer/export parity remain |
-| 3 | Inventory, costing/valuation, batches, reservations, transfers, production, sales and purchases | **IN PROGRESS** — core stock/cost paths and the distinct historical stock-report/P&L readers are source-mapped; numeric parity and module-level end-to-end coverage remain NOT VERIFIED |
+| 3 | Inventory, costing/valuation, batches, reservations, transfers, production, sales and purchases | **IN PROGRESS** — core stock/cost paths, physical verification, additive opening-stock imports, transfer lifecycle and the distinct historical stock-report/P&L readers are source-mapped; numeric parity and module-level end-to-end coverage remain NOT VERIFIED |
 | 4 | GST, customer/vendor settlement, cash/bank, assets, payroll and HR | **IN PROGRESS** — GST, sale/purchase settlement, cash/bank readers, payroll and fixed-asset formulas traced; remaining flows pending |
 | 5 | Permissions/location security, audit logging, background jobs, backup/restore, mobile and external services | **IN PROGRESS** — authz/LBAC, jobs, backup/import/reset and core mobile paths traced; exhaustive coverage pending |
-| 6 | Full report/export/API inventory, tests, issue cross-check, final counts and verification | **IN PROGRESS** — API inventories, 110 OpenAPI contract rows, all 300 source-only operation identities, grouped route-level guards/effects, 94 per-operation high-risk mutation/read records, 40 report-slot UI export/filter map and path/test-evidence classifications, nine-family DB relationship map, and ten-group workflow map recorded; per-operation contracts remain incomplete, with report-result parity, test execution, and remaining issue cross-check pending |
+| 6 | Full report/export/API inventory, tests, issue cross-check, final counts and verification | **IN PROGRESS** — API inventories, 110 OpenAPI contract rows, all 300 source-only operation identities, grouped route-level guards/effects, 134 per-operation high-risk records, 40 report-slot UI export/filter map and path/test-evidence classifications, ten-family DB relationship map, and twelve-group workflow map recorded; per-operation contracts remain incomplete, with report-result parity, test execution, and remaining issue cross-check pending |
 
-**DOCUMENTATION PROGRESS:** Phase 1 complete; source-backed passes cover selected paths in Phases 2–6. Static API/report inventories, the 110-operation OpenAPI contract map, grouped route-level guard/effect review, 94 per-operation records for source-only high-risk financial mutations and financial/report/GST/dashboard/party-ledger/stock-valuation reads, the P&L/Balance Sheet consumer chain and historical stock valuation reader distinction, source-mapped export/filter controls and slot-by-slot path/test-evidence classifications for all 40 Reports Center slots, and focused workflow/relationship maps are recorded; per-operation API contracts and report-result parity remain incomplete.
-**Completion estimate:** 83% — the 55 registry keys are mapped to principal pages/router owners; 410 API declarations have grouped route-level guard/effect review; all 300 source-only operation identities are enumerated; and the 110 OpenAPI operations have spec-declared contract summaries. Source inventories cover all 40 Reports Center slots and 32 formula groups, including current UI filter/export actions and source-based path/test-evidence classification. Nine key relationship families and ten workflow groups now have source maps, but not exhaustive field/caller traces. Source-only request/response contracts, report-result parity, remaining workflow/table relationships, issue/test cross-checks and runtime verification remain open. This is not a 100% completion claim.
+**DOCUMENTATION PROGRESS:** Phase 1 complete; source-backed passes cover selected paths in Phases 2–6. Static API/report inventories, the 110-operation OpenAPI contract map, grouped route-level guard/effect review, 134 per-operation records for source-only high-risk financial and inventory/transfer operations, the P&L/Balance Sheet consumer chain, historical stock valuation distinction, stock verification/opening-stock formulas, source-mapped export/filter controls and slot-by-slot path/test-evidence classifications for all 40 Reports Center slots, and focused workflow/relationship maps are recorded. Per-operation API contracts and report-result parity remain incomplete.
+**Completion estimate:** 83% — the 55 registry keys are mapped to principal pages/router owners; 410 API declarations have grouped route-level guard/effect review; all 300 source-only operation identities are enumerated; and the 110 OpenAPI operations have spec-declared contract summaries. Source inventories cover all 40 Reports Center slots and 34 formula groups, including current UI filter/export actions and source-based path/test-evidence classification. Ten key relationship families and twelve workflow groups now have source maps, but not exhaustive field/caller traces. Source-only request/response contracts, report-result parity, remaining workflow/table relationships, issue/test cross-checks and runtime verification remain open. This is not a 100% completion claim.
 
 ## 7. Inventory status and remaining counts
 
@@ -340,18 +342,18 @@ The scoped source scan did not find a purchase request/order workflow, a standal
 
 - 43 API route files, 42 mounted routers and 410 unique normalized method/path declarations. See `ERP_API_INVENTORY.md`.
 - OpenAPI: 66 path keys and 110 HTTP operation keys; 110 matched and 300 source operations were not represented in the current spec. This is a static-source comparison, not runtime.
-- Source-only API progress: 94 per-operation high-risk records (55 mutations and 39 reads) in `ERP_HIGH_RISK_API_SCOPE_REGISTER.md`; fields remain partly NOT VERIFIED, so these are not fully established contracts.
+- Source-only API progress: 134 per-operation high-risk records (73 mutations and 61 reads) in `ERP_HIGH_RISK_API_SCOPE_REGISTER.md`; fields remain partly NOT VERIFIED, so these are not fully established contracts. The source-only inventory remains 300 identities; 166 are not yet in this per-operation register.
 - Reports: 34 declarations in the selected report-oriented source set (12 Reports Center, 11 Financial Reports Center and 11 adjacent/legacy routes); not an exhaustive report count.
 - UI: nine Reports Center categories, 40 defined report slots, 14 financial report-picker values, and eight dashboard GET routes. These are different counting units; slots share API routes.
 - 93 public development base tables and three trigger objects, read-only snapshot dated 2026-09-29; production remains unqueried.
 - 70 API test/spec files (73 total files including helpers/support); 4 filename matches for report/dashboard/export/pdf/xlsx/csv; no tests were executed.
-- The formula register contains 32 verified formula/algorithm groups; this is not an exhaustive formula total.
+- The formula register contains 34 source-traced formula/algorithm groups; this is not an exhaustive formula total or test/accounting-policy certification.
 - Four configured workflows, 55 module-registry keys and 57 generated permission page keys were inventoried; keys are not equivalent to distinct active business modules.
 
 ### Not yet established
 
 - Active business modules and complete end-to-end workflows without double-counting shared components; `ERP_WORKFLOW_MAP.md` is a high-level partial trace, not exhaustive caller/effect coverage.
-- Per-operation request/response contracts, route-local permission/action roles, location classification, caller mapping and business/database effects for all 410 API operations; 94 source-only high-risk operations have per-operation records, but many details remain NOT VERIFIED and the other 206 source-only operations have not yet been mapped per operation.
+- Per-operation request/response contracts, route-local permission/action roles, location classification, caller mapping and business/database effects for all 410 API operations; 134 source-only high-risk operations have per-operation records, but many details remain NOT VERIFIED and the other 166 source-only operations have not yet been mapped per operation.
 - Report result/format parity and exhaustive screen-to-route mapping; UI filter/export actions are documented in `ERP_REPORT_INVENTORY.md`, while slot classifications and direct test-source evidence are in `ERP_REPORT_PARITY_MATRIX.md`.
 - Exhaustive table relationships and a full current data dictionary; nine core relationship families have a source/FK-status map in `ERP_DATABASE_RELATIONSHIP_MAP.md`.
 - Exhaustive formula count and remaining per-module formula families.

@@ -1,7 +1,7 @@
 # Frozen Fruits ERP — Reports Center Path and Test Evidence Matrix
 
 **Audit status:** PARTIAL — all 40 slots classified from source; output parity is not certified  
-**Snapshot date:** 2026-09-29  
+**Snapshot date:** 2026-09-30
 **Tests/runtime:** NOT RUN  
 **Production database:** NOT QUERIED
 
@@ -59,3 +59,12 @@ The 40 slot names, UI sources, filters and export actions are listed in `ERP_REP
 - Location/all-location output parity is established only for the specific tested surfaces cited here. Other report slots remain **NOT VERIFIED**; visible UI filters do not prove server authorization or all-location behavior.
 - P&L/Balance Sheet source mapping identifies the shared endpoint and both primary UI consumers, but rendered statement rows, Chart Month Wise columns, drilldowns, dashboard/legacy-reader comparisons and PDF/XLSX/CSV/Print equality remain **NOT VERIFIED**. The cited tests were not run.
 - Screen/export action, source service, visible filters and row preparation are mapped in `ERP_REPORT_INVENTORY.md`. This matrix does not establish PDF/XLSX/CSV/Print output parity or certify the underlying financial/inventory values.
+
+## Inventory, transfer and production parity boundary
+
+- Reports Center Inventory — Stock Valuation is the canonical current valuation slot and calls the shared stock-valuation path. `dashboard-parity.test.mjs:322-328` asserts dashboard stock value equals the valuation `grandTotal`; `stock-valuation-location-cost.test.mjs:102-140` covers location-cost/statement scenarios. These are source assertions only: **TEST EXISTS — RESULT NOT ESTABLISHED**.
+- Near Expiry and Expired Stock use the shared expiry reader; Slow/Dead Stock uses movement analysis; Reorder Alerts uses the separate reorder query. Direct report-output assertions were not identified for these slots. Reorder location scope is the existing GAP-012; current grants/exposure remain unverified.
+- Transfer Register reads `/stock/transfers`; Branch Transfers — Transfer Register uses `/reports/branch-transfers`; GST Transfers uses `/reports/gst-transfers`. They are separate readers with different document/accounting purposes. Transfer-list/detail/approve/reject source tests exist, but their presence does not establish report totals or export parity: **TEST EXISTS — RESULT NOT ESTABLISHED**.
+- The five direct transfer lifecycle routes are mapped in `ERP_WORKFLOW_MAP.md`; only list/create/detail are OpenAPI-present. Approve/reject are source-only. Transfer challan and taxable-transfer invoice PDFs render stored transfer-linked documents; no direct PDF parity assertion was identified.
+- Production Output, Material Consumption, Batch Costs and Wastage share `/productions/reports`; no direct report-output result was established. Physical stock verification is not a Reports Center slot; its stock-entry, batch, ledger and checkpoint outputs were mapped, but no matching report/P&L/Balance Sheet numeric reconciliation was established.
+- Live valuation, historical stock valuation, historical P&L/Balance Sheet, dashboard, transfer-in-transit and partial-receipt paths have different source rules documented at `ERP_CURRENT_FORMULA_REGISTER.md:F-011–F-013`. Numeric parity among them, inventory reports, transfer reports, GST, P&L, Balance Sheet and exports is **UNKNOWN — not established from source**. No tests or runtime comparisons were performed.
