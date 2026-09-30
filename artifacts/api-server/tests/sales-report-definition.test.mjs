@@ -78,6 +78,52 @@ try {
     total: 19870,
   }, "By Item keeps the merchandise-line totals");
 
+  const customerRow = (await pool.query(
+    `SELECT customer_id
+       FROM sales
+      WHERE id = ANY($1::int[]) AND customer_id IS NOT NULL
+      GROUP BY customer_id
+      ORDER BY COUNT(*) DESC, customer_id
+      LIMIT 1`,
+    [ids],
+  )).rows[0];
+  assert.ok(customerRow, "the report fixture includes at least one identified customer");
+  const customerId = Number(customerRow.customer_id);
+  const customerByItem = await api(`/reports/sales-by-item?${scope}&customerId=${customerId}`);
+  assert.equal(customerByItem.status, 200, "By Item accepts a customer filter");
+  const expectedCustomerRows = (await pool.query(
+    `SELECT (li->>'itemId')::int AS item_id,
+            SUM(COALESCE((li->>'quantity')::numeric,0)) AS qty,
+            SUM(COALESCE((li->>'lineSubtotal')::numeric,0)) AS taxable,
+            SUM(COALESCE((li->>'taxAmount')::numeric,0)) AS tax,
+            SUM(COALESCE((li->>'lineTotal')::numeric,
+                         COALESCE((li->>'lineSubtotal')::numeric,0) + COALESCE((li->>'taxAmount')::numeric,0))) AS total,
+            COUNT(DISTINCT s.id) AS invoices
+       FROM sales s, jsonb_array_elements(s.line_items) li
+      WHERE s.branch_transfer_id IS NULL AND s.cancelled_at IS NULL
+        AND s.sale_date >= '2026-09-11'::date AND s.sale_date <= '2026-09-13'::date
+        AND COALESCE(s.location_type,'outlet') = 'warehouse'
+        AND COALESCE(s.location_id, s.outlet_id) = 2
+        AND s.customer_id = $1
+      GROUP BY 1 ORDER BY 4 DESC NULLS LAST`,
+    [customerId],
+  )).rows.map((row) => ({
+    itemId: Number(row.item_id),
+    invoices: Number(row.invoices),
+    qty: Math.round(Number(row.qty) * 1000) / 1000,
+    taxable: Math.round(Number(row.taxable) * 100) / 100,
+    tax: Math.round(Number(row.tax) * 100) / 100,
+    total: Math.round(Number(row.total) * 100) / 100,
+  }));
+  assert.deepEqual(
+    customerByItem.data.rows.map(({ itemId, invoices, qty, taxable, tax, total }) =>
+      ({ itemId, invoices, qty, taxable, tax, total })),
+    expectedCustomerRows,
+    "By Item aggregates only the selected customer's merchandise lines",
+  );
+  assert.equal((await api(`/reports/sales-by-item?${scope}&customerId=invalid`)).status, 400,
+    "By Item rejects malformed customer filters");
+
   assert.equal(register.data.totals.total - byItem.data.totals.total, 150,
     "the report difference is exactly the invoice-level charge");
   assert.equal(register.data.totals.total - register.data.totals.paid - register.data.totals.balance, 380,

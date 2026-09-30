@@ -232,7 +232,7 @@ export function useSalesBySalesperson(params: DateRangeParams & { locationType?:
   });
 }
 
-export function useSalesByItem(params: DateRangeParams = {}) {
+export function useSalesByItem(params: DateRangeParams & { customerId?: number } = {}) {
   const qs = buildQs({ ...params });
   return useQuery({
     queryKey: ['/api/reports/sales-by-item', qs],
