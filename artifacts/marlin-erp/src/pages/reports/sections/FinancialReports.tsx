@@ -74,7 +74,7 @@ interface FinancialStatements {
     liabilities: { capitalAccount: GroupSummary; loans: GroupSummary; currentLiabilities: GroupSummary; pandlCarryForward: number; difference: number; total: number };
     assets: { fixedAssets: GroupSummary; currentAssets: GroupSummary; closingStock: number; closingStockOnHand?: number; closingStockInTransit?: number; total: number };
   };
-  integrity: { balanced: boolean; difference: number; issues: string[] };
+  integrity: { status?: "PASS" | "UNVERIFIED" | "FAIL"; balanced: boolean; difference: number; issues: string[] };
 }
 
 /**
@@ -193,21 +193,26 @@ function useLocationOptions() {
 
 // ── Integrity banner ──────────────────────────────────────────────────────────
 /**
- * Replaces the old "Difference in books" line. The statements balance by
- * construction now, so anything shown here is a defect to chase, not a figure
- * to file.
+ * Shows measured accounting failures separately from missing historical evidence.
  */
 function IntegrityBanner({ integrity }: { integrity?: FinancialStatements['integrity'] }) {
   if (!integrity) return null;
   const off = Math.abs(integrity.difference) > 0.005;
   if (integrity.balanced && !off && integrity.issues.length === 0) return null;
+  const status = integrity.status ?? (off ? "FAIL" : integrity.issues.length ? "UNVERIFIED" : "PASS");
   return (
     <div className="rounded-xl border border-amber-500/40 bg-amber-500/5 p-3.5">
       <div className="flex items-start gap-2.5">
         <AlertTriangle className="w-4 h-4 text-amber-600 mt-0.5 shrink-0" />
         <div className="space-y-1.5 min-w-0">
           <p className="text-sm font-semibold text-amber-700">
-            {off ? `Books are out by ${fmt(integrity.difference)}` : 'Accounting integrity warnings'}
+            {off
+              ? `Books are out by ${fmt(integrity.difference)}`
+              : status === "FAIL"
+                ? "Accounting integrity failure"
+                : status === "UNVERIFIED"
+                  ? "Historical stock evidence is unverified"
+                  : "Accounting integrity warnings"}
           </p>
           {off && (
             <p className="text-xs text-amber-700/90">

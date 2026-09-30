@@ -951,6 +951,7 @@ export interface StatementGroup {
 }
 
 export interface BooksIntegrity {
+  status: "PASS" | "UNVERIFIED" | "FAIL";
   balanced: boolean;
   difference: number;
   issues: string[];
@@ -1372,39 +1373,50 @@ export async function buildBooks(
 
   // ── Integrity ─────────────────────────────────────────────────────────────
   const issues: string[] = [];
+  let hasIntegrityFailure = false;
+  let hasUnverifiedEvidence = false;
+  const addIntegrityIssue = (message: string, severity: "UNVERIFIED" | "FAIL") => {
+    issues.push(message);
+    if (severity === "FAIL") hasIntegrityFailure = true;
+    else hasUnverifiedEvidence = true;
+  };
   if (missingLedgerIds.size > 0) {
-    issues.push(
+    addIntegrityIssue(
       `${missingLedgerIds.size} posting${missingLedgerIds.size === 1 ? " refers" : "s refer"} to a ledger that no longer exists (id ${[...missingLedgerIds].slice(0, 5).join(", ")}${missingLedgerIds.size > 5 ? ", …" : ""}). Restore the ledger or reverse the entries.`,
+      "FAIL",
     );
   }
   if (unclassified.length > 0) {
-    issues.push(
+    addIntegrityIssue(
       `${unclassified.length} ledger${unclassified.length === 1 ? " has" : "s have"} a balance but sit under no reporting group, so ${unclassified.length === 1 ? "it is" : "they are"} in neither statement: ${unclassified.slice(0, 5).join("; ")}${unclassified.length > 5 ? "; …" : ""}. Move ${unclassified.length === 1 ? "it" : "them"} under a group in the Chart of Accounts.`,
+      "FAIL",
     );
   }
   if (!openingBalances.balanced) {
-    issues.push(
+    addIntegrityIssue(
       `Opening balances do not balance: debits ₹${openingBalances.debit.toFixed(2)} against credits ₹${openingBalances.credit.toFixed(2)}.`,
+      "FAIL",
     );
   }
   const overlayNet = r2(overlay.finishedGoods + overlay.absorbed);
   if (Math.abs(overlayNet) > 0.01) {
-    issues.push(
+    addIntegrityIssue(
       `Production cost capitalised into stock does not net to zero (₹${overlayNet.toFixed(2)}). Finished Goods Inventory and Production Cost Absorbed must always move together.`,
+      "FAIL",
     );
   }
-  // Inventory that is not derivable does not unbalance the statements — closing
-  // stock enters the P&L and the balance sheet as the same number — but it does
-  // make cost of goods sold, net profit and total assets wrong, so it is an
-  // integrity failure rather than a footnote.
+  // Missing historical inventory evidence is UNVERIFIED, not a proven accounting
+  // contradiction. Keep the warning visible without calling unknown evidence a FAIL.
   if (historicalClose && !closing.reliable) {
-    issues.push(
+    addIntegrityIssue(
       `Closing stock as at ${toDate} cannot be established: stock movement history does not reach back that far, so cost of goods sold, net profit and total assets are all unreliable for this period. Run the statement to today for figures that can be trusted.`,
+      "UNVERIFIED",
     );
   }
   if (fromDate && !opening.reliable) {
-    issues.push(
+    addIntegrityIssue(
       `Opening stock as at ${previousDay(fromDate)} cannot be established from stock movement history, so cost of goods sold and net profit are understated or overstated by the true opening position.`,
+      "UNVERIFIED",
     );
   }
   // An entry that posts more to one side than the other gaps the balance
@@ -1427,16 +1439,21 @@ export async function buildBooks(
     const unbalanced = [...entryNet.values()].filter((e) => Math.abs(e.net) > 0.009);
     if (unbalanced.length > 0) {
       const net = r2(unbalanced.reduce((a, e) => a + e.net, 0));
-      issues.push(
+      addIntegrityIssue(
         `${unbalanced.length} ${unbalanced.length === 1 ? "entry does" : "entries do"} not balance internally (net ₹${net.toFixed(2)}): ${unbalanced.slice(0, 5).map((e) => e.label).join(", ")}${unbalanced.length > 5 ? ", …" : ""}. Each posts more to one side than the other — usually a document whose stored figures no longer agree with its collections.`,
+        "FAIL",
       );
     }
   }
-  if (Math.abs(difference) > 0.01 && issues.length === 0) {
-    issues.push(
+  if (Math.abs(difference) >= 0.01 && issues.length === 0) {
+    addIntegrityIssue(
       `Assets and liabilities differ by ₹${Math.abs(difference).toFixed(2)} with no identifiable cause. The books need review before this statement is relied on.`,
+      "FAIL",
     );
   }
+  const status: BooksIntegrity["status"] = hasIntegrityFailure || Math.abs(difference) >= 0.01
+    ? "FAIL"
+    : hasUnverifiedEvidence ? "UNVERIFIED" : "PASS";
 
   return {
     period: { fromDate, toDate },
@@ -1514,8 +1531,9 @@ export async function buildBooks(
       net: overlayNet,
     },
     integrity: {
-      balanced: Math.abs(difference) < 0.01 && issues.length === 0,
-      difference: Math.abs(difference) > 0.01 ? difference : 0,
+      status,
+      balanced: status === "PASS",
+      difference: Math.abs(difference) >= 0.01 ? difference : 0,
       issues,
     },
   };
