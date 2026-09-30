@@ -155,4 +155,4 @@
 - [Customer receipt ledger aggregation](receipt-ledger-aggregation.md) — allocation rows are settlement metadata; one receipt posts one customer credit for its full amount
 - [Report parity gates](report-parity-gates.md) — verify API-derived screen anchors against parsed PDF/XLSX content; a missing UI export action is a real failure
 - [Sales report definitions](sales-report-definitions.md) — Sales Register includes invoice-level charges; By Item is explicitly merchandise-line-only
-- [Transfer accounting](transfer-accounting.md) — taxable inter-warehouse value uses Transfer-Out/Transfer-In P&L ledgers; legacy voucher mode is backfilled with additive balanced adjustments
+- [Transfer accounting](transfer-accounting.md) — location P&Ls show Transfer-Out/In; transit stays sender-owned; consolidated P&L and the location-pair payable remain unchanged

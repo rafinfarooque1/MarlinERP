@@ -339,6 +339,7 @@ export async function generateChartOfAccountsPdf(opts: CoaPdfOpts): Promise<void
 
   if (statement === 'balance_sheet') {
     const bs = fs.balanceSheet;
+    const transferPnl = !!fs.profitAndLoss.stockTransfersIncludedInPnl;
 
     // groupRows respects isOpen — collapsed groups show only the header row
     const bsRows: Row[] = [
@@ -353,7 +354,9 @@ export async function generateChartOfAccountsPdf(opts: CoaPdfOpts): Promise<void
       rowSpacer(),
       rowPanel('ASSETS'),
        ...groupRows(bs.assets.fixedAssets,   'grp:fixed',     series, N, isOpen, showValuedOnly),
-      rowAuto('Closing Stock', sv('bsClosingStock'), bs.assets.closingStock),
+        rowAuto(transferPnl ? 'Closing Stock (on hand)' : 'Closing Stock', transferPnl ? sv('bsClosingStockOnHand') : sv('bsClosingStock'), transferPnl ? (bs.assets.closingStockOnHand ?? bs.assets.closingStock) : bs.assets.closingStock),
+        ...(transferPnl && (Math.abs(Number(bs.assets.closingStockInTransit ?? 0)) > 0.005 || sv('bsClosingStockInTransit').some(v => Math.abs(v) > 0.005))
+          ? [rowAuto('Stock in Transit', sv('bsClosingStockInTransit'), Number(bs.assets.closingStockInTransit ?? 0))] : []),
        ...groupRows(bs.assets.currentAssets, 'grp:curassets', series, N, isOpen, showValuedOnly),
       rowTotal('Total Assets', bs.assets.total, sv('assetsTotal')),
     ];
@@ -366,18 +369,24 @@ export async function generateChartOfAccountsPdf(opts: CoaPdfOpts): Promise<void
     const pl  = fs.profitAndLoss;
     const exp = pl.expenses;
     const inc = pl.incomes;
+    const transferPnl = !!pl.stockTransfersIncludedInPnl;
+    const transferIn = transferPnl ? Number(exp.stockTransferIn ?? 0) : 0;
+    const transferOut = transferPnl ? Number(inc.stockTransferOut ?? 0) : 0;
+    const purchasesForDisplay = exp.purchases;
 
     const salesReturns    = inc.salesReturns    ?? 0;
     const grossSales      = inc.grossSales      ?? (inc.sales + salesReturns);
     const purchaseReturns = exp.purchaseReturns ?? 0;
     const grossProfit: number = pl.summary?.grossProfit
-      ?? ((inc.sales + inc.closingStock + inc.directIncomes.total)
-         - (exp.openingStock + exp.purchases + exp.directExpenses.total));
+      ?? ((inc.sales + inc.closingStock + inc.directIncomes.total + transferOut)
+         - (exp.openingStock + exp.purchases + transferIn + exp.directExpenses.total));
 
     // Per-month derived arrays — same arithmetic as StatementsView
     const mwSales      = sv('sales');
     const mwSalesRet   = sv('salesReturns');
     const mwPur        = sv('purchases');
+    const mwTransferIn = transferPnl ? sv('stockTransferIn') : zeroArr(N);
+    const mwTransferOut = transferPnl ? sv('stockTransferOut') : zeroArr(N);
     const mwPurRet     = sv('purchaseReturns');
     const mwGp         = sv('gp');
     const mwNp         = sv('np');
@@ -385,8 +394,14 @@ export async function generateChartOfAccountsPdf(opts: CoaPdfOpts): Promise<void
     const mwGrossPur   = add(mwPur,   mwPurRet);
     const mwGpPos      = mwGp.map(v => v > 0 ?  v : 0);
     const mwGpNeg      = mwGp.map(v => v < 0 ? -v : 0);
-    const tradingExpBase  = exp.openingStock + exp.purchases + exp.directExpenses.total;
-    const tradingIncBase  = inc.sales + inc.closingStock + inc.directIncomes.total;
+    const showTransferInLine = transferPnl && (Math.abs(transferIn) > 0.005 || mwTransferIn.some(v => Math.abs(v) > 0.005));
+    const showTransferOutLine = transferPnl && (Math.abs(transferOut) > 0.005 || mwTransferOut.some(v => Math.abs(v) > 0.005));
+    const showClosingTransitLine = transferPnl && (
+      Math.abs(Number(inc.closingStockInTransit ?? 0)) > 0.005
+      || sv('closingStockInTransit').some(v => Math.abs(v) > 0.005)
+    );
+    const tradingExpBase  = exp.openingStock + exp.purchases + transferIn + exp.directExpenses.total;
+    const tradingIncBase  = inc.sales + inc.closingStock + inc.directIncomes.total + transferOut;
     const tradingExpTotal = tradingExpBase + (grossProfit > 0 ?  grossProfit : 0);
     const tradingIncTotal = tradingIncBase + (grossProfit < 0 ? -grossProfit : 0);
     const plExpTotal      = exp.indirectExpenses.total + (grossProfit < 0 ? -grossProfit : 0);
@@ -402,11 +417,15 @@ export async function generateChartOfAccountsPdf(opts: CoaPdfOpts): Promise<void
       rowAuto('Opening Stock', sv('openingStock'), exp.openingStock),
       ...(purchaseReturns !== 0
         ? [
-            rowAuto('Purchase Account',       mwGrossPur,              exp.purchases + purchaseReturns),
+            rowAuto('Purchase Account',       mwGrossPur,              purchasesForDisplay + purchaseReturns),
             rowAuto('Less: Purchase Returns', neg(mwPurRet),           -purchaseReturns),
-            rowAuto('Net Purchases',          mwPur,                   exp.purchases),
+            rowAuto('Net Purchases',          mwPur,                   purchasesForDisplay),
+            ...(showTransferInLine ? [rowAuto('Purchase Stock Transfer In', mwTransferIn, transferIn)] : []),
           ]
-        : [rowAuto('Purchase Account', mwPur, exp.purchases)]),
+        : [
+            rowAuto('Purchase Account', mwPur, purchasesForDisplay),
+            ...(showTransferInLine ? [rowAuto('Purchase Stock Transfer In', mwTransferIn, transferIn)] : []),
+          ]),
        ...groupRows(exp.directExpenses, 'grp:direxp', series, N, isOpen, showValuedOnly),
       ...(grossProfit > 0 ? [rowAuto('Gross Profit c/d', mwGpPos, grossProfit)] : []),
       rowTotal('Total', tradingExpTotal),
@@ -421,7 +440,14 @@ export async function generateChartOfAccountsPdf(opts: CoaPdfOpts): Promise<void
           ]
         : [rowAuto('Sales Account', mwSales, inc.sales)]),
        ...groupRows(inc.directIncomes, 'grp:dirinc', series, N, isOpen, showValuedOnly),
-      rowAuto('Closing Stock', sv('closingStock'), inc.closingStock),
+        ...(showTransferOutLine ? [rowAuto('Stock Transfer Out', mwTransferOut, transferOut)] : []),
+       ...(transferPnl
+         ? [
+             rowAuto('Closing Stock (on hand)', sv('closingStockOnHand'), Number((inc as any).closingStockOnHand ?? inc.closingStock)),
+              ...(showClosingTransitLine
+                ? [rowAuto('Stock in Transit', sv('closingStockInTransit'), Number(inc.closingStockInTransit ?? 0))] : []),
+           ]
+         : [rowAuto('Closing Stock', sv('closingStock'), inc.closingStock)]),
       ...(grossProfit < 0 ? [rowAuto('Gross Loss c/d', mwGpNeg, -grossProfit)] : []),
       rowTotal('Total', tradingIncTotal),
       rowSpacer(),

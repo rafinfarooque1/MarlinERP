@@ -73,26 +73,47 @@ export function canonicalDocument(request: CanonicalReportRequest, payload: any)
     if (payload.integrity?.balanced === false) warnings.push(`Books do not balance. Difference: ${payload.integrity.difference}`);
     if (reportId === "balance-sheet") {
       const b = payload.balanceSheet;
+      const stockRows: (string | number)[][] = pl.stockTransfersIncludedInPnl
+        ? [
+            ["Closing Stock (on hand)", amount(b.assets.closingStockOnHand ?? Math.max(0, Number(b.assets.closingStock ?? 0) - Number(b.assets.closingStockInTransit ?? 0)))],
+            ...(Math.abs(Number(b.assets.closingStockInTransit ?? 0)) > 0.005
+              ? [["Stock in Transit", amount(b.assets.closingStockInTransit)]] : []),
+          ]
+        : [["Closing Stock", amount(b.assets.closingStock)]];
       statement("Liabilities", [
         ...groupRows(b.liabilities.capitalAccount),
         ["Reserves & Surplus (P&L)", amount(b.liabilities.pandlCarryForward)],
         ...groupRows(b.liabilities.loans), ...groupRows(b.liabilities.currentLiabilities),
       ], b.liabilities.total);
       statement("Assets", [
-        ...groupRows(b.assets.fixedAssets), ["Closing Stock", amount(b.assets.closingStock)], ...groupRows(b.assets.currentAssets),
+        ...groupRows(b.assets.fixedAssets), ...stockRows, ...groupRows(b.assets.currentAssets),
       ], b.assets.total);
     } else {
       // Read the canonical summary, not an independent export COGS/GP/NP formula.
       const stockTransferIn = Number((e as any).stockTransferIn ?? 0);
       const stockTransferOut = Number((i as any).stockTransferOut ?? 0);
+      const locationTransfers = Boolean(pl.stockTransfersIncludedInPnl);
+      const closingStockRows = locationTransfers
+        ? {
+            "Closing Stock (on hand)": i.closingStockOnHand ?? Math.max(0, Number(i.closingStock ?? 0) - Number(i.closingStockInTransit ?? 0)),
+            ...(Math.abs(Number(i.closingStockInTransit ?? 0)) > 0.005
+              ? { "Stock in Transit": i.closingStockInTransit } : {}),
+          }
+        : { "Closing Stock": i.closingStock, "Closing Stock In Transit": i.closingStockInTransit };
+      const transferRows = locationTransfers
+        ? {
+            "Purchase Stock Transfer In": stockTransferIn,
+            "Stock Transfer Out": stockTransferOut,
+          }
+        : {
+            "Internal Transfer In (memo; excluded from COGS/GP)": stockTransferIn,
+            "Internal Transfer Out (memo; excluded from COGS/GP)": stockTransferOut,
+          };
       sections.push(summary("Authoritative financial summary", {
         "Gross Sales": i.grossSales, "Sales Returns": i.salesReturns, "Net Sales": i.sales,
         "Opening Stock": e.openingStock,
         "Net Purchases": e.purchases,
-        "Direct Expenses": e.directExpenses.total, "Closing Stock": i.closingStock,
-        "Closing Stock In Transit": i.closingStockInTransit,
-        "Internal Transfer In (memo; excluded from COGS/GP)": stockTransferIn,
-        "Internal Transfer Out (memo; excluded from COGS/GP)": stockTransferOut,
+        "Direct Expenses": e.directExpenses.total, ...closingStockRows, ...transferRows,
         "Cost of Goods Sold (COGS)": pl.summary.costOfGoodsSold, "Gross Profit": pl.summary.grossProfit,
         ...(reportId === "pnl" ? {
           "Other Income": pl.summary.otherIncome, "Operating Expenses": pl.summary.operatingExpenses,
@@ -103,11 +124,21 @@ export function canonicalDocument(request: CanonicalReportRequest, payload: any)
         statement("Expenses", [
           ["Opening Stock", amount(e.openingStock)],
           ["Purchases", amount(e.purchases)],
+          ...(locationTransfers && Math.abs(stockTransferIn) > 0.005
+            ? [["Purchase Stock Transfer In", amount(stockTransferIn)]] : []),
           ...groupRows(e.directExpenses), ...groupRows(e.indirectExpenses),
         ], e.total);
         statement("Incomes", [
           ["Sales (net of GST)", amount(i.sales)],
-          ["Closing Stock", amount(i.closingStock)],
+          ...(locationTransfers && Math.abs(stockTransferOut) > 0.005
+            ? [["Stock Transfer Out", amount(stockTransferOut)]] : []),
+          ...(locationTransfers
+            ? [
+                ["Closing Stock (on hand)", amount(i.closingStockOnHand ?? Math.max(0, Number(i.closingStock ?? 0) - Number(i.closingStockInTransit ?? 0)))],
+                ...(Math.abs(Number(i.closingStockInTransit ?? 0)) > 0.005
+                  ? [["Stock in Transit", amount(i.closingStockInTransit)]] : []),
+              ]
+            : [["Closing Stock", amount(i.closingStock)]]),
           ...groupRows(i.directIncomes), ...groupRows(i.indirectIncomes),
         ], i.total);
       }

@@ -31,9 +31,13 @@ export interface GroupSummary {
 export interface FinancialStatements {
   filters: { warehouses: { id: number; name: string }[]; outlets: { id: number; name: string }[] };
   profitAndLoss: {
+    /** True when a location statement includes transfer-in/out in P&L activity. */
+    stockTransfersIncludedInPnl?: boolean;
     expenses: {
       openingStock: number; openingStockItems: StockItem[];
+      openingStockTransferAdjustment?: number;
       purchases: number;
+      stockTransferIn?: number;
       /** Debit-note total on the purchases subtree — `purchases` is already net of it. */
       purchaseReturns?: number;
       /** The Purchase group tree behind the single `purchases` figure. */
@@ -47,7 +51,8 @@ export interface FinancialStatements {
       salesReturns?: number;
       /** The Sales group tree behind the single `sales` figure. */
       salesGroup?: GroupSummary;
-      closingStock: number; closingStockItems: StockItem[];
+      closingStock: number; closingStockOnHand?: number; closingStockItems: StockItem[];
+      closingStockInTransit?: number; stockTransferOut?: number;
       directIncomes: GroupSummary; indirectIncomes: GroupSummary; total: number;
     };
     /** Same engine figures the dashboard GP/NP tiles read — never recompute these. */
@@ -56,7 +61,10 @@ export interface FinancialStatements {
   };
   balanceSheet: {
     liabilities: { capitalAccount: GroupSummary; loans: GroupSummary; currentLiabilities: GroupSummary; pandlCarryForward: number; difference: number; total: number };
-    assets: { fixedAssets: GroupSummary; currentAssets: GroupSummary; closingStock: number; total: number };
+    assets: {
+      fixedAssets: GroupSummary; currentAssets: GroupSummary; closingStock: number;
+      closingStockOnHand?: number; closingStockInTransit?: number; total: number;
+    };
   };
   integrity?: { balanced: boolean; difference: number; issues: string[] };
 }

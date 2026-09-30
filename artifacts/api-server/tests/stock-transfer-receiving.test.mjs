@@ -3,9 +3,10 @@
  *
  * Run: node artifacts/api-server/tests/stock-transfer-receiving.test.mjs
  *
- * This suite uses isolated, no-GST warehouse/material fixtures so the test
- * exercises physical inventory without creating accounting documents. The
- * transfer endpoints are still used for every stock transition.
+ * This suite uses isolated warehouses/materials and same-GSTIN transfers so
+ * both physical inventory and internal-transfer accounting are exercised. The
+ * transfer endpoints are used for every stock transition, and cleanup removes
+ * only vouchers linked to the fixture transfer ids.
  */
 
 import pg from 'pg';
@@ -101,6 +102,32 @@ async function cleanup() {
     await sql(`DELETE FROM stock_reservations WHERE doc_type = 'stock_transfer' AND doc_id = ANY($1::int[])`, [transferIds]);
     await sql(`DELETE FROM stock_ledger WHERE doc_type = 'stock_transfer' AND doc_id = ANY($1::int[])`, [transferIds]);
     await sql(`DELETE FROM stock_batches WHERE source = 'transfer' AND source_id = ANY($1::int[])`, [transferIds]);
+    // Dispatch/receive vouchers have direct ids on the transfer row. A rejection
+    // reversal has no FK, so match its dedicated source_module and exact challan.
+    // journal_voucher_lines cascade from the selected voucher rows.
+    await sql(
+      `WITH fixture_transfers AS (
+         SELECT id, challan_number, dispatch_voucher_id, receive_voucher_id
+           FROM stock_transfers
+          WHERE id = ANY($1::int[])
+       ), fixture_vouchers AS (
+         SELECT dispatch_voucher_id AS id FROM fixture_transfers WHERE dispatch_voucher_id IS NOT NULL
+         UNION
+         SELECT receive_voucher_id FROM fixture_transfers WHERE receive_voucher_id IS NOT NULL
+         UNION
+         SELECT jv.id
+           FROM journal_vouchers jv
+           JOIN fixture_transfers t
+             ON jv.voucher_number = 'TRF-REJ-' || t.challan_number
+          WHERE jv.voucher_type = 'journal'
+            AND jv.source_module = 'branch_transfer_reversal'
+            AND jv.origin = 'system'
+       )
+       DELETE FROM journal_vouchers jv
+        USING fixture_vouchers v
+        WHERE jv.id = v.id`,
+      [transferIds],
+    );
     await sql(`DELETE FROM stock_transfers WHERE id = ANY($1::int[])`, [transferIds]);
   }
   if (materialId) {
@@ -390,6 +417,7 @@ try {
   const historicalSourceIncome = historicalSource.data?.profitAndLoss?.incomes;
   assert('Historical source closing includes on-hand and sender-owned transit',
     historicalSource.status === 200 &&
+    Number(historicalSourceIncome?.closingStockOnHand) === 500 &&
     Number(historicalSourceIncome?.closingStock) === 700 &&
     Number(historicalSourceIncome?.closingStockInTransit) === 200,
     JSON.stringify(historicalSourceIncome));
@@ -399,6 +427,7 @@ try {
   const historicalDestinationIncome = historicalDestination.data?.profitAndLoss?.incomes;
   assert('Historical destination excludes the sender-owned transit value',
     historicalDestination.status === 200 &&
+    Number(historicalDestinationIncome?.closingStockOnHand) === 500 &&
     Number(historicalDestinationIncome?.closingStock) === 500 &&
     Number(historicalDestinationIncome?.closingStockInTransit) === 0,
     JSON.stringify(historicalDestinationIncome));
@@ -433,7 +462,7 @@ try {
   assert('On-hand source plus destination equals 11 units', Number(onHand.quantity) === 11);
   assert('On-hand plus active in-transit equals original 12 units', Number(onHand.quantity) + Number(inTransit.quantity) === 12);
 
-  console.log('\n[6] Transfer values adjust opening stock, never closing stock');
+  console.log('\n[6] Location P&L shows transfer activity and separates on-hand closing stock from transit');
   const statement = async (from, to, locationId) => {
     const result = await get(
       `/accounts/financial-statements?fromDate=${from}&toDate=${to}&locationType=warehouse&locationId=${locationId}`,
@@ -442,9 +471,13 @@ try {
   };
   const sourceDay = await statement(D0, D1, sourceId);
   const destinationDay = await statement(D0, D1, destinationId);
-  assert('Opening-stock transfer values follow dispatch cost, not stale ledger/lot cost',
+  assert('Location P&L includes transfer activity without an opening-stock adjustment',
     sourceDay?.profitAndLoss?.expenses?.openingStockReliable === true &&
     destinationDay?.profitAndLoss?.expenses?.openingStockReliable === true &&
+    sourceDay?.profitAndLoss?.stockTransfersIncludedInPnl === true &&
+    destinationDay?.profitAndLoss?.stockTransfersIncludedInPnl === true &&
+    Number(sourceDay?.profitAndLoss?.expenses?.openingStockTransferAdjustment) === 0 &&
+    Number(destinationDay?.profitAndLoss?.expenses?.openingStockTransferAdjustment) === 0 &&
     ![...(sourceDay?.integrity?.issues ?? []), ...(destinationDay?.integrity?.issues ?? [])]
       .some((issue) => String(issue).includes('Opening stock as at')),
     JSON.stringify({
@@ -453,20 +486,33 @@ try {
       sourceIssues: sourceDay?.integrity?.issues,
       destinationIssues: destinationDay?.integrity?.issues,
     }));
-  assert('Source opening is reduced by dispatched transfer value',
-    Number(sourceDay?.profitAndLoss?.expenses?.openingStock) === 800,
+  assert('Source opening stays at its physical value; dispatch is shown as Transfer-Out',
+    Number(sourceDay?.profitAndLoss?.expenses?.openingStock) === 1200 &&
+    Number(sourceDay?.profitAndLoss?.incomes?.stockTransferOut) === 400,
     JSON.stringify(sourceDay?.profitAndLoss?.expenses));
-  assert('Destination opening is increased by received transfer value',
-    Number(destinationDay?.profitAndLoss?.expenses?.openingStock) === 400,
+  assert('Destination opening stays physical; receipt is shown as Purchase Stock Transfer In',
+    Number(destinationDay?.profitAndLoss?.expenses?.openingStock) === 0 &&
+    Number(destinationDay?.profitAndLoss?.expenses?.stockTransferIn) === 400,
     JSON.stringify(destinationDay?.profitAndLoss?.expenses));
-  assert('Transfer does not get added to source closing stock',
+  assert('Source closing stock shows on-hand after dispatch',
+    Number(sourceDay?.profitAndLoss?.incomes?.closingStockOnHand) === 800 &&
     Number(sourceDay?.profitAndLoss?.incomes?.closingStock) === 800,
     JSON.stringify(sourceDay?.profitAndLoss?.incomes));
-  assert('Transfer does not get added to destination closing stock',
+  assert('Destination closing stock includes received on-hand stock only',
+    Number(destinationDay?.profitAndLoss?.incomes?.closingStockOnHand) === 400 &&
     Number(destinationDay?.profitAndLoss?.incomes?.closingStock) === 400,
     JSON.stringify(destinationDay?.profitAndLoss?.incomes));
-  assert('Completed transfer is P&L-neutral at both locations',
-    Number(sourceDay?.profitAndLoss?.summary?.costOfGoodsSold) === 0 &&
+  assert('Location Balance Sheets show the same on-hand and transit stock components',
+    Number(sourceDay?.balanceSheet?.assets?.closingStockOnHand) === 800 &&
+    Number(sourceDay?.balanceSheet?.assets?.closingStockInTransit) === 0 &&
+    Number(destinationDay?.balanceSheet?.assets?.closingStockOnHand) === 400 &&
+    Number(destinationDay?.balanceSheet?.assets?.closingStockInTransit) === 0,
+    JSON.stringify({
+      source: sourceDay?.balanceSheet?.assets,
+      destination: destinationDay?.balanceSheet?.assets,
+    }));
+  assert('Completed transfer balances in both location P&Ls',
+    Number(sourceDay?.profitAndLoss?.summary?.costOfGoodsSold) === 400 &&
     Number(destinationDay?.profitAndLoss?.summary?.costOfGoodsSold) === 0 &&
     Number(sourceDay?.profitAndLoss?.netProfit) === 0 &&
     Number(destinationDay?.profitAndLoss?.netProfit) === 0,
@@ -475,12 +521,22 @@ try {
   const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Calcutta' });
   const currentSource = await statement(D0, today, sourceId);
   const currentDestination = await statement(D0, today, destinationId);
-  assert('Short receipt and active in-transit balance keep source P&L neutral',
-    Number(currentSource?.profitAndLoss?.summary?.costOfGoodsSold) === 0 &&
-    Number(currentSource?.profitAndLoss?.netProfit) === 0,
+  assert('After a short receipt, source P&L shows the remaining dispatch and separate transit value',
+    Number(currentSource?.profitAndLoss?.summary?.costOfGoodsSold) === 500 &&
+    Number(currentSource?.profitAndLoss?.incomes?.stockTransferOut) === 600 &&
+    Number(currentSource?.profitAndLoss?.incomes?.closingStockOnHand) === 600 &&
+    Number(currentSource?.profitAndLoss?.incomes?.closingStockInTransit) === 100 &&
+    Number(currentSource?.balanceSheet?.assets?.closingStockOnHand) === 600 &&
+    Number(currentSource?.balanceSheet?.assets?.closingStockInTransit) === 100 &&
+    Number(currentSource?.balanceSheet?.assets?.closingStock) === 700 &&
+    Number(currentSource?.profitAndLoss?.netProfit) === 100,
     JSON.stringify(currentSource?.profitAndLoss?.summary));
-  assert('Short receipt keeps destination P&L neutral',
+  assert('Short receipt shows only the actual received value in destination P&L',
     Number(currentDestination?.profitAndLoss?.summary?.costOfGoodsSold) === 0 &&
+    Number(currentDestination?.profitAndLoss?.expenses?.stockTransferIn) === 500 &&
+    Number(currentDestination?.profitAndLoss?.incomes?.closingStockOnHand) === 500 &&
+    Number(currentDestination?.balanceSheet?.assets?.closingStockOnHand) === 500 &&
+    Number(currentDestination?.balanceSheet?.assets?.closingStockInTransit) === 0 &&
     Number(currentDestination?.profitAndLoss?.netProfit) === 0,
     JSON.stringify(currentDestination?.profitAndLoss?.summary));
 

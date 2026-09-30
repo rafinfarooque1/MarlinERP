@@ -131,6 +131,7 @@ export function DemoReportView({ batchId = null, migrationId = null, open, onOpe
   const data = migrationId != null ? migQ.data : batchQ.data;
   const isLoading = migrationId != null ? migQ.isLoading : batchQ.isLoading;
   const report = data?.report as any;
+  const transferPnl = !!report?.profitAndLoss?.stockTransfersIncludedInPnl;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -245,14 +246,29 @@ export function DemoReportView({ batchId = null, migrationId = null, open, onOpe
                     <MoneyLine label="Less: sales returns" value={-(report.profitAndLoss?.incomes?.salesReturns ?? 0)} indent />
                   )}
                   <GroupTree node={report.profitAndLoss?.incomes?.directIncomes} />
+                  {transferPnl && Number(report.profitAndLoss?.incomes?.stockTransferOut ?? 0) !== 0 && (
+                    <MoneyLine label="Stock Transfer Out" value={report.profitAndLoss.incomes.stockTransferOut} />
+                  )}
                   <GroupTree node={report.profitAndLoss?.incomes?.indirectIncomes} />
-                  <MoneyLine label="Closing stock" value={report.profitAndLoss?.incomes?.closingStock ?? 0} />
+                  {transferPnl ? (
+                    <>
+                      <MoneyLine label="Closing stock (on hand)" value={report.profitAndLoss?.incomes?.closingStockOnHand ?? report.profitAndLoss?.incomes?.closingStock ?? 0} />
+                      {Number(report.profitAndLoss?.incomes?.closingStockInTransit ?? 0) !== 0 && (
+                        <MoneyLine label="Stock in Transit" value={report.profitAndLoss.incomes.closingStockInTransit} />
+                      )}
+                    </>
+                  ) : (
+                    <MoneyLine label="Closing stock" value={report.profitAndLoss?.incomes?.closingStock ?? 0} />
+                  )}
                   <div className="border-t mt-1 pt-1"><MoneyLine label="Total" value={report.profitAndLoss?.incomes?.total ?? 0} bold /></div>
                 </div>
                 <div className="rounded-lg border p-3">
                   <div className="text-sm font-semibold mb-2">Expenses</div>
                   <MoneyLine label="Opening stock" value={report.profitAndLoss?.expenses?.openingStock ?? 0} />
                   <MoneyLine label="Purchases" value={report.profitAndLoss?.expenses?.purchases ?? 0} />
+                  {transferPnl && Number(report.profitAndLoss?.expenses?.stockTransferIn ?? 0) !== 0 && (
+                    <MoneyLine label="Purchase Stock Transfer In" value={report.profitAndLoss.expenses.stockTransferIn} />
+                  )}
                   {Number(report.profitAndLoss?.expenses?.purchaseReturns ?? 0) !== 0 && (
                     <MoneyLine label="Less: purchase returns" value={-(report.profitAndLoss?.expenses?.purchaseReturns ?? 0)} indent />
                   )}
@@ -283,7 +299,16 @@ export function DemoReportView({ batchId = null, migrationId = null, open, onOpe
                   <div className="text-sm font-semibold mb-2">Assets</div>
                   <GroupTree node={report.balanceSheet?.assets?.fixedAssets} />
                   <GroupTree node={report.balanceSheet?.assets?.currentAssets} />
-                  <MoneyLine label="Closing stock" value={report.balanceSheet?.assets?.closingStock ?? 0} />
+                  {transferPnl ? (
+                    <>
+                      <MoneyLine label="Closing stock (on hand)" value={report.balanceSheet?.assets?.closingStockOnHand ?? report.balanceSheet?.assets?.closingStock ?? 0} />
+                      {Number(report.balanceSheet?.assets?.closingStockInTransit ?? 0) !== 0 && (
+                        <MoneyLine label="Stock in Transit" value={report.balanceSheet.assets.closingStockInTransit} />
+                      )}
+                    </>
+                  ) : (
+                    <MoneyLine label="Closing stock" value={report.balanceSheet?.assets?.closingStock ?? 0} />
+                  )}
                   <div className="border-t mt-1 pt-1"><MoneyLine label="Total assets" value={report.balanceSheet?.assets?.total ?? 0} bold /></div>
                 </div>
                 <div className="rounded-lg border p-3">
