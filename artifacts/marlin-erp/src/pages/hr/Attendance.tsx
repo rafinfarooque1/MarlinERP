@@ -350,13 +350,14 @@ export default function Attendance() {
   const submitCorrection = (force = false) => {
     if (!correcting) return;
     const isLeave = correctStatus === 'leave_casual' || correctStatus === 'leave_sick';
+    const correctionDate = String(correcting.date ?? date).slice(0, 10);
     // Times are cleared explicitly so the chosen status alone decides what the
     // day earns — the server's contract is that recorded hours (including punch
     // sessions) outvote the status label unless they are cleared with it.
     correctMutation.mutate(
       {
         data: {
-          employeeId: correcting.employeeId, date,
+          employeeId: correcting.employeeId, date: correctionDate,
           status: (isLeave ? 'leave' : correctStatus) as any,
           ...(isLeave ? { leaveType: (correctStatus === 'leave_sick' ? 'sick' : 'casual') as any } : {}),
           ...(force ? { force: true } : {}),
@@ -365,7 +366,7 @@ export default function Attendance() {
       },
       {
         onSuccess: () => {
-          toast.success(`Attendance corrected — salary for ${date} has been re-calculated`);
+          toast.success(`Attendance corrected — salary for ${correctionDate} has been re-calculated`);
           refreshAfterAttendance();
           setCorrecting(null);
           setExhaustedWarning(null);
@@ -645,7 +646,7 @@ export default function Attendance() {
             </div>
             <div>
               <p className="text-muted-foreground text-xs">Date</p>
-              <p className="font-semibold font-mono">{date}</p>
+              <p className="font-semibold font-mono">{formatDateOrDash(correcting?.date ?? date)}</p>
             </div>
           </div>
           <div>
@@ -1019,8 +1020,8 @@ export default function Attendance() {
             </div>
           )}
 
-          {/* Range view — read-only period register (check-in/out and Fix act
-              on ONE date, so they live in the Day view only) */}
+          {/* Range view — status corrections apply to the exact row date.
+              Check-in/out remain tied to the selected operational day. */}
           {viewMode === 'calendar' ? null : viewMode === 'range' ? (
           <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
             <Table>
@@ -1032,20 +1033,21 @@ export default function Attendance() {
                   <SortableHead k="checkOut" sort={rangeSort.sort}>Check-Out</SortableHead>
                   <SortableHead k="hours" sort={rangeSort.sort}>Hours</SortableHead>
                   <SortableHead k="status" sort={rangeSort.sort}>Status</SortableHead>
+                  {isAdmin && perm.canEdit && <TableHead className="text-right">Action</TableHead>}
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {rangeUnbounded ? (
                   <TableRow>
-                    <TableCell colSpan={6} className="p-0">
+                    <TableCell colSpan={isAdmin && perm.canEdit ? 7 : 6} className="p-0">
                       <EmptyState icon={CalendarDays} title="Pick a bounded period" hint='"All time" is not available for the attendance register' compact />
                     </TableCell>
                   </TableRow>
                 ) : rangeLoading ? (
-                  <TableRow><TableCell colSpan={6} className="p-0"><TableSkeleton rows={4} cols={6} /></TableCell></TableRow>
+                  <TableRow><TableCell colSpan={isAdmin && perm.canEdit ? 7 : 6} className="p-0"><TableSkeleton rows={4} cols={isAdmin && perm.canEdit ? 7 : 6} /></TableCell></TableRow>
                 ) : filteredRange.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={6} className="p-0">
+                    <TableCell colSpan={isAdmin && perm.canEdit ? 7 : 6} className="p-0">
                       <EmptyState icon={Clock} title="No attendance records in this period" compact />
                     </TableCell>
                   </TableRow>
@@ -1061,6 +1063,22 @@ export default function Attendance() {
                     </TableCell>
                     <TableCell className="font-mono text-sm">{a.hoursWorked ? `${Number(a.hoursWorked).toFixed(1)}h` : '—'}</TableCell>
                     <TableCell><StatusBadge status={a.status} /></TableCell>
+                    {isAdmin && perm.canEdit && (
+                      <TableCell className="text-right">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 text-xs gap-1"
+                          onClick={() => openCorrection({
+                            ...a,
+                            employeeName: empNameMap.get(a.employeeId) ?? `#${a.employeeId}`,
+                          })}
+                          aria-label={`Edit attendance status for ${empNameMap.get(a.employeeId) ?? `employee ${a.employeeId}`} on ${formatDateOrDash(a.date)}`}
+                        >
+                          <Pencil className="w-3 h-3" /> Edit status
+                        </Button>
+                      </TableCell>
+                    )}
                   </TableRow>
                 ))}
               </TableBody>
