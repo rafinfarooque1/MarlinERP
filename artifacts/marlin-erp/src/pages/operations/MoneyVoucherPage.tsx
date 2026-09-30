@@ -46,6 +46,7 @@ import { isSystemLedger } from '@/lib/systemLedgers';
 import { ReceiveIntoSelect } from '@/components/receive-into-select';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { PageHeader } from '@/components/app/page-header';
+import { FilterPanel } from '@/components/app/filter-panel';
 import { BillSettlementPanel, type SettlementSelection } from '@/components/settlement/BillSettlementPanel';
 import { entryScopeKeyDown, focusField, useEntryShortcuts } from '@/lib/keyboard-entry';
 import { useVoucherLocationChoice, parseLocKey, LocationSelectField, voucherLocationName } from '@/lib/voucherLocation';
@@ -466,7 +467,15 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
 
   const total = filtered.reduce((s, r) => s + Number(r.amount), 0);
   const hasFilters = search || fromDate || toDate || cashFilter !== 'all' || byFilter !== 'all';
-
+  const activeFilterCount = Number(!!fromDate) + Number(!!toDate)
+    + Number(cashFilter !== 'all') + Number(byFilter !== 'all');
+  const clearRegisterFilters = () => {
+    setSearch('');
+    setFromDate('');
+    setToDate('');
+    setCashFilter('all');
+    setByFilter('all');
+  };
   const exportCsv = () => downloadCSV(C.csvName, filtered.map(r => ({
     Voucher: r.voucherNumber,
     Date: formatDate(r[C.dateField]),
@@ -517,14 +526,39 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
 
         {/* ── Entry form (inline, full-page — never a dialog) ── */}
         {(perm.canAdd || editing) && (
-          <div className="bg-card border border-border rounded-xl shadow-sm">
-            <div className="px-5 py-3 border-b border-border bg-muted/20 flex items-center justify-between">
-              <h2 className="font-semibold text-sm">
-                {editing ? <>Editing <span className="font-mono text-primary">{editing.voucherNumber}</span></> : `New ${C.title}`}
-              </h2>
-              <span className="text-xs text-muted-foreground font-mono">
-                Voucher No: {editing ? editing.voucherNumber : C.numberHint}
-              </span>
+          <div className={isReceipt
+            ? 'overflow-hidden rounded-xl border border-primary/20 bg-card shadow-sm'
+            : 'bg-card border border-border rounded-xl shadow-sm'}>
+            <div className={isReceipt
+              ? 'flex items-center justify-between gap-3 border-b border-primary/15 bg-primary/5 px-5 py-3'
+              : 'px-5 py-3 border-b border-border bg-muted/20 flex items-center justify-between'}>
+              {isReceipt ? (
+                <div className="flex min-w-0 items-center gap-3">
+                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                    <C.Icon className="h-4 w-4" />
+                  </span>
+                  <div className="min-w-0">
+                    <h2 className="text-sm font-semibold">
+                      {editing ? `Editing ${C.title}` : `New ${C.title}`}
+                    </h2>
+                    <p className="text-[11px] text-muted-foreground">Entry details and accounting destination</p>
+                  </div>
+                </div>
+              ) : (
+                <h2 className="font-semibold text-sm">
+                  {editing ? <>Editing <span className="font-mono text-primary">{editing.voucherNumber}</span></> : `New ${C.title}`}
+                </h2>
+              )}
+              {isReceipt ? (
+                <div className="flex shrink-0 items-center gap-2 rounded-md border border-border/70 bg-background/70 px-2.5 py-1.5">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Voucher No</span>
+                  <span className="font-mono text-xs font-bold text-foreground">{editing ? editing.voucherNumber : C.numberHint}</span>
+                </div>
+              ) : (
+                <span className="text-xs text-muted-foreground font-mono">
+                  Voucher No: {editing ? editing.voucherNumber : C.numberHint}
+                </span>
+              )}
             </div>
             <Form {...form}>
               <form
@@ -624,7 +658,8 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
 
                   <FormField control={form.control} name="amount" render={({ field }) => (
                     <FormItem><FormLabel>Amount ₹ <span className="text-destructive">*</span></FormLabel>
-                      <Input type="number" min={0} step="0.01" data-field="amount" {...field} />
+                      <Input type="number" min={0} step="0.01" data-field="amount"
+                        className={isReceipt ? 'font-mono text-right font-semibold tabular-nums' : undefined} {...field} />
                       <FormMessage />
                     </FormItem>
                   )} />
@@ -655,7 +690,9 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
                   </FormItem>
                 )} />
 
-                <div className="flex flex-wrap gap-2 pt-2 border-t border-border">
+                <div className={`flex flex-wrap gap-2 border-t border-border ${
+                  isReceipt ? 'items-center pt-3' : 'pt-2'
+                }`}>
                   <Button type="submit" disabled={busy}>
                     <Save className="w-4 h-4 mr-2" />
                     {busy ? 'Saving…' : editing ? 'Update Voucher' : 'Save'}
@@ -668,6 +705,11 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
                   <Button type="button" variant="outline" onClick={resetForm} disabled={busy}>
                     {editing ? <><X className="w-4 h-4 mr-2" /> Cancel Edit</> : <><RotateCcw className="w-4 h-4 mr-2" /> Reset</>}
                   </Button>
+                  {isReceipt && (
+                    <span className="ml-auto hidden items-center gap-1.5 text-[10px] text-muted-foreground sm:inline-flex">
+                      <Lock className="h-3 w-3" /> Posting trail follows the selected location
+                    </span>
+                  )}
                 </div>
               </form>
             </Form>
@@ -694,54 +736,120 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
 
         {/* ── Summary ── */}
         {filtered.length > 0 && (
-          <div className="bg-card border border-border rounded-xl p-4 flex justify-between items-center">
-            <span className="text-muted-foreground text-sm">
-              {filtered.length} voucher{filtered.length === 1 ? '' : 's'}{hasFilters ? ' (filtered)' : ''}
-            </span>
-            <span className={`text-xl font-bold font-mono ${C.accent}`}>
-              ₹{total.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-            </span>
-          </div>
+          isReceipt ? (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card px-4 py-3 shadow-sm">
+              <div className="flex items-center gap-3">
+                <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                  <C.Icon className="h-4 w-4" />
+                </span>
+                <div>
+                  <p className="text-sm font-medium text-foreground">
+                    {filtered.length} receipt voucher{filtered.length === 1 ? '' : 's'}{hasFilters ? ' (filtered)' : ''}
+                  </p>
+                  <p className="text-[11px] text-muted-foreground">Receipt register total</p>
+                </div>
+              </div>
+              <span className={`font-mono text-xl font-bold tabular-nums ${C.accent}`}>
+                ₹{total.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+              </span>
+            </div>
+          ) : (
+            <div className="bg-card border border-border rounded-xl p-4 flex justify-between items-center">
+              <span className="text-muted-foreground text-sm">
+                {filtered.length} voucher{filtered.length === 1 ? '' : 's'}{hasFilters ? ' (filtered)' : ''}
+              </span>
+              <span className={`text-xl font-bold font-mono ${C.accent}`}>
+                ₹{total.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+              </span>
+            </div>
+          )
         )}
 
         {/* ── Register ── */}
         <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
           <div className="p-4 border-b border-border bg-muted/20 space-y-3">
-            <div className="flex items-center gap-2">
+            {isReceipt && (
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h2 className="text-sm font-semibold">Receipt register</h2>
+                  <p className="text-[11px] text-muted-foreground">Search and review recorded collections</p>
+                </div>
+                <span className="rounded-md border border-border bg-background px-2 py-1 text-[10px] font-medium text-muted-foreground">
+                  {filtered.length} shown
+                </span>
+              </div>
+            )}
+            <div className={`flex items-center gap-2 ${
+              isReceipt ? 'rounded-lg border border-border bg-card px-3 shadow-sm focus-within:border-primary/50 focus-within:ring-2 focus-within:ring-primary/10' : ''
+            }`}>
               <Search className="w-4 h-4 text-muted-foreground shrink-0" />
               <Input placeholder="Search voucher no, party, reference or narration…" value={search}
                 onChange={e => setSearch(e.target.value)}
-                className="border-transparent bg-transparent focus-visible:ring-0 max-w-md max-md:max-w-full" />
+                className={isReceipt
+                  ? 'h-10 border-0 bg-transparent px-0 text-sm shadow-none focus-visible:ring-0'
+                  : 'border-transparent bg-transparent focus-visible:ring-0 max-w-md max-md:max-w-full'} />
             </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <Input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} className="w-[150px] h-8 text-xs" title="From date" />
-              <span className="text-xs text-muted-foreground">to</span>
-              <Input type="date" value={toDate} onChange={e => setToDate(e.target.value)} className="w-[150px] h-8 text-xs" title="To date" />
-              <Select value={cashFilter} onValueChange={setCashFilter}>
-                <SelectTrigger className="w-[190px] h-8 text-xs"><SelectValue placeholder="Cash / Bank" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Cash / Bank accounts</SelectItem>
-                  {(cashBankAccounts as any[]).map(a => <SelectItem key={a.id} value={String(a.id)}>{a.name}</SelectItem>)}
-                </SelectContent>
-              </Select>
-              <Select value={byFilter} onValueChange={setByFilter}>
-                <SelectTrigger className="w-[150px] h-8 text-xs"><SelectValue placeholder="Created by" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All users</SelectItem>
-                  {createdBys.map(u => <SelectItem key={u} value={u}>{u}</SelectItem>)}
-                </SelectContent>
-              </Select>
-              {hasFilters && (
-                <Button variant="ghost" size="sm" className="h-8 text-xs" onClick={() => {
-                  setSearch(''); setFromDate(''); setToDate(''); setCashFilter('all'); setByFilter('all');
-                }}>Clear</Button>
-              )}
-            </div>
+            {isReceipt ? (
+              <div className="flex flex-wrap items-start gap-2">
+                <FilterPanel activeCount={activeFilterCount} defaultOpen className="min-w-0">
+                  <label className="space-y-1 text-xs text-muted-foreground">
+                    <span>From date</span>
+                    <Input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} className="h-8 text-xs" title="From date" />
+                  </label>
+                  <label className="space-y-1 text-xs text-muted-foreground">
+                    <span>To date</span>
+                    <Input type="date" value={toDate} onChange={e => setToDate(e.target.value)} className="h-8 text-xs" title="To date" />
+                  </label>
+                  <Select value={cashFilter} onValueChange={setCashFilter}>
+                    <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Cash / Bank" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Cash / Bank accounts</SelectItem>
+                      {(cashBankAccounts as any[]).map(a => <SelectItem key={a.id} value={String(a.id)}>{a.name}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                  <Select value={byFilter} onValueChange={setByFilter}>
+                    <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Created by" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All users</SelectItem>
+                      {createdBys.map(u => <SelectItem key={u} value={u}>{u}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </FilterPanel>
+                {hasFilters && (
+                  <Button variant="ghost" size="sm" className="h-8 text-xs" onClick={clearRegisterFilters}>Clear</Button>
+                )}
+              </div>
+            ) : (
+              <div className="flex flex-wrap items-center gap-2">
+                <Input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} className="w-[150px] h-8 text-xs" title="From date" />
+                <span className="text-xs text-muted-foreground">to</span>
+                <Input type="date" value={toDate} onChange={e => setToDate(e.target.value)} className="w-[150px] h-8 text-xs" title="To date" />
+                <Select value={cashFilter} onValueChange={setCashFilter}>
+                  <SelectTrigger className="w-[190px] h-8 text-xs"><SelectValue placeholder="Cash / Bank" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Cash / Bank accounts</SelectItem>
+                    {(cashBankAccounts as any[]).map(a => <SelectItem key={a.id} value={String(a.id)}>{a.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+                <Select value={byFilter} onValueChange={setByFilter}>
+                  <SelectTrigger className="w-[150px] h-8 text-xs"><SelectValue placeholder="Created by" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All users</SelectItem>
+                    {createdBys.map(u => <SelectItem key={u} value={u}>{u}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+                {hasFilters && (
+                  <Button variant="ghost" size="sm" className="h-8 text-xs" onClick={clearRegisterFilters}>Clear</Button>
+                )}
+              </div>
+            )}
           </div>
 
           <Table>
             <TableHeader>
-              <TableRow className="bg-muted/10">
+              <TableRow className={isReceipt
+                ? 'bg-background/80 text-[10px] uppercase tracking-[0.1em] text-muted-foreground'
+                : 'bg-muted/10'}>
                 <SortableHead k="voucher" sort={sort}>Voucher #</SortableHead>
                 <SortableHead k="date" sort={sort}>Date</SortableHead>
                 <SortableHead k="party" sort={sort}>{C.partyLabel}</SortableHead>
@@ -762,8 +870,10 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
                   <C.Icon className="w-10 h-10 mx-auto mb-3 opacity-20" />
                   <p>{hasFilters ? 'No vouchers match the filters' : `No ${C.title.toLowerCase()}s yet`}</p>
                 </TableCell></TableRow>
-              ) : sorted.map(r => (
-                <TableRow key={r.id} className="hover:bg-muted/10">
+              ) : sorted.map((r, index) => (
+                <TableRow key={r.id} className={isReceipt
+                  ? `group transition-colors hover:bg-primary/[0.035] ${index % 2 === 1 ? 'bg-muted/[0.12]' : 'bg-card'}`
+                  : 'hover:bg-muted/10'}>
                   <TableCell className="font-mono text-primary font-bold text-sm whitespace-nowrap">
                     {r.voucherNumber}
                     {r.origin === 'system' && (
@@ -786,7 +896,7 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
                   </TableCell>
                   <TableCell className="text-muted-foreground text-sm max-w-[180px] truncate">{r.narration || '—'}</TableCell>
                   <TableCell className="text-xs text-muted-foreground">{r.createdBy || '—'}</TableCell>
-                  <TableCell className={`text-right font-mono font-bold ${C.accent}`}>
+                  <TableCell className={`text-right font-mono font-bold ${isReceipt ? 'tabular-nums' : ''} ${C.accent}`}>
                     ₹{Number(r.amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                   </TableCell>
                   <TableCell className="text-right whitespace-nowrap">
