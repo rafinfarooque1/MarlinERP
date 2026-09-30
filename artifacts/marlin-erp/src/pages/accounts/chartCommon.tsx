@@ -66,7 +66,12 @@ export interface FinancialStatements {
       closingStockOnHand?: number; closingStockInTransit?: number; total: number;
     };
   };
-  integrity?: { balanced: boolean; difference: number; issues: string[] };
+  integrity?: {
+    status?: "PASS" | "UNVERIFIED" | "FAIL";
+    balanced: boolean;
+    difference: number;
+    issues: string[];
+  };
 }
 
 /** What the statement sheet needs to identify a ledger. */

@@ -921,18 +921,21 @@ function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, on
       <>
 
           {/* ── Integrity warning banner ──
-              'difference' is no longer a plug figure — on healthy books it is ~0.
-              Any non-zero difference or any reported integrity issue is a REAL
-              defect (orphan ledgers, unbalanced opening balances, unmatched
-              production-costing overlay, incomplete stock ledgers) and is surfaced
-              here to investigate, never as an ordinary balance-sheet line. */}
+              A measured imbalance is a failure; missing historical evidence is
+              unverified. Surface both, but do not label unknown evidence as a defect. */}
           {fs?.integrity && (!fs.integrity.balanced || fs.integrity.issues.length > 0) && (
             <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 mb-4">
               <div className="flex items-center gap-2 text-amber-500 font-semibold text-sm">
                 <AlertTriangle className="w-4 h-4 shrink-0" />
-                <span>Books integrity check failed — investigate before relying on these statements</span>
+                <span>
+                  {fs.integrity.status === "UNVERIFIED"
+                    ? "Books evidence is unverified — review before relying on these statements"
+                    : fs.integrity.status === "FAIL" || Math.abs(fs.integrity.difference) >= 0.01
+                      ? "Books integrity check failed — investigate before relying on these statements"
+                      : "Books integrity needs review — see the issue below"}
+                </span>
               </div>
-              {Math.abs(fs.integrity.difference) > 0.01 && (
+              {Math.abs(fs.integrity.difference) >= 0.01 && (
                 <p className="mt-1.5 text-xs text-amber-500/90">
                   Unexplained difference of <span className="font-mono font-semibold">{fmt(Math.abs(fs.integrity.difference))}</span>{' '}
                   — the balance sheet does not tie out. This is a defect, not a balancing figure.
