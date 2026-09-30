@@ -200,6 +200,14 @@ async function main() {
     punches.length === 1 && near(await accrualFor(EID, 3), DAY_RATE * factor(spanFull)),
     `punch rows: ${punches.length}; accrual ₹${await accrualFor(EID, 3)} (stale sessions would have paid ₹${expectedC})`);
 
+  // ── E2. Manual full-day Present overrides any old punch sessions ─────────
+  await api("PUT", "/hr/attendance",
+    { employeeId: EID, date: D(3), status: "present", checkIn: null, checkOut: null });
+  punches = await punchRows(EID, D(3));
+  check("E2", "Present — Earned Full Day clears old punches and earns a full paid day",
+    punches.length === 0 && near(await accrualFor(EID, 3), DAY_RATE),
+    `punch rows: ${punches.length}; accrual ₹${await accrualFor(EID, 3)} (expected ₹${r2(DAY_RATE)})`);
+
   // ── F. Clearing times drops the day to its status, punches deleted ────────
   await api("PUT", "/hr/attendance",
     { employeeId: EID, date: D(3), status: "half_day", checkIn: null, checkOut: null });

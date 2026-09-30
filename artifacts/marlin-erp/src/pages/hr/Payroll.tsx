@@ -84,7 +84,12 @@ function EditDialog({ item, onClose }: { item: EnrichedPayrollRecord; onClose: (
   const mutation = useEditPayroll();
 
   const save = () => {
-    mutation.mutate({ id: item.id, extraAmount: Number(amount), extraNote: note }, {
+    const parsedAmount = Number(amount);
+    if (!Number.isFinite(parsedAmount) || parsedAmount < 0) {
+      toast.error('Enter a valid non-negative amount');
+      return;
+    }
+    mutation.mutate({ id: item.id, extraAmount: parsedAmount, extraNote: note }, {
       onSuccess: () => {
         toast.success('Payroll updated');
         qc.invalidateQueries({ queryKey: getEnrichedPayrollQueryKey({ year: item.year, month: item.month }) });
@@ -208,13 +213,15 @@ function PayDialog({ item, onClose }: { item: EnrichedPayrollRecord; onClose: ()
 
 // ── Payslip detail sheet ───────────────────────────────────────────────────
 function PayslipSheet({
-  item, accrued, onClose, isAdmin, onApprove, onPay, canDownload,
+  item, accrued, onClose, isAdmin, canEdit, onEdit, onApprove, onPay, canDownload,
 }: {
   item: EnrichedPayrollRecord;
   /** Already charged to the P&L by daily accrual for this employee-month. */
   accrued: number;
   onClose: () => void;
   isAdmin: boolean;
+  canEdit: boolean;
+  onEdit: () => void;
   onApprove: () => void;
   onPay: () => void;
   canDownload: boolean;
@@ -254,6 +261,11 @@ function PayslipSheet({
         {/* Action buttons (admin) */}
         {isAdmin && (
           <div className="flex gap-2 flex-wrap mt-4">
+            {item.status === 'draft' && canEdit && (
+              <Button size="sm" variant="outline" onClick={onEdit}>
+                <Pencil className="h-3 w-3 mr-1" />Edit
+              </Button>
+            )}
             {item.status === 'draft' && (
               <Button size="sm" onClick={onApprove}><CheckCircle className="h-3 w-3 mr-1" />Approve</Button>
             )}
@@ -486,21 +498,28 @@ function NewAdvanceDialog({ employees, onClose }: { employees: any[]; onClose: (
 // Days with no attendance row, no holiday and no weekly off price as loss of
 // pay by omission. A manager decides each one here — full-day present,
 // casual/sick leave, paid off, or confirmed unpaid — through the same
-// attendance-correction route the Fix Attendance flow uses.
+// attendance-correction route the Fix Attendance flow uses. Explicitly clear
+// punch data so a manual status correction, especially Present, is authoritative.
 const CLASSIFY_CHOICES = [
-  { value: 'present', label: 'Present — Earned Full Day' },
+  { value: 'present', label: 'Present — Earned Full Day (Paid; No LOP)' },
   { value: 'casual', label: 'Casual Leave' },
   { value: 'sick', label: 'Sick Leave' },
   { value: 'paid_off', label: 'Paid Off' },
   { value: 'absent', label: 'Absent (LOP)' },
 ] as const;
 
-function classificationBody(choice: string): { status: 'present' | 'leave' | 'weekly_off' | 'absent'; leaveType?: 'casual' | 'sick' } {
-  if (choice === 'present') return { status: 'present' };
-  if (choice === 'casual') return { status: 'leave', leaveType: 'casual' };
-  if (choice === 'sick') return { status: 'leave', leaveType: 'sick' };
-  if (choice === 'paid_off') return { status: 'weekly_off' };
-  return { status: 'absent' };
+function classificationBody(choice: string): {
+  status: 'present' | 'leave' | 'weekly_off' | 'absent';
+  leaveType?: 'casual' | 'sick';
+  checkIn: null;
+  checkOut: null;
+} {
+  const clearPunches = { checkIn: null, checkOut: null };
+  if (choice === 'present') return { ...clearPunches, status: 'present' };
+  if (choice === 'casual') return { ...clearPunches, status: 'leave', leaveType: 'casual' };
+  if (choice === 'sick') return { ...clearPunches, status: 'leave', leaveType: 'sick' };
+  if (choice === 'paid_off') return { ...clearPunches, status: 'weekly_off' };
+  return { ...clearPunches, status: 'absent' };
 }
 
 function ClassifyAbsencesDialog({ emp, year, month, onClose }: {
@@ -546,7 +565,8 @@ function ClassifyAbsencesDialog({ emp, year, month, onClose }: {
         </DialogHeader>
         <p className="text-sm text-muted-foreground">
           These days have no attendance record, so they count as unpaid unless
-          classified. Days left as “—” stay unclassified.
+          classified. Choosing Present pays that day as a full day; days left as
+          “—” stay unclassified.
         </p>
         <div className="max-h-72 overflow-y-auto rounded-lg border divide-y text-sm">
           {emp.dates.map(date => (
@@ -662,6 +682,7 @@ export default function Payroll() {
   const [month, setMonth] = useState(String(now.getMonth() + 1));
   const [search, setSearch]   = useState('');
   const [viewItem, setViewItem] = useState<EnrichedPayrollRecord | null>(null);
+  const [editItem, setEditItem] = useState<EnrichedPayrollRecord | null>(null);
   const [payItem, setPayItem]   = useState<EnrichedPayrollRecord | null>(null);
   const [classifyEmp, setClassifyEmp] = useState<UnclassifiedAbsences | null>(null);
   // Approval refused because the month still has unclassified absent days —
@@ -936,6 +957,11 @@ export default function Payroll() {
                         <Eye className="h-4 w-4" />
                       </Button>
                       {isAdmin && p.status === 'draft' && perm.canEdit && (
+                        <Button size="sm" variant="ghost" className="text-blue-600" onClick={() => setEditItem(p)} title="Edit payroll">
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                      )}
+                      {isAdmin && p.status === 'draft' && perm.canEdit && (
                         <Button size="sm" variant="ghost" className="text-blue-600" onClick={() => handleApprove(p)} title="Approve">
                           <CheckCircle className="h-4 w-4" />
                         </Button>
@@ -971,6 +997,8 @@ export default function Payroll() {
           accrued={accruedByEmployee.get(viewItem.employeeId)?.accrued ?? 0}
           onClose={() => setViewItem(null)}
           isAdmin={isAdmin}
+          canEdit={perm.canEdit}
+          onEdit={() => { setEditItem(viewItem); setViewItem(null); }}
           onApprove={() => handleApprove(viewItem)}
           onPay={() => { setPayItem(viewItem); setViewItem(null); }}
           canDownload={perm.canDownload}
@@ -978,6 +1006,7 @@ export default function Payroll() {
       )}
 
       {/* Dialogs */}
+      {editItem && <EditDialog item={editItem} onClose={() => setEditItem(null)} />}
       {payItem && <PayDialog item={payItem} onClose={() => setPayItem(null)} />}
       {classifyEmp && (
         <ClassifyAbsencesDialog
