@@ -484,17 +484,19 @@ function NewAdvanceDialog({ employees, onClose }: { employees: any[]; onClose: (
 // ── Absence classification dialog ─────────────────────────────────────────
 //
 // Days with no attendance row, no holiday and no weekly off price as loss of
-// pay by omission. A manager decides each one here — casual/sick leave, paid
-// off, or confirmed unpaid — through the same attendance-correction route the
-// Fix Attendance flow uses, so the accruals and payroll refresh themselves.
+// pay by omission. A manager decides each one here — full-day present,
+// casual/sick leave, paid off, or confirmed unpaid — through the same
+// attendance-correction route the Fix Attendance flow uses.
 const CLASSIFY_CHOICES = [
+  { value: 'present', label: 'Present — Earned Full Day' },
   { value: 'casual', label: 'Casual Leave' },
   { value: 'sick', label: 'Sick Leave' },
   { value: 'paid_off', label: 'Paid Off' },
   { value: 'absent', label: 'Absent (LOP)' },
 ] as const;
 
-function classificationBody(choice: string): { status: 'leave' | 'weekly_off' | 'absent'; leaveType?: 'casual' | 'sick' } {
+function classificationBody(choice: string): { status: 'present' | 'leave' | 'weekly_off' | 'absent'; leaveType?: 'casual' | 'sick' } {
+  if (choice === 'present') return { status: 'present' };
   if (choice === 'casual') return { status: 'leave', leaveType: 'casual' };
   if (choice === 'sick') return { status: 'leave', leaveType: 'sick' };
   if (choice === 'paid_off') return { status: 'weekly_off' };
@@ -529,7 +531,10 @@ function ClassifyAbsencesDialog({ emp, year, month, onClose }: {
       toast.error(done > 0 ? `Saved ${done} day(s), then failed: ${msg}` : msg);
     } finally {
       setSaving(false);
-      qc.invalidateQueries({ queryKey: getUnclassifiedAbsencesQueryKey({ year, month }) });
+      const params = { year, month };
+      qc.invalidateQueries({ queryKey: getUnclassifiedAbsencesQueryKey(params) });
+      qc.invalidateQueries({ queryKey: getEnrichedPayrollQueryKey(params) });
+      qc.invalidateQueries({ queryKey: getSalaryAccrualsQueryKey(params) });
     }
   };
 
