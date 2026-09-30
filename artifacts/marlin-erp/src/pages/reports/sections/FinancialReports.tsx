@@ -53,13 +53,14 @@ interface FinancialStatements {
   locationScoped: boolean;
   filters: { warehouses: { id: number; name: string }[]; outlets: { id: number; name: string }[] };
   profitAndLoss: {
+    stockTransfersIncludedInPnl?: boolean;
     expenses: {
       openingStock: number; openingStockItems: StockItem[];
       openingStockReliable: boolean; openingStockNote: string | null;
        purchases: number; stockTransferIn?: number; directExpenses: GroupSummary; indirectExpenses: GroupSummary; total: number;
     };
     incomes: {
-      sales: number; closingStock: number; closingStockItems: StockItem[]; closingStockInTransit: number;
+      sales: number; closingStock: number; closingStockOnHand?: number; closingStockItems: StockItem[]; closingStockInTransit: number;
       closingStockReliable: boolean; closingStockNote: string | null;
        stockTransferOut?: number; directIncomes: GroupSummary; indirectIncomes: GroupSummary; total: number;
     };
@@ -71,7 +72,7 @@ interface FinancialStatements {
   };
   balanceSheet: {
     liabilities: { capitalAccount: GroupSummary; loans: GroupSummary; currentLiabilities: GroupSummary; pandlCarryForward: number; difference: number; total: number };
-    assets: { fixedAssets: GroupSummary; currentAssets: GroupSummary; closingStock: number; total: number };
+    assets: { fixedAssets: GroupSummary; currentAssets: GroupSummary; closingStock: number; closingStockOnHand?: number; closingStockInTransit?: number; total: number };
   };
   integrity: { balanced: boolean; difference: number; issues: string[] };
 }
@@ -380,8 +381,12 @@ function PnlReport({ range, loc, canDownload }: { range: RangeState; loc: Locati
   const salesReturns = Number((pl?.incomes as any)?.salesReturns ?? 0);
   const grossSales = Number((pl?.incomes as any)?.grossSales ?? (pl?.incomes.sales ?? 0));
   const directIncome = pl?.incomes.directIncomes.total ?? 0;
+  const transferPnl = !!pl?.stockTransfersIncludedInPnl;
+  const transferIn = transferPnl ? Number((pl?.expenses as any)?.stockTransferIn ?? 0) : 0;
+  const transferOut = transferPnl ? Number((pl?.incomes as any)?.stockTransferOut ?? 0) : 0;
+  const purchasesForDisplay = pl?.expenses.purchases ?? 0;
   const goodsAvailable = pl
-    ? pl.expenses.openingStock + pl.expenses.purchases + pl.expenses.directExpenses.total
+    ? pl.expenses.openingStock + purchasesForDisplay + transferIn + pl.expenses.directExpenses.total
     : 0;
   // Financial charges and depreciation are ordinary indirect-expense ledgers;
   // they get their own statement lines when such ledgers exist. Topmost match
@@ -413,11 +418,19 @@ function PnlReport({ range, loc, canDownload }: { range: RangeState; loc: Locati
     { name: 'Less: Sales Returns', amount: salesReturns, less: true },
     { name: 'Net Sales', amount: pl.incomes.sales, kind: 'sub' },
     ...(Math.abs(directIncome) > 0.005 ? [{ name: 'Add: Direct Income', amount: directIncome }] : []),
+    ...(transferPnl && Math.abs(transferOut) > 0.005 ? [{ name: 'Add: Stock Transfer Out', amount: transferOut }] : []),
     { name: 'Opening Stock', amount: pl.expenses.openingStock },
-    { name: 'Add: Purchases (net of returns)', amount: pl.expenses.purchases },
+    { name: 'Add: Purchases (net of returns)', amount: purchasesForDisplay },
+    ...(transferPnl && Math.abs(transferIn) > 0.005 ? [{ name: 'Add: Purchase Stock Transfer In', amount: transferIn }] : []),
     { name: 'Add: Direct Expenses', amount: pl.expenses.directExpenses.total },
     { name: 'Goods Available for Sale', amount: goodsAvailable, kind: 'sub' },
-    { name: 'Less: Closing Stock', amount: pl.incomes.closingStock, less: true },
+    ...(transferPnl
+      ? [
+        { name: 'Less: Closing Stock (on hand)', amount: Number((pl.incomes as any).closingStockOnHand ?? pl.incomes.closingStock), less: true },
+        ...(Math.abs(Number(pl.incomes.closingStockInTransit ?? 0)) > 0.005
+          ? [{ name: 'Less: Stock in Transit', amount: Number(pl.incomes.closingStockInTransit), less: true }] : []),
+      ]
+      : [{ name: 'Less: Closing Stock', amount: pl.incomes.closingStock, less: true }]),
     { name: 'Cost of Goods Sold (COGS)', amount: s?.costOfGoodsSold ?? 0, kind: 'sub', id: 'pl-cogs' },
     { name: `Gross ${(s?.grossProfit ?? 0) >= 0 ? 'Profit' : 'Loss'} (GP)`, amount: Math.abs(s?.grossProfit ?? 0), kind: 'total', id: 'pl-gross-profit' },
     { name: 'Add: Other Income', amount: s?.otherIncome ?? 0 },
@@ -447,19 +460,31 @@ function PnlReport({ range, loc, canDownload }: { range: RangeState; loc: Locati
 
   const expenseLines: Line[] = pl ? [
     { name: 'Opening Stock', amount: pl.expenses.openingStock, depth: 0, key: 'pl:openingStock', parentKey: null },
-    { name: 'Purchases', amount: pl.expenses.purchases, depth: 0, key: 'pl:purchases', parentKey: null },
+    { name: 'Purchases', amount: purchasesForDisplay, depth: 0, key: 'pl:purchases', parentKey: null },
+    ...(transferPnl && Math.abs(transferIn) > 0.005
+      ? [{ name: 'Purchase Stock Transfer In', amount: transferIn, depth: 0, key: 'pl:transferIn', parentKey: null }] : []),
     ...groupLines(pl.expenses.directExpenses),
     ...groupLines(pl.expenses.indirectExpenses),
   ] : [];
   const incomeLines: Line[] = pl ? [
     { name: 'Sales (net of GST)', amount: pl.incomes.sales, depth: 0, key: 'pl:sales', parentKey: null },
-    {
-      name: 'Closing Stock', amount: pl.incomes.closingStock, depth: 0,
-      key: 'pl:closingStock', parentKey: null,
-      hasChildren: pl.incomes.closingStockInTransit > 0.005,
-    },
-    ...(pl.incomes.closingStockInTransit > 0.005
-      ? [{ name: 'of which in transit', amount: pl.incomes.closingStockInTransit, depth: 1, key: 'pl:closingStock/transit', parentKey: 'pl:closingStock' }] : []),
+    ...(transferPnl && Math.abs(transferOut) > 0.005
+      ? [{ name: 'Stock Transfer Out', amount: transferOut, depth: 0, key: 'pl:transferOut', parentKey: null }] : []),
+    ...(transferPnl
+      ? [
+        { name: 'Closing Stock (on hand)', amount: Number((pl.incomes as any).closingStockOnHand ?? pl.incomes.closingStock), depth: 0, key: 'pl:closingStock', parentKey: null },
+        ...(Math.abs(Number(pl.incomes.closingStockInTransit ?? 0)) > 0.005
+          ? [{ name: 'Stock in Transit', amount: Number(pl.incomes.closingStockInTransit), depth: 0, key: 'pl:closingStockTransit', parentKey: null }] : []),
+      ]
+      : [
+        {
+          name: 'Closing Stock', amount: pl.incomes.closingStock, depth: 0,
+          key: 'pl:closingStock', parentKey: null,
+          hasChildren: pl.incomes.closingStockInTransit > 0.005,
+        },
+        ...(pl.incomes.closingStockInTransit > 0.005
+          ? [{ name: 'of which in transit', amount: pl.incomes.closingStockInTransit, depth: 1, key: 'pl:closingStock/transit', parentKey: 'pl:closingStock' }] : []),
+      ]),
     ...groupLines(pl.incomes.directIncomes),
     ...groupLines(pl.incomes.indirectIncomes),
   ] : [];
@@ -616,6 +641,7 @@ function BalanceSheetReport({ range, loc, canDownload }: { range: RangeState; lo
   const { options, loading: locLoading } = useLocationOptions();
   const { data, isLoading } = useFinancialStatements(range, loc);
   const bs = data?.balanceSheet;
+  const transferPnl = !!data?.profitAndLoss?.stockTransfersIncludedInPnl;
 
   // Dashboard Payables tile links here with #bs-liabilities — same scroll +
   // highlight treatment as the P&L anchors.
@@ -639,7 +665,9 @@ function BalanceSheetReport({ range, loc, canDownload }: { range: RangeState; lo
   ] : [];
   const assetLines: Line[] = bs ? [
     ...groupLines(bs.assets.fixedAssets),
-    { name: 'Closing Stock', amount: bs.assets.closingStock, depth: 0, key: 'bs:closingStock', parentKey: null },
+    { name: transferPnl ? 'Closing Stock (on hand)' : 'Closing Stock', amount: transferPnl ? (bs.assets.closingStockOnHand ?? bs.assets.closingStock) : bs.assets.closingStock, depth: 0, key: 'bs:closingStock', parentKey: null },
+    ...(transferPnl && Math.abs(bs.assets.closingStockInTransit ?? 0) > 0.005
+      ? [{ name: 'Stock in Transit', amount: bs.assets.closingStockInTransit ?? 0, depth: 0, key: 'bs:closingStockTransit', parentKey: null }] : []),
     ...groupLines(bs.assets.currentAssets),
   ] : [];
 

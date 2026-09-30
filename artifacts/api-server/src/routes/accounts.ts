@@ -4789,8 +4789,12 @@ router.get("/accounts/financial-statements/monthly", requireModuleView(["page:/a
     put("purchaseReturns", pl.expenses.purchaseReturns);
     put("stockTransferIn", pl.expenses.stockTransferIn);
     put("stockTransferOut", pl.incomes.stockTransferOut);
+    put("closingStockOnHand", pl.incomes.closingStockOnHand);
+    put("closingStockInTransit", pl.incomes.closingStockInTransit);
     put("openingStock", pl.expenses.openingStock);
     put("closingStock", pl.incomes.closingStock);
+    put("bsClosingStockOnHand", bs.assets.closingStockOnHand);
+    put("bsClosingStockInTransit", bs.assets.closingStockInTransit);
     put("gp", pl.summary?.grossProfit ?? null);
     put("np", pl.netProfit);
   };
@@ -4805,6 +4809,7 @@ router.get("/accounts/financial-statements/monthly", requireModuleView(["page:/a
 
   res.json({
     locationScoped: location != null,
+    stockTransfersIncludedInPnl: !!location && location.type !== "company",
     ...(location ? { location: { type: location.type, id: location.id } } : {}),
     fromDate: window.fromDate,
     toDate: window.toDate,

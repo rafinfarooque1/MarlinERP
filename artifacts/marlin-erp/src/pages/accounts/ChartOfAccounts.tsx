@@ -855,14 +855,18 @@ function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, on
   const salesReturns    = inc?.salesReturns ?? 0;
   const grossSales      = inc?.grossSales ?? ((inc?.sales ?? 0) + salesReturns);
   const purchaseReturns = exp?.purchaseReturns ?? 0;
+  const transferPnl = !!pl?.stockTransfersIncludedInPnl;
+  const transferIn = transferPnl ? Number(exp?.stockTransferIn ?? 0) : 0;
+  const transferOut = transferPnl ? Number(inc?.stockTransferOut ?? 0) : 0;
+  const purchasesForDisplay = exp?.purchases ?? 0;
   const grossProfit     = pl ? (pl.summary?.grossProfit
-    ?? ((inc ? inc.sales + inc.closingStock + inc.directIncomes.total : 0)
-      - (exp ? exp.openingStock + exp.purchases + exp.directExpenses.total : 0))) : null;
+    ?? ((inc ? inc.sales + inc.closingStock + inc.directIncomes.total + transferOut : 0)
+      - (exp ? exp.openingStock + exp.purchases + transferIn + exp.directExpenses.total : 0))) : null;
   // Each Trading side includes the GP c/d balancing row (debit when profit,
   // credit when loss), so the two panel headers always show the SAME total —
   // that is what makes it a balanced two-sided account.
-  const tradingExpBase  = exp ? exp.openingStock + exp.purchases + exp.directExpenses.total : 0;
-  const tradingIncBase  = inc ? inc.sales + inc.closingStock + inc.directIncomes.total : 0;
+  const tradingExpBase  = exp ? exp.openingStock + exp.purchases + transferIn + exp.directExpenses.total : 0;
+  const tradingIncBase  = inc ? inc.sales + inc.closingStock + inc.directIncomes.total + transferOut : 0;
   const tradingExpTotal = tradingExpBase + (grossProfit !== null && grossProfit > 0 ? grossProfit : 0);
   const tradingIncTotal = tradingIncBase + (grossProfit !== null && grossProfit < 0 ? -grossProfit : 0);
   const plExpTotal = (exp?.indirectExpenses.total ?? 0) + (grossProfit !== null && grossProfit < 0 ? -grossProfit : 0);
@@ -875,11 +879,25 @@ function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, on
   const mwMonths   = monthly?.months ?? [];
   const mwSales    = mwS('sales'),     mwSalesRet = mwS('salesReturns');
   const mwPur      = mwS('purchases'), mwPurRet   = mwS('purchaseReturns');
+  const mwTransferIn = transferPnl ? mwS('stockTransferIn') : [];
+  const mwTransferOut = transferPnl ? mwS('stockTransferOut') : [];
   const mwGp       = mwS('gp');
   const mwGrossSales = mwMonths.map((_, i) => (mwSales[i] ?? 0) + (mwSalesRet[i] ?? 0));
   const mwGrossPur   = mwMonths.map((_, i) => (mwPur[i] ?? 0) + (mwPurRet[i] ?? 0));
   const mwNegSalesRet = mwMonths.map((_, i) => -(mwSalesRet[i] ?? 0));
   const mwNegPurRet   = mwMonths.map((_, i) => -(mwPurRet[i] ?? 0));
+  const showTransferInLine = transferPnl && (monthly
+    ? mwTransferIn.some((v) => Math.abs(v) > 0.005)
+    : Math.abs(transferIn) > 0.005);
+  const showTransferOutLine = transferPnl && (monthly
+    ? mwTransferOut.some((v) => Math.abs(v) > 0.005)
+    : Math.abs(transferOut) > 0.005);
+  const showClosingTransitLine = transferPnl && (monthly
+    ? mwS('closingStockInTransit').some((v) => Math.abs(v) > 0.005)
+    : Math.abs(Number(inc?.closingStockInTransit ?? 0)) > 0.005);
+  const showBalanceTransitLine = transferPnl && (monthly
+    ? mwS('bsClosingStockInTransit').some((v) => Math.abs(v) > 0.005)
+    : Math.abs(Number(bs?.assets?.closingStockInTransit ?? 0)) > 0.005);
   // The c/d balancing rows are two-sided per month: profit months carry down
   // on the debit side, loss months on the credit side.
   const mwGpPos = mwGp.map(v => (v > 0 ? v : 0));
@@ -1022,10 +1040,13 @@ function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, on
                     <>
                       <MwGroupBlock group={bs.assets.fixedAssets} seriesKey="grp:fixed" monthly={monthly} expansion={bsExpansion} />
                       <MwAutoRow
-                        label="Closing Stock"
-                        values={mwS('bsClosingStock')} total={bs.assets.closingStock} monthly={monthly}
+                        label={transferPnl ? 'Closing Stock (on hand)' : 'Closing Stock'}
+                        values={transferPnl ? mwS('bsClosingStockOnHand') : mwS('bsClosingStock')} total={transferPnl ? (bs.assets.closingStockOnHand ?? bs.assets.closingStock) : bs.assets.closingStock} monthly={monthly}
                         accent="text-foreground/80 font-semibold"
                       />
+                      {showBalanceTransitLine && (
+                        <MwAutoRow label="Stock in Transit" values={mwS('bsClosingStockInTransit')} total={Number(bs.assets.closingStockInTransit ?? 0)} monthly={monthly} />
+                      )}
                       <MwGroupBlock group={bs.assets.currentAssets} seriesKey="grp:curassets" monthly={monthly} expansion={bsExpansion} />
                     </>
                   ) : (
@@ -1035,12 +1056,18 @@ function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, on
                       {/* Closing Stock — a real asset line. Before this change closing
                           stock never appeared on the balance sheet, which is why a
                           plug 'Difference' was needed. It now shows explicitly. */}
-                      <div className="flex items-center gap-2 py-2 px-3 mx-2 mb-2 rounded-lg text-xs font-semibold bg-emerald-500/5 text-foreground/80">
-                        <span className="flex-1">Closing Stock</span>
+                       <div className="flex items-center gap-2 py-2 px-3 mx-2 mb-2 rounded-lg text-xs font-semibold bg-emerald-500/5 text-foreground/80">
+                         <span className="flex-1">{transferPnl ? 'Closing Stock (on hand)' : 'Closing Stock'}</span>
                         <span className="font-mono tabular-nums text-foreground/70">
-                          {bs.assets.closingStock === 0 ? '—' : fmt(bs.assets.closingStock)}
+                           {Number(transferPnl ? (bs.assets.closingStockOnHand ?? bs.assets.closingStock) : bs.assets.closingStock) === 0 ? '—' : fmt(Number(transferPnl ? (bs.assets.closingStockOnHand ?? bs.assets.closingStock) : bs.assets.closingStock))}
                         </span>
                       </div>
+                       {showBalanceTransitLine && (
+                         <div className="flex items-center gap-2 py-2 px-3 mx-2 mb-2 rounded-lg text-xs font-semibold bg-amber-500/5 text-foreground/80">
+                           <span className="flex-1">Stock in Transit</span>
+                           <span className="font-mono tabular-nums text-foreground/70">{fmt(Number(bs.assets.closingStockInTransit))}</span>
+                         </div>
+                       )}
 
                       <GroupBlock group={bs.assets.currentAssets} onCreated={onCreated} expansion={bsExpansion} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={canAdd} canEdit={canEdit} canDelete={canDelete} />
                     </>
@@ -1086,12 +1113,16 @@ function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, on
                       <MwAutoRow label="Opening Stock" values={mwS('openingStock')} total={exp.openingStock} monthly={monthly} accent="text-foreground/80 font-semibold" />
                       {purchaseReturns !== 0 ? (
                         <>
-                          <MwAutoRow label="Purchase Account" values={mwGrossPur} total={exp.purchases + purchaseReturns} monthly={monthly} sub="auto" />
+                          <MwAutoRow label="Purchase Account" values={mwGrossPur} total={purchasesForDisplay + purchaseReturns} monthly={monthly} sub="auto" />
                           <MwAutoRow label="Less: Purchase Returns" values={mwNegPurRet} total={-purchaseReturns} monthly={monthly} sub="debit notes" />
-                          <MwAutoRow label="Net Purchases" values={mwPur} total={exp.purchases} monthly={monthly} accent="text-foreground/80" />
+                          <MwAutoRow label="Net Purchases" values={mwPur} total={purchasesForDisplay} monthly={monthly} accent="text-foreground/80" />
+                           {showTransferInLine && <MwAutoRow label="Purchase Stock Transfer In" values={mwTransferIn} total={transferIn} monthly={monthly} />}
                         </>
                       ) : (
-                        <MwAutoRow label="Purchase Account" values={mwPur} total={exp.purchases} monthly={monthly} sub="auto" />
+                        <>
+                          <MwAutoRow label="Purchase Account" values={mwPur} total={purchasesForDisplay} monthly={monthly} sub="auto" />
+                          {showTransferInLine && <MwAutoRow label="Purchase Stock Transfer In" values={mwTransferIn} total={transferIn} monthly={monthly} />}
+                        </>
                       )}
                       <Divider />
                       <MwGroupBlock group={exp.directExpenses} seriesKey="grp:direxp" monthly={monthly} expansion={plExpansion} />
@@ -1115,12 +1146,16 @@ function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, on
                           when debit notes exist; `purchases` is already the net. */}
                       {purchaseReturns !== 0 ? (
                         <>
-                          <AutoRow label="Purchase Account" amount={exp.purchases + purchaseReturns} sub="auto · from purchase orders" />
+                           <AutoRow label="Purchase Account" amount={purchasesForDisplay + purchaseReturns} sub="auto · from purchase orders" />
                           <AutoRow label="Less: Purchase Returns" amount={-purchaseReturns} sub="debit notes" />
-                          <AutoRow label="Net Purchases" amount={exp.purchases} accent="text-foreground/80" />
+                           <AutoRow label="Net Purchases" amount={purchasesForDisplay} accent="text-foreground/80" />
+                            {showTransferInLine && <AutoRow label="Purchase Stock Transfer In" amount={transferIn} />}
                         </>
-                      ) : (
-                        <AutoRow label="Purchase Account" amount={exp.purchases} sub="auto · from purchase orders" />
+                       ) : (
+                         <>
+                         <AutoRow label="Purchase Account" amount={purchasesForDisplay} sub="auto · from purchase orders" />
+                         {showTransferInLine && <AutoRow label="Purchase Stock Transfer In" amount={transferIn} />}
+                         </>
                       )}
 
                       <Divider />
@@ -1160,7 +1195,13 @@ function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, on
                       )}
                       <Divider />
                       <MwGroupBlock group={inc.directIncomes} seriesKey="grp:dirinc" monthly={monthly} expansion={plExpansion} />
-                      <MwAutoRow label="Closing Stock" values={mwS('closingStock')} total={inc.closingStock} monthly={monthly} accent="text-foreground/80 font-semibold" />
+                       {showTransferOutLine && <MwAutoRow label="Stock Transfer Out" values={mwTransferOut} total={transferOut} monthly={monthly} />}
+                       {transferPnl ? (
+                         <>
+                            <MwAutoRow label="Closing Stock (on hand)" values={mwS('closingStockOnHand')} total={Number(inc.closingStockOnHand ?? inc.closingStock)} monthly={monthly} accent="text-foreground/80 font-semibold" />
+                            {showClosingTransitLine && <MwAutoRow label="Stock in Transit" values={mwS('closingStockInTransit')} total={Number(inc.closingStockInTransit ?? 0)} monthly={monthly} />}
+                         </>
+                       ) : <MwAutoRow label="Closing Stock" values={mwS('closingStock')} total={inc.closingStock} monthly={monthly} accent="text-foreground/80 font-semibold" />}
                       {grossProfit !== null && grossProfit < 0 && (
                         <>
                           <Divider />
@@ -1186,13 +1227,17 @@ function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, on
 
                       {/* Direct Incomes */}
                       <GroupBlock group={inc.directIncomes} onCreated={onCreated} expansion={plExpansion} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={canAdd} canEdit={canEdit} canDelete={canDelete} />
+                        {showTransferOutLine && <AutoRow label="Stock Transfer Out" amount={transferOut} />}
 
                       {/* Closing Stock */}
-                      <StockBlock
-                        label="Closing Stock"
-                        items={inc.closingStockItems}
-                        total={inc.closingStock}
-                      />
+                       {transferPnl ? (
+                         <>
+                            <StockBlock label="Closing Stock (on hand)" items={inc.closingStockItems} total={Number(inc.closingStockOnHand ?? inc.closingStock)} />
+                            {showClosingTransitLine && <AutoRow label="Stock in Transit" amount={Number(inc.closingStockInTransit ?? 0)} />}
+                         </>
+                       ) : (
+                         <StockBlock label="Closing Stock" items={inc.closingStockItems} total={inc.closingStock} />
+                       )}
 
                       {/* Balancing transfer — makes both Trading sides equal */}
                       {grossProfit !== null && grossProfit < 0 && (

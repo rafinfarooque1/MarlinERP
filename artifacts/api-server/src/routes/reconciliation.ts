@@ -383,11 +383,12 @@ router.get(
         netSales: {
           sales: books.profitAndLoss.incomes.grossSales,
           returns: books.profitAndLoss.incomes.salesReturns,
-          net: books.profitAndLoss.summary.revenue,
+          net: books.profitAndLoss.incomes.sales,
         },
         goodsAvailable: r2(
           books.profitAndLoss.expenses.openingStock
           + books.profitAndLoss.expenses.purchases
+          + (books.profitAndLoss.stockTransfersIncludedInPnl ? books.profitAndLoss.expenses.stockTransferIn : 0)
           + books.profitAndLoss.expenses.directExpenses.total,
         ),
         cogs: books.profitAndLoss.summary.costOfGoodsSold,

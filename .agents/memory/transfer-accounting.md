@@ -8,6 +8,14 @@ dispatch and `Transfer-In` expense at receipt. Cross-GSTIN transfers also carry
 the appropriate GST heads; same-GSTIN transfers use tax-free internal vouchers.
 P&L recognition stays separate from the inter-branch payable.
 
+Location statements include Transfer-Out as income and Transfer-In as purchase
+expense; consolidated statements remain neutral. Do not apply the transfer
+opening-stock adjustment to a location P&L. At a location, keep total closing
+stock for statement arithmetic but show on-hand and sender-owned in-transit as
+separate components. Their sum must match the total closing-stock value on both
+the P&L and Balance Sheet. Dispatch reduces sender on-hand; transit remains
+owned by the sender until receipt.
+
 There is one payable ledger per undirected location pair. The balanced dispatch
 and receipt legs split between that pair ledger and shared clearing so a
 forward transfer increases the pair balance and a reverse transfer decreases
@@ -22,3 +30,9 @@ historical journal lines would damage the audit trail.
 must not create duplicate JVs. Legacy voucher-mode history is repaired only
 with additive, balanced adjustment vouchers; keep existing journal lines
 immutable. Migrations are marker-guarded and atomic.
+
+For reporting, apply transfer P&L lines only to location-scoped statements and
+keep the pair-payable postings unchanged. The transfer-in amount is already
+separate from ordinary purchases; include it once in goods available and
+COGS. Keep monthly statements, on-screen reports, PDFs, and canonical exports
+aligned on the same transfer and stock split.
