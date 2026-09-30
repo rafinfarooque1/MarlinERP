@@ -4,10 +4,11 @@
 import { useState } from 'react';
 import {
   useSalesRegister, useSalesByItem, useSalesByLocation, useSalesStockCombined,
-  useSalesBySalesperson,
+  useSalesBySalesperson, useListCustomers,
   useDiscountReport, useListWarehouses,
 } from '@workspace/api-client-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { EntityCombobox } from '@/components/ui/entity-combobox';
 import { Badge } from '@/components/ui/badge';
 import { StatusBadge as KitStatusBadge } from '@/components/app/status-badge';
 import { Building2, Store } from 'lucide-react';
@@ -517,24 +518,54 @@ function DiscountsReport({ range, canDownload }: { range: RangeState; canDownloa
 
 // ── By item ───────────────────────────────────────────────────────────────────
 function ByItemReport({ range, canDownload }: { range: RangeState; canDownload: boolean }) {
-  const { data, isLoading } = useSalesByItem({ from: range.from || undefined, to: range.to || undefined });
+  const [customerId, setCustomerId] = useState<number | null>(null);
+  const { data: customers = [], isLoading: customersLoading } = useListCustomers();
+  const customerOptions = (customers as any[])
+    .map((customer) => ({
+      id: Number(customer.id),
+      label: String(customer.name ?? customer.customerName ?? `Customer #${customer.id}`),
+    }))
+    .filter((customer) => Number.isSafeInteger(customer.id) && customer.id > 0);
+  const selectedCustomerName = customerOptions.find((customer) => customer.id === customerId)?.label ?? 'All customers';
+  const { data, isLoading } = useSalesByItem({
+    from: range.from || undefined,
+    to: range.to || undefined,
+    customerId: customerId ?? undefined,
+  });
   const rows = data?.rows ?? [];
   const t = data?.totals;
 
   return (
     <div className="space-y-4">
       <RangeBar range={range}>
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-medium text-muted-foreground whitespace-nowrap">Customer</span>
+          <EntityCombobox
+            options={customerOptions}
+            value={customerId}
+            onChange={setCustomerId}
+            placeholder="All customers"
+            searchPlaceholder="Search customers..."
+            emptyLabel="No customers found."
+            clearable
+            loading={customersLoading}
+            className="w-full sm:w-56 h-8 text-xs"
+            data-testid="sales-by-item-customer-filter"
+          />
+        </div>
         <ExportButtons
           canDownload={canDownload}
           disabled={isLoading || rows.length === 0}
           onCSV={() => downloadCSV('sales-by-item.csv', rows.map((r) => ({
+            Customer: selectedCustomerName,
             Item: r.itemName, Unit: r.unit, Invoices: r.invoices, Qty: r.qty,
             'Taxable (₹)': r.taxable.toFixed(2), 'Tax (₹)': r.tax.toFixed(2), 'Item total incl. tax (₹)': r.total.toFixed(2),
           })))}
           onPDF={() => exportReportPdf({
             title: 'Sales by Item',
-            subtitle: `Period: ${periodLabel(range.from, range.to)}`,
+            subtitle: `Customer: ${selectedCustomerName} | Period: ${periodLabel(range.from, range.to)}`,
             metaRows: [
+              ['Customer', selectedCustomerName],
               ['Period', periodLabel(range.from, range.to)],
               ['Items', String(t?.items ?? 0)],
               ['Definition', 'Item line totals only; invoice-level charges excluded'],

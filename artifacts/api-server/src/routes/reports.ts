@@ -228,10 +228,17 @@ router.get("/reports/sales-by-item", requireModuleView("page:/reports/sales"), a
   const range = parseRange(req as any);
   if (!range) { res.status(400).json({ error: "from/to must be YYYY-MM-DD dates" }); return; }
 
+  const rawCustomerId = req.query.customerId == null ? "" : String(req.query.customerId);
+  const customerId = rawCustomerId === "" ? 0 : Number(rawCustomerId);
+  if (!Number.isSafeInteger(customerId) || customerId < 0) {
+    res.status(400).json({ error: "customerId must be a non-negative integer" });
+    return;
+  }
+
   const { getUserDataScope: getScope2, scopeSalesWhere: sScope2 } = await import("../lib/dataScope");
   const emp2 = (req as any).employee as { branchType: string; branchId: number } | undefined;
   const scope2 = emp2 ? await getScope2(emp2) : { isHeadOffice: true, warehouseIds: [], outletIds: [] };
-  const itemParams: any[] = [range.from, range.to, ...viewLocParams(req)];
+  const itemParams: any[] = [range.from, range.to, ...viewLocParams(req), customerId];
   const itemScopeCond = sScope2(scope2, itemParams);
 
   const { rows } = await pool.query<any>(
@@ -248,6 +255,7 @@ router.get("/reports/sales-by-item", requireModuleView("page:/reports/sales"), a
        AND ($2 = '' OR s.sale_date <= $2::date)
        AND ($3 = '' OR COALESCE(s.location_type,'outlet') = $3)
        AND ($4 = 0 OR COALESCE(s.location_id, s.outlet_id) = $4)
+        AND ($5 = 0 OR s.customer_id = $5)
        AND ${itemScopeCond}
      GROUP BY 1 ORDER BY 4 DESC NULLS LAST`,
     itemParams,
