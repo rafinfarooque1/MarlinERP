@@ -291,7 +291,7 @@ const ChartRow = memo(function ChartRow({
       className={`group/row flex items-center gap-2 border-b border-border/25 transition-colors ${tone}
         ${isRoot ? `border-l-2 ${ACCENT[node.type] ?? 'border-l-border'}` : 'border-l-2 border-l-transparent'}
         ${!node.isActive ? 'opacity-60' : ''}`}
-      draggable={manage && canEdit && !node.isSystemGroup && !node.moduleManaged}
+      draggable={manage && canEdit && !node.isSystemGroup && !node.moduleManaged && !node.code}
       onDragStart={(e) => { e.dataTransfer.setData('text/ledger-id', String(node.id)); e.dataTransfer.effectAllowed = 'move'; }}
       onDragOver={(e) => { if (manage && isGroupish) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; } }}
       onDrop={(e) => {

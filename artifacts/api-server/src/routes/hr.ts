@@ -2790,6 +2790,10 @@ router.post("/hr/payroll/:id/pay", requireModuleAction("page:/hr/payroll", "edit
   const today = new Date().toISOString().split("T")[0];
   const payAmount = Number(req.body.amount ?? 0);
   const paymentMode: string = req.body.paymentMode ?? "cash";
+  if (!Number.isFinite(payAmount) || payAmount < 0) {
+    res.status(400).json({ error: "Payment amount must be a non-negative number." });
+    return;
+  }
   if (!["cash", "bank", "upi"].includes(paymentMode)) {
     res.status(400).json({ error: "Payment mode must be cash, bank or upi." });
     return;
@@ -2812,21 +2816,8 @@ router.post("/hr/payroll/:id/pay", requireModuleAction("page:/hr/payroll", "edit
   const payMonthFirst = `${existing.year}-${String(existing.month).padStart(2, "0")}-01`;
   if (await respondIfMonthLocked(res, pool, [payMonthFirst, today], "salary payment")) return;
 
-  const extraAmt   = Number(existing.extra_amount ?? 0);
-  const totalNet   = round2(Number(existing.net_pay ?? 0) + extraAmt);
-  const alreadyPaid = Number(existing.paid_amount ?? 0);
-  const payNow     = payAmount > 0 ? round2(payAmount) : round2(totalNet - alreadyPaid);
-  const newPaidAmt = round2(alreadyPaid + payNow);
-  const isFullyPaid = newPaidAmt >= totalNet - 0.005;
-  const newStatus   = isFullyPaid ? 'paid' : 'approved';
-
   const [emp] = await db.select().from(employeesTable).where(eq(employeesTable.id, existing.employee_id)).limit(1);
   const monthStr = String(existing.month).padStart(2, "0");
-
-  if (payNow <= 0.004) {
-    res.status(400).json({ error: "Payment amount must be greater than zero." });
-    return;
-  }
 
   // Credit the salary payable ledger for this employee; debit cash/bank.
   const salPayId = await findOrProvisionLedger(
@@ -2863,9 +2854,46 @@ router.post("/hr/payroll/:id/pay", requireModuleAction("page:/hr/payroll", "edit
   // salary paid while its cash entry failed would show the money as gone from
   // the payroll screen and still sitting in the cash ledger.
   let row: any;
+  let payNow = 0;
+  let totalNet = 0;
+  let newPaidAmt = 0;
+  let isFullyPaid = false;
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+
+    // Lock first, then derive the payment from the current outstanding amount.
+    // This prevents concurrent partial payments from each using the same stale
+    // balance and driving Salary Payable below zero.
+    const { rows: [locked] } = await client.query(
+      `SELECT paid_amount, status, net_pay, extra_amount FROM payroll WHERE id = $1 FOR UPDATE`, [id],
+    );
+    if (!locked) {
+      throw Object.assign(new Error("Payroll not found"), { httpStatus: 404 });
+    }
+    if (locked.status === "paid") {
+      throw Object.assign(new Error("Already fully paid"), { httpStatus: 400 });
+    }
+    if (locked.status !== "approved") {
+      throw Object.assign(new Error("Approve this payroll before recording a payment."), { httpStatus: 400 });
+    }
+
+    totalNet = round2(Number(locked.net_pay ?? 0) + Number(locked.extra_amount ?? 0));
+    const lockedPaidAmount = round2(Number(locked.paid_amount ?? 0));
+    const outstanding = round2(totalNet - lockedPaidAmount);
+    payNow = payAmount > 0 ? round2(payAmount) : outstanding;
+    if (payNow <= 0.004) {
+      throw Object.assign(new Error("Payment amount must be greater than zero."), { httpStatus: 400 });
+    }
+    if (payNow > outstanding + 0.005) {
+      throw Object.assign(
+        new Error(`Payment exceeds the outstanding salary for this month (₹${outstanding.toLocaleString("en-IN")}).`),
+        { httpStatus: 400 },
+      );
+    }
+    newPaidAmt = round2(lockedPaidAmount + payNow);
+    isFullyPaid = newPaidAmt >= totalNet - 0.005;
+
     const voucherNumber = await nextVoucherNumber(client, "journal", today);
     const narration = `Salary Payment${isFullyPaid ? '' : ' (Partial)'} — ${emp?.name ?? `Emp #${existing.employee_id}`} — ${monthStr}/${existing.year}`;
     // Stamped with the paying till's location (null for HO money): a salary
@@ -2884,21 +2912,11 @@ router.post("/hr/payroll/:id/pay", requireModuleAction("page:/hr/payroll", "edit
        VALUES ($1, $2, $3, 0), ($1, $4, 0, $3)`,
       [jv.id, salPayId, payNow.toFixed(2), payLedgerId],
     );
-    // Re-read under the row lock so two concurrent payments cannot each think
-    // they are settling the same outstanding balance.
-    const { rows: [locked] } = await client.query(
-      `SELECT paid_amount, status FROM payroll WHERE id = $1 FOR UPDATE`, [id],
-    );
-    if (!locked || locked.status === 'paid') {
-      throw Object.assign(new Error("Already fully paid"), { httpStatus: 400 });
-    }
-    const lockedPaid = round2(Number(locked.paid_amount ?? 0) + payNow);
-    const lockedFull = lockedPaid >= totalNet - 0.005;
     const { rows: [updated] } = await client.query(
       `UPDATE payroll
        SET paid_amount = $1, payment_mode = $2, is_paid = $3, paid_date = $4, status = $5
        WHERE id = $6 RETURNING *`,
-      [String(lockedPaid), effectiveMode, lockedFull, lockedFull ? today : null, lockedFull ? 'paid' : 'approved', id],
+      [String(newPaidAmt), effectiveMode, isFullyPaid, isFullyPaid ? today : null, isFullyPaid ? 'paid' : 'approved', id],
     );
     await client.query("COMMIT");
     row = updated;
@@ -2906,7 +2924,7 @@ router.post("/hr/payroll/:id/pay", requireModuleAction("page:/hr/payroll", "edit
     await client.query("ROLLBACK").catch(() => {});
     const status = e?.httpStatus ?? 500;
     res.status(status).json({
-      error: status === 400
+      error: status === 400 || status === 404
         ? e.message
         : "Could not record the salary payment. Nothing was changed — please try again.",
     });
