@@ -39,7 +39,7 @@
 - [Attachment ACL](attachment-acl.md) — "signed in" is not authorisation in a location-scoped app; readable only if you uploaded it (id in path) or may see the record; 404 not 403; presigned PUT can't bind content-type.
 - [Invoice numbering](invoice-numbering-sequence.md) + [per-location](per-location-invoice-numbering.md) + [format override](sales-number-format-override.md) — EVERY producer uses the allocator + stamps 4 identity cols; scope lock protocol; renumber once, trail in same txn.
 - [Scratch-DB experiments](scratch-db-experiments.md) — `A && B &` backgrounds the WHOLE chain (vars lost) and `psql ""` silently hits dev; print current_database() before any scratch write.
-- [Cross-env record identity](cross-env-record-identity.md) — dev and prod imported the same documents separately: ids and PUR- batch numbers differ; match by invoice/voucher number; prod data fixes go through the app.
+- [Cross-env record identity](cross-env-record-identity.md) — match docs by business number across environments; archive DB names and hashes establish contents, not dev/prod provenance.
 - [Sale cancellation](sale-cancellation.md) — a terminal state obliges EVERY write path (payments, returns) to refuse it after the row lock; filtering it from reports is not enough.
 - [Opt-in list paging](list-paging.md) — never default-cap a list endpoint the UI reads wholesale; in-memory slicing after a full fetch is pure downside.
 - [Text→DATE conversion](date-column-conversion.md) — after converting, `col <> ''` guards AND every shape-only date regex become live 22007s — read filters most of all; audits never see it.
