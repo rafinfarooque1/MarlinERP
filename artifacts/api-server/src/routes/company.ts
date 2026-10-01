@@ -11,6 +11,11 @@ import { normalizeUpiId } from "../lib/upi";
 import { validateLogoDataUrl } from "../lib/logoImage";
 import { createBackup } from "../lib/backup/create";
 import { runSalaryAccrual } from "../lib/salaryAccrual";
+import {
+  assertStockDailyCloseBaselineExists,
+  rebaseStockDailyCloseAfterReset,
+  STOCK_DAILY_CLOSE_LOCK_KEY,
+} from "../lib/dailyStockClosures";
 import { objectStorageConfigured } from "../lib/backup/files";
 import { ObjectStorageService } from "../lib/objectStorage";
 import { readApkManifest } from "../lib/apkRelease";
@@ -844,6 +849,20 @@ router.get("/company/permissions/rbac-audit", requireModuleView("page:/company/p
 
 // ── Reset all company data (dangerous — wipes all transactional records) ──────
 router.post("/company/reset", requireModuleAction("page:/company/settings", "delete"), async (_req, res): Promise<void> => {
+  // This endpoint uses a sequence of autocommitted TRUNCATEs rather than one
+  // transaction. Hold the close/writer lock for the entire reset so a scheduler
+  // cannot accept a partial-stock close between table clears.
+  const stockCloseLockClient = await pool.connect();
+  let stockCloseLockHeld = false;
+  let baselineTransactionOpen = false;
+  try {
+    await stockCloseLockClient.query(
+      `SELECT pg_advisory_lock(hashtext($1))`,
+      [STOCK_DAILY_CLOSE_LOCK_KEY],
+    );
+    stockCloseLockHeld = true;
+    await assertStockDailyCloseBaselineExists(stockCloseLockClient);
+
   // EVERY transactional table comes from TXN_RESET_TABLES — the single,
   // maintained list shared with the "CLEAR ALL TRANSACTIONS" endpoint below —
   // so the two resets can never drift apart again. (This route once carried
@@ -887,15 +906,31 @@ router.post("/company/reset", requireModuleAction("page:/company/settings", "del
     // would widen every role created post-reset to all-true, defeating the
     // default-deny model. Only business-data and auth records are wiped.
   ];
+  const requiredStockResetTables = new Set([
+    "stock_daily_close_entries",
+    "stock_daily_close_runs",
+    "stock_daily_close_baseline_entries",
+    "stock_cost_snapshots",
+  ]);
 
   // Truncate all transactional tables in one shot (RESTART IDENTITY cascades sequences)
   for (const table of TRUNCATE_TABLES) {
     try {
       await pool.query(`TRUNCATE TABLE ${table} RESTART IDENTITY CASCADE`);
-    } catch {
+    } catch (error) {
+      if (requiredStockResetTables.has(table)) throw error;
       // table may not exist yet — skip silently
     }
   }
+
+  // The daily-close history was cleared with the shared transaction list. Keep
+  // the one-time baseline row (migration_log also survives a factory reset),
+  // but replace its contents/date with the post-reset stock state.
+  await stockCloseLockClient.query("BEGIN");
+  baselineTransactionOpen = true;
+  await rebaseStockDailyCloseAfterReset(stockCloseLockClient, { closeLockHeld: true });
+  await stockCloseLockClient.query("COMMIT");
+  baselineTransactionOpen = false;
 
   // ── Standalone sequences ───────────────────────────────────────────────────
   // Document/batch/code numbering runs on global sequences not owned by any
@@ -970,6 +1005,20 @@ router.post("/company/reset", requireModuleAction("page:/company/settings", "del
   }
 
   res.json({ ok: true, message: 'All company data has been reset successfully.' });
+  } catch (error) {
+    if (baselineTransactionOpen) {
+      await stockCloseLockClient.query("ROLLBACK").catch(() => {});
+    }
+    throw error;
+  } finally {
+    if (stockCloseLockHeld) {
+      await stockCloseLockClient.query(
+        `SELECT pg_advisory_unlock(hashtext($1))`,
+        [STOCK_DAILY_CLOSE_LOCK_KEY],
+      ).catch(() => {});
+    }
+    stockCloseLockClient.release();
+  }
 });
 
 // ── One-time transactional data reset ─────────────────────────────────────
@@ -1040,6 +1089,13 @@ router.post("/company/clear-transactions", requireModuleAction("page:/company/se
   const resets: Record<string, number | string> = {};
   try {
     await client.query("BEGIN");
+    // Match the daily-close scheduler and stock writers before locking/resetting
+    // tables; the reset and new baseline are one serialized operation.
+    await client.query(
+      `SELECT pg_advisory_xact_lock(hashtext($1))`,
+      [STOCK_DAILY_CLOSE_LOCK_KEY],
+    );
+    await assertStockDailyCloseBaselineExists(client);
 
     // ── Quiesce barrier ────────────────────────────────────────────────────
     // 1. Take the SAME per-entity advisory locks the salary (class 8201) and
@@ -1067,6 +1123,8 @@ router.post("/company/clear-transactions", requireModuleAction("page:/company/se
       const r = await client.query(`DELETE FROM ${table}`);
       deleted[table] = r.rowCount ?? 0;
     }
+
+    await rebaseStockDailyCloseAfterReset(client, { closeLockHeld: true });
 
     // Cached transactional aggregates on masters → zero. avg_cost is the
     // purchase/production-derived weighted average (raw-migration column) and

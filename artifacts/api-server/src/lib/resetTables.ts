@@ -34,6 +34,13 @@ export const TXN_RESET_TABLES = [
   "journal_vouchers",
   "stock_reservations",
   "stock_verifications",
+  // Derived inventory history is company data too. Resets clear old closes and
+  // valuation snapshots, then rebase the preserved baseline row from the stock
+  // state that remains after the reset.
+  "stock_daily_close_entries",
+  "stock_daily_close_runs",
+  "stock_daily_close_baseline_entries",
+  "stock_cost_snapshots",
   "stock_transfers",
   "productions",
   "stock_ledger",

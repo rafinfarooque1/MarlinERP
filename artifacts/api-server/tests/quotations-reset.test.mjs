@@ -41,6 +41,12 @@ ok("quotations is in the reset list", iQuotes !== -1);
 ok("share links are deleted before quotations (children first)", iLinks !== -1 && iLinks < iQuotes);
 ok("quotations are deleted before sales (converted_sale_id points at sales)", iQuotes !== -1 && iQuotes < iSales);
 ok("no duplicate table entries", new Set(list).size === list.length);
+const iDailyEntries = list.indexOf("stock_daily_close_entries");
+const iDailyRuns = list.indexOf("stock_daily_close_runs");
+ok("daily-close entries and runs are reset", iDailyEntries !== -1 && iDailyRuns !== -1);
+ok("daily-close entries are deleted before their run parents", iDailyEntries !== -1 && iDailyEntries < iDailyRuns);
+ok("baseline entries and valuation snapshots are reset", list.includes("stock_daily_close_baseline_entries") && list.includes("stock_cost_snapshots"));
+ok("the one-time baseline row is preserved for rebase, not deleted", !list.includes("stock_daily_close_baseline"));
 
 // Both handlers must reset quotation_sequence wherever invoice_sequence is
 // reset — assert on the source so a future edit that drops one side fails here.

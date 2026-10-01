@@ -1,7 +1,7 @@
 import { disabledWarehouseError, WAREHOUSE_DISABLED_CODE } from "../lib/warehouseLifecycle";
 import { Router } from "express";
 import { db, pool, accountLedgersTable, cashBankAccountsTable, expensesTable, salesTable, purchasesTable, warehousesTable } from "@workspace/db";
-import { requireModuleView, requireModuleAction } from "../middleware/permissions";
+import { requireModuleView, requireModuleAction, canViewStockValuation } from "../middleware/permissions";
 import { isIsoDate } from "../lib/dateInput";
 import { optionalMoney } from "../lib/numericInput";
 import { parseCashBankLocation, parseCashBankLocations, diagnoseCashBankLocation, CASH_BANK_LOCATION_CONFLICT } from "../lib/cashBankLedgers";
@@ -20,7 +20,7 @@ import { buildBooks } from "../lib/books";
 import { buildPeriodicBuckets } from "../lib/periodicSummary";
 import { buildDerivedPostings } from "./journal";
 import { outletWritesBlocked, OUTLETS_DISABLED_MESSAGE, OUTLETS_DISABLED_CODE } from "../lib/featureFlags";
-import { getUserDataScope, scopeSalesWhere, scopeBranchWhere, scopeLocationTypeWhere } from "../lib/dataScope";
+import { getUserDataScope, scopeSalesWhere, scopeBranchWhere, scopeLocationTypeWhere, scopeTransferWhere, type DataScope } from "../lib/dataScope";
 import { parseDateRange, pushDateRange, pushLocationFilter } from "../lib/queryFilters";
 import { getLocationFilter, getPostingLocationFilter } from "../lib/requestLocation";
 import { parsePaging, setPagingHeaders, applyPaging } from "../lib/paging";
@@ -2815,7 +2815,7 @@ router.post("/accounts/receipts/:id/system-delete", requireModuleAction(["page:/
  * every other balance surface. One stream, one figure.
  */
 type StatementInvoiceAllocation = { invoiceNumber: string | null; date: string | null; amount: number };
-type StatementSourceDetail = {
+type StatementDocumentSourceDetail = {
   type: "Sale" | "Receipt" | "Payment";
   date: string | null;
   reference: string | null;
@@ -2826,6 +2826,41 @@ type StatementSourceDetail = {
   referenceNumber: string | null;
   invoiceAllocations?: StatementInvoiceAllocation[];
 };
+type StatementTransferLineDetail = {
+  materialType: string;
+  itemId: number;
+  itemName: string;
+  dispatchedQuantity: number;
+  receivedQuantity: number | null;
+  unitCost?: number | null;
+  lineValue?: number | null;
+};
+type StatementTransferSourceDetail = {
+  type: "Stock Transfer";
+  kind: "stock_transfer";
+  entryLabel: "Transfer-Out" | "Transfer-In" | "Transfer Reversal";
+  transferId: number;
+  date: string | null;
+  reference: string | null;
+  narration: string;
+  amount: number;
+  fromType: string;
+  fromId: number;
+  fromName: string;
+  toType: string;
+  toId: number;
+  toName: string;
+  status: string;
+  transferType: string;
+  documentMode: string;
+  taxType: string;
+  transferInvoiceNumber: string | null;
+  transferValue: number | null;
+  gstAmount: number | null;
+  totalValue: number | null;
+  lines: StatementTransferLineDetail[];
+};
+type StatementSourceDetail = StatementDocumentSourceDetail | StatementTransferSourceDetail;
 type StatementEntry = {
   date: string;
   reference: string | null;
@@ -2849,6 +2884,8 @@ async function postingLedgerStatement(opts: {
   fromDate?: string;
   toDate?: string;
   locFilter: PostingLocationFilter | null;
+  transferScope: DataScope;
+  canViewValuation: boolean;
 }): Promise<{
   opening: number; closing: number; totalDebit: number; totalCredit: number;
   entries: StatementEntry[];
@@ -2953,6 +2990,8 @@ async function postingLedgerStatement(opts: {
     return ids;
   };
   const saleIds = idsForPrefix("sale", entries);
+  const purchaseIds = idsForPrefix("purchase", entries);
+  const journalIds = idsForPrefix("jv", entries);
   const receiptIds = idsForPrefix("receipt", entries);
   const paymentIds = idsForPrefix("payment", entries);
   const salePaymentIds = idsForPrefix("sale_payment", entries);
@@ -3128,8 +3167,239 @@ async function postingLedgerStatement(opts: {
     });
   }
 
+  // Enrich only transfer documents attached to rows already selected for this
+  // statement, then independently enforce the caller's server-derived scope.
+  const transferClauses: string[] = [];
+  const transferParams: unknown[] = [];
+  const addTransferIds = (column: string, ids: Set<number>) => {
+    if (!ids.size) return;
+    transferParams.push([...ids]);
+    transferClauses.push(`t.${column} = ANY($${transferParams.length}::int[])`);
+  };
+  addTransferIds("sale_id", saleIds);
+  addTransferIds("purchase_id", purchaseIds);
+  addTransferIds("dispatch_voucher_id", journalIds);
+  addTransferIds("receive_voucher_id", journalIds);
+  addTransferIds("credit_note_voucher_id", journalIds);
+  const transferResult = transferClauses.length
+    ? await pool.query(
+      `SELECT t.id, t.challan_number, t.from_type, t.from_id, t.to_type, t.to_id,
+              t.transfer_date, t.line_items, t.received_line_items, t.status,
+              t.transfer_type, t.document_mode, t.tax_type, t.transfer_invoice_number,
+              t.transfer_value::numeric AS transfer_value, t.gst_amount::numeric AS gst_amount,
+              t.sale_id, t.purchase_id, t.dispatch_voucher_id, t.receive_voucher_id,
+              t.credit_note_voucher_id
+         FROM stock_transfers t
+        WHERE (${transferClauses.join(" OR ")})
+          AND ${scopeTransferWhere(opts.transferScope, transferParams, "t")}`,
+      transferParams,
+    )
+    : { rows: [] as any[] };
+
+  const parseJsonArray = (value: unknown): any[] => {
+    if (Array.isArray(value)) return value;
+    if (typeof value === "string") {
+      try {
+        const parsed = JSON.parse(value);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch {
+        return [];
+      }
+    }
+    return [];
+  };
+  type TransferLineDraft = {
+    materialType: string;
+    itemId: number;
+    itemName: string;
+    dispatchedQuantity: number;
+    receivedQuantity: number;
+    hasReceivedQuantity: boolean;
+    lineValue: number;
+    hasLineCost: boolean;
+  };
+  const lineDraftsByTransfer = new Map<number, Map<string, TransferLineDraft>>();
+  const itemIdsByType = new Map<string, Set<number>>();
+  const safeQty = (value: unknown) => {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : 0;
+  };
+  for (const transfer of transferResult.rows) {
+    const transferId = Number(transfer.id);
+    const lines = new Map<string, TransferLineDraft>();
+    for (const line of parseJsonArray(transfer.line_items)) {
+      const itemId = Number(line?.itemId ?? line?.item_id);
+      if (!Number.isInteger(itemId) || itemId <= 0) continue;
+      const materialType = String(line?.materialType ?? "item");
+      const key = `${materialType}:${itemId}`;
+      const quantity = safeQty(line?.quantity);
+      const draft = lines.get(key) ?? {
+        materialType, itemId,
+        itemName: String(line?.itemName ?? line?.name ?? ""),
+        dispatchedQuantity: 0,
+        receivedQuantity: 0,
+        hasReceivedQuantity: false,
+        lineValue: 0,
+        hasLineCost: false,
+      };
+      draft.dispatchedQuantity += quantity;
+      if (!draft.itemName) draft.itemName = String(line?.itemName ?? line?.name ?? "");
+      if (opts.canViewValuation) {
+        const rawCost = line?.costPrice ?? line?.unitCost;
+        if (rawCost != null && Number.isFinite(Number(rawCost))) {
+          draft.lineValue += quantity * Number(rawCost);
+          draft.hasLineCost = true;
+        }
+      }
+      lines.set(key, draft);
+    }
+    for (const line of parseJsonArray(transfer.received_line_items)) {
+      const itemId = Number(line?.itemId ?? line?.item_id);
+      if (!Number.isInteger(itemId) || itemId <= 0) continue;
+      const materialType = String(line?.materialType ?? "item");
+      const key = `${materialType}:${itemId}`;
+      const draft = lines.get(key) ?? {
+        materialType, itemId,
+        itemName: String(line?.itemName ?? line?.name ?? ""),
+        dispatchedQuantity: 0,
+        receivedQuantity: 0,
+        hasReceivedQuantity: false,
+        lineValue: 0,
+        hasLineCost: false,
+      };
+      draft.receivedQuantity += safeQty(line?.quantity);
+      draft.hasReceivedQuantity = true;
+      if (!draft.itemName) draft.itemName = String(line?.itemName ?? line?.name ?? "");
+      lines.set(key, draft);
+    }
+    for (const draft of lines.values()) {
+      if (!itemIdsByType.has(draft.materialType)) itemIdsByType.set(draft.materialType, new Set<number>());
+      itemIdsByType.get(draft.materialType)!.add(draft.itemId);
+    }
+    lineDraftsByTransfer.set(transferId, lines);
+  }
+
+  const queryNames = (table: "items" | "materials" | "raw_materials", materialType: string) => {
+    const ids = [...(itemIdsByType.get(materialType) ?? [])];
+    return ids.length
+      ? pool.query(`SELECT id, name FROM ${table} WHERE id = ANY($1::int[])`, [ids])
+      : Promise.resolve({ rows: [] as any[] });
+  };
+  const [itemNames, materialNames, rawMaterialNames] = await Promise.all([
+    queryNames("items", "item"),
+    queryNames("materials", "material"),
+    queryNames("raw_materials", "raw_material"),
+  ]);
+  const productNames = new Map<string, string>();
+  for (const [materialType, result] of [
+    ["item", itemNames], ["material", materialNames], ["raw_material", rawMaterialNames],
+  ] as const) {
+    for (const row of result.rows) productNames.set(`${materialType}:${row.id}`, String(row.name));
+  }
+
+  const transferWarehouseIds = new Set<number>();
+  const transferOutletIds = new Set<number>();
+  for (const transfer of transferResult.rows) {
+    for (const [type, rawId] of [[transfer.from_type, transfer.from_id], [transfer.to_type, transfer.to_id]]) {
+      const id = Number(rawId);
+      if (!Number.isInteger(id) || id <= 0) continue;
+      if (type === "warehouse") transferWarehouseIds.add(id);
+      if (type === "outlet") transferOutletIds.add(id);
+    }
+  }
+  const [transferWarehouses, transferOutlets] = await Promise.all([
+    transferWarehouseIds.size
+      ? pool.query(`SELECT id, name FROM warehouses WHERE id = ANY($1::int[])`, [[...transferWarehouseIds]])
+      : Promise.resolve({ rows: [] as any[] }),
+    transferOutletIds.size
+      ? pool.query(`SELECT id, name FROM outlets WHERE id = ANY($1::int[])`, [[...transferOutletIds]])
+      : Promise.resolve({ rows: [] as any[] }),
+  ]);
+  for (const row of transferWarehouses.rows) names.set(`warehouse:${row.id}`, String(row.name));
+  for (const row of transferOutlets.rows) names.set(`outlet:${row.id}`, String(row.name));
+
+  const transferDetailsByEntryId = new Map<string, StatementTransferSourceDetail>();
+  for (const transfer of transferResult.rows) {
+    const id = Number(transfer.id);
+    const fromType = String(transfer.from_type ?? "");
+    const fromId = Number(transfer.from_id ?? 0);
+    const toType = String(transfer.to_type ?? "");
+    const toId = Number(transfer.to_id ?? 0);
+    const fromName = fromType === "headoffice"
+      ? "Head Office"
+      : names.get(`${fromType}:${fromId}`) ?? `${fromType} #${fromId}`;
+    const toName = toType === "headoffice"
+      ? "Head Office"
+      : names.get(`${toType}:${toId}`) ?? `${toType} #${toId}`;
+    const status = String(transfer.status ?? "pending");
+    const transferValue = transfer.transfer_value == null ? null : Number(transfer.transfer_value);
+    const gstAmount = transfer.gst_amount == null ? null : Number(transfer.gst_amount);
+    const totalValue = transferValue == null && gstAmount == null
+      ? null
+      : rnd((transferValue ?? 0) + (gstAmount ?? 0));
+    const lineDrafts = lineDraftsByTransfer.get(id) ?? new Map<string, TransferLineDraft>();
+    const lines: StatementTransferLineDetail[] = [...lineDrafts.values()].map((line) => ({
+      materialType: line.materialType,
+      itemId: line.itemId,
+      itemName: line.itemName || productNames.get(`${line.materialType}:${line.itemId}`) || `Product #${line.itemId}`,
+      dispatchedQuantity: Math.round(line.dispatchedQuantity * 1000) / 1000,
+      receivedQuantity: status.toLowerCase() === "pending" && !line.hasReceivedQuantity
+        ? null
+        : Math.round(line.receivedQuantity * 1000) / 1000,
+      ...(opts.canViewValuation && line.hasLineCost ? {
+        unitCost: line.dispatchedQuantity > 0
+          ? rnd(line.lineValue / line.dispatchedQuantity)
+          : null,
+        lineValue: rnd(line.lineValue),
+      } : {}),
+    }));
+    const reference = transfer.challan_number == null
+      ? `TRF-${id}`
+      : String(transfer.challan_number);
+    const makeDetail = (
+      entryLabel: StatementTransferSourceDetail["entryLabel"],
+    ): StatementTransferSourceDetail => ({
+      type: "Stock Transfer",
+      kind: "stock_transfer",
+      entryLabel,
+      transferId: id,
+      date: dateOnly(transfer.transfer_date),
+      reference,
+      narration: `${entryLabel} — ${fromName} → ${toName}`,
+      amount: totalValue ?? 0,
+      fromType, fromId, fromName,
+      toType, toId, toName,
+      status,
+      transferType: String(transfer.transfer_type ?? "internal"),
+      documentMode: String(transfer.document_mode ?? "voucher"),
+      taxType: String(transfer.tax_type ?? "none"),
+      transferInvoiceNumber: transfer.transfer_invoice_number == null
+        ? null
+        : String(transfer.transfer_invoice_number),
+      transferValue,
+      gstAmount,
+      totalValue,
+      lines,
+    });
+    if (transfer.sale_id != null) {
+      transferDetailsByEntryId.set(`sale:${Number(transfer.sale_id)}`, makeDetail("Transfer-Out"));
+    }
+    if (transfer.purchase_id != null) {
+      transferDetailsByEntryId.set(`purchase:${Number(transfer.purchase_id)}`, makeDetail("Transfer-In"));
+    }
+    if (transfer.dispatch_voucher_id != null) {
+      transferDetailsByEntryId.set(`jv:${Number(transfer.dispatch_voucher_id)}`, makeDetail("Transfer-Out"));
+    }
+    if (transfer.receive_voucher_id != null) {
+      transferDetailsByEntryId.set(`jv:${Number(transfer.receive_voucher_id)}`, makeDetail("Transfer-In"));
+    }
+    if (transfer.credit_note_voucher_id != null) {
+      transferDetailsByEntryId.set(`jv:${Number(transfer.credit_note_voucher_id)}`, makeDetail("Transfer Reversal"));
+    }
+  }
+
   const sourceFallback = (item: any): StatementSourceDetail => {
-    const type: StatementSourceDetail["type"] = item?.kind === "sale_payment"
+    const type: StatementDocumentSourceDetail["type"] = item?.kind === "sale_payment"
       ? "Sale"
       : item?.voucherKind === "receipt" ? "Receipt" : "Payment";
     return {
@@ -3143,17 +3413,26 @@ async function postingLedgerStatement(opts: {
       referenceNumber: null,
     };
   };
-  const detailLabel = (detail: StatementSourceDetail) => [
-    detail.type,
-    detail.reference,
-    detail.partyName ? `· ${detail.partyName}` : null,
-    detail.narration ? `— ${detail.narration}` : null,
-  ].filter(Boolean).join(" ");
+  const detailLabel = (detail: StatementSourceDetail) => {
+    if (detail.type === "Stock Transfer") {
+      return [detail.entryLabel, detail.reference, `· ${detail.fromName} → ${detail.toName}`]
+        .filter(Boolean).join(" ");
+    }
+    return [
+      detail.type,
+      detail.reference,
+      detail.partyName ? `· ${detail.partyName}` : null,
+      detail.narration ? `— ${detail.narration}` : null,
+    ].filter(Boolean).join(" ");
+  };
 
   for (const entry of entries) {
     const batchItems = entry.entryId ? sourceItemsByEntryId.get(entry.entryId) ?? [] : [];
     let details: StatementSourceDetail[] = [];
-    if (batchItems.length) {
+    const transferDetail = entry.entryId ? transferDetailsByEntryId.get(entry.entryId) : undefined;
+    if (transferDetail) {
+      details = [transferDetail];
+    } else if (batchItems.length) {
       details = batchItems.map((item: any) => {
         const id = Number(item?.id);
         if (item?.kind === "sale_payment") return salePaymentDetailsById.get(id) ?? sourceFallback(item);
@@ -3181,10 +3460,14 @@ async function postingLedgerStatement(opts: {
     }
     entry.sourceDetails = details;
     if (details.length) {
-      entry.displayEntryType = [...new Set(details.map((detail) => detail.type))].join(" / ");
+      entry.displayEntryType = [...new Set(details.map((detail) =>
+        detail.type === "Stock Transfer" ? detail.entryLabel : detail.type,
+      ))].join(" / ");
       const visible = details.slice(0, 2).map(detailLabel);
       if (details.length > 2) visible.push(`+ ${details.length - 2} more`);
-      const allocationCount = details.length === 1 ? details[0].invoiceAllocations?.length ?? 0 : 0;
+      const allocationCount = details.length === 1 && details[0].type !== "Stock Transfer"
+        ? details[0].invoiceAllocations?.length ?? 0
+        : 0;
       if (allocationCount > 1) visible.push(`${allocationCount} invoice allocations`);
       entry.displayNarration = visible.join("; ");
     }
@@ -3221,8 +3504,15 @@ router.get("/accounts/ledger-statement", requireModuleView("page:/accounts/ledge
     }
   }
   const locFilter = statementLocationFilter(req);
+  const employee = (req as any).employee;
+  const [transferScope, canViewValuation] = await Promise.all([
+    getUserDataScope(employee),
+    canViewStockValuation(employee?.hierarchyId),
+  ]);
 
-  const st = await postingLedgerStatement({ ledgerId: accountId, fromDate, toDate, locFilter });
+  const st = await postingLedgerStatement({
+    ledgerId: accountId, fromDate, toDate, locFilter, transferScope, canViewValuation,
+  });
   res.json({
     accountId,
     accountName: account.name,
@@ -4847,8 +5137,15 @@ router.get("/accounts/ledger/:id/statement", requireModuleView("page:/accounts/l
     }
   }
   const locFilter = statementLocationFilter(req);
+  const employee = (req as any).employee;
+  const [transferScope, canViewValuation] = await Promise.all([
+    getUserDataScope(employee),
+    canViewStockValuation(employee?.hierarchyId),
+  ]);
 
-  const st = await postingLedgerStatement({ ledgerId: id, fromDate, toDate, locFilter });
+  const st = await postingLedgerStatement({
+    ledgerId: id, fromDate, toDate, locFilter, transferScope, canViewValuation,
+  });
   res.json({
     ledger: { id: ledger.id, name: ledger.name, type: ledger.type, code: ledger.code },
     entries: st.entries,
