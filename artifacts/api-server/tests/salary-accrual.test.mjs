@@ -192,12 +192,24 @@ async function main() {
     + `Expense ₹${expenseBefore} → ₹${expenseAfter} (accrued ₹${t.total}, not doubled to ₹${t.total * 2})`);
 
   // ── I / J. Payments ─────────────────────────────────────────────────────
-  const part = Math.round(netPay / 2 * 100) / 100;
-  await api("POST", `/hr/payroll/${row.id}/pay`, { amount: part, paymentMode: "cash" });
+  const overpay = await tryApi("POST", `/hr/payroll/${row.id}/pay`, {
+    amount: Math.round((netPay + 1) * 100) / 100, paymentMode: "cash",
+  });
+  const afterRejectedOverpay = await payableFor(EID);
+  check("I1", "Overpayment is rejected without changing Salary Payable",
+    !overpay.ok && near(afterRejectedOverpay, netPay),
+    `request=${overpay.ok ? "accepted" : overpay.error}; payable ₹${afterRejectedOverpay}, expected ₹${netPay}`);
+
+  const part = Math.round(netPay * 0.6 * 100) / 100;
+  const race = await Promise.all([
+    tryApi("POST", `/hr/payroll/${row.id}/pay`, { amount: part, paymentMode: "cash" }),
+    tryApi("POST", `/hr/payroll/${row.id}/pay`, { amount: part, paymentMode: "cash" }),
+  ]);
   const afterPartial = await payableFor(EID);
-  check("J", "Partial payment leaves only the remainder payable",
-    near(afterPartial, netPay - part),
-    `paid ₹${part} of ₹${netPay}; Salary Payable now ₹${afterPartial}, expected ₹${Math.round((netPay - part) * 100) / 100}`);
+  const acceptedRacePayments = race.filter((result) => result.ok).length;
+  check("J", "Concurrent payments cannot overpay the salary payable",
+    acceptedRacePayments === 1 && near(afterPartial, netPay - part),
+    `${acceptedRacePayments} of 2 concurrent payments accepted; Salary Payable ₹${afterPartial}, expected ₹${Math.round((netPay - part) * 100) / 100}`);
 
   await api("POST", `/hr/payroll/${row.id}/pay`, { paymentMode: "cash" });
   const afterFull = await payableFor(EID);

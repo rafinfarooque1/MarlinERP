@@ -660,10 +660,14 @@ router.patch("/accounts/chart/:id/move", requireModuleAction("page:/accounts/cha
 
   // Node must exist and must not be a system group
   const { rows: [node] } = await pool.query(
-    `SELECT is_system_group, code FROM account_ledgers WHERE id = $1`, [id]
+    `SELECT is_system_group, code, type FROM account_ledgers WHERE id = $1`, [id]
   );
   if (!node) { res.status(404).json({ error: "Account not found" }); return; }
   if (node.is_system_group) { res.status(400).json({ error: "System groups cannot be moved" }); return; }
+  if (node.code != null) {
+    res.status(400).json({ error: "System-managed accounts cannot be moved in the chart." });
+    return;
+  }
 
   // The Cash / Bank Accounts subtrees are module territory: their ledgers may
   // not be dragged out (each mirrors a Cash & Bank account under its head),
@@ -679,7 +683,7 @@ router.patch("/accounts/chart/:id/move", requireModuleAction("page:/accounts/cha
 
   // Target parent must exist and must be a group (container)
   const { rows: [parent] } = await pool.query(
-    `SELECT id, is_group, is_active FROM account_ledgers WHERE id = $1`, [parentId]
+    `SELECT id, is_group, is_active, type FROM account_ledgers WHERE id = $1`, [parentId]
   );
   if (!parent) { res.status(404).json({ error: "Target parent not found" }); return; }
   if (!parent.is_group) { res.status(400).json({ error: "Target must be a group or sub-group, not a leaf ledger" }); return; }
@@ -687,6 +691,10 @@ router.patch("/accounts/chart/:id/move", requireModuleAction("page:/accounts/cha
   // a valid home, or a move would quietly park live accounts under a dead head.
   if (parent.is_active === false) {
     res.status(400).json({ error: "That group is deactivated. Reactivate it first, or pick another group." }); return;
+  }
+  if (parent.type !== node.type) {
+    res.status(400).json({ error: "An account can only be moved under a group with the same account type." });
+    return;
   }
 
   // Prevent circular reference: target must not be a descendant of the node being moved
