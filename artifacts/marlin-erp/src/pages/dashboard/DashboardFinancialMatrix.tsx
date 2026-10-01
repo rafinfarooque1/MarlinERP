@@ -127,7 +127,7 @@ export function DashboardFinancialMatrixSection({
   const period = data?.period ?? { fromDate: fromDate ?? null, toDate: toDate ?? null };
   const periodText = periodLabel(period.fromDate ?? undefined, period.toDate ?? undefined);
   const openingDescription = period.fromDate
-    ? 'Opening Cash and Bank are positions as of the day before this period.'
+    ? 'Opening Cash is the position as of the day before this period.'
     : 'All time begins at inception with a zero opening balance.';
 
   const amountRow = (
@@ -177,7 +177,7 @@ export function DashboardFinancialMatrixSection({
           Cross-Warehouse Financial Summary Matrix
         </CardTitle>
         <CardDescription>
-          {periodText} · {openingDescription} Balance = Opening Cash + Opening Bank + Sale.
+          {periodText} · {openingDescription} Balance = Opening Cash + Sale.
           Columns include active locations available to your account and, for company-wide access, an Unallocated column for company-level balances.
         </CardDescription>
       </CardHeader>
@@ -226,7 +226,6 @@ export function DashboardFinancialMatrixSection({
                 <tbody>
                   {amountRow('opening-total', 'Opening balance', data.openingTotal, data.totals.openingTotal, { emphasized: true })}
                   {amountRow('opening-cash', 'Cash', data.openingCash, data.totals.openingCash, { nested: true })}
-                  {amountRow('opening-bank', 'Bank', data.openingBank, data.totals.openingBank, { nested: true })}
                   {amountRow('sales', 'Sale', data.sales, data.totals.sales)}
                   {amountRow('balance', 'Balance', data.balance, data.totals.balance, { balance: true })}
                   {amountRow('expenses', 'Expense', data.expenses, data.totals.expenses, { emphasized: true })}
@@ -235,7 +234,6 @@ export function DashboardFinancialMatrixSection({
                   )}
                   {amountRow('closing-total', 'Closing balance', data.closingTotal, data.totals.closingTotal, { emphasized: true })}
                   {amountRow('closing-cash', 'Cash', data.closingCash, data.totals.closingCash, { nested: true })}
-                  {amountRow('closing-bank', 'Bank', data.closingBank, data.totals.closingBank, { nested: true })}
                 </tbody>
               </table>
               </div>

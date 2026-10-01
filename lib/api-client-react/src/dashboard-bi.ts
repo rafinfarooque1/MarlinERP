@@ -147,7 +147,6 @@ export interface DashboardFinancialMatrix {
     name: string;
   }>;
   openingCash: number[];
-  openingBank: number[];
   openingTotal: number[];
   sales: number[];
   balance: number[];
@@ -160,17 +159,14 @@ export interface DashboardFinancialMatrix {
     total: number;
   }>;
   closingCash: number[];
-  closingBank: number[];
   closingTotal: number[];
   totals: {
     openingCash: number;
-    openingBank: number;
     openingTotal: number;
     sales: number;
     balance: number;
     expenses: number;
     closingCash: number;
-    closingBank: number;
     closingTotal: number;
   };
 }

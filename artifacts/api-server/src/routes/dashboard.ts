@@ -872,7 +872,6 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       location,
       financials,
       openingCash: money(opening.cashBalance),
-      openingBank: money(opening.bankBalance),
       sales: matrixSalesByLocation.get(locationKey(location.locationType, location.locationId)) ?? 0,
     };
   }));
@@ -897,7 +896,6 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       location,
       financials,
       openingCash: money(opening.cashBalance),
-      openingBank: money(opening.bankBalance),
       sales: 0,
     });
   }
@@ -907,17 +905,13 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
   ]));
 
   const matrixOpeningCash = matrixLocationFigures.map((figure) => figure.openingCash);
-  const matrixOpeningBank = matrixLocationFigures.map((figure) => figure.openingBank);
-  const matrixOpeningTotal = matrixOpeningCash.map((cash, index) =>
-    money(cash + matrixOpeningBank[index]));
+  const matrixOpeningTotal = [...matrixOpeningCash];
   const matrixSales = matrixLocationFigures.map((figure) => figure.sales);
   const matrixBalance = matrixSales.map((sale, index) =>
-    money(matrixOpeningCash[index] + matrixOpeningBank[index] + sale));
+    money(matrixOpeningCash[index] + sale));
   const matrixExpenses = matrixLocationFigures.map((figure) => money(figure.financials.expenses.total));
   const matrixClosingCash = matrixLocationFigures.map((figure) => money(figure.financials.cashBalance));
-  const matrixClosingBank = matrixLocationFigures.map((figure) => money(figure.financials.bankBalance));
-  const matrixClosingTotal = matrixClosingCash.map((cash, index) =>
-    money(cash + matrixClosingBank[index]));
+  const matrixClosingTotal = [...matrixClosingCash];
   const matrixSum = (values: number[]) => money(values.reduce((total, value) => total + value, 0));
 
   const matrixExpenseDefinitions = new Map<number, { name: string; code: string | null }>();
@@ -935,24 +929,20 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
     period: { fromDate: fromDate || null, toDate: toDate || null },
     locations: matrixLocationFigures.map(({ location }) => location),
     openingCash: matrixOpeningCash,
-    openingBank: matrixOpeningBank,
     openingTotal: matrixOpeningTotal,
     sales: matrixSales,
     balance: matrixBalance,
     expenses: matrixExpenses,
     expenseLedgers: matrixExpenseLedgers,
     closingCash: matrixClosingCash,
-    closingBank: matrixClosingBank,
     closingTotal: matrixClosingTotal,
     totals: {
       openingCash: matrixSum(matrixOpeningCash),
-      openingBank: matrixSum(matrixOpeningBank),
       openingTotal: matrixSum(matrixOpeningTotal),
       sales: matrixSum(matrixSales),
       balance: matrixSum(matrixBalance),
       expenses: matrixSum(matrixExpenses),
       closingCash: matrixSum(matrixClosingCash),
-      closingBank: matrixSum(matrixClosingBank),
       closingTotal: matrixSum(matrixClosingTotal),
     },
   };
