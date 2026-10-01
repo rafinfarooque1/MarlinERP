@@ -113,7 +113,10 @@ export function diagnoseCashBankLocation(
   if (["bank", "cash", "online"].includes(String(account.account_type)) && memberships.length > 1) {
     let ownerIsAssigned = false;
     for (const membership of memberships) {
-      const member = parseCashBankLocation(membership);
+      const member = parseCashBankLocation({
+        locationType: membership.location_type,
+        locationId: membership.location_id,
+      });
       if (!member.ok) return conflict;
       ownerIsAssigned = ownerIsAssigned
         || member.location.locationType === owner.location.locationType
