@@ -61,6 +61,27 @@ export interface RentAgreementRow {
   inactive_from: unknown;
 }
 
+export type RentAccrualTerms = Pick<
+  RentAgreementRow,
+  "monthly_rent" | "start_date" | "end_date" | "status" | "inactive_from"
+>;
+
+/** These are the agreement fields that can change the amount or covered days. */
+export function rentAccrualTermsChanged(before: RentAccrualTerms, after: RentAccrualTerms): boolean {
+  return Math.abs(Number(before.monthly_rent) - Number(after.monthly_rent)) > 0.000001
+    || ymd(before.start_date) !== ymd(after.start_date)
+    || ymd(before.end_date) !== ymd(after.end_date)
+    || before.status !== after.status
+    || ymd(before.inactive_from) !== ymd(after.inactive_from);
+}
+
+export const RENT_COVERAGE_TOLERANCE = 0.01;
+
+/** Accept only a penny of rounding variance; larger shortfalls and excesses are both unsafe. */
+export function rentCoverageMatches(expected: number, accrued: number): boolean {
+  return Math.abs(accrued - expected) <= RENT_COVERAGE_TOLERANCE + 1e-9;
+}
+
 /**
  * The last date an agreement can accrue: bounded by its end date and, if it has
  * been switched off, by the day before it went inactive. Historical accruals are
@@ -104,7 +125,7 @@ export async function lockRentAccrual(q: Querier, warehouseId: number): Promise<
 }
 
 /** Run `fn` in a transaction holding that warehouse's accrual lock. */
-async function withWarehouseRentLock<T>(
+export async function withWarehouseRentLock<T>(
   pool: Pool,
   warehouseId: number,
   fn: (q: Querier) => Promise<T>,
@@ -171,7 +192,7 @@ export async function runRentAccrual(
     only = ` AND warehouse_id = $${params.length}`;
   }
 
-  const { rows: agreements } = await pool.query<RentAgreementRow>(
+  const { rows: candidates } = await pool.query<{ warehouse_id: number }>(
     // Switched-off agreements stay in the sweep. They are bounded to the day
     // before they went inactive by coverageEnd(), so they cannot accrue past
     // their stop date — but any day missed BEFORE that (a restart, downtime, or
@@ -180,7 +201,7 @@ export async function runRentAccrual(
     // forever, which is the one failure this scheduler exists to prevent.
     // Rows that never accrued at all (auto-registered, inactive, no stop date)
     // are excluded: there is nothing to catch up.
-    `SELECT warehouse_id, monthly_rent, start_date, end_date, status, inactive_from
+    `SELECT warehouse_id
        FROM warehouse_rent_agreements
       WHERE monthly_rent > 0 AND start_date IS NOT NULL
         AND (status = 'active' OR inactive_from IS NOT NULL)${only}`,
@@ -189,9 +210,10 @@ export async function runRentAccrual(
 
   const result: AccrualResult = { daysAccrued: 0, warehousesTouched: 0, totalAmount: 0 };
 
-  for (const a of agreements) {
-    const per = await withWarehouseRentLock(pool, a.warehouse_id, (q) =>
-      accrueAgreement(q, a, { asOf, fromDate: opts.fromDate }),
+  for (const candidate of candidates) {
+    const warehouseId = Number(candidate.warehouse_id);
+    const per = await withWarehouseRentLock(pool, warehouseId, (q) =>
+      runRentAccrualLocked(q, warehouseId, { asOf, fromDate: opts.fromDate }),
     );
     if (per.days > 0) {
       result.daysAccrued += per.days;
@@ -201,6 +223,30 @@ export async function runRentAccrual(
   }
 
   return result;
+}
+
+/**
+ * Catch up one warehouse while the caller already holds its rent advisory lock
+ * and transaction. The agreement is deliberately re-read only after that lock:
+ * a sweep which queued behind a PATCH must use the new terms, never its stale
+ * candidate row from before it waited.
+ */
+export async function runRentAccrualLocked(
+  q: Querier,
+  warehouseId: number,
+  opts: { asOf?: string; fromDate?: string } = {},
+): Promise<{ days: number; total: number }> {
+  const { rows: [agreement] } = await q.query<RentAgreementRow>(
+    `SELECT warehouse_id, monthly_rent, start_date, end_date, status, inactive_from
+       FROM warehouse_rent_agreements
+      WHERE warehouse_id = $1
+        AND monthly_rent > 0 AND start_date IS NOT NULL
+        AND (status = 'active' OR inactive_from IS NOT NULL)
+      FOR UPDATE`,
+    [warehouseId],
+  );
+  if (!agreement) return { days: 0, total: 0 };
+  return accrueAgreement(q, agreement, { asOf: opts.asOf ?? ymd(new Date())!, fromDate: opts.fromDate });
 }
 
 /**
@@ -332,7 +378,7 @@ function expectedMonthTotal(
  * afterwards to make up a shortfall.
  */
 export async function rentMonthCoverage(
-  pool: Pool,
+  pool: Querier,
   warehouseId: number,
   year: number,
   month: number,
@@ -352,7 +398,7 @@ export async function rentMonthCoverage(
   // rather than blocking approval on a figure that can no longer be derived.
   if (!a) return { expectedTotal: accruedTotal, accruedTotal, complete: true };
   const expectedTotal = expectedMonthTotal(a, Number(a.monthly_rent), year, month);
-  return { expectedTotal, accruedTotal, complete: accruedTotal >= expectedTotal - 0.01 };
+  return { expectedTotal, accruedTotal, complete: rentCoverageMatches(expectedTotal, accruedTotal) };
 }
 
 /**
@@ -361,7 +407,7 @@ export async function rentMonthCoverage(
  * figure that is about to change, so the UI uses this to gate the action.
  */
 export async function isPeriodAccrualComplete(
-  pool: Pool,
+  pool: Querier,
   warehouseId: number,
   year: number,
   month: number,
@@ -418,58 +464,78 @@ export async function recalcUnapprovedRentAccruals(
   warehouseId: number,
   opts: { asOf?: string } = {},
 ): Promise<RentRecalcResult> {
+  return withWarehouseRentLock(pool, warehouseId, (q) =>
+    recalcUnapprovedRentAccrualsLocked(q, warehouseId, opts),
+  );
+}
+
+/**
+ * Rebuild while the caller already holds this warehouse's lock and transaction.
+ * Only unapproved, accounting-open months are removed; signed-off months remain
+ * available as immutable history even when new agreement terms would differ.
+ */
+export async function recalcUnapprovedRentAccrualsLocked(
+  q: Querier,
+  warehouseId: number,
+  opts: { asOf?: string } = {},
+): Promise<RentRecalcResult> {
   const asOf = opts.asOf ?? ymd(new Date())!;
+  const { rows: removed } = await q.query<{
+    amount: string; accrual_date: unknown; year: number; month: number;
+  }>(
+    `DELETE FROM rent_accruals r
+      WHERE r.warehouse_id = $1
+        AND NOT EXISTS (
+          SELECT 1 FROM rent_periods p
+           WHERE p.warehouse_id = r.warehouse_id AND p.year = r.year AND p.month = r.month
+             AND p.status IN ('approved', 'paid')
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM accounting_period_locks l
+           WHERE l.year = r.year AND l.month = r.month
+        )
+      RETURNING amount, accrual_date, year, month`,
+    [warehouseId],
+  );
 
-  return withWarehouseRentLock(pool, warehouseId, async (q) => {
-    const { rows: removed } = await q.query<{
-      amount: string; accrual_date: unknown; year: number; month: number;
-    }>(
-      `DELETE FROM rent_accruals r
-        WHERE r.warehouse_id = $1
-          AND NOT EXISTS (
-            SELECT 1 FROM rent_periods p
-             WHERE p.warehouse_id = r.warehouse_id AND p.year = r.year AND p.month = r.month
-               AND p.status IN ('approved', 'paid')
-          )
-          AND NOT EXISTS (
-            SELECT 1 FROM accounting_period_locks l
-             WHERE l.year = r.year AND l.month = r.month
-          )
-        RETURNING amount, accrual_date, year, month`,
-      [warehouseId],
-    );
+  const seen = new Map<string, { year: number; month: number }>();
+  let previousTotal = 0;
+  let earliest: string | null = null;
+  for (const r of removed) {
+    previousTotal = round2(previousTotal + Number(r.amount));
+    seen.set(monthKey(Number(r.year), Number(r.month)), { year: Number(r.year), month: Number(r.month) });
+    const d = ymd(r.accrual_date);
+    if (d && (!earliest || d < earliest)) earliest = d;
+  }
 
-    const seen = new Map<string, { year: number; month: number }>();
-    let previousTotal = 0;
-    let earliest: string | null = null;
-    for (const r of removed) {
-      previousTotal = round2(previousTotal + Number(r.amount));
-      seen.set(monthKey(Number(r.year), Number(r.month)), { year: Number(r.year), month: Number(r.month) });
-      const d = ymd(r.accrual_date);
-      if (d && (!earliest || d < earliest)) earliest = d;
-    }
+  // The PATCH has already written the revised agreement inside the same
+  // transaction. Re-read it under the lock so no stale terms can leak into the
+  // regeneration.
+  const { rows: [a] } = await q.query<RentAgreementRow>(
+    `SELECT warehouse_id, monthly_rent, start_date, end_date, status, inactive_from
+       FROM warehouse_rent_agreements WHERE warehouse_id = $1 FOR UPDATE`,
+    [warehouseId],
+  );
+  const eligible = a && Number(a.monthly_rent) > 0 && ymd(a.start_date)
+    && (a.status === "active" || a.inactive_from);
+  const regenerated = eligible
+    ? await accrueAgreement(q, a!, {
+        asOf,
+        // Start from the current agreement boundary, not just the earliest row
+        // removed: a revised start date or a previously missed day can precede
+        // the first surviving accrual. The walk skips approved and accounting-
+        // locked months, so replaying the full eligible range is safe.
+        fromDate: minDate(earliest, ymd(a!.start_date)),
+      })
+    : { days: 0, total: 0 };
 
-    // Read the agreement inside the lock: this runs straight after the PATCH that
-    // changed it, and the revised rent is the whole point of rebuilding.
-    const { rows: [a] } = await q.query<RentAgreementRow>(
-      `SELECT warehouse_id, monthly_rent, start_date, end_date, status, inactive_from
-         FROM warehouse_rent_agreements WHERE warehouse_id = $1`,
-      [warehouseId],
-    );
-    const eligible = a && Number(a.monthly_rent) > 0 && ymd(a.start_date)
-      && (a.status === "active" || a.inactive_from);
-    const regenerated = eligible
-      ? await accrueAgreement(q, a!, { asOf, fromDate: earliest ?? undefined })
-      : { days: 0, total: 0 };
-
-    return {
-      monthsRecalculated: [...seen.values()].sort((x, y) => x.year - y.year || x.month - y.month),
-      entriesReversed: removed.length,
-      entriesRegenerated: regenerated.days,
-      previousTotal,
-      newTotal: regenerated.total,
-    };
-  });
+  return {
+    monthsRecalculated: [...seen.values()].sort((x, y) => x.year - y.year || x.month - y.month),
+    entriesReversed: removed.length,
+    entriesRegenerated: regenerated.days,
+    previousTotal,
+    newTotal: regenerated.total,
+  };
 }
 
 /** The per-day figure a monthly amount produces in a given month. */

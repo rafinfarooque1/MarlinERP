@@ -7,10 +7,11 @@ import { nextVoucherNumber } from "../lib/voucherNumber";
 import { logActivity } from "../lib/audit";
 import { isIsoDate } from "../lib/dateInput";
 import {
-  runRentAccrual, isPeriodAccrualComplete, rentMonthCoverage, recalcUnapprovedRentAccruals, dailyRentRate,
+  runRentAccrual, runRentAccrualLocked, isPeriodAccrualComplete, rentMonthCoverage,
+  recalcUnapprovedRentAccrualsLocked, withWarehouseRentLock, rentAccrualTermsChanged, dailyRentRate,
 } from "../lib/rentAccrual";
 import { provisionRentLedgers } from "../lib/rentLedgers";
-import { isMonthLocked, monthLockedBody, respondIfMonthLocked } from "../lib/periodLock";
+import { assertMonthOpen, handlePeriodLocked, respondIfMonthLocked } from "../lib/periodLock";
 
 const router: IRouter = Router();
 const PERM = "page:/hr/rent";
@@ -164,135 +165,165 @@ router.patch("/rent/agreements/:warehouseId", requireModuleAction(PERM, "edit"),
   // their own warehouse, which lands straight in the P&L as expense they chose.
   if (!requireHeadOffice(scope, res, "change rent terms")) return;
 
-  const { rows: [wh] } = await pool.query<{ name: string }>(`SELECT name FROM warehouses WHERE id = $1`, [warehouseId]);
-  if (!wh) { res.status(404).json({ error: "Warehouse not found" }); return; }
-
-  await pool.query(
-    `INSERT INTO warehouse_rent_agreements (warehouse_id) VALUES ($1) ON CONFLICT (warehouse_id) DO NOTHING`,
-    [warehouseId],
-  );
-  const { rows: [before] } = await pool.query(
-    `SELECT * FROM warehouse_rent_agreements WHERE warehouse_id = $1`, [warehouseId],
-  );
-
   const b = (req.body ?? {}) as Record<string, any>;
-  const monthlyRent = b.monthlyRent !== undefined ? Number(b.monthlyRent) : num(before.monthly_rent);
-  if (!Number.isFinite(monthlyRent) || monthlyRent < 0) {
-    res.status(400).json({ error: "Monthly rent must be zero or a positive amount." }); return;
+  const parseDateField = (value: unknown, label: string): string | null => {
+    if (value == null || value === "") return null;
+    const date = String(value).trim();
+    if (!isIsoDate(date)) throw Object.assign(new Error(`${label} must be a real calendar date in YYYY-MM-DD form.`), { httpStatus: 400 });
+    return date;
+  };
+
+  let outcome: {
+    warehouseName: string;
+    before: any;
+    saved: any;
+    monthlyRent: number;
+    status: string;
+    reason: string;
+    recalc: Awaited<ReturnType<typeof recalcUnapprovedRentAccrualsLocked>> | null;
+  };
+  try {
+    outcome = await withWarehouseRentLock(pool, warehouseId, async (q) => {
+      const { rows: [wh] } = await q.query<{ name: string }>(
+        `SELECT name FROM warehouses WHERE id = $1`, [warehouseId],
+      );
+      if (!wh) throw Object.assign(new Error("Warehouse not found"), { httpStatus: 404 });
+
+      await q.query(
+        `INSERT INTO warehouse_rent_agreements (warehouse_id) VALUES ($1)
+         ON CONFLICT (warehouse_id) DO NOTHING`,
+        [warehouseId],
+      );
+      const { rows: [before] } = await q.query(
+        `SELECT * FROM warehouse_rent_agreements WHERE warehouse_id = $1 FOR UPDATE`,
+        [warehouseId],
+      );
+      if (!before) throw new Error("Rent agreement could not be loaded.");
+
+      const monthlyRent = b.monthlyRent !== undefined ? Number(b.monthlyRent) : num(before.monthly_rent);
+      if (!Number.isFinite(monthlyRent) || monthlyRent < 0) {
+        throw Object.assign(new Error("Monthly rent must be zero or a positive amount."), { httpStatus: 400 });
+      }
+      const dueDay = b.dueDay !== undefined ? Number(b.dueDay) : Number(before.due_day ?? 5);
+      if (!Number.isInteger(dueDay) || dueDay < 1 || dueDay > 31) {
+        throw Object.assign(new Error("Payment due day must be a day of the month (1–31)."), { httpStatus: 400 });
+      }
+
+      const startDate = b.startDate !== undefined ? parseDateField(b.startDate, "Agreement start date") : ymd(before.start_date);
+      const endDate = b.endDate !== undefined ? parseDateField(b.endDate, "Agreement end date") : ymd(before.end_date);
+      if (startDate && endDate && endDate < startDate) {
+        throw Object.assign(new Error("Agreement end date cannot be before the start date."), { httpStatus: 400 });
+      }
+
+      const status = b.status !== undefined ? String(b.status) : String(before.status);
+      if (!["active", "inactive"].includes(status)) {
+        throw Object.assign(new Error("Status must be active or inactive."), { httpStatus: 400 });
+      }
+      if (status === "active" && !startDate) {
+        throw Object.assign(new Error("Set an agreement start date before activating rent."), { httpStatus: 400 });
+      }
+      if (status === "active" && monthlyRent <= 0) {
+        throw Object.assign(new Error("Set a monthly rent amount before activating rent."), { httpStatus: 400 });
+      }
+
+      let inactiveFrom = ymd(before.inactive_from);
+      if (status === "active") {
+        inactiveFrom = null;
+      } else if (b.inactiveFrom !== undefined) {
+        inactiveFrom = parseDateField(b.inactiveFrom, "Inactive date");
+      } else if (before.status === "active") {
+        inactiveFrom = today();
+      }
+
+      const { rows: [saved] } = await q.query(
+        `UPDATE warehouse_rent_agreements SET
+           monthly_rent = $1, security_deposit = $2, agreement_number = $3,
+           landlord_name = $4, landlord_phone = $5, landlord_email = $6, landlord_address = $7,
+           start_date = $8, end_date = $9, due_day = $10, status = $11, inactive_from = $12,
+           updated_at = NOW()
+         WHERE warehouse_id = $13 RETURNING *`,
+        [
+          monthlyRent,
+          b.securityDeposit !== undefined ? Number(b.securityDeposit) : num(before.security_deposit),
+          b.agreementNumber !== undefined ? String(b.agreementNumber) : before.agreement_number,
+          b.landlordName    !== undefined ? String(b.landlordName)    : before.landlord_name,
+          b.landlordPhone   !== undefined ? String(b.landlordPhone)   : before.landlord_phone,
+          b.landlordEmail   !== undefined ? String(b.landlordEmail)   : before.landlord_email,
+          b.landlordAddress !== undefined ? String(b.landlordAddress) : before.landlord_address,
+          startDate, endDate, dueDay, status, inactiveFrom, warehouseId,
+        ],
+      );
+      if (!saved) throw new Error("Rent agreement could not be saved.");
+
+      // Keep ledger creation/linking in this transaction too: a later rebuild
+      // failure must roll back every part of this agreement edit.
+      await provisionRentLedgers(q as unknown as typeof pool, warehouseId, wh.name);
+
+      const reason = typeof b.revisionReason === "string" ? b.revisionReason.trim().slice(0, 500) : "";
+      const accrualChanged = rentAccrualTermsChanged(before, saved);
+      const recalc = accrualChanged
+        ? await recalcUnapprovedRentAccrualsLocked(q, warehouseId)
+        : null;
+      if (!accrualChanged && status === "active") {
+        await runRentAccrualLocked(q, warehouseId);
+      }
+
+      return { warehouseName: wh.name, before, saved, monthlyRent, status, reason, recalc };
+    });
+  } catch (e: any) {
+    if (e?.httpStatus) { res.status(e.httpStatus).json({ error: e.message }); return; }
+    console.error("[rent] agreement update/recalculation failed; transaction rolled back:", e);
+    res.status(500).json({ error: "Rent agreement could not be saved. No agreement or accrual changes were committed." });
+    return;
   }
-  const dueDay = b.dueDay !== undefined ? Number(b.dueDay) : Number(before.due_day ?? 5);
-  if (!Number.isInteger(dueDay) || dueDay < 1 || dueDay > 31) {
-    res.status(400).json({ error: "Payment due day must be a day of the month (1–31)." }); return;
-  }
 
-  const startDate = b.startDate !== undefined ? (b.startDate || null) : ymd(before.start_date);
-  const endDate   = b.endDate   !== undefined ? (b.endDate   || null) : ymd(before.end_date);
-  if (startDate && endDate && endDate < startDate) {
-    res.status(400).json({ error: "Agreement end date cannot be before the start date." }); return;
-  }
+  if (outcome.recalc) {
+    const { recalc, before, saved, warehouseName, monthlyRent, reason } = outcome;
+    const now = new Date();
+    const basis = recalc.monthsRecalculated[0]
+      ?? { year: now.getFullYear(), month: now.getMonth() + 1 };
+    const asLabel = (m: { year: number; month: number }) => `${String(m.month).padStart(2, "0")}/${m.year}`;
+    const months = recalc.monthsRecalculated.map(asLabel);
 
-  const status = b.status !== undefined ? String(b.status) : String(before.status);
-  if (!["active", "inactive"].includes(status)) {
-    res.status(400).json({ error: "Status must be active or inactive." }); return;
-  }
-  // Activating rent with no start date would accrue nothing and look broken.
-  if (status === "active" && !startDate) {
-    res.status(400).json({ error: "Set an agreement start date before activating rent." }); return;
-  }
-  if (status === "active" && monthlyRent <= 0) {
-    res.status(400).json({ error: "Set a monthly rent amount before activating rent." }); return;
-  }
-
-  // Stamp the switch-off date on the transition, and clear it on re-activation.
-  let inactiveFrom = ymd(before.inactive_from);
-  if (status === "inactive" && before.status === "active") inactiveFrom = b.inactiveFrom || today();
-  if (status === "active") inactiveFrom = null;
-
-  await pool.query(
-    `UPDATE warehouse_rent_agreements SET
-       monthly_rent = $1, security_deposit = $2, agreement_number = $3,
-       landlord_name = $4, landlord_phone = $5, landlord_email = $6, landlord_address = $7,
-       start_date = $8, end_date = $9, due_day = $10, status = $11, inactive_from = $12,
-       updated_at = NOW()
-     WHERE warehouse_id = $13 RETURNING *`,
-    [
-      monthlyRent,
-      b.securityDeposit !== undefined ? Number(b.securityDeposit) : num(before.security_deposit),
-      b.agreementNumber !== undefined ? String(b.agreementNumber) : before.agreement_number,
-      b.landlordName    !== undefined ? String(b.landlordName)    : before.landlord_name,
-      b.landlordPhone   !== undefined ? String(b.landlordPhone)   : before.landlord_phone,
-      b.landlordEmail   !== undefined ? String(b.landlordEmail)   : before.landlord_email,
-      b.landlordAddress !== undefined ? String(b.landlordAddress) : before.landlord_address,
-      startDate, endDate, dueDay, status, inactiveFrom, warehouseId,
-    ],
-  );
-
-  // Ledgers are provisioned lazily too: a warehouse created before the chart of
-  // accounts was seeded gets them on its first edit rather than never.
-  await provisionRentLedgers(pool, warehouseId, wh.name);
-
-  // A change to the rent or to when the agreement starts rewrites every
-  // unapproved month's daily accrual at the new terms: an open month is
-  // recalculated in full rather than running at two rates for one month.
-  // Approved and paid months are financially final and are left untouched.
-  const prevRent = num(before.monthly_rent);
-  const rentChanged = b.monthlyRent !== undefined && Math.abs(monthlyRent - prevRent) > 0.004;
-  const startChanged = b.startDate !== undefined && startDate !== ymd(before.start_date);
-
-  if (rentChanged || startChanged) {
-    // The reason travels outside the field list so the audit trail can say why
-    // the figures moved.
-    const reason = typeof b.revisionReason === "string" ? b.revisionReason.trim().slice(0, 500) : "";
-    try {
-      const recalc = await recalcUnapprovedRentAccruals(pool, warehouseId);
-      const now = new Date();
-      const basis = recalc.monthsRecalculated[0]
-        ?? { year: now.getFullYear(), month: now.getMonth() + 1 };
-      const asLabel = (m: { year: number; month: number }) => `${String(m.month).padStart(2, "0")}/${m.year}`;
-      const months = recalc.monthsRecalculated.map(asLabel);
-
-      logActivity({
-        action: "UPDATE", module: "rent", entityType: "rent_accrual", entityId: warehouseId,
-        user: req.employee?.username ?? "system",
-        description:
-          `Rent revised for ${wh.name} — ₹${prevRent.toLocaleString("en-IN")} → ₹${monthlyRent.toLocaleString("en-IN")}/month; `
-          + `${recalc.entriesReversed} daily accrual entr${recalc.entriesReversed === 1 ? "y" : "ies"} reversed, `
-          + `${recalc.entriesRegenerated} regenerated`
-          + (months.length ? ` for ${months.join(", ")}` : " (nothing accrued yet)")
-          + (reason ? ` — reason: ${reason}` : ""),
-        metadata: {
-          warehouseId, warehouseName: wh.name,
-          previousAmount: prevRent, newAmount: monthlyRent,
-          previousDailyAccrual: dailyRentRate(prevRent, basis.year, basis.month),
-          newDailyAccrual: dailyRentRate(monthlyRent, basis.year, basis.month),
-          dailyRateBasisMonth: asLabel(basis),
-          previousStartDate: ymd(before.start_date), newStartDate: startDate,
-          reason: reason || null,
-          monthsRecalculated: months,
-          entriesReversed: recalc.entriesReversed,
-          entriesRegenerated: recalc.entriesRegenerated,
-          previousAccruedTotal: recalc.previousTotal,
-          newAccruedTotal: recalc.newTotal,
-          revisedBy: req.employee?.username ?? "system",
-          revisedAt: now.toISOString(),
-        },
-      });
-    } catch (e) {
-      // The agreement itself is saved. Accrual is an idempotent catch-up, so a
-      // failure here self-heals on the next hourly pass — but it must be loud,
-      // because until then the open month is still accruing at the old rent.
-      console.error("[rent] accrual recalculation after edit failed:", e);
-    }
-  } else if (status === "active") {
-    // Catch up immediately so activating rent shows accrual without waiting an hour.
-    try { await runRentAccrual(pool); } catch (e) { console.error("[rent] accrual after edit failed:", e); }
+    logActivity({
+      action: "UPDATE", module: "rent", entityType: "rent_accrual", entityId: warehouseId,
+      user: req.employee?.username ?? "system",
+      description:
+        `Rent terms revised for ${warehouseName} — ₹${num(before.monthly_rent).toLocaleString("en-IN")} → ₹${monthlyRent.toLocaleString("en-IN")}/month; `
+        + `${recalc.entriesReversed} daily accrual entr${recalc.entriesReversed === 1 ? "y" : "ies"} reversed, `
+        + `${recalc.entriesRegenerated} regenerated`
+        + (months.length ? ` for ${months.join(", ")}` : " (nothing accrued yet)")
+        + (reason ? ` — reason: ${reason}` : ""),
+      metadata: {
+        warehouseId, warehouseName,
+        previousAmount: num(before.monthly_rent), newAmount: monthlyRent,
+        previousDailyAccrual: dailyRentRate(num(before.monthly_rent), basis.year, basis.month),
+        newDailyAccrual: dailyRentRate(monthlyRent, basis.year, basis.month),
+        dailyRateBasisMonth: asLabel(basis),
+        previousStartDate: ymd(before.start_date), newStartDate: ymd(saved.start_date),
+        previousEndDate: ymd(before.end_date), newEndDate: ymd(saved.end_date),
+        previousStatus: before.status, newStatus: saved.status,
+        previousInactiveFrom: ymd(before.inactive_from), newInactiveFrom: ymd(saved.inactive_from),
+        reason: reason || null,
+        monthsRecalculated: months,
+        entriesReversed: recalc.entriesReversed,
+        entriesRegenerated: recalc.entriesRegenerated,
+        previousAccruedTotal: recalc.previousTotal,
+        newAccruedTotal: recalc.newTotal,
+        revisedBy: req.employee?.username ?? "system",
+        revisedAt: now.toISOString(),
+      },
+    });
   }
 
   logActivity({
     action: "UPDATE", module: "rent", entityType: "rent_agreement", entityId: warehouseId,
-    description: `Rent agreement updated for ${wh.name} — ₹${monthlyRent.toLocaleString("en-IN")}/month, ${status}`,
+    description: `Rent agreement updated for ${outcome.warehouseName} — ₹${outcome.monthlyRent.toLocaleString("en-IN")}/month, ${outcome.status}`,
     user: req.employee?.username ?? "system",
-    metadata: { before: { monthlyRent: num(before.monthly_rent), status: before.status }, after: { monthlyRent, status } },
+    metadata: {
+      before: { monthlyRent: num(outcome.before.monthly_rent), status: outcome.before.status },
+      after: { monthlyRent: outcome.monthlyRent, status: outcome.status },
+    },
   });
 
   const [fresh] = await loadAgreements("w.id = $1", [warehouseId]);
@@ -432,66 +463,86 @@ router.post("/rent/periods/:warehouseId/:year/:month/approve", requireModuleActi
   const scope = await getUserDataScope(req.employee!);
   if (!requireHeadOffice(scope, res)) return;
 
-  // Month lock: approval freezes and settles the payable for this (year, month),
-  // so it may not run once that accounting period is locked.
-  if (await isMonthLocked(pool, year, month)) {
-    res.status(423).json(monthLockedBody(year, month)); return;
-  }
+  let approved: { name: string; amount: number };
+  try {
+    approved = await withWarehouseRentLock(pool, warehouseId, async (q) => {
+      // The full catch-up, validation and state transition share the same
+      // transaction and warehouse lock as revisions and the hourly sweep.
+      await assertMonthOpen(q, year, month, "rent approval");
 
-  const { rows: [existing] } = await pool.query<{ status: string }>(
-    `SELECT status FROM rent_periods WHERE warehouse_id = $1 AND year = $2 AND month = $3`,
-    [warehouseId, year, month],
-  );
-  if (existing && existing.status !== "pending") {
-    res.status(400).json({ error: `This month is already ${existing.status}.` }); return;
-  }
-  if (!await isPeriodAccrualComplete(pool, warehouseId, year, month)) {
-    res.status(400).json({
-      error: "This month is still accruing. Approve it once the month has ended so the approved amount is final.",
+      const { rows: [existing] } = await q.query<{ status: string }>(
+        `SELECT status FROM rent_periods
+          WHERE warehouse_id = $1 AND year = $2 AND month = $3
+          FOR UPDATE`,
+        [warehouseId, year, month],
+      );
+      if (existing && existing.status !== "pending") {
+        throw Object.assign(new Error(`This month is already ${existing.status}.`), { httpStatus: 400 });
+      }
+      if (!await isPeriodAccrualComplete(q, warehouseId, year, month)) {
+        throw Object.assign(
+          new Error("This month is still accruing. Approve it once the month has ended so the approved amount is final."),
+          { httpStatus: 400 },
+        );
+      }
+
+      // Caller already holds the lock: this avoids recursively acquiring it
+      // while guaranteeing that a revision cannot delete rows between the
+      // catch-up and the approval transition.
+      await runRentAccrualLocked(q, warehouseId);
+
+      const { rows: [agg] } = await q.query<{ total: string; name: string }>(
+        `SELECT COALESCE(SUM(r.amount), 0) AS total, MAX(w.name) AS name
+           FROM rent_accruals r JOIN warehouses w ON w.id = r.warehouse_id
+          WHERE r.warehouse_id = $1 AND r.year = $2 AND r.month = $3`,
+        [warehouseId, year, month],
+      );
+      if (!agg || num(agg.total) <= 0) {
+        throw Object.assign(new Error("There is no accrued rent to approve for this month."), { httpStatus: 400 });
+      }
+
+      const coverage = await rentMonthCoverage(q, warehouseId, year, month);
+      if (!coverage.complete) {
+        const difference = round2(coverage.accruedTotal - coverage.expectedTotal);
+        const direction = difference < 0 ? "under" : "over";
+        throw Object.assign(
+          new Error(
+            `This month has accrued ₹${coverage.accruedTotal.toLocaleString("en-IN")} against ₹${coverage.expectedTotal.toLocaleString("en-IN")} expected `
+            + `(₹${Math.abs(difference).toLocaleString("en-IN")} ${direction}). Check the agreement and accruals; approval would freeze an incorrect amount.`,
+          ),
+          { httpStatus: 400 },
+        );
+      }
+
+      const { rows: [period] } = await q.query<{ status: string }>(
+        `INSERT INTO rent_periods (warehouse_id, year, month, status, approved_at, approved_by)
+         VALUES ($1, $2, $3, 'approved', NOW(), $4)
+         ON CONFLICT (warehouse_id, year, month)
+         DO UPDATE SET status = 'approved', approved_at = NOW(), approved_by = EXCLUDED.approved_by
+         WHERE rent_periods.status = 'pending'
+         RETURNING status`,
+        [warehouseId, year, month, req.employee?.username ?? "system"],
+      );
+      if (!period) {
+        throw Object.assign(new Error("This month was approved by another request."), { httpStatus: 400 });
+      }
+      return { name: String(agg.name ?? `Warehouse #${warehouseId}`), amount: round2(num(agg.total)) };
     });
+  } catch (e: any) {
+    if (handlePeriodLocked(res, e)) return;
+    if (e?.httpStatus) { res.status(e.httpStatus).json({ error: e.message }); return; }
+    console.error("[rent] approval transaction failed:", e);
+    res.status(500).json({ error: "Could not approve rent. No approval changes were committed." });
     return;
   }
-
-  // Catch this warehouse up before freezing the month. Approval is the point of
-  // no return — nothing tops a month up afterwards, because approved months are
-  // excluded from the sweep — so a day lost to downtime has to be recovered now
-  // rather than quietly written off.
-  await runRentAccrual(pool, { warehouseId });
-
-  const { rows: [agg] } = await pool.query<{ total: string; name: string }>(
-    `SELECT COALESCE(SUM(r.amount), 0) AS total, MAX(w.name) AS name
-       FROM rent_accruals r JOIN warehouses w ON w.id = r.warehouse_id
-      WHERE r.warehouse_id = $1 AND r.year = $2 AND r.month = $3`,
-    [warehouseId, year, month],
-  );
-  if (!agg || num(agg.total) <= 0) {
-    res.status(400).json({ error: "There is no accrued rent to approve for this month." }); return;
-  }
-
-  const coverage = await rentMonthCoverage(pool, warehouseId, year, month);
-  if (!coverage.complete) {
-    res.status(400).json({
-      error: `This month has only accrued ₹${coverage.accruedTotal.toLocaleString("en-IN")} of the ₹${coverage.expectedTotal.toLocaleString("en-IN")} the agreement is worth, so approving it would understate the expense permanently. Check the agreement dates and rent amount, then try again.`,
-    });
-    return;
-  }
-
-  await pool.query(
-    `INSERT INTO rent_periods (warehouse_id, year, month, status, approved_at, approved_by)
-     VALUES ($1, $2, $3, 'approved', NOW(), $4)
-     ON CONFLICT (warehouse_id, year, month)
-     DO UPDATE SET status = 'approved', approved_at = NOW(), approved_by = EXCLUDED.approved_by
-     WHERE rent_periods.status = 'pending'`,
-    [warehouseId, year, month, req.employee?.username ?? "system"],
-  );
 
   logActivity({
     action: "UPDATE", module: "rent", entityType: "rent_period", entityId: warehouseId,
-    description: `Rent approved for ${agg.name} — ${String(month).padStart(2, "0")}/${year}, ₹${round2(num(agg.total)).toLocaleString("en-IN")}`,
-    user: req.employee?.username ?? "system", metadata: { warehouseId, year, month, amount: round2(num(agg.total)) },
+    description: `Rent approved for ${approved.name} — ${String(month).padStart(2, "0")}/${year}, ₹${approved.amount.toLocaleString("en-IN")}`,
+    user: req.employee?.username ?? "system", metadata: { warehouseId, year, month, amount: approved.amount },
   });
 
-  res.json({ warehouseId, year, month, status: "approved", amount: round2(num(agg.total)) });
+  res.json({ warehouseId, year, month, status: "approved", amount: approved.amount });
 });
 
 /**
@@ -614,9 +665,9 @@ router.post("/rent/periods/:warehouseId/:year/:month/pay", requireModuleAction(P
     const narration = `Rent Payment${isFinal ? "" : " (Partial)"} — ${agg?.name ?? `Warehouse #${warehouseId}`} — ${String(month).padStart(2, "0")}/${year}`;
     const { rows: [jv] } = await client.query<{ id: number }>(
       `INSERT INTO journal_vouchers (voucher_type, voucher_number, voucher_date, narration, total_amount, created_by,
-                                    origin, source_module)
-       VALUES ('journal', $1, $2, $3, $4, $5, 'system', 'rent') RETURNING id`,
-      [voucherNumber, paymentDate, narration, requested.toFixed(2), req.employee?.username ?? "system"],
+                                    origin, source_module, location_type, location_id)
+       VALUES ('journal', $1, $2, $3, $4, $5, 'system', 'rent', 'warehouse', $6) RETURNING id`,
+      [voucherNumber, paymentDate, narration, requested.toFixed(2), req.employee?.username ?? "system", warehouseId],
     );
     // Dr Rent Payable / Cr Cash or Bank
     await client.query(

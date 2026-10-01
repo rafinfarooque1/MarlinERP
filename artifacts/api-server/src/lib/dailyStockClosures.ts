@@ -389,6 +389,91 @@ let lastSuccessfulCompanyDay = "";
 let lastSuccessfulTimeZone = "Asia/Kolkata";
 let lastKnownClosedThrough: string | null = null;
 
+/** Refuse a reset before it can clear company data if the one-time baseline is absent. */
+export async function assertStockDailyCloseBaselineExists(db: Queryable): Promise<void> {
+  const { rows: [state] } = await db.query(
+    `SELECT id FROM ${BASELINE_TABLE} WHERE id = 1`,
+  );
+  if (!state) {
+    throw domainError(
+      "The future-only stock baseline is not available; company reset was stopped before changing data.",
+      "STOCK_DAILY_BASELINE_MISSING",
+      503,
+    );
+  }
+}
+
+/**
+ * Clear prior-company daily closes and establish a new future-only baseline from
+ * the current stock state. The caller must already be in a transaction. By
+ * default this takes the same advisory lock as close capture and stock writers;
+ * a reset that holds the session-level lock across a non-transactional factory
+ * reset can pass `closeLockHeld`.
+ */
+export async function rebaseStockDailyCloseAfterReset(
+  db: Queryable,
+  options: { closeLockHeld?: boolean } = {},
+): Promise<{ baselineDate: string; timeZone: string; baselineLedgerId: string; baselineRows: number }> {
+  if (!options.closeLockHeld) await lockCloseState(db);
+  await assertStockDailyCloseBaselineExists(db);
+
+  const timeZone = await companyTimeZone(db);
+  const baselineDate = await companyToday(db, timeZone);
+
+  // Freeze both sides of the baseline snapshot. The reset transaction may
+  // already hold stronger locks on these tables; PostgreSQL treats these
+  // requests as satisfied by the same transaction.
+  await db.query(`LOCK TABLE stock_entries IN SHARE MODE`);
+  await db.query(`LOCK TABLE stock_ledger IN SHARE MODE`);
+
+  const { rows: [highWater] } = await db.query(
+    `SELECT COALESCE(MAX(id), 0)::bigint::text AS ledger_id FROM stock_ledger`,
+  );
+  const { rows: [count] } = await db.query(
+    `SELECT COUNT(*)::int AS row_count FROM stock_entries`,
+  );
+  const baselineLedgerId = String(highWater?.ledger_id ?? "0");
+  const baselineRows = Number(count?.row_count ?? 0);
+
+  await db.query(`DELETE FROM ${ENTRIES_TABLE}`);
+  await db.query(`DELETE FROM ${RUNS_TABLE}`);
+  await db.query(`DELETE FROM ${BASELINE_ENTRIES_TABLE}`);
+
+  const { rows: [updated] } = await db.query(
+    `UPDATE ${BASELINE_TABLE}
+        SET baseline_date = $1::date,
+            time_zone = $2,
+            baseline_ledger_id = $3::bigint,
+            baseline_rows = $4,
+            captured_at = clock_timestamp()
+      WHERE id = 1
+      RETURNING id`,
+    [baselineDate, timeZone, baselineLedgerId, baselineRows],
+  );
+  if (!updated) {
+    throw domainError(
+      "The future-only stock baseline disappeared during reset; stock closes remain unavailable.",
+      "STOCK_DAILY_BASELINE_MISSING",
+      503,
+    );
+  }
+  await db.query(
+    `INSERT INTO ${BASELINE_ENTRIES_TABLE}
+       (material_type, ref_id, branch_type, branch_id, quantity)
+     SELECT material_type, item_id, branch_type, branch_id, quantity::numeric
+       FROM stock_entries`,
+  );
+
+  // A prior successful check is no longer evidence about the newly rebased
+  // company. Force the next close check to read the database again.
+  lastSuccessfulCheckAt = 0;
+  lastSuccessfulCompanyDay = "";
+  lastSuccessfulTimeZone = timeZone;
+  lastKnownClosedThrough = null;
+
+  return { baselineDate, timeZone, baselineLedgerId, baselineRows };
+}
+
 function localDay(timeZone: string): string {
   return new Date().toLocaleDateString("en-CA", { timeZone });
 }

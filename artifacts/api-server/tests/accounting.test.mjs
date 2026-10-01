@@ -95,6 +95,55 @@ async function snapshotPnL() {
   ].map(([key, value]) => [key, round2(Number(value ?? 0))]));
 }
 
+async function assertTransferStatementRow({
+  label, ledgerCode, entryId, sourceType, displayType, transferId, challanNumber,
+  sourceName, destinationName, itemId, expectedDispatchedQuantity, expectedReceivedQuantity,
+  expectedDebit, expectedCredit,
+}) {
+  const chart = (await get('/accounts/chart/flat')).data ?? [];
+  const ledger = chart.find(row => row.code === ledgerCode);
+  assert(`${label}: transfer ledger exists`, !!ledger, ledgerCode);
+  if (!ledger) return;
+
+  const [statementRes, tb] = await Promise.all([
+    get(`/accounts/ledger-statement?accountId=${ledger.id}`),
+    snapshotTB(),
+  ]);
+  const statement = statementRes.data;
+  const matching = (statement?.entries ?? []).filter(row => row.entryId === entryId);
+  assert(`${label}: statement preserves posting ID`, matching.length > 0, entryId);
+  if (!matching.length) return;
+
+  const entry = matching[0];
+  const detail = (entry.sourceDetails ?? []).find(source => source.kind === 'stock_transfer');
+  assert(`${label}: explicit Stock Transfer source detail`, detail?.type === 'Stock Transfer' &&
+    Number(detail.transferId) === Number(transferId), JSON.stringify(detail ?? null).slice(0, 240));
+  assert(`${label}: challan and transfer endpoints are linked`,
+    detail?.reference === challanNumber && detail?.fromName === sourceName && detail?.toName === destinationName,
+    `reference=${detail?.reference} from=${detail?.fromName} to=${detail?.toName}`);
+  const transferLine = (detail?.lines ?? []).find(line => Number(line.itemId) === Number(itemId));
+  assert(`${label}: dispatched/received quantities are shown`,
+    !!transferLine && Number(transferLine.dispatchedQuantity) === expectedDispatchedQuantity &&
+      (expectedReceivedQuantity == null
+        ? transferLine.receivedQuantity == null
+        : Number(transferLine.receivedQuantity) === expectedReceivedQuantity),
+    JSON.stringify(transferLine ?? null));
+  assert(`${label}: visible Transfer-In/Out classification`, entry.displayEntryType === displayType,
+    `displayEntryType=${entry.displayEntryType}`);
+  assert(`${label}: original posting source classification is unchanged`, entry.entryType === sourceType,
+    `entryType=${entry.entryType}`);
+  assert(`${label}: posted debit/credit amounts are unchanged`,
+    Math.abs(Number(entry.debit ?? 0) - expectedDebit) < 0.05 &&
+      Math.abs(Number(entry.credit ?? 0) - expectedCredit) < 0.05,
+    `debit=${entry.debit} credit=${entry.credit} expected=${expectedDebit}/${expectedCredit}`);
+
+  const tbRow = (tb.rows ?? []).find(row => Number(row.ledgerId) === Number(ledger.id));
+  assert(`${label}: statement debit/credit totals reconcile to trial balance`,
+    !!tbRow && Math.abs(Number(statement.totalDebit ?? 0) - Number(tbRow.debit ?? 0)) < 0.05 &&
+      Math.abs(Number(statement.totalCredit ?? 0) - Number(tbRow.credit ?? 0)) < 0.05,
+    `statement=${statement.totalDebit}/${statement.totalCredit} trialBalance=${tbRow?.debit}/${tbRow?.credit}`);
+}
+
 // ── Auth ───────────────────────────────────────────────────────────────────
 // The admin account uses DEFAULT_INITIAL_PASSWORD ('marlin1458') set by the
 // startup migration. mustChangePassword may be true but the token is still
@@ -564,6 +613,22 @@ if (!srcLoc || !dstLoc) {
           assert(`Invoice mode: sale total = taxable + GST (≈ ₹${expectedTotal.toFixed(2)})`,
             Math.abs(saleTotal - expectedTotal) < 0.05,
             `saleTotal=${saleTotal} expected=${expectedTotal}`);
+          await assertTransferStatementRow({
+            label: 'Invoice-mode Transfer-Out statement',
+            ledgerCode: 'STD-TRF-OUT',
+            entryId: `sale:${saleId}`,
+            sourceType: 'sale',
+            displayType: 'Transfer-Out',
+            transferId: createdId,
+            challanNumber,
+            sourceName: srcLoc.name,
+            destinationName: dstLoc.name,
+            itemId: taxableItem.id,
+            expectedDispatchedQuantity: 1,
+            expectedReceivedQuantity: null,
+            expectedDebit: 0,
+            expectedCredit: Number(transfer.transferValue ?? 0),
+          });
         }
       }
 
@@ -655,6 +720,24 @@ if (!srcLoc || !dstLoc) {
         assert('Dispatch JV debits the direction-selected inter-branch liability', !!drBranchDebtor, `lines=${linesSummary}`);
         assert('Dispatch JV credits Transfer-Out', !!crTransfer, `lines=${linesSummary}`);
         assert('Dispatch JV has no Sales credit line', !crSales, `lines=${linesSummary}`);
+        if (crTransfer) {
+          await assertTransferStatementRow({
+            label: 'Voucher-mode Transfer-Out statement',
+            ledgerCode: 'STD-TRF-OUT',
+            entryId: `jv:${dispVid}`,
+            sourceType: 'branch_transfer_sale',
+            displayType: 'Transfer-Out',
+            transferId: createdId,
+            challanNumber,
+            sourceName: srcLoc.name,
+            destinationName: dstLoc.name,
+            itemId: taxableItem.id,
+            expectedDispatchedQuantity: 1,
+            expectedReceivedQuantity: null,
+            expectedDebit: Number(crTransfer.debit ?? 0),
+            expectedCredit: Number(crTransfer.credit ?? 0),
+          });
+        }
 
         if (expectedTaxType === 'igst') {
           assert('Dispatch JV credits STD-OUT-IGST (interstate)', !!crGstIg, `lines=${linesSummary}`);
@@ -712,6 +795,60 @@ if (!srcLoc || !dstLoc) {
     assert('Stock transfer received successfully', !approveRes.data?.error,
       JSON.stringify(approveRes.data).slice(0, 300));
     if (!approveRes.data?.error) {
+      if (docMode === 'invoice') {
+        const receivedTransfer = (await get(`/stock/transfers/${createdId}`)).data;
+        if (receivedTransfer.purchaseId) {
+          await assertTransferStatementRow({
+            label: 'Invoice-mode Transfer-In statement',
+            ledgerCode: 'STD-TRF-IN',
+            entryId: `purchase:${receivedTransfer.purchaseId}`,
+            sourceType: 'purchase',
+            displayType: 'Transfer-In',
+            transferId: createdId,
+            challanNumber,
+            sourceName: srcLoc.name,
+            destinationName: dstLoc.name,
+            itemId: taxableItem.id,
+            expectedDispatchedQuantity: 1,
+            expectedReceivedQuantity: 1,
+            expectedDebit: Number(transfer.transferValue ?? 0),
+            expectedCredit: 0,
+          });
+        } else {
+          assert('Invoice-mode Transfer-In purchase id is linked', false, JSON.stringify(receivedTransfer).slice(0, 200));
+        }
+      } else {
+        const receiveVouchers = (await get('/accounts/journal-vouchers')).data ?? [];
+        const receiveVoucher = receiveVouchers.find(v => v.voucherNumber === `TRF-RCV-${challanNumber}`);
+        assert('Voucher-mode receive voucher is linked', !!receiveVoucher,
+          `TRF-RCV-${challanNumber}`);
+        if (receiveVoucher?.id) {
+          const receiveDetail = (await get(`/accounts/journal-vouchers/${receiveVoucher.id}`)).data;
+          const transferInLine = (receiveDetail.lines ?? []).find(l =>
+            l.ledgerCode === 'STD-TRF-IN' && Number(l.debit) > 0);
+          assert('Receive voucher debits Transfer-In', !!transferInLine,
+            JSON.stringify(receiveDetail.lines ?? []).slice(0, 250));
+          if (transferInLine) {
+            await assertTransferStatementRow({
+              label: 'Voucher-mode Transfer-In statement',
+              ledgerCode: 'STD-TRF-IN',
+              entryId: `jv:${receiveVoucher.id}`,
+              sourceType: 'branch_transfer_purchase',
+              displayType: 'Transfer-In',
+              transferId: createdId,
+              challanNumber,
+              sourceName: srcLoc.name,
+              destinationName: dstLoc.name,
+              itemId: taxableItem.id,
+              expectedDispatchedQuantity: 1,
+              expectedReceivedQuantity: 1,
+              expectedDebit: Number(transferInLine.debit ?? 0),
+              expectedCredit: Number(transferInLine.credit ?? 0),
+            });
+          }
+        }
+      }
+
       const pnlAfterReceipt = await snapshotPnL();
       for (const key of Object.keys(pnlBefore)) {
         assert(`Transfer receipt leaves P&L ${key} unchanged`,

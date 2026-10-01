@@ -265,55 +265,166 @@ export default function Ledger() {
                 <h3 className="text-sm font-semibold">Original transaction</h3>
                 {(selectedEntry.sourceDetails ?? []).length ? (
                   selectedEntry.sourceDetails.map((detail: any, index: number) => (
-                    <div key={`${detail.type}-${detail.reference ?? index}`} className="rounded-lg border border-border p-4 space-y-3" data-testid={`card-ledger-source-detail-${index}`}>
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div className="flex items-center gap-2">
-                          <Badge variant="outline">{detail.type}</Badge>
-                          {detail.reference && <span className="font-mono text-sm">{detail.reference}</span>}
+                    detail.kind === 'stock_transfer' ? (
+                      <div key={`transfer-${detail.transferId}-${detail.entryLabel}`} className="rounded-lg border border-border p-4 space-y-4" data-testid={`card-ledger-stock-transfer-${index}`}>
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Badge variant="outline">Stock Transfer</Badge>
+                            <Badge variant="outline">{detail.entryLabel}</Badge>
+                            {detail.reference && <span className="font-mono text-sm">{detail.reference}</span>}
+                          </div>
+                          {detail.totalValue != null && (
+                            <span className="font-mono text-sm font-semibold">{inr(Number(detail.totalValue) || 0)}</span>
+                          )}
                         </div>
-                        <span className="font-mono text-sm font-semibold">{inr(Number(detail.amount) || 0)}</span>
-                      </div>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-2 text-sm">
-                        <div>
-                          <span className="text-muted-foreground">Date: </span>
-                          {detail.date ? formatDate(detail.date) : '—'}
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-2 text-sm">
+                          <div>
+                            <span className="text-muted-foreground">Transfer date: </span>
+                            {detail.date ? formatDate(detail.date) : '—'}
+                          </div>
+                          <div>
+                            <span className="text-muted-foreground">Status: </span>
+                            <span className="capitalize">{detail.status || '—'}</span>
+                          </div>
+                          <div>
+                            <span className="text-muted-foreground">Source: </span>
+                            {detail.fromName || '—'}
+                            {detail.fromType ? <span className="text-muted-foreground"> ({detail.fromType})</span> : ''}
+                          </div>
+                          <div>
+                            <span className="text-muted-foreground">Destination: </span>
+                            {detail.toName || '—'}
+                            {detail.toType ? <span className="text-muted-foreground"> ({detail.toType})</span> : ''}
+                          </div>
+                          <div>
+                            <span className="text-muted-foreground">Transfer type: </span>
+                            <span className="capitalize">{String(detail.transferType || '—').replaceAll('_', ' ')}</span>
+                          </div>
+                          <div>
+                            <span className="text-muted-foreground">Document mode: </span>
+                            <span className="capitalize">{detail.documentMode || '—'}</span>
+                          </div>
+                          {detail.transferInvoiceNumber && (
+                            <div className="sm:col-span-2">
+                              <span className="text-muted-foreground">Transfer invoice: </span>
+                              <span className="font-mono">{detail.transferInvoiceNumber}</span>
+                            </div>
+                          )}
                         </div>
-                        <div>
-                          <span className="text-muted-foreground">Party: </span>
-                          {detail.partyName || '—'}
-                        </div>
-                        <div>
-                          <span className="text-muted-foreground">Method: </span>
-                          {detail.method || '—'}
-                        </div>
-                        <div>
-                          <span className="text-muted-foreground">Reference: </span>
-                          {detail.referenceNumber || '—'}
-                        </div>
-                      </div>
-                      <p className="text-sm whitespace-pre-wrap break-words">{detail.narration || '—'}</p>
-                      {detail.invoiceAllocations?.length > 0 && (
-                        <div className="border-t border-border pt-3 space-y-2">
-                          <p className="text-xs font-medium text-muted-foreground">Invoice allocations</p>
-                          <div className="space-y-1.5">
-                            {detail.invoiceAllocations.map((allocation: any, allocationIndex: number) => (
-                              <div key={`${allocation.invoiceNumber ?? 'invoice'}-${allocationIndex}`} className="flex items-center justify-between gap-3 text-sm" data-testid={`row-ledger-invoice-allocation-${index}-${allocationIndex}`}>
-                                <span className="min-w-0 break-words">
-                                  {allocation.invoiceNumber || 'Invoice'}
-                                  {allocation.date ? <span className="text-muted-foreground"> · {formatDate(allocation.date)}</span> : ''}
-                                </span>
-                                <span className="shrink-0 font-mono">{inr(Number(allocation.amount) || 0)}</span>
+
+                        {(detail.transferValue != null || detail.gstAmount != null) && (
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 border-t border-border pt-3">
+                            {detail.transferValue != null && (
+                              <div>
+                                <p className="text-xs text-muted-foreground">Transfer value</p>
+                                <p className="mt-1 font-mono text-sm">{inr(Number(detail.transferValue) || 0)}</p>
                               </div>
-                            ))}
+                            )}
+                            {detail.gstAmount != null && (
+                              <div>
+                                <p className="text-xs text-muted-foreground">
+                                  GST ({detail.taxType === 'cgst_sgst' ? 'CGST + SGST' : detail.taxType === 'igst' ? 'IGST' : 'tax'})
+                                </p>
+                                <p className="mt-1 font-mono text-sm">{inr(Number(detail.gstAmount) || 0)}</p>
+                              </div>
+                            )}
+                            {detail.totalValue != null && (
+                              <div>
+                                <p className="text-xs text-muted-foreground">Total transfer document</p>
+                                <p className="mt-1 font-mono text-sm">{inr(Number(detail.totalValue) || 0)}</p>
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        {detail.lines?.length > 0 && (
+                          <div className="border-t border-border pt-3 space-y-2">
+                            <p className="text-xs font-medium text-muted-foreground">Dispatched and received quantities</p>
+                            <div className="space-y-2">
+                              {detail.lines.map((line: any, lineIndex: number) => (
+                                <div key={`${line.materialType}-${line.itemId}-${lineIndex}`} className="rounded-md bg-muted/20 p-3 space-y-2" data-testid={`row-ledger-transfer-line-${index}-${lineIndex}`}>
+                                  <div className="flex flex-wrap items-baseline justify-between gap-2">
+                                    <span className="min-w-0 break-words text-sm font-medium">{line.itemName || `Product #${line.itemId}`}</span>
+                                    <span className="text-xs capitalize text-muted-foreground">{String(line.materialType || 'item').replaceAll('_', ' ')}</span>
+                                  </div>
+                                  <div className="grid grid-cols-2 gap-3 text-sm">
+                                    <div>
+                                      <p className="text-xs text-muted-foreground">Dispatched</p>
+                                      <p className="mt-0.5 font-mono">{Number(line.dispatchedQuantity || 0).toLocaleString('en-IN', { maximumFractionDigits: 3 })}</p>
+                                    </div>
+                                    <div>
+                                      <p className="text-xs text-muted-foreground">Received</p>
+                                      <p className="mt-0.5 font-mono">
+                                        {line.receivedQuantity == null
+                                          ? 'Pending'
+                                          : Number(line.receivedQuantity || 0).toLocaleString('en-IN', { maximumFractionDigits: 3 })}
+                                      </p>
+                                    </div>
+                                  </div>
+                                  {(line.unitCost != null || line.lineValue != null) && (
+                                    <div className="flex flex-wrap gap-x-5 gap-y-1 border-t border-border/60 pt-2 text-xs text-muted-foreground">
+                                      {line.unitCost != null && <span>Unit cost: <span className="font-mono text-foreground">{inr(Number(line.unitCost) || 0)}</span></span>}
+                                      {line.lineValue != null && <span>Line value: <span className="font-mono text-foreground">{inr(Number(line.lineValue) || 0)}</span></span>}
+                                    </div>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div key={`${detail.type}-${detail.reference ?? index}`} className="rounded-lg border border-border p-4 space-y-3" data-testid={`card-ledger-source-detail-${index}`}>
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <Badge variant="outline">{detail.type}</Badge>
+                            {detail.reference && <span className="font-mono text-sm">{detail.reference}</span>}
+                          </div>
+                          <span className="font-mono text-sm font-semibold">{inr(Number(detail.amount) || 0)}</span>
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-2 text-sm">
+                          <div>
+                            <span className="text-muted-foreground">Date: </span>
+                            {detail.date ? formatDate(detail.date) : '—'}
+                          </div>
+                          <div>
+                            <span className="text-muted-foreground">Party: </span>
+                            {detail.partyName || '—'}
+                          </div>
+                          <div>
+                            <span className="text-muted-foreground">Method: </span>
+                            {detail.method || '—'}
+                          </div>
+                          <div>
+                            <span className="text-muted-foreground">Reference: </span>
+                            {detail.referenceNumber || '—'}
                           </div>
                         </div>
-                      )}
-                    </div>
+                        <p className="text-sm whitespace-pre-wrap break-words">{detail.narration || '—'}</p>
+                        {detail.invoiceAllocations?.length > 0 && (
+                          <div className="border-t border-border pt-3 space-y-2">
+                            <p className="text-xs font-medium text-muted-foreground">Invoice allocations</p>
+                            <div className="space-y-1.5">
+                              {detail.invoiceAllocations.map((allocation: any, allocationIndex: number) => (
+                                <div key={`${allocation.invoiceNumber ?? 'invoice'}-${allocationIndex}`} className="flex items-center justify-between gap-3 text-sm" data-testid={`row-ledger-invoice-allocation-${index}-${allocationIndex}`}>
+                                  <span className="min-w-0 break-words">
+                                    {allocation.invoiceNumber || 'Invoice'}
+                                    {allocation.date ? <span className="text-muted-foreground"> · {formatDate(allocation.date)}</span> : ''}
+                                  </span>
+                                  <span className="shrink-0 font-mono">{inr(Number(allocation.amount) || 0)}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )
                   ))
                 ) : (
                   <div className="rounded-lg border border-border p-4 space-y-2">
                     <p className="text-sm">{selectedEntry.displayNarration ?? selectedEntry.narration ?? selectedEntry.description ?? 'No additional source details.'}</p>
-                    <p className="text-xs text-muted-foreground">No linked Sale, Receipt, or Payment record is available for this row.</p>
+                    <p className="text-xs text-muted-foreground">No linked Sale, Receipt, Payment, or Stock Transfer record is available for this row.</p>
                   </div>
                 )}
               </div>
