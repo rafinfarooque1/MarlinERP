@@ -1741,7 +1741,7 @@ export async function buildDerivedPostings(opts: { toDate?: string; q?: Q } = {}
     `SELECT r.id, r.accrual_date AS date, r.amount, r.warehouse_id, w.name AS warehouse_name,
             a.expense_ledger_id, a.payable_ledger_id
      FROM rent_accruals r
-     JOIN warehouse_rent_agreements a ON a.warehouse_id = r.warehouse_id
+     JOIN warehouse_rent_agreements a ON a.id = r.agreement_id
      JOIN warehouses w ON w.id = r.warehouse_id
      WHERE a.expense_ledger_id IS NOT NULL AND a.payable_ledger_id IS NOT NULL
        ${upTo("r.accrual_date", rap)}`, rap

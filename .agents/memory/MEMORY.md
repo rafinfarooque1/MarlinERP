@@ -156,3 +156,4 @@
 - [Report parity gates](report-parity-gates.md) — verify API-derived screen anchors against parsed PDF/XLSX content; a missing UI export action is a real failure
 - [Sales report definitions](sales-report-definitions.md) — Sales Register includes invoice-level charges; By Item is explicitly merchandise-line-only
 - [Transfer accounting](transfer-accounting.md) — location P&Ls show Transfer-Out/In; transit stays sender-owned; consolidated P&L and the location-pair payable remain unchanged
+- [OpenAPI codegen & Vite refresh](openapi-codegen-vite-refresh.md) — Orval temporarily removes generated client files; restart Vite after codegen before treating missing-module logs as persistent

@@ -1837,6 +1837,282 @@ export interface ReconciliationQueueSettlementResult {
   accountingImpact: string;
 }
 
+export type RentApiAgreementStatus = typeof RentApiAgreementStatus[keyof typeof RentApiAgreementStatus];
+
+
+export const RentApiAgreementStatus = {
+  active: 'active',
+  inactive: 'inactive',
+} as const;
+
+export interface RentApiAgreement {
+  /** @nullable */
+  id: number | null;
+  warehouseId: number;
+  warehouseName: string;
+  roomName: string;
+  monthlyRent: number;
+  securityDeposit: number;
+  agreementNumber: string;
+  landlordName: string;
+  landlordPhone: string;
+  landlordEmail: string;
+  landlordAddress: string;
+  /** @nullable */
+  startDate: string | null;
+  /** @nullable */
+  endDate: string | null;
+  /**
+     * @minimum 1
+     * @maximum 31
+     */
+  dueDay: number;
+  status: RentApiAgreementStatus;
+  /** @nullable */
+  inactiveFrom: string | null;
+  /** @nullable */
+  expenseLedgerId: number | null;
+  /** @nullable */
+  payableLedgerId: number | null;
+  expenseLedgerName: string;
+  payableLedgerName: string;
+  totalAccrued: number;
+  totalPaid: number;
+  totalOutstanding: number;
+}
+
+export type RentApiAgreementCreateStatus = typeof RentApiAgreementCreateStatus[keyof typeof RentApiAgreementCreateStatus];
+
+
+export const RentApiAgreementCreateStatus = {
+  active: 'active',
+  inactive: 'inactive',
+} as const;
+
+export interface RentApiAgreementCreate {
+  warehouseId: number;
+  /**
+     * @minLength 1
+     * @maxLength 120
+     */
+  roomName: string;
+  /** @minimum 0 */
+  monthlyRent?: number;
+  /** @minimum 0 */
+  securityDeposit?: number;
+  agreementNumber?: string;
+  landlordName?: string;
+  landlordPhone?: string;
+  landlordEmail?: string;
+  landlordAddress?: string;
+  /** @nullable */
+  startDate?: string | null;
+  /** @nullable */
+  endDate?: string | null;
+  /**
+     * @minimum 1
+     * @maximum 31
+     */
+  dueDay?: number;
+  status?: RentApiAgreementCreateStatus;
+  /** @nullable */
+  inactiveFrom?: string | null;
+}
+
+export type RentApiAgreementPatchStatus = typeof RentApiAgreementPatchStatus[keyof typeof RentApiAgreementPatchStatus];
+
+
+export const RentApiAgreementPatchStatus = {
+  active: 'active',
+  inactive: 'inactive',
+} as const;
+
+export interface RentApiAgreementPatch {
+  /**
+     * @minLength 1
+     * @maxLength 120
+     */
+  roomName?: string;
+  /** @minimum 0 */
+  monthlyRent?: number;
+  /** @minimum 0 */
+  securityDeposit?: number;
+  agreementNumber?: string;
+  landlordName?: string;
+  landlordPhone?: string;
+  landlordEmail?: string;
+  landlordAddress?: string;
+  /** @nullable */
+  startDate?: string | null;
+  /** @nullable */
+  endDate?: string | null;
+  /**
+     * @minimum 1
+     * @maximum 31
+     */
+  dueDay?: number;
+  status?: RentApiAgreementPatchStatus;
+  /** @nullable */
+  inactiveFrom?: string | null;
+  /** @maxLength 500 */
+  revisionReason?: string;
+}
+
+export interface RentApiAccrual {
+  id: number;
+  agreementId: number;
+  warehouseId: number;
+  warehouseName: string;
+  roomName: string;
+  accrualDate: string;
+  year: number;
+  month: number;
+  amount: number;
+  monthlyRent: number;
+  daysInMonth: number;
+}
+
+export interface RentApiAccrualRun {
+  daysAccrued: number;
+  warehousesTouched: number;
+  totalAmount: number;
+}
+
+export type RentApiPeriodStatus = typeof RentApiPeriodStatus[keyof typeof RentApiPeriodStatus];
+
+
+export const RentApiPeriodStatus = {
+  pending: 'pending',
+  approved: 'approved',
+  paid: 'paid',
+} as const;
+
+export interface RentApiPeriod {
+  agreementId: number;
+  warehouseId: number;
+  warehouseName: string;
+  roomName: string;
+  year: number;
+  month: number;
+  accrued: number;
+  paid: number;
+  outstanding: number;
+  daysAccrued: number;
+  daysInMonth: number;
+  status: RentApiPeriodStatus;
+  /** @nullable */
+  approvedAt: string | null;
+  /** @nullable */
+  approvedBy: string | null;
+  dueDate: string;
+  accrualComplete: boolean;
+}
+
+export type RentApiApprovalResultStatus = typeof RentApiApprovalResultStatus[keyof typeof RentApiApprovalResultStatus];
+
+
+export const RentApiApprovalResultStatus = {
+  approved: 'approved',
+} as const;
+
+export interface RentApiApprovalResult {
+  agreementId: number;
+  warehouseId: number;
+  year: number;
+  month: number;
+  status: RentApiApprovalResultStatus;
+  amount: number;
+}
+
+export interface RentApiPaymentInput {
+  /** @exclusiveMinimum 0 */
+  amount?: number;
+  paymentMode?: string;
+  paymentDate?: string;
+  referenceNumber?: string;
+  remarks?: string;
+}
+
+export type RentApiPaymentResultStatus = typeof RentApiPaymentResultStatus[keyof typeof RentApiPaymentResultStatus];
+
+
+export const RentApiPaymentResultStatus = {
+  approved: 'approved',
+  paid: 'paid',
+} as const;
+
+export interface RentApiPaymentResult {
+  id: number;
+  agreementId: number;
+  warehouseId: number;
+  year: number;
+  month: number;
+  amount: number;
+  status: RentApiPaymentResultStatus;
+}
+
+export interface RentApiPayment {
+  id: number;
+  agreementId: number;
+  warehouseId: number;
+  warehouseName: string;
+  roomName: string;
+  year: number;
+  month: number;
+  paymentDate: string;
+  amount: number;
+  paymentMode: string;
+  referenceNumber: string;
+  remarks: string;
+  /** @nullable */
+  voucherId: number | null;
+  voucherNumber: string;
+  createdBy: string;
+  createdAt: string;
+}
+
+export type RentApiDashboardWarehouseWiseItem = {
+  warehouseId: number;
+  warehouseName: string;
+  monthAccrued: number;
+  totalAccrued: number;
+  totalPaid: number;
+  outstanding: number;
+};
+
+export interface RentApiDashboard {
+  year: number;
+  month: number;
+  monthlyRentCommitted: number;
+  activeAgreements: number;
+  accruedThisMonth: number;
+  paidThisMonth: number;
+  totalOutstanding: number;
+  pendingApprovals: number;
+  warehouseWise: RentApiDashboardWarehouseWiseItem[];
+}
+
+export type RentApiLedgerPostingKind = typeof RentApiLedgerPostingKind[keyof typeof RentApiLedgerPostingKind];
+
+
+export const RentApiLedgerPostingKind = {
+  accrual: 'accrual',
+  payment: 'payment',
+} as const;
+
+export interface RentApiLedgerPosting {
+  agreementId: number;
+  date: string;
+  warehouseName: string;
+  roomName: string;
+  kind: RentApiLedgerPostingKind;
+  narration: string;
+  voucherNumber: string;
+  debitLedger: string;
+  creditLedger: string;
+  amount: number;
+}
+
 export type ListStockParams = {
 branchId?: number;
 branchType?: ListStockBranchType;
@@ -1968,5 +2244,49 @@ platformLedgerId?: string;
 fromDate?: string;
 toDate?: string;
 search?: string;
+};
+
+export type RentApiListAccrualsParams = {
+warehouseId?: number;
+agreementId?: number;
+year?: number;
+month?: number;
+from?: string;
+to?: string;
+};
+
+export type RentApiListPeriodsParams = {
+warehouseId?: number;
+agreementId?: number;
+year?: number;
+month?: number;
+status?: RentApiListPeriodsStatus;
+};
+
+export type RentApiListPeriodsStatus = typeof RentApiListPeriodsStatus[keyof typeof RentApiListPeriodsStatus];
+
+
+export const RentApiListPeriodsStatus = {
+  pending: 'pending',
+  approved: 'approved',
+  paid: 'paid',
+} as const;
+
+export type RentApiListPaymentsParams = {
+warehouseId?: number;
+agreementId?: number;
+year?: number;
+month?: number;
+from?: string;
+to?: string;
+};
+
+export type RentApiListLedgerPostingsParams = {
+warehouseId?: number;
+agreementId?: number;
+year?: number;
+month?: number;
+from?: string;
+to?: string;
 };
 

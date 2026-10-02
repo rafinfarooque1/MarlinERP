@@ -3028,3 +3028,378 @@ export const SettleReconciliationPendingQueueResponse = zod.object({
 })
 
 
+/**
+ * @summary List room rent agreements
+ */
+export const rentApiListAgreementsResponseDueDayMax = 31;
+
+
+
+export const RentApiListAgreementsResponseItem = zod.object({
+  "id": zod.number().nullable(),
+  "warehouseId": zod.number(),
+  "warehouseName": zod.string(),
+  "roomName": zod.string(),
+  "monthlyRent": zod.number(),
+  "securityDeposit": zod.number(),
+  "agreementNumber": zod.string(),
+  "landlordName": zod.string(),
+  "landlordPhone": zod.string(),
+  "landlordEmail": zod.string(),
+  "landlordAddress": zod.string(),
+  "startDate": zod.coerce.date().nullable(),
+  "endDate": zod.coerce.date().nullable(),
+  "dueDay": zod.number().min(1).max(rentApiListAgreementsResponseDueDayMax),
+  "status": zod.enum(['active', 'inactive']),
+  "inactiveFrom": zod.coerce.date().nullable(),
+  "expenseLedgerId": zod.number().nullable(),
+  "payableLedgerId": zod.number().nullable(),
+  "expenseLedgerName": zod.string(),
+  "payableLedgerName": zod.string(),
+  "totalAccrued": zod.number(),
+  "totalPaid": zod.number(),
+  "totalOutstanding": zod.number()
+})
+export const RentApiListAgreementsResponse = zod.array(RentApiListAgreementsResponseItem)
+
+
+/**
+ * @summary Create a room rent agreement
+ */
+export const rentApiCreateAgreementBodyRoomNameMax = 120;
+
+export const rentApiCreateAgreementBodyMonthlyRentMin = 0;
+
+export const rentApiCreateAgreementBodySecurityDepositMin = 0;
+
+export const rentApiCreateAgreementBodyDueDayMax = 31;
+
+
+
+export const RentApiCreateAgreementBody = zod.object({
+  "warehouseId": zod.number(),
+  "roomName": zod.string().min(1).max(rentApiCreateAgreementBodyRoomNameMax),
+  "monthlyRent": zod.number().min(rentApiCreateAgreementBodyMonthlyRentMin).optional(),
+  "securityDeposit": zod.number().min(rentApiCreateAgreementBodySecurityDepositMin).optional(),
+  "agreementNumber": zod.string().optional(),
+  "landlordName": zod.string().optional(),
+  "landlordPhone": zod.string().optional(),
+  "landlordEmail": zod.string().optional(),
+  "landlordAddress": zod.string().optional(),
+  "startDate": zod.coerce.date().nullish(),
+  "endDate": zod.coerce.date().nullish(),
+  "dueDay": zod.number().min(1).max(rentApiCreateAgreementBodyDueDayMax).optional(),
+  "status": zod.enum(['active', 'inactive']).optional(),
+  "inactiveFrom": zod.coerce.date().nullish()
+})
+
+export const rentApiCreateAgreementResponseDueDayMax = 31;
+
+
+
+export const RentApiCreateAgreementResponse = zod.object({
+  "id": zod.number().nullable(),
+  "warehouseId": zod.number(),
+  "warehouseName": zod.string(),
+  "roomName": zod.string(),
+  "monthlyRent": zod.number(),
+  "securityDeposit": zod.number(),
+  "agreementNumber": zod.string(),
+  "landlordName": zod.string(),
+  "landlordPhone": zod.string(),
+  "landlordEmail": zod.string(),
+  "landlordAddress": zod.string(),
+  "startDate": zod.coerce.date().nullable(),
+  "endDate": zod.coerce.date().nullable(),
+  "dueDay": zod.number().min(1).max(rentApiCreateAgreementResponseDueDayMax),
+  "status": zod.enum(['active', 'inactive']),
+  "inactiveFrom": zod.coerce.date().nullable(),
+  "expenseLedgerId": zod.number().nullable(),
+  "payableLedgerId": zod.number().nullable(),
+  "expenseLedgerName": zod.string(),
+  "payableLedgerName": zod.string(),
+  "totalAccrued": zod.number(),
+  "totalPaid": zod.number(),
+  "totalOutstanding": zod.number()
+})
+
+
+/**
+ * @summary Update a room rent agreement
+ */
+export const RentApiUpdateAgreementParams = zod.object({
+  "agreementId": zod.coerce.number()
+})
+
+export const rentApiUpdateAgreementBodyRoomNameMax = 120;
+
+export const rentApiUpdateAgreementBodyMonthlyRentMin = 0;
+
+export const rentApiUpdateAgreementBodySecurityDepositMin = 0;
+
+export const rentApiUpdateAgreementBodyDueDayMax = 31;
+
+export const rentApiUpdateAgreementBodyRevisionReasonMax = 500;
+
+
+
+export const RentApiUpdateAgreementBody = zod.object({
+  "roomName": zod.string().min(1).max(rentApiUpdateAgreementBodyRoomNameMax).optional(),
+  "monthlyRent": zod.number().min(rentApiUpdateAgreementBodyMonthlyRentMin).optional(),
+  "securityDeposit": zod.number().min(rentApiUpdateAgreementBodySecurityDepositMin).optional(),
+  "agreementNumber": zod.string().optional(),
+  "landlordName": zod.string().optional(),
+  "landlordPhone": zod.string().optional(),
+  "landlordEmail": zod.string().optional(),
+  "landlordAddress": zod.string().optional(),
+  "startDate": zod.coerce.date().nullish(),
+  "endDate": zod.coerce.date().nullish(),
+  "dueDay": zod.number().min(1).max(rentApiUpdateAgreementBodyDueDayMax).optional(),
+  "status": zod.enum(['active', 'inactive']).optional(),
+  "inactiveFrom": zod.coerce.date().nullish(),
+  "revisionReason": zod.string().max(rentApiUpdateAgreementBodyRevisionReasonMax).optional()
+})
+
+export const rentApiUpdateAgreementResponseDueDayMax = 31;
+
+
+
+export const RentApiUpdateAgreementResponse = zod.object({
+  "id": zod.number().nullable(),
+  "warehouseId": zod.number(),
+  "warehouseName": zod.string(),
+  "roomName": zod.string(),
+  "monthlyRent": zod.number(),
+  "securityDeposit": zod.number(),
+  "agreementNumber": zod.string(),
+  "landlordName": zod.string(),
+  "landlordPhone": zod.string(),
+  "landlordEmail": zod.string(),
+  "landlordAddress": zod.string(),
+  "startDate": zod.coerce.date().nullable(),
+  "endDate": zod.coerce.date().nullable(),
+  "dueDay": zod.number().min(1).max(rentApiUpdateAgreementResponseDueDayMax),
+  "status": zod.enum(['active', 'inactive']),
+  "inactiveFrom": zod.coerce.date().nullable(),
+  "expenseLedgerId": zod.number().nullable(),
+  "payableLedgerId": zod.number().nullable(),
+  "expenseLedgerName": zod.string(),
+  "payableLedgerName": zod.string(),
+  "totalAccrued": zod.number(),
+  "totalPaid": zod.number(),
+  "totalOutstanding": zod.number()
+})
+
+
+/**
+ * @summary List daily room rent accruals
+ */
+export const RentApiListAccrualsQueryParams = zod.object({
+  "warehouseId": zod.coerce.number().optional(),
+  "agreementId": zod.coerce.number().optional(),
+  "year": zod.coerce.number().optional(),
+  "month": zod.coerce.number().optional(),
+  "from": zod.date().optional(),
+  "to": zod.date().optional()
+})
+
+export const RentApiListAccrualsResponseItem = zod.object({
+  "id": zod.number(),
+  "agreementId": zod.number(),
+  "warehouseId": zod.number(),
+  "warehouseName": zod.string(),
+  "roomName": zod.string(),
+  "accrualDate": zod.coerce.date(),
+  "year": zod.number(),
+  "month": zod.number(),
+  "amount": zod.number(),
+  "monthlyRent": zod.number(),
+  "daysInMonth": zod.number()
+})
+export const RentApiListAccrualsResponse = zod.array(RentApiListAccrualsResponseItem)
+
+
+/**
+ * @summary Run the rent accrual catch-up
+ */
+export const RentApiRunAccrualResponse = zod.object({
+  "daysAccrued": zod.number(),
+  "warehousesTouched": zod.number(),
+  "totalAmount": zod.number()
+})
+
+
+/**
+ * @summary List room rent approval and payment periods
+ */
+export const RentApiListPeriodsQueryParams = zod.object({
+  "warehouseId": zod.coerce.number().optional(),
+  "agreementId": zod.coerce.number().optional(),
+  "year": zod.coerce.number().optional(),
+  "month": zod.coerce.number().optional(),
+  "status": zod.enum(['pending', 'approved', 'paid']).optional()
+})
+
+export const RentApiListPeriodsResponseItem = zod.object({
+  "agreementId": zod.number(),
+  "warehouseId": zod.number(),
+  "warehouseName": zod.string(),
+  "roomName": zod.string(),
+  "year": zod.number(),
+  "month": zod.number(),
+  "accrued": zod.number(),
+  "paid": zod.number(),
+  "outstanding": zod.number(),
+  "daysAccrued": zod.number(),
+  "daysInMonth": zod.number(),
+  "status": zod.enum(['pending', 'approved', 'paid']),
+  "approvedAt": zod.coerce.date().nullable(),
+  "approvedBy": zod.string().nullable(),
+  "dueDate": zod.coerce.date(),
+  "accrualComplete": zod.boolean()
+})
+export const RentApiListPeriodsResponse = zod.array(RentApiListPeriodsResponseItem)
+
+
+/**
+ * @summary Approve a completed room rent period
+ */
+export const rentApiApprovePeriodPathMonthMax = 12;
+
+
+
+export const RentApiApprovePeriodParams = zod.object({
+  "agreementId": zod.coerce.number(),
+  "year": zod.coerce.number(),
+  "month": zod.coerce.number().min(1).max(rentApiApprovePeriodPathMonthMax)
+})
+
+export const RentApiApprovePeriodResponse = zod.object({
+  "agreementId": zod.number(),
+  "warehouseId": zod.number(),
+  "year": zod.number(),
+  "month": zod.number(),
+  "status": zod.enum(['approved']),
+  "amount": zod.number()
+})
+
+
+/**
+ * @summary Record a payment against an approved room rent period
+ */
+export const rentApiPayPeriodPathMonthMax = 12;
+
+
+
+export const RentApiPayPeriodParams = zod.object({
+  "agreementId": zod.coerce.number(),
+  "year": zod.coerce.number(),
+  "month": zod.coerce.number().min(1).max(rentApiPayPeriodPathMonthMax)
+})
+
+export const rentApiPayPeriodBodyAmountExclusiveMin = 0;
+
+
+
+export const RentApiPayPeriodBody = zod.object({
+  "amount": zod.number().gt(rentApiPayPeriodBodyAmountExclusiveMin).optional(),
+  "paymentMode": zod.string().optional(),
+  "paymentDate": zod.coerce.date().optional(),
+  "referenceNumber": zod.string().optional(),
+  "remarks": zod.string().optional()
+})
+
+export const RentApiPayPeriodResponse = zod.object({
+  "id": zod.number(),
+  "agreementId": zod.number(),
+  "warehouseId": zod.number(),
+  "year": zod.number(),
+  "month": zod.number(),
+  "amount": zod.number(),
+  "status": zod.enum(['approved', 'paid'])
+})
+
+
+/**
+ * @summary List rent payments
+ */
+export const RentApiListPaymentsQueryParams = zod.object({
+  "warehouseId": zod.coerce.number().optional(),
+  "agreementId": zod.coerce.number().optional(),
+  "year": zod.coerce.number().optional(),
+  "month": zod.coerce.number().optional(),
+  "from": zod.date().optional(),
+  "to": zod.date().optional()
+})
+
+export const RentApiListPaymentsResponseItem = zod.object({
+  "id": zod.number(),
+  "agreementId": zod.number(),
+  "warehouseId": zod.number(),
+  "warehouseName": zod.string(),
+  "roomName": zod.string(),
+  "year": zod.number(),
+  "month": zod.number(),
+  "paymentDate": zod.coerce.date(),
+  "amount": zod.number(),
+  "paymentMode": zod.string(),
+  "referenceNumber": zod.string(),
+  "remarks": zod.string(),
+  "voucherId": zod.number().nullable(),
+  "voucherNumber": zod.string(),
+  "createdBy": zod.string(),
+  "createdAt": zod.coerce.date()
+})
+export const RentApiListPaymentsResponse = zod.array(RentApiListPaymentsResponseItem)
+
+
+/**
+ * @summary Get warehouse rent dashboard totals
+ */
+export const RentApiGetDashboardResponse = zod.object({
+  "year": zod.number(),
+  "month": zod.number(),
+  "monthlyRentCommitted": zod.number(),
+  "activeAgreements": zod.number(),
+  "accruedThisMonth": zod.number(),
+  "paidThisMonth": zod.number(),
+  "totalOutstanding": zod.number(),
+  "pendingApprovals": zod.number(),
+  "warehouseWise": zod.array(zod.object({
+  "warehouseId": zod.number(),
+  "warehouseName": zod.string(),
+  "monthAccrued": zod.number(),
+  "totalAccrued": zod.number(),
+  "totalPaid": zod.number(),
+  "outstanding": zod.number()
+}))
+})
+
+
+/**
+ * @summary List room rent ledger postings
+ */
+export const RentApiListLedgerPostingsQueryParams = zod.object({
+  "warehouseId": zod.coerce.number().optional(),
+  "agreementId": zod.coerce.number().optional(),
+  "year": zod.coerce.number().optional(),
+  "month": zod.coerce.number().optional(),
+  "from": zod.date().optional(),
+  "to": zod.date().optional()
+})
+
+export const RentApiListLedgerPostingsResponseItem = zod.object({
+  "agreementId": zod.number(),
+  "date": zod.coerce.date(),
+  "warehouseName": zod.string(),
+  "roomName": zod.string(),
+  "kind": zod.enum(['accrual', 'payment']),
+  "narration": zod.string(),
+  "voucherNumber": zod.string(),
+  "debitLedger": zod.string(),
+  "creditLedger": zod.string(),
+  "amount": zod.number()
+})
+export const RentApiListLedgerPostingsResponse = zod.array(RentApiListLedgerPostingsResponseItem)
+
+

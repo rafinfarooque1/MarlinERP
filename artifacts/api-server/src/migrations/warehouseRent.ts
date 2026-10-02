@@ -17,11 +17,12 @@ import { provisionRentLedgers } from "../lib/rentLedgers";
  * where an earlier version of the table already exists.
  */
 export async function addWarehouseRent(pool: Pool): Promise<void> {
-  // ── 1. Rent master: one agreement per warehouse ────────────────────────────
+  // ── 1. Rent master: one or more room agreements per warehouse ──────────────
   await pool.query(`
     CREATE TABLE IF NOT EXISTS warehouse_rent_agreements (
       id                SERIAL PRIMARY KEY,
       warehouse_id      INTEGER NOT NULL,
+      room_name         TEXT        NOT NULL DEFAULT 'Main agreement',
       monthly_rent      NUMERIC(15,2) NOT NULL DEFAULT 0,
       security_deposit  NUMERIC(15,2) NOT NULL DEFAULT 0,
       agreement_number  TEXT        NOT NULL DEFAULT '',
@@ -41,7 +42,12 @@ export async function addWarehouseRent(pool: Pool): Promise<void> {
     )
   `);
   await pool.query(
-    `CREATE UNIQUE INDEX IF NOT EXISTS idx_rent_agreement_warehouse
+    `ALTER TABLE warehouse_rent_agreements
+       ADD COLUMN IF NOT EXISTS room_name TEXT NOT NULL DEFAULT 'Main agreement'`,
+  );
+  await pool.query(`DROP INDEX IF EXISTS idx_rent_agreement_warehouse`);
+  await pool.query(
+    `CREATE INDEX IF NOT EXISTS idx_rent_agreement_warehouse
        ON warehouse_rent_agreements (warehouse_id)`,
   );
 
@@ -51,6 +57,7 @@ export async function addWarehouseRent(pool: Pool): Promise<void> {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS rent_accruals (
       id            SERIAL PRIMARY KEY,
+      agreement_id  INTEGER NOT NULL,
       warehouse_id  INTEGER NOT NULL,
       accrual_date  DATE    NOT NULL,
       year          INTEGER NOT NULL,
@@ -61,18 +68,25 @@ export async function addWarehouseRent(pool: Pool): Promise<void> {
       created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+  await pool.query(`ALTER TABLE rent_accruals ADD COLUMN IF NOT EXISTS agreement_id INTEGER`);
+  await pool.query(`DROP INDEX IF EXISTS idx_rent_accrual_wh_date`);
   await pool.query(
-    `CREATE UNIQUE INDEX IF NOT EXISTS idx_rent_accrual_wh_date
-       ON rent_accruals (warehouse_id, accrual_date)`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_rent_accrual_agreement_date
+       ON rent_accruals (agreement_id, accrual_date)`,
   );
   await pool.query(
     `CREATE INDEX IF NOT EXISTS idx_rent_accrual_period ON rent_accruals (warehouse_id, year, month)`,
   );
+  await pool.query(
+    `CREATE INDEX IF NOT EXISTS idx_rent_accrual_agreement_period
+       ON rent_accruals (agreement_id, year, month)`,
+  );
 
-  // ── 3. Approval state, one row per warehouse-month ─────────────────────────
+  // ── 3. Approval state, one row per agreement-month ──────────────────────────
   await pool.query(`
     CREATE TABLE IF NOT EXISTS rent_periods (
       id           SERIAL PRIMARY KEY,
+      agreement_id INTEGER NOT NULL,
       warehouse_id INTEGER NOT NULL,
       year         INTEGER NOT NULL,
       month        INTEGER NOT NULL,
@@ -82,15 +96,18 @@ export async function addWarehouseRent(pool: Pool): Promise<void> {
       created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+  await pool.query(`ALTER TABLE rent_periods ADD COLUMN IF NOT EXISTS agreement_id INTEGER`);
+  await pool.query(`DROP INDEX IF EXISTS idx_rent_period_wh_ym`);
   await pool.query(
-    `CREATE UNIQUE INDEX IF NOT EXISTS idx_rent_period_wh_ym
-       ON rent_periods (warehouse_id, year, month)`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_rent_period_agreement_ym
+       ON rent_periods (agreement_id, year, month)`,
   );
 
-  // ── 4. Payments (partial supported; many rows per period) ──────────────────
+  // ── 4. Payments (partial supported; many rows per agreement-period) ────────
   await pool.query(`
     CREATE TABLE IF NOT EXISTS rent_payments (
       id               SERIAL PRIMARY KEY,
+      agreement_id     INTEGER NOT NULL,
       warehouse_id     INTEGER NOT NULL,
       year             INTEGER NOT NULL,
       month            INTEGER NOT NULL,
@@ -104,8 +121,13 @@ export async function addWarehouseRent(pool: Pool): Promise<void> {
       created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+  await pool.query(`ALTER TABLE rent_payments ADD COLUMN IF NOT EXISTS agreement_id INTEGER`);
   await pool.query(
     `CREATE INDEX IF NOT EXISTS idx_rent_payment_period ON rent_payments (warehouse_id, year, month)`,
+  );
+  await pool.query(
+    `CREATE INDEX IF NOT EXISTS idx_rent_payment_agreement_period
+       ON rent_payments (agreement_id, year, month)`,
   );
 
   // ── 5. Approve becomes a permission in its own right ───────────────────────
@@ -125,25 +147,78 @@ export async function addWarehouseRent(pool: Pool): Promise<void> {
   // that already existed when the module shipped. Rent starts at zero and
   // inactive, so nothing accrues until someone fills in the agreement.
   const { rowCount: registered } = await pool.query(`
-    INSERT INTO warehouse_rent_agreements (warehouse_id)
-    SELECT w.id FROM warehouses w
+    INSERT INTO warehouse_rent_agreements (warehouse_id, room_name)
+    SELECT w.id, 'Main agreement' FROM warehouses w
     WHERE NOT EXISTS (SELECT 1 FROM warehouse_rent_agreements a WHERE a.warehouse_id = w.id)
   `);
   if (registered) console.log(`[migration] warehouse_rent: registered ${registered} warehouse(s) for rent`);
 
-  // ── 7. Provision the two ledgers per warehouse ─────────────────────────────
+  // Preserve existing daily accruals, approvals, and payments exactly. Before
+  // this migration each warehouse had at most one agreement, so its legacy
+  // transaction rows unambiguously belong to that agreement.
+  await pool.query(`
+    UPDATE rent_accruals r
+       SET agreement_id = a.id
+      FROM (
+        SELECT warehouse_id, MIN(id) AS id
+          FROM warehouse_rent_agreements
+         GROUP BY warehouse_id
+      ) a
+     WHERE r.agreement_id IS NULL AND r.warehouse_id = a.warehouse_id
+  `);
+  await pool.query(`
+    UPDATE rent_periods p
+       SET agreement_id = a.id
+      FROM (
+        SELECT warehouse_id, MIN(id) AS id
+          FROM warehouse_rent_agreements
+         GROUP BY warehouse_id
+      ) a
+     WHERE p.agreement_id IS NULL AND p.warehouse_id = a.warehouse_id
+  `);
+  await pool.query(`
+    UPDATE rent_payments p
+       SET agreement_id = a.id
+      FROM (
+        SELECT warehouse_id, MIN(id) AS id
+          FROM warehouse_rent_agreements
+         GROUP BY warehouse_id
+      ) a
+     WHERE p.agreement_id IS NULL AND p.warehouse_id = a.warehouse_id
+  `);
+
+  const { rows: [unlinked] } = await pool.query<{ count: string }>(`
+    SELECT
+      (SELECT COUNT(*) FROM rent_accruals WHERE agreement_id IS NULL)
+      + (SELECT COUNT(*) FROM rent_periods WHERE agreement_id IS NULL)
+      + (SELECT COUNT(*) FROM rent_payments WHERE agreement_id IS NULL) AS count
+  `);
+  if (Number(unlinked?.count ?? 0) > 0) {
+    throw new Error(`warehouse_rent: cannot associate ${unlinked.count} legacy rent row(s) with an agreement`);
+  }
+
+  await pool.query(`ALTER TABLE rent_accruals ALTER COLUMN agreement_id SET NOT NULL`);
+  await pool.query(`ALTER TABLE rent_periods ALTER COLUMN agreement_id SET NOT NULL`);
+  await pool.query(`ALTER TABLE rent_payments ALTER COLUMN agreement_id SET NOT NULL`);
+
+  // ── 7. Provision the two ledgers per agreement ─────────────────────────────
   // Idempotent, and retried on every boot: if the chart of accounts had not been
   // seeded yet on a previous boot the ledgers come out null, and this run fixes
   // them without needing anyone to notice.
-  const { rows: warehouses } = await pool.query<{ id: number; name: string }>(
-    `SELECT w.id, w.name FROM warehouses w
-       JOIN warehouse_rent_agreements a ON a.warehouse_id = w.id
+  const { rows: agreements } = await pool.query<{
+    id: number; warehouse_id: number; warehouse_name: string; room_name: string;
+  }>(
+    `SELECT a.id, w.id AS warehouse_id, w.name AS warehouse_name, a.room_name
+       FROM warehouse_rent_agreements a
+       JOIN warehouses w ON w.id = a.warehouse_id
       WHERE a.expense_ledger_id IS NULL OR a.payable_ledger_id IS NULL`,
   );
   let provisioned = 0;
-  for (const w of warehouses) {
-    const ids = await provisionRentLedgers(pool, w.id, w.name);
+  for (const a of agreements) {
+    const ids = await provisionRentLedgers(
+      pool, Number(a.id), Number(a.warehouse_id), a.warehouse_name, a.room_name ?? "Main agreement",
+    );
     if (ids.expenseLedgerId && ids.payableLedgerId) provisioned++;
   }
-  if (provisioned) console.log(`[migration] warehouse_rent: provisioned rent ledgers for ${provisioned} warehouse(s)`);
+  if (provisioned) console.log(`[migration] warehouse_rent: provisioned rent ledgers for ${provisioned} agreement(s)`);
 }

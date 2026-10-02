@@ -18,7 +18,7 @@ type Pool = typeof _pool;
  *    agreement start and today, so a server that was asleep for a week produces
  *    the same result as one that ran every night.
  *  - It is **idempotent**, guaranteed by the unique index on
- *    (warehouse_id, accrual_date) rather than by remembering when it last ran.
+ *    (agreement_id, accrual_date) rather than by remembering when it last ran.
  *    Running it twice in a minute cannot double-charge a day.
  */
 
@@ -53,6 +53,7 @@ const minDate = (...xs: (string | null)[]) => xs.filter(Boolean).sort()[0] as st
 const maxDate = (...xs: (string | null)[]) => xs.filter(Boolean).sort().pop() as string | undefined;
 
 export interface RentAgreementRow {
+  id: number;
   warehouse_id: number;
   monthly_rent: string | number;
   start_date: unknown;
@@ -146,20 +147,20 @@ export async function withWarehouseRentLock<T>(
 }
 
 /**
- * Warehouse-months already signed off, which no writer may touch again.
+ * Agreement-months already signed off, which no writer may touch again.
  *
- * Two things freeze a month, and both are unioned: the warehouse's own
- * approved/paid rent period (the original contract), and an accounting-period
+ * Two things freeze a month, and both are unioned: the agreement's own
+ * approved/paid rent period, and an accounting-period
  * lock on that calendar month. A locked accounting period is frozen for
  * automation exactly like an approved period — the sweep and the revision
  * rebuild must not accrue or delete a day inside it — so both sets flow into
  * the same `locked` guard the walk already respects.
  */
-async function lockedRentMonths(q: Querier, warehouseId: number): Promise<Set<string>> {
+async function lockedRentMonths(q: Querier, agreementId: number): Promise<Set<string>> {
   const { rows } = await q.query<{ year: number; month: number }>(
     `SELECT year, month FROM rent_periods
-      WHERE warehouse_id = $1 AND status IN ('approved', 'paid')`,
-    [warehouseId],
+      WHERE agreement_id = $1 AND status IN ('approved', 'paid')`,
+    [agreementId],
   );
   const set = new Set(rows.map((r) => monthKey(Number(r.year), Number(r.month))));
   const { rows: apRows } = await q.query<{ year: number; month: number }>(
@@ -201,7 +202,7 @@ export async function runRentAccrual(
     // forever, which is the one failure this scheduler exists to prevent.
     // Rows that never accrued at all (auto-registered, inactive, no stop date)
     // are excluded: there is nothing to catch up.
-    `SELECT warehouse_id
+    `SELECT DISTINCT warehouse_id
        FROM warehouse_rent_agreements
       WHERE monthly_rent > 0 AND start_date IS NOT NULL
         AND (status = 'active' OR inactive_from IS NOT NULL)${only}`,
@@ -234,19 +235,32 @@ export async function runRentAccrual(
 export async function runRentAccrualLocked(
   q: Querier,
   warehouseId: number,
-  opts: { asOf?: string; fromDate?: string } = {},
+  opts: { asOf?: string; fromDate?: string; agreementId?: number } = {},
 ): Promise<{ days: number; total: number }> {
-  const { rows: [agreement] } = await q.query<RentAgreementRow>(
-    `SELECT warehouse_id, monthly_rent, start_date, end_date, status, inactive_from
+  const params: unknown[] = [warehouseId];
+  const agreementFilter = opts.agreementId === undefined
+    ? ""
+    : ` AND id = $${params.push(opts.agreementId)}`;
+  const { rows: agreements } = await q.query<RentAgreementRow>(
+    `SELECT id, warehouse_id, monthly_rent, start_date, end_date, status, inactive_from
        FROM warehouse_rent_agreements
       WHERE warehouse_id = $1
         AND monthly_rent > 0 AND start_date IS NOT NULL
-        AND (status = 'active' OR inactive_from IS NOT NULL)
+        AND (status = 'active' OR inactive_from IS NOT NULL)${agreementFilter}
       FOR UPDATE`,
-    [warehouseId],
+    params,
   );
-  if (!agreement) return { days: 0, total: 0 };
-  return accrueAgreement(q, agreement, { asOf: opts.asOf ?? ymd(new Date())!, fromDate: opts.fromDate });
+  let days = 0;
+  let total = 0;
+  for (const agreement of agreements) {
+    const accrued = await accrueAgreement(q, agreement, {
+      asOf: opts.asOf ?? ymd(new Date())!,
+      fromDate: opts.fromDate,
+    });
+    days += accrued.days;
+    total = round2(total + accrued.total);
+  }
+  return { days, total };
 }
 
 /**
@@ -263,7 +277,7 @@ async function accrueAgreement(
   const endCover = coverageEnd(a, opts.asOf);
   if (!startDate || !endCover || endCover < startDate) return { days: 0, total: 0 };
 
-  const locked = await lockedRentMonths(q, a.warehouse_id);
+  const locked = await lockedRentMonths(q, a.id);
 
   // Resume from the day after the newest accrual rather than rescanning from
   // the agreement start every run. Days inside an approved month are skipped
@@ -276,8 +290,8 @@ async function accrueAgreement(
   // resume past July and leave the days just deleted gone for good. Existing days
   // are protected by the unique index, so an earlier start is safe.
   const { rows: [last] } = await q.query(
-    `SELECT MAX(accrual_date) AS last FROM rent_accruals WHERE warehouse_id = $1`,
-    [a.warehouse_id],
+    `SELECT MAX(accrual_date) AS last FROM rent_accruals WHERE agreement_id = $1`,
+    [a.id],
   );
   const cursor = opts.fromDate ?? (last?.last ? addDays(ymd(last.last)!, 1) : null);
   const resumeFrom = maxDate(startDate, cursor)!;
@@ -310,8 +324,8 @@ async function accrueAgreement(
       // Absorb the remainder so the covered span totals exactly.
       const { rows: [sofar] } = await q.query(
         `SELECT COALESCE(SUM(amount), 0) AS total FROM rent_accruals
-          WHERE warehouse_id = $1 AND year = $2 AND month = $3`,
-        [a.warehouse_id, y, m],
+          WHERE agreement_id = $1 AND year = $2 AND month = $3`,
+        [a.id, y, m],
       );
       amount = round2(
         expectedMonthTotal(a, monthlyRent, y, m) - Number(sofar?.total ?? 0),
@@ -323,10 +337,10 @@ async function accrueAgreement(
     if (amount <= 0) continue;
 
     const { rowCount } = await q.query(
-      `INSERT INTO rent_accruals (warehouse_id, accrual_date, year, month, amount, monthly_rent, days_in_month)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
-       ON CONFLICT (warehouse_id, accrual_date) DO NOTHING`,
-      [a.warehouse_id, day, y, m, amount, monthlyRent, dim],
+      `INSERT INTO rent_accruals (agreement_id, warehouse_id, accrual_date, year, month, amount, monthly_rent, days_in_month)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       ON CONFLICT (agreement_id, accrual_date) DO NOTHING`,
+      [a.id, a.warehouse_id, day, y, m, amount, monthlyRent, dim],
     );
     if (rowCount) {
       days++;
@@ -335,9 +349,9 @@ async function accrueAgreement(
       // A period row exists as soon as the month has any accrual, so the
       // approval queue never has to guess which months are outstanding.
       await q.query(
-        `INSERT INTO rent_periods (warehouse_id, year, month) VALUES ($1, $2, $3)
-         ON CONFLICT (warehouse_id, year, month) DO NOTHING`,
-        [a.warehouse_id, y, m],
+        `INSERT INTO rent_periods (agreement_id, warehouse_id, year, month) VALUES ($1, $2, $3, $4)
+         ON CONFLICT (agreement_id, year, month) DO NOTHING`,
+        [a.id, a.warehouse_id, y, m],
       );
     }
   }
@@ -379,19 +393,19 @@ function expectedMonthTotal(
  */
 export async function rentMonthCoverage(
   pool: Querier,
-  warehouseId: number,
+  agreementId: number,
   year: number,
   month: number,
 ): Promise<{ expectedTotal: number; accruedTotal: number; complete: boolean }> {
   const { rows: [a] } = await pool.query<RentAgreementRow>(
-    `SELECT warehouse_id, monthly_rent, start_date, end_date, status, inactive_from
-       FROM warehouse_rent_agreements WHERE warehouse_id = $1`,
-    [warehouseId],
+    `SELECT id, warehouse_id, monthly_rent, start_date, end_date, status, inactive_from
+       FROM warehouse_rent_agreements WHERE id = $1`,
+    [agreementId],
   );
   const { rows: [sofar] } = await pool.query<{ total: string }>(
     `SELECT COALESCE(SUM(amount), 0) AS total FROM rent_accruals
-      WHERE warehouse_id = $1 AND year = $2 AND month = $3`,
-    [warehouseId, year, month],
+      WHERE agreement_id = $1 AND year = $2 AND month = $3`,
+    [agreementId, year, month],
   );
   const accruedTotal = round2(Number(sofar?.total ?? 0));
   // No agreement row left to judge against: treat what is there as complete
@@ -402,22 +416,22 @@ export async function rentMonthCoverage(
 }
 
 /**
- * Whether a warehouse-month has finished accruing — i.e. today is past the last
+ * Whether an agreement-month has finished accruing — i.e. today is past the last
  * day that month could accrue. Approving a still-accruing month would freeze a
  * figure that is about to change, so the UI uses this to gate the action.
  */
 export async function isPeriodAccrualComplete(
   pool: Querier,
-  warehouseId: number,
+  agreementId: number,
   year: number,
   month: number,
   asOf?: string,
 ): Promise<boolean> {
   const today = asOf ?? ymd(new Date())!;
   const { rows: [a] } = await pool.query<RentAgreementRow>(
-    `SELECT warehouse_id, monthly_rent, start_date, end_date, status, inactive_from
-       FROM warehouse_rent_agreements WHERE warehouse_id = $1`,
-    [warehouseId],
+    `SELECT id, warehouse_id, monthly_rent, start_date, end_date, status, inactive_from
+       FROM warehouse_rent_agreements WHERE id = $1`,
+    [agreementId],
   );
   if (!a) return true;
 
@@ -441,7 +455,7 @@ export interface RentRecalcResult {
 }
 
 /**
- * Rebuild every unapproved month for one warehouse at its current rent.
+ * Rebuild every unapproved month for one agreement at its current rent.
  *
  * A mid-month rent revision does not create a second rate for the rest of the
  * month: the owner's rule is that an unapproved month is recalculated *in full*
@@ -461,11 +475,24 @@ export interface RentRecalcResult {
  */
 export async function recalcUnapprovedRentAccruals(
   pool: Pool,
-  warehouseId: number,
+  agreementId: number,
   opts: { asOf?: string } = {},
 ): Promise<RentRecalcResult> {
-  return withWarehouseRentLock(pool, warehouseId, (q) =>
-    recalcUnapprovedRentAccrualsLocked(q, warehouseId, opts),
+  const { rows: [agreement] } = await pool.query<{ warehouse_id: number }>(
+    `SELECT warehouse_id FROM warehouse_rent_agreements WHERE id = $1`,
+    [agreementId],
+  );
+  if (!agreement) {
+    return {
+      monthsRecalculated: [],
+      entriesReversed: 0,
+      entriesRegenerated: 0,
+      previousTotal: 0,
+      newTotal: 0,
+    };
+  }
+  return withWarehouseRentLock(pool, Number(agreement.warehouse_id), (q) =>
+    recalcUnapprovedRentAccrualsLocked(q, agreementId, opts),
   );
 }
 
@@ -476,7 +503,7 @@ export async function recalcUnapprovedRentAccruals(
  */
 export async function recalcUnapprovedRentAccrualsLocked(
   q: Querier,
-  warehouseId: number,
+  agreementId: number,
   opts: { asOf?: string } = {},
 ): Promise<RentRecalcResult> {
   const asOf = opts.asOf ?? ymd(new Date())!;
@@ -484,10 +511,10 @@ export async function recalcUnapprovedRentAccrualsLocked(
     amount: string; accrual_date: unknown; year: number; month: number;
   }>(
     `DELETE FROM rent_accruals r
-      WHERE r.warehouse_id = $1
+      WHERE r.agreement_id = $1
         AND NOT EXISTS (
           SELECT 1 FROM rent_periods p
-           WHERE p.warehouse_id = r.warehouse_id AND p.year = r.year AND p.month = r.month
+           WHERE p.agreement_id = r.agreement_id AND p.year = r.year AND p.month = r.month
              AND p.status IN ('approved', 'paid')
         )
         AND NOT EXISTS (
@@ -495,7 +522,7 @@ export async function recalcUnapprovedRentAccrualsLocked(
            WHERE l.year = r.year AND l.month = r.month
         )
       RETURNING amount, accrual_date, year, month`,
-    [warehouseId],
+    [agreementId],
   );
 
   const seen = new Map<string, { year: number; month: number }>();
@@ -512,9 +539,9 @@ export async function recalcUnapprovedRentAccrualsLocked(
   // transaction. Re-read it under the lock so no stale terms can leak into the
   // regeneration.
   const { rows: [a] } = await q.query<RentAgreementRow>(
-    `SELECT warehouse_id, monthly_rent, start_date, end_date, status, inactive_from
-       FROM warehouse_rent_agreements WHERE warehouse_id = $1 FOR UPDATE`,
-    [warehouseId],
+    `SELECT id, warehouse_id, monthly_rent, start_date, end_date, status, inactive_from
+       FROM warehouse_rent_agreements WHERE id = $1 FOR UPDATE`,
+    [agreementId],
   );
   const eligible = a && Number(a.monthly_rent) > 0 && ymd(a.start_date)
     && (a.status === "active" || a.inactive_from);

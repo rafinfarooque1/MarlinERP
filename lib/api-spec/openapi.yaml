@@ -35,6 +35,7 @@ tags:
   - name: company
   - name: permissions
   - name: reconciliation
+  - name: rent
 paths:
   /healthz:
     get:
@@ -1828,6 +1829,208 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ReconciliationQueueSettlementResult"
+
+  # ── WAREHOUSE RENT ─────────────────────────────────────────────────────────
+  /rent/agreements:
+    get:
+      operationId: rentApiListAgreements
+      tags: [rent]
+      summary: List room rent agreements
+      responses:
+        "200":
+          description: Rent agreements
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/RentApiAgreement"
+    post:
+      operationId: rentApiCreateAgreement
+      tags: [rent]
+      summary: Create a room rent agreement
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RentApiAgreementCreate"
+      responses:
+        "201":
+          description: Created room agreement
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RentApiAgreement"
+  /rent/agreements/{agreementId}:
+    patch:
+      operationId: rentApiUpdateAgreement
+      tags: [rent]
+      summary: Update a room rent agreement
+      parameters:
+        - name: agreementId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RentApiAgreementPatch"
+      responses:
+        "200":
+          description: Updated room agreement
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RentApiAgreement"
+  /rent/accruals:
+    get:
+      operationId: rentApiListAccruals
+      tags: [rent]
+      summary: List daily room rent accruals
+      parameters:
+        - { name: warehouseId, in: query, schema: { type: integer } }
+        - { name: agreementId, in: query, schema: { type: integer } }
+        - { name: year, in: query, schema: { type: integer } }
+        - { name: month, in: query, schema: { type: integer } }
+        - { name: from, in: query, schema: { type: string, format: date } }
+        - { name: to, in: query, schema: { type: string, format: date } }
+      responses:
+        "200":
+          description: Daily rent accruals
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/RentApiAccrual"
+  /rent/accrue:
+    post:
+      operationId: rentApiRunAccrual
+      tags: [rent]
+      summary: Run the rent accrual catch-up
+      responses:
+        "200":
+          description: Accrual run result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RentApiAccrualRun"
+  /rent/periods:
+    get:
+      operationId: rentApiListPeriods
+      tags: [rent]
+      summary: List room rent approval and payment periods
+      parameters:
+        - { name: warehouseId, in: query, schema: { type: integer } }
+        - { name: agreementId, in: query, schema: { type: integer } }
+        - { name: year, in: query, schema: { type: integer } }
+        - { name: month, in: query, schema: { type: integer } }
+        - { name: status, in: query, schema: { type: string, enum: [pending, approved, paid] } }
+      responses:
+        "200":
+          description: Room rent periods
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/RentApiPeriod"
+  /rent/periods/{agreementId}/{year}/{month}/approve:
+    post:
+      operationId: rentApiApprovePeriod
+      tags: [rent]
+      summary: Approve a completed room rent period
+      parameters:
+        - { name: agreementId, in: path, required: true, schema: { type: integer } }
+        - { name: year, in: path, required: true, schema: { type: integer } }
+        - { name: month, in: path, required: true, schema: { type: integer, minimum: 1, maximum: 12 } }
+      responses:
+        "200":
+          description: Approved period
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RentApiApprovalResult"
+  /rent/periods/{agreementId}/{year}/{month}/pay:
+    post:
+      operationId: rentApiPayPeriod
+      tags: [rent]
+      summary: Record a payment against an approved room rent period
+      parameters:
+        - { name: agreementId, in: path, required: true, schema: { type: integer } }
+        - { name: year, in: path, required: true, schema: { type: integer } }
+        - { name: month, in: path, required: true, schema: { type: integer, minimum: 1, maximum: 12 } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RentApiPaymentInput"
+      responses:
+        "201":
+          description: Rent payment and accounting voucher created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RentApiPaymentResult"
+  /rent/payments:
+    get:
+      operationId: rentApiListPayments
+      tags: [rent]
+      summary: List rent payments
+      parameters:
+        - { name: warehouseId, in: query, schema: { type: integer } }
+        - { name: agreementId, in: query, schema: { type: integer } }
+        - { name: year, in: query, schema: { type: integer } }
+        - { name: month, in: query, schema: { type: integer } }
+        - { name: from, in: query, schema: { type: string, format: date } }
+        - { name: to, in: query, schema: { type: string, format: date } }
+      responses:
+        "200":
+          description: Rent payments
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/RentApiPayment"
+  /rent/dashboard:
+    get:
+      operationId: rentApiGetDashboard
+      tags: [rent]
+      summary: Get warehouse rent dashboard totals
+      responses:
+        "200":
+          description: Warehouse-level rent totals
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RentApiDashboard"
+  /rent/ledger-postings:
+    get:
+      operationId: rentApiListLedgerPostings
+      tags: [rent]
+      summary: List room rent ledger postings
+      parameters:
+        - { name: warehouseId, in: query, schema: { type: integer } }
+        - { name: agreementId, in: query, schema: { type: integer } }
+        - { name: year, in: query, schema: { type: integer } }
+        - { name: month, in: query, schema: { type: integer } }
+        - { name: from, in: query, schema: { type: string, format: date } }
+        - { name: to, in: query, schema: { type: string, format: date } }
+      responses:
+        "200":
+          description: Rent accrual and payment ledger postings
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/RentApiLedgerPosting"
 
 components:
   schemas:
@@ -4118,3 +4321,228 @@ components:
           format: date
         accountingImpact:
           type: string
+    RentApiAgreement:
+      type: object
+      required:
+        - id
+        - warehouseId
+        - warehouseName
+        - roomName
+        - monthlyRent
+        - securityDeposit
+        - agreementNumber
+        - landlordName
+        - landlordPhone
+        - landlordEmail
+        - landlordAddress
+        - startDate
+        - endDate
+        - dueDay
+        - status
+        - inactiveFrom
+        - expenseLedgerId
+        - payableLedgerId
+        - expenseLedgerName
+        - payableLedgerName
+        - totalAccrued
+        - totalPaid
+        - totalOutstanding
+      properties:
+        id: { type: ["integer", "null"] }
+        warehouseId: { type: integer }
+        warehouseName: { type: string }
+        roomName: { type: string }
+        monthlyRent: { type: number }
+        securityDeposit: { type: number }
+        agreementNumber: { type: string }
+        landlordName: { type: string }
+        landlordPhone: { type: string }
+        landlordEmail: { type: string }
+        landlordAddress: { type: string }
+        startDate: { type: ["string", "null"], format: date }
+        endDate: { type: ["string", "null"], format: date }
+        dueDay: { type: integer, minimum: 1, maximum: 31 }
+        status: { type: string, enum: [active, inactive] }
+        inactiveFrom: { type: ["string", "null"], format: date }
+        expenseLedgerId: { type: ["integer", "null"] }
+        payableLedgerId: { type: ["integer", "null"] }
+        expenseLedgerName: { type: string }
+        payableLedgerName: { type: string }
+        totalAccrued: { type: number }
+        totalPaid: { type: number }
+        totalOutstanding: { type: number }
+
+    RentApiAgreementCreate:
+      type: object
+      required: [warehouseId, roomName]
+      properties:
+        warehouseId: { type: integer }
+        roomName: { type: string, minLength: 1, maxLength: 120 }
+        monthlyRent: { type: number, minimum: 0 }
+        securityDeposit: { type: number, minimum: 0 }
+        agreementNumber: { type: string }
+        landlordName: { type: string }
+        landlordPhone: { type: string }
+        landlordEmail: { type: string }
+        landlordAddress: { type: string }
+        startDate: { type: ["string", "null"], format: date }
+        endDate: { type: ["string", "null"], format: date }
+        dueDay: { type: integer, minimum: 1, maximum: 31 }
+        status: { type: string, enum: [active, inactive] }
+        inactiveFrom: { type: ["string", "null"], format: date }
+
+    RentApiAgreementPatch:
+      type: object
+      properties:
+        roomName: { type: string, minLength: 1, maxLength: 120 }
+        monthlyRent: { type: number, minimum: 0 }
+        securityDeposit: { type: number, minimum: 0 }
+        agreementNumber: { type: string }
+        landlordName: { type: string }
+        landlordPhone: { type: string }
+        landlordEmail: { type: string }
+        landlordAddress: { type: string }
+        startDate: { type: ["string", "null"], format: date }
+        endDate: { type: ["string", "null"], format: date }
+        dueDay: { type: integer, minimum: 1, maximum: 31 }
+        status: { type: string, enum: [active, inactive] }
+        inactiveFrom: { type: ["string", "null"], format: date }
+        revisionReason: { type: string, maxLength: 500 }
+
+    RentApiAccrual:
+      type: object
+      required: [id, agreementId, warehouseId, warehouseName, roomName, accrualDate, year, month, amount, monthlyRent, daysInMonth]
+      properties:
+        id: { type: integer }
+        agreementId: { type: integer }
+        warehouseId: { type: integer }
+        warehouseName: { type: string }
+        roomName: { type: string }
+        accrualDate: { type: string, format: date }
+        year: { type: integer }
+        month: { type: integer }
+        amount: { type: number }
+        monthlyRent: { type: number }
+        daysInMonth: { type: integer }
+
+    RentApiAccrualRun:
+      type: object
+      required: [daysAccrued, warehousesTouched, totalAmount]
+      properties:
+        daysAccrued: { type: integer }
+        warehousesTouched: { type: integer }
+        totalAmount: { type: number }
+
+    RentApiPeriod:
+      type: object
+      required: [agreementId, warehouseId, warehouseName, roomName, year, month, accrued, paid, outstanding, daysAccrued, daysInMonth, status, approvedAt, approvedBy, dueDate, accrualComplete]
+      properties:
+        agreementId: { type: integer }
+        warehouseId: { type: integer }
+        warehouseName: { type: string }
+        roomName: { type: string }
+        year: { type: integer }
+        month: { type: integer }
+        accrued: { type: number }
+        paid: { type: number }
+        outstanding: { type: number }
+        daysAccrued: { type: integer }
+        daysInMonth: { type: integer }
+        status: { type: string, enum: [pending, approved, paid] }
+        approvedAt: { type: ["string", "null"], format: date-time }
+        approvedBy: { type: ["string", "null"] }
+        dueDate: { type: string, format: date }
+        accrualComplete: { type: boolean }
+
+    RentApiApprovalResult:
+      type: object
+      required: [agreementId, warehouseId, year, month, status, amount]
+      properties:
+        agreementId: { type: integer }
+        warehouseId: { type: integer }
+        year: { type: integer }
+        month: { type: integer }
+        status: { type: string, enum: [approved] }
+        amount: { type: number }
+
+    RentApiPaymentInput:
+      type: object
+      properties:
+        amount: { type: number, exclusiveMinimum: 0 }
+        paymentMode: { type: string }
+        paymentDate: { type: string, format: date }
+        referenceNumber: { type: string }
+        remarks: { type: string }
+
+    RentApiPaymentResult:
+      type: object
+      required: [id, agreementId, warehouseId, year, month, amount, status]
+      properties:
+        id: { type: integer }
+        agreementId: { type: integer }
+        warehouseId: { type: integer }
+        year: { type: integer }
+        month: { type: integer }
+        amount: { type: number }
+        status: { type: string, enum: [approved, paid] }
+
+    RentApiPayment:
+      type: object
+      required: [id, agreementId, warehouseId, warehouseName, roomName, year, month, paymentDate, amount, paymentMode, referenceNumber, remarks, voucherId, voucherNumber, createdBy, createdAt]
+      properties:
+        id: { type: integer }
+        agreementId: { type: integer }
+        warehouseId: { type: integer }
+        warehouseName: { type: string }
+        roomName: { type: string }
+        year: { type: integer }
+        month: { type: integer }
+        paymentDate: { type: string, format: date }
+        amount: { type: number }
+        paymentMode: { type: string }
+        referenceNumber: { type: string }
+        remarks: { type: string }
+        voucherId: { type: ["integer", "null"] }
+        voucherNumber: { type: string }
+        createdBy: { type: string }
+        createdAt: { type: string, format: date-time }
+
+    RentApiDashboard:
+      type: object
+      required: [year, month, monthlyRentCommitted, activeAgreements, accruedThisMonth, paidThisMonth, totalOutstanding, pendingApprovals, warehouseWise]
+      properties:
+        year: { type: integer }
+        month: { type: integer }
+        monthlyRentCommitted: { type: number }
+        activeAgreements: { type: integer }
+        accruedThisMonth: { type: number }
+        paidThisMonth: { type: number }
+        totalOutstanding: { type: number }
+        pendingApprovals: { type: integer }
+        warehouseWise:
+          type: array
+          items:
+            type: object
+            required: [warehouseId, warehouseName, monthAccrued, totalAccrued, totalPaid, outstanding]
+            properties:
+              warehouseId: { type: integer }
+              warehouseName: { type: string }
+              monthAccrued: { type: number }
+              totalAccrued: { type: number }
+              totalPaid: { type: number }
+              outstanding: { type: number }
+
+    RentApiLedgerPosting:
+      type: object
+      required: [agreementId, date, warehouseName, roomName, kind, narration, voucherNumber, debitLedger, creditLedger, amount]
+      properties:
+        agreementId: { type: integer }
+        date: { type: string, format: date }
+        warehouseName: { type: string }
+        roomName: { type: string }
+        kind: { type: string, enum: [accrual, payment] }
+        narration: { type: string }
+        voucherNumber: { type: string }
+        debitLedger: { type: string }
+        creditLedger: { type: string }
+        amount: { type: number }

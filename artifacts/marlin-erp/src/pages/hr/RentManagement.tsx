@@ -1,6 +1,6 @@
 import { type ComponentType, useState, useMemo } from 'react';
 import {
-  useListRentAgreements, useUpdateRentAgreement, useListRentAccruals,
+  useListRentAgreements, useCreateRentAgreement, useUpdateRentAgreement, useListWarehouses, useListRentAccruals,
   useListRentPeriods, useApproveRentPeriod, usePayRentPeriod,
   useListRentPayments, useRentDashboard, useListRentLedgerPostings,
   getRentAgreementsQueryKey, getRentPeriodsQueryKey, getRentPaymentsQueryKey,
@@ -20,7 +20,7 @@ import { TransactionDialog, TransactionDialogContent } from '@/components/ui/tra
 import { Separator } from '@/components/ui/separator';
 import {
   Building2, Download, Printer, BadgeCheck, Wallet, IndianRupee, AlertTriangle,
-  Pencil, RefreshCw, FileText, CalendarClock, TrendingUp, Clock,
+  Pencil, Plus, RefreshCw, FileText, CalendarClock, TrendingUp, Clock,
 } from 'lucide-react';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -78,9 +78,9 @@ const TABS: Array<{ key: Tab; label: string }> = [
 
 type ReportKey = 'register' | 'warehouse' | 'monthly' | 'outstanding' | 'paid' | 'pending' | 'ledger';
 const REPORTS: Array<{ key: ReportKey; label: string; hint: string }> = [
-  { key: 'register',    label: 'Rent Register',    hint: 'Every daily accrual, warehouse by warehouse' },
+  { key: 'register',    label: 'Rent Register',    hint: 'Every daily accrual, agreement by agreement' },
   { key: 'warehouse',   label: 'Warehouse Wise',   hint: 'Accrued, paid and outstanding per warehouse' },
-  { key: 'monthly',     label: 'Monthly Summary',  hint: 'One row per warehouse per month' },
+  { key: 'monthly',     label: 'Monthly Summary',  hint: 'One row per room agreement per month' },
   { key: 'outstanding', label: 'Outstanding',      hint: 'Months with rent still unpaid' },
   { key: 'paid',        label: 'Paid',             hint: 'Months settled in full' },
   { key: 'pending',     label: 'Pending Approval', hint: 'Accrued months awaiting sign-off' },
@@ -114,6 +114,14 @@ export default function RentManagement() {
   const whId = warehouseFilter === 'all' ? undefined : Number(warehouseFilter);
 
   const { data: agreements = [], isLoading: loadingAgr } = useListRentAgreements();
+  const warehouseOptions = useMemo(() => {
+    const unique = new Map<number, string>();
+    for (const agreement of agreements) unique.set(agreement.warehouseId, agreement.warehouseName);
+    return [...unique.entries()]
+      .map(([id, name]) => ({ id, name }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [agreements]);
+  const { data: warehouses = [] } = useListWarehouses();
   const { data: dashboard, isLoading: loadingDash } = useRentDashboard();
   const { data: periods = [], isLoading: loadingPer } = useListRentPeriods({ year, warehouseId: whId });
   const { data: payments = [] } = useListRentPayments({ year, warehouseId: whId });
@@ -126,6 +134,7 @@ export default function RentManagement() {
     { query: { enabled: tab === 'reports' && report === 'ledger' } },
   );
 
+  const createAgreement = useCreateRentAgreement();
   const updateAgreement = useUpdateRentAgreement();
   const approvePeriod = useApproveRentPeriod();
   const payPeriod = usePayRentPeriod();
@@ -139,11 +148,15 @@ export default function RentManagement() {
 
   // ── Agreement editing ─────────────────────────────────────────────────────
   const [editing, setEditing] = useState<RentAgreement | null>(null);
+  const [agreementDialogOpen, setAgreementDialogOpen] = useState(false);
+  const [newWarehouseId, setNewWarehouseId] = useState('');
   const [form, setForm] = useState<Record<string, string>>({});
 
   const openEdit = (a: RentAgreement) => {
     setEditing(a);
+    setAgreementDialogOpen(true);
     setForm({
+      roomName: a.roomName ?? 'Main agreement',
       monthlyRent: String(a.monthlyRent ?? 0),
       securityDeposit: String(a.securityDeposit ?? 0),
       agreementNumber: a.agreementNumber ?? '',
@@ -159,17 +172,39 @@ export default function RentManagement() {
     });
   };
 
+  const openCreate = () => {
+    setEditing(null);
+    setNewWarehouseId('');
+    setForm({
+      roomName: '',
+      monthlyRent: '0',
+      securityDeposit: '0',
+      agreementNumber: '',
+      landlordName: '',
+      landlordPhone: '',
+      landlordEmail: '',
+      landlordAddress: '',
+      startDate: '',
+      endDate: '',
+      dueDay: '5',
+      status: 'inactive',
+      revisionReason: '',
+    });
+    setAgreementDialogOpen(true);
+  };
+
   const saveAgreement = async () => {
-    if (!editing) return;
+    const roomName = form.roomName?.trim() ?? '';
+    if (!roomName) { toast.error('Enter a room or agreement name'); return; }
+    if (!editing && !newWarehouseId) { toast.error('Choose a warehouse'); return; }
     const rent = Number(form.monthlyRent);
     if (!Number.isFinite(rent) || rent < 0) { toast.error('Monthly rent must be a positive amount'); return; }
     if (form.status === 'active' && rent <= 0) { toast.error('An active agreement needs a monthly rent above zero'); return; }
     if (form.status === 'active' && !form.startDate) { toast.error('An active agreement needs a start date to accrue from'); return; }
     if (form.startDate && form.endDate && form.endDate < form.startDate) { toast.error('The end date cannot fall before the start date'); return; }
     try {
-      await updateAgreement.mutateAsync({
-        warehouseId: editing.warehouseId,
-        data: {
+      const data = {
+        roomName,
           monthlyRent: rent,
           securityDeposit: Number(form.securityDeposit) || 0,
           agreementNumber: form.agreementNumber,
@@ -184,9 +219,21 @@ export default function RentManagement() {
           // Kept with the recalculation audit entry when the rent or the start
           // date changes; ignored otherwise.
           revisionReason: form.revisionReason?.trim() || undefined,
-        } as any,
-      });
-      toast.success(`Rent agreement saved for ${editing.warehouseName}`);
+      } as const;
+      if (editing) {
+        if (editing.id == null) {
+          toast.error('Create an agreement before editing this warehouse');
+          return;
+        }
+        await updateAgreement.mutateAsync({ agreementId: editing.id, data });
+      } else {
+        await createAgreement.mutateAsync({
+          warehouseId: Number(newWarehouseId),
+          ...data,
+        });
+      }
+      toast.success(`Rent agreement saved for ${editing?.warehouseName ?? 'the warehouse'}`);
+      setAgreementDialogOpen(false);
       setEditing(null);
       refreshAll();
     } catch (e: any) {
@@ -197,8 +244,8 @@ export default function RentManagement() {
   // ── Approve ───────────────────────────────────────────────────────────────
   const doApprove = async (p: RentPeriod) => {
     try {
-      await approvePeriod.mutateAsync({ warehouseId: p.warehouseId, year: p.year, month: p.month });
-      toast.success(`${MONTHS[p.month - 1]} ${p.year} approved for ${p.warehouseName}`);
+      await approvePeriod.mutateAsync({ agreementId: p.agreementId, year: p.year, month: p.month });
+      toast.success(`${MONTHS[p.month - 1]} ${p.year} approved for ${p.warehouseName} / ${p.roomName}`);
       refreshAll();
     } catch (e: any) {
       toast.error(e?.message ?? 'Could not approve this month');
@@ -221,13 +268,13 @@ export default function RentManagement() {
     if (amt > paying.outstanding + 0.01) { toast.error(`That is more than the ${inr(paying.outstanding)} still outstanding for this month`); return; }
     try {
       await payPeriod.mutateAsync({
-        warehouseId: paying.warehouseId, year: paying.year, month: paying.month,
+        agreementId: paying.agreementId, year: paying.year, month: paying.month,
         data: {
           amount: amt, paymentMode: payForm.paymentMode, paymentDate: payForm.paymentDate,
           referenceNumber: payForm.referenceNumber, remarks: payForm.remarks,
         },
       });
-      toast.success(`${inr(amt)} paid for ${MONTHS[paying.month - 1]} ${paying.year}`);
+      toast.success(`${inr(amt)} paid for ${paying.warehouseName} / ${paying.roomName} — ${MONTHS[paying.month - 1]} ${paying.year}`);
       setPaying(null);
       refreshAll();
     } catch (e: any) {
@@ -253,7 +300,7 @@ export default function RentManagement() {
     switch (report) {
       case 'register':
         return accruals.map(a => ({
-          Date: dmy(a.accrualDate), Warehouse: a.warehouseName,
+          Date: dmy(a.accrualDate), Warehouse: a.warehouseName, Room: a.roomName,
           Month: `${MONTHS[a.month - 1]} ${a.year}`,
           'Monthly Rent': a.monthlyRent, 'Days in Month': a.daysInMonth, 'Accrued': a.amount,
         }));
@@ -264,31 +311,31 @@ export default function RentManagement() {
         }));
       case 'monthly':
         return periods.map(p => ({
-          Warehouse: p.warehouseName, Month: `${MONTHS[p.month - 1]} ${p.year}`,
+          Warehouse: p.warehouseName, Room: p.roomName, Month: `${MONTHS[p.month - 1]} ${p.year}`,
           'Days Accrued': `${p.daysAccrued}/${p.daysInMonth}`,
           Accrued: p.accrued, Paid: p.paid, Outstanding: p.outstanding,
           Status: p.status, 'Due Date': dmy(p.dueDate),
         }));
       case 'outstanding':
         return periods.filter(p => p.outstanding > 0).map(p => ({
-          Warehouse: p.warehouseName, Month: `${MONTHS[p.month - 1]} ${p.year}`,
+          Warehouse: p.warehouseName, Room: p.roomName, Month: `${MONTHS[p.month - 1]} ${p.year}`,
           Accrued: p.accrued, Paid: p.paid, Outstanding: p.outstanding,
           'Due Date': dmy(p.dueDate), Status: p.status,
         }));
       case 'paid':
         return payments.map(p => ({
-          'Payment Date': dmy(p.paymentDate), Warehouse: p.warehouseName,
+          'Payment Date': dmy(p.paymentDate), Warehouse: p.warehouseName, Room: p.roomName,
           Month: `${MONTHS[p.month - 1]} ${p.year}`, Amount: p.amount,
           Mode: p.paymentMode, Reference: p.referenceNumber, Voucher: p.voucherNumber, 'Recorded By': p.createdBy,
         }));
       case 'pending':
         return periods.filter(p => p.status === 'pending' && p.accrualComplete).map(p => ({
-          Warehouse: p.warehouseName, Month: `${MONTHS[p.month - 1]} ${p.year}`,
+          Warehouse: p.warehouseName, Room: p.roomName, Month: `${MONTHS[p.month - 1]} ${p.year}`,
           Accrued: p.accrued, 'Due Date': dmy(p.dueDate),
         }));
       case 'ledger':
         return ledgerPostings.map(l => ({
-          Date: dmy(l.date), Warehouse: l.warehouseName, Type: l.kind,
+          Date: dmy(l.date), Warehouse: l.warehouseName, Room: l.roomName, Type: l.kind,
           Voucher: l.voucherNumber || '—', Narration: l.narration,
           'Debit Ledger': l.debitLedger, 'Credit Ledger': l.creditLedger, Amount: l.amount,
         }));
@@ -300,6 +347,7 @@ export default function RentManagement() {
   // ── Sortable listing tables (filters/scope stay upstream) ──────────────────
   const agreementsSort = useTableSort(agreements, {
     warehouse: (a) => a.warehouseName,
+    roomName: (a) => a.roomName,
     agreement: (a) => a.agreementNumber,
     landlord: (a) => a.landlordName,
     monthlyRent: (a) => Number(a.monthlyRent) || null,
@@ -310,7 +358,7 @@ export default function RentManagement() {
     status: (a) => a.status,
   });
   const periodsSort = useTableSort(periods, {
-    warehouse: (p) => p.warehouseName,
+    warehouse: (p) => `${p.warehouseName} ${p.roomName}`,
     month: (p) => p.year * 100 + p.month,
     days: (p) => Number(p.daysAccrued),
     accrued: (p) => Number(p.accrued),
@@ -321,7 +369,7 @@ export default function RentManagement() {
   });
   const paymentsSort = useTableSort(payments, {
     date: (p) => p.paymentDate,
-    warehouse: (p) => p.warehouseName,
+    warehouse: (p) => `${p.warehouseName} ${p.roomName}`,
     month: (p) => p.year * 100 + p.month,
     amount: (p) => Number(p.amount),
     mode: (p) => p.paymentMode,
@@ -374,7 +422,7 @@ export default function RentManagement() {
         {/* Header */}
         <PageHeader
           title="Rent Management"
-          description="Warehouse rent accrues daily and posts straight to the books — approval releases payment, it does not create the expense."
+          description="Room agreements accrue rent daily and post to the books — approval releases payment, it does not create the expense."
           icon={Building2}
           actions={
             <Button variant="outline" size="sm" onClick={refreshAll}>
@@ -391,8 +439,9 @@ export default function RentManagement() {
             </div>
             <ul className="mt-2 space-y-1 text-sm">
               {reminders.slice(0, 6).map(({ period: p, days }) => (
-                <li key={`${p.warehouseId}-${p.year}-${p.month}`} className="flex flex-wrap gap-x-2">
+                <li key={`${p.agreementId}-${p.year}-${p.month}`} className="flex flex-wrap gap-x-2">
                   <span className="font-medium">{p.warehouseName}</span>
+                  <span>{p.roomName}</span>
                   <span className="text-muted-foreground">{MONTHS[p.month - 1]} {p.year}</span>
                   <span>{inr(p.outstanding)}</span>
                   <span className={days < 0 ? 'text-red-600 font-medium' : 'text-amber-700 dark:text-amber-400'}>
@@ -438,8 +487,8 @@ export default function RentManagement() {
                 <SelectTrigger className="w-64 mt-1"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All warehouses</SelectItem>
-                  {agreements.map(a => (
-                    <SelectItem key={a.warehouseId} value={String(a.warehouseId)}>{a.warehouseName}</SelectItem>
+                  {warehouseOptions.map(w => (
+                    <SelectItem key={w.id} value={String(w.id)}>{w.name}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
@@ -465,7 +514,7 @@ export default function RentManagement() {
             ) : (
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               <Tile icon={IndianRupee} label="Monthly Rent Committed" value={inr0(dashboard?.monthlyRentCommitted ?? 0)} hint={`${activeCount} active agreement${activeCount === 1 ? '' : 's'}`} />
-              <Tile icon={Building2} label="Active Agreements" value={String(dashboard?.activeAgreements ?? 0)} hint={`of ${agreements.length} warehouses`} />
+              <Tile icon={Building2} label="Active Agreements" value={String(dashboard?.activeAgreements ?? 0)} hint={`of ${agreements.length} rent agreements`} />
               <Tile icon={TrendingUp} label="Accrued This Month" value={inr(dashboard?.accruedThisMonth ?? 0)} hint={`${MONTHS[(dashboard?.month ?? 1) - 1]} ${dashboard?.year ?? ''}`} />
               <Tile icon={Wallet} label="Paid This Month" value={inr(dashboard?.paidThisMonth ?? 0)} hint="Cash and bank outflow" />
               <Tile icon={AlertTriangle} label="Total Outstanding" value={inr(dashboard?.totalOutstanding ?? 0)} hint="Rent Payable balance" tone={((dashboard?.totalOutstanding ?? 0) > 0) ? 'warn' : undefined} />
@@ -501,11 +550,18 @@ export default function RentManagement() {
         {/* ── Agreements ─────────────────────────────────────────────────── */}
         {tab === 'agreements' && (
           <div className="bg-card border border-border rounded-xl overflow-hidden">
+            <div className="flex justify-end p-3 border-b border-border">
+              {perm.canAdd && isHeadOffice && (
+                <Button onClick={openCreate}>
+                  <Plus className="w-4 h-4 mr-2" /> Add room agreement
+                </Button>
+              )}
+            </div>
             <Table>
               <TableHeader>
                 <TableRow>
                   <SortableHead k="warehouse" sort={agreementsSort.sort}>Warehouse</SortableHead>
-                  <SortableHead k="agreement" sort={agreementsSort.sort}>Agreement</SortableHead>
+                  <SortableHead k="roomName" sort={agreementsSort.sort}>Room / Agreement</SortableHead>
                   <SortableHead k="landlord" sort={agreementsSort.sort}>Landlord</SortableHead>
                   <SortableHead k="monthlyRent" sort={agreementsSort.sort} className="text-right">Monthly Rent</SortableHead>
                   <SortableHead k="deposit" sort={agreementsSort.sort} className="text-right">Deposit</SortableHead>
@@ -522,9 +578,12 @@ export default function RentManagement() {
                   <TableRow><TableCell colSpan={10} className="p-0"><EmptyState icon={Building2} title="No warehouses found" hint="Rent agreements appear here once warehouses exist." compact /></TableCell></TableRow>
                 )}
                 {agreementsSort.sorted.map(a => (
-                  <TableRow key={a.warehouseId}>
+                  <TableRow key={a.id ?? `warehouse-${a.warehouseId}`}>
                     <TableCell className="font-medium">{a.warehouseName}</TableCell>
-                    <TableCell className="text-muted-foreground">{a.agreementNumber || '—'}</TableCell>
+                    <TableCell>
+                      <div className="font-medium">{a.roomName || 'Main agreement'}</div>
+                      <div className="text-xs text-muted-foreground">{a.agreementNumber || 'No agreement number'}</div>
+                    </TableCell>
                     <TableCell>
                       {a.landlordName || '—'}
                       {a.landlordPhone && <div className="text-xs text-muted-foreground">{a.landlordPhone}</div>}
@@ -544,7 +603,7 @@ export default function RentManagement() {
                         : <StatusBadge status="inactive" />}
                     </TableCell>
                     <TableCell className="text-right">
-                      {perm.canEdit && isHeadOffice && (
+                      {perm.canEdit && isHeadOffice && a.id != null && (
                         <Button variant="ghost" size="sm" onClick={() => openEdit(a)}>
                           <Pencil className="w-4 h-4" />
                         </Button>
@@ -563,7 +622,7 @@ export default function RentManagement() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <SortableHead k="warehouse" sort={periodsSort.sort}>Warehouse</SortableHead>
+                  <SortableHead k="warehouse" sort={periodsSort.sort}>Warehouse / Room</SortableHead>
                   <SortableHead k="month" sort={periodsSort.sort}>Month</SortableHead>
                   <SortableHead k="days" sort={periodsSort.sort} className="text-center">Days</SortableHead>
                   <SortableHead k="accrued" sort={periodsSort.sort} className="text-right">Accrued</SortableHead>
@@ -582,8 +641,11 @@ export default function RentManagement() {
                   </TableCell></TableRow>
                 )}
                 {periodsSort.sorted.map(p => (
-                  <TableRow key={`${p.warehouseId}-${p.year}-${p.month}`}>
-                    <TableCell className="font-medium">{p.warehouseName}</TableCell>
+                  <TableRow key={`${p.agreementId}-${p.year}-${p.month}`}>
+                    <TableCell>
+                      <div className="font-medium">{p.warehouseName}</div>
+                      <div className="text-xs text-muted-foreground">{p.roomName}</div>
+                    </TableCell>
                     <TableCell>{MONTHS[p.month - 1]} {p.year}</TableCell>
                     <TableCell className="text-center text-xs text-muted-foreground">{p.daysAccrued}/{p.daysInMonth}</TableCell>
                     <TableCell className="text-right">{inr(p.accrued)}</TableCell>
@@ -622,7 +684,7 @@ export default function RentManagement() {
               <TableHeader>
                 <TableRow>
                   <SortableHead k="date" sort={paymentsSort.sort}>Date</SortableHead>
-                  <SortableHead k="warehouse" sort={paymentsSort.sort}>Warehouse</SortableHead>
+                  <SortableHead k="warehouse" sort={paymentsSort.sort}>Warehouse / Room</SortableHead>
                   <SortableHead k="month" sort={paymentsSort.sort}>For Month</SortableHead>
                   <SortableHead k="amount" sort={paymentsSort.sort} className="text-right">Amount</SortableHead>
                   <SortableHead k="mode" sort={paymentsSort.sort}>Mode</SortableHead>
@@ -638,7 +700,10 @@ export default function RentManagement() {
                 {paymentsSort.sorted.map(p => (
                   <TableRow key={p.id}>
                     <TableCell>{dmy(p.paymentDate)}</TableCell>
-                    <TableCell className="font-medium">{p.warehouseName}</TableCell>
+                    <TableCell>
+                      <div className="font-medium">{p.warehouseName}</div>
+                      <div className="text-xs text-muted-foreground">{p.roomName}</div>
+                    </TableCell>
                     <TableCell>{MONTHS[p.month - 1]} {p.year}</TableCell>
                     <TableCell className="text-right">{inr(p.amount)}</TableCell>
                     <TableCell className="capitalize">{p.paymentMode}</TableCell>
@@ -721,10 +786,16 @@ export default function RentManagement() {
       </div>
 
       {/* ── Edit agreement sheet ──────────────────────────────────────────── */}
-      <Sheet open={!!editing} onOpenChange={o => !o && setEditing(null)}>
+      <Sheet
+        open={agreementDialogOpen}
+        onOpenChange={o => {
+          setAgreementDialogOpen(o);
+          if (!o) setEditing(null);
+        }}
+      >
         <SheetContent className="w-full sm:max-w-lg overflow-y-auto">
           <SheetHeader>
-            <SheetTitle>Rent agreement — {editing?.warehouseName}</SheetTitle>
+            <SheetTitle>{editing ? `Rent agreement — ${editing.warehouseName} / ${editing.roomName}` : 'Add room rent agreement'}</SheetTitle>
             <SheetDescription>
               Rent accrues every day from the start date while the agreement is active.
               Setting it inactive stops future accrual and leaves the history untouched.
@@ -732,6 +803,21 @@ export default function RentManagement() {
           </SheetHeader>
 
           <div className="space-y-4 mt-6">
+            {!editing && (
+              <Field label="Warehouse">
+                <Select value={newWarehouseId} onValueChange={setNewWarehouseId}>
+                  <SelectTrigger><SelectValue placeholder="Choose a warehouse" /></SelectTrigger>
+                  <SelectContent>
+                    {(warehouses as any[]).map(w => (
+                      <SelectItem key={w.id} value={String(w.id)}>{w.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </Field>
+            )}
+            <Field label="Room / Agreement Name">
+              <Input value={form.roomName ?? ''} onChange={e => setForm({ ...form, roomName: e.target.value })} placeholder="e.g. Cold Room 2" />
+            </Field>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <Field label="Monthly Rent (₹)"><Input type="number" min="0" step="0.01" value={form.monthlyRent ?? ''} onChange={e => setForm({ ...form, monthlyRent: e.target.value })} /></Field>
               <Field label="Security Deposit (₹)"><Input type="number" min="0" step="0.01" value={form.securityDeposit ?? ''} onChange={e => setForm({ ...form, securityDeposit: e.target.value })} /></Field>
@@ -784,9 +870,9 @@ export default function RentManagement() {
             </p>
 
             <div className="flex justify-end gap-2 pt-2">
-              <Button variant="outline" onClick={() => setEditing(null)}>Cancel</Button>
-              <Button onClick={saveAgreement} disabled={updateAgreement.isPending}>
-                {updateAgreement.isPending ? 'Saving…' : 'Save agreement'}
+              <Button variant="outline" onClick={() => { setAgreementDialogOpen(false); setEditing(null); }}>Cancel</Button>
+              <Button onClick={saveAgreement} disabled={updateAgreement.isPending || createAgreement.isPending}>
+                {updateAgreement.isPending || createAgreement.isPending ? 'Saving…' : editing ? 'Save agreement' : 'Create agreement'}
               </Button>
             </div>
           </div>
@@ -803,7 +889,7 @@ export default function RentManagement() {
           <DialogHeader>
             <DialogTitle>Record rent payment</DialogTitle>
             <DialogDescription>
-              {paying && <>{paying.warehouseName} — {MONTHS[paying.month - 1]} {paying.year}. {inr(paying.outstanding)} outstanding.</>}
+              {paying && <>{paying.warehouseName} / {paying.roomName} — {MONTHS[paying.month - 1]} {paying.year}. {inr(paying.outstanding)} outstanding.</>}
             </DialogDescription>
           </DialogHeader>
 

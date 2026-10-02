@@ -56,6 +56,7 @@ test("rent coverage accepts a penny of rounding variance but rejects under- and 
   async function coverage(accrued: string) {
     const q = fakeQuerier(async (sql) => {
       if (sql.includes("FROM warehouse_rent_agreements")) {
+        assert.match(sql, /WHERE id = \$1/);
         return { rows: [agreement()] };
       }
       if (sql.includes("FROM rent_accruals")) {
@@ -101,6 +102,63 @@ test("scheduled rent sweep re-reads the agreement after acquiring the warehouse 
   assert.equal(events.filter((sql) => sql.includes("pg_advisory_xact_lock")).length, 1, "sweep must acquire one lock");
 });
 
+test("one warehouse sweep accrues each room agreement against its own rent and period", async () => {
+  const accruals: Array<{ agreementId: number; date: string; amount: number }> = [];
+  const periodAgreementIds = new Set<number>();
+  const client = fakeQuerier(async (sql, params) => {
+    if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK") return { rows: [] };
+    if (sql.includes("pg_advisory_xact_lock")) return { rows: [] };
+    if (sql.includes("FROM warehouse_rent_agreements") && sql.includes("FOR UPDATE")) {
+      return {
+        rows: [
+          agreement({ id: 701, monthly_rent: "3100.00" }),
+          agreement({ id: 702, monthly_rent: "6200.00" }),
+        ],
+      };
+    }
+    if (sql.includes("FROM rent_periods")) return { rows: [] };
+    if (sql.includes("FROM accounting_period_locks")) return { rows: [] };
+    if (sql.includes("MAX(accrual_date)")) return { rows: [{ last: null }] };
+    if (sql.includes("INSERT INTO rent_accruals")) {
+      accruals.push({
+        agreementId: Number(params?.[0]),
+        date: String(params?.[2]),
+        amount: Number(params?.[5]),
+      });
+      return { rows: [], rowCount: 1 };
+    }
+    if (sql.includes("INSERT INTO rent_periods")) {
+      periodAgreementIds.add(Number(params?.[0]));
+      return { rows: [], rowCount: 1 };
+    }
+    throw new Error(`Unexpected query: ${sql}`);
+  });
+  const pool = {
+    async query(sql: string) {
+      assert.match(sql, /SELECT DISTINCT warehouse_id/);
+      return { rows: [{ warehouse_id: 7 }] };
+    },
+    async connect() {
+      return { query: client.query.bind(client), release() {} };
+    },
+  } as unknown as Parameters<typeof runRentAccrual>[0];
+
+  const result = await runRentAccrual(pool, { asOf: "2026-01-02" });
+  assert.equal(result.daysAccrued, 4);
+  assert.equal(result.warehousesTouched, 1);
+  assert.equal(result.totalAmount, 600);
+  assert.deepEqual(
+    accruals,
+    [
+      { agreementId: 701, date: "2026-01-01", amount: 100 },
+      { agreementId: 701, date: "2026-01-02", amount: 100 },
+      { agreementId: 702, date: "2026-01-01", amount: 200 },
+      { agreementId: 702, date: "2026-01-02", amount: 200 },
+    ],
+  );
+  assert.deepEqual([...periodAgreementIds].sort(), [701, 702]);
+});
+
 test("rent rebuild is one locked transaction and preserves approved and accounting-locked months", async () => {
   const events: string[] = [];
   const deletedDates: string[] = [];
@@ -111,6 +169,7 @@ test("rent rebuild is one locked transaction and preserves approved and accounti
     if (sql.includes("DELETE FROM rent_accruals")) {
       assert.match(sql, /p\.status IN \('approved', 'paid'\)/);
       assert.match(sql, /FROM accounting_period_locks/);
+      assert.match(sql, /r\.agreement_id = \$1/);
       return {
         rows: [{ amount: "100.00", accrual_date: "2026-01-15", year: 2026, month: 1 }],
         rowCount: 1,
@@ -124,13 +183,17 @@ test("rent rebuild is one locked transaction and preserves approved and accounti
     if (sql.includes("MAX(accrual_date)")) return { rows: [{ last: null }] };
     if (sql.includes("COALESCE(SUM(amount), 0) AS total")) return { rows: [{ total: "0" }] };
     if (sql.includes("INSERT INTO rent_accruals")) {
-      deletedDates.push(String(params?.[1]));
+      deletedDates.push(String(params?.[2]));
       return { rows: [], rowCount: 1 };
     }
     if (sql.includes("INSERT INTO rent_periods")) return { rows: [], rowCount: 1 };
     throw new Error(`Unexpected query: ${sql}`);
   });
   const pool = {
+    async query(sql: string) {
+      assert.match(sql, /SELECT warehouse_id FROM warehouse_rent_agreements WHERE id = \$1/);
+      return { rows: [{ warehouse_id: 7 }] };
+    },
     async connect() {
       return { query: client.query.bind(client), release() {} };
     },
