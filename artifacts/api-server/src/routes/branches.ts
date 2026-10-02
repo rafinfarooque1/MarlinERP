@@ -237,12 +237,22 @@ router.post("/warehouses", requireModuleAction("page:/headoffice/warehouses", "a
   // Register the warehouse for rent straight away — inactive and at zero — so it
   // shows up in Rent Management without anyone having to link it by hand.
   try {
-    await pool.query(
-      `INSERT INTO warehouse_rent_agreements (warehouse_id) VALUES ($1) ON CONFLICT (warehouse_id) DO NOTHING`,
-      [row.id],
+    const roomName = "Main agreement";
+    const { rows: inserted } = await pool.query<{ id: number }>(
+      `INSERT INTO warehouse_rent_agreements (warehouse_id, room_name)
+       SELECT $1, $2
+        WHERE NOT EXISTS (SELECT 1 FROM warehouse_rent_agreements WHERE warehouse_id = $1)
+       RETURNING id`,
+      [row.id, roomName],
     );
-    await provisionRentLedgers(pool, row.id, row.name);
-  } catch (e) { console.warn('[branches] rent registration failed:', e); }
+    const agreementId = inserted[0]?.id ?? (await pool.query<{ id: number }>(
+      `SELECT id FROM warehouse_rent_agreements WHERE warehouse_id = $1 ORDER BY id LIMIT 1`,
+      [row.id],
+    )).rows[0]?.id;
+    if (agreementId != null) {
+      await provisionRentLedgers(pool, Number(agreementId), Number(row.id), row.name, roomName);
+    }
+  } catch (e) { req.log.error({ err: e, warehouseId: row.id }, "warehouse rent registration failed"); }
   await seedShortNumberFormat("warehouse", row.id);
   const { rows: [ledgers] } = await pool.query<{ cash_ledger_id: number | null; sales_ledger_id: number | null; purchase_ledger_id: number | null }>(
     `SELECT cash_ledger_id, sales_ledger_id, purchase_ledger_id FROM warehouses WHERE id = $1`, [row.id]
@@ -340,7 +350,8 @@ router.delete("/warehouses/:id", requireModuleAction("page:/headoffice/warehouse
   // real rent history and silently drop it out of the P&L.
   const { rows: [rentHistory] } = await pool.query<{ count: string }>(
     `SELECT (SELECT COUNT(*) FROM rent_accruals WHERE warehouse_id = $1)
-          + (SELECT COUNT(*) FROM rent_payments WHERE warehouse_id = $1) AS count`, [id],
+          + (SELECT COUNT(*) FROM rent_payments WHERE warehouse_id = $1)
+          + (SELECT COUNT(*) FROM rent_periods WHERE warehouse_id = $1) AS count`, [id],
   );
   if (Number(rentHistory?.count ?? 0) > 0) {
     res.status(400).json({ error: "This warehouse cannot be deleted because rent has already been accrued or paid against it. Deleting it would affect financial history." });

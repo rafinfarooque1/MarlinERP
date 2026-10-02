@@ -3,7 +3,7 @@
  *
  * Rent is accrued daily by the server, so the client never computes money — it
  * reads accrued / paid / outstanding and displays them. Mutations are limited to
- * editing the agreement, approving a month, and recording a payment.
+ * creating/editing room agreements, approving a month, and recording a payment.
  */
 import { useQuery, useMutation, UseQueryOptions } from "@tanstack/react-query";
 import { customFetch } from "./custom-fetch";
@@ -14,6 +14,7 @@ export interface RentAgreement {
   id: number | null;
   warehouseId: number;
   warehouseName: string;
+  roomName: string;
   monthlyRent: number;
   securityDeposit: number;
   agreementNumber: string;
@@ -38,16 +39,20 @@ export interface RentAgreement {
 export type RentAgreementPatch = Partial<
   Pick<
     RentAgreement,
-    | "monthlyRent" | "securityDeposit" | "agreementNumber"
+    | "roomName" | "monthlyRent" | "securityDeposit" | "agreementNumber"
     | "landlordName" | "landlordPhone" | "landlordEmail" | "landlordAddress"
     | "startDate" | "endDate" | "dueDay" | "status"
   >
->;
+> & { revisionReason?: string };
+
+export type RentAgreementCreate = Pick<RentAgreement, "warehouseId" | "roomName"> & RentAgreementPatch;
 
 export interface RentAccrual {
   id: number;
+  agreementId: number;
   warehouseId: number;
   warehouseName: string;
+  roomName: string;
   accrualDate: string;
   year: number;
   month: number;
@@ -57,8 +62,10 @@ export interface RentAccrual {
 }
 
 export interface RentPeriod {
+  agreementId: number;
   warehouseId: number;
   warehouseName: string;
+  roomName: string;
   year: number;
   month: number;
   accrued: number;
@@ -76,8 +83,10 @@ export interface RentPeriod {
 
 export interface RentPayment {
   id: number;
+  agreementId: number;
   warehouseId: number;
   warehouseName: string;
+  roomName: string;
   year: number;
   month: number;
   paymentDate: string;
@@ -111,8 +120,10 @@ export interface RentDashboard {
 }
 
 export interface RentLedgerPosting {
+  agreementId: number;
   date: string;
   warehouseName: string;
+  roomName: string;
   kind: "accrual" | "payment";
   narration: string;
   voucherNumber: string;
@@ -123,6 +134,7 @@ export interface RentLedgerPosting {
 
 export interface RentFilters {
   warehouseId?: number;
+  agreementId?: number;
   year?: number;
   month?: number;
   from?: string;
@@ -133,6 +145,7 @@ export interface RentFilters {
 const qs = (f?: RentFilters) => {
   const p = new URLSearchParams();
   if (f?.warehouseId) p.set("warehouseId", String(f.warehouseId));
+  if (f?.agreementId) p.set("agreementId", String(f.agreementId));
   if (f?.year) p.set("year", String(f.year));
   if (f?.month) p.set("month", String(f.month));
   if (f?.from) p.set("from", f.from);
@@ -155,10 +168,20 @@ export const useListRentAgreements = (
     ...options?.query,
   });
 
+export const useCreateRentAgreement = () =>
+  useMutation<RentAgreement, Error, RentAgreementCreate>({
+    mutationFn: (data) =>
+      customFetch<RentAgreement>("/api/rent/agreements", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      }),
+  });
+
 export const useUpdateRentAgreement = () =>
-  useMutation<RentAgreement, Error, { warehouseId: number; data: RentAgreementPatch }>({
-    mutationFn: ({ warehouseId, data }) =>
-      customFetch<RentAgreement>(`/api/rent/agreements/${warehouseId}`, {
+  useMutation<RentAgreement, Error, { agreementId: number; data: RentAgreementPatch }>({
+    mutationFn: ({ agreementId, data }) =>
+      customFetch<RentAgreement>(`/api/rent/agreements/${agreementId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
@@ -200,12 +223,12 @@ export const useListRentPeriods = (
 
 export const useApproveRentPeriod = () =>
   useMutation<
-    { warehouseId: number; year: number; month: number; status: string; amount: number },
+    { agreementId: number; warehouseId: number; year: number; month: number; status: string; amount: number },
     Error,
-    { warehouseId: number; year: number; month: number }
+    { agreementId: number; year: number; month: number }
   >({
-    mutationFn: ({ warehouseId, year, month }) =>
-      customFetch(`/api/rent/periods/${warehouseId}/${year}/${month}/approve`, { method: "POST" }),
+    mutationFn: ({ agreementId, year, month }) =>
+      customFetch(`/api/rent/periods/${agreementId}/${year}/${month}/approve`, { method: "POST" }),
   });
 
 export interface RentPayBody {
@@ -218,12 +241,12 @@ export interface RentPayBody {
 
 export const usePayRentPeriod = () =>
   useMutation<
-    { id: number; warehouseId: number; year: number; month: number; amount: number; status: string },
+    { id: number; agreementId: number; warehouseId: number; year: number; month: number; amount: number; status: string },
     Error,
-    { warehouseId: number; year: number; month: number; data: RentPayBody }
+    { agreementId: number; year: number; month: number; data: RentPayBody }
   >({
-    mutationFn: ({ warehouseId, year, month, data }) =>
-      customFetch(`/api/rent/periods/${warehouseId}/${year}/${month}/pay`, {
+    mutationFn: ({ agreementId, year, month, data }) =>
+      customFetch(`/api/rent/periods/${agreementId}/${year}/${month}/pay`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),

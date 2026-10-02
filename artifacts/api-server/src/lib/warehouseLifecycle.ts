@@ -155,7 +155,8 @@ export async function warehouseDeleteSummary(c: Queryable, id: number): Promise<
             )
           )`),
     one(`SELECT (SELECT COUNT(*) FROM rent_accruals WHERE warehouse_id = $1)
-             + (SELECT COUNT(*) FROM rent_payments WHERE warehouse_id = $1) AS count`),
+             + (SELECT COUNT(*) FROM rent_payments WHERE warehouse_id = $1)
+             + (SELECT COUNT(*) FROM rent_periods WHERE warehouse_id = $1) AS count`),
   ]);
   const bankAccounts = await one(
     `SELECT COUNT(*) FILTER (WHERE cba.account_type <> 'cash') AS count

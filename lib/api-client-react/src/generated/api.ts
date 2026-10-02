@@ -104,6 +104,22 @@ import type {
   ReconciliationPendingQueueItem,
   ReconciliationQueueSettlementRequest,
   ReconciliationQueueSettlementResult,
+  RentApiAccrual,
+  RentApiAccrualRun,
+  RentApiAgreement,
+  RentApiAgreementCreate,
+  RentApiAgreementPatch,
+  RentApiApprovalResult,
+  RentApiDashboard,
+  RentApiLedgerPosting,
+  RentApiListAccrualsParams,
+  RentApiListLedgerPostingsParams,
+  RentApiListPaymentsParams,
+  RentApiListPeriodsParams,
+  RentApiPayment,
+  RentApiPaymentInput,
+  RentApiPaymentResult,
+  RentApiPeriod,
   Sale,
   SaleInput,
   SalesSummary,
@@ -8135,4 +8151,859 @@ export const useSettleReconciliationPendingQueue = <TError = ErrorType<unknown>,
       > => {
       return useMutation(getSettleReconciliationPendingQueueMutationOptions(options));
     }
+
+export const getRentApiListAgreementsUrl = () => {
+
+
+
+
+  return `/api/rent/agreements`
+}
+
+/**
+ * @summary List room rent agreements
+ */
+export const rentApiListAgreements = async ( options?: RequestInit): Promise<RentApiAgreement[]> => {
+
+  return customFetch<RentApiAgreement[]>(getRentApiListAgreementsUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getRentApiListAgreementsQueryKey = () => {
+    return [
+    `/api/rent/agreements`
+    ] as const;
+    }
+
+
+export const getRentApiListAgreementsQueryOptions = <TData = Awaited<ReturnType<typeof rentApiListAgreements>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof rentApiListAgreements>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getRentApiListAgreementsQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof rentApiListAgreements>>> = ({ signal }) => rentApiListAgreements({ signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof rentApiListAgreements>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type RentApiListAgreementsQueryResult = NonNullable<Awaited<ReturnType<typeof rentApiListAgreements>>>
+export type RentApiListAgreementsQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary List room rent agreements
+ */
+
+export function useRentApiListAgreements<TData = Awaited<ReturnType<typeof rentApiListAgreements>>, TError = ErrorType<unknown>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof rentApiListAgreements>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getRentApiListAgreementsQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getRentApiCreateAgreementUrl = () => {
+
+
+
+
+  return `/api/rent/agreements`
+}
+
+/**
+ * @summary Create a room rent agreement
+ */
+export const rentApiCreateAgreement = async (rentApiAgreementCreate: RentApiAgreementCreate, options?: RequestInit): Promise<RentApiAgreement> => {
+
+  return customFetch<RentApiAgreement>(getRentApiCreateAgreementUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(rentApiAgreementCreate)
+  }
+);}
+
+
+
+
+
+export const getRentApiCreateAgreementMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof rentApiCreateAgreement>>, TError,{data: BodyType<RentApiAgreementCreate>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof rentApiCreateAgreement>>, TError,{data: BodyType<RentApiAgreementCreate>}, TContext> => {
+
+const mutationKey = ['rentApiCreateAgreement'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof rentApiCreateAgreement>>, {data: BodyType<RentApiAgreementCreate>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  rentApiCreateAgreement(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type RentApiCreateAgreementMutationResult = NonNullable<Awaited<ReturnType<typeof rentApiCreateAgreement>>>
+    export type RentApiCreateAgreementMutationBody = BodyType<RentApiAgreementCreate>
+    export type RentApiCreateAgreementMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Create a room rent agreement
+ */
+export const useRentApiCreateAgreement = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof rentApiCreateAgreement>>, TError,{data: BodyType<RentApiAgreementCreate>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof rentApiCreateAgreement>>,
+        TError,
+        {data: BodyType<RentApiAgreementCreate>},
+        TContext
+      > => {
+      return useMutation(getRentApiCreateAgreementMutationOptions(options));
+    }
+
+export const getRentApiUpdateAgreementUrl = (agreementId: number,) => {
+
+
+
+
+  return `/api/rent/agreements/${agreementId}`
+}
+
+/**
+ * @summary Update a room rent agreement
+ */
+export const rentApiUpdateAgreement = async (agreementId: number,
+    rentApiAgreementPatch: RentApiAgreementPatch, options?: RequestInit): Promise<RentApiAgreement> => {
+
+  return customFetch<RentApiAgreement>(getRentApiUpdateAgreementUrl(agreementId),
+  {
+    ...options,
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(rentApiAgreementPatch)
+  }
+);}
+
+
+
+
+
+export const getRentApiUpdateAgreementMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof rentApiUpdateAgreement>>, TError,{agreementId: number;data: BodyType<RentApiAgreementPatch>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof rentApiUpdateAgreement>>, TError,{agreementId: number;data: BodyType<RentApiAgreementPatch>}, TContext> => {
+
+const mutationKey = ['rentApiUpdateAgreement'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof rentApiUpdateAgreement>>, {agreementId: number;data: BodyType<RentApiAgreementPatch>}> = (props) => {
+          const {agreementId,data} = props ?? {};
+
+          return  rentApiUpdateAgreement(agreementId,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type RentApiUpdateAgreementMutationResult = NonNullable<Awaited<ReturnType<typeof rentApiUpdateAgreement>>>
+    export type RentApiUpdateAgreementMutationBody = BodyType<RentApiAgreementPatch>
+    export type RentApiUpdateAgreementMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Update a room rent agreement
+ */
+export const useRentApiUpdateAgreement = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof rentApiUpdateAgreement>>, TError,{agreementId: number;data: BodyType<RentApiAgreementPatch>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof rentApiUpdateAgreement>>,
+        TError,
+        {agreementId: number;data: BodyType<RentApiAgreementPatch>},
+        TContext
+      > => {
+      return useMutation(getRentApiUpdateAgreementMutationOptions(options));
+    }
+
+export const getRentApiListAccrualsUrl = (params?: RentApiListAccrualsParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : String(value))
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/rent/accruals?${stringifiedParams}` : `/api/rent/accruals`
+}
+
+/**
+ * @summary List daily room rent accruals
+ */
+export const rentApiListAccruals = async (params?: RentApiListAccrualsParams, options?: RequestInit): Promise<RentApiAccrual[]> => {
+
+  return customFetch<RentApiAccrual[]>(getRentApiListAccrualsUrl(params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getRentApiListAccrualsQueryKey = (params?: RentApiListAccrualsParams,) => {
+    return [
+    `/api/rent/accruals`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getRentApiListAccrualsQueryOptions = <TData = Awaited<ReturnType<typeof rentApiListAccruals>>, TError = ErrorType<unknown>>(params?: RentApiListAccrualsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof rentApiListAccruals>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getRentApiListAccrualsQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof rentApiListAccruals>>> = ({ signal }) => rentApiListAccruals(params, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof rentApiListAccruals>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type RentApiListAccrualsQueryResult = NonNullable<Awaited<ReturnType<typeof rentApiListAccruals>>>
+export type RentApiListAccrualsQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary List daily room rent accruals
+ */
+
+export function useRentApiListAccruals<TData = Awaited<ReturnType<typeof rentApiListAccruals>>, TError = ErrorType<unknown>>(
+ params?: RentApiListAccrualsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof rentApiListAccruals>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getRentApiListAccrualsQueryOptions(params,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getRentApiRunAccrualUrl = () => {
+
+
+
+
+  return `/api/rent/accrue`
+}
+
+/**
+ * @summary Run the rent accrual catch-up
+ */
+export const rentApiRunAccrual = async ( options?: RequestInit): Promise<RentApiAccrualRun> => {
+
+  return customFetch<RentApiAccrualRun>(getRentApiRunAccrualUrl(),
+  {
+    ...options,
+    method: 'POST'
+
+
+  }
+);}
+
+
+
+
+
+export const getRentApiRunAccrualMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof rentApiRunAccrual>>, TError,void, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof rentApiRunAccrual>>, TError,void, TContext> => {
+
+const mutationKey = ['rentApiRunAccrual'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof rentApiRunAccrual>>, void> = () => {
+
+
+          return  rentApiRunAccrual(requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type RentApiRunAccrualMutationResult = NonNullable<Awaited<ReturnType<typeof rentApiRunAccrual>>>
+
+    export type RentApiRunAccrualMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Run the rent accrual catch-up
+ */
+export const useRentApiRunAccrual = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof rentApiRunAccrual>>, TError,void, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof rentApiRunAccrual>>,
+        TError,
+        void,
+        TContext
+      > => {
+      return useMutation(getRentApiRunAccrualMutationOptions(options));
+    }
+
+export const getRentApiListPeriodsUrl = (params?: RentApiListPeriodsParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : String(value))
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/rent/periods?${stringifiedParams}` : `/api/rent/periods`
+}
+
+/**
+ * @summary List room rent approval and payment periods
+ */
+export const rentApiListPeriods = async (params?: RentApiListPeriodsParams, options?: RequestInit): Promise<RentApiPeriod[]> => {
+
+  return customFetch<RentApiPeriod[]>(getRentApiListPeriodsUrl(params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getRentApiListPeriodsQueryKey = (params?: RentApiListPeriodsParams,) => {
+    return [
+    `/api/rent/periods`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getRentApiListPeriodsQueryOptions = <TData = Awaited<ReturnType<typeof rentApiListPeriods>>, TError = ErrorType<unknown>>(params?: RentApiListPeriodsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof rentApiListPeriods>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getRentApiListPeriodsQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof rentApiListPeriods>>> = ({ signal }) => rentApiListPeriods(params, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof rentApiListPeriods>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type RentApiListPeriodsQueryResult = NonNullable<Awaited<ReturnType<typeof rentApiListPeriods>>>
+export type RentApiListPeriodsQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary List room rent approval and payment periods
+ */
+
+export function useRentApiListPeriods<TData = Awaited<ReturnType<typeof rentApiListPeriods>>, TError = ErrorType<unknown>>(
+ params?: RentApiListPeriodsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof rentApiListPeriods>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getRentApiListPeriodsQueryOptions(params,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getRentApiApprovePeriodUrl = (agreementId: number,
+    year: number,
+    month: number,) => {
+
+
+
+
+  return `/api/rent/periods/${agreementId}/${year}/${month}/approve`
+}
+
+/**
+ * @summary Approve a completed room rent period
+ */
+export const rentApiApprovePeriod = async (agreementId: number,
+    year: number,
+    month: number, options?: RequestInit): Promise<RentApiApprovalResult> => {
+
+  return customFetch<RentApiApprovalResult>(getRentApiApprovePeriodUrl(agreementId,year,month),
+  {
+    ...options,
+    method: 'POST'
+
+
+  }
+);}
+
+
+
+
+
+export const getRentApiApprovePeriodMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof rentApiApprovePeriod>>, TError,{agreementId: number;year: number;month: number}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof rentApiApprovePeriod>>, TError,{agreementId: number;year: number;month: number}, TContext> => {
+
+const mutationKey = ['rentApiApprovePeriod'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof rentApiApprovePeriod>>, {agreementId: number;year: number;month: number}> = (props) => {
+          const {agreementId,year,month} = props ?? {};
+
+          return  rentApiApprovePeriod(agreementId,year,month,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type RentApiApprovePeriodMutationResult = NonNullable<Awaited<ReturnType<typeof rentApiApprovePeriod>>>
+
+    export type RentApiApprovePeriodMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Approve a completed room rent period
+ */
+export const useRentApiApprovePeriod = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof rentApiApprovePeriod>>, TError,{agreementId: number;year: number;month: number}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof rentApiApprovePeriod>>,
+        TError,
+        {agreementId: number;year: number;month: number},
+        TContext
+      > => {
+      return useMutation(getRentApiApprovePeriodMutationOptions(options));
+    }
+
+export const getRentApiPayPeriodUrl = (agreementId: number,
+    year: number,
+    month: number,) => {
+
+
+
+
+  return `/api/rent/periods/${agreementId}/${year}/${month}/pay`
+}
+
+/**
+ * @summary Record a payment against an approved room rent period
+ */
+export const rentApiPayPeriod = async (agreementId: number,
+    year: number,
+    month: number,
+    rentApiPaymentInput: RentApiPaymentInput, options?: RequestInit): Promise<RentApiPaymentResult> => {
+
+  return customFetch<RentApiPaymentResult>(getRentApiPayPeriodUrl(agreementId,year,month),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(rentApiPaymentInput)
+  }
+);}
+
+
+
+
+
+export const getRentApiPayPeriodMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof rentApiPayPeriod>>, TError,{agreementId: number;year: number;month: number;data: BodyType<RentApiPaymentInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof rentApiPayPeriod>>, TError,{agreementId: number;year: number;month: number;data: BodyType<RentApiPaymentInput>}, TContext> => {
+
+const mutationKey = ['rentApiPayPeriod'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof rentApiPayPeriod>>, {agreementId: number;year: number;month: number;data: BodyType<RentApiPaymentInput>}> = (props) => {
+          const {agreementId,year,month,data} = props ?? {};
+
+          return  rentApiPayPeriod(agreementId,year,month,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type RentApiPayPeriodMutationResult = NonNullable<Awaited<ReturnType<typeof rentApiPayPeriod>>>
+    export type RentApiPayPeriodMutationBody = BodyType<RentApiPaymentInput>
+    export type RentApiPayPeriodMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Record a payment against an approved room rent period
+ */
+export const useRentApiPayPeriod = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof rentApiPayPeriod>>, TError,{agreementId: number;year: number;month: number;data: BodyType<RentApiPaymentInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof rentApiPayPeriod>>,
+        TError,
+        {agreementId: number;year: number;month: number;data: BodyType<RentApiPaymentInput>},
+        TContext
+      > => {
+      return useMutation(getRentApiPayPeriodMutationOptions(options));
+    }
+
+export const getRentApiListPaymentsUrl = (params?: RentApiListPaymentsParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : String(value))
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/rent/payments?${stringifiedParams}` : `/api/rent/payments`
+}
+
+/**
+ * @summary List rent payments
+ */
+export const rentApiListPayments = async (params?: RentApiListPaymentsParams, options?: RequestInit): Promise<RentApiPayment[]> => {
+
+  return customFetch<RentApiPayment[]>(getRentApiListPaymentsUrl(params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getRentApiListPaymentsQueryKey = (params?: RentApiListPaymentsParams,) => {
+    return [
+    `/api/rent/payments`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getRentApiListPaymentsQueryOptions = <TData = Awaited<ReturnType<typeof rentApiListPayments>>, TError = ErrorType<unknown>>(params?: RentApiListPaymentsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof rentApiListPayments>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getRentApiListPaymentsQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof rentApiListPayments>>> = ({ signal }) => rentApiListPayments(params, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof rentApiListPayments>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type RentApiListPaymentsQueryResult = NonNullable<Awaited<ReturnType<typeof rentApiListPayments>>>
+export type RentApiListPaymentsQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary List rent payments
+ */
+
+export function useRentApiListPayments<TData = Awaited<ReturnType<typeof rentApiListPayments>>, TError = ErrorType<unknown>>(
+ params?: RentApiListPaymentsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof rentApiListPayments>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getRentApiListPaymentsQueryOptions(params,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getRentApiGetDashboardUrl = () => {
+
+
+
+
+  return `/api/rent/dashboard`
+}
+
+/**
+ * @summary Get warehouse rent dashboard totals
+ */
+export const rentApiGetDashboard = async ( options?: RequestInit): Promise<RentApiDashboard> => {
+
+  return customFetch<RentApiDashboard>(getRentApiGetDashboardUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getRentApiGetDashboardQueryKey = () => {
+    return [
+    `/api/rent/dashboard`
+    ] as const;
+    }
+
+
+export const getRentApiGetDashboardQueryOptions = <TData = Awaited<ReturnType<typeof rentApiGetDashboard>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof rentApiGetDashboard>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getRentApiGetDashboardQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof rentApiGetDashboard>>> = ({ signal }) => rentApiGetDashboard({ signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof rentApiGetDashboard>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type RentApiGetDashboardQueryResult = NonNullable<Awaited<ReturnType<typeof rentApiGetDashboard>>>
+export type RentApiGetDashboardQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary Get warehouse rent dashboard totals
+ */
+
+export function useRentApiGetDashboard<TData = Awaited<ReturnType<typeof rentApiGetDashboard>>, TError = ErrorType<unknown>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof rentApiGetDashboard>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getRentApiGetDashboardQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getRentApiListLedgerPostingsUrl = (params?: RentApiListLedgerPostingsParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : String(value))
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/rent/ledger-postings?${stringifiedParams}` : `/api/rent/ledger-postings`
+}
+
+/**
+ * @summary List room rent ledger postings
+ */
+export const rentApiListLedgerPostings = async (params?: RentApiListLedgerPostingsParams, options?: RequestInit): Promise<RentApiLedgerPosting[]> => {
+
+  return customFetch<RentApiLedgerPosting[]>(getRentApiListLedgerPostingsUrl(params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getRentApiListLedgerPostingsQueryKey = (params?: RentApiListLedgerPostingsParams,) => {
+    return [
+    `/api/rent/ledger-postings`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getRentApiListLedgerPostingsQueryOptions = <TData = Awaited<ReturnType<typeof rentApiListLedgerPostings>>, TError = ErrorType<unknown>>(params?: RentApiListLedgerPostingsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof rentApiListLedgerPostings>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getRentApiListLedgerPostingsQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof rentApiListLedgerPostings>>> = ({ signal }) => rentApiListLedgerPostings(params, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof rentApiListLedgerPostings>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type RentApiListLedgerPostingsQueryResult = NonNullable<Awaited<ReturnType<typeof rentApiListLedgerPostings>>>
+export type RentApiListLedgerPostingsQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary List room rent ledger postings
+ */
+
+export function useRentApiListLedgerPostings<TData = Awaited<ReturnType<typeof rentApiListLedgerPostings>>, TError = ErrorType<unknown>>(
+ params?: RentApiListLedgerPostingsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof rentApiListLedgerPostings>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getRentApiListLedgerPostingsQueryOptions(params,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
 
