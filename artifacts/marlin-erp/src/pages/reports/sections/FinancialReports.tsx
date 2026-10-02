@@ -72,7 +72,7 @@ interface FinancialStatements {
   };
   balanceSheet: {
     liabilities: { capitalAccount: GroupSummary; loans: GroupSummary; currentLiabilities: GroupSummary; pandlCarryForward: number; difference: number; total: number };
-    assets: { fixedAssets: GroupSummary; currentAssets: GroupSummary; closingStock: number; closingStockOnHand?: number; closingStockInTransit?: number; total: number };
+    assets: { fixedAssets: GroupSummary; currentAssets: GroupSummary; total: number };
   };
   integrity: { status?: "PASS" | "UNVERIFIED" | "FAIL"; balanced: boolean; difference: number; issues: string[] };
 }
@@ -669,7 +669,6 @@ function BalanceSheetReport({ range, loc, canDownload }: { range: RangeState; lo
   ] : [];
   const assetLines: Line[] = bs ? [
     ...groupLines(bs.assets.fixedAssets),
-    { name: 'Closing Stock', amount: bs.assets.closingStock, depth: 0, key: 'bs:closingStock', parentKey: null },
     ...groupLines(bs.assets.currentAssets),
   ] : [];
 
@@ -731,7 +730,6 @@ function BalanceSheetReport({ range, loc, canDownload }: { range: RangeState; lo
       <SummaryCards cards={[
         { label: 'Total Assets', value: fmt(bs?.assets.total) },
         { label: 'Total Liabilities', value: fmt(bs?.liabilities.total) },
-        { label: 'Closing Stock', value: fmt(bs?.assets.closingStock), tone: 'accent' },
         { label: 'Reserves & Surplus', value: fmt(bs?.liabilities.pandlCarryForward), tone: (bs?.liabilities.pandlCarryForward ?? 0) >= 0 ? 'pos' : 'neg' },
       ]} />
 

@@ -73,16 +73,13 @@ export function canonicalDocument(request: CanonicalReportRequest, payload: any)
     if (payload.integrity?.balanced === false) warnings.push(`Books do not balance. Difference: ${payload.integrity.difference}`);
     if (reportId === "balance-sheet") {
       const b = payload.balanceSheet;
-      const stockRows: (string | number)[][] = [
-        ["Closing Stock", amount(b.assets.closingStock)],
-      ];
       statement("Liabilities", [
         ...groupRows(b.liabilities.capitalAccount),
         ["Reserves & Surplus (P&L)", amount(b.liabilities.pandlCarryForward)],
         ...groupRows(b.liabilities.loans), ...groupRows(b.liabilities.currentLiabilities),
       ], b.liabilities.total);
       statement("Assets", [
-        ...groupRows(b.assets.fixedAssets), ...stockRows, ...groupRows(b.assets.currentAssets),
+        ...groupRows(b.assets.fixedAssets), ...groupRows(b.assets.currentAssets),
       ], b.assets.total);
     } else {
       // Read the canonical summary, not an independent export COGS/GP/NP formula.

@@ -1061,6 +1061,7 @@ export interface Books {
     assets: {
       fixedAssets: StatementGroup;
       currentAssets: StatementGroup;
+      /** Compatibility fields; stock is P&L-only and excluded from the Balance Sheet. */
       closingStock: number;
       closingStockOnHand: number;
       closingStockInTransit: number;
@@ -1193,7 +1194,7 @@ export async function buildBooks(
   // Closing stock must be dated to `toDate`, not to today. `stock_entries` holds
   // only the current position, so asking for a past period with today's stock
   // silently reports today's inventory as that period's closing stock — which
-  // corrupts COGS, net profit and the balance sheet's "as at" inventory alike.
+  // corrupts COGS, net profit and the P&L carry-forward alike.
   // Only when the statement genuinely runs to today (or has no end date) is the
   // current position the right answer, and only then is it exact.
   // Location slices carry their own stock: goods sit at branches, so a
@@ -1367,7 +1368,9 @@ export async function buildBooks(
   }
   const retainedEarnings = r2(cumulativeIncome + closing.total - cumulativeExpense);
 
-  const assetsTotal = r2(fixedGroup.total + curaGroup.total + closing.total);
+  // Stock is included in the P&L's COGS calculation, but is intentionally not
+  // presented as a Balance Sheet asset.
+  const assetsTotal = r2(fixedGroup.total + curaGroup.total);
   const liabilitiesTotal = r2(capitalGroup.total + loansGroup.total + curlGroup.total + retainedEarnings);
   const difference = r2(assetsTotal - liabilitiesTotal);
 
@@ -1409,7 +1412,7 @@ export async function buildBooks(
   // contradiction. Keep the warning visible without calling unknown evidence a FAIL.
   if (historicalClose && !closing.reliable) {
     addIntegrityIssue(
-      `Closing stock as at ${toDate} cannot be established: stock movement history does not reach back that far, so cost of goods sold, net profit and total assets are all unreliable for this period. Run the statement to today for figures that can be trusted.`,
+      `Closing stock as at ${toDate} cannot be established: stock movement history does not reach back that far, so cost of goods sold, net profit and P&L carry-forward are unreliable for this period. Run the statement to today for figures that can be trusted.`,
       "UNVERIFIED",
     );
   }
@@ -1445,11 +1448,12 @@ export async function buildBooks(
       );
     }
   }
-  if (Math.abs(difference) >= 0.01 && issues.length === 0) {
-    addIntegrityIssue(
-      `Assets and liabilities differ by ₹${Math.abs(difference).toFixed(2)} with no identifiable cause. The books need review before this statement is relied on.`,
-      "FAIL",
-    );
+  if (Math.abs(difference) >= 0.01) {
+    const unexplainedAfterStockExclusion = r2(difference + closing.total);
+    const gapDetail = Math.abs(unexplainedAfterStockExclusion) <= 0.01
+      ? `Assets and liabilities differ by ₹${Math.abs(difference).toFixed(2)} because closing stock of ₹${closing.total.toFixed(2)} is excluded from Balance Sheet assets but remains in P&L carry-forward.`
+      : `Assets and liabilities differ by ₹${Math.abs(difference).toFixed(2)}. After accounting for the intentionally excluded closing stock of ₹${closing.total.toFixed(2)}, an additional difference of ₹${Math.abs(unexplainedAfterStockExclusion).toFixed(2)} remains.`;
+    addIntegrityIssue(gapDetail, "FAIL");
   }
   const status: BooksIntegrity["status"] = hasIntegrityFailure || Math.abs(difference) >= 0.01
     ? "FAIL"
@@ -1518,9 +1522,9 @@ export async function buildBooks(
       assets: {
         fixedAssets: fixedGroup,
         currentAssets: curaGroup,
-        closingStock: closing.total,
-        closingStockOnHand: r2(Math.max(0, closing.total - closing.inTransit)),
-        closingStockInTransit: closing.inTransit,
+        closingStock: 0,
+        closingStockOnHand: 0,
+        closingStockInTransit: 0,
         total: assetsTotal,
       },
     },

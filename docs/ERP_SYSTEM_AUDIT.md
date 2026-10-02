@@ -132,7 +132,7 @@ Single source of truth: `buildDerivedPostings()` (routes/journal.ts) derives the
 | Branch transfer (cross-GSTIN) | Real sale + purchase rows replace the JVs (`branch_transfer_id` set — every revenue/spend query must exclude it) |
 | Production costing | Matched `STD-FG-INV`/`STD-PROD-ABS` legs — **excluded from P&L** (closing stock already carries the value): the capitalisation overlay |
 
-Statements: Trial Balance, P&L (period aggregate + opening/closing stock), Balance Sheet (cumulative; statements signed to each section's natural side — sign ≠ Dr/Cr), Ledger Statement (running balance), Day Book, Cash/Bank books — all from the same stream. Voucher numbering per type + FY via `voucher_sequences`.
+Statements: Trial Balance, P&L (period aggregate + opening/closing stock), Balance Sheet (cumulative; excludes the calculated closing-stock value; statements signed to each section's natural side — sign ≠ Dr/Cr), Ledger Statement (running balance), Day Book, Cash/Bank books — all from the same stream. Voucher numbering per type + FY via `voucher_sequences`.
 
 ## 7. Reporting Flow
 

@@ -323,9 +323,9 @@ router.get(
         { difference: books.balanceSheet.liabilities.difference },
       ),
       check(
-        "P&L closing stock = Balance Sheet inventory",
-        Math.abs(books.profitAndLoss.incomes.closingStock - books.balanceSheet.assets.closingStock) <= 0.01,
-        `P&L ₹${books.profitAndLoss.incomes.closingStock.toFixed(2)}; Balance Sheet ₹${books.balanceSheet.assets.closingStock.toFixed(2)}.`,
+        "Balance Sheet excludes closing stock",
+        Math.abs(books.balanceSheet.assets.closingStock) <= 0.01,
+        `Balance Sheet closing-stock value ₹${books.balanceSheet.assets.closingStock.toFixed(2)}; expected ₹0 because stock is included in P&L only.`,
       ),
       check(
         "Inventory valuation = current closing stock",

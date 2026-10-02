@@ -2,8 +2,8 @@
  * The single stock-valuation function.
  *
  * Every figure that expresses "what is our stock worth" must come from here:
- * the P&L closing stock, the Balance Sheet, the Stock Valuation report, the
- * Live Stock page and the dashboard. Before this existed the P&L valued stock
+ * the P&L closing stock, the Stock Valuation report, the Live Stock page and
+ * the dashboard. Before this existed the P&L valued stock
  * at MRP off an abandoned counter column while the Stock Valuation report
  * valued the same item at weighted-average cost, so the two never agreed.
  *
