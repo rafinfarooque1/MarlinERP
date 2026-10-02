@@ -1851,6 +1851,13 @@ export const ListStockBranchType = {
   outlet: 'outlet',
 } as const;
 
+export type ListWarehousesParams = {
+/**
+ * Include disabled warehouses; restricted to super administrators by the server.
+ */
+includeDisabled?: boolean;
+};
+
 export type ListItemPricesParams = {
 outletId?: number;
 };

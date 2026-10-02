@@ -25,6 +25,7 @@ import {
   type PriceMode, type TaxType,
 } from "@workspace/purchase-pricing";
 import { respondIfMonthLocked, isMonthLocked, ymOfDate, monthLockedBody } from "../lib/periodLock";
+import { visibleLocationSql } from "../lib/warehouseVisibility";
 
 const router = Router();
 
@@ -499,6 +500,7 @@ export async function loadPurchaseBillDoc(
            v.state AS vendor_state, v.phone AS vendor_phone, v.email AS vendor_email
       FROM purchases p LEFT JOIN vendors v ON v.id = p.vendor_id
      WHERE p.id = $1 AND p.branch_transfer_id IS NULL
+       AND ${visibleLocationSql("COALESCE(p.location_type, 'headoffice')", "COALESCE(p.location_id, 1)")}
        ${scopeWhere !== "TRUE" ? `AND ${scopeWhere}` : ""}`, params);
   if (!r) return null;
   const nameMaps = await buildNameMaps();
@@ -552,6 +554,7 @@ router.get("/purchases", requireModuleView(["page:/production/purchase", "page:/
   const dr = parseDateRange(req.query as Record<string, unknown>);
   if (!dr.ok) { res.status(400).json({ error: dr.error }); return; }
   pushDateRange(conds, params, 'p.purchase_date', dr.from, dr.to);
+  conds.push(visibleLocationSql("COALESCE(p.location_type, 'headoffice')", "COALESCE(p.location_id, 1)"));
   pushLocationFilter(
     conds, params, getLocationFilter(req),
     // Legacy bills predate the location columns and belong to Head Office.
@@ -973,7 +976,10 @@ router.get("/purchases/:id", requireModuleView("page:/production/purchase"), asy
   const { rows: [locRow] } = await pool.query(
     `SELECT location_type, location_id, price_mode, other_charges,
             vendor_invoice_date::text AS vendor_invoice_date
-       FROM purchases WHERE id = $1`, [id]);
+       FROM purchases
+      WHERE id = $1
+        AND ${visibleLocationSql("COALESCE(location_type, 'headoffice')", "COALESCE(location_id, 1)")}`, [id]);
+  if (!locRow) { res.status(404).json({ error: "Not found" }); return; }
   const loc: ProdLocation = { type: locRow?.location_type ?? 'headoffice', id: Number(locRow?.location_id ?? 1) };
   const gotCharges = parseStoredOtherCharges(locRow?.other_charges);
 

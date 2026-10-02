@@ -20,6 +20,7 @@ import { getLocationFilter } from "../lib/requestLocation";
 import { parsePaging, setPagingHeaders, applyPaging } from "../lib/paging";
 import { availabilityAt, insufficientStockMessage } from "../lib/reservations";
 import { respondIfMonthLocked, isMonthLocked, ymOfDate, monthLockedBody } from "../lib/periodLock";
+import { visibleLocationSql } from "../lib/warehouseVisibility";
 
 // ── Batch costing & wastage ──────────────────────────────────────────────────
 // Every new batch snapshots, at save time:
@@ -152,6 +153,7 @@ router.get("/productions", requireModuleView("page:/production/production"), asy
 
   // Optional client filters — ANDed onto the scope, so they only narrow it.
   const conds: string[] = [where];
+  conds.push(visibleLocationSql("COALESCE(p.location_type, 'headoffice')", "COALESCE(p.location_id, 1)"));
   pushDateRange(conds, params, "p.production_date", dr.from, dr.to);
   pushLocationFilter(
     conds, params, getLocationFilter(req),
@@ -212,7 +214,10 @@ router.get("/productions/reports", requireModuleView("page:/production/reports")
   // View narrowing from the global location selector (or explicit query
   // params) — same expressions as the production list route: legacy runs
   // without location stamps belong to Head Office.
-  const rptConds: string[] = [where];
+  const rptConds: string[] = [
+    where,
+    visibleLocationSql("COALESCE(p.location_type, 'headoffice')", "COALESCE(p.location_id, 1)"),
+  ];
   pushLocationFilter(
     rptConds, params, getLocationFilter(req),
     "COALESCE(p.location_type, 'headoffice')", "COALESCE(p.location_id, 1)",
@@ -766,7 +771,13 @@ router.get("/productions/:id", requireModuleView("page:/production/production"),
   if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid production id" }); return; }
   const [row] = await db.select().from(productionsTable).where(eq(productionsTable.id, id)).limit(1);
   if (!row) { res.status(404).json({ error: "Not found" }); return; }
-  const { rows: [ex] } = await pool.query(`SELECT ${EXTRA_COLS} FROM productions WHERE id = $1`, [id]);
+  const { rows: [ex] } = await pool.query(
+    `SELECT ${EXTRA_COLS} FROM productions p
+      WHERE p.id = $1
+        AND ${visibleLocationSql("COALESCE(p.location_type, 'headoffice')", "COALESCE(p.location_id, 1)")}`,
+    [id],
+  );
+  if (!ex) { res.status(404).json({ error: "Not found" }); return; }
 
   // LBAC: only the location that made the batch (and Head Office) may read it.
   const scope = await getUserDataScope((req as any).employee ?? { branchType: "headoffice", branchId: 0 });

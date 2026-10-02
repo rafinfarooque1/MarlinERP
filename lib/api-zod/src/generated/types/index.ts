@@ -96,6 +96,7 @@ export * from './listReconciliationPendingQueueParams';
 export * from './listSalesParams';
 export * from './listStockBranchType';
 export * from './listStockParams';
+export * from './listWarehousesParams';
 export * from './loginInput';
 export * from './material';
 export * from './materialInput';

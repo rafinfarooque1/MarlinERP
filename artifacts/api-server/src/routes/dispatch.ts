@@ -24,6 +24,7 @@ import { getUserDataScope, scopeSalesWhere } from "../lib/dataScope";
 import { getLocationFilter } from "../lib/requestLocation";
 import { isIsoDate } from "../lib/dateInput";
 import { logActivity } from "../lib/audit";
+import { visibleLocationSql } from "../lib/warehouseVisibility";
 
 const router = Router();
 
@@ -120,6 +121,7 @@ router.get("/dispatch/queue", requireModuleView(DISPATCH_PAGE), async (req, res)
   const conds: string[] = [
     "s.branch_transfer_id IS NULL", // internal GST documents, never dispatched to a customer
     "s.cancelled_at IS NULL",       // cancelled sales drop out of the queue automatically
+    visibleLocationSql("COALESCE(s.location_type, 'outlet')", "COALESCE(s.location_id, s.outlet_id)"),
   ];
 
   if (from) { params.push(from); conds.push(`s.sale_date >= $${params.length}::date`); }

@@ -9,6 +9,7 @@ import { getUserDataScope, isLocationInScope } from "../lib/dataScope";
 import { resolveMoneyVoucherLocation, callerLocation } from "../lib/moneyScope";
 import { outletWritesBlocked, OUTLETS_DISABLED_MESSAGE, OUTLETS_DISABLED_CODE } from "../lib/featureFlags";
 import { respondIfMonthLocked } from "../lib/periodLock";
+import { visibleLocationSql } from "../lib/warehouseVisibility";
 
 const router = Router();
 
@@ -75,7 +76,10 @@ router.get("/cash-in-outlet", requireModuleView(["page:/accounts/cash-in-outlet"
 
   // ── Outlets ────────────────────────────────────────────────────────────────
   const { rows: outlets } = await pool.query(
-    `SELECT id, name, warehouse_id, cash_ledger_id FROM outlets ORDER BY name`
+    `SELECT o.id, o.name, o.warehouse_id, o.cash_ledger_id
+       FROM outlets o
+      WHERE ${visibleLocationSql("'outlet'", "o.id")}
+      ORDER BY o.name`
   );
   for (const outlet of outlets) {
     // Skip outlets outside the caller's scope
@@ -111,7 +115,10 @@ router.get("/cash-in-outlet", requireModuleView(["page:/accounts/cash-in-outlet"
 
   // ── Warehouses ─────────────────────────────────────────────────────────────
   const { rows: warehouses } = await pool.query(
-    `SELECT id, name, cash_ledger_id FROM warehouses ORDER BY name`
+    `SELECT w.id, w.name, w.cash_ledger_id
+       FROM warehouses w
+      WHERE ${visibleLocationSql("'warehouse'", "w.id")}
+      ORDER BY w.name`
   );
   for (const wh of warehouses) {
     // Skip warehouses outside the caller's scope
@@ -148,7 +155,12 @@ router.get("/cash-in-outlet/deposits", requireModuleView("page:/accounts/cash-in
   const { status, outletId } = req.query as Record<string, string | undefined>;
 
   const params: any[] = [];
-  const conds: string[] = [];
+  const conds: string[] = [
+    visibleLocationSql(
+      "CASE WHEN cd.warehouse_id IS NOT NULL THEN 'warehouse' ELSE 'outlet' END",
+      "COALESCE(cd.warehouse_id, cd.outlet_id)",
+    ),
+  ];
 
   if (status)   { params.push(status);         conds.push(`cd.status = $${params.length}`); }
   if (outletId) { params.push(Number(outletId)); conds.push(`cd.outlet_id = $${params.length}`); }

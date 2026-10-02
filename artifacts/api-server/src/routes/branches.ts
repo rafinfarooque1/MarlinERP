@@ -173,17 +173,22 @@ async function hasLedgerEntries(ledgerIds: (number | null)[]): Promise<boolean> 
 // Cross-cutting location dropdown consumed by most pages (Dashboard, Inventory,
 // HR, Expenses, Reports, Transfers …). Kept deliberately wide to avoid blanking
 // out pages for users with any of these permissions.
-router.get("/warehouses", requireModuleView(["page:/", "page:/production/item-master", "page:/headoffice/stock-verification", "page:/headoffice/warehouses", "page:/headoffice/outlets", "page:/headoffice/item-price", "page:/headoffice/inventory-reports", "page:/headoffice/stock", "page:/hr/attendance", "page:/hr/payroll", "page:/hr/employees", "page:/accounts/expenses", "page:/reports/sales", "page:/transfers", "page:/assets/purchases", "page:/assets/register", "page:/assets/transfers", "page:/assets/reports"]), async (_req, res): Promise<void> => {
-  const rows = await db.select().from(warehousesTable).orderBy(warehousesTable.id);
+router.get("/warehouses", requireModuleView(["page:/", "page:/production/item-master", "page:/headoffice/stock-verification", "page:/headoffice/warehouses", "page:/headoffice/outlets", "page:/headoffice/item-price", "page:/headoffice/inventory-reports", "page:/headoffice/stock", "page:/hr/attendance", "page:/hr/payroll", "page:/hr/employees", "page:/accounts/expenses", "page:/reports/sales", "page:/transfers", "page:/assets/purchases", "page:/assets/register", "page:/assets/transfers", "page:/assets/reports"]), async (req, res): Promise<void> => {
+  const includeDisabled = req.query.includeDisabled === "true";
+  if (includeDisabled && !(await requireLevelOne(req, res))) return;
+  const disabledFilter = includeDisabled ? "" : "WHERE disabled_at IS NULL";
+  const { rows: raw } = await pool.query<{ id: number; cash_ledger_id: number | null; sales_ledger_id: number | null; purchase_ledger_id: number | null; disabled_at: Date | null; disabled_by: string | null }>(
+    `SELECT id, cash_ledger_id, sales_ledger_id, purchase_ledger_id, disabled_at, disabled_by
+       FROM warehouses ${disabledFilter} ORDER BY id`
+  );
+  const visibleIds = new Set(raw.map((r) => Number(r.id)));
+  const rows = (await db.select().from(warehousesTable).orderBy(warehousesTable.id))
+    .filter((warehouse) => visibleIds.has(Number(warehouse.id)));
   const outletCounts = await db
     .select({ warehouseId: outletsTable.warehouseId, cnt: count() })
     .from(outletsTable)
     .groupBy(outletsTable.warehouseId);
   const countMap = new Map(outletCounts.map((o) => [o.warehouseId, o.cnt]));
-  // Fetch ledger IDs via raw query (columns not in Drizzle schema)
-  const { rows: raw } = await pool.query<{ id: number; cash_ledger_id: number | null; sales_ledger_id: number | null; purchase_ledger_id: number | null; disabled_at: Date | null; disabled_by: string | null }>(
-    `SELECT id, cash_ledger_id, sales_ledger_id, purchase_ledger_id, disabled_at, disabled_by FROM warehouses ORDER BY id`
-  );
   const ledgerMap = new Map(raw.map(r => [r.id, {
     cashLedgerId: r.cash_ledger_id, salesLedgerId: r.sales_ledger_id, purchaseLedgerId: r.purchase_ledger_id,
     disabledAt: r.disabled_at ? new Date(r.disabled_at).toISOString() : null, disabledBy: r.disabled_by ?? null,
@@ -192,7 +197,7 @@ router.get("/warehouses", requireModuleView(["page:/", "page:/production/item-ma
   // the bank and UPI fall back to the company, so a warehouse without its own
   // is not necessarily incomplete.
   const issuers = await loadWarehouseIssuers(pool);
-  const paging = parsePaging(_req.query as Record<string, unknown>);
+  const paging = parsePaging(req.query as Record<string, unknown>);
   setPagingHeaders(res, rows.length, paging);
   res.json(applyPaging(rows, paging).map((r) => ({
     ...r, outletCount: countMap.get(r.id) ?? 0, ...ledgerMap.get(r.id),
@@ -461,12 +466,21 @@ router.delete("/warehouses/:id/permanent", requireModuleAction("page:/headoffice
 // Cross-cutting location dropdown consumed by most pages (as /warehouses, plus
 // POS and Sales Expenses). Kept deliberately wide to avoid blanking out pages.
 router.get("/outlets", requireModuleView(["page:/", "page:/production/item-master", "page:/headoffice/stock-verification", "page:/headoffice/warehouses", "page:/headoffice/outlets", "page:/headoffice/item-price", "page:/headoffice/inventory-reports", "page:/headoffice/stock", "page:/hr/attendance", "page:/hr/payroll", "page:/hr/employees", "page:/accounts/expenses", "page:/reports/sales", "page:/transfers", "page:/sales/pos", "page:/sales/expenses", "page:/assets/purchases", "page:/assets/register", "page:/assets/transfers", "page:/assets/reports"]), async (_req, res): Promise<void> => {
-  const rows = await db.select().from(outletsTable).orderBy(outletsTable.id);
+  const { rows: raw } = await pool.query<{ id: number; cash_ledger_id: number | null; sales_ledger_id: number | null; gstin: string | null; state: string | null; state_code: string | null; email: string | null; fssai_number: string | null; logo_url: string | null }>(
+    `SELECT o.id, o.cash_ledger_id, o.sales_ledger_id,
+            COALESCE(o.gstin,'') AS gstin, COALESCE(o.state,'') AS state,
+            COALESCE(o.state_code,'') AS state_code, COALESCE(o.email,'') AS email,
+            COALESCE(o.fssai_number,'') AS fssai_number, o.logo_url
+       FROM outlets o
+       LEFT JOIN warehouses w ON w.id = o.warehouse_id
+      WHERE w.disabled_at IS NULL
+      ORDER BY o.id`
+  );
+  const visibleIds = new Set(raw.map((r) => Number(r.id)));
+  const rows = (await db.select().from(outletsTable).orderBy(outletsTable.id))
+    .filter((outlet) => visibleIds.has(Number(outlet.id)));
   const warehouses = await db.select().from(warehousesTable);
   const wMap = new Map(warehouses.map((w) => [w.id, w.name]));
-  const { rows: raw } = await pool.query<{ id: number; cash_ledger_id: number | null; sales_ledger_id: number | null; gstin: string | null; state: string | null; state_code: string | null; email: string | null; fssai_number: string | null; logo_url: string | null }>(
-    `SELECT id, cash_ledger_id, sales_ledger_id, COALESCE(gstin,'') AS gstin, COALESCE(state,'') AS state, COALESCE(state_code,'') AS state_code, COALESCE(email,'') AS email, COALESCE(fssai_number,'') AS fssai_number, logo_url FROM outlets ORDER BY id`
-  );
   const ledgerMap = new Map(raw.map(r => [r.id, { cashLedgerId: r.cash_ledger_id, salesLedgerId: r.sales_ledger_id, gstin: r.gstin ?? '', state: r.state ?? '', stateCode: r.state_code ?? '', email: r.email ?? '', fssaiNumber: r.fssai_number ?? '', logoUrl: r.logo_url ?? null }]));
   const paging = parsePaging(_req.query as Record<string, unknown>);
   setPagingHeaders(res, rows.length, paging);

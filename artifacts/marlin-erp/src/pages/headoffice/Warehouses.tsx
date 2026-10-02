@@ -126,7 +126,6 @@ const req = <span className="text-destructive">*</span>;
 
 export default function Warehouses() {
   const perm = usePermission('page:/headoffice/warehouses');
-  const { data: warehouses = [], isLoading } = useListWarehouses();
   const [search, setSearch] = useState('');
   const [isOpen, setIsOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -142,6 +141,9 @@ export default function Warehouses() {
   const { data: hierarchies = [] } = useListHierarchies();
   const myLevel = hierarchies.find(h => h.id === (me as any)?.hierarchyId)?.level;
   const isSuperAdmin = myLevel === 1;
+  const { data: warehouses = [], isLoading } = useListWarehouses(
+    isSuperAdmin ? { includeDisabled: true } : undefined,
+  );
 
   const enableMutation = useEnableWarehouse();
   const [flowWh, setFlowWh] = useState<WarehouseRow | null>(null);

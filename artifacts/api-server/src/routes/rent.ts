@@ -12,6 +12,7 @@ import {
 } from "../lib/rentAccrual";
 import { provisionRentLedgers } from "../lib/rentLedgers";
 import { assertMonthOpen, handlePeriodLocked, respondIfMonthLocked } from "../lib/periodLock";
+import { visibleLocationSql } from "../lib/warehouseVisibility";
 
 const router: IRouter = Router();
 const PERM = "page:/hr/rent";
@@ -45,10 +46,14 @@ function badDateRange(q: Record<string, string | undefined>, res: Response): boo
  * is the intended answer, not a bug: rent is not an outlet concern.
  */
 function scopeWhere(scope: DataScope, params: unknown[], col: string): string {
-  if (scope.isHeadOffice) return "TRUE";
-  if (scope.warehouseIds.length === 0) return "FALSE";
-  params.push(scope.warehouseIds);
-  return `${col} = ANY($${params.length}::int[])`;
+  let scopeCondition: string;
+  if (scope.isHeadOffice) scopeCondition = "TRUE";
+  else if (scope.warehouseIds.length === 0) scopeCondition = "FALSE";
+  else {
+    params.push(scope.warehouseIds);
+    scopeCondition = `${col} = ANY($${params.length}::int[])`;
+  }
+  return `(${scopeCondition}) AND ${visibleLocationSql("'warehouse'", col)}`;
 }
 
 /**

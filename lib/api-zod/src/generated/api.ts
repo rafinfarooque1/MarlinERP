@@ -736,8 +736,14 @@ export const GetStockTransferResponse = zod.object({
 
 
 /**
- * @summary List all warehouses
+ * @summary List enabled warehouses, optionally including disabled warehouses for lifecycle management
  */
+export const listWarehousesQueryIncludeDisabledDefault = false;
+
+export const ListWarehousesQueryParams = zod.object({
+  "includeDisabled": zod.coerce.boolean().default(listWarehousesQueryIncludeDisabledDefault).describe('Include disabled warehouses; restricted to super administrators by the server.')
+})
+
 export const ListWarehousesResponseItem = zod.object({
   "id": zod.number(),
   "name": zod.string(),

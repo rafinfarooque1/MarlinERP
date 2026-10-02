@@ -535,10 +535,18 @@ paths:
     get:
       operationId: listWarehouses
       tags: [warehouses]
-      summary: List all warehouses
+      summary: List enabled warehouses, optionally including disabled warehouses for lifecycle management
+      parameters:
+        - name: includeDisabled
+          in: query
+          required: false
+          description: Include disabled warehouses; restricted to super administrators by the server.
+          schema:
+            type: boolean
+            default: false
       responses:
         "200":
-          description: Warehouses list
+          description: Warehouses visible to the caller
           content:
             application/json:
               schema:

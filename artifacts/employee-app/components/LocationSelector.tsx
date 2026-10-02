@@ -25,6 +25,7 @@ export function LocationSelector() {
 
   // Only Head Office users ever open the picker; branch users never fetch.
   const { data: warehouses } = useListWarehouses(
+    undefined,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     { query: { enabled: !!token && isHeadOffice, staleTime: 300_000, retry: false } as any },
   );

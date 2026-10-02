@@ -25,6 +25,7 @@ import {
 } from "../lib/postingLocation";
 import { getLocationFilter, getPostingLocationFilter } from "../lib/requestLocation";
 import { ymOfDate } from "../lib/periodLock";
+import { visibleLocationSql } from "../lib/warehouseVisibility";
 
 const router = Router();
 const REPORTS_KEY = "page:/reports/sales";
@@ -68,18 +69,42 @@ async function splitPostings(from: string | null, to: string | null, loc: Postin
     openingBalancePostings({ toDate: to ?? undefined }),
   ]);
   const all = derived.concat(openings as Posting[]);
+  const locationPairs = [...new Map(all
+    .filter((p) => p.locationType != null)
+    .map((p) => [`${p.locationType}:${p.locationId ?? 0}`, { type: p.locationType, id: p.locationId ?? 0 }])).values()];
+  const visiblePairs = new Set<string>();
+  if (locationPairs.length) {
+    const { rows } = await pool.query<any>(
+      `SELECT location_type, location_id
+         FROM unnest($1::text[], $2::int[]) AS locations(location_type, location_id)
+        WHERE ${visibleLocationSql("locations.location_type", "locations.location_id")}`,
+      [locationPairs.map((p) => p.type), locationPairs.map((p) => p.id)],
+    );
+    for (const row of rows) visiblePairs.add(`${row.location_type}:${row.location_id}`);
+  }
+  const isVisible = (p: Posting) => p.locationType == null || visiblePairs.has(`${p.locationType}:${p.locationId ?? 0}`);
   const before: Posting[] = [];
   const inRange: Posting[] = [];
+  const visibleBefore: Posting[] = [];
+  const visibleInRange: Posting[] = [];
   const windowAll: Posting[] = [];
+  const selectedLocationVisible = !loc || (loc.type !== "warehouse" && loc.type !== "outlet")
+    || visiblePairs.has(`${loc.type}:${loc.id}`);
   for (const p of all) {
     const isBefore = Boolean(from && p.date < from);
     if (!isBefore) windowAll.push(p);
+    if (!selectedLocationVisible) continue;
     if (loc && !postingMatchesLocation(p, loc)) continue;
-    if (isBefore) before.push(p);
-    else inRange.push(p);
+    if (isBefore) {
+      before.push(p);
+      if (isVisible(p)) visibleBefore.push(p);
+    } else {
+      inRange.push(p);
+      if (isVisible(p)) visibleInRange.push(p);
+    }
   }
   const companyLevel = loc && loc.type !== "company" ? companyLevelSummary(windowAll) : null;
-  return { before, inRange, companyLevel };
+  return { before, inRange, visibleBefore, visibleInRange, companyLevel };
 }
 
 /** Response fields a location-filtered report adds; {} when unfiltered so the
@@ -158,14 +183,17 @@ router.get("/reports/fin/ledger-statement", requireModuleView(REPORTS_KEY), asyn
   const ids = chart.subtree(ledgerId);
 
   const loc = getPostingLocationFilter(req);
-  const { before, inRange, companyLevel } = await splitPostings(from, to, loc);
+  const { before, inRange, visibleBefore, visibleInRange, companyLevel } = await splitPostings(from, to, loc);
   const opening = r2(before.filter((p) => ids.has(p.ledgerId)).reduce((s, p) => s + p.debit - p.credit, 0));
 
   const mine = inRange.filter((p) => ids.has(p.ledgerId));
   mine.sort((a, b) => a.date.localeCompare(b.date) || a.entryId.localeCompare(b.entryId));
+  const visibleOpening = r2(visibleBefore.filter((p) => ids.has(p.ledgerId)).reduce((s, p) => s + p.debit - p.credit, 0));
+  const visibleMine = visibleInRange.filter((p) => ids.has(p.ledgerId));
+  visibleMine.sort((a, b) => a.date.localeCompare(b.date) || a.entryId.localeCompare(b.entryId));
 
-  let balance = opening;
-  const entries = mine.map((p) => {
+  let balance = visibleOpening;
+  const entries = visibleMine.map((p) => {
     balance = r2(balance + p.debit - p.credit);
     return {
       date: p.date, source: p.source, voucherNumber: p.voucherNumber,
@@ -180,9 +208,9 @@ router.get("/reports/fin/ledger-statement", requireModuleView(REPORTS_KEY), asyn
     fromDate: from, toDate: to,
     openingBalance: opening,
     entries,
-    totalDebit: r2(entries.reduce((s, e) => s + e.debit, 0)),
-    totalCredit: r2(entries.reduce((s, e) => s + e.credit, 0)),
-    closingBalance: balance,
+    totalDebit: r2(mine.reduce((s, p) => s + p.debit, 0)),
+    totalCredit: r2(mine.reduce((s, p) => s + p.credit, 0)),
+    closingBalance: r2(opening + mine.reduce((s, p) => s + p.debit - p.credit, 0)),
     ...locationEcho(loc, companyLevel),
   });
 });
@@ -258,14 +286,17 @@ async function bookReport(req: any, rootCodes: string | string[]) {
     : rootIds;
 
   const loc = getPostingLocationFilter(req);
-  const { before, inRange, companyLevel } = await splitPostings(from, to, loc);
+  const { before, inRange, visibleBefore, visibleInRange, companyLevel } = await splitPostings(from, to, loc);
   const opening = r2(before.filter((p) => scopeIds.has(p.ledgerId)).reduce((s, p) => s + p.debit - p.credit, 0));
 
   const mine = inRange.filter((p) => scopeIds.has(p.ledgerId));
   mine.sort((a, b) => a.date.localeCompare(b.date) || a.entryId.localeCompare(b.entryId));
+  const visibleOpening = r2(visibleBefore.filter((p) => scopeIds.has(p.ledgerId)).reduce((s, p) => s + p.debit - p.credit, 0));
+  const visibleMine = visibleInRange.filter((p) => scopeIds.has(p.ledgerId));
+  visibleMine.sort((a, b) => a.date.localeCompare(b.date) || a.entryId.localeCompare(b.entryId));
 
-  let balance = opening;
-  const entries = mine.map((p) => {
+  let balance = visibleOpening;
+  const entries = visibleMine.map((p) => {
     balance = r2(balance + p.debit - p.credit);
     return {
       date: p.date, source: p.source, voucherNumber: p.voucherNumber,
@@ -312,9 +343,9 @@ async function bookReport(req: any, rootCodes: string | string[]) {
         },
     openingBalance: opening,
     entries,
-    totalReceipts: r2(entries.reduce((s, e) => s + e.receipt, 0)),
-    totalPayments: r2(entries.reduce((s, e) => s + e.payment, 0)),
-    closingBalance: balance,
+    totalReceipts: r2(mine.reduce((s, p) => s + p.debit, 0)),
+    totalPayments: r2(mine.reduce((s, p) => s + p.credit, 0)),
+    closingBalance: r2(opening + mine.reduce((s, p) => s + p.debit - p.credit, 0)),
     accounts,
     ...locationEcho(loc, companyLevel),
   };
@@ -434,6 +465,7 @@ router.get("/reports/fin/expenses", requireModuleView(REPORTS_KEY), async (req, 
     `SELECT e.id, e.expense_number, e.expense_date, e.amount, e.description,
             COALESCE(NULLIF(e.category,''),'Uncategorised') AS category,
             e.location_type, e.location_id,
+            ${visibleLocationSql("COALESCE(e.location_type,'headoffice')", "COALESCE(e.location_id,0)")} AS location_visible,
             l.name AS ledger_name, l.code AS ledger_code,
             pa.name AS paid_from,
             emp.name AS created_by_name
@@ -460,6 +492,7 @@ router.get("/reports/fin/expenses", requireModuleView(REPORTS_KEY), async (req, 
   const { rows: chargeRows } = await pool.query<any>(
     `SELECT p.id AS pid, e.idx, p.purchase_date, p.invoice_number,
             p.location_type, p.location_id,
+            ${visibleLocationSql("COALESCE(p.location_type,'headoffice')", "COALESCE(p.location_id,0)")} AS location_visible,
             (e.val->>'amount')::numeric AS amount,
             v.name AS vendor_name, l.name AS ledger_name, l.code AS ledger_code
        FROM purchases p
@@ -498,6 +531,7 @@ router.get("/reports/fin/expenses", requireModuleView(REPORTS_KEY), async (req, 
     description: r.description ?? "",
     locationType: r.location_type ?? "headoffice",
     locationName: locName(r.location_type, r.location_id),
+    locationVisible: r.location_visible !== false,
     createdBy: r.created_by_name ?? null,
     amount: r2(Number(r.amount)),
   }));
@@ -516,15 +550,18 @@ router.get("/reports/fin/expenses", requireModuleView(REPORTS_KEY), async (req, 
       description: `Other charge on purchase bill${c.invoice_number ? ` ${c.invoice_number}` : ` #${c.pid}`}${c.vendor_name ? ` — ${c.vendor_name}` : ""}`,
       locationType: c.location_type ?? "headoffice",
       locationName: locName(c.location_type, c.location_id),
+      locationVisible: c.location_visible !== false,
       createdBy: null,
       amount: r2(Number(c.amount)),
     });
   }
   items.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+  const visibleItems = items.filter((i) => i.locationVisible);
+  const summaryItems = effType ? visibleItems : items;
 
-  const roll = (key: (i: typeof items[number]) => string) => {
+  const roll = (source: typeof items, key: (i: typeof items[number]) => string) => {
     const m = new Map<string, { count: number; amount: number }>();
-    for (const i of items) {
+    for (const i of source) {
       const k = key(i);
       const v = m.get(k) ?? { count: 0, amount: 0 };
       v.count += 1; v.amount = r2(v.amount + i.amount);
@@ -535,12 +572,12 @@ router.get("/reports/fin/expenses", requireModuleView(REPORTS_KEY), async (req, 
 
   res.json({
     fromDate: from, toDate: to,
-    rows: items,
-    byCategory: roll((i) => i.category),
-    byLedger: roll((i) => i.ledgerName),
-    byLocation: roll((i) => i.locationName),
-    total: r2(items.reduce((s, i) => s + i.amount, 0)),
-    count: items.length,
+    rows: visibleItems.map(({ locationVisible: _locationVisible, ...item }) => item),
+    byCategory: roll(summaryItems, (i) => i.category),
+    byLedger: roll(summaryItems, (i) => i.ledgerName),
+    byLocation: roll(visibleItems, (i) => i.locationName),
+    total: r2(summaryItems.reduce((s, i) => s + i.amount, 0)),
+    count: summaryItems.length,
   });
 });
 
@@ -576,6 +613,7 @@ router.get("/reports/fin/salary", requireModuleView(REPORTS_KEY), async (req, re
             p.deductions, p.bonus, p.extra_amount, p.net_pay, p.total_amount, p.paid_amount,
             p.payment_mode, p.working_days, p.present_days,
             e.name AS employee_name, e.branch_type, e.branch_id,
+            ${visibleLocationSql("COALESCE(e.branch_type,'headoffice')", "COALESCE(e.branch_id,0)")} AS location_visible,
             h.name AS role_name
        FROM payroll p
        LEFT JOIN employees e   ON e.id = p.employee_id
@@ -594,7 +632,7 @@ router.get("/reports/fin/salary", requireModuleView(REPORTS_KEY), async (req, re
   const wMap = new Map<number, string>(whs.map((w: any) => [Number(w.id), String(w.name)]));
   const oMap = new Map<number, string>(outs.map((o: any) => [Number(o.id), String(o.name)]));
 
-  const items: SalaryRow[] = (rows as any[])
+  const allItems: (SalaryRow & { locationVisible: boolean })[] = (rows as any[])
     .filter((r: any) => {
       if (salViewLoc) {
         const bt = String(r.branch_type ?? "headoffice");
@@ -610,7 +648,7 @@ router.get("/reports/fin/salary", requireModuleView(REPORTS_KEY), async (req, re
       if (to && startOfMonth(y, m) > to) return false;
       return true;
     })
-    .map((r: any): SalaryRow => {
+    .map((r: any): SalaryRow & { locationVisible: boolean } => {
       const bt = r.branch_type ?? "headoffice";
       const location = bt === "warehouse" ? (wMap.get(Number(r.branch_id)) ?? `Warehouse #${r.branch_id}`)
         : bt === "outlet" ? (oMap.get(Number(r.branch_id)) ?? `Outlet #${r.branch_id}`)
@@ -622,6 +660,7 @@ router.get("/reports/fin/salary", requireModuleView(REPORTS_KEY), async (req, re
         employeeName: r.employee_name ?? `Employee #${r.employee_id}`,
         role: r.role_name ?? null,
         location,
+        locationVisible: r.location_visible !== false,
         period: r.pay_period_label ?? `${String(r.month).padStart(2, "0")}/${r.year}`,
         month: Number(r.month), year: Number(r.year),
         status: r.status ?? (r.is_paid ? "paid" : "draft"),
@@ -649,12 +688,15 @@ router.get("/reports/fin/salary", requireModuleView(REPORTS_KEY), async (req, re
       };
     });
 
-  const sum = (f: (i: typeof items[number]) => number) => r2(items.reduce((s, i) => s + f(i), 0));
+  const visibleItems = allItems.filter((i) => i.locationVisible);
+  const summaryItems = salViewLoc ? visibleItems : allItems;
+  const items: SalaryRow[] = visibleItems.map(({ locationVisible: _locationVisible, ...item }) => item);
+  const sum = (f: (i: typeof summaryItems[number]) => number) => r2(summaryItems.reduce((s, i) => s + f(i), 0));
   res.json({
     fromDate: from, toDate: to,
     rows: items,
     totals: {
-      count: items.length,
+      count: summaryItems.length,
       grossPay: sum((i) => i.grossPay),
       deductions: sum((i) => i.lopDeduction + i.advanceDeduction + i.pfEmployee + i.esiEmployee + i.otherDeductions),
       netPay: sum((i) => i.netPay),
@@ -663,7 +705,7 @@ router.get("/reports/fin/salary", requireModuleView(REPORTS_KEY), async (req, re
       esiEmployer: sum((i) => i.esiEmployer),
       costToCompany: sum((i) => i.costToCompany),
     },
-    byStatus: [...items.reduce((m, i) => {
+    byStatus: [...summaryItems.reduce((m, i) => {
       const v = m.get(i.status) ?? { count: 0, netPay: 0 };
       v.count += 1; v.netPay = r2(v.netPay + i.netPay);
       return m.set(i.status, v);
@@ -680,15 +722,23 @@ router.get("/reports/fin/day-book", requireModuleView(REPORTS_KEY), async (req, 
   if (!headOfficeOnly(req)) { res.json({ entries: [], totals: null }); return; }
   const { from, to } = range(req);
   const loc = getPostingLocationFilter(req);
-  const { inRange, companyLevel } = await splitPostings(from, to, loc);
+  const { inRange, visibleInRange, companyLevel } = await splitPostings(from, to, loc);
   const chart = await loadChart();
+
+  const allTotals = new Map<string, { debit: number; credit: number }>();
+  for (const p of inRange) {
+    const total = allTotals.get(p.entryId) ?? { debit: 0, credit: 0 };
+    total.debit = r2(total.debit + p.debit);
+    total.credit = r2(total.credit + p.credit);
+    allTotals.set(p.entryId, total);
+  }
 
   const byEntry = new Map<string, {
     id: string; date: string; source: string; voucherNumber: string | null;
     narration: string | null; debit: number; credit: number;
     dr: string[]; cr: string[];
   }>();
-  for (const p of inRange) {
+  for (const p of visibleInRange) {
     let e = byEntry.get(p.entryId);
     if (!e) {
       e = { id: p.entryId, date: p.date, source: p.source, voucherNumber: p.voucherNumber, narration: p.description || null, debit: 0, credit: 0, dr: [], cr: [] };
@@ -707,14 +757,14 @@ router.get("/reports/fin/day-book", requireModuleView(REPORTS_KEY), async (req, 
     }))
     .sort((a, b) => a.date.localeCompare(b.date) || a.source.localeCompare(b.source) || a.id.localeCompare(b.id));
 
-  const debit = r2(entries.reduce((s, e) => s + e.debit, 0));
-  const credit = r2(entries.reduce((s, e) => s + e.credit, 0));
+  const debit = r2([...allTotals.values()].reduce((s, e) => s + e.debit, 0));
+  const credit = r2([...allTotals.values()].reduce((s, e) => s + e.credit, 0));
   res.json({
     fromDate: from, toDate: to,
     entries,
     totals: {
-      count: entries.length,
-      amount: r2(entries.reduce((s, e) => s + e.amount, 0)),
+      count: allTotals.size,
+      amount: r2([...allTotals.values()].reduce((s, e) => s + Math.max(e.debit, e.credit), 0)),
       debit, credit, balanced: Math.abs(debit - credit) < 0.01,
     },
     ...locationEcho(loc, companyLevel),

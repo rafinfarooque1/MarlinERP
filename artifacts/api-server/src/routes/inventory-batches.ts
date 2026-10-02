@@ -18,12 +18,39 @@ import {
   EXPIRY_TIER_DAYS, EXPIRY_BUCKETS, movementClass, MOVEMENT_CLASSES, MOVEMENT_CLASS_LABELS,
   MOVEMENT_CLASS_DAYS, type MovementClass,
 } from "../lib/inventoryAging";
+import { visibleLocationSql } from "../lib/warehouseVisibility";
 
 const router = Router();
 
 const r3 = (n: number) => Math.round(n * 1000) / 1000;
+const r2 = (n: number) => Math.round(n * 100) / 100;
 const VERIFY_REASONS = ["damage", "wastage", "count_correction", "expired"] as const;
 const BATCH_KINDS = ["item", "material", "raw_material"] as const;
+
+async function retainVisibleValuationRows<T extends { branchType: string; branchId: number }>(rows: T[]): Promise<T[]> {
+  if (rows.length === 0) return rows;
+  const locations = new Map<string, { branchType: string; branchId: number }>();
+  for (const row of rows) {
+    locations.set(`${row.branchType}:${Number(row.branchId)}`, {
+      branchType: row.branchType,
+      branchId: Number(row.branchId),
+    });
+  }
+  const params: unknown[] = [];
+  const values = [...locations.values()].map((location) => {
+    params.push(location.branchType, location.branchId);
+    return `($${params.length - 1}::text, $${params.length}::int)`;
+  });
+  const visible = await pool.query(
+    `SELECT location.branch_type, location.branch_id
+       FROM (VALUES ${values.join(", ")}) AS location(branch_type, branch_id)
+      WHERE ${visibleLocationSql("location.branch_type", "location.branch_id")}`,
+    params,
+  );
+  const visibleKeys = new Set(visible.rows.map((location: any) =>
+    `${location.branch_type}:${Number(location.branch_id)}`));
+  return rows.filter((row) => visibleKeys.has(`${row.branchType}:${Number(row.branchId)}`));
+}
 
 /**
  * stock_batches is polymorphic: item_id points at items, materials or
@@ -56,7 +83,7 @@ router.get("/stock/batches", requireModuleView(["page:/headoffice/stock", "page:
     return;
   }
 
-  const conds: string[] = ["sb.quantity > 0"];
+  const conds: string[] = ["sb.quantity > 0", visibleLocationSql("sb.branch_type", "sb.branch_id")];
   const params: any[] = [];
   if (branchType) { params.push(branchType); conds.push(`sb.branch_type = $${params.length}`); }
   if (branchId != null && branchId !== "") { params.push(Number(branchId)); conds.push(`sb.branch_id = $${params.length}`); }
@@ -155,6 +182,14 @@ router.get("/stock/batches/suggest", requireModuleView("page:/transfers"), async
     res.status(400).json({ error: `materialType must be one of: ${BATCH_KINDS.join(", ")}` });
     return;
   }
+  const { rows: [location] } = await pool.query(
+    `SELECT ${visibleLocationSql("$1", "$2")} AS visible`,
+    [branchType, branchId],
+  );
+  if (!location?.visible) {
+    res.status(404).json({ error: "Location not found" });
+    return;
+  }
   const { plan, shortfall } = await planFEFO(pool, itemId, branchType, branchId, quantity, false, materialType as any);
   res.json({ plan, shortfall });
 });
@@ -181,7 +216,11 @@ router.get("/stock/expiry-report", requireModuleView("page:/headoffice/inventory
     res.status(400).json({ error: `materialType must be one of: ${BATCH_KINDS.join(", ")}` }); return;
   }
 
-  const conds: string[] = ["sb.quantity > 0", "sb.expiry_date IS NOT NULL"];
+  const conds: string[] = [
+    "sb.quantity > 0",
+    "sb.expiry_date IS NOT NULL",
+    visibleLocationSql("sb.branch_type", "sb.branch_id"),
+  ];
   const params: any[] = [];
   if (status === "expired") {
     conds.push("sb.expiry_date::date < CURRENT_DATE");
@@ -315,7 +354,8 @@ router.get("/stock/valuation", requireModuleView("page:/headoffice/inventory-rep
     buildBranchMaps(),
   ]);
 
-  const rows = valuation.rows.map((r) => ({
+  const visibleRows = await retainVisibleValuationRows(valuation.rows);
+  const rows = visibleRows.map((r) => ({
     // `itemId` is kept for callers that predate materials being included; refId is
     // the honest name now that the id space is polymorphic.
     itemId: r.refId,
@@ -338,9 +378,46 @@ router.get("/stock/valuation", requireModuleView("page:/headoffice/inventory-rep
     inTransit: r.inTransit,
   }));
 
+  const byTypeMap = new Map<ProductKind, { materialType: ProductKind; label: string; lines: number; quantity: number; value: number }>();
+  const byProductMap = new Map<string, {
+    materialType: ProductKind; refId: number; itemName: string; unit: string;
+    quantity: number; unitCost: number; value: number;
+  }>();
+  let onHandValue = 0;
+  let inTransitValue = 0;
+  let reservedQuantity = 0;
+  for (const r of visibleRows) {
+    if (r.inTransit) inTransitValue = r2(inTransitValue + r.value);
+    else onHandValue = r2(onHandValue + r.value);
+    reservedQuantity = r3(reservedQuantity + r.reserved);
+
+    const typeSummary = byTypeMap.get(r.materialType) ?? {
+      materialType: r.materialType, label: PRODUCT_KIND_LABELS[r.materialType] ?? r.materialType,
+      lines: 0, quantity: 0, value: 0,
+    };
+    typeSummary.lines += 1;
+    typeSummary.quantity = r3(typeSummary.quantity + r.quantity);
+    typeSummary.value = r2(typeSummary.value + r.value);
+    byTypeMap.set(r.materialType, typeSummary);
+
+    const productKey = `${r.materialType}:${r.refId}`;
+    const productSummary = byProductMap.get(productKey) ?? {
+      materialType: r.materialType, refId: r.refId, itemName: r.itemName, unit: r.unit,
+      quantity: 0, unitCost: r.unitCost, value: 0,
+    };
+    productSummary.quantity = r3(productSummary.quantity + r.quantity);
+    productSummary.value = r2(productSummary.value + r.value);
+    productSummary.unitCost = productSummary.quantity > 0
+      ? r2(productSummary.value / productSummary.quantity)
+      : r.unitCost;
+    byProductMap.set(productKey, productSummary);
+  }
+
   res.json({
     rows,
-    locations: valuation.byLocation.map((l) => ({
+    locations: valuation.byLocation.filter((l) =>
+      visibleRows.some((r) => r.branchType === l.branchType && Number(r.branchId) === Number(l.branchId)),
+    ).map((l) => ({
       branchType: l.branchType,
       branchId: l.branchId,
       branchName: branchName(l.branchType, l.branchId),
@@ -350,12 +427,12 @@ router.get("/stock/valuation", requireModuleView("page:/headoffice/inventory-rep
       itemCount: l.lines,
       totalQuantity: l.quantity,
     })),
-    byType: valuation.byType,
-    byProduct: valuation.byProduct,
-    onHandValue: valuation.onHandValue,
-    inTransitValue: valuation.inTransitValue,
-    reservedQuantity: valuation.reservedQuantity,
-    grandTotal: valuation.grandTotal,
+    byType: [...byTypeMap.values()].sort((a, b) => b.value - a.value),
+    byProduct: [...byProductMap.values()].sort((a, b) => a.itemName.localeCompare(b.itemName)),
+    onHandValue,
+    inTransitValue,
+    reservedQuantity,
+    grandTotal: r2(onHandValue + inTransitValue),
   });
 });
 
@@ -373,7 +450,7 @@ router.get("/stock/movement-analysis", requireModuleView("page:/headoffice/inven
     res.status(400).json({ error: `class must be all or one of: ${MOVEMENT_CLASSES.join(", ")}` }); return;
   }
 
-  const conds: string[] = ["se.quantity::numeric > 0"];
+  const conds: string[] = ["se.quantity::numeric > 0", visibleLocationSql("se.branch_type", "se.branch_id")];
   const params: any[] = [];
   if (branchType) { params.push(branchType); conds.push(`se.branch_type = $${params.length}`); }
   if (branchId != null && branchId !== "") { params.push(Number(branchId)); conds.push(`se.branch_id = $${params.length}`); }
@@ -420,7 +497,10 @@ router.get("/stock/movement-analysis", requireModuleView("page:/headoffice/inven
     buildBranchMaps(),
     // The ledger has a start date. Stock that has never moved may simply predate
     // it, so the answer is qualified rather than presented as fact.
-    pool.query(`SELECT MIN(created_at) AS started_at FROM stock_ledger`),
+     pool.query(
+       `SELECT MIN(created_at) AS started_at FROM stock_ledger
+         WHERE ${visibleLocationSql("branch_type", "branch_id")}`,
+     ),
   ]);
 
   const rows = result.rows.map((r: any) => {
@@ -491,6 +571,7 @@ router.get("/stock/reorder-report", requireModuleView("page:/headoffice/inventor
        JOIN items i ON i.id = se.item_id
        WHERE se.material_type = 'item'
          AND se.quantity::numeric < COALESCE(i.reorder_level, 10)::numeric
+         AND ${visibleLocationSql("se.branch_type", "se.branch_id")}
        ORDER BY (COALESCE(i.reorder_level, 10)::numeric - se.quantity::numeric) DESC`
     ),
     buildBranchMaps(),
@@ -664,7 +745,7 @@ router.post("/stock/verifications", requireModuleAction("page:/headoffice/stock-
 
 router.get("/stock/verifications", requireModuleView("page:/headoffice/stock-verification"), async (req, res): Promise<void> => {
   const { branchType, branchId } = req.query as Record<string, string | undefined>;
-  const conds: string[] = ["true"];
+  const conds: string[] = [visibleLocationSql("branch_type", "branch_id")];
   const params: any[] = [];
   if (branchType) { params.push(branchType); conds.push(`branch_type = $${params.length}`); }
   if (branchId != null && branchId !== "") { params.push(Number(branchId)); conds.push(`branch_id = $${params.length}`); }
@@ -700,7 +781,9 @@ router.get("/stock/verifications/:id", requireModuleView("page:/headoffice/stock
   const id = parseInt(req.params.id, 10);
   const { rows: [v] } = await pool.query(
     `SELECT id, branch_type, branch_id, verify_date, notes, created_by, lines, created_at
-     FROM stock_verifications WHERE id = $1 LIMIT 1`,
+     FROM stock_verifications
+      WHERE id = $1 AND ${visibleLocationSql("branch_type", "branch_id")}
+      LIMIT 1`,
     [id]
   );
   if (!v) { res.status(404).json({ error: "Not found" }); return; }

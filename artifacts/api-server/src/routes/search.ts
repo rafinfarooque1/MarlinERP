@@ -2,6 +2,7 @@ import { Router, type IRouter } from "express";
 import { pool } from "@workspace/db";
 import { getUserDataScope, scopeSalesWhere, scopeLocationTypeWhere } from "../lib/dataScope";
 import { hasModuleAction } from "../middleware/permissions";
+import { visibleLocationSql } from "../lib/warehouseVisibility";
 
 const router: IRouter = Router();
 
@@ -68,6 +69,7 @@ router.get("/search", async (req, res): Promise<void> => {
       ? pool.query(
           `SELECT c.id, c.name, c.phone FROM customers c
            WHERE (c.name ILIKE $1 OR c.phone ILIKE $1) AND ${custScope}
+             AND ${visibleLocationSql("c.location_type", "c.location_id")}
            ORDER BY c.name LIMIT 8`,
           custParams,
         )
@@ -76,6 +78,7 @@ router.get("/search", async (req, res): Promise<void> => {
       ? pool.query(
           `SELECT v.id, v.name, v.phone FROM vendors v
            WHERE (v.name ILIKE $1 OR v.phone ILIKE $1) AND ${vendScope}
+             AND ${visibleLocationSql("v.location_type", "v.location_id")}
            ORDER BY v.name LIMIT 8`,
           vendParams,
         )
@@ -90,6 +93,7 @@ router.get("/search", async (req, res): Promise<void> => {
            LEFT JOIN warehouses w ON s.location_type = 'warehouse' AND w.id = s.location_id
            WHERE (s.invoice_number ILIKE $1 OR s.legacy_invoice_number ILIKE $1 OR c.name ILIKE $1)
              AND s.branch_transfer_id IS NULL AND ${salesScope}
+             AND ${visibleLocationSql("COALESCE(s.location_type, 'outlet')", "COALESCE(s.location_id, s.outlet_id)")}
            ORDER BY s.id DESC LIMIT 8`,
           salesParams,
         )
@@ -108,6 +112,7 @@ router.get("/search", async (req, res): Promise<void> => {
                        SELECT 1 FROM jsonb_array_elements(q.line_items) li
                         WHERE li->>'itemName' ILIKE $1))
              AND ${quotScope}
+             AND ${visibleLocationSql("q.location_type", "q.location_id")}
            ORDER BY q.id DESC LIMIT 8`,
           quotParams,
         )

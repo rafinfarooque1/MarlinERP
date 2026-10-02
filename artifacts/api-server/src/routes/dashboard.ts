@@ -10,6 +10,7 @@ import { companyBalances, companyFinancials, rangeMoneyFlows, ledgerSubtreeLooku
 import { outstandingExpr, outstandingAsOfExpr } from "../lib/salePaymentPosition";
 import { isIsoDate } from "../lib/dateInput";
 import { getLocationFilter, getPostingLocationFilter } from "../lib/requestLocation";
+import { visibleLocationSql } from "../lib/warehouseVisibility";
 
 const router = Router();
 
@@ -41,6 +42,116 @@ function scopeLocWhere(scope: DataScope, params: unknown[], typeExpr: string, id
 }
 
 const HO_SCOPE: DataScope = { isHeadOffice: true, warehouseIds: [], outletIds: [] } as DataScope;
+
+/** Remove disabled-location rows from the shared valuation result without
+ * changing the valuation engine or its inventory-cost calculations. */
+function hideDisabledValuationLocations<T extends {
+  rows: Array<any>;
+  issues: Array<any>;
+  byLocation: Array<any>;
+  byType: Array<any>;
+  byProduct: Array<any>;
+  onHandValue: number;
+  inTransitValue: number;
+  reservedQuantity: number;
+  grandTotal: number;
+}>(valuation: T, disabledLocations: Set<string>): T {
+  const rows = valuation.rows.filter((row) =>
+    !disabledLocations.has(`${row.branchType}:${Number(row.branchId)}`));
+  const issues = valuation.issues.filter((issue) =>
+    !disabledLocations.has(`${issue.branchType}:${Number(issue.branchId)}`));
+  const byLocation = new Map<string, any>();
+  const byType = new Map<string, any>();
+  const byProduct = new Map<string, any>();
+  let onHandValue = 0;
+  let inTransitValue = 0;
+  let reservedQuantity = 0;
+  for (const row of rows) {
+    if (row.inTransit) inTransitValue += row.value;
+    else onHandValue += row.value;
+    reservedQuantity += row.reserved;
+    const locationKey = `${row.branchType}:${Number(row.branchId)}`;
+    const location = byLocation.get(locationKey) ?? {
+      branchType: row.branchType, branchId: Number(row.branchId), lines: 0,
+      quantity: 0, onHandValue: 0, inTransitValue: 0, value: 0,
+    };
+    location.lines += 1;
+    location.quantity += row.quantity;
+    if (row.inTransit) location.inTransitValue += row.value;
+    else location.onHandValue += row.value;
+    location.value = location.onHandValue + location.inTransitValue;
+    byLocation.set(locationKey, location);
+
+    const type = byType.get(row.materialType) ?? {
+      materialType: row.materialType, label: valuation.byType.find((x) => x.materialType === row.materialType)?.label ?? row.materialType,
+      lines: 0, quantity: 0, value: 0,
+    };
+    type.lines += 1;
+    type.quantity += row.quantity;
+    type.value += row.value;
+    byType.set(row.materialType, type);
+
+    const productKey = `${row.materialType}:${Number(row.refId)}`;
+    const product = byProduct.get(productKey) ?? {
+      materialType: row.materialType, refId: Number(row.refId), itemName: row.itemName, unit: row.unit,
+      quantity: 0, unitCost: row.unitCost, value: 0,
+    };
+    product.quantity += row.quantity;
+    product.value += row.value;
+    product.unitCost = product.quantity > 0 ? product.value / product.quantity : row.unitCost;
+    byProduct.set(productKey, product);
+  }
+  const round2 = (value: number) => Math.round(value * 100) / 100;
+  const round3 = (value: number) => Math.round(value * 1000) / 1000;
+  return {
+    ...valuation,
+    rows,
+    issues,
+    reliable: issues.length === 0,
+    note: issues.length ? issues.map((issue) => issue.message).join(" ") : null,
+    byLocation: [...byLocation.values()].map((row) => ({
+      ...row,
+      quantity: round3(row.quantity),
+      onHandValue: round2(row.onHandValue),
+      inTransitValue: round2(row.inTransitValue),
+      value: round2(row.value),
+    })).sort((a, b) => b.value - a.value),
+    byType: [...byType.values()].map((row) => ({
+      ...row, quantity: round3(row.quantity), value: round2(row.value),
+    })).sort((a, b) => b.value - a.value),
+    byProduct: [...byProduct.values()].map((row) => ({
+      ...row, quantity: round3(row.quantity), unitCost: round2(row.unitCost), value: round2(row.value),
+    })).sort((a, b) => a.itemName.localeCompare(b.itemName)),
+    onHandValue: round2(onHandValue),
+    inTransitValue: round2(inTransitValue),
+    reservedQuantity: round3(reservedQuantity),
+    grandTotal: round2(onHandValue + inTransitValue),
+  };
+}
+
+async function disabledWarehouseLocationKeys(): Promise<Set<string>> {
+  const { rows } = await pool.query(`
+    SELECT 'warehouse'::text AS location_type, w.id AS location_id
+      FROM warehouses w
+     WHERE NOT ${visibleLocationSql("'warehouse'", "w.id")}
+    UNION
+    SELECT 'outlet'::text AS location_type, o.id AS location_id
+      FROM outlets o
+     WHERE NOT ${visibleLocationSql("'outlet'", "o.id")}
+  `);
+  return new Set(rows.map((row: any) => `${row.location_type}:${Number(row.location_id)}`));
+}
+
+/** Accounting remains consolidated when there is no posting-location filter.
+ * A selected branch slice is ordinary location data and follows visibility. */
+async function isVisiblePostingLocation(location: { type: string; id: number | null } | null): Promise<boolean> {
+  if (!location || location.type === "headoffice" || location.type === "company") return true;
+  const { rows } = await pool.query(
+    `SELECT ${visibleLocationSql("$1", "$2")} AS visible`,
+    [location.type, location.id],
+  );
+  return rows[0]?.visible === true;
+}
 
 /** Unconditional LBAC scope + the view-only location context, resolved once. */
 async function dashboardScope(req: any): Promise<{ scope: DataScope; viewLoc: ParsedLocationFilter | null }> {
@@ -77,6 +188,7 @@ router.get("/dashboard/summary", requireModuleView("page:/"), async (req, res): 
     ?? (!scope.isHeadOffice
       ? ({ type: (req as any).employee.branchType, id: (req as any).employee.branchId } as any)
       : null);
+  const postingLocationVisible = await isVisiblePostingLocation(postingLoc);
   // The stream is built ONCE and feeds both the balance tiles and today's
   // money-movement tiles, so "cash in hand" and "cash in today" cannot
   // disagree about what today's postings were.
@@ -97,11 +209,13 @@ router.get("/dashboard/summary", requireModuleView("page:/"), async (req, res): 
   // ── Other metrics ─────────────────────────────────────────────────────
   const salesConds = ["s.branch_transfer_id IS NULL", "s.cancelled_at IS NULL"];
   const salesParams: unknown[] = [];
+  salesConds.push(visibleLocationSql("COALESCE(s.location_type, 'outlet')", "COALESCE(s.location_id, s.outlet_id)"));
   pushLocationFilter(salesConds, salesParams, viewLoc, "COALESCE(s.location_type, 'outlet')", "COALESCE(s.location_id, s.outlet_id)");
   if (!scope.isHeadOffice) salesConds.push(scopeSalesWhere(scope, salesParams));
 
   const empConds = ["e.is_active = TRUE"];
   const empParams: unknown[] = [];
+  empConds.push(visibleLocationSql("e.branch_type", "e.branch_id"));
   pushLocationFilter(empConds, empParams, viewLoc, "e.branch_type", "e.branch_id");
   if (!scope.isHeadOffice) empConds.push(scopeBranchWhere(scope, empParams, "e"));
 
@@ -109,6 +223,8 @@ router.get("/dashboard/summary", requireModuleView("page:/"), async (req, res): 
   // end is that location.
   const trConds = [`t.status IN ('pending', 'in_transit')`];
   const trParams: unknown[] = [];
+  trConds.push(visibleLocationSql("t.from_type", "t.from_id"));
+  trConds.push(visibleLocationSql("t.to_type", "t.to_id"));
   if (viewLoc) {
     if (viewLoc.locationType === "headoffice") {
       trConds.push(`(t.from_type = 'headoffice' OR t.to_type = 'headoffice')`);
@@ -132,11 +248,13 @@ router.get("/dashboard/summary", requireModuleView("page:/"), async (req, res): 
 
   const stockConds = ["se.material_type = 'item'", "se.quantity::numeric < COALESCE(i.reorder_level, 10)::numeric"];
   const stockParams: unknown[] = [];
+  stockConds.push(visibleLocationSql("se.branch_type", "se.branch_id"));
   pushLocationFilter(stockConds, stockParams, viewLoc, "se.branch_type", "se.branch_id");
   if (!scope.isHeadOffice) stockConds.push(scopeBranchWhere(scope, stockParams, "se"));
 
   const expConds = ["TRUE"];
   const expParams: unknown[] = [];
+  expConds.push(visibleLocationSql("COALESCE(ex.location_type, 'headoffice')", "COALESCE(ex.location_id, 0)"));
   pushLocationFilter(expConds, expParams, viewLoc, "COALESCE(ex.location_type, 'headoffice')", "COALESCE(ex.location_id, 0)");
   if (!scope.isHeadOffice) expConds.push(scopeLocWhere(scope, expParams, "COALESCE(ex.location_type, 'headoffice')", "COALESCE(ex.location_id, 0)"));
 
@@ -144,9 +262,11 @@ router.get("/dashboard/summary", requireModuleView("page:/"), async (req, res): 
   // Office — same COALESCE rule as the production list endpoints.
   const prodConds = ["TRUE"];
   const prodParams: unknown[] = [];
+  prodConds.push(visibleLocationSql("COALESCE(p.location_type, 'headoffice')", "COALESCE(p.location_id, 1)"));
   pushLocationFilter(prodConds, prodParams, viewLoc, "COALESCE(p.location_type, 'headoffice')", "COALESCE(p.location_id, 1)");
   if (!scope.isHeadOffice) prodConds.push(scopeLocWhere(scope, prodParams, "COALESCE(p.location_type, 'headoffice')", "COALESCE(p.location_id, 1)"));
 
+  const disabledValuationLocations = await disabledWarehouseLocationKeys();
   const [
     [itemsCount],
     salesSumQ,
@@ -172,7 +292,7 @@ router.get("/dashboard/summary", requireModuleView("page:/"), async (req, res): 
       includeInTransit: true,
       ...(scope.isHeadOffice ? {} : { dataScope: scope }),
       ...(viewLoc ? { branchType: viewLoc.locationType, ...(viewLoc.locationType === "headoffice" ? {} : { branchId: viewLoc.locationId }) } : {}),
-    }),
+    }).then((valuation) => hideDisabledValuationLocations(valuation, disabledValuationLocations)),
     pool.query(`SELECT COUNT(*)::int AS count FROM employees e WHERE ${empConds.join(" AND ")}`, empParams),
     // Transfers awaiting action: legacy rows use "pending"; the dispatch →
     // approve lifecycle creates them as "in_transit".
@@ -209,13 +329,13 @@ router.get("/dashboard/summary", requireModuleView("page:/"), async (req, res): 
     todayAttendance:      todayAtt.count,
     pendingLeaves:        pendingLeaves.count,
     lowStockCount:        lowStock.count,
-    totalExpense:         financials.expenses.total,
-    todayMoney,
+    totalExpense:         postingLocationVisible ? financials.expenses.total : null,
+    todayMoney:           postingLocationVisible ? todayMoney : null,
     totalBatchesCreated:  Number(batchRow.batch_count ?? 0),
     totalBatchQuantity:   Number(batchRow.total_qty ?? 0),
-    bankBalance,
-    cashBalance,
-    reconciliationPendingAmount: reconciliationPending,
+    bankBalance:          postingLocationVisible ? bankBalance : null,
+    cashBalance:          postingLocationVisible ? cashBalance : null,
+    reconciliationPendingAmount: postingLocationVisible ? reconciliationPending : null,
   });
 });
 
@@ -224,6 +344,7 @@ router.get("/dashboard/stock-alerts", requireModuleView("page:/"), async (req, r
   const { scope, viewLoc } = await dashboardScope(req);
   const conds = ["se.material_type = 'item'", "se.quantity::numeric < COALESCE(i.reorder_level, 10)::numeric"];
   const params: unknown[] = [];
+  conds.push(visibleLocationSql("se.branch_type", "se.branch_id"));
   pushLocationFilter(conds, params, viewLoc, "se.branch_type", "se.branch_id");
   if (!scope.isHeadOffice) conds.push(scopeBranchWhere(scope, params, "se"));
   const { rows: alerts } = await pool.query(
@@ -286,7 +407,11 @@ function salesWhere(query: Record<string, unknown>): { conds: string[]; params: 
   // A cancelled invoice is not turnover either — it was dropped from the GST
   // and sales reports but left in the dashboard analytics, so the two told
   // different stories about the same day.
-  const conds: string[] = ['s.branch_transfer_id IS NULL', 's.cancelled_at IS NULL'];
+  const conds: string[] = [
+    's.branch_transfer_id IS NULL',
+    's.cancelled_at IS NULL',
+    visibleLocationSql("COALESCE(s.location_type, 'outlet')", "COALESCE(s.location_id, s.outlet_id)"),
+  ];
   const params: unknown[] = [];
   const from = typeof query.from === 'string' ? query.from : '';
   const to = typeof query.to === 'string' ? query.to : '';
@@ -493,7 +618,11 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
   // Always excludes branch transfers and cancelled invoices; applies date and
   // location filters; applies mandatory LBAC scope for non-HO users.
   function salesConds(): { where: string; params: unknown[] } {
-    const conds = ["s.branch_transfer_id IS NULL", "s.cancelled_at IS NULL"];
+    const conds = [
+      "s.branch_transfer_id IS NULL",
+      "s.cancelled_at IS NULL",
+      visibleLocationSql("COALESCE(s.location_type, 'outlet')", "COALESCE(s.location_id, s.outlet_id)"),
+    ];
     const params: unknown[] = [];
     if (fromDate) { params.push(fromDate); conds.push(`s.sale_date >= $${params.length}::date`); }
     if (toDate) { params.push(toDate); conds.push(`s.sale_date <= $${params.length}::date`); }
@@ -513,7 +642,9 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
   // see their own location; if a non-HO location has no rows it returns FALSE.
   function locConds(alias: string, opts: { dateCol: string; dateCast?: string } ): { where: string; params: unknown[] } {
     const cast = opts.dateCast ?? "::date";
-    const conds: string[] = [];
+    const conds: string[] = [
+      visibleLocationSql(`COALESCE(${alias}.location_type, 'headoffice')`, `COALESCE(${alias}.location_id, 0)`),
+    ];
     const params: unknown[] = [];
     if (fromDate) { params.push(fromDate); conds.push(`${alias}.${opts.dateCol}${cast} >= $${params.length}::date`); }
     if (toDate) { params.push(toDate); conds.push(`${alias}.${opts.dateCol}${cast} <= $${params.length}::date`); }
@@ -554,6 +685,7 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       : effLocType && effLocId != null
       ? ({ type: effLocType as "warehouse" | "outlet", id: effLocId } as const)
       : null;
+  const postingLocationVisible = await isVisiblePostingLocation(postingLoc);
   // One posting build per distinct cap. companyFinancials and the money-flow
   // tiles both want the stream capped at the selected range's end, so they
   // share a single build per toDate.
@@ -564,7 +696,7 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
     if (!p) { p = buildDerivedPostings(opts); postingsCache.set(key, p); }
     return p;
   };
-  const accountingP = scope.isHeadOffice || postingLoc
+  const accountingP = (scope.isHeadOffice || postingLoc) && postingLocationVisible
     ? companyFinancials(cachedPostings, {
         fromDate: fromDate || null,
         toDate: toDate || null,
@@ -575,7 +707,7 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
   // stream as the balance tiles — the Money In/Out tiles follow the date
   // filter like every other KPI, so "yesterday" shows yesterday's flows and
   // an empty range means all-time totals.
-  const moneyFlowsP = scope.isHeadOffice || postingLoc
+  const moneyFlowsP = (scope.isHeadOffice || postingLoc) && postingLocationVisible
     ? (async () => rangeMoneyFlows(
         (await cachedPostings(toDate ? { toDate } : {})) as never[],
         {
@@ -584,7 +716,9 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
         },
       ))()
     : Promise.resolve(null);
-  const reconciliationPendingP = reconciliationPendingAmount({ location: postingLoc });
+  const reconciliationPendingP = postingLocationVisible
+    ? reconciliationPendingAmount({ location: postingLoc })
+    : Promise.resolve(null);
 
   // ── Run everything in parallel ────────────────────────────────────────────
   const [
@@ -687,6 +821,7 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       // credit note can settle a bill without that column being rewritten, and
       // a stale status would keep money in receivables that nobody owes.
       const conds = ["s.branch_transfer_id IS NULL", "s.cancelled_at IS NULL"];
+      conds.push(visibleLocationSql("COALESCE(s.location_type, 'outlet')", "COALESCE(s.location_id, s.outlet_id)"));
       const params: unknown[] = [];
       // With an end date the exposure is priced AT that date: only invoices
       // issued by then, netted by only the payments and credit notes that had
@@ -733,11 +868,12 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       // HO stock rows carry branch_id 1 while effLocId is the voucher-side 0
       // placeholder — filter HO by type alone or its stock would vanish.
       branchId: effLocType === "headoffice" ? undefined : effLocId ?? undefined,
-    }),
+    }).then(async (value) => hideDisabledValuationLocations(value, await disabledWarehouseLocationKeys())),
     // low-stock count (finished items only)
     (() => {
       const conds = [`stock_entries.material_type = 'item'`, `stock_entries.quantity::numeric < COALESCE(items.reorder_level, 10)::numeric`];
       const params: unknown[] = [];
+      conds.push(visibleLocationSql("stock_entries.branch_type", "stock_entries.branch_id"));
       if (effLocType === "headoffice") {
         conds.push(`stock_entries.branch_type = 'headoffice'`);
       } else if (effLocType && effLocId != null) {
@@ -763,6 +899,7 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       const conds = ["sb.quantity::numeric > 0", "sb.expiry_date IS NOT NULL",
         "sb.expiry_date::date >= CURRENT_DATE", "sb.expiry_date::date <= CURRENT_DATE + INTERVAL '30 day'"];
       const params: unknown[] = [];
+      conds.push(visibleLocationSql("sb.branch_type", "sb.branch_id"));
       if (effLocType === "headoffice") {
         conds.push(`sb.branch_type = 'headoffice'`);
       } else if (effLocType && effLocId != null) {
@@ -820,7 +957,11 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       || (location.locationType === "warehouse" && scope.warehouseIds.includes(location.locationId))
       || (location.locationType === "outlet" && scope.outletIds.includes(location.locationId)));
 
-  const matrixSaleConditions = ["s.branch_transfer_id IS NULL", "s.cancelled_at IS NULL"];
+  const matrixSaleConditions = [
+    "s.branch_transfer_id IS NULL",
+    "s.cancelled_at IS NULL",
+    visibleLocationSql("COALESCE(s.location_type, 'outlet')", "COALESCE(s.location_id, s.outlet_id)"),
+  ];
   const matrixSaleParams: unknown[] = [];
   if (fromDate) {
     matrixSaleParams.push(fromDate);
@@ -965,9 +1106,11 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       pool.query(`
         SELECT 'headoffice'::text AS location_type, 0::int AS location_id, 'Head Office'::text AS name
         UNION ALL
-        SELECT 'warehouse'::text, id, name FROM warehouses
+        SELECT 'warehouse'::text, id, name FROM warehouses WHERE disabled_at IS NULL
         UNION ALL
-        SELECT 'outlet'::text, id, name FROM outlets
+        SELECT 'outlet'::text, o.id, o.name FROM outlets o
+          JOIN warehouses w ON w.id = o.warehouse_id
+         WHERE w.disabled_at IS NULL
         ORDER BY location_type, location_id
       `),
       pool.query(`
@@ -976,7 +1119,8 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
                     THEN 0 ELSE COALESCE(p.location_id, 0) END AS location_id,
                COALESCE(SUM(p.total_amount::numeric), 0)::float AS total
           FROM purchases p
-         WHERE p.branch_transfer_id IS NULL AND p.cancelled_at IS NULL
+          WHERE p.branch_transfer_id IS NULL AND p.cancelled_at IS NULL
+            AND ${visibleLocationSql("COALESCE(p.location_type, 'headoffice')", "COALESCE(p.location_id, 0)")}
            ${fromDate ? "AND p.purchase_date::date >= $1::date" : ""}
            ${toDate ? `AND p.purchase_date::date <= $${fromDate ? 2 : 1}::date` : ""}
          GROUP BY 1, 2
@@ -1186,6 +1330,7 @@ router.get("/dashboard/production-trend", requireModuleView("page:/"), async (re
   const { scope, viewLoc } = await dashboardScope(req);
   const params: unknown[] = [days];
   const conds = [`p.production_date >= CURRENT_DATE - ($1::int * INTERVAL '1 day')`];
+  conds.push(visibleLocationSql("COALESCE(p.location_type, 'headoffice')", "COALESCE(p.location_id, 1)"));
   pushLocationFilter(conds, params, viewLoc, "COALESCE(p.location_type, 'headoffice')", "COALESCE(p.location_id, 1)");
   if (!scope.isHeadOffice) conds.push(scopeLocWhere(scope, params, "COALESCE(p.location_type, 'headoffice')", "COALESCE(p.location_id, 1)"));
   const { rows } = await pool.query(`
