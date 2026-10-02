@@ -1038,26 +1038,11 @@ function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, on
                   {bs && (monthly ? (
                     <>
                       <MwGroupBlock group={bs.assets.fixedAssets} seriesKey="grp:fixed" monthly={monthly} expansion={bsExpansion} />
-                      <MwAutoRow
-                        label="Closing Stock"
-                        values={mwS('bsClosingStock')} total={Number(bs.assets.closingStock)} monthly={monthly}
-                        accent="text-foreground/80 font-semibold"
-                      />
                       <MwGroupBlock group={bs.assets.currentAssets} seriesKey="grp:curassets" monthly={monthly} expansion={bsExpansion} />
                     </>
                   ) : (
                     <>
                       <GroupBlock group={bs.assets.fixedAssets} onCreated={onCreated} expansion={bsExpansion} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={canAdd} canEdit={canEdit} canDelete={canDelete} />
-
-                      {/* Closing Stock — a real asset line. Before this change closing
-                          stock never appeared on the balance sheet, which is why a
-                          plug 'Difference' was needed. It now shows explicitly. */}
-                       <div className="flex items-center gap-2 py-2 px-3 mx-2 mb-2 rounded-lg text-xs font-semibold bg-emerald-500/5 text-foreground/80">
-                         <span className="flex-1">Closing Stock</span>
-                        <span className="font-mono tabular-nums text-foreground/70">
-                           {Number(bs.assets.closingStock) === 0 ? '—' : fmt(Number(bs.assets.closingStock))}
-                        </span>
-                      </div>
 
                       <GroupBlock group={bs.assets.currentAssets} onCreated={onCreated} expansion={bsExpansion} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={canAdd} canEdit={canEdit} canDelete={canDelete} />
                     </>

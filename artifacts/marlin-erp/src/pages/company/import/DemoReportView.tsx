@@ -299,7 +299,6 @@ export function DemoReportView({ batchId = null, migrationId = null, open, onOpe
                   <div className="text-sm font-semibold mb-2">Assets</div>
                   <GroupTree node={report.balanceSheet?.assets?.fixedAssets} />
                   <GroupTree node={report.balanceSheet?.assets?.currentAssets} />
-                  <MoneyLine label="Closing stock" value={report.balanceSheet?.assets?.closingStock ?? 0} />
                   <div className="border-t mt-1 pt-1"><MoneyLine label="Total assets" value={report.balanceSheet?.assets?.total ?? 0} bold /></div>
                 </div>
                 <div className="rounded-lg border p-3">

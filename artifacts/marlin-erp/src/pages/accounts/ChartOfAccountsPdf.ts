@@ -339,7 +339,6 @@ export async function generateChartOfAccountsPdf(opts: CoaPdfOpts): Promise<void
 
   if (statement === 'balance_sheet') {
     const bs = fs.balanceSheet;
-    const transferPnl = !!fs.profitAndLoss.stockTransfersIncludedInPnl;
 
     // groupRows respects isOpen — collapsed groups show only the header row
     const bsRows: Row[] = [
@@ -354,7 +353,6 @@ export async function generateChartOfAccountsPdf(opts: CoaPdfOpts): Promise<void
       rowSpacer(),
       rowPanel('ASSETS'),
        ...groupRows(bs.assets.fixedAssets,   'grp:fixed',     series, N, isOpen, showValuedOnly),
-        rowAuto('Closing Stock', sv('bsClosingStock'), Number(bs.assets.closingStock)),
        ...groupRows(bs.assets.currentAssets, 'grp:curassets', series, N, isOpen, showValuedOnly),
       rowTotal('Total Assets', bs.assets.total, sv('assetsTotal')),
     ];
