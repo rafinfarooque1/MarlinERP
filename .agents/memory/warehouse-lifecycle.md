@@ -1,6 +1,6 @@
 ---
 name: Warehouse lifecycle (disable / permanent delete)
-description: Disabled-warehouse guards on every transaction producer; permanent delete = one txn cascade + post-delete validation; blockers vs deletable rationale.
+description: Disabled-location write guards and read visibility; permanent delete = one txn cascade + post-delete validation; blockers vs deletable rationale.
 ---
 
 # Warehouse lifecycle
@@ -8,6 +8,7 @@ description: Disabled-warehouse guards on every transaction producer; permanent 
 ## Disable (reversible)
 - `warehouses.disabled_at/disabled_by` are RAW startup-migration columns (invisible to generated types — list route selects them explicitly, client casts `(w as any).disabledAt`).
 - `disabledWarehouseError(queryable, locs[])` in api-server `lib/warehouseLifecycle.ts` is the ONE guard helper. Outlets inherit their parent warehouse's disabled state.
+- Disabled warehouses and their child outlets are hidden from ordinary location lists, stock views, historical operational reports, GSTR-1, and GST document registers without changing stored records. Company-wide consolidated accounting and GSTR-3B totals remain complete; disabled warehouses stay visible to super-admins in warehouse management so they can be re-enabled.
 - The guard must run on the EFFECTIVE resolved location (after resolveActingLocation / resolveMoneyVoucherLocation / resolveVoucherLocation etc.), never the raw body. Inside-transaction call sites must ROLLBACK before returning 409.
 - Guarded producers: sales, purchases, quotations (create+edit), production, stock transfers (both endpoints), payments/receipts/location-expenses, journal vouchers (create+edit), returns, stock verification, rent pay, import approve/commit, payroll pay + advances, asset purchases, cash deposits. **Any NEW transaction producer must add this guard** — receiving in-transit transfers and record edits stay allowed by design (wind-down).
 
@@ -19,6 +20,10 @@ description: Disabled-warehouse guards on every transaction producer; permanent 
 - Post-delete validation inside the same txn: zero remaining rows per stamped table, own ledgers gone, TB debit==credit, no orphaned JV lines — any failure rolls the whole thing back and returns 409 with `failures[]`.
 
 **Why:** deletion in a location-stamped double-entry system either takes everything in one atomic validated sweep or corrupts a counterparty; anything cross-location is a blocker, not a cascade target.
+
+**Why:** disabling is a reversible visibility/operating-state change, not a data-retention action. The user approved hiding disabled-location transactions from GSTR-1 and GST document lists despite the statutory-review tradeoff, while requiring complete consolidated totals.
+
+**How to apply:** new location-specific read views must suppress disabled warehouses and their outlets. Do not filter consolidated company accounting or GSTR-3B totals or mutate historical records; management must retain the path to re-enable.
 
 ## Clearing the imports blocker (learned during the Calicut demo purge)
 - The blocker counts ALL import_batches rows for the location regardless of status (validated/rolled_back/discarded included), but only migration-owned batches ever get DELETEd by any endpoint — standalone batches have no removal route, so stray batch rows can only be cleared by SQL (delete import_rows first; no FK cascade exists). UI gap: History cannot actually clear this blocker.
