@@ -269,7 +269,9 @@ router.get("/assets/purchases", requireModuleView(ANY_ASSET_VIEW), async (req, r
   const typeExpr = basis === "purchase" ? PURCHASE_TYPE_EXPR : CURRENT_TYPE_EXPR;
   const idExpr = basis === "purchase" ? PURCHASE_ID_EXPR : CURRENT_ID_EXPR;
 
-  const conds: string[] = [];
+  const conds: string[] = [
+    visibleLocationSql(typeExpr, idExpr),
+  ];
   const params: unknown[] = [];
 
   const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
@@ -914,7 +916,9 @@ router.post("/assets/transfers", requireModuleAction(PG_TRANSFERS, "add"), async
 
 router.get("/assets/disposals", requireModuleView([PG_DISPOSAL, PG_REGISTER, PG_REPORTS]), async (req, res): Promise<void> => {
   const scope = await getUserDataScope((req as any).employee ?? { branchType: "headoffice", branchId: 0 });
-  const conds: string[] = [];
+  const conds: string[] = [
+    visibleLocationSql(CURRENT_TYPE_EXPR, CURRENT_ID_EXPR),
+  ];
   const params: unknown[] = [];
   const dr = parseDateRange(req.query as Record<string, unknown>);
   if (!dr.ok) { res.status(400).json({ error: dr.error }); return; }
@@ -1216,7 +1220,10 @@ router.get("/assets/summary", requireModuleView(ANY_ASSET_VIEW), async (req, res
     });
     return;
   }
-  const where = scopeWhere === "TRUE" ? "" : `WHERE ${scopeWhere}`;
+  const visibleLocation = visibleLocationSql(CURRENT_TYPE_EXPR, CURRENT_ID_EXPR);
+  const where = scopeWhere === "TRUE"
+    ? `WHERE ${visibleLocation}`
+    : `WHERE (${scopeWhere}) AND ${visibleLocation}`;
 
   const [totals, byLoc, warranty] = await Promise.all([
     pool.query(`

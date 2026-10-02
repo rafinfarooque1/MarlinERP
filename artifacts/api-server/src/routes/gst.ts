@@ -12,6 +12,7 @@ import { purchaseSettlementIndex, settlementModeSummary } from "../lib/vendorBil
 import { loadPaymentPositions } from "../lib/salePaymentPosition";
 import { paymentModeLabel } from "../lib/paymentModes";
 import { getLocationFilter } from "../lib/requestLocation";
+import { visibleLocationSql } from "../lib/warehouseVisibility";
 
 const router: IRouter = Router();
 
@@ -147,6 +148,7 @@ async function loadGstNotePostings(
   fromDate: string | undefined,
   toDate: string | undefined,
   scope: GstScope | null,
+  hiddenLocationKeys?: Set<string>,
 ): Promise<GstNotePosting[]> {
   const codes = [
     "STD-OUT-CGST", "STD-OUT-SGST", "STD-OUT-IGST",
@@ -176,6 +178,7 @@ async function loadGstNotePostings(
     if (fromDate && date < fromDate) continue;
     if (toDate && date > toDate) continue;
     if (!postingMatchesGstScope(posting, scope)) continue;
+    if (hiddenLocationKeys?.has(`${String(posting.locationType ?? "")}:${Number(posting.locationId)}`)) continue;
     const ledger = headLedger.get(Number(posting.ledgerId));
     if (!ledger) continue;
     const entryId = String(posting.entryId);
@@ -212,6 +215,7 @@ async function loadSalesCreditReturnMemos(
   fromDate: string | undefined,
   toDate: string | undefined,
   scope: GstScope | null,
+  hideDisabledLocations = false,
 ): Promise<GstReturnMemo[]> {
   const params: any[] = [];
   const scopeSql = scope ? salesScopeCond("s", scope, params) : "";
@@ -226,7 +230,9 @@ async function loadSalesCreditReturnMemos(
        JOIN sales s ON s.id = sr.sale_id
        JOIN journal_vouchers jv ON jv.id = sr.credit_note_id
        LEFT JOIN customers c ON c.id = s.customer_id
-      WHERE sr.credit_note_id IS NOT NULL${rangeFilter("sr.return_date", fromDate, toDate, params)}${scopeSql}
+      WHERE sr.credit_note_id IS NOT NULL
+        ${hideDisabledLocations ? `AND ${visibleLocationSql("COALESCE(s.location_type, 'outlet')", "COALESCE(s.location_id, s.outlet_id)")}` : ""}
+        ${rangeFilter("sr.return_date", fromDate, toDate, params)}${scopeSql}
       ORDER BY sr.return_date, sr.id`,
     params,
   );
@@ -585,8 +591,18 @@ router.get("/gst/gstr1", requireModuleView("page:/accounts/gst-returns"), async 
   // LBAC: branch sessions are pinned to their own registration by parseGstScope.
   const { fromDate, toDate } = parseRange(req);
   const scope = await parseGstScope(req);
-  const salesReturnMemos = await loadSalesCreditReturnMemos(fromDate, toDate, scope);
-  const notePostings = await loadGstNotePostings(fromDate, toDate, scope);
+  const { rows: hiddenLocations } = await pool.query<{ location_type: string; location_id: number }>(`
+    SELECT 'warehouse'::text AS location_type, w.id AS location_id
+      FROM warehouses w WHERE w.disabled_at IS NOT NULL
+    UNION
+    SELECT 'outlet'::text AS location_type, o.id AS location_id
+      FROM outlets o
+      JOIN warehouses w ON w.id = o.warehouse_id
+     WHERE w.disabled_at IS NOT NULL
+  `);
+  const hiddenLocationKeys = new Set(hiddenLocations.map((row) => `${row.location_type}:${Number(row.location_id)}`));
+  const salesReturnMemos = await loadSalesCreditReturnMemos(fromDate, toDate, scope, true);
+  const notePostings = await loadGstNotePostings(fromDate, toDate, scope, hiddenLocationKeys);
 
   const sp: any[] = [];
   const { rows: sales } = await pool.query(
@@ -594,7 +610,10 @@ router.get("/gst/gstr1", requireModuleView("page:/accounts/gst-returns"), async 
             branch_transfer_id, party_name, party_gstin, party_state, payment_mode,
             COALESCE(location_type, 'outlet') AS loc_type,
             COALESCE(location_id, outlet_id, 0) AS loc_id
-     FROM sales s WHERE cancelled_at IS NULL${rangeFilter("sale_date", fromDate, toDate, sp)}${scope ? salesScopeCond("s", scope, sp) : ""}
+     FROM sales s
+     WHERE cancelled_at IS NULL
+       AND ${visibleLocationSql("COALESCE(s.location_type, 'outlet')", "COALESCE(s.location_id, s.outlet_id)")}
+       ${rangeFilter("sale_date", fromDate, toDate, sp)}${scope ? salesScopeCond("s", scope, sp) : ""}
      ORDER BY sale_date, id`, sp
   );
   const locNames = await locationNameIndex();
@@ -1138,7 +1157,10 @@ router.get("/gst/documents", requireModuleView(["page:/accounts/gst", "page:/acc
             branch_transfer_id, party_name, party_gstin, payment_mode,
             COALESCE(location_type, 'outlet') AS loc_type,
             COALESCE(location_id, outlet_id, 0) AS loc_id
-     FROM sales s WHERE cancelled_at IS NULL${rangeFilter("sale_date", fromDate, toDate, sp)}${scope ? salesScopeCond("s", scope, sp) : ""}
+     FROM sales s
+     WHERE cancelled_at IS NULL
+       AND ${visibleLocationSql("COALESCE(s.location_type, 'outlet')", "COALESCE(s.location_id, s.outlet_id)")}
+       ${rangeFilter("sale_date", fromDate, toDate, sp)}${scope ? salesScopeCond("s", scope, sp) : ""}
      ORDER BY sale_date, id`, sp
   );
   const { rows: customers } = await pool.query(`SELECT id, name, gst_number FROM customers`);
@@ -1172,7 +1194,9 @@ router.get("/gst/documents", requireModuleView(["page:/accounts/gst", "page:/acc
             COALESCE(p.location_id, p.branch_id, 0) AS loc_id,
             v.name AS vendor_name, v.gst_number AS vendor_gstin
      FROM purchases p LEFT JOIN vendors v ON v.id = p.vendor_id
-     WHERE p.cancelled_at IS NULL${rangeFilter("p.purchase_date", fromDate, toDate, pp)}${scope ? purchaseScopeCond("p", scope, pp) : ""}
+     WHERE p.cancelled_at IS NULL
+       AND ${visibleLocationSql("COALESCE(p.location_type, p.branch_type, 'headoffice')", "COALESCE(p.location_id, p.branch_id, 0)")}
+       ${rangeFilter("p.purchase_date", fromDate, toDate, pp)}${scope ? purchaseScopeCond("p", scope, pp) : ""}
      ORDER BY p.purchase_date, p.id`, pp
   );
   // Bounded to the vendors in the result set — the FIFO walk is per-vendor,
