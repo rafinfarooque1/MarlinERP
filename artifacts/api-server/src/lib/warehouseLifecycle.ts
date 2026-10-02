@@ -37,7 +37,7 @@ export async function disabledWarehouseError(c: Queryable, locs: LocRef[]): Prom
   );
   if (rows.length === 0) return null;
   const names = rows.map((r: { name: string }) => `"${r.name}"`).join(", ");
-  return `${names} is disabled. New transactions are blocked; historical data stays available. Re-enable the warehouse under Head Office → Warehouses to record new entries.`;
+  return `${names} is disabled. New transactions are blocked; historical records remain stored but are hidden from ordinary lists, reports, and stock views. Re-enable the warehouse under Head Office → Warehouses to record new entries.`;
 }
 
 /** The exact confirmation phrase the administrator must type. */

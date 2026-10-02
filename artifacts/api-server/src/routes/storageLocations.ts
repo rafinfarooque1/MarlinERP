@@ -26,6 +26,7 @@ import { pool } from "@workspace/db";
 import { requireModuleView, requireModuleAction } from "../middleware/permissions";
 import { getUserDataScope } from "../lib/dataScope";
 import { logActivity } from "../lib/audit";
+import { visibleLocationSql } from "../lib/warehouseVisibility";
 
 const router: IRouter = Router();
 
@@ -69,6 +70,7 @@ router.get("/storage-locations", requireModuleView(PAGE), async (req, res): Prom
     params.push(allowed);
     conds.push(`sl.warehouse_id = ANY($${params.length}::int[])`);
   }
+  conds.push(visibleLocationSql("'warehouse'", "sl.warehouse_id"));
   const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
   // Hierarchy is capped at three levels (freezer → rack → shelf), so parent
   // and grandparent are plain self-joins — no recursion. Families sort
@@ -287,7 +289,7 @@ router.get("/storage-stock", requireModuleView(PAGE), async (req, res): Promise<
   const emp = (req as any).employee as Emp;
   const warehouseId = Number(req.query.warehouseId);
   const wh = await loadWarehouse(emp, warehouseId);
-  if (!wh) { res.status(404).json({ error: "Warehouse not found" }); return; }
+  if (!wh || wh.disabled) { res.status(404).json({ error: "Warehouse not found" }); return; }
   const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
   const matType = typeof req.query.materialType === "string" && KINDS.has(req.query.materialType) ? req.query.materialType : "";
 

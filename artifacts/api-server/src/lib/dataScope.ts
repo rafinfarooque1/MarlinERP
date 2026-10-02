@@ -78,8 +78,19 @@ export async function getUserDataScope(employee: {
   }
 
   if (branchType === "warehouse") {
+    const { rows: [warehouse] } = await pool.query<{ id: number }>(
+      `SELECT id FROM warehouses WHERE id = $1 AND disabled_at IS NULL`,
+      [branchId],
+    );
+    if (!warehouse) {
+      return { isHeadOffice: false, warehouseIds: [], outletIds: [] };
+    }
     const { rows } = await pool.query<{ id: number }>(
-      `SELECT id FROM outlets WHERE warehouse_id = $1 ORDER BY id`,
+      `SELECT o.id
+         FROM outlets o
+         JOIN warehouses w ON w.id = o.warehouse_id AND w.disabled_at IS NULL
+        WHERE o.warehouse_id = $1
+        ORDER BY o.id`,
       [branchId],
     );
     return {
@@ -87,6 +98,18 @@ export async function getUserDataScope(employee: {
       warehouseIds: [Number(branchId)],
       outletIds: rows.map((r) => Number(r.id)),
     };
+  }
+
+  // An outlet inherits its parent warehouse's visibility and operating state.
+  const { rows: [outlet] } = await pool.query<{ id: number }>(
+    `SELECT o.id
+       FROM outlets o
+       JOIN warehouses w ON w.id = o.warehouse_id AND w.disabled_at IS NULL
+      WHERE o.id = $1`,
+    [branchId],
+  );
+  if (!outlet) {
+    return { isHeadOffice: false, warehouseIds: [], outletIds: [] };
   }
 
   // outlet — sees only their own outlet

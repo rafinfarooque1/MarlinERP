@@ -76,6 +76,7 @@ import type {
   ListReconciliationPendingQueueParams,
   ListSalesParams,
   ListStockParams,
+  ListWarehousesParams,
   LoginInput,
   Material,
   MaterialInput,
@@ -2534,20 +2535,27 @@ export function useGetStockTransfer<TData = Awaited<ReturnType<typeof getStockTr
 
 
 
-export const getListWarehousesUrl = () => {
+export const getListWarehousesUrl = (params?: ListWarehousesParams,) => {
+  const normalizedParams = new URLSearchParams();
 
+  Object.entries(params || {}).forEach(([key, value]) => {
 
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : String(value))
+    }
+  });
 
+  const stringifiedParams = normalizedParams.toString();
 
-  return `/api/warehouses`
+  return stringifiedParams.length > 0 ? `/api/warehouses?${stringifiedParams}` : `/api/warehouses`
 }
 
 /**
- * @summary List all warehouses
+ * @summary List enabled warehouses, optionally including disabled warehouses for lifecycle management
  */
-export const listWarehouses = async ( options?: RequestInit): Promise<Warehouse[]> => {
+export const listWarehouses = async (params?: ListWarehousesParams, options?: RequestInit): Promise<Warehouse[]> => {
 
-  return customFetch<Warehouse[]>(getListWarehousesUrl(),
+  return customFetch<Warehouse[]>(getListWarehousesUrl(params),
   {
     ...options,
     method: 'GET'
@@ -2560,23 +2568,23 @@ export const listWarehouses = async ( options?: RequestInit): Promise<Warehouse[
 
 
 
-export const getListWarehousesQueryKey = () => {
+export const getListWarehousesQueryKey = (params?: ListWarehousesParams,) => {
     return [
-    `/api/warehouses`
+    `/api/warehouses`, ...(params ? [params] : [])
     ] as const;
     }
 
 
-export const getListWarehousesQueryOptions = <TData = Awaited<ReturnType<typeof listWarehouses>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listWarehouses>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+export const getListWarehousesQueryOptions = <TData = Awaited<ReturnType<typeof listWarehouses>>, TError = ErrorType<unknown>>(params?: ListWarehousesParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listWarehouses>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 ) => {
 
 const {query: queryOptions, request: requestOptions} = options ?? {};
 
-  const queryKey =  queryOptions?.queryKey ?? getListWarehousesQueryKey();
+  const queryKey =  queryOptions?.queryKey ?? getListWarehousesQueryKey(params);
 
 
 
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof listWarehouses>>> = ({ signal }) => listWarehouses({ signal, ...requestOptions });
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listWarehouses>>> = ({ signal }) => listWarehouses(params, { signal, ...requestOptions });
 
 
 
@@ -2590,15 +2598,15 @@ export type ListWarehousesQueryError = ErrorType<unknown>
 
 
 /**
- * @summary List all warehouses
+ * @summary List enabled warehouses, optionally including disabled warehouses for lifecycle management
  */
 
 export function useListWarehouses<TData = Awaited<ReturnType<typeof listWarehouses>>, TError = ErrorType<unknown>>(
-  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listWarehouses>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+ params?: ListWarehousesParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listWarehouses>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
 
-  const queryOptions = getListWarehousesQueryOptions(options)
+  const queryOptions = getListWarehousesQueryOptions(params,options)
 
   const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
 

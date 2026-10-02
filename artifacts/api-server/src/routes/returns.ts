@@ -29,6 +29,7 @@ import { postingMatchesLocation } from "../lib/postingLocation";
 import { availabilityAt, insufficientStockMessage } from "../lib/reservations";
 import { isIsoDate } from "../lib/dateInput";
 import { respondIfMonthLocked, isMonthLocked, ymOfDate, monthLockedBody } from "../lib/periodLock";
+import { visibleLocationSql } from "../lib/warehouseVisibility";
 
 const router: IRouter = Router();
 
@@ -568,7 +569,10 @@ router.get("/sales-returns", requireModuleView("page:/returns"), async (req: Req
     const scope = emp ? await getUserDataScope(emp) : { isHeadOffice: true, warehouseIds: [], outletIds: [] };
     const params: any[] = [];
     const scopeCond = scopeLocationTypeWhere(scope, params, "sr");
-    let whereParts = [`${scopeCond}`];
+    let whereParts = [
+      `${scopeCond}`,
+      visibleLocationSql("sr.location_type", "sr.location_id"),
+    ];
     if (req.query.saleId) { params.push(Number(req.query.saleId)); whereParts.push(`sr.sale_id = $${params.length}`); }
     // Global location context — a return belongs to the location it was taken at.
     const viewLoc = getLocationFilter(req);
@@ -1388,6 +1392,7 @@ router.get("/purchase-returns", requireModuleView("page:/returns"), async (req: 
       if (!ors.length) { res.json([]); return; }
       prConds.push(`(${ors.join(" OR ")})`);
     }
+    prConds.push(visibleLocationSql("p.location_type", "p.location_id"));
     if (req.query.purchaseId) { params.push(Number(req.query.purchaseId)); prConds.push(`pr.purchase_id = $${params.length}`); }
     // Global location context — follow the purchase document's location.
     const viewLoc = getLocationFilter(req);
@@ -1891,6 +1896,7 @@ router.get("/outstanding/receivables", requireModuleView(["page:/outstanding", "
          AND ${saleDateCond}
          AND ${rcvScopeCond}
          AND ${rcvLocCond}
+         AND ${visibleLocationSql("COALESCE(s.location_type, 'outlet')", "COALESCE(s.location_id, s.outlet_id)")}
        ORDER BY s.sale_date ASC, s.id ASC`,
       rcvParams
     );
@@ -2452,6 +2458,7 @@ router.get("/outstanding/collections", requireModuleView("page:/outstanding"), a
          AND s.branch_transfer_id IS NULL
          AND ${colScopeCond}
          AND ${colLocCond}
+         AND ${visibleLocationSql("COALESCE(s.location_type, 'outlet')", "COALESCE(s.location_id, s.outlet_id)")}
        ORDER BY s.sale_date ASC, s.id ASC`,
       colParams
     );

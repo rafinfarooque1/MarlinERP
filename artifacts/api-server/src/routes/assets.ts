@@ -45,6 +45,7 @@ import {
   ASSET_DISPOSAL_TYPES, ASSET_PAYMENT_MODES, ASSET_PAYMENT_STATUSES,
 } from "../migrations/assetModule";
 import { respondIfMonthLocked, isMonthLocked, ymOfDate, monthLockedBody } from "../lib/periodLock";
+import { visibleLocationSql } from "../lib/warehouseVisibility";
 
 const router: IRouter = Router();
 const FIXED_ASSET_CODE = "STD-FIXED-ASSET";
@@ -761,7 +762,10 @@ router.delete("/assets/purchases/:id", requireModuleAction(PG_REGISTER, "delete"
 
 router.get("/assets/transfers", requireModuleView([PG_TRANSFERS, PG_REGISTER, PG_REPORTS]), async (req, res): Promise<void> => {
   const scope = await getUserDataScope((req as any).employee ?? { branchType: "headoffice", branchId: 0 });
-  const conds: string[] = [];
+  const conds: string[] = [
+    visibleLocationSql("t.from_type", "t.from_id"),
+    visibleLocationSql("t.to_type", "t.to_id"),
+  ];
   const params: unknown[] = [];
   const dr = parseDateRange(req.query as Record<string, unknown>);
   if (!dr.ok) { res.status(400).json({ error: dr.error }); return; }

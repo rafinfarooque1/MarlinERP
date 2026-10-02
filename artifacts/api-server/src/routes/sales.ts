@@ -32,6 +32,7 @@ import { allocateSalesInvoiceNumber, salesCounterScope } from "../lib/voucherNum
 import { resolveLocationGst, isInterStateSupply } from "../lib/gstTransfer";
 import { validateOtherCharges, validateSaleOtherCharges, parseStoredOtherCharges, otherChargesTotal, type OtherCharge } from "../lib/otherCharges";
 import { resolveReceiveIntoAccount, postSaleCollectionReceipt, type ReceiveIntoAccount } from "../lib/saleCollection";
+import { visibleLocationSql } from "../lib/warehouseVisibility";
 
 const router = Router();
 
@@ -418,6 +419,7 @@ router.get("/item-prices", requireModuleView(["page:/headoffice/item-price", "pa
     LEFT JOIN items     i ON i.id = ip.item_id
     LEFT JOIN outlets   o ON o.id = ip.outlet_id AND COALESCE(ip.location_type, 'outlet') = 'outlet'
     LEFT JOIN warehouses w ON w.id = ip.outlet_id AND ip.location_type = 'warehouse'
+    WHERE ${visibleLocationSql("COALESCE(ip.location_type, 'outlet')", "ip.outlet_id")}
     ORDER BY ip.id DESC
   `);
 
@@ -532,7 +534,10 @@ router.get("/sales", requireModuleView(["page:/sales/pos", "page:/returns", "pag
 
   // Branch-transfer tax invoices are not customer sales — they must never show
   // in the sales register (see gstTransfer.ts).
-  const conds: string[] = ['s.branch_transfer_id IS NULL'];
+  const conds: string[] = [
+    's.branch_transfer_id IS NULL',
+    visibleLocationSql("COALESCE(s.location_type, 'outlet')", "COALESCE(s.location_id, s.outlet_id)"),
+  ];
   const params: unknown[] = [];
   if (q) {
     params.push(`%${q}%`);
@@ -2667,6 +2672,7 @@ router.get("/sales/price-history", requireModuleView("page:/sales/pos"), async (
         AND (li->>'itemId')::numeric = $2
         AND s.cancelled_at IS NULL
         AND s.branch_transfer_id IS NULL
+        AND ${visibleLocationSql("COALESCE(s.location_type, 'outlet')", "COALESCE(s.location_id, s.outlet_id)")}
         AND ${phScopeCond}
       ORDER BY s.sale_date DESC, s.id DESC
       LIMIT $${phParams.length}`,
@@ -2703,6 +2709,7 @@ router.get("/sales/summary", requireModuleView(["page:/sales/pos", "page:/"]), a
     FROM sales s
     WHERE s.branch_transfer_id IS NULL
       AND s.cancelled_at IS NULL
+      AND ${visibleLocationSql("COALESCE(s.location_type, 'outlet')", "COALESCE(s.location_id, s.outlet_id)")}
       AND ${summScopeCond}
     GROUP BY 1, 2
   `, summParams);
@@ -2855,7 +2862,10 @@ router.get("/sales/:id", requireModuleView(["page:/sales/pos", "page:/operations
   const detailScope = await getUserDataScope((req as any).employee);
   const detailParams: unknown[] = [id];
   const { rows: [row] } = await pgPool.query(
-    `SELECT * FROM sales s WHERE s.id = $1 AND ${scopeSalesWhere(detailScope, detailParams)}`,
+    `SELECT * FROM sales s
+      WHERE s.id = $1
+        AND ${visibleLocationSql("COALESCE(s.location_type, 'outlet')", "COALESCE(s.location_id, s.outlet_id)")}
+        AND ${scopeSalesWhere(detailScope, detailParams)}`,
     detailParams,
   );
   if (!row) { res.status(404).json({ error: "Not found" }); return; }

@@ -22,6 +22,7 @@ import {
 } from "../lib/gstTransfer";
 import { getUserDataScope, isLocationInScope, scopeBranchWhere, scopeTransferWhere } from "../lib/dataScope";
 import { getLocationFilter } from "../lib/requestLocation";
+import { visibleLocationSql } from "../lib/warehouseVisibility";
 import { deductMaterialAt, creditMaterialAt, paiseConservativeBlendCost } from "../lib/materialStock";
 import { outletWritesBlocked, OUTLETS_DISABLED_MESSAGE, OUTLETS_DISABLED_CODE } from "../lib/featureFlags";
 import { productBatchIdentity, blockedByInactiveProducts, INACTIVE_PRODUCT_CODE, isProductKind } from "../lib/productIdentity";
@@ -197,6 +198,7 @@ router.get("/stock", requireModuleView(["page:/", "page:/production/item-master"
     params.push(matTypeFilter);
     conds.push(`u.material_type = $${params.length}`);
   }
+  conds.push(visibleLocationSql('u.branch_type', 'u.branch_id'));
 
   // Non-headoffice employees: scope to their branch items only (materials are HO-global)
   const scopeEmp = (req as any).employee as { branchType: string; branchId: number } | undefined;
@@ -391,6 +393,9 @@ router.get("/stock/ledger", requireModuleView(["page:/headoffice/stock-ledger", 
     params.push(req.query.branchType);
     conds.push(`ranked.branch_type = ${p()}`);
   }
+  // Keep this in the outer WHERE: running balances above must include the full
+  // movement history, including movements at locations hidden from this view.
+  conds.push(visibleLocationSql('ranked.branch_type', 'ranked.branch_id'));
 
   // Global location context — narrows the movement history to one branch.
   // View request only; HO matches on type alone.
@@ -541,6 +546,8 @@ router.get("/stock/transfers", requireModuleView("page:/transfers"), async (req,
   if (from) { params.push(from); conds.push(`transfer_date::date >= $${params.length}::date`); }
   if (to)   { params.push(to);   conds.push(`transfer_date::date <= $${params.length}::date`); }
   if (status) { params.push(status); conds.push(`status = $${params.length}`); }
+  conds.push(visibleLocationSql("stock_transfers.from_type", "stock_transfers.from_id"));
+  conds.push(visibleLocationSql("stock_transfers.to_type", "stock_transfers.to_id"));
 
   // Global location context — a transfer belongs to the selected location's
   // view when that location is EITHER endpoint (dispatches and receipts both
@@ -1743,7 +1750,12 @@ router.get("/stock/transfers/:id", requireModuleView("page:/transfers"), async (
             approved_by, approved_at, received_line_items, rejection_reason,
             transfer_type, from_gstin, to_gstin, tax_type, transfer_value, gst_amount,
             document_mode, transfer_invoice_number, sale_id, purchase_id, credit_note_voucher_id
-     FROM stock_transfers t WHERE id = $1 AND ${scopeTransferWhere(transferScope, transferParams)} LIMIT 1`,
+     FROM stock_transfers t
+     WHERE id = $1
+       AND ${scopeTransferWhere(transferScope, transferParams)}
+       AND ${visibleLocationSql("t.from_type", "t.from_id")}
+       AND ${visibleLocationSql("t.to_type", "t.to_id")}
+     LIMIT 1`,
     transferParams
   );
   const r = result.rows[0];

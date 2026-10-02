@@ -17,6 +17,7 @@ import { lineTaxHeads } from "../lib/gst";
 import { creditAdjustmentsExpr, outstandingExpr, computePaymentPosition } from "../lib/salePaymentPosition";
 import { isIsoDate } from "../lib/dateInput";
 import { getLocationFilter } from "../lib/requestLocation";
+import { visibleLocationSql } from "../lib/warehouseVisibility";
 
 // Effective location VIEW filter for the report queries: explicit
 // locationType/locationId query params win, else the global x-location-*
@@ -43,10 +44,12 @@ function parseRange(req: { query: Record<string, unknown> }): { from: string; to
 
 // ── Location name maps (headoffice / outlet / warehouse) ────────────────────
 type LocMaps = Record<string, Map<number, string>>;
-async function locationMaps(): Promise<LocMaps> {
+async function locationMaps(visibleOnly = false): Promise<LocMaps> {
   const [o, w] = await Promise.all([
-    pool.query<any>(`SELECT id, name FROM outlets`),
-    pool.query<any>(`SELECT id, name FROM warehouses`),
+    pool.query<any>(`SELECT o.id, o.name FROM outlets o
+                     LEFT JOIN warehouses parent ON parent.id = o.warehouse_id
+                     WHERE ${visibleOnly ? "(parent.id IS NULL OR parent.disabled_at IS NULL)" : "TRUE"}`),
+    pool.query<any>(`SELECT id, name FROM warehouses ${visibleOnly ? "WHERE disabled_at IS NULL" : ""}`),
   ]);
   return {
     outlet: new Map(o.rows.map((r: any) => [Number(r.id), String(r.name)])),
@@ -108,6 +111,7 @@ router.get("/reports/sales-register", requireModuleView("page:/reports/sales"), 
      FROM sales s
      LEFT JOIN customers c ON c.id = s.customer_id
      WHERE s.branch_transfer_id IS NULL AND s.cancelled_at IS NULL
+       AND ${visibleLocationSql("COALESCE(s.location_type,'outlet')", "COALESCE(s.location_id,s.outlet_id)")}
        AND ($1 = '' OR s.sale_date >= $1::date)
        AND ($2 = '' OR s.sale_date <= $2::date)
        AND ($3 = '' OR COALESCE(s.location_type,'outlet') = $3)
@@ -116,7 +120,7 @@ router.get("/reports/sales-register", requireModuleView("page:/reports/sales"), 
      ORDER BY s.sale_date, s.id`,
     rparams,
   );
-  const maps = await locationMaps();
+  const maps = await locationMaps(true);
 
   const list = rows.map((r: any) => {
     // Balance and status come from the shared derivation, so the register agrees
@@ -185,6 +189,7 @@ router.get("/reports/sales-by-salesperson", requireModuleView("page:/reports/sal
             COALESCE(SUM(${creditAdjustmentsExpr("s")}), 0) AS credit_adjustments
        FROM sales s
       WHERE s.branch_transfer_id IS NULL AND s.cancelled_at IS NULL
+        AND ${visibleLocationSql("COALESCE(s.location_type,'outlet')", "COALESCE(s.location_id,s.outlet_id)")}
         AND ($1 = '' OR s.sale_date >= $1::date)
         AND ($2 = '' OR s.sale_date <= $2::date)
         AND ($3 = '' OR COALESCE(s.location_type,'outlet') = $3)
@@ -251,6 +256,7 @@ router.get("/reports/sales-by-item", requireModuleView("page:/reports/sales"), a
             COUNT(DISTINCT s.id)                            AS invoices
      FROM sales s, jsonb_array_elements(s.line_items) li
      WHERE s.branch_transfer_id IS NULL AND s.cancelled_at IS NULL
+        AND ${visibleLocationSql("COALESCE(s.location_type,'outlet')", "COALESCE(s.location_id,s.outlet_id)")}
        AND ($1 = '' OR s.sale_date >= $1::date)
        AND ($2 = '' OR s.sale_date <= $2::date)
        AND ($3 = '' OR COALESCE(s.location_type,'outlet') = $3)
@@ -311,6 +317,7 @@ router.get("/reports/sales-by-location", requireModuleView("page:/reports/sales"
             SUM(${outstandingExpr("s")}) AS outstanding
      FROM sales s
      WHERE s.branch_transfer_id IS NULL AND s.cancelled_at IS NULL
+        AND ${visibleLocationSql("COALESCE(s.location_type,'outlet')", "COALESCE(s.location_id,s.outlet_id)")}
        AND ($1 = '' OR s.sale_date >= $1::date)
        AND ($2 = '' OR s.sale_date <= $2::date)
        AND ($3 = '' OR COALESCE(s.location_type,'outlet') = $3)
@@ -319,7 +326,7 @@ router.get("/reports/sales-by-location", requireModuleView("page:/reports/sales"
      GROUP BY 1, 2 ORDER BY 6 DESC NULLS LAST`,
     locParams,
   );
-  const maps = await locationMaps();
+  const maps = await locationMaps(true);
   const list = rows.map((r: any) => ({
     locationType: r.location_type,
     locationId: Number(r.location_id),
@@ -383,6 +390,7 @@ router.get("/reports/discounts", requireModuleView("page:/reports/sales"), async
        FROM jsonb_array_elements(COALESCE(s.line_items, '[]'::jsonb)) AS li
      ) d
      WHERE s.branch_transfer_id IS NULL AND s.cancelled_at IS NULL
+        AND ${visibleLocationSql("COALESCE(s.location_type,'outlet')", "COALESCE(s.location_id,s.outlet_id)")}
        AND ($1 = '' OR s.sale_date >= $1::date)
        AND ($2 = '' OR s.sale_date <= $2::date)
        AND ($3 = '' OR COALESCE(s.location_type,'outlet') = $3)
@@ -399,6 +407,7 @@ router.get("/reports/discounts", requireModuleView("page:/reports/sales"), async
   const { rows: [cnt] } = await pool.query<any>(
     `SELECT COUNT(*) AS n FROM sales s
      WHERE s.branch_transfer_id IS NULL AND s.cancelled_at IS NULL
+        AND ${visibleLocationSql("COALESCE(s.location_type,'outlet')", "COALESCE(s.location_id,s.outlet_id)")}
        AND ($1 = '' OR s.sale_date >= $1::date)
        AND ($2 = '' OR s.sale_date <= $2::date)
        AND ($3 = '' OR COALESCE(s.location_type,'outlet') = $3)
@@ -407,7 +416,7 @@ router.get("/reports/discounts", requireModuleView("page:/reports/sales"), async
     countArgs,
   );
 
-  const maps = await locationMaps();
+  const maps = await locationMaps(true);
   const list = rows.map((r: any) => {
     const itemDiscount = Number(r.item_discount);
     const billDiscount = Number(r.bill_discount);
@@ -479,6 +488,7 @@ router.get("/reports/purchase-register", requireModuleView("page:/reports/sales"
      FROM purchases p
      LEFT JOIN vendors v ON v.id = p.vendor_id
      WHERE p.branch_transfer_id IS NULL AND p.cancelled_at IS NULL
+        AND ${visibleLocationSql("COALESCE(p.location_type,'headoffice')", "p.location_id")}
        AND ($1 = '' OR p.purchase_date >= $1::date)
        AND ($2 = '' OR p.purchase_date <= $2::date)
        AND ($3 = 0 OR p.vendor_id = $3)
@@ -569,6 +579,7 @@ router.get("/reports/purchases-by-vendor", requireModuleView("page:/reports/sale
      FROM purchases p
      LEFT JOIN vendors v ON v.id = p.vendor_id
      WHERE p.branch_transfer_id IS NULL AND p.cancelled_at IS NULL
+        AND ${visibleLocationSql("COALESCE(p.location_type,'headoffice')", "p.location_id")}
        AND ($1 = '' OR p.purchase_date >= $1::date)
        AND ($2 = '' OR p.purchase_date <= $2::date)
        AND ($3 = '' OR COALESCE(p.location_type,'headoffice') = $3)
@@ -614,6 +625,7 @@ router.get("/reports/purchases-by-material", requireModuleView("page:/reports/sa
             COUNT(DISTINCT p.id) AS bills
      FROM purchases p, jsonb_array_elements(p.line_items) li
      WHERE p.branch_transfer_id IS NULL AND p.cancelled_at IS NULL
+        AND ${visibleLocationSql("COALESCE(p.location_type,'headoffice')", "p.location_id")}
        AND ($1 = '' OR p.purchase_date >= $1::date)
        AND ($2 = '' OR p.purchase_date <= $2::date)
        AND ($3 = '' OR COALESCE(p.location_type,'headoffice') = $3)
@@ -673,6 +685,7 @@ router.get("/reports/profitability", requireModuleView("page:/reports/sales"), a
             COALESCE(s.location_id, s.outlet_id) AS location_id, s.line_items
      FROM sales s
      WHERE s.branch_transfer_id IS NULL AND s.cancelled_at IS NULL
+        AND ${visibleLocationSql("COALESCE(s.location_type,'outlet')", "COALESCE(s.location_id,s.outlet_id)")}
        AND ($1 = '' OR s.sale_date >= $1::date)
        AND ($2 = '' OR s.sale_date <= $2::date)
        AND ($3 = '' OR COALESCE(s.location_type,'outlet') = $3)
@@ -686,7 +699,7 @@ router.get("/reports/profitability", requireModuleView("page:/reports/sales"), a
      FROM items`,
   );
   const iMap = new Map<number, { name: string; unit: string; cost: number }>(items.map((i: any) => [Number(i.id), { name: String(i.name), unit: String(i.unit), cost: Number(i.fallback_cost) }]));
-  const maps = groupBy === "location" ? await locationMaps() : null;
+  const maps = groupBy === "location" ? await locationMaps(true) : null;
 
   type Agg = { key: string; label: string; unit: string; qty: number; revenue: number; cogs: number; untrackedQty: number };
   const agg = new Map<string, Agg>();
@@ -785,7 +798,8 @@ router.get("/reports/sales-stock-combined", requireModuleView("page:/reports/sal
   // Sales tables key location as location_type/location_id (outlet fallback);
   // stock_entries keys the same place as branch_type/branch_id.
   const salesLocCond = `($3 = '' OR COALESCE(s.location_type,'outlet') = $3)
-         AND ($4 = 0 OR COALESCE(s.location_id, s.outlet_id) = $4)`;
+         AND ($4 = 0 OR COALESCE(s.location_id, s.outlet_id) = $4)
+         AND ${visibleLocationSql("COALESCE(s.location_type,'outlet')", "COALESCE(s.location_id,s.outlet_id)")}`;
 
   const [salesAgg, byLoc, topItems, stockRows, maps] = await Promise.all([
     pool.query<any>(
@@ -839,12 +853,13 @@ router.get("/reports/sales-stock-combined", requireModuleView("page:/reports/sal
        FROM stock_entries se
        JOIN items i ON i.id = se.item_id
        WHERE se.material_type = 'item'
+          AND ${visibleLocationSql("se.branch_type", "se.branch_id")}
          AND ($1 = '' OR se.branch_type = $1)
          AND ($2 = 0 OR se.branch_id = $2)
        GROUP BY 1, 2 ORDER BY 5 DESC`,
       [csLocType, csLocId],
     ),
-    locationMaps(),
+    locationMaps(true),
   ]);
 
   const { rows: items } = await pool.query<any>(`SELECT id, name, COALESCE(unit,'') AS unit FROM items`);
@@ -941,6 +956,8 @@ router.get("/reports/gst-transfers", requireModuleView("page:/reports/sales"), a
         -- carries no invoice is the one thing a reviewer most needs to see, so
         -- it is listed and quantified rather than filtered out.
         WHERE COALESCE(t.transfer_type, 'internal') <> 'internal'
+           AND ${visibleLocationSql("t.from_type", "t.from_id")}
+           AND ${visibleLocationSql("t.to_type", "t.to_id")}
           AND ($1 = '' OR t.transfer_date >= $1::date)
           AND ($2 = '' OR t.transfer_date <= $2::date)
           AND ($3 = '' OR (t.from_type = $3 AND ($4 = 0 OR t.from_id = $4))
@@ -955,13 +972,14 @@ router.get("/reports/gst-transfers", requireModuleView("page:/reports/sales"), a
               COALESCE(SUM(total_amount), 0)           AS total
          FROM sales
         WHERE branch_transfer_id IS NULL AND cancelled_at IS NULL
+          AND ${visibleLocationSql("COALESCE(location_type,'outlet')", "COALESCE(location_id,outlet_id)")}
           AND ($1 = '' OR sale_date >= $1::date)
           AND ($2 = '' OR sale_date <= $2::date)
           AND ($3 = '' OR COALESCE(location_type,'outlet') = $3)
           AND ($4 = 0 OR COALESCE(location_id, outlet_id) = $4)`,
       [range.from, range.to, gtLocType, gtLocId],
     ),
-    locationMaps(),
+    locationMaps(true),
   ]);
 
   const rows = transfers.map((t: any) => {
@@ -1151,6 +1169,8 @@ router.get("/reports/branch-transfers", requireModuleView("page:/reports/sales")
           ORDER BY emp.id LIMIT 1
        ) e ON TRUE
       WHERE ($1 = '' OR t.transfer_date >= $1::date)
+         AND ${visibleLocationSql("t.from_type", "t.from_id")}
+         AND ${visibleLocationSql("t.to_type", "t.to_id")}
         AND ($2 = '' OR t.transfer_date <= $2::date)
         AND ($3 = '' OR t.from_type = $3)
         AND ($4 = 0  OR t.from_id = $4)
@@ -1176,7 +1196,7 @@ router.get("/reports/branch-transfers", requireModuleView("page:/reports/sales")
     params,
   );
 
-  const [maps, nameMaps] = await Promise.all([locationMaps(), materialNameMaps()]);
+  const [maps, nameMaps] = await Promise.all([locationMaps(true), materialNameMaps()]);
   // Ids OVERLAP between items / materials / raw_materials, so a line's name and
   // UOM are only correct when resolved through its own materialType.
   const resolve = (materialType: string, id: number) => nameMaps[materialType]?.get(id);

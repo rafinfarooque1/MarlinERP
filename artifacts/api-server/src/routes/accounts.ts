@@ -40,6 +40,7 @@ import { parsePostingLocationFilter, companyLevelSummary, filterPostingsByLocati
 import { resolveGstScope, salesScopeCond, purchaseScopeCond } from "../lib/gstinScope";
 import { openingBalancePostings } from "../lib/openingBalances";
 import { isLevelOneAdmin, ADMIN_DELETE_ERROR } from "../lib/adminGate";
+import { visibleLocationSql } from "../lib/warehouseVisibility";
 
 function monthKeyOf(value: unknown): string {
   const ym = ymOfDate(value as string | Date | null | undefined);
@@ -178,18 +179,27 @@ router.get("/accounts/chart", requireModuleView(["page:/accounts/chart", "page:/
   const [result, usage, whsRes, outsRes] = await Promise.all([
     pool.query(`SELECT * FROM account_ledgers ORDER BY name`),
     loadLedgerUsage(pool),
-    pool.query(`SELECT id, name FROM warehouses`),
-    pool.query(`SELECT id, name FROM outlets`),
+    pool.query(`SELECT id, name FROM warehouses WHERE disabled_at IS NULL`),
+    pool.query(`SELECT o.id, o.name FROM outlets o LEFT JOIN warehouses w ON w.id = o.warehouse_id WHERE w.disabled_at IS NULL`),
   ]);
   const rows = result.rows;
   const whName = new Map<number, string>(whsRes.rows.map((r: any) => [Number(r.id), String(r.name)]));
   const outName = new Map<number, string>(outsRes.rows.map((r: any) => [Number(r.id), String(r.name)]));
+  const [{ rows: disabledWhs }, { rows: disabledOuts }] = await Promise.all([
+    pool.query(`SELECT id FROM warehouses WHERE disabled_at IS NOT NULL`),
+    pool.query(`SELECT o.id FROM outlets o JOIN warehouses w ON w.id = o.warehouse_id WHERE w.disabled_at IS NOT NULL`),
+  ]);
+  const hiddenLocationKeys = new Set<string>([
+    ...disabledWhs.map((r: any) => `warehouse:${Number(r.id)}`),
+    ...disabledOuts.map((r: any) => `outlet:${Number(r.id)}`),
+  ]);
   // location_type/location_id are raw-migration columns (SELECT * surfaces
   // them via pg). Display-only ownership stamp — report scoping stays
   // document/posting-based.
   const locName = (t: string | null, i: any): string | null => {
     if (!t) return null;
     if (t === "headoffice") return "Head Office";
+    if (hiddenLocationKeys.has(`${t}:${Number(i)}`)) return null;
     if (t === "warehouse") return whName.get(Number(i)) ?? `Warehouse #${i}`;
     if (t === "outlet") return outName.get(Number(i)) ?? `Outlet #${i}`;
     return String(t);
@@ -197,24 +207,27 @@ router.get("/accounts/chart", requireModuleView(["page:/accounts/chart", "page:/
 
   // Build tree in memory
   const map = new Map<number, any>();
-  rows.forEach((r: any) => map.set(r.id, {
-    id: r.id,
-    name: r.name,
-    type: r.type,
-    parentId: r.parent_id ?? null,
-    description: r.description ?? null,
-    code: r.code ?? null,
-    section: r.section ?? null,
-    isSystemGroup: r.is_system_group ?? false,
-    isGroup: r.is_group ?? false,
-    isActive: r.is_active ?? true,
-    createdAt: r.created_at,
-    locationType: r.location_type ?? null,
-    locationId: r.location_id != null ? Number(r.location_id) : null,
-    locationName: locName(r.location_type ?? null, r.location_id),
-    children: [],
-    balance: 0,
-  }));
+  rows.forEach((r: any) => {
+    const hiddenLocation = hiddenLocationKeys.has(`${r.location_type}:${Number(r.location_id)}`);
+    map.set(r.id, {
+      id: r.id,
+      name: r.name,
+      type: r.type,
+      parentId: r.parent_id ?? null,
+      description: r.description ?? null,
+      code: r.code ?? null,
+      section: r.section ?? null,
+      isSystemGroup: r.is_system_group ?? false,
+      isGroup: r.is_group ?? false,
+      isActive: r.is_active ?? true,
+      createdAt: r.created_at,
+      locationType: hiddenLocation ? null : (r.location_type ?? null),
+      locationId: hiddenLocation ? null : (r.location_id != null ? Number(r.location_id) : null),
+      locationName: locName(r.location_type ?? null, r.location_id),
+      children: [],
+      balance: 0,
+    });
+  });
   const roots: any[] = [];
   rows.forEach((r: any) => {
     const node = map.get(r.id)!;
@@ -3600,8 +3613,9 @@ router.get("/accounts/cash-bank", requireModuleView("page:/accounts/cash-bank"),
                         )
                 FROM cash_bank_account_locations l WHERE l.account_id = c.id), '[]'::json) AS memberships
       FROM cash_bank_accounts c ORDER BY c.id`),
-    pool.query(`SELECT id, name, cash_ledger_id FROM warehouses`),
-    pool.query(`SELECT id, name, cash_ledger_id FROM outlets`),
+    pool.query(`SELECT id, name, cash_ledger_id, disabled_at FROM warehouses`),
+    pool.query(`SELECT o.id, o.name, o.cash_ledger_id, w.disabled_at AS parent_disabled_at
+                  FROM outlets o LEFT JOIN warehouses w ON w.id = o.warehouse_id`),
     pool.query(`
       WITH RECURSIVE tree AS (
         SELECT id, name, code, is_active, code AS root_code FROM account_ledgers WHERE code IN ('STD-CASH','STD-BANK')
@@ -3610,9 +3624,15 @@ router.get("/accounts/cash-bank", requireModuleView("page:/accounts/cash-bank"),
       ) SELECT * FROM tree ORDER BY id
     `),
   ]);
+  const visibleWhs = whs.filter((w: any) => w.disabled_at == null);
+  const visibleOuts = outs.filter((o: any) => o.parent_disabled_at == null);
+  const hiddenLocationKeys = new Set<string>([
+    ...whs.filter((w: any) => w.disabled_at != null).map((w: any) => `warehouse:${Number(w.id)}`),
+    ...outs.filter((o: any) => o.parent_disabled_at != null).map((o: any) => `outlet:${Number(o.id)}`),
+  ]);
   const locName = (lt: string | null, lid: number | null): string => {
-    if (lt === "warehouse") return whs.find((w: any) => Number(w.id) === lid)?.name ?? "Warehouse";
-    if (lt === "outlet") return outs.find((o: any) => Number(o.id) === lid)?.name ?? "Outlet";
+    if (lt === "warehouse") return visibleWhs.find((w: any) => Number(w.id) === lid)?.name ?? "Warehouse";
+    if (lt === "outlet") return visibleOuts.find((o: any) => Number(o.id) === lid)?.name ?? "Outlet";
     return "Head Office";
   };
 
@@ -3633,14 +3653,15 @@ router.get("/accounts/cash-bank", requireModuleView("page:/accounts/cash-bank"),
     }]).map((location: any) => ({
       locationType: String(location.location_type),
       locationId: String(location.location_type) === "headoffice" ? 0 : Number(location.location_id),
-    }));
+    })).filter((location: { locationType: string; locationId: number }) =>
+      !hiddenLocationKeys.has(`${location.locationType}:${location.locationId}`));
     const assignedKeys = new Set<string>(assignedLocations.map((location) => `${location.locationType}:${location.locationId}`));
     if (selectedKeys.size > 0 && ![...assignedKeys].some((key) => selectedKeys.has(key))) continue;
     if (!scope.isHeadOffice && ![...assignedKeys].some((key) => allowedKeys?.has(key))) continue;
-    const primaryLocation = assignedLocations[0] ?? { locationType: "headoffice", locationId: 0 };
+    const primaryLocation = assignedLocations[0] ?? null;
     const accountLocation = {
-      locationType: primaryLocation.locationType,
-      locationId: primaryLocation.locationId,
+      locationType: primaryLocation?.locationType ?? null,
+      locationId: primaryLocation?.locationId ?? null,
       locationName: assignedLocations.map((location) => locName(location.locationType, location.locationId)).join(", "),
     };
     const balance = lid && selectedNet ? (selectedNet.get(lid) ?? 0) : null;
@@ -3669,8 +3690,8 @@ router.get("/accounts/cash-bank", requireModuleView("page:/accounts/cash-bank"),
   //    ledger, so rows are deduped by ledger id (warehouse identity wins).
   const outletsHidden = await outletWritesBlocked(pool);
   const tills = [
-    ...whs.filter((w: any) => w.cash_ledger_id).map((w: any) => ({ lt: "warehouse", locId: Number(w.id), locNm: w.name, lid: Number(w.cash_ledger_id) })),
-    ...(outletsHidden ? [] : outs.filter((o: any) => o.cash_ledger_id).map((o: any) => ({ lt: "outlet", locId: Number(o.id), locNm: o.name, lid: Number(o.cash_ledger_id) }))),
+    ...visibleWhs.filter((w: any) => w.cash_ledger_id).map((w: any) => ({ lt: "warehouse", locId: Number(w.id), locNm: w.name, lid: Number(w.cash_ledger_id) })),
+    ...(outletsHidden ? [] : visibleOuts.filter((o: any) => o.cash_ledger_id).map((o: any) => ({ lt: "outlet", locId: Number(o.id), locNm: o.name, lid: Number(o.cash_ledger_id) }))),
   ];
   const ledgerMeta = new Map<number, any>(tree.map((t: any) => [Number(t.id), t]));
   for (const t of tills) {
@@ -4481,15 +4502,15 @@ router.get("/accounts/location-expenses/summary", requireModuleView("page:/accou
   let warehouses: any[] = [];
   let outlets: any[] = [];
   if (sumIsHO) {
-    const wRes = await pool.query(`SELECT id, name, cash_ledger_id FROM warehouses WHERE cash_ledger_id IS NOT NULL ORDER BY name`);
-    const oRes = await pool.query(`SELECT id, name, cash_ledger_id FROM outlets WHERE cash_ledger_id IS NOT NULL ORDER BY name`);
+    const wRes = await pool.query(`SELECT id, name, cash_ledger_id FROM warehouses WHERE disabled_at IS NULL AND cash_ledger_id IS NOT NULL ORDER BY name`);
+    const oRes = await pool.query(`SELECT o.id, o.name, o.cash_ledger_id FROM outlets o LEFT JOIN warehouses w ON w.id = o.warehouse_id WHERE w.disabled_at IS NULL AND o.cash_ledger_id IS NOT NULL ORDER BY o.name`);
     warehouses = wRes.rows;
     outlets = oRes.rows;
   } else if (sumEmp.branchType === 'warehouse') {
-    const { rows } = await pool.query(`SELECT id, name, cash_ledger_id FROM warehouses WHERE id = $1 AND cash_ledger_id IS NOT NULL`, [sumEmp.branchId]);
+    const { rows } = await pool.query(`SELECT id, name, cash_ledger_id FROM warehouses WHERE id = $1 AND disabled_at IS NULL AND cash_ledger_id IS NOT NULL`, [sumEmp.branchId]);
     warehouses = rows;
   } else {
-    const { rows } = await pool.query(`SELECT id, name, cash_ledger_id FROM outlets WHERE id = $1 AND cash_ledger_id IS NOT NULL`, [sumEmp.branchId]);
+    const { rows } = await pool.query(`SELECT o.id, o.name, o.cash_ledger_id FROM outlets o LEFT JOIN warehouses w ON w.id = o.warehouse_id WHERE o.id = $1 AND w.disabled_at IS NULL AND o.cash_ledger_id IS NOT NULL`, [sumEmp.branchId]);
     outlets = rows;
   }
 
@@ -4525,6 +4546,7 @@ router.get("/accounts/location-expenses/summary", requireModuleView("page:/accou
     FROM payments
     WHERE is_location_expense = true
       AND paid_to_ledger_id = ANY($1)
+      AND ${visibleLocationSql("location_type", "location_id")}
     GROUP BY location_type, location_id
   `, [expenseLedgerIds]);
 
@@ -4536,9 +4558,11 @@ router.get("/accounts/location-expenses/summary", requireModuleView("page:/accou
   // figure on both of its entries, so totals are summed over every identity
   // sharing the cash ledger rather than over the single stamp on the row.
   const { rows: identityRows } = await pool.query(`
-    SELECT 'warehouse' AS t, id, cash_ledger_id FROM warehouses WHERE cash_ledger_id IS NOT NULL
+    SELECT 'warehouse' AS t, id, cash_ledger_id FROM warehouses WHERE disabled_at IS NULL AND cash_ledger_id IS NOT NULL
     UNION ALL
-    SELECT 'outlet' AS t, id, cash_ledger_id FROM outlets WHERE cash_ledger_id IS NOT NULL
+    SELECT 'outlet' AS t, o.id, o.cash_ledger_id FROM outlets o
+      LEFT JOIN warehouses w ON w.id = o.warehouse_id
+     WHERE w.disabled_at IS NULL AND o.cash_ledger_id IS NOT NULL
   `);
   const byCashLedger = new Map<number, Array<{ t: string; id: number }>>();
   for (const r of identityRows) {
@@ -4612,7 +4636,8 @@ router.get("/accounts/location-expenses/all", requireModuleView(["page:/accounts
     LEFT JOIN warehouses w ON p.location_type = 'warehouse' AND w.id = p.location_id
     LEFT JOIN outlets    o ON p.location_type = 'outlet'    AND o.id = p.location_id
     WHERE p.is_location_expense = true
-      AND p.paid_to_ledger_id = ANY($1)${locationFilterAll}
+      AND p.paid_to_ledger_id = ANY($1)
+      AND ${visibleLocationSql("p.location_type", "p.location_id")}${locationFilterAll}
     ORDER BY p.payment_date DESC, p.id DESC
   `, allParams);
 
@@ -4651,6 +4676,18 @@ router.get("/accounts/location-expenses", requireModuleView(["page:/accounts/exp
       res.status(403).json({ error: "Access denied: you may only view your own location's expenses" }); return;
     }
   }
+  if (locationType !== "warehouse" && locationType !== "outlet") {
+    res.status(404).json({ error: "Location not found." }); return;
+  }
+  const { rows: visibleLocation } = await pool.query(
+    `SELECT 1 FROM ${locationType === "warehouse" ? "warehouses" : "outlets"} loc
+      WHERE loc.id = $1
+        AND ${visibleLocationSql(`'${String(locationType)}'`, "loc.id")}`,
+    [Number(locationId)],
+  );
+  if (visibleLocation.length === 0) {
+    res.status(404).json({ error: "Location not found." }); return;
+  }
   const cashLedgerId = await resolveLocationCashLedger(locationType, Number(locationId));
   if (!cashLedgerId) {
     res.status(404).json({ error: "Location has no Cash ledger assigned. Provision it under Accounts → Warehouses/Outlets." }); return;
@@ -4681,6 +4718,7 @@ router.get("/accounts/location-expenses", requireModuleView(["page:/accounts/exp
     LEFT JOIN account_ledgers pt ON p.paid_to_ledger_id = pt.id
     WHERE p.is_location_expense = true
       AND p.paid_to_ledger_id = ANY($1)
+      AND ${visibleLocationSql("p.location_type", "p.location_id")}
       AND ${identityFilter}
     ORDER BY p.id DESC
   `, singleParams);
@@ -4735,25 +4773,31 @@ async function getLocationCashBalance(ledgerId: number): Promise<number> {
 async function resolveLocationIdentities(
   locationType: string, locationId: number,
 ): Promise<Array<{ type: string; id: number }>> {
-  const out = [{ type: String(locationType), id: Number(locationId) }];
-  const cashLedgerId = await resolveLocationCashLedger(locationType, Number(locationId));
-  if (!cashLedgerId) return out;
+  const cashLedgerId = await resolveLocationCashLedger(locationType, locationId);
+  const params: any[] = [String(locationType), Number(locationId)];
+  const mirrors = cashLedgerId
+    ? `UNION ALL
+       SELECT 'warehouse' AS t, id FROM warehouses WHERE cash_ledger_id = $3
+       UNION ALL
+       SELECT 'outlet' AS t, id FROM outlets WHERE cash_ledger_id = $3`
+    : "";
+  if (cashLedgerId) params.push(cashLedgerId);
   const { rows } = await pool.query(
-    `SELECT 'warehouse' AS t, id FROM warehouses WHERE cash_ledger_id = $1
-     UNION ALL
-     SELECT 'outlet' AS t, id FROM outlets WHERE cash_ledger_id = $1`,
-    [cashLedgerId],
+    `SELECT DISTINCT t, id FROM (
+       SELECT $1::text AS t, $2::int AS id
+       ${mirrors}
+     ) identities
+      WHERE ${visibleLocationSql("t", "id")}`,
+    params,
   );
-  for (const r of rows) {
-    if (!out.some(o => o.type === r.t && o.id === Number(r.id))) out.push({ type: r.t, id: Number(r.id) });
-  }
-  return out;
+  return rows.map((r: any) => ({ type: String(r.t), id: Number(r.id) }));
 }
 
 /** `(location_type = $n AND location_id = $n+1) OR (…)` for an identity set. */
 function locationIdentitySql(
   identities: Array<{ type: string; id: number }>, params: any[], alias = 'p',
 ): string {
+  if (identities.length === 0) return "FALSE";
   const clauses = identities.map(i => {
     params.push(i.type, i.id);
     return `(${alias}.location_type = $${params.length - 1} AND ${alias}.location_id = $${params.length})`;

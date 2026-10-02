@@ -28,6 +28,7 @@ import { pool } from "@workspace/db";
 import { requireModuleView, canViewStockValuation } from "../middleware/permissions";
 import { getUserDataScope, scopeSalesWhere, scopeBranchWhere, scopeTransferWhere, type DataScope } from "../lib/dataScope";
 import { buildBranchMaps } from "./stock";
+import { visibleLocationSql } from "../lib/warehouseVisibility";
 
 const router: IRouter = Router();
 const KINDS = new Set(["item", "material", "raw_material"]);
@@ -37,17 +38,21 @@ const HISTORY_CAP = 200;
 
 /** location_type/location_id scope fragment (purchases, productions, sales_returns). */
 function scopeLocWhere(scope: DataScope, params: unknown[], alias: string): string {
-  if (scope.isHeadOffice) return "TRUE";
-  const conds: string[] = [];
-  if (scope.warehouseIds.length > 0) {
-    params.push(scope.warehouseIds);
-    conds.push(`(${alias}.location_type = 'warehouse' AND ${alias}.location_id = ANY($${params.length}::int[]))`);
+  let scopeCondition: string;
+  if (scope.isHeadOffice) scopeCondition = "TRUE";
+  else {
+    const conds: string[] = [];
+    if (scope.warehouseIds.length > 0) {
+      params.push(scope.warehouseIds);
+      conds.push(`(${alias}.location_type = 'warehouse' AND ${alias}.location_id = ANY($${params.length}::int[]))`);
+    }
+    if (scope.outletIds.length > 0) {
+      params.push(scope.outletIds);
+      conds.push(`(${alias}.location_type = 'outlet' AND ${alias}.location_id = ANY($${params.length}::int[]))`);
+    }
+    scopeCondition = conds.length ? `(${conds.join(" OR ")})` : "FALSE";
   }
-  if (scope.outletIds.length > 0) {
-    params.push(scope.outletIds);
-    conds.push(`(${alias}.location_type = 'outlet' AND ${alias}.location_id = ANY($${params.length}::int[]))`);
-  }
-  return conds.length ? `(${conds.join(" OR ")})` : "FALSE";
+  return `(${scopeCondition}) AND ${visibleLocationSql(`${alias}.location_type`, `${alias}.location_id`)}`;
 }
 
 router.get("/item-tracking", requireModuleView(["page:/headoffice/stock", "page:/production/item-master"]), async (req, res): Promise<void> => {
@@ -84,6 +89,15 @@ router.get("/item-tracking", requireModuleView(["page:/headoffice/stock", "page:
             jsonb_array_elements(p.line_items) li
       WHERE (li->>'materialId')::int = $1 AND COALESCE(li->>'materialType', 'item') = $2
         AND ${purScope}
+        AND (
+          p.branch_transfer_id IS NULL
+          OR EXISTS (
+            SELECT 1 FROM stock_transfers visible_transfer
+             WHERE visible_transfer.id = p.branch_transfer_id
+               AND ${visibleLocationSql("visible_transfer.from_type", "visible_transfer.from_id")}
+               AND ${visibleLocationSql("visible_transfer.to_type", "visible_transfer.to_id")}
+          )
+        )
       ORDER BY p.purchase_date DESC, p.id DESC
       LIMIT ${HISTORY_CAP}`, purParams);
 
@@ -103,6 +117,16 @@ router.get("/item-tracking", requireModuleView(["page:/headoffice/stock", "page:
               jsonb_array_elements(s.line_items) li
         WHERE (li->>'itemId')::int = $1
           AND ${sScope}
+          AND ${visibleLocationSql("s.location_type", "COALESCE(s.location_id, s.outlet_id)")}
+          AND (
+            s.branch_transfer_id IS NULL
+            OR EXISTS (
+              SELECT 1 FROM stock_transfers visible_transfer
+               WHERE visible_transfer.id = s.branch_transfer_id
+                 AND ${visibleLocationSql("visible_transfer.from_type", "visible_transfer.from_id")}
+                 AND ${visibleLocationSql("visible_transfer.to_type", "visible_transfer.to_id")}
+            )
+          )
         ORDER BY s.sale_date DESC, s.id DESC
         LIMIT ${HISTORY_CAP}`, sParams);
   })() : Promise.resolve({ rows: [] as any[] });
@@ -152,6 +176,8 @@ router.get("/item-tracking", requireModuleView(["page:/headoffice/stock", "page:
             jsonb_array_elements(t.line_items) li
       WHERE (li->>'itemId')::int = $1 AND COALESCE(li->>'materialType', 'item') = $2
         AND ${tScope}
+         AND ${visibleLocationSql("t.from_type", "t.from_id")}
+         AND ${visibleLocationSql("t.to_type", "t.to_id")}
       ORDER BY t.transfer_date DESC, t.id DESC
       LIMIT ${HISTORY_CAP}`, tParams);
 
@@ -193,6 +219,7 @@ router.get("/item-tracking", requireModuleView(["page:/headoffice/stock", "page:
               jsonb_array_elements(sv.lines) l
         WHERE (l->>'itemId')::int = $1 AND COALESCE((l->>'variance')::numeric, 0) <> 0
           AND ${aScope}
+          AND ${visibleLocationSql("sv.branch_type", "sv.branch_id")}
         ORDER BY sv.verify_date DESC, sv.id DESC
         LIMIT ${HISTORY_CAP}`, aParams);
   })() : Promise.resolve({ rows: [] as any[] });
@@ -203,7 +230,8 @@ router.get("/item-tracking", requireModuleView(["page:/headoffice/stock", "page:
   const stockP = pool.query(
     `SELECT se.branch_type, se.branch_id, SUM(se.quantity)::numeric AS qty
        FROM stock_entries se
-      WHERE se.item_id = $1 AND se.material_type = $2 AND ${stScope}
+       WHERE se.item_id = $1 AND se.material_type = $2 AND ${stScope}
+         AND ${visibleLocationSql("se.branch_type", "se.branch_id")}
       GROUP BY se.branch_type, se.branch_id
       HAVING SUM(se.quantity) <> 0
       ORDER BY se.branch_type, se.branch_id`, stParams);
