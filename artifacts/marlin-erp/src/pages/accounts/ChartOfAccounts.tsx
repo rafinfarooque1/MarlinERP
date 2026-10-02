@@ -894,9 +894,6 @@ function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, on
   const showClosingTransitLine = transferPnl && (monthly
     ? mwS('closingStockInTransit').some((v) => Math.abs(v) > 0.005)
     : Math.abs(Number(inc?.closingStockInTransit ?? 0)) > 0.005);
-  const showBalanceTransitLine = transferPnl && (monthly
-    ? mwS('bsClosingStockInTransit').some((v) => Math.abs(v) > 0.005)
-    : Math.abs(Number(bs?.assets?.closingStockInTransit ?? 0)) > 0.005);
   // The c/d balancing rows are two-sided per month: profit months carry down
   // on the debit side, loss months on the credit side.
   const mwGpPos = mwGp.map(v => (v > 0 ? v : 0));
@@ -1042,13 +1039,10 @@ function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, on
                     <>
                       <MwGroupBlock group={bs.assets.fixedAssets} seriesKey="grp:fixed" monthly={monthly} expansion={bsExpansion} />
                       <MwAutoRow
-                        label={transferPnl ? 'Closing Stock (on hand)' : 'Closing Stock'}
-                        values={transferPnl ? mwS('bsClosingStockOnHand') : mwS('bsClosingStock')} total={transferPnl ? (bs.assets.closingStockOnHand ?? bs.assets.closingStock) : bs.assets.closingStock} monthly={monthly}
+                        label="Closing Stock"
+                        values={mwS('bsClosingStock')} total={Number(bs.assets.closingStock)} monthly={monthly}
                         accent="text-foreground/80 font-semibold"
                       />
-                      {showBalanceTransitLine && (
-                        <MwAutoRow label="Stock in Transit" values={mwS('bsClosingStockInTransit')} total={Number(bs.assets.closingStockInTransit ?? 0)} monthly={monthly} />
-                      )}
                       <MwGroupBlock group={bs.assets.currentAssets} seriesKey="grp:curassets" monthly={monthly} expansion={bsExpansion} />
                     </>
                   ) : (
@@ -1059,17 +1053,11 @@ function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, on
                           stock never appeared on the balance sheet, which is why a
                           plug 'Difference' was needed. It now shows explicitly. */}
                        <div className="flex items-center gap-2 py-2 px-3 mx-2 mb-2 rounded-lg text-xs font-semibold bg-emerald-500/5 text-foreground/80">
-                         <span className="flex-1">{transferPnl ? 'Closing Stock (on hand)' : 'Closing Stock'}</span>
+                         <span className="flex-1">Closing Stock</span>
                         <span className="font-mono tabular-nums text-foreground/70">
-                           {Number(transferPnl ? (bs.assets.closingStockOnHand ?? bs.assets.closingStock) : bs.assets.closingStock) === 0 ? '—' : fmt(Number(transferPnl ? (bs.assets.closingStockOnHand ?? bs.assets.closingStock) : bs.assets.closingStock))}
+                           {Number(bs.assets.closingStock) === 0 ? '—' : fmt(Number(bs.assets.closingStock))}
                         </span>
                       </div>
-                       {showBalanceTransitLine && (
-                         <div className="flex items-center gap-2 py-2 px-3 mx-2 mb-2 rounded-lg text-xs font-semibold bg-amber-500/5 text-foreground/80">
-                           <span className="flex-1">Stock in Transit</span>
-                           <span className="font-mono tabular-nums text-foreground/70">{fmt(Number(bs.assets.closingStockInTransit))}</span>
-                         </div>
-                       )}
 
                       <GroupBlock group={bs.assets.currentAssets} onCreated={onCreated} expansion={bsExpansion} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={canAdd} canEdit={canEdit} canDelete={canDelete} />
                     </>

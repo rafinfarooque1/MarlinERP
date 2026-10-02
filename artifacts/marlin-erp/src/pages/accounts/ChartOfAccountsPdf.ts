@@ -354,9 +354,7 @@ export async function generateChartOfAccountsPdf(opts: CoaPdfOpts): Promise<void
       rowSpacer(),
       rowPanel('ASSETS'),
        ...groupRows(bs.assets.fixedAssets,   'grp:fixed',     series, N, isOpen, showValuedOnly),
-        rowAuto(transferPnl ? 'Closing Stock (on hand)' : 'Closing Stock', transferPnl ? sv('bsClosingStockOnHand') : sv('bsClosingStock'), transferPnl ? (bs.assets.closingStockOnHand ?? bs.assets.closingStock) : bs.assets.closingStock),
-        ...(transferPnl && (Math.abs(Number(bs.assets.closingStockInTransit ?? 0)) > 0.005 || sv('bsClosingStockInTransit').some(v => Math.abs(v) > 0.005))
-          ? [rowAuto('Stock in Transit', sv('bsClosingStockInTransit'), Number(bs.assets.closingStockInTransit ?? 0))] : []),
+        rowAuto('Closing Stock', sv('bsClosingStock'), Number(bs.assets.closingStock)),
        ...groupRows(bs.assets.currentAssets, 'grp:curassets', series, N, isOpen, showValuedOnly),
       rowTotal('Total Assets', bs.assets.total, sv('assetsTotal')),
     ];
