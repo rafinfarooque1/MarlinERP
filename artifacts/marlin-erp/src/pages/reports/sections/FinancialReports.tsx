@@ -646,7 +646,6 @@ function BalanceSheetReport({ range, loc, canDownload }: { range: RangeState; lo
   const { options, loading: locLoading } = useLocationOptions();
   const { data, isLoading } = useFinancialStatements(range, loc);
   const bs = data?.balanceSheet;
-  const transferPnl = !!data?.profitAndLoss?.stockTransfersIncludedInPnl;
 
   // Dashboard Payables tile links here with #bs-liabilities — same scroll +
   // highlight treatment as the P&L anchors.
@@ -670,9 +669,7 @@ function BalanceSheetReport({ range, loc, canDownload }: { range: RangeState; lo
   ] : [];
   const assetLines: Line[] = bs ? [
     ...groupLines(bs.assets.fixedAssets),
-    { name: transferPnl ? 'Closing Stock (on hand)' : 'Closing Stock', amount: transferPnl ? (bs.assets.closingStockOnHand ?? bs.assets.closingStock) : bs.assets.closingStock, depth: 0, key: 'bs:closingStock', parentKey: null },
-    ...(transferPnl && Math.abs(bs.assets.closingStockInTransit ?? 0) > 0.005
-      ? [{ name: 'Stock in Transit', amount: bs.assets.closingStockInTransit ?? 0, depth: 0, key: 'bs:closingStockTransit', parentKey: null }] : []),
+    { name: 'Closing Stock', amount: bs.assets.closingStock, depth: 0, key: 'bs:closingStock', parentKey: null },
     ...groupLines(bs.assets.currentAssets),
   ] : [];
 

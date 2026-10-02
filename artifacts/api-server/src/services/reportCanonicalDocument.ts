@@ -73,13 +73,9 @@ export function canonicalDocument(request: CanonicalReportRequest, payload: any)
     if (payload.integrity?.balanced === false) warnings.push(`Books do not balance. Difference: ${payload.integrity.difference}`);
     if (reportId === "balance-sheet") {
       const b = payload.balanceSheet;
-      const stockRows: (string | number)[][] = pl.stockTransfersIncludedInPnl
-        ? [
-            ["Closing Stock (on hand)", amount(b.assets.closingStockOnHand ?? Math.max(0, Number(b.assets.closingStock ?? 0) - Number(b.assets.closingStockInTransit ?? 0)))],
-            ...(Math.abs(Number(b.assets.closingStockInTransit ?? 0)) > 0.005
-              ? [["Stock in Transit", amount(b.assets.closingStockInTransit)]] : []),
-          ]
-        : [["Closing Stock", amount(b.assets.closingStock)]];
+      const stockRows: (string | number)[][] = [
+        ["Closing Stock", amount(b.assets.closingStock)],
+      ];
       statement("Liabilities", [
         ...groupRows(b.liabilities.capitalAccount),
         ["Reserves & Surplus (P&L)", amount(b.liabilities.pandlCarryForward)],
