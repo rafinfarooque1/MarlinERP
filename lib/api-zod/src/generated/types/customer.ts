@@ -20,5 +20,6 @@ export interface Customer {
   totalPurchases?: number;
   creditLimit?: number;
   creditDays?: number;
+  isActive: boolean;
   createdAt: string;
 }

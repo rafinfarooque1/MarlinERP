@@ -5956,7 +5956,7 @@ export const getListCustomersUrl = () => {
 }
 
 /**
- * @summary List all customers
+ * @summary List active customers
  */
 export const listCustomers = async ( options?: RequestInit): Promise<Customer[]> => {
 
@@ -6003,7 +6003,7 @@ export type ListCustomersQueryError = ErrorType<unknown>
 
 
 /**
- * @summary List all customers
+ * @summary List active customers
  */
 
 export function useListCustomers<TData = Awaited<ReturnType<typeof listCustomers>>, TError = ErrorType<unknown>>(
@@ -6094,6 +6094,83 @@ export const useCreateCustomer = <TError = ErrorType<unknown>,
       > => {
       return useMutation(getCreateCustomerMutationOptions(options));
     }
+
+export const getListCustomerManagementUrl = () => {
+
+
+
+
+  return `/api/customers/management`
+}
+
+/**
+ * @summary List all customers for customer management
+ */
+export const listCustomerManagement = async ( options?: RequestInit): Promise<Customer[]> => {
+
+  return customFetch<Customer[]>(getListCustomerManagementUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getListCustomerManagementQueryKey = () => {
+    return [
+    `/api/customers/management`
+    ] as const;
+    }
+
+
+export const getListCustomerManagementQueryOptions = <TData = Awaited<ReturnType<typeof listCustomerManagement>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listCustomerManagement>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getListCustomerManagementQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listCustomerManagement>>> = ({ signal }) => listCustomerManagement({ signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listCustomerManagement>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type ListCustomerManagementQueryResult = NonNullable<Awaited<ReturnType<typeof listCustomerManagement>>>
+export type ListCustomerManagementQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary List all customers for customer management
+ */
+
+export function useListCustomerManagement<TData = Awaited<ReturnType<typeof listCustomerManagement>>, TError = ErrorType<unknown>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listCustomerManagement>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getListCustomerManagementQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
 
 export const getGetCustomerUrl = (id: number,) => {
 

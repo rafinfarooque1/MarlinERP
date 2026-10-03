@@ -12,7 +12,12 @@
  * it, keeping the new customer visible in that screen's scoped dropdown.
  */
 import { useEffect } from 'react';
-import { useCreateCustomer, useUpdateCustomer, getListCustomersQueryKey } from '@workspace/api-client-react';
+import {
+  useCreateCustomer,
+  useUpdateCustomer,
+  getListCustomerManagementQueryKey,
+  getListCustomersQueryKey,
+} from '@workspace/api-client-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
@@ -102,6 +107,7 @@ export function CustomerFormDialog({ open, onOpenChange, editItem, defaultLocati
     const afterSave = (row: any, mode: 'created' | 'updated') => {
       toast.success(mode === 'created' ? `Customer "${row?.name ?? data.name}" added` : 'Customer updated');
       queryClient.invalidateQueries({ queryKey: getListCustomersQueryKey() });
+      queryClient.invalidateQueries({ queryKey: getListCustomerManagementQueryKey() });
       // POS/Quotations read location-scoped lists under the plain 'customers' key.
       queryClient.invalidateQueries({ queryKey: ['customers'] });
       close();

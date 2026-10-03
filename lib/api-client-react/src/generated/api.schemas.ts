@@ -1230,6 +1230,7 @@ export interface Customer {
   totalPurchases?: number;
   creditLimit?: number;
   creditDays?: number;
+  isActive: boolean;
   createdAt: string;
 }
 
@@ -1251,6 +1252,7 @@ export interface CustomerUpdate {
   gstNumber?: string;
   creditLimit?: number;
   creditDays?: number;
+  isActive?: boolean;
 }
 
 export interface Vendor {

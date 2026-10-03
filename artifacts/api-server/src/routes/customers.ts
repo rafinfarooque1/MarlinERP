@@ -206,7 +206,7 @@ import {
 
 // ── Customers ─────────────────────────────────────────────────────────────
 // Serves HO Sales (POS), Notes (Vouchers) and Customers pages.
-router.get("/customers", requireModuleView(["page:/sales/pos", "page:/accounts/vouchers", "page:/customers"]), async (req, res): Promise<void> => {
+async function respondWithCustomers(req: any, res: any, includeDisabled: boolean): Promise<void> {
   const emp = (req as any).employee as { branchType: string; branchId: number } | undefined;
   if (!emp) { res.status(401).json({ error: "Authentication required" }); return; }
   const { getUserDataScope, scopeLocationTypeWhere } = await import("../lib/dataScope");
@@ -227,6 +227,7 @@ router.get("/customers", requireModuleView(["page:/sales/pos", "page:/accounts/v
     FROM customers c
     LEFT JOIN sales s ON s.customer_id = c.id
     WHERE ${conds.join(" AND ")}
+      ${includeDisabled ? "" : "AND COALESCE(c.is_active, true)"}
     GROUP BY c.id
     ORDER BY c.id
   `, params);
@@ -261,10 +262,19 @@ router.get("/customers", requireModuleView(["page:/sales/pos", "page:/accounts/v
     advanceBalance:      Number(r.advanceBalance),
     creditLimit:         Number(r.credit_limit ?? 0),
     creditDays:          Number(r.credit_days ?? 0),
+    isActive:            r.is_active !== false,
     // Raw-migration columns surfaced in camelCase for the UI.
     locationType:        r.location_type ?? null,
     locationId:          r.location_id == null ? null : Number(r.location_id),
   })));
+}
+
+router.get("/customers", requireModuleView(["page:/sales/pos", "page:/accounts/vouchers", "page:/customers"]), async (req, res): Promise<void> => {
+  await respondWithCustomers(req, res, false);
+});
+
+router.get("/customers/management", requireModuleView("page:/customers"), async (req, res): Promise<void> => {
+  await respondWithCustomers(req, res, true);
 });
 
 router.post("/customers", requireModuleAction("page:/customers", "add"), async (req, res): Promise<void> => {
@@ -319,6 +329,12 @@ router.patch("/customers/:id", requireModuleAction("page:/customers", "edit"), a
   const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const id = parseInt(raw, 10);
   const data = pickCustomer(req.body);
+  const hasActiveStatus = Object.prototype.hasOwnProperty.call(req.body ?? {}, "isActive");
+  if (hasActiveStatus && typeof req.body.isActive !== "boolean") {
+    res.status(400).json({ error: "isActive must be a boolean" });
+    return;
+  }
+  if (hasActiveStatus) (data as any).isActive = req.body.isActive;
   if (await partyScopeCheck(req, "customer", id) !== "ok") { res.status(404).json({ error: "Not found" }); return; }
   normalizeGstField(data);
   const gstErr = await gstWriteError(data, "customers", id);

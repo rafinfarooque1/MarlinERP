@@ -391,6 +391,7 @@ router.get("/accounts/voucher-parties", requireModuleView(["page:/accounts/vouch
     `al.code = $1 || p.id::text`,
     `COALESCE(al.is_active, true)`,
   ];
+  if (kind === "customer") conds.push(`COALESCE(p.is_active, true)`);
   params.push(prefix);
 
   // The existing vendor list treats HO vendors as shared master records; the

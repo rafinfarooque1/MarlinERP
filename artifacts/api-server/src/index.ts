@@ -505,6 +505,7 @@ async function runMigrations() {
   // Location-scoped customers: add location columns (idempotent)
   await pool.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS location_type text`);
   await pool.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS location_id integer`);
+  await pool.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS is_active boolean NOT NULL DEFAULT true`);
 
   // Blank GST numbers are stored as NULL, never '' — the write paths normalise
   // this since Aug 2026, and this idempotent sweep keeps rows written by older
