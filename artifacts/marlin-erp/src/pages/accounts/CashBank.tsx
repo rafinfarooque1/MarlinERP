@@ -14,7 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Plus, Search, Banknote, Download, ShieldOff, Lock, Pencil, Trash2, Landmark } from 'lucide-react';
+import { Plus, Search, Banknote, Download, ShieldOff, Lock, Pencil, Trash2, Landmark, Power } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV } from '@/lib/download';
@@ -81,6 +81,7 @@ export default function CashBank() {
   const { data: me } = useGetMe();
   const isHOUser = !(me as any)?.branchType || (me as any)?.branchType === 'headoffice';
   const [availabilityFilter, setAvailabilityFilter] = useState<string[]>([]);
+  const [accountView, setAccountView] = useState<'active' | 'disabled'>('active');
   const { data: accounts = [], isLoading } = useListCashBankAccounts(
     { locationKeys: availabilityFilter.join(',') },
     { query: { enabled: true } } as any,
@@ -95,7 +96,14 @@ export default function CashBank() {
   const createMutation = useCreateCashBankAccount();
   const updateMutation = useUpdateCashBankAccount();
   const deleteMutation = useDeleteCashBankAccount();
-  const refresh = () => queryClient.invalidateQueries({ queryKey: getListCashBankAccountsQueryKey() });
+  const refresh = () => {
+    queryClient.invalidateQueries({ queryKey: getListCashBankAccountsQueryKey() });
+    queryClient.invalidateQueries({ queryKey: ['/api/accounts/cash-bank-ledgers'] });
+    queryClient.invalidateQueries({ queryKey: ['/api/accounts/voucher-locations'] });
+    queryClient.invalidateQueries({ queryKey: ['cash-bank-ledgers'] });
+    queryClient.invalidateQueries({ queryKey: ['cash-bank-ledgers-list'] });
+    queryClient.invalidateQueries({ queryKey: ['chart-tree'] });
+  };
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
@@ -190,19 +198,25 @@ export default function CashBank() {
         ? outlets.find((o: any) => Number(o.id) === Number(a.locationId))?.name ?? 'Outlet'
         : 'Head Office'
   );
-  const filtered = accounts.filter(a => {
+  const matchesSearch = accounts.filter(a => {
     const matchesSearch =
       a.name?.toLowerCase().includes(search.toLowerCase()) ||
       a.bankName?.toLowerCase().includes(search.toLowerCase()) ||
       locationText(a).toLowerCase().includes(search.toLowerCase());
     return matchesSearch;
   });
+  const isDisabledManagedAccount = (a: any) => a.source === 'module' && a.isActive === false;
+  const disabledAccountCount = (accounts as any[]).filter(isDisabledManagedAccount).length;
+  const activeAccountCount = (accounts as any[]).filter((a: any) => a.source === 'module' && !isDisabledManagedAccount(a)).length;
+  const filtered = matchesSearch.filter((a: any) =>
+    accountView === 'disabled' ? isDisabledManagedAccount(a) : !isDisabledManagedAccount(a),
+  );
 
   // Every row carries a ledger-derived balance, so these sums are the books'
   // cash and bank positions — the same figures as the Cash Book, Bank Book,
   // Trial Balance and Balance Sheet.
-  const cashTotal = filtered.filter(a => a.accountType === 'cash').reduce((s, a) => s + Number(a.balance ?? 0), 0);
-  const bankTotal = filtered.filter(a => a.accountType !== 'cash').reduce((s, a) => s + Number(a.balance ?? 0), 0);
+  const cashTotal = matchesSearch.filter(a => a.accountType === 'cash').reduce((s, a) => s + Number(a.balance ?? 0), 0);
+  const bankTotal = matchesSearch.filter(a => a.accountType !== 'cash').reduce((s, a) => s + Number(a.balance ?? 0), 0);
 
   const { sorted, sort } = useTableSort(filtered, {
     name: a => a.name,
@@ -222,6 +236,21 @@ export default function CashBank() {
     return null;
   };
   const fmt = (n: number) => `₹${Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const setAccountActive = (account: any, active: boolean) => {
+    updateMutation.mutate(
+      { id: account.id, data: { isActive: active } },
+      {
+        onSuccess: () => {
+          toast.success(active
+            ? 'Account enabled for new transactions'
+            : 'Account disabled; its ledger and history are preserved');
+          refresh();
+          setAccountView(active ? 'active' : 'disabled');
+        },
+        onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
+      },
+    );
+  };
 
   if (!perm.isLoading && !perm.canView) {
     return (
@@ -285,6 +314,24 @@ export default function CashBank() {
             <Search className="w-4 h-4 text-muted-foreground absolute left-3 top-1/2 -translate-y-1/2" />
              <Input data-testid="input-search-cash-bank" placeholder="Search accounts..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9" />
           </div>
+          <div className="flex flex-wrap gap-2" role="group" aria-label="Cash and Bank account status">
+            <Button
+              type="button"
+              size="sm"
+              variant={accountView === 'active' ? 'default' : 'outline'}
+              onClick={() => setAccountView('active')}
+            >
+              Active accounts ({activeAccountCount})
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant={accountView === 'disabled' ? 'default' : 'outline'}
+              onClick={() => setAccountView('disabled')}
+            >
+              Disabled accounts ({disabledAccountCount})
+            </Button>
+          </div>
           <div className="rounded-lg border border-border bg-muted/20 px-3 py-2.5">
             <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
               <span className="text-xs font-medium text-muted-foreground">Filter accounts and balances by location</span>
@@ -320,17 +367,18 @@ export default function CashBank() {
                 <SortableHead k="location" sort={sort}>Location</SortableHead>
                 <SortableHead k="bank" sort={sort}>Bank</SortableHead>
                 <SortableHead k="accountNumber" sort={sort}>Account No.</SortableHead>
+                <TableHead>Status</TableHead>
                 <TableHead>Reconciliation</TableHead>
                 <SortableHead k="balance" sort={sort} className="text-right">Balance</SortableHead>
-                <TableHead className="w-20" />
+                <TableHead className="w-48" />
               </TableRow>
             </TableHeader>
             <TableBody>
               {isLoading ? (
-                <TableRow><TableCell colSpan={8} className="p-0"><TableSkeleton rows={3} cols={8} /></TableCell></TableRow>
+                <TableRow><TableCell colSpan={9} className="p-0"><TableSkeleton rows={3} cols={9} /></TableCell></TableRow>
               ) : filtered.length === 0 ? (
-                <TableRow><TableCell colSpan={8} className="p-0">
-                  <EmptyState icon={Banknote} title="No accounts yet" compact />
+                <TableRow><TableCell colSpan={9} className="p-0">
+                  <EmptyState icon={Banknote} title={accountView === 'disabled' ? 'No disabled accounts' : 'No accounts yet'} compact />
                 </TableCell></TableRow>
               ) : pageRows.map(a => (
                 <TableRow key={a.id} className="hover:bg-muted/10">
@@ -339,6 +387,13 @@ export default function CashBank() {
                   <TableCell className="text-sm text-muted-foreground">{locationText(a)}</TableCell>
                   <TableCell className="text-sm text-muted-foreground">{a.bankName || '—'}</TableCell>
                   <TableCell className="font-mono text-xs text-muted-foreground">{a.accountNumber || '—'}</TableCell>
+                  <TableCell>
+                    {(a as any).source === 'module' ? (
+                      <Badge variant="outline" className={(a as any).isActive === false ? 'text-muted-foreground' : 'text-emerald-600'}>
+                        {(a as any).isActive === false ? 'Disabled' : 'Active'}
+                      </Badge>
+                    ) : <span className="text-muted-foreground text-xs">—</span>}
+                  </TableCell>
                   <TableCell>
                     {/* The switch controls default routing. An explicit
                         Receive-Into account selection posts to that account. */}
@@ -369,6 +424,19 @@ export default function CashBank() {
                   <TableCell>
                     {!(a as any).readOnly && (
                       <div className="flex justify-end gap-1">
+                        {(a as any).source === 'module' && perm.canEdit && isHOUser && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-8 px-2 text-xs"
+                            disabled={updateMutation.isPending}
+                            onClick={() => setAccountActive(a, (a as any).isActive === false)}
+                            title={(a as any).isActive === false ? 'Enable for new transactions' : 'Disable for new transactions'}
+                          >
+                            <Power className="mr-1 h-3.5 w-3.5" />
+                            {(a as any).isActive === false ? 'Enable' : 'Disable'}
+                          </Button>
+                        )}
                         {perm.canEdit && (
                           <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => openEdit(a)} title="Edit">
                             <Pencil className="w-3.5 h-3.5" />

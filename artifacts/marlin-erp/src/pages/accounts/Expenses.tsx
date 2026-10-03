@@ -364,6 +364,7 @@ export default function Expenses() {
     ...locationFilterParams(locationState),
   });
   const { data: cashBanks = [] } = useListCashBankAccounts();
+  const availableCashBanks = (cashBanks as any[]).filter((cb: any) => cb.isActive !== false);
   const { data: warehouses = [] } = useListWarehouses();
   const { data: outlets = [] } = useListOutlets();
   const { outletsEnabled } = useOutletsEnabled();
@@ -696,7 +697,7 @@ export default function Expenses() {
                   <FormLabel>Paid From <span className="text-destructive">*</span></FormLabel>
                   <FormControl>
                     <EntityCombobox
-                      options={(cashBanks as any[]).map((cb: any) => ({ id: cb.id, label: cb.name, sublabel: cb.gstin ?? cb.phone ?? cb.code ?? null }))}
+                      options={availableCashBanks.map((cb: any) => ({ id: cb.id, label: cb.name, sublabel: cb.gstin ?? cb.phone ?? cb.code ?? null }))}
                       value={Number(field.value) || null}
                       onChange={id => field.onChange(id ?? 0)}
                       placeholder="Select cash/bank account"

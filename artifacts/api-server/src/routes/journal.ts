@@ -440,6 +440,18 @@ async function checkLinesLocation(
 ): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
   const owned = await locationOwnedLedgerMap();
   const ids = [...new Set(lines.map((l) => l.ledgerId))];
+  const { rows: [inactiveLedger] } = await pool.query(
+    `SELECT id, name FROM account_ledgers
+      WHERE id = ANY($1::int[]) AND NOT COALESCE(is_active, true)
+      LIMIT 1`,
+    [ids],
+  );
+  if (inactiveLedger) {
+    return {
+      ok: false, status: 409,
+      error: `Ledger "${inactiveLedger.name}" is disabled and cannot be used for new transactions.`,
+    };
+  }
   // Managed Cash/Bank accounts use every assignment as an owner. The scalar
   // fields remain a fallback for older rows without a junction entry.
   const { rows: membershipRows } = await pool.query(
@@ -592,6 +604,10 @@ router.get("/accounts/voucher-locations", requireModuleView(["page:/accounts/vou
   const ownedMap = await locationOwnedLedgerMap();
   const hoCashBank = await ledgerIdsUnderCodes(["STD-CASH", "STD-BANK", "STD-ONLINE"]);
   for (const id of ownedMap.keys()) hoCashBank.delete(id);
+  const { rows: inactiveLedgers } = await pool.query(
+    `SELECT id FROM account_ledgers WHERE NOT COALESCE(is_active, true)`,
+  );
+  for (const row of inactiveLedgers) hoCashBank.delete(Number(row.id));
 
   // Managed Cash & Bank accounts may be assigned to multiple warehouses.
   const { rows: cbaRows } = await pool.query(
@@ -599,6 +615,7 @@ router.get("/accounts/voucher-locations", requireModuleView(["page:/accounts/vou
             COALESCE(l.location_type, cba.location_type) AS location_type,
             COALESCE(l.location_id, cba.location_id) AS location_id
        FROM cash_bank_accounts cba
+       JOIN account_ledgers al ON al.id = cba.ledger_id AND COALESCE(al.is_active, true)
        LEFT JOIN cash_bank_account_locations l ON l.account_id = cba.id
       WHERE cba.ledger_id IS NOT NULL
         AND COALESCE(l.location_type, cba.location_type) IN ('headoffice','warehouse','outlet')`,

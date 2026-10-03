@@ -977,8 +977,10 @@ async function inferMoneyVoucherMode(
 
 async function isOnlineFamilyLedger(q: { query: Function }, ledgerId: number): Promise<boolean> {
   const { rows } = await q.query(
-    `SELECT 1 FROM cash_bank_accounts
-      WHERE ledger_id = $1 AND account_type = 'online'
+    `SELECT 1
+       FROM cash_bank_accounts cba
+       JOIN account_ledgers al ON al.id = cba.ledger_id AND COALESCE(al.is_active, true)
+      WHERE cba.ledger_id = $1 AND cba.account_type = 'online'
       LIMIT 1`,
     [ledgerId],
   );
@@ -3601,7 +3603,7 @@ router.get("/accounts/cash-bank", requireModuleView("page:/accounts/cash-bank"),
   }
 
   const [{ rows: accounts }, { rows: whs }, { rows: outs }, { rows: tree }] = await Promise.all([
-    pool.query(`SELECT c.*,
+    pool.query(`SELECT c.*, al.is_active AS ledger_is_active,
       COALESCE((SELECT json_agg(
                           json_build_object('location_type', l.location_type, 'location_id', l.location_id)
                           ORDER BY CASE
@@ -3612,7 +3614,9 @@ router.get("/accounts/cash-bank", requireModuleView("page:/accounts/cash-bank"),
                           l.location_type, l.location_id
                         )
                 FROM cash_bank_account_locations l WHERE l.account_id = c.id), '[]'::json) AS memberships
-      FROM cash_bank_accounts c ORDER BY c.id`),
+      FROM cash_bank_accounts c
+      LEFT JOIN account_ledgers al ON al.id = c.ledger_id
+      ORDER BY c.id`),
     pool.query(`SELECT id, name, cash_ledger_id, disabled_at FROM warehouses`),
     pool.query(`SELECT o.id, o.name, o.cash_ledger_id, w.disabled_at AS parent_disabled_at
                   FROM outlets o LEFT JOIN warehouses w ON w.id = o.warehouse_id`),
@@ -3638,6 +3642,7 @@ router.get("/accounts/cash-bank", requireModuleView("page:/accounts/cash-bank"),
 
   const out: any[] = [];
   const listed = new Set<number>();
+  const ledgerMeta = new Map<number, any>(tree.map((t: any) => [Number(t.id), t]));
 
   // 1. Module-managed accounts (editable).
   for (const c of accounts) {
@@ -3679,6 +3684,7 @@ router.get("/accounts/cash-bank", requireModuleView("page:/accounts/cash-bank"),
         ...location,
         locationName: locName(location.locationType, location.locationId),
       })),
+      isActive: lid == null || c.ledger_is_active !== false,
       source: "module", readOnly: !ownership.ok,
       ...(!ownership.ok ? { locationError: ownership.error, locationErrorCode: CASH_BANK_LOCATION_CONFLICT } : {}),
       requiresReconciliation: c.account_type !== "cash" && c.requires_reconciliation === true,
@@ -3693,7 +3699,6 @@ router.get("/accounts/cash-bank", requireModuleView("page:/accounts/cash-bank"),
     ...visibleWhs.filter((w: any) => w.cash_ledger_id).map((w: any) => ({ lt: "warehouse", locId: Number(w.id), locNm: w.name, lid: Number(w.cash_ledger_id) })),
     ...(outletsHidden ? [] : visibleOuts.filter((o: any) => o.cash_ledger_id).map((o: any) => ({ lt: "outlet", locId: Number(o.id), locNm: o.name, lid: Number(o.cash_ledger_id) }))),
   ];
-  const ledgerMeta = new Map<number, any>(tree.map((t: any) => [Number(t.id), t]));
   for (const t of tills) {
     if (listed.has(t.lid)) continue;
     if (selectedKeys.size > 0 && !selectedKeys.has(`${t.lt}:${t.locId}`)) continue;
@@ -3704,7 +3709,8 @@ router.get("/accounts/cash-bank", requireModuleView("page:/accounts/cash-bank"),
       bankName: null, accountNumber: null, ifscCode: null,
       balance: selectedNet?.get(t.lid) ?? idx.net(t.lid), storedBalance: 0,
       currentBalance: selectedNet?.get(t.lid) ?? idx.net(t.lid), balanceSource: "ledger" as const,
-      ledgerId: t.lid, locationType: t.lt, locationId: t.locId, locationName: t.locNm,
+       ledgerId: t.lid, locationType: t.lt, locationId: t.locId, locationName: t.locNm,
+       isActive: meta?.is_active !== false,
       source: "location", readOnly: true,
     });
   }
@@ -3722,7 +3728,8 @@ router.get("/accounts/cash-bank", requireModuleView("page:/accounts/cash-bank"),
       bankName: null, accountNumber: null, ifscCode: null,
       balance: selectedNet?.get(lid) ?? idx.net(lid), storedBalance: 0,
       currentBalance: selectedNet?.get(lid) ?? idx.net(lid), balanceSource: "ledger" as const,
-      ledgerId: lid, locationType: "headoffice", locationId: 0, locationName: "Head Office",
+       ledgerId: lid, locationType: "headoffice", locationId: 0, locationName: "Head Office",
+       isActive: t.is_active !== false,
       source: isRoot ? "system" : "ledger", readOnly: true,
     });
   }
@@ -3874,6 +3881,7 @@ router.post("/accounts/cash-bank", requireModuleAction("page:/accounts/cash-bank
      locationType: loc.locationType, locationId: loc.locationId,
      locations,
     source: "module", readOnly: false,
+     isActive: true,
     requiresReconciliation: requiresRecon,
   });
 });
@@ -3888,6 +3896,9 @@ router.patch("/accounts/cash-bank/:id", requireModuleAction("page:/accounts/cash
   if (!acc) { res.status(404).json({ error: "Account not found" }); return; }
 
   const body = (req.body ?? {}) as Record<string, unknown>;
+  if (body.isActive !== undefined && typeof body.isActive !== "boolean") {
+    res.status(400).json({ error: "isActive must be a boolean." }); return;
+  }
   const openingMoney = body.openingBalance !== undefined ? optionalMoney(body.openingBalance) : null;
   if (openingMoney && (!openingMoney.ok || openingMoney.value < 0)) {
     res.status(400).json({ error: !openingMoney.ok ? `Opening Balance ${openingMoney.reason}.` : "Opening Balance cannot be negative." }); return;
@@ -3946,6 +3957,7 @@ router.patch("/accounts/cash-bank/:id", requireModuleAction("page:/accounts/cash
     locationsToSet = resolved.locations;
   }
   const locationToSet = locationsToSet?.[0] ?? null;
+  let activeChange: { before: boolean; after: boolean } | null = null;
   if (locationToSet) {
     push("location_type", locationToSet.locationType);
     push("location_id", locationToSet.locationId);
@@ -3974,6 +3986,30 @@ router.patch("/accounts/cash-bank/:id", requireModuleAction("page:/accounts/cash
       await write.query("ROLLBACK");
       res.status(409).json({ error: "Account location changed while editing. Refresh and try again." }); return;
     }
+    if (body.isActive !== undefined) {
+      if (locked.ledger_id == null) {
+        await write.query("ROLLBACK");
+        res.status(409).json({ error: "This account has no linked ledger and cannot be enabled or disabled." }); return;
+      }
+      const { rows: [ledger] } = await write.query(
+        `SELECT id, is_active FROM account_ledgers WHERE id = $1 FOR UPDATE`,
+        [Number(locked.ledger_id)],
+      );
+      if (!ledger) {
+        await write.query("ROLLBACK");
+        res.status(409).json({ error: "This account's linked ledger is missing." }); return;
+      }
+      activeChange = {
+        before: ledger.is_active !== false,
+        after: body.isActive as boolean,
+      };
+      if (activeChange.before !== activeChange.after) {
+        await write.query(
+          `UPDATE account_ledgers SET is_active = $1 WHERE id = $2`,
+          [activeChange.after, Number(locked.ledger_id)],
+        );
+      }
+    }
     if (sets.length > 0) {
       vals.push(id);
       await write.query(`UPDATE cash_bank_accounts SET ${sets.join(", ")} WHERE id = $${vals.length}`, vals);
@@ -3993,11 +4029,19 @@ router.patch("/accounts/cash-bank/:id", requireModuleAction("page:/accounts/cash
     }
     await logActivityInTransaction(write, {
       action: "UPDATE", module: "accounts", entityType: "cash_bank_account", entityId: id,
-      description: `Updated cash/bank account "${newName ?? acc.name}"`,
+      description: activeChange && activeChange.before !== activeChange.after
+        ? `${activeChange.after ? "Reactivated" : "Disabled"} cash/bank account "${newName ?? acc.name}"`
+        : `Updated cash/bank account "${newName ?? acc.name}"`,
       user: (req as any).employee?.username ?? "system",
       metadata: {
-        before: { locationType: locked.location_type, locationId: locked.location_id },
-         after: locationsToSet ? { locations: locationsToSet } : ownership.location,
+        before: {
+          locationType: locked.location_type, locationId: locked.location_id,
+          ...(activeChange ? { isActive: activeChange.before } : {}),
+        },
+        after: {
+          ...(locationsToSet ? { locations: locationsToSet } : ownership.location),
+          ...(activeChange ? { isActive: activeChange.after } : {}),
+        },
       },
     });
     await write.query("COMMIT");
@@ -4038,9 +4082,15 @@ router.patch("/accounts/cash-bank/:id", requireModuleAction("page:/accounts/cash
   // The response carries the DERIVED balance (postings + openings), same as the
   // list — a stale zero here would flash a wrong figure onto the screen.
   let derived: number | null = null;
+  let isActive = true;
   if (fresh.ledger_id != null) {
     const { currentBalanceIndex } = await import("../lib/ledgerBalances");
     derived = (await currentBalanceIndex()).net(Number(fresh.ledger_id));
+    const { rows: [ledger] } = await pool.query(
+      `SELECT COALESCE(is_active, true) AS is_active FROM account_ledgers WHERE id = $1`,
+      [Number(fresh.ledger_id)],
+    );
+    isActive = ledger?.is_active !== false;
   }
   res.json({
     id, name: fresh.name, accountType: fresh.account_type,
@@ -4055,6 +4105,7 @@ router.patch("/accounts/cash-bank/:id", requireModuleAction("page:/accounts/cash
       locationId: Number(location.location_id),
     })),
     source: "module", readOnly: false,
+    isActive,
     requiresReconciliation: fresh.account_type !== "cash" && fresh.requires_reconciliation === true,
   });
 });
@@ -4357,6 +4408,17 @@ router.post("/expenses", requireModuleAction("page:/accounts/expenses", "add"), 
   // writes are constrained.
   if (!(await isPostableIndirectExpenseLedger(Number(parsed.data.ledgerAccountId)))) {
     res.status(400).json({ error: "ledgerAccountId must be an active Indirect Expense ledger account." }); return;
+  }
+  const { rows: [paymentAccount] } = await pool.query(
+    `SELECT c.name, COALESCE(al.is_active, true) AS is_active
+       FROM cash_bank_accounts c
+       LEFT JOIN account_ledgers al ON al.id = c.ledger_id
+      WHERE c.id = $1`,
+    [Number(parsed.data.paymentAccountId)],
+  );
+  if (paymentAccount?.is_active === false) {
+    res.status(409).json({ error: `Cash/Bank account "${paymentAccount.name}" is disabled and cannot be used for new expenses.` });
+    return;
   }
 
   // Attribution: which location the spend belongs to. Defaults to Head Office.
@@ -4917,6 +4979,13 @@ router.post("/accounts/location-expenses", requireModuleAction("page:/sales/expe
     const bankIds = await getDescendantLedgerIds(['STD-BANK']);
     if (!bankIds.includes(bankLedgerId)) {
       res.status(400).json({ error: "paymentAccountId must be a Bank ledger account" }); return;
+    }
+    const { rows: [bankStatus] } = await pool.query(
+      `SELECT COALESCE(is_active, true) AS is_active FROM account_ledgers WHERE id = $1`,
+      [bankLedgerId],
+    );
+    if (!bankStatus || bankStatus.is_active !== true) {
+      res.status(409).json({ error: "That Cash/Bank account is disabled and cannot be used for new expenses." }); return;
     }
     fundingLedgerId = bankLedgerId;
   } else if (paymentMode === 'online') {

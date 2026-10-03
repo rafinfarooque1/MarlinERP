@@ -13,6 +13,8 @@ export interface CashBankUpdate {
   bankName?: string;
   accountNumber?: string;
   ifscCode?: string;
+  /** Activate or deactivate the account for new transactions; historical postings remain unchanged. */
+  isActive?: boolean;
   locationType?: CashBankUpdateLocationType;
   locationId?: number;
   /**

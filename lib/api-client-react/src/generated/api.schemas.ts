@@ -1546,6 +1546,8 @@ export interface CashBankAccount {
   /** module = managed on this screen; location = a branch till owned by the Locations module (read-only here); system = the Cash / Bank Accounts head itself; ledger = another ledger in the subtree. */
   source?: CashBankAccountSource;
   readOnly?: boolean;
+  /** Whether this account can be used for new transactions. Disabling it preserves its ledger and history. */
+  isActive?: boolean;
   /** Bank/Online accounts only. When true, collections routed into this account land in Electronic Clearing first and reach the bank balance through Reconciliation; when false, they post straight into the account's ledger. */
   requiresReconciliation?: boolean;
 }
@@ -1606,6 +1608,8 @@ export interface CashBankUpdate {
   bankName?: string;
   accountNumber?: string;
   ifscCode?: string;
+  /** Activate or deactivate the account for new transactions; historical postings remain unchanged. */
+  isActive?: boolean;
   locationType?: CashBankUpdateLocationType;
   locationId?: number;
   /**
