@@ -2658,6 +2658,7 @@ export const ListCashBankAccountsResponseItem = zod.object({
 })).optional().describe('Locations where this account is available.'),
   "source": zod.enum(['module', 'location', 'system', 'ledger']).optional().describe('module = managed on this screen; location = a branch till owned by the Locations module (read-only here); system = the Cash \/ Bank Accounts head itself; ledger = another ledger in the subtree.'),
   "readOnly": zod.boolean().optional(),
+  "isActive": zod.boolean().optional().describe('Whether this account can be used for new transactions. Disabling it preserves its ledger and history.'),
   "requiresReconciliation": zod.boolean().optional().describe('Bank\/Online accounts only. When true, collections routed into this account land in Electronic Clearing first and reach the bank balance through Reconciliation; when false, they post straight into the account\'s ledger.')
 })
 export const ListCashBankAccountsResponse = zod.array(ListCashBankAccountsResponseItem)
@@ -2708,6 +2709,7 @@ export const CreateCashBankAccountResponse = zod.object({
 })).optional().describe('Locations where this account is available.'),
   "source": zod.enum(['module', 'location', 'system', 'ledger']).optional().describe('module = managed on this screen; location = a branch till owned by the Locations module (read-only here); system = the Cash \/ Bank Accounts head itself; ledger = another ledger in the subtree.'),
   "readOnly": zod.boolean().optional(),
+  "isActive": zod.boolean().optional().describe('Whether this account can be used for new transactions. Disabling it preserves its ledger and history.'),
   "requiresReconciliation": zod.boolean().optional().describe('Bank\/Online accounts only. When true, collections routed into this account land in Electronic Clearing first and reach the bank balance through Reconciliation; when false, they post straight into the account\'s ledger.')
 })
 
@@ -2727,6 +2729,7 @@ export const UpdateCashBankAccountBody = zod.object({
   "bankName": zod.string().optional(),
   "accountNumber": zod.string().optional(),
   "ifscCode": zod.string().optional(),
+  "isActive": zod.boolean().optional().describe('Activate or deactivate the account for new transactions; historical postings remain unchanged.'),
   "locationType": zod.enum(['headoffice', 'warehouse', 'outlet']).optional(),
   "locationId": zod.number().optional(),
   "locations": zod.array(zod.object({
@@ -2760,6 +2763,7 @@ export const UpdateCashBankAccountResponse = zod.object({
 })).optional().describe('Locations where this account is available.'),
   "source": zod.enum(['module', 'location', 'system', 'ledger']).optional().describe('module = managed on this screen; location = a branch till owned by the Locations module (read-only here); system = the Cash \/ Bank Accounts head itself; ledger = another ledger in the subtree.'),
   "readOnly": zod.boolean().optional(),
+  "isActive": zod.boolean().optional().describe('Whether this account can be used for new transactions. Disabling it preserves its ledger and history.'),
   "requiresReconciliation": zod.boolean().optional().describe('Bank\/Online accounts only. When true, collections routed into this account land in Electronic Clearing first and reach the bank balance through Reconciliation; when false, they post straight into the account\'s ledger.')
 })
 

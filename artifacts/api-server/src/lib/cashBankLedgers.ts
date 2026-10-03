@@ -136,16 +136,22 @@ export function diagnoseCashBankLocation(
 /** Pure diagnosis above is shared by account edits and money-voucher guards. */
 export async function cashBankLedgerLocationError(q: Queryable, ledgerIds: number[]): Promise<string | null> {
   const { rows } = await q.query(
-    `SELECT c.id, c.ledger_id, c.account_type, c.location_type, c.location_id,
+    `SELECT c.id, c.name, c.ledger_id, c.account_type, c.location_type, c.location_id,
+            COALESCE(al.is_active, true) AS ledger_is_active,
             COALESCE((SELECT json_agg(json_build_object('location_type', l.location_type, 'location_id', l.location_id))
                       FROM cash_bank_account_locations l WHERE l.account_id = c.id), '[]'::json) AS memberships
-       FROM cash_bank_accounts c WHERE c.ledger_id = ANY($1::int[])`,
+       FROM cash_bank_accounts c
+       LEFT JOIN account_ledgers al ON al.id = c.ledger_id
+      WHERE c.ledger_id = ANY($1::int[])`,
     [ledgerIds],
   );
   const seen = new Set<number>();
   for (const row of rows) {
     if (seen.has(Number(row.ledger_id))) return "Cash/Bank ledger is linked to multiple accounts. Writes are blocked pending Head Office review.";
     seen.add(Number(row.ledger_id));
+    if (row.ledger_is_active === false) {
+      return `Cash/Bank account "${row.name}" is disabled and cannot be used for new transactions.`;
+    }
     const result = diagnoseCashBankLocation(row, row.memberships);
     if (!result.ok) return result.error;
   }

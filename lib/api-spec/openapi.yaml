@@ -3937,6 +3937,9 @@ components:
             Accounts head itself; ledger = another ledger in the subtree.
         readOnly:
           type: boolean
+        isActive:
+          type: boolean
+          description: Whether this account can be used for new transactions. Disabling it preserves its ledger and history.
         requiresReconciliation:
           type: boolean
           description: >-
@@ -3997,6 +4000,9 @@ components:
           type: string
         ifscCode:
           type: string
+        isActive:
+          type: boolean
+          description: Activate or deactivate the account for new transactions; historical postings remain unchanged.
         locationType:
           type: string
           enum: [headoffice, warehouse, outlet]
