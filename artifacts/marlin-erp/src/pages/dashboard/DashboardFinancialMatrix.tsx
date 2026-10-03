@@ -127,8 +127,8 @@ export function DashboardFinancialMatrixSection({
   const period = data?.period ?? { fromDate: fromDate ?? null, toDate: toDate ?? null };
   const periodText = periodLabel(period.fromDate ?? undefined, period.toDate ?? undefined);
   const openingDescription = period.fromDate
-    ? 'Opening Cash is the position as of the day before this period.'
-    : 'All time begins at inception with a zero opening balance.';
+    ? 'Opening balance cash is the position as of the day before this period.'
+    : 'All time begins at inception with a zero opening cash balance.';
 
   const amountRow = (
     key: string,
@@ -177,7 +177,7 @@ export function DashboardFinancialMatrixSection({
           Cross-Warehouse Financial Summary Matrix
         </CardTitle>
         <CardDescription>
-          {periodText} · {openingDescription} Balance = Opening Cash + Sale.
+          {periodText} · {openingDescription} Balance = Opening Balance Cash + Cash Receipt.
           Columns include active locations available to your account and, for company-wide access, an Unallocated column for company-level balances.
         </CardDescription>
       </CardHeader>
@@ -224,16 +224,16 @@ export function DashboardFinancialMatrixSection({
                   </tr>
                 </thead>
                 <tbody>
-                  {amountRow('opening-total', 'Opening balance', data.openingTotal, data.totals.openingTotal, { emphasized: true })}
-                  {amountRow('opening-cash', 'Cash', data.openingCash, data.totals.openingCash, { nested: true })}
-                  {amountRow('sales', 'Sale', data.sales, data.totals.sales)}
+                  {amountRow('opening-cash', 'Opening balance cash', data.openingCash, data.totals.openingCash, { emphasized: true })}
+                  {amountRow('cash-receipts-total', 'Cash Receipt', data.cashReceiptTotal, data.totals.cashReceiptTotal, { emphasized: true })}
+                  {amountRow('cash-receipts-by-sale', 'By Sale', data.cashReceiptBySale, data.totals.cashReceiptBySale, { nested: true })}
+                  {amountRow('cash-receipt-vouchers', 'Cash Receipt', data.cashReceiptVouchers, data.totals.cashReceiptVouchers, { nested: true })}
                   {amountRow('balance', 'Balance', data.balance, data.totals.balance, { balance: true })}
                   {amountRow('expenses', 'Expense', data.expenses, data.totals.expenses, { emphasized: true })}
                   {data.expenseLedgers.map((ledger) =>
                     amountRow(`expense-${ledger.ledgerId}`, ledger.name, ledger.values, ledger.total, { nested: true }),
                   )}
-                  {amountRow('closing-total', 'Closing balance', data.closingTotal, data.totals.closingTotal, { emphasized: true })}
-                  {amountRow('closing-cash', 'Cash', data.closingCash, data.totals.closingCash, { nested: true })}
+                  {amountRow('closing-cash', 'Closing balance cash', data.closingCash, data.totals.closingCash, { emphasized: true })}
                 </tbody>
               </table>
               </div>

@@ -95,3 +95,21 @@ nested ledgers, while omitting LBAC from a cross-location view exposes data.
 reuse the per-location financial results where the existing location
 breakdown needs them. Sum totals from the displayed location values, and keep
 matrix image capture scoped to the table element only.
+
+# Cash receipt rows in the cross-location matrix
+
+“By Sale” means cash-ledger debits from `sale` postings; the separate receipt
+row means cash-ledger debits from `receipt` postings. Apply the same date and
+location filters to both, and calculate the total from those displayed values.
+Do not substitute invoice `total_amount` or sum receipt records directly:
+invoice revenue is not cash received, and sale-linked receipt records are
+represented by the sale-payment postings to avoid double-counting.
+
+**Why:** the destination may be a till, bank, or clearing ledger, and allocation
+receipts keep their actual cash/bank movement on the receipt voucher while the
+sale settlement uses clearing. The derived posting source and cash ledger
+identify the real cash receipt without counting the settlement twice.
+
+**How to apply:** use the shared derived posting stream and the cash-in
+calculation for each source, scoped to the matrix column's location. Keep the
+parent total equal to “By Sale” plus receipt vouchers.

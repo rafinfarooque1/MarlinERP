@@ -113,6 +113,30 @@ try {
   for (const [label, from, to] of ranges) {
     const bi = (await get(`/dashboard/bi?fromDate=${from}&toDate=${to}`)).data;
     const reg = (await get(`/reports/sales-register?from=${from}&to=${to}`)).data;
+    const matrix = bi?.financialMatrix;
+    const matrixFields = [
+      "openingCash", "cashReceiptBySale", "cashReceiptVouchers",
+      "cashReceiptTotal", "balance", "closingCash",
+    ];
+    const matrixShapeOk = Array.isArray(matrix?.locations)
+      && matrixFields.every((field) =>
+        Array.isArray(matrix[field]) && matrix[field].length === matrix.locations.length);
+    assert(`financial matrix cash rows match visible locations (${label})`, matrixShapeOk);
+    if (matrixShapeOk) {
+      const expectedTotals = {};
+      for (const field of matrixFields) {
+        expectedTotals[field] = matrix[field].reduce((sum, value) => sum + Number(value || 0), 0);
+      }
+      const receiptsReconcile = matrix.locations.every((_, index) =>
+        near(matrix.cashReceiptTotal[index],
+          Number(matrix.cashReceiptBySale[index] || 0) + Number(matrix.cashReceiptVouchers[index] || 0))
+        && near(matrix.balance[index],
+          Number(matrix.openingCash[index] || 0) + Number(matrix.cashReceiptTotal[index] || 0)));
+      assert(`financial matrix receipt rows and balance add up (${label})`, receiptsReconcile);
+      const totalRowsReconcile = matrixFields.every((field) =>
+        near(matrix.totals?.[field], expectedTotals[field]));
+      assert(`financial matrix totals sum visible columns (${label})`, totalRowsReconcile);
+    }
     assert(`bi.sales.total == register total (${label})`,
       near(bi?.sales?.total, reg?.totals?.total),
       `bi=${bi?.sales?.total} reg=${reg?.totals?.total}`);
