@@ -160,9 +160,39 @@ export async function reconciliationPendingAmount(
 }
 
 type Posting = { date: string; ledgerId: number; debit: number; credit: number };
+type SourcePosting = Posting & {
+  entryId: string;
+  source: string;
+  locationType: string | null;
+  locationId: number | null;
+};
 type PostingsFn = (opts: { toDate?: string }) => Promise<Posting[]>;
+type PostingRangeOptions = {
+  fromDate?: string | null;
+  toDate?: string | null;
+  location?: PostingLocationFilter | null;
+};
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
+
+function isPostingDateInRange(dateValue: unknown, fromDate: string | null, toDate: string | null): boolean {
+  const date = dateValue instanceof Date
+    ? dateValue.toISOString().slice(0, 10)
+    : String(dateValue).slice(0, 10);
+  return (!fromDate || date >= fromDate) && (!toDate || date <= toDate);
+}
+
+function postingsInRange<T extends Posting>(
+  postings: T[],
+  opts: PostingRangeOptions,
+): T[] {
+  const sliced = opts.location
+    ? filterPostingsByLocation(postings as never[], opts.location) as unknown as T[]
+    : postings;
+  const fromDate = opts.fromDate || null;
+  const toDate = opts.toDate || null;
+  return sliced.filter((posting) => isPostingDateInRange(posting.date, fromDate, toDate));
+}
 
 /**
  * Returns a lookup from a system/standard ledger code to every ledger id in its
@@ -272,23 +302,11 @@ export function rangeMoneyFlows(
     subtree: (code: string) => number[];
   },
 ): { cashIn: number; cashOut: number; bankIn: number; bankOut: number; totalIn: number; totalOut: number } {
-  const location = opts.location ?? null;
-  const fromDate = opts.fromDate || null;
-  const toDate = opts.toDate || null;
-  const sliced = location
-    ? (filterPostingsByLocation(postings as never[], location) as unknown as Posting[])
-    : postings;
+  const sliced = postingsInRange(postings, opts);
   const cashIds = new Set(opts.subtree("STD-CASH"));
   const bankIds = new Set(opts.subtree("STD-BANK"));
   let cashIn = 0, cashOut = 0, bankIn = 0, bankOut = 0;
   for (const p of sliced) {
-    // pg date columns come back as JS Dates (UTC midnight); derived rows may
-    // already be strings. Normalise both to YYYY-MM-DD before comparing.
-    const d = (p.date as unknown) instanceof Date
-      ? (p.date as unknown as Date).toISOString().slice(0, 10)
-      : String(p.date).slice(0, 10);
-    if (fromDate && d < fromDate) continue;
-    if (toDate && d > toDate) continue;
     if (cashIds.has(p.ledgerId)) { cashIn += p.debit; cashOut += p.credit; }
     else if (bankIds.has(p.ledgerId)) { bankIn += p.debit; bankOut += p.credit; }
   }
@@ -305,12 +323,54 @@ export function rangeMoneyFlows(
  * business date, location and cash-ledger ownership authoritative.
  */
 export function rangeCashReceiptBreakdown(
-  postings: Array<Parameters<typeof rangeMoneyFlows>[0][number] & { source: string }>,
+  postings: SourcePosting[],
   opts: Parameters<typeof rangeMoneyFlows>[1],
 ): { bySale: number; receiptVouchers: number; total: number } {
   const bySale = rangeMoneyFlows(postings.filter((posting) => posting.source === "sale"), opts).cashIn;
   const receiptVouchers = rangeMoneyFlows(postings.filter((posting) => posting.source === "receipt"), opts).cashIn;
   return { bySale, receiptVouchers, total: r2(bySale + receiptVouchers) };
+}
+
+/**
+ * Expense-module payments made from cash, grouped by the expense account.
+ * An expense qualifies only when its paired posting credits a cash ledger.
+ */
+export function rangeCashExpensesByLedger(
+  postings: SourcePosting[],
+  opts: Parameters<typeof rangeMoneyFlows>[1],
+): { total: number; ledgers: Array<{ ledgerId: number; amount: number }> } {
+  const sliced = postingsInRange(postings, opts);
+  const cashIds = new Set(opts.subtree("STD-CASH"));
+  const cashPaidExpenseEntries = new Set<string>();
+
+  for (const posting of sliced) {
+    if (posting.source === "expense" && posting.credit > 0.004 && cashIds.has(posting.ledgerId)) {
+      cashPaidExpenseEntries.add(posting.entryId);
+    }
+  }
+
+  const amountByLedger = new Map<number, number>();
+  for (const posting of sliced) {
+    if (
+      posting.source === "expense"
+      && posting.debit > 0.004
+      && !cashIds.has(posting.ledgerId)
+      && cashPaidExpenseEntries.has(posting.entryId)
+    ) {
+      amountByLedger.set(
+        posting.ledgerId,
+        (amountByLedger.get(posting.ledgerId) ?? 0) + posting.debit,
+      );
+    }
+  }
+
+  const ledgers = Array.from(amountByLedger, ([ledgerId, amount]) => ({ ledgerId, amount: r2(amount) }))
+    .filter((ledger) => ledger.amount > 0.004)
+    .sort((a, b) => a.ledgerId - b.ledgerId);
+  return {
+    total: r2(ledgers.reduce((sum, ledger) => sum + ledger.amount, 0)),
+    ledgers,
+  };
 }
 
 /** Control balances only — for callers that do not need the expense figure. */
