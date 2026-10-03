@@ -116,7 +116,7 @@ try {
     const matrix = bi?.financialMatrix;
     const matrixFields = [
       "openingCash", "cashReceiptBySale", "cashReceiptVouchers",
-      "cashReceiptTotal", "balance", "closingCash",
+      "cashReceiptTotal", "balance", "cashExpenses", "closingCash",
     ];
     const matrixShapeOk = Array.isArray(matrix?.locations)
       && matrixFields.every((field) =>
@@ -133,6 +133,13 @@ try {
         && near(matrix.balance[index],
           Number(matrix.openingCash[index] || 0) + Number(matrix.cashReceiptTotal[index] || 0)));
       assert(`financial matrix receipt rows and balance add up (${label})`, receiptsReconcile);
+      const cashExpenseDetailsReconcile = Array.isArray(matrix.cashExpenseLedgers)
+        && matrix.cashExpenseLedgers.every((ledger) =>
+          Array.isArray(ledger.values) && ledger.values.length === matrix.locations.length)
+        && matrix.locations.every((_, index) =>
+          near(matrix.cashExpenses[index],
+            matrix.cashExpenseLedgers.reduce((sum, ledger) => sum + Number(ledger.values[index] || 0), 0)));
+      assert(`financial matrix cash expense details sum by location (${label})`, cashExpenseDetailsReconcile);
       const totalRowsReconcile = matrixFields.every((field) =>
         near(matrix.totals?.[field], expectedTotals[field]));
       assert(`financial matrix totals sum visible columns (${label})`, totalRowsReconcile);

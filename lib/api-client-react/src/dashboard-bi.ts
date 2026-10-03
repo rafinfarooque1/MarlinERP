@@ -151,8 +151,8 @@ export interface DashboardFinancialMatrix {
   cashReceiptVouchers: number[];
   cashReceiptTotal: number[];
   balance: number[];
-  expenses: number[];
-  expenseLedgers: Array<{
+  cashExpenses: number[];
+  cashExpenseLedgers: Array<{
     ledgerId: number;
     name: string;
     code: string | null;
@@ -166,7 +166,7 @@ export interface DashboardFinancialMatrix {
     cashReceiptVouchers: number;
     cashReceiptTotal: number;
     balance: number;
-    expenses: number;
+    cashExpenses: number;
     closingCash: number;
   };
 }
