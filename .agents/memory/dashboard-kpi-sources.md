@@ -113,3 +113,20 @@ identify the real cash receipt without counting the settlement twice.
 **How to apply:** use the shared derived posting stream and the cash-in
 calculation for each source, scoped to the matrix column's location. Keep the
 parent total equal to “By Sale” plus receipt vouchers.
+
+# Cash Expense in the cross-location matrix
+
+The matrix's Cash Expense row is the expense-module amount paired with a
+credit to the STD-CASH subtree, grouped by the expense-side ledger debit. It
+excludes bank-paid entries and other P&L expenses that did not leave cash.
+Apply the same date and location scope as the matrix, and total only the
+displayed cash-paid account details. This is separate from the dashboard's P&L
+expense KPI, which remains sourced from `buildBooks`.
+
+**Why:** the matrix row represents cash actually paid from tills, not all
+accrued/direct/indirect expense balances. Reusing the P&L total would label
+bank-paid and non-cash entries as cash expenses.
+
+**How to apply:** classify by paired derived postings (`source: "expense"`)
+and the cash-ledger credit, not payment-mode text or an expense subtree. Keep
+other payment sources out unless the requirement explicitly broadens the row.

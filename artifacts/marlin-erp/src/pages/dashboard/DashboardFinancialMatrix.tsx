@@ -229,8 +229,8 @@ export function DashboardFinancialMatrixSection({
                   {amountRow('cash-receipts-by-sale', 'By Sale', data.cashReceiptBySale, data.totals.cashReceiptBySale, { nested: true })}
                   {amountRow('cash-receipt-vouchers', 'Cash Receipt', data.cashReceiptVouchers, data.totals.cashReceiptVouchers, { nested: true })}
                   {amountRow('balance', 'Balance', data.balance, data.totals.balance, { balance: true })}
-                  {amountRow('expenses', 'Expense', data.expenses, data.totals.expenses, { emphasized: true })}
-                  {data.expenseLedgers.map((ledger) =>
+                  {amountRow('cash-expenses', 'Cash Expense', data.cashExpenses, data.totals.cashExpenses, { emphasized: true })}
+                  {data.cashExpenseLedgers.map((ledger) =>
                     amountRow(`expense-${ledger.ledgerId}`, ledger.name, ledger.values, ledger.total, { nested: true }),
                   )}
                   {amountRow('closing-cash', 'Closing balance cash', data.closingCash, data.totals.closingCash, { emphasized: true })}
