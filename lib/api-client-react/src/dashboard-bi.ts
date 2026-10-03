@@ -160,6 +160,21 @@ export interface DashboardFinancialMatrix {
     total: number;
   }>;
   closingCash: number[];
+  openingBank: number[];
+  bankReceiptBySale: number[];
+  bankReceiptVouchers: number[];
+  bankReceiptTotal: number[];
+  bankBalance: number[];
+  bankExpenses: number[];
+  bankExpenseLedgers: Array<{
+    ledgerId: number;
+    name: string;
+    code: string | null;
+    values: number[];
+    total: number;
+  }>;
+  reconciliationPending: number[];
+  closingBank: number[];
   totals: {
     openingCash: number;
     cashReceiptBySale: number;
@@ -168,6 +183,14 @@ export interface DashboardFinancialMatrix {
     balance: number;
     cashExpenses: number;
     closingCash: number;
+    openingBank: number;
+    bankReceiptBySale: number;
+    bankReceiptVouchers: number;
+    bankReceiptTotal: number;
+    bankBalance: number;
+    bankExpenses: number;
+    reconciliationPending: number;
+    closingBank: number;
   };
 }
 
