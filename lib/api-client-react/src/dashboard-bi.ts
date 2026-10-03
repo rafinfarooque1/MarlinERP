@@ -147,8 +147,9 @@ export interface DashboardFinancialMatrix {
     name: string;
   }>;
   openingCash: number[];
-  openingTotal: number[];
-  sales: number[];
+  cashReceiptBySale: number[];
+  cashReceiptVouchers: number[];
+  cashReceiptTotal: number[];
   balance: number[];
   expenses: number[];
   expenseLedgers: Array<{
@@ -159,15 +160,14 @@ export interface DashboardFinancialMatrix {
     total: number;
   }>;
   closingCash: number[];
-  closingTotal: number[];
   totals: {
     openingCash: number;
-    openingTotal: number;
-    sales: number;
+    cashReceiptBySale: number;
+    cashReceiptVouchers: number;
+    cashReceiptTotal: number;
     balance: number;
     expenses: number;
     closingCash: number;
-    closingTotal: number;
   };
 }
 

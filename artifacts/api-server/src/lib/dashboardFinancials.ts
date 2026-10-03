@@ -299,6 +299,20 @@ export function rangeMoneyFlows(
   };
 }
 
+/**
+ * Cash-only receipts split by their source document: sale collections versus
+ * receipt vouchers. Using the derived posting stream keeps destination ledger,
+ * business date, location and cash-ledger ownership authoritative.
+ */
+export function rangeCashReceiptBreakdown(
+  postings: Array<Parameters<typeof rangeMoneyFlows>[0][number] & { source: string }>,
+  opts: Parameters<typeof rangeMoneyFlows>[1],
+): { bySale: number; receiptVouchers: number; total: number } {
+  const bySale = rangeMoneyFlows(postings.filter((posting) => posting.source === "sale"), opts).cashIn;
+  const receiptVouchers = rangeMoneyFlows(postings.filter((posting) => posting.source === "receipt"), opts).cashIn;
+  return { bySale, receiptVouchers, total: r2(bySale + receiptVouchers) };
+}
+
 /** Control balances only — for callers that do not need the expense figure. */
 export async function companyBalances(
   buildDerivedPostings: PostingsFn,

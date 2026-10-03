@@ -6,7 +6,7 @@ import { pushLocationFilter, type ParsedLocationFilter } from "../lib/queryFilte
 import { stockValuation } from "../lib/valuation";
 import { requireModuleView, canViewStockValuation } from "../middleware/permissions";
 import { buildDerivedPostings } from "./journal";
-import { companyBalances, companyFinancials, rangeMoneyFlows, ledgerSubtreeLookup, reconciliationPendingAmount } from "../lib/dashboardFinancials";
+import { companyBalances, companyFinancials, rangeCashReceiptBreakdown, rangeMoneyFlows, ledgerSubtreeLookup, reconciliationPendingAmount } from "../lib/dashboardFinancials";
 import { outstandingExpr, outstandingAsOfExpr } from "../lib/salePaymentPosition";
 import { isIsoDate } from "../lib/dateInput";
 import { getLocationFilter, getPostingLocationFilter } from "../lib/requestLocation";
@@ -957,37 +957,6 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       || (location.locationType === "warehouse" && scope.warehouseIds.includes(location.locationId))
       || (location.locationType === "outlet" && scope.outletIds.includes(location.locationId)));
 
-  const matrixSaleConditions = [
-    "s.branch_transfer_id IS NULL",
-    "s.cancelled_at IS NULL",
-    visibleLocationSql("COALESCE(s.location_type, 'outlet')", "COALESCE(s.location_id, s.outlet_id)"),
-  ];
-  const matrixSaleParams: unknown[] = [];
-  if (fromDate) {
-    matrixSaleParams.push(fromDate);
-    matrixSaleConditions.push(`s.sale_date >= $${matrixSaleParams.length}::date`);
-  }
-  if (toDate) {
-    matrixSaleParams.push(toDate);
-    matrixSaleConditions.push(`s.sale_date <= $${matrixSaleParams.length}::date`);
-  }
-  if (!scope.isHeadOffice) matrixSaleConditions.push(scopeSalesWhere(scope, matrixSaleParams));
-  const { rows: matrixSaleRows } = await pool.query(`
-    SELECT COALESCE(s.location_type, 'outlet') AS location_type,
-           CASE WHEN COALESCE(s.location_type, 'outlet') = 'headoffice'
-                THEN 0 ELSE COALESCE(s.location_id, s.outlet_id) END AS location_id,
-           COALESCE(SUM(s.total_amount::numeric), 0)::float AS total
-      FROM sales s
-     WHERE ${matrixSaleConditions.join(" AND ")}
-     GROUP BY 1, 2
-  `, matrixSaleParams);
-  const matrixSalesByLocation = new Map<string, number>();
-  for (const row of matrixSaleRows as Array<{
-    location_type: unknown; location_id: unknown; total: unknown;
-  }>) {
-    matrixSalesByLocation.set(locationKey(String(row.location_type), row.location_id), money(row.total));
-  }
-
   const matrixOpeningToDate = fromDate
     ? (() => {
         const date = new Date(`${fromDate}T00:00:00.000Z`);
@@ -995,6 +964,10 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
         return date.toISOString().slice(0, 10);
       })()
     : null;
+  const [matrixPostings, matrixCashSubtree] = await Promise.all([
+    cachedPostings(toDate ? { toDate } : {}),
+    ledgerSubtreeLookup(),
+  ]);
   const matrixLocationFigures = await Promise.all(matrixLocations.map(async (location) => {
     const postingLocation = location.locationType === "headoffice"
       ? ({ type: "headoffice", id: null } as const)
@@ -1009,11 +982,19 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
         ? companyBalances(cachedPostings, { toDate: matrixOpeningToDate, location: postingLocation })
         : Promise.resolve({ cashBalance: 0, bankBalance: 0 }),
     ]);
+    const flowOptions = {
+      fromDate: fromDate || null,
+      toDate: toDate || null,
+      location: postingLocation,
+      subtree: matrixCashSubtree,
+    };
+    const cashReceiptBreakdown = rangeCashReceiptBreakdown(matrixPostings as never[], flowOptions);
     return {
       location,
       financials,
       openingCash: money(opening.cashBalance),
-      sales: matrixSalesByLocation.get(locationKey(location.locationType, location.locationId)) ?? 0,
+      cashReceiptBySale: cashReceiptBreakdown.bySale,
+      cashReceiptVouchers: cashReceiptBreakdown.receiptVouchers,
     };
   }));
   // Company-level openings and unlocated postings are a separate posting
@@ -1033,11 +1014,18 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
         ? companyBalances(cachedPostings, { toDate: matrixOpeningToDate, location: postingLocation })
         : Promise.resolve({ cashBalance: 0, bankBalance: 0 }),
     ]);
+    const cashReceiptBreakdown = rangeCashReceiptBreakdown(matrixPostings as never[], {
+      fromDate: fromDate || null,
+      toDate: toDate || null,
+      location: postingLocation,
+      subtree: matrixCashSubtree,
+    });
     matrixLocationFigures.push({
       location,
       financials,
       openingCash: money(opening.cashBalance),
-      sales: 0,
+      cashReceiptBySale: cashReceiptBreakdown.bySale,
+      cashReceiptVouchers: cashReceiptBreakdown.receiptVouchers,
     });
   }
   const matrixFinancialsByLocation = new Map(matrixLocationFigures.map((figure) => [
@@ -1046,13 +1034,14 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
   ]));
 
   const matrixOpeningCash = matrixLocationFigures.map((figure) => figure.openingCash);
-  const matrixOpeningTotal = [...matrixOpeningCash];
-  const matrixSales = matrixLocationFigures.map((figure) => figure.sales);
-  const matrixBalance = matrixSales.map((sale, index) =>
-    money(matrixOpeningCash[index] + sale));
+  const matrixCashReceiptBySale = matrixLocationFigures.map((figure) => figure.cashReceiptBySale);
+  const matrixCashReceiptVouchers = matrixLocationFigures.map((figure) => figure.cashReceiptVouchers);
+  const matrixCashReceiptTotal = matrixCashReceiptBySale.map((sale, index) =>
+    money(sale + matrixCashReceiptVouchers[index]));
+  const matrixBalance = matrixCashReceiptTotal.map((receipt, index) =>
+    money(matrixOpeningCash[index] + receipt));
   const matrixExpenses = matrixLocationFigures.map((figure) => money(figure.financials.expenses.total));
   const matrixClosingCash = matrixLocationFigures.map((figure) => money(figure.financials.cashBalance));
-  const matrixClosingTotal = [...matrixClosingCash];
   const matrixSum = (values: number[]) => money(values.reduce((total, value) => total + value, 0));
 
   const matrixExpenseDefinitions = new Map<number, { name: string; code: string | null }>();
@@ -1070,21 +1059,21 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
     period: { fromDate: fromDate || null, toDate: toDate || null },
     locations: matrixLocationFigures.map(({ location }) => location),
     openingCash: matrixOpeningCash,
-    openingTotal: matrixOpeningTotal,
-    sales: matrixSales,
+    cashReceiptBySale: matrixCashReceiptBySale,
+    cashReceiptVouchers: matrixCashReceiptVouchers,
+    cashReceiptTotal: matrixCashReceiptTotal,
     balance: matrixBalance,
     expenses: matrixExpenses,
     expenseLedgers: matrixExpenseLedgers,
     closingCash: matrixClosingCash,
-    closingTotal: matrixClosingTotal,
     totals: {
       openingCash: matrixSum(matrixOpeningCash),
-      openingTotal: matrixSum(matrixOpeningTotal),
-      sales: matrixSum(matrixSales),
+      cashReceiptBySale: matrixSum(matrixCashReceiptBySale),
+      cashReceiptVouchers: matrixSum(matrixCashReceiptVouchers),
+      cashReceiptTotal: matrixSum(matrixCashReceiptTotal),
       balance: matrixSum(matrixBalance),
       expenses: matrixSum(matrixExpenses),
       closingCash: matrixSum(matrixClosingCash),
-      closingTotal: matrixSum(matrixClosingTotal),
     },
   };
 
