@@ -123,6 +123,8 @@ import type {
   Sale,
   SaleInput,
   SalesSummary,
+  ShipFromAddressInput,
+  ShipFromAddressResponse,
   StockAlert,
   StockEntry,
   StockTransfer,
@@ -2551,6 +2553,78 @@ export function useGetStockTransfer<TData = Awaited<ReturnType<typeof getStockTr
 
 
 
+export const getUpdateStockTransferShipFromAddressUrl = (id: number,) => {
+
+
+
+
+  return `/api/stock/transfers/${id}/ship-from-address`
+}
+
+/**
+ * @summary Save or clear a transfer's shipped-from address override
+ */
+export const updateStockTransferShipFromAddress = async (id: number,
+    shipFromAddressInput: ShipFromAddressInput, options?: RequestInit): Promise<ShipFromAddressResponse> => {
+
+  return customFetch<ShipFromAddressResponse>(getUpdateStockTransferShipFromAddressUrl(id),
+  {
+    ...options,
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(shipFromAddressInput)
+  }
+);}
+
+
+
+
+
+export const getUpdateStockTransferShipFromAddressMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateStockTransferShipFromAddress>>, TError,{id: number;data: BodyType<ShipFromAddressInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof updateStockTransferShipFromAddress>>, TError,{id: number;data: BodyType<ShipFromAddressInput>}, TContext> => {
+
+const mutationKey = ['updateStockTransferShipFromAddress'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof updateStockTransferShipFromAddress>>, {id: number;data: BodyType<ShipFromAddressInput>}> = (props) => {
+          const {id,data} = props ?? {};
+
+          return  updateStockTransferShipFromAddress(id,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type UpdateStockTransferShipFromAddressMutationResult = NonNullable<Awaited<ReturnType<typeof updateStockTransferShipFromAddress>>>
+    export type UpdateStockTransferShipFromAddressMutationBody = BodyType<ShipFromAddressInput>
+    export type UpdateStockTransferShipFromAddressMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Save or clear a transfer's shipped-from address override
+ */
+export const useUpdateStockTransferShipFromAddress = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateStockTransferShipFromAddress>>, TError,{id: number;data: BodyType<ShipFromAddressInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof updateStockTransferShipFromAddress>>,
+        TError,
+        {id: number;data: BodyType<ShipFromAddressInput>},
+        TContext
+      > => {
+      return useMutation(getUpdateStockTransferShipFromAddressMutationOptions(options));
+    }
+
 export const getListWarehousesUrl = (params?: ListWarehousesParams,) => {
   const normalizedParams = new URLSearchParams();
 
@@ -3638,6 +3712,78 @@ export function useGetSale<TData = Awaited<ReturnType<typeof getSale>>, TError =
 
 
 
+
+export const getUpdateSaleShipFromAddressUrl = (id: number,) => {
+
+
+
+
+  return `/api/sales/${id}/ship-from-address`
+}
+
+/**
+ * @summary Save or clear an invoice's shipped-from address override
+ */
+export const updateSaleShipFromAddress = async (id: number,
+    shipFromAddressInput: ShipFromAddressInput, options?: RequestInit): Promise<ShipFromAddressResponse> => {
+
+  return customFetch<ShipFromAddressResponse>(getUpdateSaleShipFromAddressUrl(id),
+  {
+    ...options,
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(shipFromAddressInput)
+  }
+);}
+
+
+
+
+
+export const getUpdateSaleShipFromAddressMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateSaleShipFromAddress>>, TError,{id: number;data: BodyType<ShipFromAddressInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof updateSaleShipFromAddress>>, TError,{id: number;data: BodyType<ShipFromAddressInput>}, TContext> => {
+
+const mutationKey = ['updateSaleShipFromAddress'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof updateSaleShipFromAddress>>, {id: number;data: BodyType<ShipFromAddressInput>}> = (props) => {
+          const {id,data} = props ?? {};
+
+          return  updateSaleShipFromAddress(id,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type UpdateSaleShipFromAddressMutationResult = NonNullable<Awaited<ReturnType<typeof updateSaleShipFromAddress>>>
+    export type UpdateSaleShipFromAddressMutationBody = BodyType<ShipFromAddressInput>
+    export type UpdateSaleShipFromAddressMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Save or clear an invoice's shipped-from address override
+ */
+export const useUpdateSaleShipFromAddress = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateSaleShipFromAddress>>, TError,{id: number;data: BodyType<ShipFromAddressInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof updateSaleShipFromAddress>>,
+        TError,
+        {id: number;data: BodyType<ShipFromAddressInput>},
+        TContext
+      > => {
+      return useMutation(getUpdateSaleShipFromAddressMutationOptions(options));
+    }
 
 export const getGetSalesSummaryUrl = () => {
 

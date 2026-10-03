@@ -414,6 +414,11 @@ export interface StockTransfer {
   isInterstate?: boolean;
   status?: StockTransferStatus;
   createdAt: string;
+  /**
+     * Per-transfer override for the source address printed on the transfer PDFs. Null uses the current dispatching location address.
+     * @nullable
+     */
+  shipFromAddress?: string | null;
 }
 
 export type StockTransferInputFromType = typeof StockTransferInputFromType[keyof typeof StockTransferInputFromType];
@@ -736,6 +741,25 @@ export interface Sale {
      * @nullable
      */
   notes?: string | null;
+  /**
+     * Per-invoice override for the source address printed on the invoice. Null uses the current issuing location address.
+     * @nullable
+     */
+  shipFromAddress?: string | null;
+}
+
+export interface ShipFromAddressInput {
+  /**
+     * Saved source-address override. Send null or an empty string to return to the current address on the issuing or dispatching location.
+     * @maxLength 1000
+     * @nullable
+     */
+  address: string | null;
+}
+
+export interface ShipFromAddressResponse {
+  /** @nullable */
+  shipFromAddress: string | null;
 }
 
 export interface SaleInput {

@@ -176,6 +176,8 @@ export * from './saleLineItemPriceMode';
 export * from './saleOtherCharge';
 export * from './salesSummary';
 export * from './salesSummaryByOutletItem';
+export * from './shipFromAddressInput';
+export * from './shipFromAddressResponse';
 export * from './stockAlert';
 export * from './stockEntry';
 export * from './stockEntryBranchType';

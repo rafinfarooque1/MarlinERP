@@ -7,7 +7,7 @@ import {
   useListItems, useListItemPrices, useListStock, useGetCompanySettings,
   useListCoupons,
   customFetch,
-  useGetSale, useGetSalePayments, useCreateSalePayment, useUpdateSale,
+  useGetSale, useGetSalePayments, useCreateSalePayment, useUpdateSale, useUpdateSaleShipFromAddress,
   ensureInvoiceShareLink, absoluteShareUrl,
   usePartyAdvance, getPartyAdvanceQueryKey,
 } from '@workspace/api-client-react';
@@ -22,7 +22,7 @@ import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { DialogClose, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { TransactionDialog, TransactionDialogContent } from '@/components/ui/transaction-dialog';
 // The shared transaction-window vocabulary — extracted from the Purchase
 // master page so this dialog renders as the same design system.
@@ -423,6 +423,8 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   const [statusFilter, setStatusFilter] = useState<'all' | 'unpaid' | 'partially_paid' | 'paid'>('all');
   const [isOpen, setIsOpen] = useState(false);
   const [viewItem, setViewItem] = useState<any>(null);
+  const [shipFromEditSale, setShipFromEditSale] = useState<any>(null);
+  const [shipFromAddressDraft, setShipFromAddressDraft] = useState('');
 
   // Books drill-down: /headoffice/sales?view=<id> opens that invoice's view
   // sheet directly (ledger statement / day book rows navigate here). The
@@ -570,6 +572,31 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
 
   const createMutation = useCreateSale();
   const updateMutation = useUpdateSale();
+  const shipFromMutation = useUpdateSaleShipFromAddress();
+  const openShipFromAddressEditor = (sale: any) => {
+    setShipFromAddressDraft(String(sale.shipFromAddress ?? ''));
+    setShipFromEditSale(sale);
+  };
+  const saveShipFromAddress = () => {
+    if (!shipFromEditSale || shipFromMutation.isPending) return;
+    const id = Number(shipFromEditSale.id);
+    shipFromMutation.mutate(
+      { id, data: { address: shipFromAddressDraft.trim() || null } },
+      {
+        onSuccess: updated => {
+          setViewItem((current: any) => current?.id === id
+            ? { ...current, shipFromAddress: updated.shipFromAddress }
+            : current);
+          setShipFromEditSale(null);
+          void invalidateSalesData();
+          toast.success(updated.shipFromAddress
+            ? 'Shipped-from address saved for this invoice'
+            : 'Invoice will use the current issuing-location address');
+        },
+        onError: (error: any) => toast.error(error?.data?.error || error?.message || 'Could not save shipped-from address'),
+      },
+    );
+  };
 
   // editItem holds the sale being edited; null means "create" mode
   const [editItem, setEditItem] = useState<any>(null);
@@ -2871,6 +2898,25 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                 ))}
               </div>
 
+              <div className="rounded-lg border border-border bg-muted/20 p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-xs text-muted-foreground uppercase tracking-wider">Shipped From address</p>
+                  {perm.canEdit && (
+                    <Button variant="outline" size="sm" className="h-7 gap-1.5"
+                      onClick={() => openShipFromAddressEditor(viewItem)}>
+                      <Pencil className="w-3.5 h-3.5" /> Change
+                    </Button>
+                  )}
+                </div>
+                <p className="mt-1 text-sm whitespace-pre-line break-words">
+                  {String(viewItem.shipFromAddress ?? '').trim()
+                    || `Using the current address from ${viewItem.outletName || 'the issuing location'}`}
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  The PDF uses this invoice’s issuing location unless an override is saved.
+                </p>
+              </div>
+
               {!!String(viewItem.notes ?? '').trim() && (
                 <div className="rounded-lg border border-border bg-muted/20 p-3">
                   <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Notes</p>
@@ -3302,6 +3348,31 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
           )}
         </SheetContent>
       </Sheet>
+
+      <Dialog open={!!shipFromEditSale} onOpenChange={open => !open && setShipFromEditSale(null)}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Edit Shipped From address</DialogTitle>
+            <DialogDescription>
+              This override applies only to this invoice. Leave it blank to use the current address from its issuing location.
+            </DialogDescription>
+          </DialogHeader>
+          <Textarea
+            aria-label="Shipped From address"
+            rows={4}
+            maxLength={1000}
+            value={shipFromAddressDraft}
+            onChange={event => setShipFromAddressDraft(event.target.value)}
+            placeholder="Enter the address to print on this invoice"
+          />
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShipFromEditSale(null)}>Cancel</Button>
+            <Button onClick={saveShipFromAddress} disabled={shipFromMutation.isPending}>
+              {shipFromMutation.isPending ? 'Saving…' : 'Save address'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* ── Credit-limit override confirmation ─────────────────────────────── */}
       <AlertDialog open={!!creditWarning} onOpenChange={v => { if (!v) setCreditWarning(null); }}>

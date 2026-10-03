@@ -655,7 +655,8 @@ export const ListStockTransfersResponseItem = zod.object({
 })),
   "isInterstate": zod.boolean().optional(),
   "status": zod.enum(['pending', 'in_transit', 'completed', 'rejected', 'cancelled']).optional(),
-  "createdAt": zod.string()
+  "createdAt": zod.string(),
+  "shipFromAddress": zod.string().nullish().describe('Per-transfer override for the source address printed on the transfer PDFs. Null uses the current dispatching location address.\n')
 })
 export const ListStockTransfersResponse = zod.array(ListStockTransfersResponseItem)
 
@@ -702,7 +703,8 @@ export const CreateStockTransferResponse = zod.object({
 })),
   "isInterstate": zod.boolean().optional(),
   "status": zod.enum(['pending', 'in_transit', 'completed', 'rejected', 'cancelled']).optional(),
-  "createdAt": zod.string()
+  "createdAt": zod.string(),
+  "shipFromAddress": zod.string().nullish().describe('Per-transfer override for the source address printed on the transfer PDFs. Null uses the current dispatching location address.\n')
 })
 
 
@@ -731,7 +733,28 @@ export const GetStockTransferResponse = zod.object({
 })),
   "isInterstate": zod.boolean().optional(),
   "status": zod.enum(['pending', 'in_transit', 'completed', 'rejected', 'cancelled']).optional(),
-  "createdAt": zod.string()
+  "createdAt": zod.string(),
+  "shipFromAddress": zod.string().nullish().describe('Per-transfer override for the source address printed on the transfer PDFs. Null uses the current dispatching location address.\n')
+})
+
+
+/**
+ * @summary Save or clear a transfer's shipped-from address override
+ */
+export const UpdateStockTransferShipFromAddressParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const updateStockTransferShipFromAddressBodyAddressMax = 1000;
+
+
+
+export const UpdateStockTransferShipFromAddressBody = zod.object({
+  "address": zod.string().max(updateStockTransferShipFromAddressBodyAddressMax).nullable().describe('Saved source-address override. Send null or an empty string to return to the current address on the issuing or dispatching location.\n')
+})
+
+export const UpdateStockTransferShipFromAddressResponse = zod.object({
+  "shipFromAddress": zod.string().nullable()
 })
 
 
@@ -1106,7 +1129,8 @@ export const ListSalesResponseItem = zod.object({
   "createdAt": zod.string(),
   "quotationId": zod.number().nullish().describe('Set when this sale was converted from a quotation.'),
   "quotationNumber": zod.string().nullish().describe('The quotation this sale was converted from (QTN\/…).'),
-  "notes": zod.string().max(listSalesResponseNotesMax).nullish().describe('Optional plain-text transaction note. Empty notes are omitted from document output.')
+  "notes": zod.string().max(listSalesResponseNotesMax).nullish().describe('Optional plain-text transaction note. Empty notes are omitted from document output.'),
+  "shipFromAddress": zod.string().nullish().describe('Per-invoice override for the source address printed on the invoice. Null uses the current issuing location address.\n')
 })
 export const ListSalesResponse = zod.array(ListSalesResponseItem)
 
@@ -1189,7 +1213,8 @@ export const CreateSaleResponse = zod.object({
   "createdAt": zod.string(),
   "quotationId": zod.number().nullish().describe('Set when this sale was converted from a quotation.'),
   "quotationNumber": zod.string().nullish().describe('The quotation this sale was converted from (QTN\/…).'),
-  "notes": zod.string().max(createSaleResponseNotesMax).nullish().describe('Optional plain-text transaction note. Empty notes are omitted from document output.')
+  "notes": zod.string().max(createSaleResponseNotesMax).nullish().describe('Optional plain-text transaction note. Empty notes are omitted from document output.'),
+  "shipFromAddress": zod.string().nullish().describe('Per-invoice override for the source address printed on the invoice. Null uses the current issuing location address.\n')
 })
 
 
@@ -1238,7 +1263,28 @@ export const GetSaleResponse = zod.object({
   "createdAt": zod.string(),
   "quotationId": zod.number().nullish().describe('Set when this sale was converted from a quotation.'),
   "quotationNumber": zod.string().nullish().describe('The quotation this sale was converted from (QTN\/…).'),
-  "notes": zod.string().max(getSaleResponseNotesMax).nullish().describe('Optional plain-text transaction note. Empty notes are omitted from document output.')
+  "notes": zod.string().max(getSaleResponseNotesMax).nullish().describe('Optional plain-text transaction note. Empty notes are omitted from document output.'),
+  "shipFromAddress": zod.string().nullish().describe('Per-invoice override for the source address printed on the invoice. Null uses the current issuing location address.\n')
+})
+
+
+/**
+ * @summary Save or clear an invoice's shipped-from address override
+ */
+export const UpdateSaleShipFromAddressParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const updateSaleShipFromAddressBodyAddressMax = 1000;
+
+
+
+export const UpdateSaleShipFromAddressBody = zod.object({
+  "address": zod.string().max(updateSaleShipFromAddressBodyAddressMax).nullable().describe('Saved source-address override. Send null or an empty string to return to the current address on the issuing or dispatching location.\n')
+})
+
+export const UpdateSaleShipFromAddressResponse = zod.object({
+  "shipFromAddress": zod.string().nullable()
 })
 
 

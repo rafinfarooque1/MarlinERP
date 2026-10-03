@@ -71,6 +71,7 @@ async function runMigrations() {
     ALTER TABLE account_ledgers ADD COLUMN IF NOT EXISTS code text;
     ALTER TABLE sales ADD COLUMN IF NOT EXISTS bill_discount numeric(12,2) NOT NULL DEFAULT 0;
     ALTER TABLE sales ADD COLUMN IF NOT EXISTS notes text;
+    ALTER TABLE sales ADD COLUMN IF NOT EXISTS ship_from_address text;
     ALTER TABLE purchases ADD COLUMN IF NOT EXISTS tax_total numeric(12,2) DEFAULT 0;
     ALTER TABLE purchases ADD COLUMN IF NOT EXISTS discount_total numeric(12,2) DEFAULT 0;
     ALTER TABLE purchases ADD COLUMN IF NOT EXISTS round_off numeric(12,2) DEFAULT 0;
@@ -89,6 +90,7 @@ async function runMigrations() {
     ALTER TABLE stock_transfers ADD COLUMN IF NOT EXISTS received_line_items jsonb DEFAULT '[]'::jsonb;
     ALTER TABLE stock_transfers ADD COLUMN IF NOT EXISTS received_date date;
     ALTER TABLE stock_transfers ADD COLUMN IF NOT EXISTS rejection_reason text;
+    ALTER TABLE stock_transfers ADD COLUMN IF NOT EXISTS ship_from_address text;
     ALTER TABLE stock_transfers ALTER COLUMN status SET DEFAULT 'in_transit';
     ALTER TABLE warehouses ADD COLUMN IF NOT EXISTS upi_id text;
     ALTER TABLE outlets    ADD COLUMN IF NOT EXISTS upi_id text;

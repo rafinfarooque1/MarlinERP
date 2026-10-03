@@ -3,7 +3,7 @@ import { Router } from "express";
 import { db, stockEntriesTable, itemsTable, warehousesTable, outletsTable } from "@workspace/db";
 import { requireModuleView, requireModuleAction, canViewStockValuation } from "../middleware/permissions";
 import { eq, and, sql } from "drizzle-orm";
-import { CreateStockTransferBody, ListStockQueryParams } from "@workspace/api-zod";
+import { CreateStockTransferBody, ListStockQueryParams, UpdateStockTransferShipFromAddressBody } from "@workspace/api-zod";
 import { logActivity, logActivityInTransaction } from "../lib/audit";
 import { pool } from "@workspace/db";
 import {
@@ -579,7 +579,7 @@ router.get("/stock/transfers", requireModuleView("page:/transfers"), async (req,
   const [result, branchName] = await Promise.all([
     pool.query(`
       SELECT id, challan_number, from_type, from_id, to_type, to_id, transfer_date,
-             line_items, is_interstate, status, notes, created_at,
+             line_items, is_interstate, status, notes, created_at, ship_from_address,
              approved_by, approved_at, received_line_items, rejection_reason,
              transfer_type, from_gstin, to_gstin, tax_type,
               transfer_value, gst_amount, document_mode, transfer_invoice_number,
@@ -604,6 +604,7 @@ router.get("/stock/transfers", requireModuleView("page:/transfers"), async (req,
     isInterstate: r.is_interstate,
     status: r.status,
     notes: r.notes,
+    shipFromAddress: r.ship_from_address ?? null,
     createdAt: r.created_at,
     approvedBy: r.approved_by,
     approvedAt: r.approved_at,
@@ -1738,6 +1739,48 @@ router.patch("/stock/transfers/:id/reject", requireModuleAction("page:/transfers
   res.json({ success: true, id, status: "rejected" });
 });
 
+router.patch("/stock/transfers/:id/ship-from-address", requireModuleAction("page:/transfers", "edit"), async (req, res): Promise<void> => {
+  const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const id = Number(raw);
+  if (!Number.isSafeInteger(id) || id <= 0) { res.status(400).json({ error: "Invalid transfer id" }); return; }
+  const parsed = UpdateStockTransferShipFromAddressBody.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
+
+  const scope = await getUserDataScope((req as any).employee);
+  const params: unknown[] = [id];
+  const scopeCond = scopeTransferWhere(scope, params, "t");
+  const { rows: [transfer] } = await pool.query<{ from_type: string; from_id: number }>(
+    `SELECT t.from_type, t.from_id
+       FROM stock_transfers t
+      WHERE t.id = $1
+        AND ${scopeCond}
+        AND ${visibleLocationSql("t.from_type", "t.from_id")}
+        AND ${visibleLocationSql("t.to_type", "t.to_id")}
+      LIMIT 1`,
+    params,
+  );
+  if (!transfer || !isLocationInScope(scope, transfer.from_type, Number(transfer.from_id))) {
+    res.status(404).json({ error: "Transfer not found" }); return;
+  }
+  const address = typeof parsed.data.address === "string" ? parsed.data.address.trim() || null : null;
+  const updateParams: unknown[] = [address, id, transfer.from_type, Number(transfer.from_id)];
+  const updateScopeCond = scopeTransferWhere(scope, updateParams, "t");
+  const { rows: [updated] } = await pool.query<{ ship_from_address: string | null }>(
+    `UPDATE stock_transfers t
+        SET ship_from_address = $1
+      WHERE t.id = $2
+        AND t.from_type = $3
+        AND t.from_id = $4
+        AND ${updateScopeCond}
+        AND ${visibleLocationSql("t.from_type", "t.from_id")}
+        AND ${visibleLocationSql("t.to_type", "t.to_id")}
+      RETURNING t.ship_from_address`,
+    updateParams,
+  );
+  if (!updated) { res.status(404).json({ error: "Transfer not found" }); return; }
+  res.json({ shipFromAddress: updated?.ship_from_address ?? null });
+});
+
 router.get("/stock/transfers/:id", requireModuleView("page:/transfers"), async (req, res): Promise<void> => {
   const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const id = parseInt(raw, 10);
@@ -1749,7 +1792,8 @@ router.get("/stock/transfers/:id", requireModuleView("page:/transfers"), async (
             line_items, is_interstate, status, notes, created_at,
             approved_by, approved_at, received_line_items, rejection_reason,
             transfer_type, from_gstin, to_gstin, tax_type, transfer_value, gst_amount,
-            document_mode, transfer_invoice_number, sale_id, purchase_id, credit_note_voucher_id
+            document_mode, transfer_invoice_number, sale_id, purchase_id, credit_note_voucher_id,
+            ship_from_address
      FROM stock_transfers t
      WHERE id = $1
        AND ${scopeTransferWhere(transferScope, transferParams)}
@@ -1792,6 +1836,7 @@ router.get("/stock/transfers/:id", requireModuleView("page:/transfers"), async (
     saleId: r.sale_id ?? null,
     purchaseId: r.purchase_id ?? null,
     creditNoteVoucherId: r.credit_note_voucher_id ?? null,
+    shipFromAddress: r.ship_from_address ?? null,
     fromName: branchName(r.from_type, r.from_id),
     toName: branchName(r.to_type, r.to_id),
   });

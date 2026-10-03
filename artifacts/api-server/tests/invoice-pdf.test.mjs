@@ -326,6 +326,15 @@ let s1;
   assert('E&OE marked on the total row', t.includes('TOTAL (E&OE)'));
   assert('No placeholder junk', !/N\/A|undefined|\bnull\b/.test(t));
   assert('Only the QR image is embedded (lettermark fallback)', pdfImageCount(pdf.file) === 1, `imgs=${pdfImageCount(pdf.file)}`);
+
+  const shipFromAddress = `${TAG} Loading Bay 4`;
+  const savedAddress = await apiReq('PATCH', `/sales/${s1}/ship-from-address`, { address: shipFromAddress });
+  assert('Per-invoice shipped-from override saved', savedAddress.status === 200 && savedAddress.data?.shipFromAddress === shipFromAddress, JSON.stringify(savedAddress.data));
+  const overriddenText = pdfText((await invPdf(s1)).file);
+  assert('Invoice labels the source panel SHIPPED FROM', overriddenText.includes('SHIPPED FROM'));
+  assert('Saved source address appears on the invoice', overriddenText.includes(shipFromAddress));
+  const clearedAddress = await apiReq('PATCH', `/sales/${s1}/ship-from-address`, { address: null });
+  assert('Clearing the override restores the location default', clearedAddress.status === 200 && clearedAddress.data?.shipFromAddress === null, JSON.stringify(clearedAddress.data));
 }
 
 console.log('\n[2] Company Profile logo is embedded when present');

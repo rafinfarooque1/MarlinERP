@@ -16,7 +16,7 @@ import {
   useListWarehouses, useListStock,
   getListStockTransfersQueryKey,
   useSuggestBatches, useListStockBatches,
-  useGetMe,
+  useGetMe, useUpdateStockTransferShipFromAddress,
   type StockBatch,
 } from '@workspace/api-client-react';
 import { useApproveTransfer, useRejectTransfer } from '@workspace/api-client-react';
@@ -38,7 +38,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import {
   Plus, Search, Truck, Download, Eye, Calendar, Trash2, FileDown,
-  PackageOpen, AlertTriangle, Clock, CheckCircle2, XCircle,
+  PackageOpen, AlertTriangle, Clock, CheckCircle2, XCircle, Pencil,
   PackageCheck, Layers, ArrowRightLeft, ShieldOff,
 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -397,6 +397,7 @@ export default function Transfers() {
   const permLoading = perm.isLoading;
   const canView     = perm.canView;
   const canAdd      = perm.canAdd;
+  const canEdit     = perm.canEdit;
   const canDownload = perm.canDownload;
 
   // User identity
@@ -420,6 +421,7 @@ export default function Transfers() {
   const { data: outlets = [] }      = useEnabledOutlets();
   const queryClient = useQueryClient();
   const createMutation = useCreateStockTransfer();
+  const shipFromMutation = useUpdateStockTransferShipFromAddress();
 
   // Composite item map for name/unit resolution
   const allItemsMap = useMemo(() => new Map<string, any>([
@@ -433,6 +435,8 @@ export default function Transfers() {
   const [tab,       setTab]       = useState<'all' | 'in_transit' | 'completed' | 'rejected'>('all');
   const [filterLoc, setFilterLoc] = useState('all');
   const [viewItem,      setViewItem]      = useState<any>(null);
+  const [shipFromEditTransfer, setShipFromEditTransfer] = useState<any>(null);
+  const [shipFromAddressDraft, setShipFromAddressDraft] = useState('');
   const [approveTarget, setApproveTarget] = useState<any>(null);
   const [isOpen,        setIsOpen]        = useState(false);
 
@@ -471,6 +475,16 @@ export default function Transfers() {
       !isEmployee ||
       (t.toType === userBranchType && Number(t.toId) === userBranchId)
     );
+
+  const canEditShipFrom = (t: any) => {
+    if (!canEdit) return false;
+    if (!isEmployee) return true;
+    if (t.fromType === userBranchType && Number(t.fromId) === userBranchId) return true;
+    if (userBranchType === 'warehouse' && t.fromType === 'outlet') {
+      return Number((outlets as any[]).find(o => Number(o.id) === Number(t.fromId))?.warehouseId) === userBranchId;
+    }
+    return false;
+  };
 
   // ── Create form ─────────────────────────────────────────────────────────────
   // Default "from" differs: employees start locked to their branch; admins start at HO
@@ -720,6 +734,31 @@ export default function Transfers() {
     } catch (e: any) { toast.error(e?.message || 'Failed to generate PDF'); }
   };
 
+  const openShipFromAddressEditor = (transfer: any) => {
+    setShipFromAddressDraft(String(transfer.shipFromAddress ?? ''));
+    setShipFromEditTransfer(transfer);
+  };
+  const saveShipFromAddress = () => {
+    if (!shipFromEditTransfer || shipFromMutation.isPending) return;
+    const id = Number(shipFromEditTransfer.id);
+    shipFromMutation.mutate(
+      { id, data: { address: shipFromAddressDraft.trim() || null } },
+      {
+        onSuccess: updated => {
+          setViewItem((current: any) => current?.id === id
+            ? { ...current, shipFromAddress: updated.shipFromAddress }
+            : current);
+          setShipFromEditTransfer(null);
+          void queryClient.invalidateQueries({ queryKey: getListStockTransfersQueryKey() });
+          toast.success(updated.shipFromAddress
+            ? 'Shipped-from address saved for this transfer'
+            : 'Transfer documents will use the current dispatching-location address');
+        },
+        onError: (error: any) => toast.error(error?.data?.error || error?.message || 'Could not save shipped-from address'),
+      },
+    );
+  };
+
   // ── Access denied guard ─────────────────────────────────────────────────────
   if (!permLoading && !canView) {
     return (
@@ -956,6 +995,25 @@ export default function Transfers() {
                 ))}
               </div>
 
+              <div className="rounded-lg border border-border bg-muted/20 p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-xs text-muted-foreground uppercase tracking-wider">Shipped From address</p>
+                  {canEditShipFrom(viewItem) && (
+                    <Button variant="outline" size="sm" className="h-7 gap-1.5"
+                      onClick={() => openShipFromAddressEditor(viewItem)}>
+                      <Pencil className="w-3.5 h-3.5" /> Change
+                    </Button>
+                  )}
+                </div>
+                <p className="mt-1 text-sm whitespace-pre-line break-words">
+                  {String(viewItem.shipFromAddress ?? '').trim()
+                    || `Using the current address from ${viewItem.fromName || 'the dispatching location'}`}
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  The challan and any transfer invoice use the dispatching location unless an override is saved.
+                </p>
+              </div>
+
               <div>
                 <p className="text-sm font-semibold mb-2">Dispatched Items</p>
                 <div className="space-y-2">
@@ -1046,6 +1104,31 @@ export default function Transfers() {
           )}
         </SheetContent>
       </Sheet>
+
+      <Dialog open={!!shipFromEditTransfer} onOpenChange={open => !open && setShipFromEditTransfer(null)}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Edit Shipped From address</DialogTitle>
+            <DialogDescription>
+              This override applies to this transfer’s challan and transfer invoice. Leave it blank to use the current dispatching-location address.
+            </DialogDescription>
+          </DialogHeader>
+          <Textarea
+            aria-label="Shipped From address"
+            rows={4}
+            maxLength={1000}
+            value={shipFromAddressDraft}
+            onChange={event => setShipFromAddressDraft(event.target.value)}
+            placeholder="Enter the address to print on these documents"
+          />
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShipFromEditTransfer(null)}>Cancel</Button>
+            <Button onClick={saveShipFromAddress} disabled={shipFromMutation.isPending}>
+              {shipFromMutation.isPending ? 'Saving…' : 'Save address'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* ── New Transfer dialog ── */}
       <Dialog open={isOpen} onOpenChange={setIsOpen}>

@@ -4,7 +4,7 @@
  * Professional A4 GST tax-invoice layout matching the Marlin brand design:
  *   • Dark-navy header — issuing warehouse (left) + TAX INVOICE badge (right)
  *   • GSTIN / FSSAI compliance bar
- *   • Navy "Billed To / Shipped To" section
+ *   • Navy "Billed To / Shipped From" section (quotations retain "Shipped To")
  *   • Navy items table with CGST/SGST/IGST group columns
  *   • Amount-in-words (left) + tax summary (right) with navy Grand Total
  *   • Payment status strip, then amount payable + bank details + UPI QR
@@ -107,8 +107,10 @@ export interface InvoiceData {
     /** Light diagonal "QUOTATION" watermark on every page. */
     watermark: boolean;
   };
-  /** Ship-to override (quotations); when absent both panels show billing. */
+  /** Recipient ship-to override (quotations only). */
   shippingAddress?: string | null;
+  /** Per-document source address override; otherwise the issuer's current address. */
+  shipFromAddress?: string | null;
   /**
    * Who is selling. Resolved from the sale's stored location, so reprinting an
    * old invoice from another branch still shows the branch that raised it.
@@ -163,11 +165,17 @@ export async function assembleInvoiceData(saleId: number): Promise<InvoiceData |
     party_name: string | null;
     party_gstin: string | null;
     party_state: string | null;
+    transfer_id: number | null;
     transfer_to_type: string | null;
     transfer_to_id: number | null;
+    sale_ship_from_address: string | null;
+    transfer_ship_from_address: string | null;
   }>(
     `SELECT s.cancelled_at, s.quotation_number, s.other_charges, s.notes,
+            s.ship_from_address AS sale_ship_from_address,
             s.party_name, s.party_gstin, s.party_state,
+            t.id AS transfer_id,
+            t.ship_from_address AS transfer_ship_from_address,
             t.to_type AS transfer_to_type, t.to_id AS transfer_to_id
        FROM sales s
        LEFT JOIN stock_transfers t ON t.id = s.branch_transfer_id
@@ -298,6 +306,11 @@ export async function assembleInvoiceData(saleId: number): Promise<InvoiceData |
       notes: (locRow?.notes ?? (sale as any).notes ?? null),
     },
     issuer,
+    shipFromAddress: (
+      locRow?.transfer_id != null
+        ? locRow.transfer_ship_from_address
+        : locRow?.sale_ship_from_address
+    )?.trim() || issuer.addressLines.join("\n"),
     outletName: issuer.locationName,
     outletUpiId: issuer.upiId,
     customer: invoiceCustomer,
@@ -845,7 +858,7 @@ export async function renderInvoicePdf(data: InvoiceData): Promise<{ buffer: Buf
   y = headerBottom + 6;
 
   // ══════════════════════════════════════════════════════════════════════════
-  // 2. BILLED TO / SHIPPED TO — tabbed panels
+  // 2. BILLED TO / SHIPPED FROM — tabbed panels (quotations use SHIPPED TO)
   // ══════════════════════════════════════════════════════════════════════════
   const custRows: [string, string][] = [
     ["Name", customer?.name || "Walk-in Customer"],
@@ -855,13 +868,21 @@ export async function renderInvoicePdf(data: InvoiceData): Promise<{ buffer: Buf
   if (customer?.gstNumber) custRows.push(["GSTIN", customer.gstNumber]);
   if (customer?.phone)     custRows.push(["Mobile No.", customer.phone]);
 
-  // Ship-to may differ (quotations carry their own shipping address); when it
-  // does, the second panel swaps only the Address row.
-  const shipRows: [string, string][] = data.shippingAddress
-    ? custRows.map(([k, v]) => (k === "Address" ? [k, data.shippingAddress!] : [k, v]) as [string, string])
-    : custRows;
-  if (data.shippingAddress && !custRows.some(([k]) => k === "Address")) {
-    shipRows.splice(1, 0, ["Address", data.shippingAddress]);
+  let shipRows: [string, string][];
+  if (isQuotation) {
+    // Preserve quotation recipient shipping semantics exactly.
+    shipRows = data.shippingAddress
+      ? custRows.map(([k, v]) => (k === "Address" ? [k, data.shippingAddress!] : [k, v]) as [string, string])
+      : [...custRows];
+    if (data.shippingAddress && !custRows.some(([k]) => k === "Address")) {
+      shipRows.splice(1, 0, ["Address", data.shippingAddress]);
+    }
+  } else {
+    shipRows = [["Name", data.issuer.tradeName || data.issuer.locationName]];
+    if (data.shipFromAddress?.trim()) shipRows.push(["Address", data.shipFromAddress.trim()]);
+    if (data.issuer.state) shipRows.push(["State", data.issuer.state]);
+    if (data.issuer.gstin) shipRows.push(["GSTIN", data.issuer.gstin]);
+    if (data.issuer.phone) shipRows.push(["Mobile No.", data.issuer.phone]);
   }
 
   const TAB_W = 36, TAB_H = 7;
@@ -890,7 +911,7 @@ export async function renderInvoicePdf(data: InvoiceData): Promise<{ buffer: Buf
     bx(px, y + TAB_H / 2, HW, BT_H - TAB_H / 2, BORDER, 1.2);
     rfill(px, y, TAB_W, TAB_H, NAVY, 1);
     icoPerson(px + 2.6, y + 1.55, 3.9);
-    txt(px === M ? "BILLED TO" : "SHIPPED TO", px + 8.4, y + 4.8, { bold: true, size: 7.8, color: WHITE });
+    txt(px === M ? "BILLED TO" : isQuotation ? "SHIPPED TO" : "SHIPPED FROM", px + 8.4, y + 4.8, { bold: true, size: 7.8, color: WHITE });
     let ry = y + TAB_H + BT_PAD + 1.4;
     for (const [k, lines] of panelRows) {
       txt(k, px + 4, ry, { size: 7.6, color: INK });

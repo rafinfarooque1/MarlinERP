@@ -56,4 +56,9 @@ export interface Sale {
      * @nullable
      */
   notes?: string | null;
+  /**
+     * Per-invoice override for the source address printed on the invoice. Null uses the current issuing location address.
+     * @nullable
+     */
+  shipFromAddress?: string | null;
 }

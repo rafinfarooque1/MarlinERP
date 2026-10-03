@@ -24,4 +24,9 @@ export interface StockTransfer {
   isInterstate?: boolean;
   status?: StockTransferStatus;
   createdAt: string;
+  /**
+     * Per-transfer override for the source address printed on the transfer PDFs. Null uses the current dispatching location address.
+     * @nullable
+     */
+  shipFromAddress?: string | null;
 }
