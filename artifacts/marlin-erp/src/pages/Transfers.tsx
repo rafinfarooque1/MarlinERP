@@ -1246,7 +1246,7 @@ export default function Transfers() {
                                       Qty {selItemId > 0 && <span className="text-muted-foreground">(max {availQty})</span>}
                                     </FormLabel>
                                     <FormControl>
-                                      <Input type="number" min={1} max={selItemId > 0 ? availQty : undefined} className="h-8 text-xs"
+                                      <Input type="number" min={1} max={selItemId > 0 ? availQty : undefined} step="any" className="h-8 text-xs"
                                         data-last-field={i === fields.length - 1 ? '1' : undefined} {...f} />
                                     </FormControl>
                                   </FormItem>
