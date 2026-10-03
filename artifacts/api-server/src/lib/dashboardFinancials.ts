@@ -93,13 +93,15 @@ export interface CompanyFinancials {
  * rows, so one rupee is counted once.
  */
 export async function reconciliationPendingAmount(
-  opts: { location?: PostingLocationFilter | null } = {},
+  opts: { location?: PostingLocationFilter | null; includePayments?: boolean } = {},
 ): Promise<number> {
   const location = opts.location ?? null;
+  const includePayments = opts.includePayments !== false;
   const params: unknown[] = [];
   const locationCond = (typeExpr: string, idExpr: string): string => {
     if (!location) return "TRUE";
     if (location.type === "headoffice") return `${typeExpr} = 'headoffice'`;
+    if (location.type === "company") return `${typeExpr} IS NULL`;
     params.push(location.type);
     const typeParam = `$${params.length}`;
     params.push(location.id);
@@ -115,10 +117,9 @@ export async function reconciliationPendingAmount(
     "COALESCE(r.location_type, 'headoffice')",
     "COALESCE(r.location_id, 0)",
   );
-  const paymentLocation = locationCond(
-    "COALESCE(py.location_type, 'headoffice')",
-    "COALESCE(py.location_id, 0)",
-  );
+  const paymentLocation = includePayments
+    ? locationCond("COALESCE(py.location_type, 'headoffice')", "COALESCE(py.location_id, 0)")
+    : null;
 
   const { rows: [row] } = await pool.query(
     `SELECT COALESCE(SUM(pending.amount), 0)::numeric AS amount
@@ -144,7 +145,7 @@ export async function reconciliationPendingAmount(
           WHERE r.payment_mode = 'bank'
             AND r.source IN ('manual', 'allocation')
             AND ${receiptLocation}
-         UNION ALL
+          ${includePayments ? `UNION ALL
          -- Any payment still sourced from Electronic Payment Clearing is
          -- awaiting selection/confirmation of its real bank destination.
          SELECT py.amount::numeric AS amount
@@ -152,7 +153,7 @@ export async function reconciliationPendingAmount(
            JOIN account_ledgers clr ON clr.id = py.paid_from_ledger_id
                                       AND clr.code = 'STD-ELEC-CLR'
           WHERE py.payment_mode = 'bank'
-            AND ${paymentLocation}
+             AND ${paymentLocation}` : ""}
        ) pending`,
     params,
   );
@@ -326,8 +327,23 @@ export function rangeCashReceiptBreakdown(
   postings: SourcePosting[],
   opts: Parameters<typeof rangeMoneyFlows>[1],
 ): { bySale: number; receiptVouchers: number; total: number } {
-  const bySale = rangeMoneyFlows(postings.filter((posting) => posting.source === "sale"), opts).cashIn;
-  const receiptVouchers = rangeMoneyFlows(postings.filter((posting) => posting.source === "receipt"), opts).cashIn;
+  return rangeReceiptBreakdownForLedger(postings, opts, "cashIn");
+}
+
+export function rangeBankReceiptBreakdown(
+  postings: SourcePosting[],
+  opts: Parameters<typeof rangeMoneyFlows>[1],
+): { bySale: number; receiptVouchers: number; total: number } {
+  return rangeReceiptBreakdownForLedger(postings, opts, "bankIn");
+}
+
+function rangeReceiptBreakdownForLedger(
+  postings: SourcePosting[],
+  opts: Parameters<typeof rangeMoneyFlows>[1],
+  amountKey: "cashIn" | "bankIn",
+): { bySale: number; receiptVouchers: number; total: number } {
+  const bySale = rangeMoneyFlows(postings.filter((posting) => posting.source === "sale"), opts)[amountKey];
+  const receiptVouchers = rangeMoneyFlows(postings.filter((posting) => posting.source === "receipt"), opts)[amountKey];
   return { bySale, receiptVouchers, total: r2(bySale + receiptVouchers) };
 }
 
@@ -339,13 +355,28 @@ export function rangeCashExpensesByLedger(
   postings: SourcePosting[],
   opts: Parameters<typeof rangeMoneyFlows>[1],
 ): { total: number; ledgers: Array<{ ledgerId: number; amount: number }> } {
+  return rangeExpensesByLedger(postings, opts, "STD-CASH");
+}
+
+export function rangeBankExpensesByLedger(
+  postings: SourcePosting[],
+  opts: Parameters<typeof rangeMoneyFlows>[1],
+): { total: number; ledgers: Array<{ ledgerId: number; amount: number }> } {
+  return rangeExpensesByLedger(postings, opts, "STD-BANK");
+}
+
+function rangeExpensesByLedger(
+  postings: SourcePosting[],
+  opts: Parameters<typeof rangeMoneyFlows>[1],
+  paymentSubtreeCode: "STD-CASH" | "STD-BANK",
+): { total: number; ledgers: Array<{ ledgerId: number; amount: number }> } {
   const sliced = postingsInRange(postings, opts);
-  const cashIds = new Set(opts.subtree("STD-CASH"));
-  const cashPaidExpenseEntries = new Set<string>();
+  const paymentIds = new Set(opts.subtree(paymentSubtreeCode));
+  const paidExpenseEntries = new Set<string>();
 
   for (const posting of sliced) {
-    if (posting.source === "expense" && posting.credit > 0.004 && cashIds.has(posting.ledgerId)) {
-      cashPaidExpenseEntries.add(posting.entryId);
+    if (posting.source === "expense" && posting.credit > 0.004 && paymentIds.has(posting.ledgerId)) {
+      paidExpenseEntries.add(posting.entryId);
     }
   }
 
@@ -354,8 +385,8 @@ export function rangeCashExpensesByLedger(
     if (
       posting.source === "expense"
       && posting.debit > 0.004
-      && !cashIds.has(posting.ledgerId)
-      && cashPaidExpenseEntries.has(posting.entryId)
+      && !paymentIds.has(posting.ledgerId)
+      && paidExpenseEntries.has(posting.entryId)
     ) {
       amountByLedger.set(
         posting.ledgerId,

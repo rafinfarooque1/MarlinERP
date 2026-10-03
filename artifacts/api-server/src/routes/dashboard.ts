@@ -6,7 +6,7 @@ import { pushLocationFilter, type ParsedLocationFilter } from "../lib/queryFilte
 import { stockValuation } from "../lib/valuation";
 import { requireModuleView, canViewStockValuation } from "../middleware/permissions";
 import { buildDerivedPostings } from "./journal";
-import { companyBalances, companyFinancials, rangeCashExpensesByLedger, rangeCashReceiptBreakdown, rangeMoneyFlows, ledgerSubtreeLookup, reconciliationPendingAmount } from "../lib/dashboardFinancials";
+import { companyBalances, companyFinancials, rangeBankExpensesByLedger, rangeBankReceiptBreakdown, rangeCashExpensesByLedger, rangeCashReceiptBreakdown, rangeMoneyFlows, ledgerSubtreeLookup, reconciliationPendingAmount } from "../lib/dashboardFinancials";
 import { outstandingExpr, outstandingAsOfExpr } from "../lib/salePaymentPosition";
 import { isIsoDate } from "../lib/dateInput";
 import { getLocationFilter, getPostingLocationFilter } from "../lib/requestLocation";
@@ -964,7 +964,7 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
         return date.toISOString().slice(0, 10);
       })()
     : null;
-  const [matrixPostings, matrixCashSubtree] = await Promise.all([
+  const [matrixPostings, matrixSubtree] = await Promise.all([
     cachedPostings(toDate ? { toDate } : {}),
     ledgerSubtreeLookup(),
   ]);
@@ -986,18 +986,30 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       fromDate: fromDate || null,
       toDate: toDate || null,
       location: postingLocation,
-      subtree: matrixCashSubtree,
+      subtree: matrixSubtree,
     };
     const cashReceiptBreakdown = rangeCashReceiptBreakdown(matrixPostings as never[], flowOptions);
+    const bankReceiptBreakdown = rangeBankReceiptBreakdown(matrixPostings as never[], flowOptions);
     const cashExpenseBreakdown = rangeCashExpensesByLedger(matrixPostings as never[], flowOptions);
+    const bankExpenseBreakdown = rangeBankExpensesByLedger(matrixPostings as never[], flowOptions);
+    const reconciliationPending = await reconciliationPendingAmount({
+      location: postingLocation,
+      includePayments: false,
+    });
     return {
       location,
       financials,
       openingCash: money(opening.cashBalance),
+      openingBank: money(opening.bankBalance),
       cashReceiptBySale: cashReceiptBreakdown.bySale,
       cashReceiptVouchers: cashReceiptBreakdown.receiptVouchers,
       cashExpenses: cashExpenseBreakdown.total,
       cashExpenseLedgers: cashExpenseBreakdown.ledgers,
+      bankReceiptBySale: bankReceiptBreakdown.bySale,
+      bankReceiptVouchers: bankReceiptBreakdown.receiptVouchers,
+      bankExpenses: bankExpenseBreakdown.total,
+      bankExpenseLedgers: bankExpenseBreakdown.ledgers,
+      reconciliationPending,
     };
   }));
   // Company-level openings and unlocated postings are a separate posting
@@ -1017,26 +1029,36 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
         ? companyBalances(cachedPostings, { toDate: matrixOpeningToDate, location: postingLocation })
         : Promise.resolve({ cashBalance: 0, bankBalance: 0 }),
     ]);
-    const cashReceiptBreakdown = rangeCashReceiptBreakdown(matrixPostings as never[], {
+    const flowOptions = {
       fromDate: fromDate || null,
       toDate: toDate || null,
       location: postingLocation,
-      subtree: matrixCashSubtree,
-    });
+      subtree: matrixSubtree,
+    };
+    const cashReceiptBreakdown = rangeCashReceiptBreakdown(matrixPostings as never[], flowOptions);
+    const bankReceiptBreakdown = rangeBankReceiptBreakdown(matrixPostings as never[], flowOptions);
     const cashExpenseBreakdown = rangeCashExpensesByLedger(matrixPostings as never[], {
-      fromDate: fromDate || null,
-      toDate: toDate || null,
+      ...flowOptions,
+    });
+    const bankExpenseBreakdown = rangeBankExpensesByLedger(matrixPostings as never[], flowOptions);
+    const reconciliationPending = await reconciliationPendingAmount({
       location: postingLocation,
-      subtree: matrixCashSubtree,
+      includePayments: false,
     });
     matrixLocationFigures.push({
       location,
       financials,
       openingCash: money(opening.cashBalance),
+      openingBank: money(opening.bankBalance),
       cashReceiptBySale: cashReceiptBreakdown.bySale,
       cashReceiptVouchers: cashReceiptBreakdown.receiptVouchers,
       cashExpenses: cashExpenseBreakdown.total,
       cashExpenseLedgers: cashExpenseBreakdown.ledgers,
+      bankReceiptBySale: bankReceiptBreakdown.bySale,
+      bankReceiptVouchers: bankReceiptBreakdown.receiptVouchers,
+      bankExpenses: bankExpenseBreakdown.total,
+      bankExpenseLedgers: bankExpenseBreakdown.ledgers,
+      reconciliationPending,
     });
   }
   const matrixFinancialsByLocation = new Map(matrixLocationFigures.map((figure) => [
@@ -1053,14 +1075,24 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
     money(matrixOpeningCash[index] + receipt));
   const matrixCashExpenses = matrixLocationFigures.map((figure) => figure.cashExpenses);
   const matrixClosingCash = matrixLocationFigures.map((figure) => money(figure.financials.cashBalance));
+  const matrixOpeningBank = matrixLocationFigures.map((figure) => figure.openingBank);
+  const matrixBankReceiptBySale = matrixLocationFigures.map((figure) => figure.bankReceiptBySale);
+  const matrixBankReceiptVouchers = matrixLocationFigures.map((figure) => figure.bankReceiptVouchers);
+  const matrixBankReceiptTotal = matrixBankReceiptBySale.map((sale, index) =>
+    money(sale + matrixBankReceiptVouchers[index]));
+  const matrixBankBalance = matrixOpeningBank.map((opening, index) =>
+    money(opening + matrixBankReceiptTotal[index]));
+  const matrixBankExpenses = matrixLocationFigures.map((figure) => figure.bankExpenses);
+  const matrixReconciliationPending = matrixLocationFigures.map((figure) => figure.reconciliationPending);
+  const matrixClosingBank = matrixLocationFigures.map((figure) => money(figure.financials.bankBalance));
   const matrixSum = (values: number[]) => money(values.reduce((total, value) => total + value, 0));
 
   const matrixExpenseDefinitions = new Map<number, { name: string; code: string | null }>();
-  for (const { financials, cashExpenseLedgers } of matrixLocationFigures) {
+  for (const { financials, cashExpenseLedgers, bankExpenseLedgers } of matrixLocationFigures) {
     for (const ledger of financials.expenses.ledgers) {
       matrixExpenseDefinitions.set(ledger.ledgerId, { name: ledger.name, code: ledger.code });
     }
-    for (const ledger of cashExpenseLedgers) {
+    for (const ledger of [...cashExpenseLedgers, ...bankExpenseLedgers]) {
       if (!matrixExpenseDefinitions.has(ledger.ledgerId)) {
         matrixExpenseDefinitions.set(ledger.ledgerId, { name: `Ledger ${ledger.ledgerId}`, code: null });
       }
@@ -1069,6 +1101,11 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
   const matrixCashExpenseLedgers = Array.from(matrixExpenseDefinitions, ([ledgerId, ledger]) => {
     const values = matrixLocationFigures.map(({ cashExpenseLedgers }) =>
       money(cashExpenseLedgers.find((row) => row.ledgerId === ledgerId)?.amount ?? 0));
+    return { ledgerId, ...ledger, values, total: matrixSum(values) };
+  }).filter((ledger) => ledger.values.some((value) => value !== 0));
+  const matrixBankExpenseLedgers = Array.from(matrixExpenseDefinitions, ([ledgerId, ledger]) => {
+    const values = matrixLocationFigures.map(({ bankExpenseLedgers }) =>
+      money(bankExpenseLedgers.find((row) => row.ledgerId === ledgerId)?.amount ?? 0));
     return { ledgerId, ...ledger, values, total: matrixSum(values) };
   }).filter((ledger) => ledger.values.some((value) => value !== 0));
   const financialMatrix = {
@@ -1082,6 +1119,15 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
     cashExpenses: matrixCashExpenses,
     cashExpenseLedgers: matrixCashExpenseLedgers,
     closingCash: matrixClosingCash,
+    openingBank: matrixOpeningBank,
+    bankReceiptBySale: matrixBankReceiptBySale,
+    bankReceiptVouchers: matrixBankReceiptVouchers,
+    bankReceiptTotal: matrixBankReceiptTotal,
+    bankBalance: matrixBankBalance,
+    bankExpenses: matrixBankExpenses,
+    bankExpenseLedgers: matrixBankExpenseLedgers,
+    reconciliationPending: matrixReconciliationPending,
+    closingBank: matrixClosingBank,
     totals: {
       openingCash: matrixSum(matrixOpeningCash),
       cashReceiptBySale: matrixSum(matrixCashReceiptBySale),
@@ -1090,6 +1136,14 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       balance: matrixSum(matrixBalance),
       cashExpenses: matrixSum(matrixCashExpenses),
       closingCash: matrixSum(matrixClosingCash),
+      openingBank: matrixSum(matrixOpeningBank),
+      bankReceiptBySale: matrixSum(matrixBankReceiptBySale),
+      bankReceiptVouchers: matrixSum(matrixBankReceiptVouchers),
+      bankReceiptTotal: matrixSum(matrixBankReceiptTotal),
+      bankBalance: matrixSum(matrixBankBalance),
+      bankExpenses: matrixSum(matrixBankExpenses),
+      reconciliationPending: matrixSum(matrixReconciliationPending),
+      closingBank: matrixSum(matrixClosingBank),
     },
   };
 

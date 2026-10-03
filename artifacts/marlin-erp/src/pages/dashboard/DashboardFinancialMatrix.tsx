@@ -127,8 +127,8 @@ export function DashboardFinancialMatrixSection({
   const period = data?.period ?? { fromDate: fromDate ?? null, toDate: toDate ?? null };
   const periodText = periodLabel(period.fromDate ?? undefined, period.toDate ?? undefined);
   const openingDescription = period.fromDate
-    ? 'Opening balance cash is the position as of the day before this period.'
-    : 'All time begins at inception with a zero opening cash balance.';
+    ? 'Opening cash and bank are the positions as of the day before this period.'
+    : 'All time begins at inception with zero opening cash and bank balances.';
 
   const amountRow = (
     key: string,
@@ -177,7 +177,8 @@ export function DashboardFinancialMatrixSection({
           Cross-Warehouse Financial Summary Matrix
         </CardTitle>
         <CardDescription>
-          {periodText} · {openingDescription} Balance = Opening Balance Cash + Cash Receipt.
+          {periodText} · {openingDescription} Cash and bank balances add opening balances to receipts.
+          Reconciliation pending shows bank sales and receipts awaiting a bank destination; it does not change closing bank.
           Columns include active locations available to your account and, for company-wide access, an Unallocated column for company-level balances.
         </CardDescription>
       </CardHeader>
@@ -224,6 +225,11 @@ export function DashboardFinancialMatrixSection({
                   </tr>
                 </thead>
                 <tbody>
+                  <tr className="bg-muted/60">
+                    <th colSpan={data.locations.length + 2} className="border-b border-border px-3 py-2 text-left font-semibold">
+                      Cash Summary
+                    </th>
+                  </tr>
                   {amountRow('opening-cash', 'Opening balance cash', data.openingCash, data.totals.openingCash, { emphasized: true })}
                   {amountRow('cash-receipts-total', 'Cash Receipt', data.cashReceiptTotal, data.totals.cashReceiptTotal, { emphasized: true })}
                   {amountRow('cash-receipts-by-sale', 'By Sale', data.cashReceiptBySale, data.totals.cashReceiptBySale, { nested: true })}
@@ -234,6 +240,22 @@ export function DashboardFinancialMatrixSection({
                     amountRow(`expense-${ledger.ledgerId}`, ledger.name, ledger.values, ledger.total, { nested: true }),
                   )}
                   {amountRow('closing-cash', 'Closing balance cash', data.closingCash, data.totals.closingCash, { emphasized: true })}
+                  <tr className="bg-muted/60">
+                    <th colSpan={data.locations.length + 2} className="border-b border-border px-3 py-2 text-left font-semibold">
+                      Bank Summary
+                    </th>
+                  </tr>
+                  {amountRow('opening-bank', 'Opening balance bank', data.openingBank, data.totals.openingBank, { emphasized: true })}
+                  {amountRow('bank-receipts-total', 'Bank Receipt', data.bankReceiptTotal, data.totals.bankReceiptTotal, { emphasized: true })}
+                  {amountRow('bank-receipts-by-sale', 'By Sale', data.bankReceiptBySale, data.totals.bankReceiptBySale, { nested: true })}
+                  {amountRow('bank-receipt-vouchers', 'Bank Receipt Vouchers', data.bankReceiptVouchers, data.totals.bankReceiptVouchers, { nested: true })}
+                  {amountRow('bank-balance', 'Balance', data.bankBalance, data.totals.bankBalance, { balance: true })}
+                  {amountRow('bank-expenses', 'Bank Expense', data.bankExpenses, data.totals.bankExpenses, { emphasized: true })}
+                  {data.bankExpenseLedgers.map((ledger) =>
+                    amountRow(`bank-expense-${ledger.ledgerId}`, ledger.name, ledger.values, ledger.total, { nested: true }),
+                  )}
+                  {amountRow('reconciliation-pending', 'Reconciliation pending', data.reconciliationPending, data.totals.reconciliationPending, { emphasized: true })}
+                  {amountRow('closing-bank', 'Closing balance bank', data.closingBank, data.totals.closingBank, { emphasized: true })}
                 </tbody>
               </table>
               </div>

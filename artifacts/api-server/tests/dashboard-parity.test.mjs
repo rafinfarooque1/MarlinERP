@@ -117,6 +117,9 @@ try {
     const matrixFields = [
       "openingCash", "cashReceiptBySale", "cashReceiptVouchers",
       "cashReceiptTotal", "balance", "cashExpenses", "closingCash",
+      "openingBank", "bankReceiptBySale", "bankReceiptVouchers",
+      "bankReceiptTotal", "bankBalance", "bankExpenses",
+      "reconciliationPending", "closingBank",
     ];
     const matrixShapeOk = Array.isArray(matrix?.locations)
       && matrixFields.every((field) =>
@@ -131,8 +134,12 @@ try {
         near(matrix.cashReceiptTotal[index],
           Number(matrix.cashReceiptBySale[index] || 0) + Number(matrix.cashReceiptVouchers[index] || 0))
         && near(matrix.balance[index],
-          Number(matrix.openingCash[index] || 0) + Number(matrix.cashReceiptTotal[index] || 0)));
-      assert(`financial matrix receipt rows and balance add up (${label})`, receiptsReconcile);
+          Number(matrix.openingCash[index] || 0) + Number(matrix.cashReceiptTotal[index] || 0))
+        && near(matrix.bankReceiptTotal[index],
+          Number(matrix.bankReceiptBySale[index] || 0) + Number(matrix.bankReceiptVouchers[index] || 0))
+        && near(matrix.bankBalance[index],
+          Number(matrix.openingBank[index] || 0) + Number(matrix.bankReceiptTotal[index] || 0)));
+      assert(`financial matrix cash and bank receipt rows and balances add up (${label})`, receiptsReconcile);
       const cashExpenseDetailsReconcile = Array.isArray(matrix.cashExpenseLedgers)
         && matrix.cashExpenseLedgers.every((ledger) =>
           Array.isArray(ledger.values) && ledger.values.length === matrix.locations.length)
@@ -143,6 +150,13 @@ try {
       const totalRowsReconcile = matrixFields.every((field) =>
         near(matrix.totals?.[field], expectedTotals[field]));
       assert(`financial matrix totals sum visible columns (${label})`, totalRowsReconcile);
+      const bankExpenseDetailsReconcile = Array.isArray(matrix.bankExpenseLedgers)
+        && matrix.bankExpenseLedgers.every((ledger) =>
+          Array.isArray(ledger.values) && ledger.values.length === matrix.locations.length)
+        && matrix.locations.every((_, index) =>
+          near(matrix.bankExpenses[index],
+            matrix.bankExpenseLedgers.reduce((sum, ledger) => sum + Number(ledger.values[index] || 0), 0)));
+      assert(`financial matrix bank expense details sum by location (${label})`, bankExpenseDetailsReconcile);
     }
     assert(`bi.sales.total == register total (${label})`,
       near(bi?.sales?.total, reg?.totals?.total),

@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 
-import { rangeCashExpensesByLedger, rangeCashReceiptBreakdown } from "../src/lib/dashboardFinancials";
+import {
+  rangeBankExpensesByLedger,
+  rangeBankReceiptBreakdown,
+  rangeCashExpensesByLedger,
+  rangeCashReceiptBreakdown,
+} from "../src/lib/dashboardFinancials";
 
 const postings = [
   { source: "sale", date: "2026-10-03", ledgerId: 10, debit: 125.25, credit: 0, locationType: "warehouse", locationId: 7 },
@@ -22,6 +27,10 @@ const postings = [
   { source: "expense", entryId: "expense:other-date", date: "2026-10-02", ledgerId: 10, debit: 0, credit: 25, locationType: "warehouse", locationId: 7 },
   { source: "journal_voucher", entryId: "jv:cash", date: "2026-10-03", ledgerId: 33, debit: 60, credit: 0, locationType: "warehouse", locationId: 7 },
   { source: "journal_voucher", entryId: "jv:cash", date: "2026-10-03", ledgerId: 10, debit: 0, credit: 60, locationType: "warehouse", locationId: 7 },
+  { source: "sale", date: "2026-10-03", ledgerId: 20, debit: 205.5, credit: 0, locationType: "warehouse", locationId: 7 },
+  { source: "receipt", date: "2026-10-03", ledgerId: 20, debit: 45.25, credit: 0, locationType: "warehouse", locationId: 7 },
+  { source: "expense", entryId: "expense:bank-only", date: "2026-10-03", ledgerId: 34, debit: 27.5, credit: 0, locationType: "warehouse", locationId: 7 },
+  { source: "expense", entryId: "expense:bank-only", date: "2026-10-03", ledgerId: 20, debit: 0, credit: 27.5, locationType: "warehouse", locationId: 7 },
 ];
 
 const result = rangeCashReceiptBreakdown(postings as never[], {
@@ -37,6 +46,19 @@ assert.deepEqual(result, {
   total: 200.8,
 });
 
+const bankReceipts = rangeBankReceiptBreakdown(postings as never[], {
+  fromDate: "2026-10-03",
+  toDate: "2026-10-03",
+  location: { type: "warehouse", id: 7 },
+  subtree: (code) => code === "STD-CASH" ? [10] : code === "STD-BANK" ? [20] : [],
+});
+
+assert.deepEqual(bankReceipts, {
+  bySale: 205.5,
+  receiptVouchers: 45.25,
+  total: 250.75,
+});
+
 const cashExpenses = rangeCashExpensesByLedger(postings as never[], {
   fromDate: "2026-10-03",
   toDate: "2026-10-03",
@@ -49,4 +71,16 @@ assert.deepEqual(cashExpenses, {
   ledgers: [{ ledgerId: 30, amount: 15.25 }],
 });
 
-console.log("Dashboard financial matrix cash receipt and cash expense scope checks passed.");
+const bankExpenses = rangeBankExpensesByLedger(postings as never[], {
+  fromDate: "2026-10-03",
+  toDate: "2026-10-03",
+  location: { type: "warehouse", id: 7 },
+  subtree: (code) => code === "STD-CASH" ? [10] : code === "STD-BANK" ? [20] : [],
+});
+
+assert.deepEqual(bankExpenses, {
+  total: 27.5,
+  ledgers: [{ ledgerId: 34, amount: 27.5 }],
+});
+
+console.log("Dashboard financial matrix cash and bank receipt/expense scope checks passed.");
