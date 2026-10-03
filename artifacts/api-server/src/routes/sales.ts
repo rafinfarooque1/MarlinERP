@@ -3,7 +3,10 @@ import { Router } from "express";
 import { requireModuleAction, requireModuleView, hasModuleAction } from "../middleware/permissions";
 import { db, salesTable, outletsTable, customersTable, stockEntriesTable, itemsTable, itemPricesTable, companySettingsTable } from "@workspace/db";
 import { eq, and, inArray, sql } from "drizzle-orm";
-import { CreateSaleBody, GetSaleParams, SetItemPriceBody, ListItemPricesQueryParams } from "@workspace/api-zod";
+import {
+  CreateSaleBody, GetSaleParams, SetItemPriceBody, ListItemPricesQueryParams,
+  UpdateSaleShipFromAddressBody,
+} from "@workspace/api-zod";
 import { logActivityInTransaction } from "../lib/audit";
 import { createInvoiceShareToken } from "../lib/shareToken";
 import { assembleInvoiceData, renderInvoicePdf } from "../services/invoicePdf";
@@ -694,6 +697,7 @@ router.get("/sales", requireModuleView(["page:/sales/pos", "page:/returns", "pag
       otherCharges: parseStoredOtherCharges(r.other_charges),
       otherChargesTotal: otherChargesTotal(parseStoredOtherCharges(r.other_charges)),
       notes: r.notes ?? null,
+      shipFromAddress: r.ship_from_address ?? null,
       createdAt: r.created_at,
       paymentStatus: position.status,
       amountPaid,
@@ -2808,6 +2812,51 @@ router.post("/sales/:id/share-token", async (req, res): Promise<void> => {
   res.json({ token, expiresAt });
 });
 
+// Save a per-invoice source address without changing the customer or location
+// master. Null/blank clears the override so future prints use the live issuer
+// address resolved from the sale's stored location.
+router.patch("/sales/:id/ship-from-address", requireModuleAction("page:/sales/pos", "edit"), async (req, res): Promise<void> => {
+  const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const id = Number(raw);
+  if (!Number.isSafeInteger(id) || id <= 0) { res.status(400).json({ error: "Invalid sale id" }); return; }
+  const parsed = UpdateSaleShipFromAddressBody.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
+
+  const scope = await getUserDataScope((req as any).employee);
+  const params: unknown[] = [id];
+  const scopeCond = scopeSalesWhere(scope, params);
+  const { rows: [sale] } = await pool.query<{ branch_transfer_id: number | null }>(
+    `SELECT s.branch_transfer_id
+       FROM sales s
+      WHERE s.id = $1
+        AND ${scopeCond}
+        AND ${visibleLocationSql("COALESCE(s.location_type, 'outlet')", "COALESCE(s.location_id, s.outlet_id)")}
+      LIMIT 1`,
+    params,
+  );
+  if (!sale) { res.status(404).json({ error: "Sale not found" }); return; }
+  if (sale.branch_transfer_id != null) {
+    res.status(409).json({ error: "Edit the shipped-from address from the stock transfer record." });
+    return;
+  }
+
+  const address = typeof parsed.data.address === "string" ? parsed.data.address.trim() || null : null;
+  const updateParams: unknown[] = [address, id];
+  const updateScopeCond = scopeSalesWhere(scope, updateParams);
+  const { rows: [updated] } = await pool.query<{ ship_from_address: string | null }>(
+    `UPDATE sales s
+        SET ship_from_address = $1
+      WHERE s.id = $2
+        AND s.branch_transfer_id IS NULL
+        AND ${updateScopeCond}
+        AND ${visibleLocationSql("COALESCE(s.location_type, 'outlet')", "COALESCE(s.location_id, s.outlet_id)")}
+      RETURNING s.ship_from_address`,
+    updateParams,
+  );
+  if (!updated) { res.status(404).json({ error: "Sale not found" }); return; }
+  res.json({ shipFromAddress: updated?.ship_from_address ?? null });
+});
+
 // Authenticated inline invoice PDF. The View sheet embeds the invoice document
 // directly; a passive sheet open must NOT be a token-issuance event (each
 // share-token is a public bearer URL), so this route serves the PDF under the
@@ -2941,6 +2990,7 @@ router.get("/sales/:id", requireModuleView(["page:/sales/pos", "page:/operations
     quotationId: row.quotation_id ?? null,
     quotationNumber: row.quotation_number ?? null,
     notes: row.notes ?? null,
+    shipFromAddress: row.ship_from_address ?? null,
   });
 });
 

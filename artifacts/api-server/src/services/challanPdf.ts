@@ -1,7 +1,7 @@
 /**
  * Delivery Challan PDF — jsPDF, A4 portrait.
  *
- * The goods-movement document for a stock transfer: FROM/TO endpoints, the
+ * The goods-movement document for a stock transfer: SHIPPED FROM/SHIPPED TO endpoints, the
  * dispatched lines with HSN and quantity, status, and the receiver's
  * signature block. Assembled by the route from the stored transfer row —
  * never from client-composed figures.
@@ -33,6 +33,7 @@ export interface ChallanPdfInput {
   date: string;
   fromName: string;
   fromType: string;
+  shipFromAddress?: string | null;
   toName: string;
   toType: string;
   lineItems: ChallanItem[];
@@ -119,19 +120,28 @@ export async function generateChallanPdf(data: ChallanPdfInput): Promise<Buffer>
     margin: M,
   });
 
-  // ── FROM / TO boxes ───────────────────────────────────────────────────────
+  // ── SHIPPED FROM / SHIPPED TO boxes ────────────────────────────────────────
   const HW = (CW - 4) / 2;
   const L2 = M + HW + 4;
-  const FT_H = 22;
+  const sourceAddress = data.shipFromAddress?.trim() || data.issuer.addressLines.join("\n");
+  const sourceAddressLines = sourceAddress ? wrap(sourceAddress, HW - 6, 6.8).slice(0, 4) : [];
+  const FT_H = Math.max(22, 20 + sourceAddressLines.length * 3.1);
   for (const [x, label, name, type] of [
-    [M, "FROM", data.fromName, data.fromType],
-    [L2, "TO", data.toName, data.toType],
+    [M, "SHIPPED FROM", data.fromName, data.fromType],
+    [L2, "SHIPPED TO", data.toName, data.toType],
   ] as Array<[number, string, string, string]>) {
     fillRect(x, y, HW, 6.5, ACCENT);
     box(x, y, HW, FT_H);
     txt(label, x + 3, y + 4.6, { size: 7.5, bold: true, color: WHITE });
     cell(name || "—", x + 3, y + 12.5, HW - 6, { size: 9.5, bold: true, color: INK });
-    txt(typeLabel(type), x + 3, y + 17.8, { size: 7.4, color: MUT });
+    if (x === M) {
+      sourceAddressLines.forEach((line, i) =>
+        cell(line, x + 3, y + 17.2 + i * 3.1, HW - 6, { size: 6.8, color: MUT }),
+      );
+      txt(typeLabel(type), x + 3, y + FT_H - 2.1, { size: 6.8, color: MUT });
+    } else {
+      txt(typeLabel(type), x + 3, y + 17.8, { size: 7.4, color: MUT });
+    }
   }
   if (data.isInterstate) {
     fillRect(L2 + HW - 27, y + FT_H - 7, 25, 5, [160, 100, 0]);

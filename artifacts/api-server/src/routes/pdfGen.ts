@@ -137,6 +137,9 @@ router.post("/pdf/challan", requireModuleAction("page:/transfers", "download"), 
       date: t.transfer_date,
       fromName: t.from_name ?? "—",
       fromType: t.from_type,
+      shipFromAddress: typeof t.ship_from_address === "string" && t.ship_from_address.trim()
+        ? t.ship_from_address.trim()
+        : issuer.addressLines.join("\n"),
       toName: t.to_name ?? "—",
       toType: t.to_type,
       lineItems,

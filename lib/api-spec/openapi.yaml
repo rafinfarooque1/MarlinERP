@@ -531,6 +531,27 @@ paths:
               schema:
                 $ref: "#/components/schemas/StockTransfer"
 
+  /stock/transfers/{id}/ship-from-address:
+    patch:
+      operationId: updateStockTransferShipFromAddress
+      tags: [stock]
+      summary: Save or clear a transfer's shipped-from address override
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ShipFromAddressInput"
+      responses:
+        "200":
+          description: Shipped-from address updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ShipFromAddressResponse"
+
   # ── WAREHOUSES ────────────────────────────────────────────────────────────
   /warehouses:
     get:
@@ -768,6 +789,27 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Sale"
+
+  /sales/{id}/ship-from-address:
+    patch:
+      operationId: updateSaleShipFromAddress
+      tags: [sales]
+      summary: Save or clear an invoice's shipped-from address override
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ShipFromAddressInput"
+      responses:
+        "200":
+          description: Shipped-from address updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ShipFromAddressResponse"
 
   /sales/summary:
     get:
@@ -2590,6 +2632,11 @@ components:
           enum: [pending, in_transit, completed, rejected, cancelled]
         createdAt:
           type: string
+        shipFromAddress:
+          type: ["string", "null"]
+          description: >
+            Per-transfer override for the source address printed on the transfer
+            PDFs. Null uses the current dispatching location address.
 
     StockTransferInput:
       type: object
@@ -2998,6 +3045,29 @@ components:
           type: ["string", "null"]
           maxLength: 2000
           description: Optional plain-text transaction note. Empty notes are omitted from document output.
+        shipFromAddress:
+          type: ["string", "null"]
+          description: >
+            Per-invoice override for the source address printed on the invoice.
+            Null uses the current issuing location address.
+
+    ShipFromAddressInput:
+      type: object
+      required: [address]
+      properties:
+        address:
+          type: ["string", "null"]
+          maxLength: 1000
+          description: >
+            Saved source-address override. Send null or an empty string to
+            return to the current address on the issuing or dispatching location.
+
+    ShipFromAddressResponse:
+      type: object
+      required: [shipFromAddress]
+      properties:
+        shipFromAddress:
+          type: ["string", "null"]
 
     SaleInput:
       type: object
