@@ -112,6 +112,7 @@ function CustomerLedger({ customerId }: { customerId: number }) {
 
 export default function Customers() {
   const perm = usePermission('page:/customers');
+  const canEditCustomers = !perm.isLoading && perm.canEdit;
   const { data: customers = [], isLoading } = useListCustomerManagement();
   const queryClient = useQueryClient();
   const updateCustomerMutation = useUpdateCustomer();
@@ -126,6 +127,7 @@ export default function Customers() {
 
   const openEdit = (c: any) => { setEditItem(c); setIsOpen(true); };
   const toggleCustomer = async (customer: any) => {
+    if (!canEditCustomers) return;
     const isActive = customer.isActive === false;
     if (!isActive && !window.confirm(
       `Disable "${customer.name}"?\n\nIt will remain visible here, but will no longer appear in customer pickers. Existing history will be preserved.`,
@@ -274,7 +276,7 @@ export default function Customers() {
                     {perm.canAdd && Number((c as any).outstandingBalance ?? 0) > 0.009 && (
                     <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" title="Collect payment" onClick={() => setCollectFor({ id: c.id, name: c.name })}><HandCoins className="w-4 h-4" /></Button>
                     )}
-                    {perm.canEdit && (
+                    {canEditCustomers && (
                     <Button
                       variant="ghost"
                       size="icon"
@@ -287,7 +289,7 @@ export default function Customers() {
                       {c.isActive === false ? <UserCheck className="w-4 h-4" /> : <UserX className="w-4 h-4" />}
                     </Button>
                     )}
-                    {perm.canEdit && (
+                    {canEditCustomers && (
                     <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => openEdit(c)}><Pencil className="w-4 h-4" /></Button>
                     )}
                     <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => { setViewItem(c); setActiveTab('details'); }}><Eye className="w-4 h-4" /></Button>
@@ -326,7 +328,7 @@ export default function Customers() {
                   {perm.canAdd && Number((c as any).outstandingBalance ?? 0) > 0.009 && (
                   <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" title="Collect payment" onClick={() => setCollectFor({ id: c.id, name: c.name })}><HandCoins className="w-4 h-4" /></Button>
                   )}
-                  {perm.canEdit && (
+                  {canEditCustomers && (
                   <Button
                     variant="ghost"
                     size="icon"
@@ -339,7 +341,7 @@ export default function Customers() {
                     {c.isActive === false ? <UserCheck className="w-4 h-4" /> : <UserX className="w-4 h-4" />}
                   </Button>
                   )}
-                  {perm.canEdit && (
+                  {canEditCustomers && (
                   <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => openEdit(c)}><Pencil className="w-4 h-4" /></Button>
                   )}
                   <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => { setViewItem(c); setActiveTab('details'); }}><Eye className="w-4 h-4" /></Button>
