@@ -1,13 +1,20 @@
 import { useState, useMemo } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { formatDate } from '@/lib/date';
-import { useListCustomers, useGetCustomerLedger } from '@workspace/api-client-react';
+import {
+  getListCustomerManagementQueryKey,
+  getListCustomersQueryKey,
+  useListCustomerManagement,
+  useGetCustomerLedger,
+  useUpdateCustomer,
+} from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Separator } from '@/components/ui/separator';
-import { Plus, Search, UserCheck, Download, Eye, BookOpen, Pencil, ShieldOff, HandCoins, Users, Wallet } from 'lucide-react';
+import { Plus, Search, UserCheck, UserX, Download, Eye, BookOpen, Pencil, ShieldOff, HandCoins, Users, Wallet } from 'lucide-react';
 import { downloadCSV } from '@/lib/download';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { usePermission } from '@/lib/usePermission';
@@ -21,6 +28,7 @@ import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
 import { EmptyState } from '@/components/app/empty-state';
 import { TableSkeleton } from '@/components/app/loading-skeletons';
 import { TablePager, useClientPage } from '@/components/ui/table-pager';
+import { toast } from 'sonner';
 
 function CustomerLedger({ customerId }: { customerId: number }) {
   const { data, isLoading } = useGetCustomerLedger(customerId);
@@ -104,7 +112,9 @@ function CustomerLedger({ customerId }: { customerId: number }) {
 
 export default function Customers() {
   const perm = usePermission('page:/customers');
-  const { data: customers = [], isLoading } = useListCustomers();
+  const { data: customers = [], isLoading } = useListCustomerManagement();
+  const queryClient = useQueryClient();
+  const updateCustomerMutation = useUpdateCustomer();
   const loc = usePartyLocations();
   const [locFilter, setLocFilter] = useState('all');
   const [search, setSearch] = useState('');
@@ -115,6 +125,28 @@ export default function Customers() {
   const [collectFor, setCollectFor] = useState<{ id: number; name: string } | null>(null);
 
   const openEdit = (c: any) => { setEditItem(c); setIsOpen(true); };
+  const toggleCustomer = async (customer: any) => {
+    const isActive = customer.isActive === false;
+    if (!isActive && !window.confirm(
+      `Disable "${customer.name}"?\n\nIt will remain visible here, but will no longer appear in customer pickers. Existing history will be preserved.`,
+    )) return;
+
+    try {
+      await updateCustomerMutation.mutateAsync({
+        id: customer.id,
+        data: { isActive },
+      });
+      toast.success(isActive ? `"${customer.name}" enabled` : `"${customer.name}" disabled`);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: getListCustomerManagementQueryKey() }),
+        queryClient.invalidateQueries({ queryKey: getListCustomersQueryKey() }),
+        queryClient.invalidateQueries({ queryKey: ['customers'] }),
+      ]);
+      setViewItem((current: any) => current?.id === customer.id ? { ...current, isActive } : current);
+    } catch (error: any) {
+      toast.error(error?.data?.error || error?.message || 'Could not update customer status');
+    }
+  };
 
   const filtered = useMemo(() => customers.filter(c =>
     (c.name.toLowerCase().includes(search.toLowerCase()) ||
@@ -226,8 +258,11 @@ export default function Customers() {
                   <EmptyState icon={UserCheck} title={customers.length === 0 ? 'No customers yet' : 'No customers match this search or location'} hint={customers.length === 0 ? 'Add your first customer account.' : undefined} compact />
                 </TableCell></TableRow>
               ) : pageRows.map(c => (
-                <TableRow key={c.id} className="hover:bg-muted/10">
-                  <TableCell className="font-semibold">{c.name}</TableCell>
+                <TableRow key={c.id} className={`hover:bg-muted/10 ${c.isActive === false ? 'opacity-60' : ''}`}>
+                  <TableCell className="font-semibold">
+                    {c.name}
+                    {c.isActive === false && <span className="ml-2 rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">Disabled</span>}
+                  </TableCell>
                   <TableCell className="text-sm text-muted-foreground">{c.phone || '—'}</TableCell>
                   <TableCell className="text-sm text-muted-foreground">{(c as any).state || '—'}</TableCell>
                   <TableCell className="font-mono text-xs text-muted-foreground">{c.gstNumber || '—'}</TableCell>
@@ -238,6 +273,19 @@ export default function Customers() {
                   <TableCell className="text-right flex items-center justify-end gap-1">
                     {perm.canAdd && Number((c as any).outstandingBalance ?? 0) > 0.009 && (
                     <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" title="Collect payment" onClick={() => setCollectFor({ id: c.id, name: c.name })}><HandCoins className="w-4 h-4" /></Button>
+                    )}
+                    {perm.canEdit && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className={`h-8 w-8 ${c.isActive === false ? 'hover:text-emerald-600' : 'hover:text-destructive'}`}
+                      title={c.isActive === false ? 'Enable customer' : 'Disable customer'}
+                      aria-label={c.isActive === false ? 'Enable customer' : 'Disable customer'}
+                      disabled={updateCustomerMutation.isPending}
+                      onClick={() => void toggleCustomer(c)}
+                    >
+                      {c.isActive === false ? <UserCheck className="w-4 h-4" /> : <UserX className="w-4 h-4" />}
+                    </Button>
                     )}
                     {perm.canEdit && (
                     <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => openEdit(c)}><Pencil className="w-4 h-4" /></Button>
@@ -258,10 +306,13 @@ export default function Customers() {
             )) : filtered.length === 0 ? (
               <EmptyState icon={UserCheck} title={customers.length === 0 ? 'No customers yet' : 'No customers match this search or location'} hint={customers.length === 0 ? 'Add your first customer account.' : undefined} compact />
             ) : pageRows.map(c => (
-              <div key={c.id} className="border border-border rounded-lg p-3">
+              <div key={c.id} className={`border border-border rounded-lg p-3 ${c.isActive === false ? 'opacity-60' : ''}`}>
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
-                    <p className="font-semibold text-sm truncate">{c.name}</p>
+                    <p className="font-semibold text-sm truncate">
+                      {c.name}
+                      {c.isActive === false && <span className="ml-2 rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">Disabled</span>}
+                    </p>
                     <p className="text-xs text-muted-foreground mt-0.5">{c.phone || '—'}</p>
                   </div>
                   <PartyBalance kind="customer" balance={(c as any).outstandingBalance} className="text-sm shrink-0" />
@@ -274,6 +325,19 @@ export default function Customers() {
                 <div className="mt-2 flex items-center justify-end gap-1">
                   {perm.canAdd && Number((c as any).outstandingBalance ?? 0) > 0.009 && (
                   <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" title="Collect payment" onClick={() => setCollectFor({ id: c.id, name: c.name })}><HandCoins className="w-4 h-4" /></Button>
+                  )}
+                  {perm.canEdit && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className={`h-8 w-8 ${c.isActive === false ? 'hover:text-emerald-600' : 'hover:text-destructive'}`}
+                    title={c.isActive === false ? 'Enable customer' : 'Disable customer'}
+                    aria-label={c.isActive === false ? 'Enable customer' : 'Disable customer'}
+                    disabled={updateCustomerMutation.isPending}
+                    onClick={() => void toggleCustomer(c)}
+                  >
+                    {c.isActive === false ? <UserCheck className="w-4 h-4" /> : <UserX className="w-4 h-4" />}
+                  </Button>
                   )}
                   {perm.canEdit && (
                   <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => openEdit(c)}><Pencil className="w-4 h-4" /></Button>
@@ -337,7 +401,7 @@ export default function Customers() {
                 </div>
               </div>
               <Separator />
-              {[['Phone', viewItem.phone || '—'], ['Email', viewItem.email || '—'], ['State', (viewItem as any).state || '—'], ['GSTIN', viewItem.gstNumber || '—'], ['Location', loc.nameOf((viewItem as any).locationType ?? (viewItem as any).location_type, (viewItem as any).locationId ?? (viewItem as any).location_id)], ['Credit Limit', Number((viewItem as any).creditLimit ?? 0) > 0 ? `₹${Number((viewItem as any).creditLimit).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` : 'No limit'], ['Credit Days', String(Number((viewItem as any).creditDays ?? 0) || '—')], ['Address', viewItem.address || '—'], ['Notes', viewItem.notes || '—']].map(([k, v]) => (
+              {[['Status', viewItem.isActive === false ? 'Disabled' : 'Active'], ['Phone', viewItem.phone || '—'], ['Email', viewItem.email || '—'], ['State', (viewItem as any).state || '—'], ['GSTIN', viewItem.gstNumber || '—'], ['Location', loc.nameOf((viewItem as any).locationType ?? (viewItem as any).location_type, (viewItem as any).locationId ?? (viewItem as any).location_id)], ['Credit Limit', Number((viewItem as any).creditLimit ?? 0) > 0 ? `₹${Number((viewItem as any).creditLimit).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` : 'No limit'], ['Credit Days', String(Number((viewItem as any).creditDays ?? 0) || '—')], ['Address', viewItem.address || '—'], ['Notes', viewItem.notes || '—']].map(([k, v]) => (
                 <div key={k} className="flex flex-col gap-1 border-b border-border pb-3">
                   <span className="text-xs text-muted-foreground uppercase tracking-wider">{k}</span>
                   <span className="font-medium">{v}</span>

@@ -1,4 +1,4 @@
-import { pgTable, text, serial, timestamp, numeric } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, timestamp, numeric, boolean } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
@@ -10,6 +10,7 @@ export const customersTable = pgTable("customers", {
   address: text("address"),
   gstNumber: text("gst_number"),
   state: text("state"),
+  isActive: boolean("is_active").notNull().default(true),
   totalPurchases: numeric("total_purchases", { precision: 12, scale: 2 }).notNull().default("0"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),

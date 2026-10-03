@@ -2248,7 +2248,7 @@ export const CancelLeaveResponse = zod.object({
 
 
 /**
- * @summary List all customers
+ * @summary List active customers
  */
 export const ListCustomersResponseItem = zod.object({
   "id": zod.number(),
@@ -2260,6 +2260,7 @@ export const ListCustomersResponseItem = zod.object({
   "totalPurchases": zod.number().optional(),
   "creditLimit": zod.number().optional(),
   "creditDays": zod.number().optional(),
+  "isActive": zod.boolean(),
   "createdAt": zod.string()
 })
 export const ListCustomersResponse = zod.array(ListCustomersResponseItem)
@@ -2288,8 +2289,28 @@ export const CreateCustomerResponse = zod.object({
   "totalPurchases": zod.number().optional(),
   "creditLimit": zod.number().optional(),
   "creditDays": zod.number().optional(),
+  "isActive": zod.boolean(),
   "createdAt": zod.string()
 })
+
+
+/**
+ * @summary List all customers for customer management
+ */
+export const ListCustomerManagementResponseItem = zod.object({
+  "id": zod.number(),
+  "name": zod.string(),
+  "phone": zod.string().nullish(),
+  "email": zod.string().nullish(),
+  "address": zod.string().nullish(),
+  "gstNumber": zod.string().nullish(),
+  "totalPurchases": zod.number().optional(),
+  "creditLimit": zod.number().optional(),
+  "creditDays": zod.number().optional(),
+  "isActive": zod.boolean(),
+  "createdAt": zod.string()
+})
+export const ListCustomerManagementResponse = zod.array(ListCustomerManagementResponseItem)
 
 
 export const GetCustomerParams = zod.object({
@@ -2306,6 +2327,7 @@ export const GetCustomerResponse = zod.object({
   "totalPurchases": zod.number().optional(),
   "creditLimit": zod.number().optional(),
   "creditDays": zod.number().optional(),
+  "isActive": zod.boolean(),
   "createdAt": zod.string()
 })
 
@@ -2321,7 +2343,8 @@ export const UpdateCustomerBody = zod.object({
   "address": zod.string().optional(),
   "gstNumber": zod.string().optional(),
   "creditLimit": zod.number().optional(),
-  "creditDays": zod.number().optional()
+  "creditDays": zod.number().optional(),
+  "isActive": zod.boolean().optional()
 })
 
 export const UpdateCustomerResponse = zod.object({
@@ -2334,6 +2357,7 @@ export const UpdateCustomerResponse = zod.object({
   "totalPurchases": zod.number().optional(),
   "creditLimit": zod.number().optional(),
   "creditDays": zod.number().optional(),
+  "isActive": zod.boolean(),
   "createdAt": zod.string()
 })
 

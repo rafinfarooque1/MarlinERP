@@ -14,4 +14,5 @@ export interface CustomerUpdate {
   gstNumber?: string;
   creditLimit?: number;
   creditDays?: number;
+  isActive?: boolean;
 }

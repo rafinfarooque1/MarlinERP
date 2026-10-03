@@ -3,7 +3,7 @@
 - [Security hardening](security-hardening.md) + [Phase 1 stabilization](phase1-stabilization.md) — bcryptjs, global requireAuth, rate limits, HMAC v2 tokens, write guards; default-deny perm seeding, 8-hr expiry; QA in phase1-qa-findings.md.
 - [API client hook names](api-client-hooks.md) — Many hook names differ from intuition; several entities are create-only (no update/delete). Always grep the generated file first.
 - [Permission system](permissions.md) — one row per sidebar link keyed `page:<href>`; hierarchies/permissions GETs must stay unguarded; migration fallback must GRANT; duplicates break authz determinism.
-- [Custom API client hooks](custom-hooks.md) — New hooks go in lib/api-client-react/src/<name>.ts + export from index.ts; must run `pnpm tsc` in lib/api-client-react after adding files to generate .d.ts types.
+- [Hook ownership](generated-mutation-ownership.md) + [custom hooks](custom-hooks.md) — OpenAPI uses generated hooks; custom hooks need barrel exports and package typecheck.
 - [Raw-migration columns](raw-migration-columns.md) + [Item prices date range](item-prices-dates.md) — startup-migration columns are invisible to drizzle (db.select() silently drops them) and generated types lack them; raw SQL + casts.
 - [Document/PDF delivery](invoice-pdf-links.md) + [letterhead](document-letterhead.md) + [renderers](document-renderers.md) + [PDF verification](voucher-print-verification.md) — one server renderer, stored-row identity, measured geometry, and safe share paths.
 - [Accounts derivation & numbering](accounts-derivation.md) — books derive from buildDerivedPostings(); customer legs GROSS since Aug 2026 (invoice Dr + per-payment Cr; net fallback = walk-ins only); sale-linked receipts stay excluded; ALL GST via lineTaxHeads(); never COUNT(*)-number vouchers.
@@ -11,8 +11,7 @@
 - [ERP integration conflicts](erp-integration-conflicts.md) — modules disagree: 5 stock qty stores (item-table col is STALE), materials have no location, P&L DOES see journal vouchers, transfer JVs already post tax
 - [Inventory batch layer](inventory-batches.md) — additive lot layer over stock_entries (qty truth); FEFO clamped consumption, shortfall = "Untracked"; zod strips unknown keys so optional passthrough fields read from raw body.
 - [pg query gotchas](pg-gotchas.md) — date columns return JS Date; creates return 201; check-then-insert needs one txn + advisory lock; a backtick in a SQL template comment breaks the build.
-- [Codegen staleness trap](codegen-staleness.md) — the spec GATES writes (a field absent from Create/Update body is stripped silently despite a real column); also flips optional→required, and under-declares responses.
-- [Generated mutation ownership](generated-mutation-ownership.md) — when an endpoint enters OpenAPI, use its generated hook and `{data}` contract; custom same-name exports collide and break the client barrel.
+- [Codegen contract](codegen-staleness.md) + [Vite refresh](openapi-codegen-vite-refresh.md) — spec gates fields; restart Vite after codegen if imports go missing.
 - [Migration DDL drift / 42P10](migration-ddl-drift.md) — two causes: constraints inside CREATE TABLE IF NOT EXISTS never reach live DBs, and widening a natural key strands every older ON CONFLICT target.
 - [Boot migration observability](boot-migration-observability.md) — prod discards stdout until the port opens, so a swallowed mid-migration throw silently skips everything after it; one-time conversions need their own top-level step + boot_status row.
 - [Sales settlement](sales-settlement.md) + [Sale discount model](sale-discount-model.md) — only 'credit' is credit-controlled, dues = total−paid; per-unit item + pre-tax bill (paise-exact) + post-tax coupon; legacy lines keep line-total semantics.
@@ -21,13 +20,12 @@
 - [Stock Ledger](stock-ledger.md) — append-only audit table; txn_date = business date (backdating, Closing(D)=Opening(D+1)); write strategy varies by route; running balance via window fn.
 - [GST reconciliation](gst-recon-attribution.md) + [transfer classification](gst-transfer-classification.md) + [place of supply](gst-place-of-supply.md) + [party GST](party-gst-persistence.md) — reconcile by document/JV attribution; classify by GSTIN/state; persist validated identity.
 - [Unified sidebar architecture](unified-sidebar.md) — ONE nav for all users; Sales/Accounts switcher removed; getNavGroups() replaces getAccountsNavGroups()+getSalesNavItems(); getPermissionGroups() replaces getPermissionSegments().
-- [Payroll workflow](payroll-workflow.md) — drafts LIVE-refresh on GET (no Generate buttons); approval gates on unclassified absences (409/confirmLop); per-employee ledgers; advances auto-deducted at generate.
-- [LOP leave policy](lop-leave-policy.md) — wd = calendar days of the month (payrollWorkingDays retired/ignored); ONE formula (dayContribution/monthLeaveSummary); NULL leave snapshot = omit, never 0; suites pin policy + derive DIM.
+- [Payroll workflow](payroll-workflow.md) + [LOP policy](lop-leave-policy.md) — drafts refresh on GET; unresolved absences gate approval; working days use calendar days; pending leave pays zero.
 - [Money and collection flows](payment-modes-invoice-share.md) + [voucher ownership](money-voucher-ownership.md) + [cash/bank availability](cash-bank-multilocation.md) + [receipt routing](electronic-collection-routing.md) — derive mode and ownership from the effective ledger/location; preserve legacy modes.
 - [Polymorphic stock_entries](polymorphic-stock-entries.md) — OVERLAPPING ids, scope material_type everywhere; master existence enforced by KEY SHARE trigger (no FK possible); orphan ledger keys poison backdated statements.
 - [Module retirement pattern](module-retirement-pattern.md) — TOTAL hide (no badge/placeholder); GETs keep returning data; page retirement = shared RETIRED_PAGE_HREFS set (nav+routes+perm matrix), keys stay registered.
 - [Guard the effective value](effective-value-guards.md) — body-only write guards are routinely bypassed: session stamping and partial PATCHes both route around them. Compute the resulting state, then guard that, then write.
-- [Product identity](product-identity.md) — code prefixes follow the DISPLAY label (materials="Raw Material"→RM); EAN-13 in the `2` in-store range; inactive blocks CREATE only; HO-only is a location rule.
+- [Product identity](product-identity.md) + [Rate terminology](rate-terminology-compatibility.md) — prefixes follow display labels; UI uses "Rate" while internal MRP aliases remain; inactive blocks CREATE.
 - [ERP write-path concurrency](erp-write-path-concurrency.md) — lock order = labour day+location, then item, then rows; reversals must read their lines from a row locked inside the txn.
 - [Verifying costing on live data](verifying-costing-on-live-data.md) — create+delete of a batch permanently lowers item avg cost; a balanced TB does NOT prove the test left no trace.
 - [Stock reservations](stock-reservations.md) — hold reduces available, in_transit does NOT (already deducted); lock the stock row inside the deducting txn; `hold` has no producer yet, keep it.
@@ -109,15 +107,13 @@
 - [Purchase other charges](purchase-other-charges.md) + [Sale other charges](sale-other-charges.md) — ASYMMETRIC: goods figures stay goods-only but vendor owed goods+charges; sale total INCLUDES charges (no GST); returns keep/never-refund charges BY DESIGN.
 - [Purchase vendor invoice date](purchase-vendor-invoice-date.md) — required on POST (broke 10 test fixtures at once), omit=keep/null=clear on PATCH, legacy NULL never backfilled; zztest-prefixed temp users get deleted by suite cleanup mid-run.
 - [Shared customer form & infinite sales list](shared-customer-form.md) — ONE CustomerFormDialog for every entry point (branch payloads carry no location); infinite sales key must keep '/api/sales' as element 0.
-- [Cash & Bank ↔ Chart integration](cash-bank-chart-integration.md) — CBA- ledgers, derived balances, code-guarded heads (never is_system_group), one-sided openings need the STD-OB-ADJ counterweight; TB must fold openings.
-- [Shared Cash/Bank/Online availability](cash-bank-multilocation.md) — availability is a location junction; every new money root must reach account trees, voucher locations, and ownership guards.
+- [Cash/bank chart](cash-bank-chart-integration.md) + [location availability](cash-bank-multilocation.md) — CBA balances derive from ledgers; new roots must reach trees, vouchers, and ownership guards.
 - [Located import compare pack](import-compare-pack.md) — pack scopes via opt-in identity sets on owning filter types; wizard location is picked at TRIAL time and approval refuses any other location.
 - [Collections & voucher attribution](electronic-collection-routing.md) + [Receive Into](receive-into-collections.md) — sales route by ledger; vouchers keep Electronic Clearing postings and store platform IDs for reconciliation.
-- [Transfer opening-stock adjustments](transfer-opening-adjustments.md) — adjustment = dated transfer movements + closing transit − opening transit; keep transfer postings out of operating P&L totals.
+- [Transfer adjustments](transfer-opening-adjustments.md) + [transfer accounting](transfer-accounting.md) — location P&Ls show Transfer-Out/In; transit stays sender-owned and out of operating totals.
 - [Warehouse lifecycle](warehouse-lifecycle.md) — disabled writes are guarded; ordinary lists, reports, stock, GSTR-1/docs hide disabled history; consolidated books stay complete; deletion is atomic.
 - [Company holidays & weekly offs](holidays-weekly-offs.md) — stored rows outvote the calendar; untracked months never synthesise; `until` bounds balance views only; moved cutover fakes "accrual writes ₹0" suite failures.
-- [Expo Metro in pnpm monorepo](expo-metro-pnpm.md) — watchFolders must include root node_modules or every import fails (blank app, JSON bundle error); it's config, not cache.
-- [Expo static build routing](expo-static-build.md) — Metro HTTP bundle and asset URLs resolve from the workspace root; use workspace-relative paths and an available local port.
+- [Expo Metro setup](expo-metro-pnpm.md) + [static build routing](expo-static-build.md) — watch root node_modules; bundles and assets resolve from workspace-relative paths.
 - [Expo pnpm type resolution](expo-pnpm-type-resolution.md) — strict virtual-store links can hide Expo peer types; direct dependency + narrow tsconfig mapping fixes typecheck without changing runtime.
 - [RN Web dialogs](rn-web-dialogs.md) — Alert.alert is a no-op on web; all confirms/error popups in the employee app go through lib/dialogs.ts.
 - [401 = dead session contract](session-401-contract.md) — clients log out on any 401; wrong typed credentials must be 400; self-service GETs self-scope instead of 403 (a 403 zeroes mobile tiles silently).
@@ -136,7 +132,7 @@
 - [UI modernization sweep](ui-modernization-sweep.md) — artifacts/marlin-erp/docs/UI_CONVENTIONS.md (in the web artifact, NOT workspace docs/) is the binding page-style contract; page kit in components/app/*; supersedes "sidebar frozen".
 - [Month Wise columns](periodic-breakdown.md) — ONE toggle folds month columns into the statements (Day Wise removed); P&L cells sum to Total, BS cells are as-at month end; one aggregated endpoint.
 - [Dispatch board](dispatch-board.md) — per-document status layer pattern: additive table, absence-of-row = initial status, forward-only transitions re-checked under the row lock; books-unchanged provable by hash.
-- [Books drill-down & exports](books-drilldown.md) — statement/day-book rows carry provenance keys mapped in ONE drilldown.ts; targets open via ?view= params; new export pages must join REPORT_EXPORT_PAGES.
+- [Books drill-downs](books-drilldown.md) + [report parity](report-parity-gates.md) — map statement rows to sources and verify API totals against PDF/XLSX exports.
 - [Workspace reset & rollback semantics](workspace-reset-recovery.md) — merge/cancel events revert TRACKED files to HEAD (untracked survive); re-verify wiring by marker greps; surviving tests + pg_dump -s are the recovery contract.
 - [Dashboard drill-downs & parity](dashboard-drilldowns.md) — tile → report via ?view/range params (stripped on mount, location rides headers); parity suite pins every tile == its report's total.
 - [Client-side image capture](dashboard-share-capture.md) — html2canvas chokes on Tailwind v4 oklab; use html-to-image + crossorigin font links; prebundle lazy deps; never disable the button on isLoading.
@@ -148,12 +144,9 @@
 - [HR employee lifecycle](hr-employee-lifecycle.md) — app-created employees carry a pay_components row (delete removes it, history blocks with 400); leave cancel = status flip; POS cash sale payments are receipt-backed → system-delete the receipt before cancel.
 - [Bank Book reconciliation identity](bank-book-reconciliation.md) — status keys are exact posting ledger + derived entry id; one-step reconciliation is metadata-only and never posts accounting
 - [Salesman assignment](salesman-assignment.md) — store employee ID plus name snapshot; validate new assignments by activity/location and grandfather unchanged historical assignments
-- [Rate terminology compatibility](rate-terminology-compatibility.md) — user-facing MRP terminology is Rate; preserve internal mrp/masterMrp fields and API aliases for compatibility
 - [Location-authoritative inventory costing](location-cost-checkpoints.md) — global product average changes must not revalue unchanged branch stock or create artificial Gross Profit
 - [Release-gate browser verification](release-gate-browser.md) — use the preview proxy for authenticated checks; report drill-down query removal is intentional and must be verified in rendered state
 - [Report cache 304 handling](report-cache-304.md) — report fetches must bypass 304 revalidation when the client cannot recover the cached response body
 - [Customer receipt ledger aggregation](receipt-ledger-aggregation.md) — allocation rows are settlement metadata; one receipt posts one customer credit for its full amount
-- [Report parity gates](report-parity-gates.md) — verify API-derived screen anchors against parsed PDF/XLSX content; a missing UI export action is a real failure
 - [Sales report definitions](sales-report-definitions.md) — Sales Register includes invoice-level charges; By Item is explicitly merchandise-line-only
-- [Transfer accounting](transfer-accounting.md) — location P&Ls show Transfer-Out/In; transit stays sender-owned; consolidated P&L and the location-pair payable remain unchanged
-- [OpenAPI codegen & Vite refresh](openapi-codegen-vite-refresh.md) — Orval temporarily removes generated client files; restart Vite after codegen before treating missing-module logs as persistent
+- [Customer disable visibility](customer-disable-visibility.md) — disabled customers remain in Customer management for reactivation and are excluded from all other customer lists and pickers

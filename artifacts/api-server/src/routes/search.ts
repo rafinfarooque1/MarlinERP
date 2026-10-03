@@ -69,6 +69,7 @@ router.get("/search", async (req, res): Promise<void> => {
       ? pool.query(
           `SELECT c.id, c.name, c.phone FROM customers c
            WHERE (c.name ILIKE $1 OR c.phone ILIKE $1) AND ${custScope}
+             AND COALESCE(c.is_active, true)
              AND ${visibleLocationSql("c.location_type", "c.location_id")}
            ORDER BY c.name LIMIT 8`,
           custParams,
