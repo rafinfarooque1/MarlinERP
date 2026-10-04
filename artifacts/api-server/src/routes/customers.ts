@@ -325,7 +325,18 @@ router.get("/customers/:id", requireModuleView("page:/customers"), async (req, r
   res.json({ ...row, ...credit, totalPurchases: Number(row.totalPurchases) });
 });
 
-router.patch("/customers/:id", requireModuleAction("page:/customers", "edit"), async (req, res): Promise<void> => {
+router.patch(
+  "/customers/:id",
+  (req, res, next) => {
+    // Toggling active status is the reversible disable/enable action and is
+    // controlled by Delete permission. All other customer changes still need
+    // Edit; mixed status + field updates cannot use the Delete-only path.
+    const body = req.body ?? {};
+    const keys = Object.keys(body);
+    const statusOnly = keys.length === 1 && keys[0] === "isActive";
+    return requireModuleAction("page:/customers", statusOnly ? "delete" : "edit")(req, res, next);
+  },
+  async (req, res): Promise<void> => {
   const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const id = parseInt(raw, 10);
   const data = pickCustomer(req.body);
@@ -411,7 +422,8 @@ router.patch("/customers/:id", requireModuleAction("page:/customers", "edit"), a
     ...row, ...credit, totalPurchases: Number(row.totalPurchases),
     ...(reclass ? { invoiceReclassification: reclass } : {}),
   });
-});
+  },
+);
 
 router.delete("/customers/:id", requireModuleAction("page:/customers", "delete"), async (req, res): Promise<void> => {
   const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
