@@ -647,8 +647,9 @@ function WarehouseRemoveFlow({ wh, onClose, onChanged }: { wh: WarehouseRow; onC
             <DialogHeader>
               <DialogTitle>Remove “{wh.name}”?</DialogTitle>
               <DialogDescription>
-                Disabling is recommended: it blocks all new transactions while every past
-                invoice, report and ledger stays viewable and printable. You can re-enable it any time.
+                Disabling blocks new transactions and hides this warehouse from ordinary
+                operational views while keeping its records intact. Re-enable it to restore
+                those views; consolidated accounting remains complete.
               </DialogDescription>
             </DialogHeader>
 

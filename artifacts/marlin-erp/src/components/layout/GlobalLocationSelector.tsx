@@ -15,7 +15,7 @@
  * request. Head Office users' selection is also persisted server-side (a
  * display preference), so it follows them across browsers.
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useGetMe, useListWarehouses, useListOutlets, customFetch } from '@workspace/api-client-react';
 import { useLocationContext, ALL_LOCATIONS, type LocationState } from '@/lib/locationContext';
 import { useOutletsEnabled } from '@/lib/useFeatureFlags';
@@ -44,14 +44,23 @@ export function GlobalLocationSelector({ collapsed = false }: { collapsed?: bool
   const { data: user } = useGetMe();
   const { locationState, setLocation } = useLocationContext();
   const { outletsEnabled } = useOutletsEnabled();
-  const { data: warehouses = [] } = useListWarehouses();
-  const { data: outlets = [] } = useListOutlets();
+  const { data: warehouses = [], isSuccess: warehousesLoaded } = useListWarehouses();
+  const { data: outlets = [], isSuccess: outletsLoaded } = useListOutlets();
   const [multiOpen, setMultiOpen] = useState(false);
   const [draftMultiKeys, setDraftMultiKeys] = useState<string[]>([]);
 
   const branchType = (user as any)?.branchType as 'headoffice' | 'warehouse' | 'outlet' | undefined;
   const isLocked = branchType === 'warehouse' || branchType === 'outlet';
   const myBranchId = Number((user as any)?.branchId) || 0;
+  const locationOptions = useMemo(() => [
+    { key: 'headoffice', name: 'Head Office' },
+    ...(warehouses as any[]).map((w) => ({ key: `warehouse:${w.id}`, name: w.name })),
+    ...(outletsEnabled ? (outlets as any[]).map((o) => ({ key: `outlet:${o.id}`, name: o.name })) : []),
+  ], [warehouses, outlets, outletsEnabled]);
+  const locationOptionByKey = useMemo(
+    () => new Map(locationOptions.map(option => [option.key, option])),
+    [locationOptions],
+  );
 
   // The context persists in localStorage across logins, so a location-locked
   // employee can inherit another user's selection on a shared browser. Their
@@ -61,20 +70,50 @@ export function GlobalLocationSelector({ collapsed = false }: { collapsed?: bool
   useEffect(() => {
     if (!isLocked || !branchType || !myBranchId) return;
     const list = branchType === 'warehouse' ? (warehouses as any[]) : (outlets as any[]);
-    const resolvedName = list.find((l) => l.id === myBranchId)?.name ?? '';
+    const listLoaded = branchType === 'warehouse' ? warehousesLoaded : outletsLoaded;
+    const resolvedName = list.find((l) => Number(l.id) === myBranchId)?.name;
+    const name = resolvedName ?? (listLoaded ? 'Inactive location' : locationState.locationName || '');
     const inSync =
       locationState.locationType === branchType &&
       locationState.locationId === myBranchId &&
-      (!resolvedName || locationState.locationName === resolvedName);
+      locationState.locationName === name;
     if (inSync) return;
     setLocation({
       locationType: branchType,
       locationId: myBranchId,
-      locationName: resolvedName || locationState.locationName || '',
+      locationName: name,
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isLocked, branchType, myBranchId, warehouses, outlets,
+  }, [isLocked, branchType, myBranchId, warehouses, outlets, warehousesLoaded, outletsLoaded,
       locationState.locationType, locationState.locationId, locationState.locationName]);
+
+  // A Head Office browser can keep a location selection in local storage after
+  // another admin disables that warehouse. Remove inactive single/multi-location
+  // selections once the active location lists have loaded.
+  useEffect(() => {
+    if (!user || isLocked || !warehousesLoaded || !outletsLoaded) return;
+    if (locationState.locationKeys?.length) {
+      const validKeys = locationState.locationKeys.filter(key => locationOptionByKey.has(key));
+      if (validKeys.length === locationState.locationKeys.length) return;
+      const next = validKeys.length
+        ? {
+            ...locationState,
+            locationKeys: validKeys,
+            locationNames: validKeys.map(key => locationOptionByKey.get(key)?.name ?? key),
+            locationName: `${validKeys.length} locations`,
+          }
+        : ALL_LOCATIONS;
+      setLocation(next);
+      persistPref(next);
+      return;
+    }
+    if (locationState.locationType !== 'warehouse' && locationState.locationType !== 'outlet') return;
+    if (locationOptionByKey.has(`${locationState.locationType}:${locationState.locationId}`)) return;
+    setLocation(ALL_LOCATIONS);
+    persistPref(ALL_LOCATIONS);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, isLocked, warehousesLoaded, outletsLoaded, locationOptionByKey,
+      locationState.locationType, locationState.locationId, locationState.locationKeys]);
 
   // Hydrate a Head Office user's server-side preference — but only when this
   // browser has no local selection yet (local always wins once it exists).
@@ -112,9 +151,13 @@ export function GlobalLocationSelector({ collapsed = false }: { collapsed?: bool
       : <Layers className="w-4 h-4 text-primary shrink-0" />;
 
   const activeName = isLocked
-    ? (locationState.locationName || (branchType === 'warehouse' ? 'Warehouse' : 'Outlet'))
+    ? (locationOptionByKey.get(`${branchType}:${myBranchId}`)?.name
+      ?? ((branchType === 'warehouse' ? warehousesLoaded : outletsLoaded)
+        ? 'Inactive location'
+        : locationState.locationName || 'Location'))
     : (locationState.locationType === 'warehouse' || locationState.locationType === 'outlet')
-    ? (locationState.locationName || 'Location')
+    ? (locationOptionByKey.get(`${locationState.locationType}:${locationState.locationId}`)?.name
+      ?? (warehousesLoaded && outletsLoaded ? 'All Locations' : locationState.locationName || 'Location'))
     : 'All Locations';
 
   // ── Collapsed sidebar: icon + tooltip only ────────────────────────────────
@@ -176,11 +219,6 @@ export function GlobalLocationSelector({ collapsed = false }: { collapsed?: bool
     setLocation(next); // provider refetches the whole ERP view
     persistPref(next);
   };
-  const locationOptions = [
-    { key: 'headoffice', name: 'Head Office' },
-    ...(warehouses as any[]).map((w) => ({ key: `warehouse:${w.id}`, name: w.name })),
-    ...(outletsEnabled ? (outlets as any[]).map((o) => ({ key: `outlet:${o.id}`, name: o.name })) : []),
-  ];
   const appliedMultiKeys = locationState.locationKeys ?? [];
   const appliedSingleKey =
     locationState.locationType === 'headoffice'

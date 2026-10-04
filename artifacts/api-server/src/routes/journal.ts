@@ -14,6 +14,7 @@ import { outletWritesBlocked } from "../lib/featureFlags";
 import { respondIfMonthLocked, isMonthLocked, ymOfDate, monthLockedBody } from "../lib/periodLock";
 import { isLevelOneAdmin, ADMIN_DELETE_ERROR } from "../lib/adminGate";
 import { parsePartyLedgerCode } from "../lib/advanceLedgers";
+import { visibleLocationSql } from "../lib/warehouseVisibility";
 import {
   interBranchTransferLedgerCode,
   transferPairPostingTargets,
@@ -548,6 +549,7 @@ router.get("/accounts/journal-vouchers", requireModuleView("page:/accounts/vouch
       conds.push(`v.location_id = $${params.length}`);
     }
   }
+  conds.push(visibleLocationSql("COALESCE(v.location_type, 'headoffice')", "COALESCE(v.location_id, 0)"));
   if (type && JV_TYPES.has(type)) { params.push(type); conds.push(`v.voucher_type = $${params.length}`); }
   if (isDate(fromDate)) { params.push(fromDate); conds.push(`v.voucher_date >= $${params.length}`); }
   if (isDate(toDate))   { params.push(toDate);   conds.push(`v.voucher_date <= $${params.length}`); }
@@ -594,12 +596,18 @@ router.get("/accounts/journal-vouchers", requireModuleView("page:/accounts/vouch
 router.get("/accounts/voucher-locations", requireModuleView(["page:/accounts/vouchers", "page:/operations/receipt-voucher", "page:/operations/payment-voucher", "page:/sales/pos", "page:/outstanding", "page:/customers"]), async (req, res): Promise<void> => {
   const employee = (req as any).employee as { branchType?: string; branchId?: number } | undefined;
   const { rows: whs } = await pool.query(
-    `SELECT id, name, cash_ledger_id FROM warehouses ORDER BY name`
+    `SELECT id, name, cash_ledger_id FROM warehouses WHERE disabled_at IS NULL ORDER BY name`
   );
   // Retired outlets are a total hide — they take no new activity, vouchers included.
   const outs = (await outletWritesBlocked(pool))
     ? []
-    : (await pool.query(`SELECT id, name, cash_ledger_id FROM outlets ORDER BY name`)).rows;
+    : (await pool.query(
+      `SELECT o.id, o.name, o.cash_ledger_id
+         FROM outlets o
+         LEFT JOIN warehouses w ON w.id = o.warehouse_id
+        WHERE w.disabled_at IS NULL
+        ORDER BY o.name`,
+    )).rows;
 
   const ownedMap = await locationOwnedLedgerMap();
   const hoCashBank = await ledgerIdsUnderCodes(["STD-CASH", "STD-BANK", "STD-ONLINE"]);
@@ -736,6 +744,14 @@ router.post("/accounts/journal-vouchers", requireModuleAction("page:/accounts/vo
 
 router.get("/accounts/journal-vouchers/:id", requireModuleView("page:/accounts/vouchers"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
+  const { rows: [visibleVoucher] } = await pool.query(
+    `SELECT v.id
+       FROM journal_vouchers v
+      WHERE v.id = $1
+        AND ${visibleLocationSql("COALESCE(v.location_type, 'headoffice')", "COALESCE(v.location_id, 0)")}`,
+    [id],
+  );
+  if (!visibleVoucher) { res.status(404).json({ error: "Voucher not found" }); return; }
   const voucher = await fetchVoucher(id);
   if (!voucher) { res.status(404).json({ error: "Voucher not found" }); return; }
   // LBAC: a branch user may only read vouchers stamped with their own
