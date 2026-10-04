@@ -113,6 +113,7 @@ function CustomerLedger({ customerId }: { customerId: number }) {
 export default function Customers() {
   const perm = usePermission('page:/customers');
   const canEditCustomers = !perm.isLoading && perm.canEdit;
+  const canToggleCustomerStatus = !perm.isLoading && perm.canDelete;
   const { data: customers = [], isLoading } = useListCustomerManagement();
   const queryClient = useQueryClient();
   const updateCustomerMutation = useUpdateCustomer();
@@ -127,7 +128,7 @@ export default function Customers() {
 
   const openEdit = (c: any) => { setEditItem(c); setIsOpen(true); };
   const toggleCustomer = async (customer: any) => {
-    if (!canEditCustomers) return;
+    if (!canToggleCustomerStatus) return;
     const isActive = customer.isActive === false;
     if (!isActive && !window.confirm(
       `Disable "${customer.name}"?\n\nIt will remain visible here, but will no longer appear in customer pickers. Existing history will be preserved.`,
@@ -276,7 +277,7 @@ export default function Customers() {
                     {perm.canAdd && Number((c as any).outstandingBalance ?? 0) > 0.009 && (
                     <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" title="Collect payment" onClick={() => setCollectFor({ id: c.id, name: c.name })}><HandCoins className="w-4 h-4" /></Button>
                     )}
-                    {canEditCustomers && (
+                    {canToggleCustomerStatus && (
                     <Button
                       variant="ghost"
                       size="icon"
@@ -328,7 +329,7 @@ export default function Customers() {
                   {perm.canAdd && Number((c as any).outstandingBalance ?? 0) > 0.009 && (
                   <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" title="Collect payment" onClick={() => setCollectFor({ id: c.id, name: c.name })}><HandCoins className="w-4 h-4" /></Button>
                   )}
-                  {canEditCustomers && (
+                  {canToggleCustomerStatus && (
                   <Button
                     variant="ghost"
                     size="icon"
