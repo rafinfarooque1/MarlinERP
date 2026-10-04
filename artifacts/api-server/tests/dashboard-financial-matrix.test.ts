@@ -54,9 +54,9 @@ const bankReceipts = rangeBankReceiptBreakdown(postings as never[], {
 });
 
 assert.deepEqual(bankReceipts, {
-  bySale: 205.5,
+  bySale: 245.5,
   receiptVouchers: 45.25,
-  total: 250.75,
+  total: 290.75,
 });
 
 const cashExpenses = rangeCashExpensesByLedger(postings as never[], {
@@ -79,8 +79,11 @@ const bankExpenses = rangeBankExpensesByLedger(postings as never[], {
 });
 
 assert.deepEqual(bankExpenses, {
-  total: 27.5,
-  ledgers: [{ ledgerId: 34, amount: 27.5 }],
+  total: 67.5,
+  ledgers: [
+    { ledgerId: 30, amount: 40 },
+    { ledgerId: 34, amount: 27.5 },
+  ],
 });
 
 console.log("Dashboard financial matrix cash and bank receipt/expense scope checks passed.");

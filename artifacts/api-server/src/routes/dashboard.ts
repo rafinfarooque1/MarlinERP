@@ -972,7 +972,7 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
     const postingLocation = location.locationType === "headoffice"
       ? ({ type: "headoffice", id: null } as const)
       : ({ type: location.locationType as "warehouse" | "outlet", id: location.locationId } as const);
-    const [financials, opening] = await Promise.all([
+    const [financials, opening, reconciliationPending] = await Promise.all([
       companyFinancials(cachedPostings, {
         fromDate: fromDate || null,
         toDate: toDate || null,
@@ -981,6 +981,10 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       matrixOpeningToDate
         ? companyBalances(cachedPostings, { toDate: matrixOpeningToDate, location: postingLocation })
         : Promise.resolve({ cashBalance: 0, bankBalance: 0 }),
+      reconciliationPendingAmount({
+        location: postingLocation,
+        includePayments: false,
+      }),
     ]);
     const flowOptions = {
       fromDate: fromDate || null,
@@ -992,10 +996,6 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
     const bankReceiptBreakdown = rangeBankReceiptBreakdown(matrixPostings as never[], flowOptions);
     const cashExpenseBreakdown = rangeCashExpensesByLedger(matrixPostings as never[], flowOptions);
     const bankExpenseBreakdown = rangeBankExpensesByLedger(matrixPostings as never[], flowOptions);
-    const reconciliationPending = await reconciliationPendingAmount({
-      location: postingLocation,
-      includePayments: false,
-    });
     return {
       location,
       financials,
@@ -1019,7 +1019,7 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
   if (scope.isHeadOffice) {
     const location = { locationType: "company", locationId: 0, name: "Unallocated" };
     const postingLocation = { type: "company", id: null } as const;
-    const [financials, opening] = await Promise.all([
+    const [financials, opening, reconciliationPending] = await Promise.all([
       companyFinancials(cachedPostings, {
         fromDate: fromDate || null,
         toDate: toDate || null,
@@ -1028,6 +1028,10 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       matrixOpeningToDate
         ? companyBalances(cachedPostings, { toDate: matrixOpeningToDate, location: postingLocation })
         : Promise.resolve({ cashBalance: 0, bankBalance: 0 }),
+      reconciliationPendingAmount({
+        location: postingLocation,
+        includePayments: false,
+      }),
     ]);
     const flowOptions = {
       fromDate: fromDate || null,
@@ -1041,10 +1045,6 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       ...flowOptions,
     });
     const bankExpenseBreakdown = rangeBankExpensesByLedger(matrixPostings as never[], flowOptions);
-    const reconciliationPending = await reconciliationPendingAmount({
-      location: postingLocation,
-      includePayments: false,
-    });
     matrixLocationFigures.push({
       location,
       financials,
