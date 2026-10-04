@@ -779,6 +779,9 @@ router.get("/accounts/payments", requireModuleView(["page:/accounts/vouchers", "
       where += ` AND COALESCE(p.location_id, 0) = $${params.length}`;
     }
   }
+  // Operational voucher registers hide records owned by disabled locations;
+  // consolidated accounting remains complete through the books endpoints.
+  where += ` AND ${visibleLocationSql("COALESCE(p.location_type, 'headoffice')", "COALESCE(p.location_id, 0)")}`;
   const result = await pool.query(`
     SELECT p.*, 
       pf.name AS paid_from_name,
@@ -1789,6 +1792,7 @@ router.get("/accounts/receipts", requireModuleView(["page:/accounts/vouchers", "
       where += ` AND COALESCE(r.location_id, 0) = $${params.length}`;
     }
   }
+  where += ` AND ${visibleLocationSql("COALESCE(r.location_type, 'headoffice')", "COALESCE(r.location_id, 0)")}`;
   const result = await pool.query(`
     SELECT r.*,
       rf.name AS received_from_name,

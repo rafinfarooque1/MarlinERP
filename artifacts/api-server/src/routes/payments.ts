@@ -9,6 +9,7 @@ import { COLLECTION_METHODS } from "../lib/paymentModes";
 import { getUserDataScope, scopeSalesWhere } from "../lib/dataScope";
 import { callerLocation } from "../lib/moneyScope";
 import { loadPaymentPosition, computePaymentPosition } from "../lib/salePaymentPosition";
+import { visibleLocationSql } from "../lib/warehouseVisibility";
 
 const router = Router();
 
@@ -36,7 +37,10 @@ router.get("/sales/:id/payments", requireModuleView("page:/sales/pos"), async (r
   const readScope = await getUserDataScope((req as any).employee);
   const readParams: unknown[] = [saleId];
   const { rows: [visibleSale] } = await pool.query(
-    `SELECT s.id FROM sales s WHERE s.id = $1 AND ${scopeSalesWhere(readScope, readParams)}`,
+    `SELECT s.id FROM sales s
+      WHERE s.id = $1
+        AND ${scopeSalesWhere(readScope, readParams)}
+        AND ${visibleLocationSql("COALESCE(s.location_type, 'outlet')", "COALESCE(s.location_id, s.outlet_id)")}`,
     readParams
   );
   if (!visibleSale) { res.status(404).json({ error: "Sale not found" }); return; }
