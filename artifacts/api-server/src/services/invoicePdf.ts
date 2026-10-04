@@ -1318,7 +1318,20 @@ export async function renderInvoicePdf(data: InvoiceData): Promise<{ buffer: Buf
     const payW  = hasQr && bankRows.length > 0 ? 57 : bankRows.length > 0 || hasQr ? HW : CW;
     const qrW   = hasQr ? (bankRows.length > 0 ? 49 : CW - payW - GAP) : 0;
     const bankW = bankRows.length > 0 ? CW - payW - qrW - (hasQr ? GAP * 2 : GAP) : 0;
-    const PAY_H = Math.max(40, 13.5 + bankRows.length * 4.6, hasQr ? QR_SIZE + 17 : 0);
+    const bankValueW = bankW - 41;
+    const bankRowLayouts = bankRows.map(([label, value]) => {
+      const holderLines = label === "Account Holder Name"
+        ? wrap(value, bankValueW, 6.9, true)
+        : null;
+      return {
+        label,
+        value,
+        holderLines,
+        height: Math.max(4.6, (holderLines?.length ?? 1) * 3.4),
+      };
+    });
+    const bankDetailsH = 13.5 + bankRowLayouts.reduce((total, row) => total + row.height, 0);
+    const PAY_H = Math.max(40, bankDetailsH, hasQr ? QR_SIZE + 17 : 0);
     if (y + PAY_H > BOT) { doc.addPage(); y = M; }
 
     // Amount payable
@@ -1342,11 +1355,18 @@ export async function renderInvoicePdf(data: InvoiceData): Promise<{ buffer: Buf
       bx(bxx, y, bankW, PAY_H, BORDER, 1.2);
       icoBank(bxx + 4.5, y + 3.9, 4.6);
       txt("BANK ACCOUNT DETAILS", bxx + 11.5, y + 8, { bold: true, size: 7.6, color: NAVY });
-      bankRows.forEach(([k, v], i) => {
-        const by = y + 14 + i * 4.6;
-        txt(k, bxx + 4.5, by, { size: 6.8, color: INK });
-        txt(":", bxx + 33, by, { size: 6.8, color: INK });
-        cell(v, bxx + 36, by, bankW - 41, { size: 6.9, color: INK, bold: true });
+      let rowY = y + 14;
+      bankRowLayouts.forEach(({ label, value, holderLines, height }) => {
+        txt(label, bxx + 4.5, rowY, { size: 6.8, color: INK });
+        txt(":", bxx + 33, rowY, { size: 6.8, color: INK });
+        if (holderLines) {
+          holderLines.forEach((line, lineIndex) => {
+            txt(line, bxx + 36, rowY + lineIndex * 3.4, { size: 6.9, color: INK, bold: true });
+          });
+        } else {
+          cell(value, bxx + 36, rowY, bankValueW, { size: 6.9, color: INK, bold: true });
+        }
+        rowY += height;
       });
     }
 

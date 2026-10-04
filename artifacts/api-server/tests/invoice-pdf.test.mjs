@@ -213,7 +213,7 @@ savedFlags = (await sql(`SELECT general_settings FROM company_settings WHERE id 
 writeFileSync(SNAP_FILE, JSON.stringify({ warehouses: savedWh, company: savedCompany, flags: savedFlags }));
 await sql(
   `UPDATE warehouses SET billing_name='MARLIN FROZEN FRUITS PVT', gst_number='29ABCDE1234F1Z5',
-      fssai_number='11223344556677', bank_account_holder='Marlin Frozen Fruits Pvt Ltd',
+      fssai_number='11223344556677', bank_account_holder='CEEVES INTERNATIONAL IMPORTS AND EXPORTS PRIVATE LIMITED',
       bank_name='HDFC Bank', bank_branch='Electronic City', bank_account_number='50200012345678',
       ifsc_code='HDFC0001234', upi_id='marlinblr@okhdfcbank', authorized_signatory='S. Raghavan',
       logo_url=''
@@ -302,6 +302,11 @@ let s1;
   assert('Header shows the WAREHOUSE billing name', t.includes('MARLIN FROZEN FRUITS PVT'), t.slice(0, 200));
   assert('Warehouse GSTIN printed', t.includes('29ABCDE1234F1Z5'));
   assert('Warehouse FSSAI printed', t.includes('11223344556677'));
+  assert(
+    'Full account holder name remains visible when it needs multiple lines',
+    t.replace(/\s+/g, ' ').includes('CEEVES INTERNATIONAL IMPORTS AND EXPORTS PRIVATE LIMITED'),
+    t.slice(t.indexOf('BANK ACCOUNT DETAILS'), t.indexOf('BANK ACCOUNT DETAILS') + 260),
+  );
   assert('TAX INVOICE title present', t.includes('TAX INVOICE'));
   assert('Customer name in BILLED TO', t.includes(`${TAG} Fasin`));
   assert('Reverse charge stated as No', /Reverse Charge/.test(t));
