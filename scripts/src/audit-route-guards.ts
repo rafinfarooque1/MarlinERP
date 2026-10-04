@@ -66,10 +66,11 @@ const EXEMPTIONS: Record<string, string> = {
   // Self-service business action — requester-only by construction.
   'POST /hr/leaves/:id/cancel': 'View-gated; handler enforces caller.id === leave.employee_id (only the requester may cancel a PENDING request; approvers reject instead, which records who/why).',
 
-  // Dynamic guards — the page key depends on the request body, so the check
-  // runs in-handler through the SAME requireModuleAction/hasModuleAction code.
+  // Dynamic guards — the page key and/or action depends on the request body, so
+  // the check runs in-handler through the SAME requireModuleAction/hasModuleAction code.
   'POST /pdf/money-voucher': 'requireModuleAction(kindKey, "download") invoked in-handler — the receipt/payment page key is derived from the voucher kind in the body (any-of bound to request kind).',
   'POST /sales/:id/share-token': 'hasModuleAction(download on POS/Outstanding) + LBAC sale-scope check in-handler; token is minutes-lived.',
+  'PATCH /customers/:id': 'isActive changes require requireModuleAction(delete); mixed status + field changes require both delete and edit; other changes require edit.',
 
   // Uploads — write nothing readable by others.
   'POST /storage/uploads/request-url': 'Authenticated presigned-PUT only; object path embeds the uploader\'s employee id and reads are ACLed by mayReadObject (uploader or record-visibility).',

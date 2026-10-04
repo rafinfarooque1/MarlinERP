@@ -329,12 +329,23 @@ router.patch(
   "/customers/:id",
   (req, res, next) => {
     // Toggling active status is the reversible disable/enable action and is
-    // controlled by Delete permission. All other customer changes still need
-    // Edit; mixed status + field updates cannot use the Delete-only path.
+    // controlled by Delete permission. Other customer changes need Edit, and a
+    // mixed status + field update must satisfy both permissions.
     const body = req.body ?? {};
     const keys = Object.keys(body);
-    const statusOnly = keys.length === 1 && keys[0] === "isActive";
-    return requireModuleAction("page:/customers", statusOnly ? "delete" : "edit")(req, res, next);
+    const hasStatus = Object.prototype.hasOwnProperty.call(body, "isActive");
+    const hasOtherFields = keys.some((key) => key !== "isActive");
+    if (!hasStatus) {
+      return requireModuleAction("page:/customers", "edit")(req, res, next);
+    }
+    if (!hasOtherFields) {
+      return requireModuleAction("page:/customers", "delete")(req, res, next);
+    }
+    return requireModuleAction("page:/customers", "edit")(
+      req,
+      res,
+      () => requireModuleAction("page:/customers", "delete")(req, res, next),
+    );
   },
   async (req, res): Promise<void> => {
   const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;

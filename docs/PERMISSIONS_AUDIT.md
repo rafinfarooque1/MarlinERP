@@ -31,9 +31,9 @@ This check runs in `pnpm --filter @workspace/scripts run typecheck`; an unguarde
 
 ## Summary
 
-- Routes scanned: **376** across 41 route files
-- Write endpoints: **179**, of which **165** carry `requireModuleAction` middleware
-- Documented exemptions (self-service / level-1 / dynamic in-handler guards): **14**
+- Routes scanned: **414** across 42 route files
+- Write endpoints: **198**, of which **183** carry `requireModuleAction` middleware
+- Documented exemptions (self-service / level-1 / dynamic in-handler guards): **15**
 
 ## Documented write exemptions
 
@@ -52,6 +52,7 @@ This check runs in `pnpm --filter @workspace/scripts run typecheck`; an unguarde
 | `POST /hr/leaves/:id/cancel` | View-gated; handler enforces caller.id === leave.employee_id (only the requester may cancel a PENDING request; approvers reject instead, which records who/why). |
 | `POST /pdf/money-voucher` | requireModuleAction(kindKey, "download") invoked in-handler — the receipt/payment page key is derived from the voucher kind in the body (any-of bound to request kind). |
 | `POST /sales/:id/share-token` | hasModuleAction(download on POS/Outstanding) + LBAC sale-scope check in-handler; token is minutes-lived. |
+| `PATCH /customers/:id` | isActive changes require requireModuleAction(delete); mixed status + field changes require both delete and edit; other changes require edit. |
 | `POST /storage/uploads/request-url` | Authenticated presigned-PUT only; object path embeds the uploader's employee id and reads are ACLed by mayReadObject (uploader or record-visibility). |
 
 ## Full route matrix
@@ -65,6 +66,8 @@ level-1 admin gates, and LBAC markers detected inside the handler body.
 | --- | --- | --- | --- |
 | GET | `/accounts/chart` | `view: page:/accounts/chart, page:/accounts/expenses` | `dynamic view: page:/accounts/chart, page:/accounts/expenses` |
 | GET | `/accounts/chart/flat` | `view: page:/accounts/vouchers, page:/accounts/ledger, page:/operations/receipt-voucher, page:/operations/payment-voucher, page:/production/purchase` | — |
+| GET | `/accounts/internal-transfer-balances` | `view: page:/vendors, page:/outstanding, page:/accounts/chart` | — |
+| GET | `/accounts/voucher-parties` | `view: page:/accounts/vouchers, page:/operations/receipt-voucher, page:/operations/payment-voucher` | `LBAC` |
 | GET | `/accounts/cash-bank-ledgers` | `view: page:/accounts/cash-bank, page:/accounts/expenses, page:/accounts/vouchers, page:/vendors, page:/sales/expenses, page:/hr/payroll, page:/hr/advances, page:/operations/receipt-voucher, page:/operations/payment-voucher, page:/sales/pos, page:/outstanding, page:/customers` | — |
 | POST | `/accounts/chart` | `add: page:/accounts/chart` | — |
 | PATCH | `/accounts/chart/:id` | `edit: page:/accounts/chart` | — |
@@ -81,8 +84,8 @@ level-1 admin gates, and LBAC markers detected inside the handler body.
 | DELETE | `/accounts/receipts/:id` | `delete: page:/accounts/vouchers, page:/operations/receipt-voucher` | `level-1 admin gate` |
 | GET | `/accounts/receipts/:id/delete-impact` | `delete: page:/accounts/vouchers, page:/operations/receipt-voucher` | `level-1 admin gate` |
 | POST | `/accounts/receipts/:id/system-delete` | `delete: page:/accounts/vouchers, page:/operations/receipt-voucher` | `level-1 admin gate` |
-| GET | `/accounts/ledger-statement` | `view: page:/accounts/ledger` | — |
-| GET | `/accounts/cash-bank` | `view: page:/accounts/cash-bank` | `dynamic view: page:/accounts/cash-bank` |
+| GET | `/accounts/ledger-statement` | `view: page:/accounts/ledger` | `LBAC` |
+| GET | `/accounts/cash-bank` | `view: page:/accounts/cash-bank` | — |
 | POST | `/accounts/cash-bank` | `add: page:/accounts/cash-bank` | — |
 | PATCH | `/accounts/cash-bank/:id` | `edit: page:/accounts/cash-bank` | — |
 | DELETE | `/accounts/cash-bank/:id` | `delete: page:/accounts/cash-bank` | — |
@@ -96,7 +99,8 @@ level-1 admin gates, and LBAC markers detected inside the handler body.
 | POST | `/accounts/location-expenses` | `add: page:/sales/expenses` | — |
 | DELETE | `/accounts/location-expenses/:id` | `delete: page:/sales/expenses` | — |
 | GET | `/accounts/financial-statements` | `view: page:/accounts/chart, page:/reports/sales` | — |
-| GET | `/accounts/ledger/:id/statement` | `view: page:/accounts/ledger` | — |
+| GET | `/accounts/financial-statements/monthly` | `view: page:/accounts/chart, page:/reports/sales` | — |
+| GET | `/accounts/ledger/:id/statement` | `view: page:/accounts/ledger` | `LBAC` |
 | GET | `/gst/summary` | `view: page:/accounts/gst, page:/accounts/gst-returns` | — |
 | GET | `/accounts/opening-balances` | `view: page:/accounts/chart` | `dynamic view: page:/accounts/chart` |
 | POST | `/accounts/opening-balances` | `add: page:/accounts/chart` | — |
@@ -128,6 +132,7 @@ level-1 admin gates, and LBAC markers detected inside the handler body.
 | POST | `/assets/transfers` | `add: page:/assets/transfers` | `LBAC` |
 | GET | `/assets/disposals` | `view: page:/assets/disposal, page:/assets/register, page:/assets/reports` | `LBAC` |
 | POST | `/assets/disposals` | `add: page:/assets/disposal` | `LBAC` |
+| POST | `/assets/depreciation/run` | `add: page:/assets/reports` | `LBAC` |
 | GET | `/assets/summary` | `view: page:/assets/purchases, page:/assets/register, page:/assets/categories, page:/assets/transfers, page:/assets/disposal, page:/assets/reports` | `LBAC` |
 
 ### audit.ts
@@ -161,6 +166,8 @@ level-1 admin gates, and LBAC markers detected inside the handler body.
 | GET | `/backup/:id/validate` | `view: page:/company/backup` | — |
 | POST | `/backup/:id/verify` | `add: page:/company/backup` | — |
 | POST | `/backup/upload` | `edit: page:/company/backup`<br>`HO-only location gate` | — |
+| POST | `/backup/upload-url` | `edit: page:/company/backup`<br>`HO-only location gate` | — |
+| POST | `/backup/upload/finalize` | `edit: page:/company/backup`<br>`HO-only location gate` | — |
 | POST | `/backup/:id/restore` | `edit: page:/company/backup`<br>`HO-only location gate` | — |
 | GET | `/backup/settings` | `view: page:/company/backup` | `dynamic view: page:/company/backup` |
 | PATCH | `/backup/settings` | `edit: page:/company/backup`<br>`HO-only location gate` | — |
@@ -179,7 +186,7 @@ level-1 admin gates, and LBAC markers detected inside the handler body.
 
 | Method | Path | Guards | In-handler |
 | --- | --- | --- | --- |
-| GET | `/warehouses` | `view: page:/, page:/production/item-master, page:/headoffice/stock-verification, page:/headoffice/warehouses, page:/headoffice/outlets, page:/headoffice/item-price, page:/headoffice/inventory-reports, page:/headoffice/stock, page:/hr/attendance, page:/hr/payroll, page:/hr/employees, page:/accounts/expenses, page:/reports/sales, page:/transfers, page:/assets/purchases, page:/assets/register, page:/assets/transfers, page:/assets/reports` | `dynamic view: page:/, page:/production/item-master, page:/headoffice/stock-verification, page:/headoffice/warehouses, page:/headoffice/outlets, page:/headoffice/item-price, page:/headoffice/inventory-reports, page:/headoffice/stock, page:/hr/attendance, page:/hr/payroll, page:/hr/employees, page:/accounts/expenses, page:/reports/sales, page:/transfers, page:/assets/purchases, page:/assets/register, page:/assets/transfers, page:/assets/reports` |
+| GET | `/warehouses` | `view: page:/, page:/production/item-master, page:/headoffice/stock-verification, page:/headoffice/warehouses, page:/headoffice/outlets, page:/headoffice/item-price, page:/headoffice/inventory-reports, page:/headoffice/stock, page:/hr/attendance, page:/hr/payroll, page:/hr/employees, page:/accounts/expenses, page:/reports/sales, page:/transfers, page:/assets/purchases, page:/assets/register, page:/assets/transfers, page:/assets/reports` | `level-1 admin gate` |
 | POST | `/warehouses` | `add: page:/headoffice/warehouses` | — |
 | GET | `/warehouses/:id` | `view: page:/headoffice/warehouses` | — |
 | PATCH | `/warehouses/:id` | `edit: page:/headoffice/warehouses` | — |
@@ -209,6 +216,9 @@ level-1 admin gates, and LBAC markers detected inside the handler body.
 | --- | --- | --- | --- |
 | GET | `/company/settings` | — | — |
 | PATCH | `/company/settings` | `edit: page:/company/settings` | — |
+| GET | `/public/app` | — | — |
+| GET | `/public/app/apk` | — | — |
+| GET | `/public/app/info` | — | — |
 | GET | `/company/login-history` | `view: page:/company/login-history, page:/company/settings` | — |
 | GET | `/company/permissions` | — | — |
 | POST | `/company/permissions` | `edit: page:/company/permissions` | — |
@@ -220,10 +230,11 @@ level-1 admin gates, and LBAC markers detected inside the handler body.
 
 | Method | Path | Guards | In-handler |
 | --- | --- | --- | --- |
-| GET | `/customers` | `view: page:/sales/pos, page:/accounts/vouchers, page:/customers` | `LBAC` |
+| GET | `/customers` | `view: page:/sales/pos, page:/accounts/vouchers, page:/customers` | — |
+| GET | `/customers/management` | `view: page:/customers` | — |
 | POST | `/customers` | `add: page:/customers` | — |
 | GET | `/customers/:id` | `view: page:/customers` | — |
-| PATCH | `/customers/:id` | `edit: page:/customers` | — |
+| PATCH | `/customers/:id` | *exempt (see table above)* | `dynamic edit: page:/customers`<br>`dynamic delete: page:/customers` |
 | DELETE | `/customers/:id` | `delete: page:/customers` | — |
 | GET | `/vendors` | `view: page:/production/purchase, page:/accounts/vouchers, page:/vendors, page:/reports/sales, page:/assets/purchases, page:/assets/register, page:/assets/reports` | `LBAC` |
 | POST | `/vendors` | `add: page:/vendors` | — |
@@ -289,6 +300,7 @@ level-1 admin gates, and LBAC markers detected inside the handler body.
 
 | Method | Path | Guards | In-handler |
 | --- | --- | --- | --- |
+| GET | `/healthz/live` | — | — |
 | GET | `/healthz` | — | — |
 | GET | `/healthz/schema` | — | — |
 
@@ -331,6 +343,7 @@ level-1 admin gates, and LBAC markers detected inside the handler body.
 | POST | `/hr/leaves/:id/approve` | `edit: page:/hr/attendance` | `LBAC` |
 | POST | `/hr/leaves/:id/cancel` | `view: page:/hr/attendance` | — |
 | PUT | `/hr/attendance` | `edit: page:/hr/attendance` | — |
+| PUT | `/hr/attendance/bulk` | `edit: page:/hr/attendance` | — |
 | POST | `/hr/employees/:id/reset-password` | `edit: page:/hr/employees` | `LBAC` |
 
 ### imports.ts
@@ -366,6 +379,12 @@ level-1 admin gates, and LBAC markers detected inside the handler body.
 | POST | `/imports/migrations/:id/approve` | `add: page:/company/import` | — |
 | POST | `/imports/migrations/:id/discard` | `add: page:/company/import` | — |
 | POST | `/imports/migrations/:id/rollback` | `delete: page:/company/import` | — |
+
+### integrity.ts
+
+| Method | Path | Guards | In-handler |
+| --- | --- | --- | --- |
+| GET | `/accounts/integrity` | `view: page:/accounts/chart` | — |
 
 ### inventory-batches.ts
 
@@ -434,8 +453,8 @@ level-1 admin gates, and LBAC markers detected inside the handler body.
 | PATCH | `/accounts/journal-vouchers/:id` | `edit: page:/accounts/vouchers` | — |
 | DELETE | `/accounts/journal-vouchers/:id` | `delete: page:/accounts/vouchers` | `level-1 admin gate` |
 | GET | `/accounts/day-book` | `view: page:/accounts/day-book` | — |
-| GET | `/accounts/cash-bank-book/ledgers` | `view: page:/accounts/cash-book, page:/accounts/bank-book, page:/accounts/cash-bank` | — |
-| GET | `/accounts/cash-bank-book` | `view: page:/accounts/cash-book, page:/accounts/bank-book` | — |
+| GET | `/accounts/cash-bank-book/ledgers` | `view: page:/accounts/cash-book, page:/accounts/bank-book, page:/accounts/cash-bank` | `LBAC` |
+| GET | `/accounts/cash-bank-book` | `view: page:/accounts/cash-book, page:/accounts/bank-book` | `LBAC` |
 | GET | `/accounts/trial-balance` | `view: page:/accounts/trial-balance` | — |
 
 ### payments.ts
@@ -449,11 +468,17 @@ level-1 admin gates, and LBAC markers detected inside the handler body.
 
 | Method | Path | Guards | In-handler |
 | --- | --- | --- | --- |
-| POST | `/pdf/challan` | `download: page:/transfers` | — |
+| POST | `/pdf/transfer-invoice` | `download: page:/transfers` | `LBAC` |
+| POST | `/pdf/challan` | `download: page:/transfers` | `LBAC` |
+| POST | `/pdf/purchase-bill` | `download: page:/production/purchase` | `LBAC` |
 | POST | `/pdf/report` | `download: page:/reports/sales, page:/accounts/ledger, page:/accounts/day-book, page:/accounts/cash-book, page:/accounts/bank-book, page:/accounts/trial-balance` | — |
 | POST | `/xlsx/report` | `download: page:/reports/sales, page:/accounts/ledger, page:/accounts/day-book, page:/accounts/cash-book, page:/accounts/bank-book, page:/accounts/trial-balance` | — |
 | POST | `/pdf/expense-voucher` | `download: page:/accounts/expenses, page:/sales/expenses` | — |
 | POST | `/pdf/money-voucher` | *exempt (see table above)* | `dynamic download: page:/accounts/vouchers` |
+| POST | `/pdf/advance-voucher` | `download: page:/hr/advances` | `hasModuleAction view: page:/hr/advances` |
+| POST | `/pdf/journal-voucher` | `download: page:/accounts/vouchers` | — |
+| POST | `/pdf/sales-return` | `download: page:/returns` | `LBAC` |
+| POST | `/pdf/purchase-return` | `download: page:/returns` | `LBAC` |
 | POST | `/pdf/payslip` | `download: page:/hr/payroll` | — |
 
 ### periods.ts
@@ -533,12 +558,26 @@ level-1 admin gates, and LBAC markers detected inside the handler body.
 
 | Method | Path | Guards | In-handler |
 | --- | --- | --- | --- |
-| GET | `/reconciliation/bank-ledgers` | `view: page:/accounts/reconciliation, page:/accounts/cash-in-outlet` | `dynamic view: page:/accounts/reconciliation, page:/accounts/cash-in-outlet` |
+| GET | `/accounts/reconciliation/audit` | `view: page:/accounts/reconciliation` | — |
+| GET | `/accounts/reconciliation/customer-receivables` | `view: page:/accounts/reconciliation` | `LBAC` |
+| GET | `/reconciliation/bank-ledgers` | `view: page:/accounts/reconciliation, page:/accounts/cash-in-outlet` | — |
+| GET | `/reconciliation/bank-transactions` | `view: page:/accounts/reconciliation` | `LBAC` |
+| GET | `/reconciliation/bank-audit` | `view: page:/accounts/reconciliation` | `LBAC` |
+| GET | `/reconciliation/bank-batches` | `view: page:/accounts/reconciliation` | — |
+| GET | `/reconciliation/bank-batches/:id` | `view: page:/accounts/reconciliation` | — |
+| POST | `/reconciliation/bank-batches` | `add: page:/accounts/reconciliation` | `LBAC` |
+| PATCH | `/reconciliation/bank-batches/:id` | `edit: page:/accounts/reconciliation` | `LBAC` |
+| POST | `/reconciliation/bank-reset` | `delete: page:/accounts/reconciliation` | `level-1 admin gate` |
+| POST | `/reconciliation/bank-book/:entryId/reconcile` | `edit: page:/accounts/bank-book, page:/accounts/reconciliation` | `LBAC` |
 | POST | `/reconciliation/bank-accounts` | `add: page:/accounts/reconciliation` | — |
+| GET | `/reconciliation/pending-queue` | `view: page:/accounts/reconciliation` | — |
+| GET | `/reconciliation/pending-manual-vouchers` | `view: page:/accounts/reconciliation` | — |
+| POST | `/reconciliation/manual-vouchers` | `add: page:/accounts/reconciliation` | `LBAC` |
+| POST | `/reconciliation/settle-queue` | `add: page:/accounts/reconciliation` | `LBAC` |
 | GET | `/reconciliation/pending` | `view: page:/accounts/reconciliation` | — |
 | GET | `/reconciliation/batches` | `view: page:/accounts/reconciliation` | `dynamic view: page:/accounts/reconciliation` |
 | GET | `/reconciliation/batches/:id` | `view: page:/accounts/reconciliation` | — |
-| POST | `/reconciliation/batches` | `add: page:/accounts/reconciliation` | — |
+| POST | `/reconciliation/batches` | `add: page:/accounts/reconciliation` | `LBAC` |
 | GET | `/reconciliation/reconciled` | `view: page:/accounts/reconciliation` | — |
 | POST | `/reconciliation/:id/match` | `edit: page:/accounts/reconciliation` | — |
 | POST | `/reconciliation/:id/unmatch` | `edit: page:/accounts/reconciliation` | — |
@@ -548,12 +587,13 @@ level-1 admin gates, and LBAC markers detected inside the handler body.
 | Method | Path | Guards | In-handler |
 | --- | --- | --- | --- |
 | GET | `/rent/agreements` | `view: page:/hr/rent` | `LBAC` |
-| PATCH | `/rent/agreements/:warehouseId` | `edit: page:/hr/rent` | `LBAC` |
+| POST | `/rent/agreements` | `add: page:/hr/rent` | `LBAC` |
+| PATCH | `/rent/agreements/:agreementId` | `edit: page:/hr/rent` | `LBAC` |
 | GET | `/rent/accruals` | `view: page:/hr/rent` | `LBAC` |
 | POST | `/rent/accrue` | `edit: page:/hr/rent` | `LBAC` |
 | GET | `/rent/periods` | `view: page:/hr/rent` | `LBAC` |
-| POST | `/rent/periods/:warehouseId/:year/:month/approve` | `edit: page:/hr/rent` | `LBAC` |
-| POST | `/rent/periods/:warehouseId/:year/:month/pay` | `add: page:/hr/rent` | `LBAC` |
+| POST | `/rent/periods/:agreementId/:year/:month/approve` | `edit: page:/hr/rent` | `LBAC` |
+| POST | `/rent/periods/:agreementId/:year/:month/pay` | `add: page:/hr/rent` | `LBAC` |
 | GET | `/rent/payments` | `view: page:/hr/rent` | `LBAC` |
 | GET | `/rent/dashboard` | `view: page:/hr/rent` | `LBAC` |
 | GET | `/rent/ledger-postings` | `view: page:/hr/rent` | `LBAC` |
@@ -563,6 +603,7 @@ level-1 admin gates, and LBAC markers detected inside the handler body.
 | Method | Path | Guards | In-handler |
 | --- | --- | --- | --- |
 | GET | `/reports/sales-register` | `view: page:/reports/sales` | `LBAC` |
+| GET | `/reports/sales-by-salesperson` | `view: page:/reports/sales` | `LBAC` |
 | GET | `/reports/sales-by-item` | `view: page:/reports/sales` | `LBAC` |
 | GET | `/reports/sales-by-location` | `view: page:/reports/sales` | `LBAC` |
 | GET | `/reports/discounts` | `view: page:/reports/sales` | `LBAC` |
@@ -601,8 +642,10 @@ level-1 admin gates, and LBAC markers detected inside the handler body.
 | GET | `/sales/price-history` | `view: page:/sales/pos` | `LBAC` |
 | GET | `/sales/summary` | `view: page:/sales/pos, page:/` | `LBAC` |
 | POST | `/sales/:id/share-token` | *exempt (see table above)* | `hasModuleAction download: page:/sales/pos, page:/outstanding`<br>`LBAC` |
+| PATCH | `/sales/:id/ship-from-address` | `edit: page:/sales/pos` | `LBAC` |
 | GET | `/sales/:id/invoice.pdf` | — | `hasModuleAction download: page:/sales/pos, page:/outstanding`<br>`LBAC` |
-| GET | `/sales/:id` | `view: page:/sales/pos` | `LBAC` |
+| GET | `/sales/salespeople` | `view: page:/sales/pos` | `dynamic view: page:/sales/pos` |
+| GET | `/sales/:id` | `view: page:/sales/pos, page:/operations/dispatch` | `LBAC` |
 
 ### search.ts
 
@@ -620,6 +663,7 @@ level-1 admin gates, and LBAC markers detected inside the handler body.
 | POST | `/stock/transfers` | `add: page:/transfers` | `LBAC` |
 | PATCH | `/stock/transfers/:id/approve` | `edit: page:/transfers` | `LBAC` |
 | PATCH | `/stock/transfers/:id/reject` | `edit: page:/transfers` | `LBAC` |
+| PATCH | `/stock/transfers/:id/ship-from-address` | `edit: page:/transfers` | `LBAC` |
 | GET | `/stock/transfers/:id` | `view: page:/transfers` | `LBAC` |
 
 ### storage.ts
