@@ -230,6 +230,16 @@ export default function Reconciliation() {
           || (item.platformLedgerId != null && selectedPlatformIds.has(Number(item.platformLedgerId))));
     })
     : [];
+  const visiblePendingBankCollections = visiblePendingQueue.filter(item =>
+    categoryForPending(String(item.method)) === 'bank' && item.direction === 'in',
+  );
+  const visiblePendingBankLocations = new Set(visiblePendingBankCollections.map(item =>
+    `${item.locationType}:${item.locationId}`,
+  ));
+  const canSelectAllPendingBankCollections =
+    visiblePendingBankCollections.length > 0 && visiblePendingBankLocations.size === 1;
+  const allPendingBankCollectionsSelected = canSelectAllPendingBankCollections
+    && visiblePendingBankCollections.every(item => pendingSelected.has(item.key));
   const selectableVisible = visibleTransactions.filter(t =>
     t.reconciliationEligible
       && (t.reconciliationStatus !== 'reconciled' || isEditableBatchItem(t)),
@@ -500,6 +510,18 @@ export default function Reconciliation() {
     });
   }
 
+  function toggleAllPendingBankCollections() {
+    if (!canSelectAllPendingBankCollections) return;
+    const keys = new Set(visiblePendingBankCollections.map(item => item.key));
+    if (allPendingBankCollectionsSelected) {
+      setPendingSelected(previous => new Set([...previous].filter(key => !keys.has(key))));
+      return;
+    }
+    // A settlement batch must belong to one location. Replace any existing
+    // selection so unrelated pending rows cannot be included accidentally.
+    setPendingSelected(keys);
+  }
+
   function openPendingReconciliation() {
     setPendingDate(localDateValue());
     setPendingBankAccountId('');
@@ -737,6 +759,26 @@ export default function Reconciliation() {
               <CheckSquare className="mr-2 h-4 w-4" />
               Reconcile selected{selectedTransactions.length ? ` (${selectedTransactions.length})` : ''}
             </Button>
+            {visiblePendingBankCollections.length > 0 ? (
+              <>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={!perm.canEdit || !canSelectAllPendingBankCollections}
+                  onClick={toggleAllPendingBankCollections}
+                  data-testid="button-select-all-bank-collections"
+                >
+                  {allPendingBankCollectionsSelected
+                    ? 'Clear bank collection selection'
+                    : `Select all bank collections (${visiblePendingBankCollections.length})`}
+                </Button>
+                {!canSelectAllPendingBankCollections ? (
+                  <span className="text-xs text-muted-foreground">
+                    Choose one location before selecting all; settlement uses a bank account assigned to that location.
+                  </span>
+                ) : null}
+              </>
+            ) : null}
             {selectedPendingRows.length > 0 ? (
               <Button
                 size="sm"
