@@ -83,7 +83,9 @@ export interface CompanyFinancials {
 }
 
 /**
- * Amount still waiting for an electronic bank destination.
+ * Amount still waiting for an electronic bank destination. By default this
+ * includes outgoing payment vouchers too; inbound-only summaries can pass
+ * `includePayments: false`.
  *
  * This is deliberately separate from the bank ledger balance. A deferred sale
  * collection is represented by a pending sale_payments row plus its clearing

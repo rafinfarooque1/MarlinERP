@@ -178,7 +178,7 @@ export function DashboardFinancialMatrixSection({
         </CardTitle>
         <CardDescription>
           {periodText} · {openingDescription} Cash and bank balances add opening balances to receipts.
-          Reconciliation pending shows bank sales and receipts awaiting a bank destination; it does not change closing bank.
+          Current reconciliation pending shows bank sales and receipts awaiting a bank destination; it is not a period flow and does not change closing bank.
           Columns include active locations available to your account and, for company-wide access, an Unallocated column for company-level balances.
         </CardDescription>
       </CardHeader>
