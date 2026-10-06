@@ -32,41 +32,41 @@ function AccountTable({
         {title}
       </h3>
       <div className={`${captureMode ? 'overflow-visible' : 'overflow-x-auto'} rounded-lg border border-border`}>
-        <table className="w-full min-w-[760px] border-separate border-spacing-0 text-sm" data-testid={testId}>
+        <table className="w-full min-w-[760px] border-collapse text-sm" data-testid={testId}>
           <caption className="sr-only">{title} account balances and period movements</caption>
           <thead>
             <tr className="bg-muted/40">
-              <th scope="col" className="min-w-[220px] border-b border-border px-3 py-2 text-left font-semibold">Account</th>
-              <th scope="col" className="min-w-[130px] border-b border-border px-3 py-2 text-right font-semibold">Opening</th>
-              <th scope="col" className="min-w-[130px] border-b border-border px-3 py-2 text-right font-semibold">Receipt</th>
-              <th scope="col" className="min-w-[130px] border-b border-border px-3 py-2 text-right font-semibold">Payment</th>
-              <th scope="col" className="min-w-[150px] border-b border-border px-3 py-2 text-right font-semibold">Closing Balance</th>
+              <th scope="col" className="min-w-[220px] border border-border px-2 py-1 text-left font-semibold">Account</th>
+              <th scope="col" className="min-w-[130px] border border-border px-2 py-1 text-right font-semibold">Opening</th>
+              <th scope="col" className="min-w-[130px] border border-border px-2 py-1 text-right font-semibold">Receipt</th>
+              <th scope="col" className="min-w-[130px] border border-border px-2 py-1 text-right font-semibold">Payment</th>
+              <th scope="col" className="min-w-[150px] border border-border px-2 py-1 text-right font-semibold">Closing Balance</th>
             </tr>
           </thead>
           <tbody>
             {rows.length === 0 ? (
               <tr>
-                <td colSpan={5} className="border-b border-border px-3 py-5 text-center text-muted-foreground">
+                <td colSpan={5} className="border border-border px-2 py-3 text-center text-muted-foreground">
                   {emptyText}
                 </td>
               </tr>
             ) : rows.map((row) => (
               <tr key={row.ledgerId} className="hover:bg-muted/20">
-                <th scope="row" className="border-b border-border bg-card px-3 py-2 text-left font-medium">{row.name}</th>
-                <td className="border-b border-border px-3 py-2 text-right font-mono tabular-nums">{fmtZeroAsBlank(row.opening)}</td>
-                <td className="border-b border-border px-3 py-2 text-right font-mono tabular-nums">{fmtZeroAsBlank(row.receipt)}</td>
-                <td className="border-b border-border px-3 py-2 text-right font-mono tabular-nums">{fmtZeroAsBlank(row.payment)}</td>
-                <td className="border-b border-border px-3 py-2 text-right font-mono tabular-nums">{fmtZeroAsBlank(row.closing)}</td>
+                <th scope="row" className="border border-border bg-card px-2 py-1 text-left font-medium">{row.name}</th>
+                <td className="border border-border px-2 py-1 text-right font-mono tabular-nums">{fmtZeroAsBlank(row.opening)}</td>
+                <td className="border border-border px-2 py-1 text-right font-mono tabular-nums">{fmtZeroAsBlank(row.receipt)}</td>
+                <td className="border border-border px-2 py-1 text-right font-mono tabular-nums">{fmtZeroAsBlank(row.payment)}</td>
+                <td className="border border-border px-2 py-1 text-right font-mono tabular-nums">{fmtZeroAsBlank(row.closing)}</td>
               </tr>
             ))}
           </tbody>
           <tfoot>
             <tr className="bg-primary/10 font-bold" data-testid={`${testId}-total`}>
-              <th scope="row" className="px-3 py-2 text-left">Total</th>
-              <td className="px-3 py-2 text-right font-mono tabular-nums">{fmtZeroAsBlank(totals.opening)}</td>
-              <td className="px-3 py-2 text-right font-mono tabular-nums">{fmtZeroAsBlank(totals.receipt)}</td>
-              <td className="px-3 py-2 text-right font-mono tabular-nums">{fmtZeroAsBlank(totals.payment)}</td>
-              <td className="px-3 py-2 text-right font-mono tabular-nums">{fmtZeroAsBlank(totals.closing)}</td>
+              <th scope="row" className="border border-border px-2 py-1 text-left">Total</th>
+              <td className="border border-border px-2 py-1 text-right font-mono tabular-nums">{fmtZeroAsBlank(totals.opening)}</td>
+              <td className="border border-border px-2 py-1 text-right font-mono tabular-nums">{fmtZeroAsBlank(totals.receipt)}</td>
+              <td className="border border-border px-2 py-1 text-right font-mono tabular-nums">{fmtZeroAsBlank(totals.payment)}</td>
+              <td className="border border-border px-2 py-1 text-right font-mono tabular-nums">{fmtZeroAsBlank(totals.closing)}</td>
             </tr>
           </tfoot>
         </table>

@@ -206,13 +206,13 @@ export function DashboardExpenseDetailsReport({
             ) : (
               <div className={`${preparingCapture ? 'overflow-visible' : 'overflow-x-auto'} rounded-lg border border-border`}>
                 <table
-                  className="w-full min-w-max border-separate border-spacing-0 text-sm"
+                  className="w-full min-w-max border-collapse text-sm"
                   data-testid="table-dashboard-expense-details"
                 >
                   <caption className="sr-only">Expense details · {periodText}</caption>
                   <thead>
                     <tr className="bg-muted/40">
-                      <th scope="col" className="min-w-[220px] border-b border-border px-3 py-2 text-left font-semibold">
+                      <th scope="col" className="min-w-[220px] border border-border px-2 py-1 text-left font-semibold">
                         Location
                       </th>
                       {data.locations.map((location) => (
@@ -220,22 +220,22 @@ export function DashboardExpenseDetailsReport({
                           key={`${location.locationType}:${location.locationId}`}
                           scope="colgroup"
                           colSpan={2}
-                          className="min-w-[260px] border-b border-border px-3 py-2 text-center font-semibold"
+                          className="min-w-[260px] border border-border px-2 py-1 text-center font-semibold"
                         >
                           {location.name}
                         </th>
                       ))}
                     </tr>
                     <tr className="bg-muted/30">
-                      <th scope="col" className="border-b border-border px-3 py-2 text-left font-medium text-muted-foreground">
+                      <th scope="col" className="border border-border px-2 py-1 text-left font-medium text-muted-foreground">
                         Bank/Cash
                       </th>
                       {data.locations.map((location) => (
                         <Fragment key={`${location.locationType}:${location.locationId}`}>
-                          <th scope="col" className="min-w-[130px] border-b border-border px-3 py-2 text-right font-medium">
+                          <th scope="col" className="min-w-[130px] border border-border px-2 py-1 text-right font-medium">
                             Bank
                           </th>
-                          <th scope="col" className="min-w-[130px] border-b border-border px-3 py-2 text-right font-medium">
+                          <th scope="col" className="min-w-[130px] border border-border px-2 py-1 text-right font-medium">
                             Cash
                           </th>
                         </Fragment>
@@ -247,22 +247,22 @@ export function DashboardExpenseDetailsReport({
                       <tr>
                         <td
                           colSpan={data.locations.length * 2 + 1}
-                          className="border-b border-border px-3 py-4 text-center text-muted-foreground"
+                          className="border border-border px-2 py-3 text-center text-muted-foreground"
                         >
                           No expense details in this period.
                         </td>
                       </tr>
                     ) : expenseRows.map((row) => (
                       <tr key={row.ledgerId} className="hover:bg-muted/20">
-                        <th scope="row" className="min-w-[220px] border-b border-border bg-card px-3 py-2 text-left font-medium">
+                        <th scope="row" className="min-w-[220px] border border-border bg-card px-2 py-1 text-left font-medium">
                           {row.name}
                         </th>
                         {data.locations.map((location, index) => (
                           <Fragment key={`${location.locationType}:${location.locationId}`}>
-                            <td className="min-w-[130px] border-b border-border px-3 py-2 text-right font-mono text-sm tabular-nums">
+                            <td className="min-w-[130px] border border-border px-2 py-1 text-right font-mono text-sm tabular-nums">
                               {fmtZeroAsBlank(row.bank[index] ?? 0)}
                             </td>
-                            <td className="min-w-[130px] border-b border-border px-3 py-2 text-right font-mono text-sm tabular-nums">
+                            <td className="min-w-[130px] border border-border px-2 py-1 text-right font-mono text-sm tabular-nums">
                               {fmtZeroAsBlank(row.cash[index] ?? 0)}
                             </td>
                           </Fragment>
@@ -270,15 +270,15 @@ export function DashboardExpenseDetailsReport({
                       </tr>
                     ))}
                     <tr className="bg-primary/10 font-bold" data-testid="row-dashboard-expense-details-total">
-                      <th scope="row" className="min-w-[220px] border-b border-border px-3 py-2 text-left">
+                        <th scope="row" className="min-w-[220px] border border-border px-2 py-1 text-left">
                         Total
                       </th>
                       {data.locations.map((location, index) => (
                         <Fragment key={`${location.locationType}:${location.locationId}`}>
-                          <td className="min-w-[130px] border-b border-border px-3 py-2 text-right font-mono text-sm tabular-nums">
+                            <td className="min-w-[130px] border border-border px-2 py-1 text-right font-mono text-sm tabular-nums">
                             {fmtZeroAsBlank(data.bankExpenses[index] ?? 0)}
                           </td>
-                          <td className="min-w-[130px] border-b border-border px-3 py-2 text-right font-mono text-sm tabular-nums">
+                            <td className="min-w-[130px] border border-border px-2 py-1 text-right font-mono text-sm tabular-nums">
                             {fmtZeroAsBlank(data.cashExpenses[index] ?? 0)}
                           </td>
                         </Fragment>
