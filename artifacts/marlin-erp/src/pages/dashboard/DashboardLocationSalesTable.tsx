@@ -23,10 +23,10 @@ export function DashboardLocationSalesTable({
   const outstandingTotal = totalOutstanding ?? totals.outstandingAmount;
 
   return (
-    <div className={`${captureMode ? 'overflow-visible' : 'overflow-x-auto'} w-fit max-w-full rounded-lg border border-border`}>
+    <div className={`${captureMode ? 'overflow-visible' : 'overflow-x-auto'} w-full max-w-full rounded-lg border border-border`}>
       <table
         data-testid={testId}
-        className="w-max border-collapse text-sm"
+        className="w-full border-collapse text-sm"
       >
         <caption className="sr-only">Sales and outstanding by location</caption>
         <thead>
