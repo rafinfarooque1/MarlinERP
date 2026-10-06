@@ -23,6 +23,8 @@ import { formatDate, formatDateOrDash } from '@/lib/date';
 // ── Formatters ────────────────────────────────────────────────────────────────
 export const fmt = (n: number | null | undefined) =>
   `₹${Number(n ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+export const fmtZeroAsBlank = (n: number | null | undefined) =>
+  Math.round(Math.abs(Number(n ?? 0)) * 100) === 0 ? '' : fmt(n);
 export const num = (n: number | null | undefined) =>
   Number(n ?? 0).toLocaleString('en-IN', { maximumFractionDigits: 3 });
 export const pdfMoney = (n: number | null | undefined) =>

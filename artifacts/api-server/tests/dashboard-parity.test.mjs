@@ -181,6 +181,11 @@ try {
     assert(`bi.sales.total == register total (located ${locRow.lt}#${locRow.lid}, query params)`,
       near(biL?.sales?.total, regL?.totals?.total),
       `bi=${biL?.sales?.total} reg=${regL?.totals?.total}`);
+    assert("selected-location outstanding matches the receivables ledger balance",
+      Array.isArray(biL?.locationSalesReport)
+      && biL.locationSalesReport.length === 1
+      && near(biL.locationSalesReport[0].outstandingAmount, biL?.receivables?.total),
+      JSON.stringify({ report: biL?.locationSalesReport, receivables: biL?.receivables?.total }));
 
     // The drill-down premise: the URL carries only view+range — location rides
     // on the global x-location headers. Both endpoints must honour them alike.
@@ -200,8 +205,31 @@ try {
       ? "headoffice"
       : `${location.locationType}:${location.locationId}`;
   const availableLocationKeys = (allLocationsBi?.locationSalesReport ?? [])
+    .filter((location) => location.locationType !== "company")
     .map(dashboardLocationKey)
     .slice(0, 3);
+  const receivablesByLocation = new Map(
+    (allLocationsBi?.locationBreakdown ?? []).map((location) => [
+      dashboardLocationKey(location),
+      Number(location.receivables ?? 0),
+    ]),
+  );
+  const physicalSalesRows = (allLocationsBi?.locationSalesReport ?? [])
+    .filter((location) => location.locationType !== "company");
+  const locationReceivablesMatch = physicalSalesRows.every((location) =>
+    near(
+      location.outstandingAmount,
+      receivablesByLocation.get(dashboardLocationKey(location)) ?? 0,
+    ));
+  const locationReceivablesTotal = (allLocationsBi?.locationSalesReport ?? [])
+    .reduce((sum, location) => sum + Number(location.outstandingAmount ?? 0), 0);
+  assert("Sales & Outstanding uses location receivable ledger balances and totals to the receivables control",
+    locationReceivablesMatch && near(locationReceivablesTotal, allLocationsBi?.receivables?.total),
+    JSON.stringify({
+      report: allLocationsBi?.locationSalesReport,
+      locationBreakdown: allLocationsBi?.locationBreakdown,
+      total: allLocationsBi?.receivables?.total,
+    }));
   if (availableLocationKeys.length > 0) {
     const selectedLocationKeys = [...availableLocationKeys];
     if (selectedLocationKeys.length < 3) {
@@ -246,6 +274,24 @@ try {
     assert("Expense Details includes cash/bank-paid ledger values and omits zero-only ledgers",
       expenseLedgersAreVisibleAndAligned && expenseTotalsReconcile,
       JSON.stringify({ cash: expenseMatrix?.cashExpenseLedgers, bank: expenseMatrix?.bankExpenseLedgers }));
+    const selectedReceivablesByLocation = new Map(
+      (selectedLocationBi?.locationBreakdown ?? []).map((location) => [
+        dashboardLocationKey(location),
+        Number(location.receivables ?? 0),
+      ]),
+    );
+    const selectedLocationReceivablesMatch = (selectedLocationBi?.locationSalesReport ?? [])
+      .filter((location) => location.locationType !== "company")
+      .every((location) => near(
+        location.outstandingAmount,
+        selectedReceivablesByLocation.get(dashboardLocationKey(location)) ?? 0,
+      ));
+    assert("Selected-location outstanding values match the receivables ledger",
+      selectedLocationReceivablesMatch,
+      JSON.stringify({
+        report: selectedLocationBi?.locationSalesReport,
+        locations: selectedLocationBi?.locationBreakdown,
+      }));
   } else {
     console.log("  - Skipping selected-location assertions: no active locations are available");
   }

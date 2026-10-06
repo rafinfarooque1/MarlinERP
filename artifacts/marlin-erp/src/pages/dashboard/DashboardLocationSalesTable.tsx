@@ -1,5 +1,5 @@
 import type { DashboardLocationSalesRow } from '@workspace/api-client-react';
-import { fmt, num } from '@/pages/reports/shared';
+import { fmt, fmtZeroAsBlank, num } from '@/pages/reports/shared';
 
 export function DashboardLocationSalesTable({
   rows,
@@ -53,13 +53,13 @@ export function DashboardLocationSalesTable({
                 {row.name}
               </th>
               <td className="border-b border-border px-3 py-2 text-right font-mono text-sm tabular-nums">
-                {fmt(row.salesAmount)}
+                {fmtZeroAsBlank(row.salesAmount)}
               </td>
               <td className="border-b border-border px-3 py-2 text-right font-mono text-sm tabular-nums">
                 {num(row.salesQuantity)}
               </td>
               <td className="border-b border-border px-3 py-2 text-right font-mono text-sm tabular-nums">
-                {fmt(row.outstandingAmount)}
+                {fmtZeroAsBlank(row.outstandingAmount)}
               </td>
             </tr>
           ))}
@@ -70,13 +70,13 @@ export function DashboardLocationSalesTable({
               Total
             </th>
             <td className="border-b border-border px-3 py-2 text-right font-mono text-sm tabular-nums">
-              {fmt(totals.salesAmount)}
+              {fmtZeroAsBlank(totals.salesAmount)}
             </td>
             <td className="border-b border-border px-3 py-2 text-right font-mono text-sm tabular-nums">
               {num(totals.salesQuantity)}
             </td>
             <td className="border-b border-border px-3 py-2 text-right font-mono text-sm tabular-nums">
-              {fmt(totals.outstandingAmount)}
+              {fmtZeroAsBlank(totals.outstandingAmount)}
             </td>
           </tr>
         </tfoot>

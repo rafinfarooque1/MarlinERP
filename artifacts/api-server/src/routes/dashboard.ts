@@ -983,7 +983,8 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
 
   // The source queries are constrained to caller-authorized locations. The
   // response below narrows their grouped rows to dashboardReportLocations.
-  // Sales follow the selected period; outstanding is an as-of position.
+  // Sales follow the selected period; outstanding is the receivables ledger
+  // position as of the range end.
   const reportSalesConds = [
     "s.branch_transfer_id IS NULL",
     "s.cancelled_at IS NULL",
@@ -1019,33 +1020,6 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       WHERE ${reportSalesConds.join(" AND ")}
       GROUP BY 1, 2, 3`,
     reportSalesParams,
-  );
-
-  const reportOutstandingConds = [
-    "s.branch_transfer_id IS NULL",
-    "s.cancelled_at IS NULL",
-    visibleLocationSql("COALESCE(s.location_type, 'outlet')", "COALESCE(s.location_id, s.outlet_id)"),
-  ];
-  const reportOutstandingParams: unknown[] = [];
-  let reportOutstandingExpr = outstandingExpr("s");
-  if (toDate) {
-    reportOutstandingParams.push(toDate);
-    const asOfParam = `$${reportOutstandingParams.length}`;
-    reportOutstandingExpr = outstandingAsOfExpr("s", asOfParam);
-    reportOutstandingConds.push(`s.sale_date::date <= ${asOfParam}::date`);
-  }
-  reportOutstandingConds.push(`${reportOutstandingExpr} > 0.009`);
-  if (!scope.isHeadOffice) {
-    reportOutstandingConds.push(scopeSalesWhere(scope, reportOutstandingParams));
-  }
-  const reportOutstandingByLocationP = pool.query(
-    `SELECT COALESCE(s.location_type, 'outlet') AS location_type,
-            COALESCE(s.location_id, s.outlet_id) AS location_id,
-            COALESCE(SUM(${reportOutstandingExpr}), 0)::float AS outstanding_amount
-       FROM sales s
-      WHERE ${reportOutstandingConds.join(" AND ")}
-      GROUP BY 1, 2`,
-    reportOutstandingParams,
   );
 
   const matrixOpeningToDate = fromDate
@@ -1130,26 +1104,22 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       reconciliationPending,
     };
   }));
-  const [matrixLocationFigures, reportSalesByLocation, reportOutstandingByLocation, cashBankReport] = await Promise.all([
+  const [matrixLocationFigures, reportSalesByLocation, cashBankReport] = await Promise.all([
     matrixLocationFiguresP,
     reportSalesByLocationP,
-    reportOutstandingByLocationP,
     cashBankReportP,
   ]);
 
+  const matrixFinancialsByLocation = new Map(matrixLocationFigures.map((figure) => [
+    locationKey(figure.location.locationType, figure.location.locationId),
+    figure.financials,
+  ]));
   const reportSalesByLocationMap = new Map<string, { salesAmount: number; salesQuantity: number }>();
   for (const row of reportSalesByLocation.rows) {
     reportSalesByLocationMap.set(locationKey(String(row.location_type), row.location_id), {
       salesAmount: money(row.sales_amount),
       salesQuantity: qty(row.sales_quantity),
     });
-  }
-  const reportOutstandingByLocationMap = new Map<string, number>();
-  for (const row of reportOutstandingByLocation.rows) {
-    reportOutstandingByLocationMap.set(
-      locationKey(String(row.location_type), row.location_id),
-      money(row.outstanding_amount),
-    );
   }
   const locationSalesReport = dashboardReportLocations.map((location) => {
     const key = locationKey(location.locationType, location.locationId);
@@ -1158,7 +1128,7 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       ...location,
       salesAmount: sales?.salesAmount ?? 0,
       salesQuantity: sales?.salesQuantity ?? 0,
-      outstandingAmount: reportOutstandingByLocationMap.get(key) ?? 0,
+      outstandingAmount: money(matrixFinancialsByLocation.get(key)?.accountsReceivable ?? 0),
     };
   });
 
@@ -1212,11 +1182,17 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       bankExpenseLedgers: bankExpenseBreakdown.ledgers,
       reconciliationPending,
     });
+    matrixFinancialsByLocation.set(locationKey(location.locationType, location.locationId), financials);
+    const unallocatedReceivables = money(financials.accountsReceivable);
+    if (unallocatedReceivables !== 0) {
+      locationSalesReport.push({
+        ...location,
+        salesAmount: 0,
+        salesQuantity: 0,
+        outstandingAmount: unallocatedReceivables,
+      });
+    }
   }
-  const matrixFinancialsByLocation = new Map(matrixLocationFigures.map((figure) => [
-    locationKey(figure.location.locationType, figure.location.locationId),
-    figure.financials,
-  ]));
 
   const matrixOpeningCash = matrixLocationFigures.map((figure) => figure.openingCash);
   const matrixCashReceiptBySale = matrixLocationFigures.map((figure) => figure.cashReceiptBySale);
