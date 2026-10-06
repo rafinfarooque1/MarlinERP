@@ -396,7 +396,7 @@ export default function Dashboard() {
 
   // Fixed two-per-row pair layout (owner's spec), identical on desktop and
   // mobile: Sales|Purchases, Inventory|Expenses, Payables|Receivables,
-  // Payments|Receipts, Cash|Reconciliation Pending, GP|NP.
+  // Payments|Receipts, Cash|Reconciliation Pending; GP|NP require dashboard Delete.
   // Inventory Value is hidden entirely for employees without the valuation
   // right (the server omits the figure) — Expenses then spans its full row so
   // every later pair stays intact.
@@ -523,8 +523,8 @@ export default function Dashboard() {
 
   // The shared KPI report picks its figures OUT OF summaryCards, so the image
   // can never disagree with the screen (same data, same formatting — never
-  // refetched or recomputed). Owner spec fixes the card list to these twelve;
-  // Inventory drops out when the valuation permission hides it on screen too. Reconciling breakdown hints ride along
+  // refetched or recomputed). Inventory drops out without valuation permission;
+  // GP/NP drop out without dashboard Delete permission. Reconciling breakdown hints ride along
   // only where they are pure figures ("tap for P&L" hints make no sense in a
   // static image).
   const SHARE_PICKS: { src: string; out: string; metric: BreakdownMetric; fallbackHint?: string }[] = [
@@ -559,8 +559,9 @@ export default function Dashboard() {
   // with shorter labels, subtle icons, structured breakdown lines and one-line
   // descriptions, per the owner's mobile-dashboard spec. Pairs land as
   // Sales|Purchases, Inventory|Expenses, Payables|Receivables,
-  // Payments|Receipts, Cash|Reconciliation Pending, GP|NP; when Inventory is permission-hidden,
-  // Expenses spans its full row so every later semantic pair stays intact.
+  // Payments|Receipts, Cash|Reconciliation Pending, and GP|NP when dashboard
+  // Delete is granted. When Inventory is permission-hidden, Expenses spans
+  // its full row so every later semantic pair stays intact.
   const mobileCards: MobileKpi[] = [
      { label: 'Sales', icon: TrendingUp, value: fmt(dashboardValue('sales', s?.total) ?? 0), tone: 'pos', lines: locationLines('sales'), onClick: drillTo('/reports/sales', 'register') },
      { label: 'Purchases', icon: ShoppingCart, value: fmt(dashboardValue('purchases', bi?.purchases.total) ?? 0), lines: locationLines('purchases'), onClick: drillTo('/reports/purchases', 'register') },

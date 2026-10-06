@@ -127,7 +127,8 @@ export interface DashboardBi {
   /**
    * Gross/net profit for the selected period, off the SAME P&L build as
    * `expenses` — so the GP/NP tiles always equal the Profit & Loss report.
-   * Fields are `null` exactly when the other accounting figures are.
+   * The whole object is omitted unless the caller has Delete permission on the
+   * dashboard; within it, fields are `null` when no honest figure is available.
    */
   profit?: { gross: number | null; net: number | null; cogs: number | null; companyWide: boolean };
   /**

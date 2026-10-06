@@ -130,3 +130,16 @@ bank-paid and non-cash entries as cash expenses.
 **How to apply:** classify by paired derived postings (`source: "expense"`)
 and the cash-ledger credit, not payment-mode text or an expense subtree. Keep
 other payment sources out unless the requirement explicitly broadens the row.
+
+# Dashboard GP/NP disclosure
+
+Show Gross Profit and Net Profit on the dashboard only when the role has
+Delete permission on `page:/`. The `/dashboard/bi` response must omit the
+profit figures for other roles, and both web and employee-app share captures
+must use the same permission-filtered card set.
+
+**Why:** the user explicitly chose the dashboard Delete permission as the
+visibility rule for these profit details.
+
+**How to apply:** enforce the check in the API as well as the UI; hiding the
+cards alone still exposes the figures in the response or a share image.

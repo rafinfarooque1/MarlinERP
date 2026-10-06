@@ -28,7 +28,7 @@ import {
  *   • Cash/Bank          → cash.balance / bank.balance (posting balances)
  *   • Inventory          → inventory.valuation (ABSENT without the valuation
  *                          right — the card is hidden, never shown as zero)
- *   • GP/NP              → profit.gross/.net (same P&L build as the report)
+  *   • GP/NP              → profit.gross/.net only with dashboard Delete access
  * Accounting figures are null when the server has no honest figure for the
  * current scope; those cards show an em-dash, matching the web.
  *
@@ -146,6 +146,7 @@ function DashboardInner() {
   const canSeeDispatch = canView(PAGE.dispatch);
   const canSeeReceipts = canView(PAGE.receiptVoucher);
   const canSeePayments = canView(PAGE.paymentVoucher);
+  const canShowProfitDetails = perm(PAGE.dashboard).canDelete;
 
   const cards: KpiCard[] = bi
     ? [
@@ -207,18 +208,19 @@ function DashboardInner() {
               onPress: canSeeStock ? () => router.push('/(tabs)/stock') : undefined,
             }]
           : []),
-        // GP/NP always render; a null figure (no honest number for this
-        // scope) shows an em-dash — matching the web dashboard tiles.
-        {
-          key: 'gp', label: 'Gross Profit', icon: 'pie-chart',
-          value: pf?.gross == null ? '—' : formatMoney(pf.gross),
-          tone: pf?.gross == null ? 'default' : pf.gross >= 0 ? 'pos' : 'neg',
-        },
-        {
-          key: 'np', label: 'Net Profit', icon: 'bar-chart-2',
-          value: pf?.net == null ? '—' : formatMoney(pf.net),
-          tone: pf?.net == null ? 'default' : pf.net >= 0 ? 'pos' : 'neg',
-        },
+        // Share captures this same card list, so denied roles omit GP/NP there too.
+        ...(canShowProfitDetails ? [
+          {
+            key: 'gp', label: 'Gross Profit', icon: 'pie-chart' as const,
+            value: pf?.gross == null ? '—' : formatMoney(pf.gross),
+            tone: pf?.gross == null ? 'default' as const : pf.gross >= 0 ? 'pos' as const : 'neg' as const,
+          },
+          {
+            key: 'np', label: 'Net Profit', icon: 'bar-chart-2' as const,
+            value: pf?.net == null ? '—' : formatMoney(pf.net),
+            tone: pf?.net == null ? 'default' as const : pf.net >= 0 ? 'pos' as const : 'neg' as const,
+          },
+        ] : []),
       ]
     : [];
 

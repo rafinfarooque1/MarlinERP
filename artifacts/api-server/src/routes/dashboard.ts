@@ -315,11 +315,6 @@ router.get("/dashboard/summary", requireModuleView("page:/"), async (req, res): 
   // Hiding the Value column on the Stock screen is pointless if the same
   // number is sitting on a dashboard tile, so the tiles obey the same right.
   const showValuation = await canViewStockValuation((req as any).employee?.hierarchyId);
-  const showDashboardProfit = await hasModuleAction(
-    (req as any).employee?.hierarchyId,
-    "page:/",
-    "delete",
-  );
 
   res.json({
     totalItemsProduced:   itemsCount.count,
@@ -932,6 +927,11 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
   ]);
   // Same rule as the Stock screen: no valuation right, no valuation figure.
   const showValuation = await canViewStockValuation((req as any).employee?.hierarchyId);
+  const showDashboardProfit = await hasModuleAction(
+    (req as any).employee?.hierarchyId,
+    "page:/",
+    "delete",
+  );
 
   // Cross-location financial matrix: span active locations in the caller's
   // server-derived data scope, independent of the dashboard's display filter.
