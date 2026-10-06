@@ -4,9 +4,11 @@ import { fmt, num } from '@/pages/reports/shared';
 export function DashboardLocationSalesTable({
   rows,
   testId = 'table-location-sales-report',
+  captureMode = false,
 }: {
   rows: DashboardLocationSalesRow[];
   testId?: string;
+  captureMode?: boolean;
 }) {
   const totals = rows.reduce(
     (sum, row) => ({
@@ -18,7 +20,7 @@ export function DashboardLocationSalesTable({
   );
 
   return (
-    <div className="overflow-x-auto">
+    <div className={captureMode ? 'overflow-visible' : 'overflow-x-auto'}>
       <table
         data-testid={testId}
         className="w-full min-w-[650px] border-separate border-spacing-0 text-sm"
