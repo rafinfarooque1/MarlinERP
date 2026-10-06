@@ -933,8 +933,9 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
     "delete",
   );
 
-  // Cross-location financial matrix: span active locations in the caller's
-  // server-derived data scope, independent of the dashboard's display filter.
+  // Base location list for cross-location dashboard reports. LBAC is always
+  // applied here; the Sales & Outstanding and Expense Details sections narrow
+  // this list further when the dashboard has an explicit location selection.
   const { rows: matrixLocationRows } = await pool.query(`
     SELECT location_type, location_id, name
       FROM (
@@ -962,10 +963,27 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
     scope.isHeadOffice
       || (location.locationType === "warehouse" && scope.warehouseIds.includes(location.locationId))
       || (location.locationType === "outlet" && scope.outletIds.includes(location.locationId)));
+  const hasDashboardLocationSelection = isNoLocations
+    || requestedLocationKeys.length > 0
+    || typeof q.locationType === "string"
+    || Boolean(headerLoc);
+  const selectedDashboardLocationKeys = new Set(requestedLocationKeys);
+  const dashboardReportLocations = isNoLocations
+    ? []
+    : requestedLocationKeys.length > 0
+      ? matrixLocations.filter((location) =>
+          selectedDashboardLocationKeys.has(locationKey(location.locationType, location.locationId)))
+      : hasDashboardLocationSelection
+        ? effLocType
+          ? matrixLocations.filter((location) =>
+              location.locationType === effLocType
+              && (effLocType === "headoffice" || location.locationId === effLocId))
+          : []
+        : matrixLocations;
 
-  // This location table spans the caller's server-authorized locations, like
-  // the financial matrix, independent of the selected display location. Sales
-  // follow the dashboard's selected period; outstanding is an as-of position.
+  // The source queries are constrained to caller-authorized locations. The
+  // response below narrows their grouped rows to dashboardReportLocations.
+  // Sales follow the selected period; outstanding is an as-of position.
   const reportSalesConds = [
     "s.branch_transfer_id IS NULL",
     "s.cancelled_at IS NULL",
@@ -1041,6 +1059,20 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
     cachedPostings(toDate ? { toDate } : {}),
     ledgerSubtreeLookup(),
   ]);
+  const expenseLedgerIds = new Set([
+    ...matrixSubtree("SYS-DIREXP"),
+    ...matrixSubtree("SYS-INDEXP"),
+  ]);
+  const filterPaidExpenseLedgers = (
+    breakdown: ReturnType<typeof rangeCashExpensesByLedger>,
+  ) => {
+    const ledgers = breakdown.ledgers.filter((ledger) =>
+      expenseLedgerIds.has(ledger.ledgerId) && money(ledger.amount) !== 0);
+    return {
+      total: money(ledgers.reduce((sum, ledger) => sum + ledger.amount, 0)),
+      ledgers,
+    };
+  };
   const cashBankReportP = buildDashboardCashBankReport({
     postings: matrixPostings as never[],
     fromDate: fromDate || null,
@@ -1050,7 +1082,7 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
     cashLedgerIds: matrixSubtree("STD-CASH"),
     bankLedgerIds: matrixSubtree("STD-BANK"),
   });
-  const matrixLocationFiguresP = Promise.all(matrixLocations.map(async (location) => {
+  const matrixLocationFiguresP = Promise.all(dashboardReportLocations.map(async (location) => {
     const postingLocation = location.locationType === "headoffice"
       ? ({ type: "headoffice", id: null } as const)
       : ({ type: location.locationType as "warehouse" | "outlet", id: location.locationId } as const);
@@ -1076,8 +1108,12 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
     };
     const cashReceiptBreakdown = rangeCashReceiptBreakdown(matrixPostings as never[], flowOptions);
     const bankReceiptBreakdown = rangeBankReceiptBreakdown(matrixPostings as never[], flowOptions);
-    const cashExpenseBreakdown = rangeCashExpensesByLedger(matrixPostings as never[], flowOptions);
-    const bankExpenseBreakdown = rangeBankExpensesByLedger(matrixPostings as never[], flowOptions);
+    const cashExpenseBreakdown = filterPaidExpenseLedgers(
+      rangeCashExpensesByLedger(matrixPostings as never[], flowOptions),
+    );
+    const bankExpenseBreakdown = filterPaidExpenseLedgers(
+      rangeBankExpensesByLedger(matrixPostings as never[], flowOptions),
+    );
     return {
       location,
       financials,
@@ -1115,7 +1151,7 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       money(row.outstanding_amount),
     );
   }
-  const locationSalesReport = matrixLocations.map((location) => {
+  const locationSalesReport = dashboardReportLocations.map((location) => {
     const key = locationKey(location.locationType, location.locationId);
     const sales = reportSalesByLocationMap.get(key);
     return {
@@ -1126,11 +1162,9 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
     };
   });
 
-  // Company-level openings and unlocated postings are a separate posting
-  // bucket, not part of any branch slice. Only callers with company-wide data
-  // scope may see it; adding it as a matrix column makes the location slices
-  // plus this bucket reconcile to the consolidated cash/bank position.
-  if (scope.isHeadOffice) {
+  // In an unfiltered all-location view, company-level openings and unlocated
+  // postings are a separate bucket. Keep it out of explicit location selections.
+  if (scope.isHeadOffice && !hasDashboardLocationSelection) {
     const location = { locationType: "company", locationId: 0, name: "Unallocated" };
     const postingLocation = { type: "company", id: null } as const;
     const [financials, opening, reconciliationPending] = await Promise.all([
@@ -1155,10 +1189,14 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
     };
     const cashReceiptBreakdown = rangeCashReceiptBreakdown(matrixPostings as never[], flowOptions);
     const bankReceiptBreakdown = rangeBankReceiptBreakdown(matrixPostings as never[], flowOptions);
-    const cashExpenseBreakdown = rangeCashExpensesByLedger(matrixPostings as never[], {
-      ...flowOptions,
-    });
-    const bankExpenseBreakdown = rangeBankExpensesByLedger(matrixPostings as never[], flowOptions);
+    const cashExpenseBreakdown = filterPaidExpenseLedgers(
+      rangeCashExpensesByLedger(matrixPostings as never[], {
+        ...flowOptions,
+      }),
+    );
+    const bankExpenseBreakdown = filterPaidExpenseLedgers(
+      rangeBankExpensesByLedger(matrixPostings as never[], flowOptions),
+    );
     matrixLocationFigures.push({
       location,
       financials,
@@ -1204,7 +1242,9 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
   const matrixExpenseDefinitions = new Map<number, { name: string; code: string | null }>();
   for (const { financials, cashExpenseLedgers, bankExpenseLedgers } of matrixLocationFigures) {
     for (const ledger of financials.expenses.ledgers) {
-      matrixExpenseDefinitions.set(ledger.ledgerId, { name: ledger.name, code: ledger.code });
+      if (expenseLedgerIds.has(ledger.ledgerId)) {
+        matrixExpenseDefinitions.set(ledger.ledgerId, { name: ledger.name, code: ledger.code });
+      }
     }
     for (const ledger of [...cashExpenseLedgers, ...bankExpenseLedgers]) {
       if (!matrixExpenseDefinitions.has(ledger.ledgerId)) {

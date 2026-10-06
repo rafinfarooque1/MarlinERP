@@ -77,24 +77,23 @@ response type by hand — new response fields must be added there (then
 `pnpm tsc` in lib/api-client-react), or the frontend ends up with `as any`
 casts like the old `profit` read.
 
-# Cross-location financial matrix
+# Selected-location dashboard details
 
-Keep cross-location dashboard summaries inside the existing `/dashboard/bi`
-response so they share the dashboard's date-range request and cache. The
-matrix ignores the selected display location but must filter its active
-location columns and source rows to the authenticated user's data scope. Read
-expense rows from each location's `buildBooks` output using ledger own balances,
-not subtree totals; calculate opening positions as of the day before the range,
-with zero opening for all-time.
+When the global location filter is set, “Sales & Outstanding by Location” and
+“Expense Details” show only the selected active locations, while the server
+still enforces the caller's authorized data scope. Expense Details include only
+cash- and bank-paid expense-module postings whose debit ledger is under
+`SYS-DIREXP` or `SYS-INDEXP`; omit ledgers whose selected-location values are
+all zero.
 
-**Why:** a second fetch can drift from the dashboard's active range and makes
-the same multi-location P&L work run twice; using subtree totals double-counts
-nested ledgers, while omitting LBAC from a cross-location view exposes data.
+**Why:** the user explicitly requested that selecting three locations limits
+both dashboard detail sections to those three, and that Expense Details show
+paid direct/indirect expense ledgers without empty rows.
 
-**How to apply:** extend the hand-written `DashboardBi` response type and
-reuse the per-location financial results where the existing location
-breakdown needs them. Sum totals from the displayed location values, and keep
-matrix image capture scoped to the table element only.
+**How to apply:** filter both `locationSalesReport` and the per-location
+Expense Details arrays using the same selected location set before building the
+response. Keep `cashBankReport` and other dashboard sections unchanged unless
+the requirement explicitly includes them.
 
 # Cash receipt rows in the cross-location matrix
 
