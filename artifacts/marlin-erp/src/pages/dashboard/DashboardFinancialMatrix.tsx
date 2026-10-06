@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { Fragment, useRef, useState } from 'react';
 import type { DashboardFinancialMatrix } from '@workspace/api-client-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -49,17 +49,17 @@ export function DashboardFinancialMatrixSection({
       });
       await document.fonts.ready;
       const { toBlob } = await import('html-to-image');
-      const table = captureTarget.querySelector<HTMLTableElement>('table');
-      if (!table) throw new Error('financial matrix table not found');
+      const tables = Array.from(captureTarget.querySelectorAll<HTMLTableElement>('table'));
+      if (tables.length === 0) throw new Error('financial matrix table not found');
       const captureRect = captureTarget.getBoundingClientRect();
-      const tableRect = table.getBoundingClientRect();
-      const lastRow = table.tBodies[0]?.rows[table.tBodies[0].rows.length - 1];
+      const tableRects = tables.map((table) => table.getBoundingClientRect());
+      const lastTable = tables[tables.length - 1];
+      const lastRow = lastTable.tBodies[0]?.rows[lastTable.tBodies[0].rows.length - 1];
       const lastRowBottom = lastRow?.getBoundingClientRect().bottom ?? captureRect.bottom;
       const width = Math.ceil(Math.max(
         captureTarget.scrollWidth,
         captureRect.width,
-        table.scrollWidth,
-        tableRect.width,
+        ...tables.map((table, index) => Math.max(table.scrollWidth, tableRects[index].width)),
       ));
       // Measure through the last rendered row, not only the wrapper's scroll
       // size: table layout can report a height that clips the final row in the
@@ -67,12 +67,14 @@ export function DashboardFinancialMatrixSection({
       const height = Math.ceil(Math.max(
         captureTarget.scrollHeight,
         captureRect.height,
-        table.scrollHeight,
-        tableRect.height,
+        ...tables.map((table, index) => Math.max(
+          table.scrollHeight,
+          tableRects[index].bottom - captureRect.top,
+        )),
         lastRowBottom - captureRect.top,
       )) + 2;
       console.debug('[dashboard] financial matrix share: capture bounds', {
-        rows: table.rows.length,
+        rows: tables.reduce((total, table) => total + table.rows.length, 0),
         width,
         height,
       });
@@ -129,6 +131,39 @@ export function DashboardFinancialMatrixSection({
   const openingDescription = period.fromDate
     ? 'Opening cash and bank are the positions as of the day before this period.'
     : 'All time begins at inception with zero opening cash and bank balances.';
+  const expenseRowsByLedger = new Map<number, {
+    ledgerId: number;
+    name: string;
+    bank: number[];
+    cash: number[];
+  }>();
+  const emptyExpenseValues = () => Array(data?.locations.length ?? 0).fill(0) as number[];
+  for (const ledger of data?.bankExpenseLedgers ?? []) {
+    expenseRowsByLedger.set(ledger.ledgerId, {
+      ledgerId: ledger.ledgerId,
+      name: ledger.name,
+      bank: ledger.values,
+      cash: emptyExpenseValues(),
+    });
+  }
+  for (const ledger of data?.cashExpenseLedgers ?? []) {
+    const row = expenseRowsByLedger.get(ledger.ledgerId);
+    if (row) {
+      row.name = ledger.name;
+      row.cash = ledger.values;
+    } else {
+      expenseRowsByLedger.set(ledger.ledgerId, {
+        ledgerId: ledger.ledgerId,
+        name: ledger.name,
+        bank: emptyExpenseValues(),
+        cash: ledger.values,
+      });
+    }
+  }
+  const expenseRows = Array.from(expenseRowsByLedger.values())
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const expenseColumnTotal = (mode: 'bank' | 'cash', locationIndex: number) =>
+    (mode === 'bank' ? data?.bankExpenses : data?.cashExpenses)?.[locationIndex] ?? 0;
 
   const amountRow = (
     key: string,
@@ -236,9 +271,6 @@ export function DashboardFinancialMatrixSection({
                   {amountRow('cash-receipt-vouchers', 'Cash Receipt', data.cashReceiptVouchers, data.totals.cashReceiptVouchers, { nested: true })}
                   {amountRow('balance', 'Balance', data.balance, data.totals.balance, { balance: true })}
                   {amountRow('cash-expenses', 'Cash Expense', data.cashExpenses, data.totals.cashExpenses, { emphasized: true })}
-                  {data.cashExpenseLedgers.map((ledger) =>
-                    amountRow(`expense-${ledger.ledgerId}`, ledger.name, ledger.values, ledger.total, { nested: true }),
-                  )}
                   {amountRow('closing-cash', 'Closing balance cash', data.closingCash, data.totals.closingCash, { emphasized: true })}
                   <tr className="bg-muted/60">
                     <th colSpan={data.locations.length + 2} className="border-b border-border px-3 py-2 text-left font-semibold">
@@ -251,13 +283,92 @@ export function DashboardFinancialMatrixSection({
                   {amountRow('bank-receipt-vouchers', 'Bank Receipt Vouchers', data.bankReceiptVouchers, data.totals.bankReceiptVouchers, { nested: true })}
                   {amountRow('bank-balance', 'Balance', data.bankBalance, data.totals.bankBalance, { balance: true })}
                   {amountRow('bank-expenses', 'Bank Expense', data.bankExpenses, data.totals.bankExpenses, { emphasized: true })}
-                  {data.bankExpenseLedgers.map((ledger) =>
-                    amountRow(`bank-expense-${ledger.ledgerId}`, ledger.name, ledger.values, ledger.total, { nested: true }),
-                  )}
                   {amountRow('reconciliation-pending', 'Reconciliation pending', data.reconciliationPending, data.totals.reconciliationPending, { emphasized: true })}
                   {amountRow('closing-bank', 'Closing balance bank', data.closingBank, data.totals.closingBank, { emphasized: true })}
                 </tbody>
               </table>
+              <div className="mt-4 overflow-hidden rounded-lg border border-border">
+                <table className="w-full min-w-max border-separate border-spacing-0 text-sm">
+                  <caption className="caption-top border-b border-border bg-card px-3 py-2 text-left font-semibold">
+                    Expense details · {periodText}
+                  </caption>
+                  <thead>
+                    <tr className="bg-muted/40">
+                      <th scope="col" className="min-w-[220px] border-b border-border px-3 py-2 text-left font-semibold">
+                        Location
+                      </th>
+                      {data.locations.map((location) => (
+                        <th
+                          key={`${location.locationType}:${location.locationId}`}
+                          scope="colgroup"
+                          colSpan={2}
+                          className="min-w-[260px] border-b border-border px-3 py-2 text-center font-semibold"
+                        >
+                          {location.name}
+                        </th>
+                      ))}
+                    </tr>
+                    <tr className="bg-muted/30">
+                      <th scope="col" className="border-b border-border px-3 py-2 text-left font-medium text-muted-foreground">
+                        Bank/Cash
+                      </th>
+                      {data.locations.map((location) => (
+                        <Fragment key={`${location.locationType}:${location.locationId}`}>
+                          <th scope="col" className="min-w-[130px] border-b border-border px-3 py-2 text-right font-medium">
+                            Bank
+                          </th>
+                          <th scope="col" className="min-w-[130px] border-b border-border px-3 py-2 text-right font-medium">
+                            Cash
+                          </th>
+                        </Fragment>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {expenseRows.length === 0 ? (
+                      <tr>
+                        <td
+                          colSpan={data.locations.length * 2 + 1}
+                          className="border-b border-border px-3 py-4 text-center text-muted-foreground"
+                        >
+                          No expense details in this period.
+                        </td>
+                      </tr>
+                    ) : expenseRows.map((row) => (
+                      <tr key={row.ledgerId} className="hover:bg-muted/20">
+                        <th scope="row" className="min-w-[220px] border-b border-border bg-card px-3 py-2 text-left font-medium">
+                          {row.name}
+                        </th>
+                        {data.locations.map((location, index) => (
+                          <Fragment key={`${location.locationType}:${location.locationId}`}>
+                            <td className="min-w-[130px] border-b border-border px-3 py-2 text-right font-mono text-sm tabular-nums">
+                              {fmt(row.bank[index] ?? 0)}
+                            </td>
+                            <td className="min-w-[130px] border-b border-border px-3 py-2 text-right font-mono text-sm tabular-nums">
+                              {fmt(row.cash[index] ?? 0)}
+                            </td>
+                          </Fragment>
+                        ))}
+                      </tr>
+                    ))}
+                    <tr className="bg-primary/10 font-bold">
+                      <th scope="row" className="min-w-[220px] border-b border-border px-3 py-2 text-left">
+                        Total
+                      </th>
+                      {data.locations.map((location, index) => (
+                        <Fragment key={`${location.locationType}:${location.locationId}`}>
+                          <td className="min-w-[130px] border-b border-border px-3 py-2 text-right font-mono text-sm tabular-nums">
+                            {fmt(expenseColumnTotal('bank', index))}
+                          </td>
+                          <td className="min-w-[130px] border-b border-border px-3 py-2 text-right font-mono text-sm tabular-nums">
+                            {fmt(expenseColumnTotal('cash', index))}
+                          </td>
+                        </Fragment>
+                      ))}
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
               </div>
             </div>
             <div className="mt-4 flex justify-end">
