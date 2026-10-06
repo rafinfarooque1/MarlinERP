@@ -25,6 +25,12 @@ const postings = [
   { source: "expense", entryId: "expense:other-location", date: "2026-10-03", ledgerId: 10, debit: 0, credit: 20, locationType: "warehouse", locationId: 8 },
   { source: "expense", entryId: "expense:other-date", date: "2026-10-02", ledgerId: 32, debit: 25, credit: 0, locationType: "warehouse", locationId: 7 },
   { source: "expense", entryId: "expense:other-date", date: "2026-10-02", ledgerId: 10, debit: 0, credit: 25, locationType: "warehouse", locationId: 7 },
+  { source: "payment", entryId: "payment:indirect-cash", date: "2026-10-03", ledgerId: 35, debit: 15, credit: 0, locationType: "warehouse", locationId: 7 },
+  { source: "payment", entryId: "payment:indirect-cash", date: "2026-10-03", ledgerId: 10, debit: 0, credit: 15, locationType: "warehouse", locationId: 7 },
+  { source: "payment", entryId: "payment:indirect-bank", date: "2026-10-03", ledgerId: 36, debit: 18, credit: 0, locationType: "warehouse", locationId: 7 },
+  { source: "payment", entryId: "payment:indirect-bank", date: "2026-10-03", ledgerId: 20, debit: 0, credit: 18, locationType: "warehouse", locationId: 7 },
+  { source: "payment", entryId: "payment:not-expense", date: "2026-10-03", ledgerId: 40, debit: 24, credit: 0, locationType: "warehouse", locationId: 7 },
+  { source: "payment", entryId: "payment:not-expense", date: "2026-10-03", ledgerId: 20, debit: 0, credit: 24, locationType: "warehouse", locationId: 7 },
   { source: "journal_voucher", entryId: "jv:cash", date: "2026-10-03", ledgerId: 33, debit: 60, credit: 0, locationType: "warehouse", locationId: 7 },
   { source: "journal_voucher", entryId: "jv:cash", date: "2026-10-03", ledgerId: 10, debit: 0, credit: 60, locationType: "warehouse", locationId: 7 },
   { source: "sale", date: "2026-10-03", ledgerId: 20, debit: 205.5, credit: 0, locationType: "warehouse", locationId: 7 },
@@ -32,6 +38,14 @@ const postings = [
   { source: "expense", entryId: "expense:bank-only", date: "2026-10-03", ledgerId: 34, debit: 27.5, credit: 0, locationType: "warehouse", locationId: 7 },
   { source: "expense", entryId: "expense:bank-only", date: "2026-10-03", ledgerId: 20, debit: 0, credit: 27.5, locationType: "warehouse", locationId: 7 },
 ];
+
+const testSubtree = (code: string) => {
+  if (code === "STD-CASH") return [10];
+  if (code === "STD-BANK") return [20];
+  if (code === "SYS-DIREXP") return [30, 34];
+  if (code === "SYS-INDEXP") return [35, 36];
+  return [];
+};
 
 const result = rangeCashReceiptBreakdown(postings as never[], {
   fromDate: "2026-10-03",
