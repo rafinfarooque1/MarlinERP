@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/app/empty-state';
 import { Loader2, Receipt, Share2 } from 'lucide-react';
-import { fmt, periodLabel } from '@/pages/reports/shared';
+import { fmtZeroAsBlank, periodLabel } from '@/pages/reports/shared';
 import { toast } from 'sonner';
 
 type ExpenseRow = {
@@ -260,10 +260,10 @@ export function DashboardExpenseDetailsReport({
                         {data.locations.map((location, index) => (
                           <Fragment key={`${location.locationType}:${location.locationId}`}>
                             <td className="min-w-[130px] border-b border-border px-3 py-2 text-right font-mono text-sm tabular-nums">
-                              {fmt(row.bank[index] ?? 0)}
+                              {fmtZeroAsBlank(row.bank[index] ?? 0)}
                             </td>
                             <td className="min-w-[130px] border-b border-border px-3 py-2 text-right font-mono text-sm tabular-nums">
-                              {fmt(row.cash[index] ?? 0)}
+                              {fmtZeroAsBlank(row.cash[index] ?? 0)}
                             </td>
                           </Fragment>
                         ))}
@@ -276,10 +276,10 @@ export function DashboardExpenseDetailsReport({
                       {data.locations.map((location, index) => (
                         <Fragment key={`${location.locationType}:${location.locationId}`}>
                           <td className="min-w-[130px] border-b border-border px-3 py-2 text-right font-mono text-sm tabular-nums">
-                            {fmt(data.bankExpenses[index] ?? 0)}
+                            {fmtZeroAsBlank(data.bankExpenses[index] ?? 0)}
                           </td>
                           <td className="min-w-[130px] border-b border-border px-3 py-2 text-right font-mono text-sm tabular-nums">
-                            {fmt(data.cashExpenses[index] ?? 0)}
+                            {fmtZeroAsBlank(data.cashExpenses[index] ?? 0)}
                           </td>
                         </Fragment>
                       ))}

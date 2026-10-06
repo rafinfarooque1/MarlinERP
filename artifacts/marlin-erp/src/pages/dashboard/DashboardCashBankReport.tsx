@@ -6,7 +6,7 @@ import { EmptyState } from '@/components/app/empty-state';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
-import { fmt, periodLabel } from '@/pages/reports/shared';
+import { fmtZeroAsBlank, periodLabel } from '@/pages/reports/shared';
 
 function AccountTable({
   title,
@@ -53,20 +53,20 @@ function AccountTable({
             ) : rows.map((row) => (
               <tr key={row.ledgerId} className="hover:bg-muted/20">
                 <th scope="row" className="border-b border-border bg-card px-3 py-2 text-left font-medium">{row.name}</th>
-                <td className="border-b border-border px-3 py-2 text-right font-mono tabular-nums">{fmt(row.opening)}</td>
-                <td className="border-b border-border px-3 py-2 text-right font-mono tabular-nums">{fmt(row.receipt)}</td>
-                <td className="border-b border-border px-3 py-2 text-right font-mono tabular-nums">{fmt(row.payment)}</td>
-                <td className="border-b border-border px-3 py-2 text-right font-mono tabular-nums">{fmt(row.closing)}</td>
+                <td className="border-b border-border px-3 py-2 text-right font-mono tabular-nums">{fmtZeroAsBlank(row.opening)}</td>
+                <td className="border-b border-border px-3 py-2 text-right font-mono tabular-nums">{fmtZeroAsBlank(row.receipt)}</td>
+                <td className="border-b border-border px-3 py-2 text-right font-mono tabular-nums">{fmtZeroAsBlank(row.payment)}</td>
+                <td className="border-b border-border px-3 py-2 text-right font-mono tabular-nums">{fmtZeroAsBlank(row.closing)}</td>
               </tr>
             ))}
           </tbody>
           <tfoot>
             <tr className="bg-primary/10 font-bold" data-testid={`${testId}-total`}>
               <th scope="row" className="px-3 py-2 text-left">Total</th>
-              <td className="px-3 py-2 text-right font-mono tabular-nums">{fmt(totals.opening)}</td>
-              <td className="px-3 py-2 text-right font-mono tabular-nums">{fmt(totals.receipt)}</td>
-              <td className="px-3 py-2 text-right font-mono tabular-nums">{fmt(totals.payment)}</td>
-              <td className="px-3 py-2 text-right font-mono tabular-nums">{fmt(totals.closing)}</td>
+              <td className="px-3 py-2 text-right font-mono tabular-nums">{fmtZeroAsBlank(totals.opening)}</td>
+              <td className="px-3 py-2 text-right font-mono tabular-nums">{fmtZeroAsBlank(totals.receipt)}</td>
+              <td className="px-3 py-2 text-right font-mono tabular-nums">{fmtZeroAsBlank(totals.payment)}</td>
+              <td className="px-3 py-2 text-right font-mono tabular-nums">{fmtZeroAsBlank(totals.closing)}</td>
             </tr>
           </tfoot>
         </table>
