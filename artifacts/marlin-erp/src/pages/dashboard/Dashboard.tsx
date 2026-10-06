@@ -277,6 +277,9 @@ export default function Dashboard() {
   // Expenses tile, so they always equal the Profit & Loss report for the same
   // range and location.
   const pf = bi?.profit;
+  // GP/NP are commercially sensitive dashboard details. Keep them hidden until
+  // the dashboard's delete permission has finished loading and explicitly grants access.
+  const canShowProfitDetails = !dashPerm.isLoading && dashPerm.canDelete;
   // Period money paid out / received over the cash+bank ledger subtrees, from
   // the SAME derived-posting stream as the Cash/Bank balance tiles — so the
   // Payments/Receipts tiles always agree with the books for the range and
@@ -499,22 +502,23 @@ export default function Dashboard() {
       tone: (dashboardValue('reconciliationPending', bi?.bank?.reconciliationPending) ?? 0) > 0 ? 'warn' : 'default',
       hint: locationHint('reconciliationPending', 'Awaiting bank clearance'),
     },
-    // ── Row 6: GP · NP — both read the P&L's own summary, never a re-sum ──
-    // NP stays beside GP in the final KPI pair.
-    {
-      label: 'GP',
-      value: dashboardValue('grossProfit', pf?.gross) == null ? '—' : fmt(dashboardValue('grossProfit', pf?.gross)!),
-      tone: pf?.gross == null ? 'default' : pf.gross >= 0 ? 'pos' : 'neg',
-      hint: locationHint('grossProfit', 'Gross Profit · tap for P&L'),
-      onClick: drill('pl-gross-profit'),
-    },
-    {
-      label: 'NP',
-      value: dashboardValue('netProfit', pf?.net) == null ? '—' : fmt(dashboardValue('netProfit', pf?.net)!),
-      tone: pf?.net == null ? 'default' : pf.net >= 0 ? 'pos' : 'neg',
-      hint: locationHint('netProfit', 'Net Profit · tap for P&L'),
-      onClick: drill('pl-net-profit'),
-    },
+    // GP/NP read the P&L summary and are visible only with dashboard delete access.
+    ...(canShowProfitDetails ? [
+      {
+        label: 'GP',
+        value: dashboardValue('grossProfit', pf?.gross) == null ? '—' : fmt(dashboardValue('grossProfit', pf?.gross)!),
+        tone: pf?.gross == null ? 'default' as const : pf.gross >= 0 ? 'pos' as const : 'neg' as const,
+        hint: locationHint('grossProfit', 'Gross Profit · tap for P&L'),
+        onClick: drill('pl-gross-profit'),
+      },
+      {
+        label: 'NP',
+        value: dashboardValue('netProfit', pf?.net) == null ? '—' : fmt(dashboardValue('netProfit', pf?.net)!),
+        tone: pf?.net == null ? 'default' as const : pf.net >= 0 ? 'pos' as const : 'neg' as const,
+        hint: locationHint('netProfit', 'Net Profit · tap for P&L'),
+        onClick: drill('pl-net-profit'),
+      },
+    ] : []),
   ];
 
   // The shared KPI report picks its figures OUT OF summaryCards, so the image
@@ -650,25 +654,27 @@ export default function Dashboard() {
       lines: locationLines('reconciliationPending'),
       desc: showLocationBreakdown ? undefined : 'Awaiting bank clearance',
     },
-    {
-      label: 'GP',
-      icon: PieChart,
-       value: dashboardValue('grossProfit', pf?.gross) == null ? '—' : fmt(dashboardValue('grossProfit', pf?.gross)!),
-      tone: pf?.gross == null ? 'default' : pf.gross >= 0 ? 'pos' : 'neg',
-      lines: locationLines('grossProfit'),
-      desc: showLocationBreakdown ? undefined : 'Gross Profit',
-      onClick: drill('pl-gross-profit'),
-    },
-    {
-      label: 'NP',
-      icon: BarChart3,
-       value: dashboardValue('netProfit', pf?.net) == null ? '—' : fmt(dashboardValue('netProfit', pf?.net)!),
-      tone: pf?.net == null ? 'default' : pf.net >= 0 ? 'pos' : 'neg',
-      lines: locationLines('netProfit'),
-      desc: showLocationBreakdown ? undefined : 'Net Profit',
-      onClick: drill('pl-net-profit'),
-      spanTwo: true,
-    },
+    ...(canShowProfitDetails ? [
+      {
+        label: 'GP',
+        icon: PieChart,
+        value: dashboardValue('grossProfit', pf?.gross) == null ? '—' : fmt(dashboardValue('grossProfit', pf?.gross)!),
+        tone: pf?.gross == null ? 'default' as const : pf.gross >= 0 ? 'pos' as const : 'neg' as const,
+        lines: locationLines('grossProfit'),
+        desc: showLocationBreakdown ? undefined : 'Gross Profit',
+        onClick: drill('pl-gross-profit'),
+      },
+      {
+        label: 'NP',
+        icon: BarChart3,
+        value: dashboardValue('netProfit', pf?.net) == null ? '—' : fmt(dashboardValue('netProfit', pf?.net)!),
+        tone: pf?.net == null ? 'default' as const : pf.net >= 0 ? 'pos' as const : 'neg' as const,
+        lines: locationLines('netProfit'),
+        desc: showLocationBreakdown ? undefined : 'Net Profit',
+        onClick: drill('pl-net-profit'),
+        spanTwo: true,
+      },
+    ] : []),
   ];
 
   return (

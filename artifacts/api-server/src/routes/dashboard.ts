@@ -4,7 +4,7 @@ import { count, sum, eq, and, sql, inArray } from "drizzle-orm";
 import { getUserDataScope, scopeSalesWhere, scopeBranchWhere, type DataScope } from "../lib/dataScope";
 import { pushLocationFilter, type ParsedLocationFilter } from "../lib/queryFilters";
 import { stockValuation } from "../lib/valuation";
-import { requireModuleView, canViewStockValuation } from "../middleware/permissions";
+import { requireModuleView, canViewStockValuation, hasModuleAction } from "../middleware/permissions";
 import { buildDerivedPostings } from "./journal";
 import { companyBalances, companyFinancials, rangeBankExpensesByLedger, rangeBankReceiptBreakdown, rangeCashExpensesByLedger, rangeCashReceiptBreakdown, rangeMoneyFlows, ledgerSubtreeLookup, reconciliationPendingAmount } from "../lib/dashboardFinancials";
 import { outstandingExpr, outstandingAsOfExpr } from "../lib/salePaymentPosition";
@@ -315,6 +315,11 @@ router.get("/dashboard/summary", requireModuleView("page:/"), async (req, res): 
   // Hiding the Value column on the Stock screen is pointless if the same
   // number is sitting on a dashboard tile, so the tiles obey the same right.
   const showValuation = await canViewStockValuation((req as any).employee?.hierarchyId);
+  const showDashboardProfit = await hasModuleAction(
+    (req as any).employee?.hierarchyId,
+    "page:/",
+    "delete",
+  );
 
   res.json({
     totalItemsProduced:   itemsCount.count,
@@ -1267,7 +1272,7 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
     expense: number | null; payables: number | null; receivables: number | null;
      payments: number | null; receipts: number | null; cash: number | null; bank: number | null;
      reconciliationPending: number;
-    grossProfit: number | null; netProfit: number | null;
+     grossProfit?: number | null; netProfit?: number | null;
   }> = [];
   if (isAllLocations || isMultiLocations) {
     const [locationRows, purchaseLocationRows] = await Promise.all([
@@ -1458,14 +1463,16 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
     // buildBooks output as the expenses tile (never recomputed here), so the
     // GP/NP tiles always equal the Profit & Loss for the same range and
     // location. Null exactly when the other accounting figures are null.
-    profit: {
-      gross: accounting ? accounting.profit.gross : null,
-      net: accounting ? accounting.profit.net : null,
-      // COGS from the same P&L summary — the tile equals the statement's
-      // "Cost of Goods Sold" line for the same range and location.
-      cogs: accounting ? accounting.profit.cogs : null,
-      companyWide: !postingLoc,
-    },
+    ...(showDashboardProfit ? {
+      profit: {
+        gross: accounting ? accounting.profit.gross : null,
+        net: accounting ? accounting.profit.net : null,
+        // COGS from the same P&L summary — the tile equals the statement's
+        // "Cost of Goods Sold" line for the same range and location.
+        cogs: accounting ? accounting.profit.cogs : null,
+        companyWide: !postingLoc,
+      },
+    } : {}),
     // Bank only — physical cash stays in the separate `cash` figures, matching
     // this ERP's existing STD-BANK / STD-CASH split.
     bank: {
@@ -1482,7 +1489,9 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
     todayMoney: moneyFlows,
     cashBankReport,
     financialMatrix,
-    locationBreakdown,
+    locationBreakdown: showDashboardProfit
+      ? locationBreakdown
+      : locationBreakdown.map(({ grossProfit: _grossProfit, netProfit: _netProfit, ...safe }) => safe),
     locationSalesReport,
     topItems: topItemsRows.rows.map((r: any) => ({
       itemId: Number(r.item_id), name: r.name, qty: qty(r.qty), revenue: money(r.revenue),
