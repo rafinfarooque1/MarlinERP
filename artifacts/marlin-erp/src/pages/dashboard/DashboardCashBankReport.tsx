@@ -6,14 +6,13 @@ import { EmptyState } from '@/components/app/empty-state';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
-import { fmtZeroAsBlank, periodLabel } from '@/pages/reports/shared';
+import { fmt, periodLabel } from '@/pages/reports/shared';
 
 function AccountTable({
   title,
   icon: Icon,
   rows,
   totals,
-  emptyText,
   testId,
   captureMode,
 }: {
@@ -21,7 +20,6 @@ function AccountTable({
   icon: typeof Landmark;
   rows: CashBankReportData['bank']['rows'];
   totals: CashBankReportData['bank']['totals'];
-  emptyText: string;
   testId: string;
   captureMode: boolean;
 }) {
@@ -44,29 +42,23 @@ function AccountTable({
             </tr>
           </thead>
           <tbody>
-            {rows.length === 0 ? (
-              <tr>
-                <td colSpan={5} className="border border-border px-2 py-3 text-center text-muted-foreground">
-                  {emptyText}
-                </td>
-              </tr>
-            ) : rows.map((row) => (
+            {rows.map((row) => (
               <tr key={row.ledgerId} className="hover:bg-muted/20">
                 <th scope="row" className="border border-border bg-card px-2 py-1 text-left font-medium">{row.name}</th>
-                <td className="border border-border px-2 py-1 text-right font-mono tabular-nums">{fmtZeroAsBlank(row.opening)}</td>
-                <td className="border border-border px-2 py-1 text-right font-mono tabular-nums">{fmtZeroAsBlank(row.receipt)}</td>
-                <td className="border border-border px-2 py-1 text-right font-mono tabular-nums">{fmtZeroAsBlank(row.payment)}</td>
-                <td className="border border-border px-2 py-1 text-right font-mono tabular-nums">{fmtZeroAsBlank(row.closing)}</td>
+                <td className="border border-border px-2 py-1 text-right font-mono tabular-nums">{fmt(row.opening)}</td>
+                <td className="border border-border px-2 py-1 text-right font-mono tabular-nums">{fmt(row.receipt)}</td>
+                <td className="border border-border px-2 py-1 text-right font-mono tabular-nums">{fmt(row.payment)}</td>
+                <td className="border border-border px-2 py-1 text-right font-mono tabular-nums">{fmt(row.closing)}</td>
               </tr>
             ))}
           </tbody>
           <tfoot>
             <tr className="bg-primary/10 font-bold" data-testid={`${testId}-total`}>
               <th scope="row" className="border border-border px-2 py-1 text-left">Total</th>
-              <td className="border border-border px-2 py-1 text-right font-mono tabular-nums">{fmtZeroAsBlank(totals.opening)}</td>
-              <td className="border border-border px-2 py-1 text-right font-mono tabular-nums">{fmtZeroAsBlank(totals.receipt)}</td>
-              <td className="border border-border px-2 py-1 text-right font-mono tabular-nums">{fmtZeroAsBlank(totals.payment)}</td>
-              <td className="border border-border px-2 py-1 text-right font-mono tabular-nums">{fmtZeroAsBlank(totals.closing)}</td>
+              <td className="border border-border px-2 py-1 text-right font-mono tabular-nums">{fmt(totals.opening)}</td>
+              <td className="border border-border px-2 py-1 text-right font-mono tabular-nums">{fmt(totals.receipt)}</td>
+              <td className="border border-border px-2 py-1 text-right font-mono tabular-nums">{fmt(totals.payment)}</td>
+              <td className="border border-border px-2 py-1 text-right font-mono tabular-nums">{fmt(totals.closing)}</td>
             </tr>
           </tfoot>
         </table>
@@ -245,7 +237,6 @@ export function DashboardCashBankReport({
                   icon={Landmark}
                   rows={data.bank.rows}
                   totals={data.bank.totals}
-                  emptyText="No bank account activity in this period."
                   testId="table-dashboard-bank"
                   captureMode={preparingCapture}
                 />
@@ -254,7 +245,6 @@ export function DashboardCashBankReport({
                   icon={Wallet}
                   rows={data.cash.rows}
                   totals={data.cash.totals}
-                  emptyText="No cash account activity in this period."
                   testId="table-dashboard-cash"
                   captureMode={preparingCapture}
                 />

@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/app/empty-state';
 import { Loader2, Receipt, Share2 } from 'lucide-react';
-import { fmtZeroAsBlank, periodLabel } from '@/pages/reports/shared';
+import { fmt, periodLabel } from '@/pages/reports/shared';
 import { toast } from 'sonner';
 
 type ExpenseRow = {
@@ -243,16 +243,7 @@ export function DashboardExpenseDetailsReport({
                     </tr>
                   </thead>
                   <tbody>
-                    {expenseRows.length === 0 ? (
-                      <tr>
-                        <td
-                          colSpan={data.locations.length * 2 + 1}
-                          className="border border-border px-2 py-3 text-center text-muted-foreground"
-                        >
-                          No expense details in this period.
-                        </td>
-                      </tr>
-                    ) : expenseRows.map((row) => (
+                    {expenseRows.map((row) => (
                       <tr key={row.ledgerId} className="hover:bg-muted/20">
                         <th scope="row" className="min-w-[220px] border border-border bg-card px-2 py-1 text-left font-medium">
                           {row.name}
@@ -260,10 +251,10 @@ export function DashboardExpenseDetailsReport({
                         {data.locations.map((location, index) => (
                           <Fragment key={`${location.locationType}:${location.locationId}`}>
                             <td className="min-w-[130px] border border-border px-2 py-1 text-right font-mono text-sm tabular-nums">
-                              {fmtZeroAsBlank(row.bank[index] ?? 0)}
+                              {fmt(row.bank[index] ?? 0)}
                             </td>
                             <td className="min-w-[130px] border border-border px-2 py-1 text-right font-mono text-sm tabular-nums">
-                              {fmtZeroAsBlank(row.cash[index] ?? 0)}
+                              {fmt(row.cash[index] ?? 0)}
                             </td>
                           </Fragment>
                         ))}
@@ -276,10 +267,10 @@ export function DashboardExpenseDetailsReport({
                       {data.locations.map((location, index) => (
                         <Fragment key={`${location.locationType}:${location.locationId}`}>
                             <td className="min-w-[130px] border border-border px-2 py-1 text-right font-mono text-sm tabular-nums">
-                            {fmtZeroAsBlank(data.bankExpenses[index] ?? 0)}
+                            {fmt(data.bankExpenses[index] ?? 0)}
                           </td>
                             <td className="min-w-[130px] border border-border px-2 py-1 text-right font-mono text-sm tabular-nums">
-                            {fmtZeroAsBlank(data.cashExpenses[index] ?? 0)}
+                            {fmt(data.cashExpenses[index] ?? 0)}
                           </td>
                         </Fragment>
                       ))}
