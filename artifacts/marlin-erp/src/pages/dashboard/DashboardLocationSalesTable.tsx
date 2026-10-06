@@ -23,24 +23,24 @@ export function DashboardLocationSalesTable({
   const outstandingTotal = totalOutstanding ?? totals.outstandingAmount;
 
   return (
-    <div className={captureMode ? 'overflow-visible' : 'overflow-x-auto'}>
+    <div className={`${captureMode ? 'overflow-visible' : 'overflow-x-auto'} rounded-lg border border-border`}>
       <table
         data-testid={testId}
-        className="w-full min-w-[650px] border-separate border-spacing-0 text-sm"
+        className="w-full min-w-[650px] border-collapse text-sm"
       >
         <caption className="sr-only">Sales and outstanding by location</caption>
         <thead>
           <tr className="bg-muted/40">
-            <th scope="col" className="min-w-[190px] border-b border-border px-3 py-2 text-left font-semibold">
+            <th scope="col" className="min-w-[190px] border border-border px-2 py-1 text-left font-semibold">
               Location
             </th>
-            <th scope="col" className="min-w-[165px] border-b border-border px-3 py-2 text-right font-semibold">
+            <th scope="col" className="min-w-[165px] border border-border px-2 py-1 text-right font-semibold">
               Sales amount
             </th>
-            <th scope="col" className="min-w-[145px] border-b border-border px-3 py-2 text-right font-semibold">
+            <th scope="col" className="min-w-[145px] border border-border px-2 py-1 text-right font-semibold">
               Sales quantity
             </th>
-            <th scope="col" className="min-w-[190px] border-b border-border px-3 py-2 text-right font-semibold">
+            <th scope="col" className="min-w-[190px] border border-border px-2 py-1 text-right font-semibold">
               Outstanding amount
             </th>
           </tr>
@@ -52,16 +52,16 @@ export function DashboardLocationSalesTable({
               data-testid={`row-location-sales-${row.locationType}-${row.locationId}`}
               className="hover:bg-muted/20"
             >
-              <th scope="row" className="border-b border-border px-3 py-2 text-left font-medium">
+              <th scope="row" className="border border-border px-2 py-1 text-left font-medium">
                 {row.name}
               </th>
-              <td className="border-b border-border px-3 py-2 text-right font-mono text-sm tabular-nums">
+              <td className="border border-border px-2 py-1 text-right font-mono text-sm tabular-nums">
                 {fmtZeroAsBlank(row.salesAmount)}
               </td>
-              <td className="border-b border-border px-3 py-2 text-right font-mono text-sm tabular-nums">
+              <td className="border border-border px-2 py-1 text-right font-mono text-sm tabular-nums">
                 {num(row.salesQuantity)}
               </td>
-              <td className="border-b border-border px-3 py-2 text-right font-mono text-sm tabular-nums">
+              <td className="border border-border px-2 py-1 text-right font-mono text-sm tabular-nums">
                 {fmtZeroAsBlank(row.outstandingAmount)}
               </td>
             </tr>
@@ -69,16 +69,16 @@ export function DashboardLocationSalesTable({
         </tbody>
         <tfoot>
           <tr data-testid="row-location-sales-total" className="bg-primary/10 font-bold">
-            <th scope="row" className="border-b border-border px-3 py-2 text-left">
+            <th scope="row" className="border border-border px-2 py-1 text-left">
               Total
             </th>
-            <td className="border-b border-border px-3 py-2 text-right font-mono text-sm tabular-nums">
+            <td className="border border-border px-2 py-1 text-right font-mono text-sm tabular-nums">
               {fmtZeroAsBlank(totals.salesAmount)}
             </td>
-            <td className="border-b border-border px-3 py-2 text-right font-mono text-sm tabular-nums">
+            <td className="border border-border px-2 py-1 text-right font-mono text-sm tabular-nums">
               {num(totals.salesQuantity)}
             </td>
-            <td className="border-b border-border px-3 py-2 text-right font-mono text-sm tabular-nums">
+            <td className="border border-border px-2 py-1 text-right font-mono text-sm tabular-nums">
               {fmtZeroAsBlank(outstandingTotal)}
             </td>
           </tr>
