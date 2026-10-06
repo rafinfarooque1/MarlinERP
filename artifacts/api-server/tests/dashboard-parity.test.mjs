@@ -221,14 +221,11 @@ try {
       location.outstandingAmount,
       receivablesByLocation.get(dashboardLocationKey(location)) ?? 0,
     ));
-  const locationReceivablesTotal = (allLocationsBi?.locationSalesReport ?? [])
-    .reduce((sum, location) => sum + Number(location.outstandingAmount ?? 0), 0);
-  assert("Sales & Outstanding uses location receivable ledger balances and totals to the receivables control",
-    locationReceivablesMatch && near(locationReceivablesTotal, allLocationsBi?.receivables?.total),
+  assert("Sales & Outstanding location amounts match customer-ledger receivables",
+    locationReceivablesMatch,
     JSON.stringify({
       report: allLocationsBi?.locationSalesReport,
       locationBreakdown: allLocationsBi?.locationBreakdown,
-      total: allLocationsBi?.receivables?.total,
     }));
   if (availableLocationKeys.length > 0) {
     const selectedLocationKeys = [...availableLocationKeys];

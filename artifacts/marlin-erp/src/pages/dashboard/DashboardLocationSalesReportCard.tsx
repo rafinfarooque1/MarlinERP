@@ -10,6 +10,7 @@ import { DashboardLocationSalesTable } from './DashboardLocationSalesTable';
 
 export function DashboardLocationSalesReportCard({
   rows,
+  totalOutstanding,
   isLoading,
   isError,
   description,
@@ -17,6 +18,7 @@ export function DashboardLocationSalesReportCard({
   toDate,
 }: {
   rows?: DashboardLocationSalesRow[];
+  totalOutstanding?: number;
   isLoading: boolean;
   isError: boolean;
   description: string;
@@ -172,7 +174,11 @@ export function DashboardLocationSalesReportCard({
             ) : rows.length === 0 ? (
               <EmptyState icon={MapPin} title="No locations in scope" compact />
             ) : (
-              <DashboardLocationSalesTable rows={rows} captureMode={preparingCapture} />
+              <DashboardLocationSalesTable
+                rows={rows}
+                totalOutstanding={totalOutstanding}
+                captureMode={preparingCapture}
+              />
             )}
           </CardContent>
         </Card>
