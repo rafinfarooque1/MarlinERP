@@ -905,6 +905,8 @@ export default function Dashboard() {
                 </div>
               ) : isError || !bi ? (
                 <Empty message="Location report unavailable" />
+              ) : !Array.isArray(bi.locationSalesReport) ? (
+                <Empty message="Location report unavailable" />
               ) : bi.locationSalesReport.length === 0 ? (
                 <Empty message="No locations in scope" />
               ) : (

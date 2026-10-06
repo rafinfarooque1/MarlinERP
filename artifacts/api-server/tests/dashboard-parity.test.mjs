@@ -216,6 +216,22 @@ try {
   assert("explicit All Locations returns a location breakdown",
     biAll?.scope?.isAllLocations === true && Array.isArray(biAll?.locationBreakdown) && biAll.locationBreakdown.length > 0,
     JSON.stringify({ scope: biAll?.scope, rows: biAll?.locationBreakdown?.length }));
+  const locationSalesReport = biAll?.locationSalesReport;
+  assert("location sales report returns finite amount, quantity and outstanding values",
+    Array.isArray(locationSalesReport) && locationSalesReport.length > 0 && locationSalesReport.every((row) =>
+      typeof row.name === "string"
+      && Number.isFinite(Number(row.salesAmount))
+      && Number.isFinite(Number(row.salesQuantity))
+      && Number.isFinite(Number(row.outstandingAmount))),
+    JSON.stringify(locationSalesReport));
+  assert("location sales amounts match the dashboard's existing location totals",
+    Array.isArray(locationSalesReport) && locationSalesReport.every((row) => {
+      const source = (biAll?.sales?.byLocation ?? []).find((salesRow) =>
+        salesRow.locationType === row.locationType
+        && (row.locationType === "headoffice" || Number(salesRow.locationId) === Number(row.locationId)));
+      return near(row.salesAmount, source?.total ?? 0);
+    }),
+    JSON.stringify({ report: locationSalesReport, source: biAll?.sales?.byLocation }));
   const breakdownFields = [
     "sales", "purchases", "inventoryValue", "expense", "payables", "receivables",
     "payments", "receipts", "cash", "bank", "grossProfit", "netProfit",
