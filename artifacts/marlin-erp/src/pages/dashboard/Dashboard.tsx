@@ -918,21 +918,26 @@ export default function Dashboard() {
           </div>
         </div>
 
-        <DashboardCashBankReport
-          data={bi?.cashBankReport}
-          isLoading={isLoading}
-          isError={isError}
-          fromDate={range.from || undefined}
-          toDate={range.to || undefined}
-        />
-
-        <DashboardExpenseDetailsReport
-          data={bi?.financialMatrix}
-          isLoading={isLoading}
-          isError={isError}
-          fromDate={range.from || undefined}
-          toDate={range.to || undefined}
-        />
+        <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-2">
+          <div className="min-w-0">
+            <DashboardCashBankReport
+              data={bi?.cashBankReport}
+              isLoading={isLoading}
+              isError={isError}
+              fromDate={range.from || undefined}
+              toDate={range.to || undefined}
+            />
+          </div>
+          <div className="min-w-0">
+            <DashboardExpenseDetailsReport
+              data={bi?.financialMatrix}
+              isLoading={isLoading}
+              isError={isError}
+              fromDate={range.from || undefined}
+              toDate={range.to || undefined}
+            />
+          </div>
+        </div>
 
       </div>
       {/* Off-screen KPI share report — exists only to be photographed by the
