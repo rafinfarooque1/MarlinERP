@@ -23,24 +23,24 @@ export function DashboardLocationSalesTable({
   const outstandingTotal = totalOutstanding ?? totals.outstandingAmount;
 
   return (
-    <div className={`${captureMode ? 'overflow-visible' : 'overflow-x-auto'} rounded-lg border border-border`}>
+    <div className={`${captureMode ? 'overflow-visible' : 'overflow-x-auto'} w-fit max-w-full rounded-lg border border-border`}>
       <table
         data-testid={testId}
-        className="w-full min-w-[650px] border-collapse text-sm"
+        className="w-max border-collapse text-sm"
       >
         <caption className="sr-only">Sales and outstanding by location</caption>
         <thead>
           <tr className="bg-muted/40">
-            <th scope="col" className="min-w-[190px] border border-border px-2 py-1 text-left font-semibold">
+            <th scope="col" className="border border-border px-2 py-1 text-left font-semibold">
               Location
             </th>
-            <th scope="col" className="min-w-[165px] border border-border px-2 py-1 text-right font-semibold">
+            <th scope="col" className="border border-border px-2 py-1 text-right font-semibold">
               Sales amount
             </th>
-            <th scope="col" className="min-w-[145px] border border-border px-2 py-1 text-right font-semibold">
+            <th scope="col" className="border border-border px-2 py-1 text-right font-semibold">
               Sales quantity
             </th>
-            <th scope="col" className="min-w-[190px] border border-border px-2 py-1 text-right font-semibold">
+            <th scope="col" className="border border-border px-2 py-1 text-right font-semibold">
               Outstanding amount
             </th>
           </tr>

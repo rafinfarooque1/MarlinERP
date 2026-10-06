@@ -29,16 +29,16 @@ function AccountTable({
         <Icon className="h-4 w-4 text-primary" />
         {title}
       </h3>
-      <div className={`${captureMode ? 'overflow-visible' : 'overflow-x-auto'} rounded-lg border border-border`}>
-        <table className="w-full min-w-[760px] border-collapse text-sm" data-testid={testId}>
+      <div className={`${captureMode ? 'overflow-visible' : 'overflow-x-auto'} w-fit max-w-full rounded-lg border border-border`}>
+        <table className="w-max border-collapse text-sm" data-testid={testId}>
           <caption className="sr-only">{title} account balances and period movements</caption>
           <thead>
             <tr className="bg-muted/40">
-              <th scope="col" className="min-w-[220px] border border-border px-2 py-1 text-left font-semibold">Account</th>
-              <th scope="col" className="min-w-[130px] border border-border px-2 py-1 text-right font-semibold">Opening</th>
-              <th scope="col" className="min-w-[130px] border border-border px-2 py-1 text-right font-semibold">Receipt</th>
-              <th scope="col" className="min-w-[130px] border border-border px-2 py-1 text-right font-semibold">Payment</th>
-              <th scope="col" className="min-w-[150px] border border-border px-2 py-1 text-right font-semibold">Closing Balance</th>
+              <th scope="col" className="border border-border px-2 py-1 text-left font-semibold">Account</th>
+              <th scope="col" className="border border-border px-2 py-1 text-right font-semibold">Opening</th>
+              <th scope="col" className="border border-border px-2 py-1 text-right font-semibold">Receipt</th>
+              <th scope="col" className="border border-border px-2 py-1 text-right font-semibold">Payment</th>
+              <th scope="col" className="border border-border px-2 py-1 text-right font-semibold">Closing Balance</th>
             </tr>
           </thead>
           <tbody>
