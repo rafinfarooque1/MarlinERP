@@ -33,6 +33,7 @@ import { DashboardShareReport, type ShareKpi } from './DashboardShareReport';
 import { DashboardLocationBreakdown } from './DashboardLocationBreakdown';
 import { DashboardLocationSalesReportCard } from './DashboardLocationSalesReportCard';
 import { DashboardExpenseDetailsReport } from './DashboardExpenseDetailsReport';
+import { DashboardCashBankReport } from './DashboardCashBankReport';
 
 // ── Small helpers ───────────────────────────────────────────────────────────
 
@@ -904,6 +905,14 @@ export default function Dashboard() {
             />
           </div>
         </div>
+
+        <DashboardCashBankReport
+          data={bi?.cashBankReport}
+          isLoading={isLoading}
+          isError={isError}
+          fromDate={range.from || undefined}
+          toDate={range.to || undefined}
+        />
 
         <DashboardExpenseDetailsReport
           data={bi?.financialMatrix}
