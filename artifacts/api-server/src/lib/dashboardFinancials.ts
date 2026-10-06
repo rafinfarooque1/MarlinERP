@@ -350,8 +350,10 @@ function rangeReceiptBreakdownForLedger(
 }
 
 /**
- * Expense-module payments made from cash, grouped by the expense account.
- * An expense qualifies only when its paired posting credits a cash ledger.
+ * Paid Direct/Indirect Expense ledger detail, grouped by expense account.
+ * This includes expenses entered in the Expenses module (`source: "expense"`)
+ * and location-expense payments (`source: "payment"`). An entry qualifies only
+ * when its paired posting credits a cash ledger.
  */
 export function rangeCashExpensesByLedger(
   postings: SourcePosting[],
@@ -374,10 +376,19 @@ function rangeExpensesByLedger(
 ): { total: number; ledgers: Array<{ ledgerId: number; amount: number }> } {
   const sliced = postingsInRange(postings, opts);
   const paymentIds = new Set(opts.subtree(paymentSubtreeCode));
+  const expenseIds = new Set([
+    ...opts.subtree("SYS-DIREXP"),
+    ...opts.subtree("SYS-INDEXP"),
+  ]);
+  const expenseSources = new Set(["expense", "payment"]);
   const paidExpenseEntries = new Set<string>();
 
   for (const posting of sliced) {
-    if (posting.source === "expense" && posting.credit > 0.004 && paymentIds.has(posting.ledgerId)) {
+    if (
+      expenseSources.has(posting.source)
+      && posting.credit > 0.004
+      && paymentIds.has(posting.ledgerId)
+    ) {
       paidExpenseEntries.add(posting.entryId);
     }
   }
@@ -385,9 +396,10 @@ function rangeExpensesByLedger(
   const amountByLedger = new Map<number, number>();
   for (const posting of sliced) {
     if (
-      posting.source === "expense"
+      expenseSources.has(posting.source)
       && posting.debit > 0.004
       && !paymentIds.has(posting.ledgerId)
+      && expenseIds.has(posting.ledgerId)
       && paidExpenseEntries.has(posting.entryId)
     ) {
       amountByLedger.set(
