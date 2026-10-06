@@ -39,8 +39,8 @@ export interface BiLocationMetric {
   cash: number | null;
   bank: number | null;
   reconciliationPending: number;
-  grossProfit: number | null;
-  netProfit: number | null;
+  grossProfit?: number | null;
+  netProfit?: number | null;
 }
 
 export interface DashboardLocationSalesRow {
@@ -129,7 +129,7 @@ export interface DashboardBi {
    * `expenses` — so the GP/NP tiles always equal the Profit & Loss report.
    * Fields are `null` exactly when the other accounting figures are.
    */
-  profit: { gross: number | null; net: number | null; cogs: number | null; companyWide: boolean };
+  profit?: { gross: number | null; net: number | null; cogs: number | null; companyWide: boolean };
   /**
    * Money movement over the cash and bank ledger subtrees for the selected
    * range and location, from the SAME derived-posting stream as the balance
