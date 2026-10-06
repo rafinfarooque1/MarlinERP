@@ -7,7 +7,7 @@ import { EmptyState } from '@/components/app/empty-state';
 import { Loader2, Receipt, Share2 } from 'lucide-react';
 import { fmtZeroAsBlank, periodLabel } from '@/pages/reports/shared';
 import { toast } from 'sonner';
-import { prepareSquareReportCapture } from './square-report-capture';
+import { measureReportCaptureDimensions } from './report-capture-size';
 
 type ExpenseRow = {
   ledgerId: number;
@@ -84,35 +84,30 @@ export function DashboardExpenseDetailsReport({
     console.debug('[dashboard] expense details share: capturing…');
     setSharing(true);
     setPreparingCapture(true);
-    let restoreCaptureScale = () => {};
     try {
       await new Promise<void>((resolve) => {
         requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
       });
       await document.fonts.ready;
       const { toBlob } = await import('html-to-image');
-      const square = prepareSquareReportCapture(captureTarget);
-      restoreCaptureScale = square.restore;
-      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
       const table = captureTarget.querySelector<HTMLTableElement>('table');
       if (!table) throw new Error('Expense Details table not found');
+      const dimensions = measureReportCaptureDimensions(captureTarget);
 
       console.debug('[dashboard] expense details share: capture bounds', {
         rows: table.rows.length,
-        width: square.width,
-        height: square.height,
+        width: dimensions.width,
+        height: dimensions.height,
       });
       const blob = await toBlob(captureTarget, {
         backgroundColor: '#ffffff',
-        width: square.width,
-        height: square.height,
+        width: dimensions.width,
+        height: dimensions.height,
         pixelRatio: 2,
         cacheBust: true,
         style: { overflow: 'visible' },
         filter: (node) => !(node instanceof HTMLElement && node.dataset.captureExclude === 'true'),
       });
-      restoreCaptureScale();
-      restoreCaptureScale = () => {};
       if (!blob) throw new Error('empty Expense Details image');
 
       const dateSlug = period.fromDate && period.toDate
@@ -148,7 +143,6 @@ export function DashboardExpenseDetailsReport({
       console.error('[dashboard] expense details share failed', error);
       toast.error('Could not create the Expense Details image');
     } finally {
-      restoreCaptureScale();
       setPreparingCapture(false);
       setSharing(false);
     }
@@ -158,9 +152,9 @@ export function DashboardExpenseDetailsReport({
     <div className="relative">
       <div ref={captureRef} data-testid="dashboard-expense-details-capture">
         <Card
-          className="aspect-square min-h-0 overflow-hidden rounded-xl border border-border bg-card shadow-sm flex flex-col"
+          className="rounded-xl border border-border bg-card shadow-sm"
           data-testid="dashboard-expense-details-card"
-          data-square-report-card
+          data-report-card
         >
           <CardHeader className="flex flex-row items-start justify-between gap-3 pb-3">
             <div className="min-w-0">
@@ -185,10 +179,7 @@ export function DashboardExpenseDetailsReport({
               {sharing ? 'Preparing…' : 'Share'}
             </Button>
           </CardHeader>
-          <CardContent
-            className={`min-h-0 flex-1 ${preparingCapture ? 'overflow-visible' : 'overflow-auto'}`}
-            data-square-report-viewport
-          >
+          <CardContent>
             {isLoading ? (
               <div className="space-y-2" aria-label="Loading expense details">
                 {[...Array(5)].map((_, index) => <Skeleton key={index} className="h-10" />)}
@@ -201,10 +192,10 @@ export function DashboardExpenseDetailsReport({
                 compact
               />
             ) : (
-              <div className="h-full min-h-0" data-square-report-content>
-                <div className={`${preparingCapture ? 'overflow-visible' : 'overflow-x-auto'} h-full min-h-0 w-full max-w-full rounded-lg border border-border`}>
+              <div>
+                <div className={`${preparingCapture ? 'overflow-visible' : 'overflow-x-auto'} w-full max-w-full rounded-lg border border-border`}>
                   <table
-                    className="h-full w-full border-collapse text-sm [&_th]:align-middle [&_td]:align-middle"
+                    className="w-full border-collapse text-sm"
                     data-testid="table-dashboard-expense-details"
                   >
                   <caption className="sr-only">Expense details · {periodText}</caption>

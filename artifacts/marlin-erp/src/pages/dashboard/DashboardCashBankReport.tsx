@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { fmtZeroAsBlank, periodLabel } from '@/pages/reports/shared';
-import { prepareSquareReportCapture } from './square-report-capture';
+import { measureReportCaptureDimensions } from './report-capture-size';
 
 function AccountTable({
   title,
@@ -25,13 +25,13 @@ function AccountTable({
   captureMode: boolean;
 }) {
   return (
-    <section className="flex min-h-0 flex-1 flex-col gap-2.5">
-      <h3 className="flex shrink-0 items-center gap-2 text-base font-semibold">
+    <section className="space-y-2.5">
+      <h3 className="flex items-center gap-2 text-base font-semibold">
         <Icon className="h-4 w-4 text-primary" />
         {title}
       </h3>
-      <div className={`${captureMode ? 'overflow-visible' : 'overflow-x-auto'} min-h-0 flex-1 w-full max-w-full rounded-lg border border-border`}>
-        <table className="h-full w-full border-collapse text-sm [&_th]:align-middle [&_td]:align-middle" data-testid={testId}>
+      <div className={`${captureMode ? 'overflow-visible' : 'overflow-x-auto'} w-full max-w-full rounded-lg border border-border`}>
+        <table className="w-full border-collapse text-sm" data-testid={testId}>
           <caption className="sr-only">{title} account balances and period movements</caption>
           <thead>
             <tr className="bg-muted/40">
@@ -107,34 +107,29 @@ export function DashboardCashBankReport({
     console.debug('[dashboard] cash and bank report share: capturing…');
     setSharing(true);
     setPreparingCapture(true);
-    let restoreCaptureScale = () => {};
     try {
       await new Promise<void>((resolve) => {
         requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
       });
       await document.fonts.ready;
       const { toBlob } = await import('html-to-image');
-      const square = prepareSquareReportCapture(element);
-      restoreCaptureScale = square.restore;
-      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
       const tables = Array.from(element.querySelectorAll<HTMLTableElement>('table'));
       if (tables.length === 0) throw new Error('cash and bank tables not found');
+      const dimensions = measureReportCaptureDimensions(element);
       console.debug('[dashboard] cash and bank report share: capture bounds', {
         tables: tables.length,
-        width: square.width,
-        height: square.height,
+        width: dimensions.width,
+        height: dimensions.height,
       });
       const blob = await toBlob(element, {
         backgroundColor: '#ffffff',
-        width: square.width,
-        height: square.height,
+        width: dimensions.width,
+        height: dimensions.height,
         pixelRatio: 2,
         cacheBust: true,
         style: { overflow: 'visible' },
         filter: (node) => !(node instanceof HTMLElement && node.dataset.captureExclude === 'true'),
       });
-      restoreCaptureScale();
-      restoreCaptureScale = () => {};
       if (!blob) throw new Error('empty image');
       const dateSlug = period.fromDate && period.toDate
         ? (period.fromDate === period.toDate ? period.fromDate : `${period.fromDate}_to_${period.toDate}`)
@@ -169,7 +164,6 @@ export function DashboardCashBankReport({
       console.error('[dashboard] cash and bank report share failed', error);
       toast.error('Could not create the cash and bank report image');
     } finally {
-      restoreCaptureScale();
       setPreparingCapture(false);
       setSharing(false);
     }
@@ -179,9 +173,9 @@ export function DashboardCashBankReport({
     <div className="relative">
       <div ref={captureRef} data-testid="dashboard-cash-bank-capture">
         <Card
-          className="aspect-square min-h-0 overflow-hidden rounded-xl border border-border bg-card shadow-sm flex flex-col"
+          className="rounded-xl border border-border bg-card shadow-sm"
           data-testid="dashboard-cash-bank-card"
-          data-square-report-card
+          data-report-card
         >
           <CardHeader className="flex flex-row items-start justify-between gap-3 pb-3">
             <div className="min-w-0">
@@ -206,10 +200,7 @@ export function DashboardCashBankReport({
               {sharing ? 'Preparing…' : 'Share'}
             </Button>
           </CardHeader>
-          <CardContent
-            className={`min-h-0 flex-1 ${preparingCapture ? 'overflow-visible' : 'overflow-auto'}`}
-            data-square-report-viewport
-          >
+          <CardContent>
             {isLoading ? (
               <div className="space-y-6" aria-label="Loading cash and bank report">
                 {[...Array(2)].map((_, section) => (
@@ -227,7 +218,7 @@ export function DashboardCashBankReport({
                 compact
               />
             ) : (
-              <div className="flex h-full min-h-0 flex-col gap-6 bg-card p-1" data-square-report-content>
+              <div className="space-y-6 bg-card p-1">
                 <AccountTable
                   title="Bank"
                   icon={Landmark}

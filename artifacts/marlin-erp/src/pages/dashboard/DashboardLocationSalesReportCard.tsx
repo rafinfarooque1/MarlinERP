@@ -7,7 +7,7 @@ import { EmptyState } from '@/components/app/empty-state';
 import { Loader2, MapPin, Share2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { DashboardLocationSalesTable } from './DashboardLocationSalesTable';
-import { prepareSquareReportCapture } from './square-report-capture';
+import { measureReportCaptureDimensions } from './report-capture-size';
 
 export function DashboardLocationSalesReportCard({
   rows,
@@ -55,35 +55,30 @@ export function DashboardLocationSalesReportCard({
     console.debug('[dashboard] location report share: capturing…');
     setSharing(true);
     setPreparingCapture(true);
-    let restoreCaptureScale = () => {};
     try {
       await new Promise<void>((resolve) => {
         requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
       });
       await document.fonts.ready;
       const { toBlob } = await import('html-to-image');
-      const square = prepareSquareReportCapture(captureTarget);
-      restoreCaptureScale = square.restore;
-      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
       const table = captureTarget.querySelector<HTMLTableElement>('table');
       if (!table) throw new Error('location sales table not found');
+      const dimensions = measureReportCaptureDimensions(captureTarget);
 
       console.debug('[dashboard] location report share: capture bounds', {
         rows: table.rows.length,
-        width: square.width,
-        height: square.height,
+        width: dimensions.width,
+        height: dimensions.height,
       });
       const blob = await toBlob(captureTarget, {
         backgroundColor: '#ffffff',
-        width: square.width,
-        height: square.height,
+        width: dimensions.width,
+        height: dimensions.height,
         pixelRatio: 2,
         cacheBust: true,
         style: { overflow: 'visible' },
         filter: (node) => !(node instanceof HTMLElement && node.dataset.captureExclude === 'true'),
       });
-      restoreCaptureScale();
-      restoreCaptureScale = () => {};
       if (!blob) throw new Error('empty location report image');
 
       const dateSlug = fromDate && toDate
@@ -121,7 +116,6 @@ export function DashboardLocationSalesReportCard({
       console.error('[dashboard] location report share failed', error);
       toast.error('Could not create the location report image');
     } finally {
-      restoreCaptureScale();
       setPreparingCapture(false);
       setSharing(false);
     }
@@ -131,8 +125,8 @@ export function DashboardLocationSalesReportCard({
     <div className="relative">
       <div ref={captureRef} data-testid="location-sales-share-capture">
         <Card
-          className="border-card-border bg-card shadow-sm flex aspect-square min-h-0 flex-col overflow-hidden"
-          data-square-report-card
+          className="border-card-border bg-card shadow-sm"
+          data-report-card
         >
           <CardHeader className="flex-row items-start justify-between gap-4 space-y-0 pb-3">
             <div className="min-w-0 flex-1">
@@ -157,10 +151,7 @@ export function DashboardLocationSalesReportCard({
               {sharing ? 'Preparing…' : 'Share'}
             </Button>
           </CardHeader>
-          <CardContent
-            className={`min-h-0 flex-1 ${preparingCapture ? 'overflow-visible' : 'overflow-auto'}`}
-            data-square-report-viewport
-          >
+          <CardContent>
             {isLoading ? (
               <div className="space-y-2" aria-label="Loading location sales report">
                 {[0, 1, 2].map((row) => <Skeleton key={row} className="h-10" />)}
@@ -170,7 +161,7 @@ export function DashboardLocationSalesReportCard({
             ) : rows.length === 0 ? (
               <EmptyState icon={MapPin} title="No locations in scope" compact />
             ) : (
-              <div className="h-full min-h-0" data-square-report-content>
+              <div>
                 <DashboardLocationSalesTable
                   rows={rows}
                   totalOutstanding={totalOutstanding}

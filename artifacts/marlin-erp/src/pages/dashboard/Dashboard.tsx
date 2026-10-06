@@ -879,13 +879,11 @@ export default function Dashboard() {
         </div>
 
         {/* ── Top customers ──────────────────────────────────────────────── */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-2">
           <SectionCard
             title="Top Customers"
             icon={<Users className="w-5 h-5 text-chart-2" />}
             description="By revenue"
-            className="aspect-square min-h-0 overflow-hidden"
-            contentClassName="min-h-0 overflow-auto"
           >
             {isLoading ? (
               <div className="space-y-3">{[...Array(5)].map((_, i) => <Skeleton key={i} className="h-8" />)}</div>
