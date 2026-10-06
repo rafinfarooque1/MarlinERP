@@ -1,12 +1,14 @@
 import type { DashboardLocationSalesRow } from '@workspace/api-client-react';
-import { fmt, fmtZeroAsBlank, num } from '@/pages/reports/shared';
+import { fmtZeroAsBlank, num } from '@/pages/reports/shared';
 
 export function DashboardLocationSalesTable({
   rows,
+  totalOutstanding,
   testId = 'table-location-sales-report',
   captureMode = false,
 }: {
   rows: DashboardLocationSalesRow[];
+  totalOutstanding?: number;
   testId?: string;
   captureMode?: boolean;
 }) {
@@ -18,6 +20,7 @@ export function DashboardLocationSalesTable({
     }),
     { salesAmount: 0, salesQuantity: 0, outstandingAmount: 0 },
   );
+  const outstandingTotal = totalOutstanding ?? totals.outstandingAmount;
 
   return (
     <div className={captureMode ? 'overflow-visible' : 'overflow-x-auto'}>
@@ -76,7 +79,7 @@ export function DashboardLocationSalesTable({
               {num(totals.salesQuantity)}
             </td>
             <td className="border-b border-border px-3 py-2 text-right font-mono text-sm tabular-nums">
-              {fmtZeroAsBlank(totals.outstandingAmount)}
+              {fmtZeroAsBlank(outstandingTotal)}
             </td>
           </tr>
         </tfoot>
