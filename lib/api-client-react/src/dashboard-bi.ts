@@ -141,6 +141,8 @@ export interface DashboardBi {
     bankIn: number; bankOut: number;
     totalIn: number; totalOut: number;
   } | null;
+  /** Account-level Bank and Cash balances across the caller's authorized locations. */
+  cashBankReport: DashboardCashBankReport;
   financialMatrix: DashboardFinancialMatrix;
   /** Populated only for an explicit All Locations view. */
   locationBreakdown: BiLocationMetric[];
@@ -202,6 +204,32 @@ export interface DashboardFinancialMatrix {
     bankExpenses: number;
     reconciliationPending: number;
     closingBank: number;
+  };
+}
+
+export interface DashboardCashBankReport {
+  period: { fromDate: string | null; toDate: string | null };
+  bank: {
+    rows: Array<{
+      ledgerId: number;
+      name: string;
+      opening: number;
+      receipt: number;
+      payment: number;
+      closing: number;
+    }>;
+    totals: { opening: number; receipt: number; payment: number; closing: number };
+  };
+  cash: {
+    rows: Array<{
+      ledgerId: number;
+      name: string;
+      opening: number;
+      receipt: number;
+      payment: number;
+      closing: number;
+    }>;
+    totals: { opening: number; receipt: number; payment: number; closing: number };
   };
 }
 

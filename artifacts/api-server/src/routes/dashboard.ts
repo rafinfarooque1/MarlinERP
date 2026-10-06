@@ -11,6 +11,7 @@ import { outstandingExpr, outstandingAsOfExpr } from "../lib/salePaymentPosition
 import { isIsoDate } from "../lib/dateInput";
 import { getLocationFilter, getPostingLocationFilter } from "../lib/requestLocation";
 import { visibleLocationSql } from "../lib/warehouseVisibility";
+import { buildDashboardCashBankReport } from "../lib/dashboardCashBankReport";
 
 const router = Router();
 
@@ -1035,6 +1036,15 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
     cachedPostings(toDate ? { toDate } : {}),
     ledgerSubtreeLookup(),
   ]);
+  const cashBankReportP = buildDashboardCashBankReport({
+    postings: matrixPostings as never[],
+    fromDate: fromDate || null,
+    toDate: toDate || null,
+    activeLocations: matrixLocations,
+    includeCompanyLevel: scope.isHeadOffice,
+    cashLedgerIds: matrixSubtree("STD-CASH"),
+    bankLedgerIds: matrixSubtree("STD-BANK"),
+  });
   const matrixLocationFiguresP = Promise.all(matrixLocations.map(async (location) => {
     const postingLocation = location.locationType === "headoffice"
       ? ({ type: "headoffice", id: null } as const)
@@ -1079,10 +1089,11 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       reconciliationPending,
     };
   }));
-  const [matrixLocationFigures, reportSalesByLocation, reportOutstandingByLocation] = await Promise.all([
+  const [matrixLocationFigures, reportSalesByLocation, reportOutstandingByLocation, cashBankReport] = await Promise.all([
     matrixLocationFiguresP,
     reportSalesByLocationP,
     reportOutstandingByLocationP,
+    cashBankReportP,
   ]);
 
   const reportSalesByLocationMap = new Map<string, { salesAmount: number; salesQuantity: number }>();
@@ -1469,6 +1480,7 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
     // build (or the mobile app) keeps rendering during rollout.
     moneyFlows,
     todayMoney: moneyFlows,
+    cashBankReport,
     financialMatrix,
     locationBreakdown,
     locationSalesReport,
