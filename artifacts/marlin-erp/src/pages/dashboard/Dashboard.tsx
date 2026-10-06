@@ -18,7 +18,7 @@ import { PageHeader } from '@/components/app/page-header';
 import { EmptyState } from '@/components/app/empty-state';
 import {
   ShieldOff, TrendingUp, ShoppingCart, Boxes,
-  Landmark, Trophy, Users, MapPin,
+  Landmark, Trophy, Users,
   Warehouse, Store, ArrowUpRight, ArrowDownRight, Wallet,
   Receipt, PieChart, BarChart3, Banknote, HandCoins,
   LayoutDashboard, Share2, Loader2, type LucideIcon,
@@ -32,7 +32,7 @@ import {
 import { DashboardShareReport, type ShareKpi } from './DashboardShareReport';
 import { DashboardLocationBreakdown } from './DashboardLocationBreakdown';
 import { DashboardFinancialMatrixSection } from './DashboardFinancialMatrix';
-import { DashboardLocationSalesTable } from './DashboardLocationSalesTable';
+import { DashboardLocationSalesReportCard } from './DashboardLocationSalesReportCard';
 
 // ── Small helpers ───────────────────────────────────────────────────────────
 
@@ -894,25 +894,14 @@ export default function Dashboard() {
             )}
           </SectionCard>
           <div className="lg:col-span-2">
-            <SectionCard
-              title="Sales & Outstanding by Location"
-              icon={<MapPin className="h-5 w-5 text-primary" />}
+            <DashboardLocationSalesReportCard
+              rows={bi?.locationSalesReport}
+              isLoading={isLoading}
+              isError={isError}
               description={`${pLabel} · outstanding as of ${range.to ? fmtDate(range.to) : 'today'}`}
-            >
-              {isLoading ? (
-                <div className="space-y-2" aria-label="Loading location sales report">
-                  {[0, 1, 2].map((row) => <Skeleton key={row} className="h-10" />)}
-                </div>
-              ) : isError || !bi ? (
-                <Empty message="Location report unavailable" />
-              ) : !Array.isArray(bi.locationSalesReport) ? (
-                <Empty message="Location report unavailable" />
-              ) : bi.locationSalesReport.length === 0 ? (
-                <Empty message="No locations in scope" />
-              ) : (
-                <DashboardLocationSalesTable rows={bi.locationSalesReport} />
-              )}
-            </SectionCard>
+              fromDate={range.from || undefined}
+              toDate={range.to || undefined}
+            />
           </div>
         </div>
 
@@ -922,7 +911,6 @@ export default function Dashboard() {
           isError={isError}
           fromDate={range.from || undefined}
           toDate={range.to || undefined}
-          shareReportRows={bi?.locationSalesReport ?? []}
         />
       </div>
       {/* Off-screen KPI share report — exists only to be photographed by the

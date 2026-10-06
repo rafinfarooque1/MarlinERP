@@ -1,5 +1,5 @@
 import { Fragment, useRef, useState } from 'react';
-import type { DashboardFinancialMatrix, DashboardLocationSalesRow } from '@workspace/api-client-react';
+import type { DashboardFinancialMatrix } from '@workspace/api-client-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -7,7 +7,6 @@ import { EmptyState } from '@/components/app/empty-state';
 import { Share2, Loader2, TableProperties } from 'lucide-react';
 import { toast } from 'sonner';
 import { fmt, periodLabel } from '@/pages/reports/shared';
-import { DashboardLocationSalesTable } from './DashboardLocationSalesTable';
 
 export function DashboardFinancialMatrixSection({
   data,
@@ -15,14 +14,12 @@ export function DashboardFinancialMatrixSection({
   isError,
   fromDate,
   toDate,
-  shareReportRows = [],
 }: {
   data?: DashboardFinancialMatrix;
   isLoading: boolean;
   isError: boolean;
   fromDate?: string;
   toDate?: string;
-  shareReportRows?: DashboardLocationSalesRow[];
 }) {
   const captureRef = useRef<HTMLDivElement>(null);
   const [sharing, setSharing] = useState(false);
@@ -240,17 +237,6 @@ export function DashboardFinancialMatrixSection({
                 data-testid="financial-matrix-capture"
                 className="inline-block w-max min-w-full bg-card text-foreground"
               >
-              {preparingCapture && shareReportRows.length > 0 && (
-                <div className="mb-4 overflow-hidden rounded-lg border border-border">
-                  <p className="border-b border-border bg-card px-3 py-2 text-left text-sm font-semibold">
-                    Location sales and outstanding · {periodText}
-                  </p>
-                  <DashboardLocationSalesTable
-                    rows={shareReportRows}
-                    testId="table-location-sales-matrix-share"
-                  />
-                </div>
-              )}
               <table className="w-full min-w-max border-separate border-spacing-0 text-sm">
                 <caption className="caption-top border-b border-border bg-card px-3 py-2 text-left font-semibold">
                   Financial summary · {periodText}
