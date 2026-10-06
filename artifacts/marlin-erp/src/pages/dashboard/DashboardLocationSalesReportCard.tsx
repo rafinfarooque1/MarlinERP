@@ -91,6 +91,7 @@ export function DashboardLocationSalesReportCard({
         pixelRatio: 2,
         cacheBust: true,
         style: { overflow: 'visible' },
+        filter: (node) => !(node instanceof HTMLElement && node.dataset.captureExclude === 'true'),
       });
       if (!blob) throw new Error('empty location report image');
 
@@ -138,12 +139,28 @@ export function DashboardLocationSalesReportCard({
     <div className="relative">
       <div ref={captureRef} data-testid="location-sales-share-capture">
         <Card className="border-card-border bg-card shadow-sm flex flex-col">
-          <CardHeader className="pb-3 pr-24">
-            <CardTitle className="text-lg flex items-center gap-2">
-              <MapPin className="h-5 w-5 text-primary" />
-              Sales &amp; Outstanding by Location
-            </CardTitle>
-            <CardDescription>{description}</CardDescription>
+          <CardHeader className="flex-row items-start justify-between gap-4 space-y-0 pb-3">
+            <div className="min-w-0 flex-1">
+              <CardTitle className="text-lg flex items-center gap-2">
+                <MapPin className="h-5 w-5 text-primary" />
+                Sales &amp; Outstanding by Location
+              </CardTitle>
+              <CardDescription className="mt-1.5">{description}</CardDescription>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="shrink-0 gap-2"
+              onClick={shareReport}
+              disabled={sharing}
+              aria-label={sharing ? 'Preparing location report image' : 'Share location report'}
+              data-testid="button-share-location-sales"
+              data-capture-exclude="true"
+            >
+              {sharing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Share2 className="h-4 w-4" />}
+              {sharing ? 'Preparing…' : 'Share'}
+            </Button>
           </CardHeader>
           <CardContent className="flex-1">
             {isLoading ? (
@@ -160,19 +177,6 @@ export function DashboardLocationSalesReportCard({
           </CardContent>
         </Card>
       </div>
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        className="absolute right-4 top-4 z-10 gap-2 bg-card"
-        onClick={shareReport}
-        disabled={sharing}
-        aria-label={sharing ? 'Preparing location report image' : 'Share location report'}
-        data-testid="button-share-location-sales"
-      >
-        {sharing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Share2 className="h-4 w-4" />}
-        {sharing ? 'Preparing…' : 'Share'}
-      </Button>
     </div>
   );
 }
