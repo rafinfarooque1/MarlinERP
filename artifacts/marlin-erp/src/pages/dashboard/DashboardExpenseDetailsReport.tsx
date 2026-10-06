@@ -206,7 +206,7 @@ export function DashboardExpenseDetailsReport({
             ) : (
               <div
                 className={`${preparingCapture ? 'overflow-visible' : 'overflow-x-auto'} w-fit max-w-full rounded-lg border border-border`}
-                style={{ zoom: 1.3 }}
+                style={{ zoom: 1.69 }}
               >
                 <table
                   className="w-max border-collapse text-sm"

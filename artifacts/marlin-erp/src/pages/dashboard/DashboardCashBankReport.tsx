@@ -29,10 +29,7 @@ function AccountTable({
         <Icon className="h-4 w-4 text-primary" />
         {title}
       </h3>
-      <div
-        className={`${captureMode ? 'overflow-visible' : 'overflow-x-auto'} w-fit max-w-full rounded-lg border border-border`}
-        style={{ zoom: 1.3 }}
-      >
+      <div className={`${captureMode ? 'overflow-visible' : 'overflow-x-auto'} w-fit max-w-full rounded-lg border border-border`}>
         <table className="w-max border-collapse text-sm" data-testid={testId}>
           <caption className="sr-only">{title} account balances and period movements</caption>
           <thead>
