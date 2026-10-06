@@ -193,16 +193,21 @@ function BarRow({ label, sub, value, max, color, valueLabel }: {
   );
 }
 
-function SectionCard({ title, icon, description, children }: {
-  title: string; icon: React.ReactNode; description?: string; children: React.ReactNode;
+function SectionCard({ title, icon, description, children, className, contentClassName }: {
+  title: string;
+  icon: React.ReactNode;
+  description?: string;
+  children: React.ReactNode;
+  className?: string;
+  contentClassName?: string;
 }) {
   return (
-    <Card className="border-card-border bg-card shadow-sm flex flex-col">
+    <Card className={`border-card-border bg-card shadow-sm flex flex-col ${className ?? ''}`}>
       <CardHeader className="pb-3">
         <CardTitle className="text-lg flex items-center gap-2">{icon}{title}</CardTitle>
         {description && <CardDescription>{description}</CardDescription>}
       </CardHeader>
-      <CardContent className="flex-1">{children}</CardContent>
+      <CardContent className={`flex-1 ${contentClassName ?? ''}`}>{children}</CardContent>
     </Card>
   );
 }
@@ -874,11 +879,13 @@ export default function Dashboard() {
         </div>
 
         {/* ── Top customers ──────────────────────────────────────────────── */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <SectionCard
             title="Top Customers"
             icon={<Users className="w-5 h-5 text-chart-2" />}
             description="By revenue"
+            className="aspect-square min-h-0 overflow-hidden"
+            contentClassName="min-h-0 overflow-auto"
           >
             {isLoading ? (
               <div className="space-y-3">{[...Array(5)].map((_, i) => <Skeleton key={i} className="h-8" />)}</div>
@@ -901,7 +908,7 @@ export default function Dashboard() {
               </div>
             )}
           </SectionCard>
-          <div className="lg:col-span-2">
+          <div className="min-w-0">
             <DashboardLocationSalesReportCard
               rows={bi?.locationSalesReport}
               totalOutstanding={

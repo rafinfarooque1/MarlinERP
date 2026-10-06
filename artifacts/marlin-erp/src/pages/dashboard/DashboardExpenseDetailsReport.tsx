@@ -7,6 +7,7 @@ import { EmptyState } from '@/components/app/empty-state';
 import { Loader2, Receipt, Share2 } from 'lucide-react';
 import { fmtZeroAsBlank, periodLabel } from '@/pages/reports/shared';
 import { toast } from 'sonner';
+import { prepareSquareReportCapture } from './square-report-capture';
 
 type ExpenseRow = {
   ledgerId: number;
@@ -83,47 +84,35 @@ export function DashboardExpenseDetailsReport({
     console.debug('[dashboard] expense details share: capturing…');
     setSharing(true);
     setPreparingCapture(true);
+    let restoreCaptureScale = () => {};
     try {
       await new Promise<void>((resolve) => {
         requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
       });
       await document.fonts.ready;
       const { toBlob } = await import('html-to-image');
+      const square = prepareSquareReportCapture(captureTarget);
+      restoreCaptureScale = square.restore;
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
       const table = captureTarget.querySelector<HTMLTableElement>('table');
       if (!table) throw new Error('Expense Details table not found');
 
-      const captureRect = captureTarget.getBoundingClientRect();
-      const tableRect = table.getBoundingClientRect();
-      const lastRow = table.rows.item(table.rows.length - 1);
-      const lastRowBottom = lastRow?.getBoundingClientRect().bottom ?? captureRect.bottom;
-      const width = Math.ceil(Math.max(
-        captureTarget.scrollWidth,
-        captureRect.width,
-        table.scrollWidth,
-        tableRect.width,
-      ));
-      const height = Math.ceil(Math.max(
-        captureTarget.scrollHeight,
-        captureRect.height,
-        table.scrollHeight,
-        tableRect.bottom - captureRect.top,
-        lastRowBottom - captureRect.top,
-      )) + 2;
-
       console.debug('[dashboard] expense details share: capture bounds', {
         rows: table.rows.length,
-        width,
-        height,
+        width: square.width,
+        height: square.height,
       });
       const blob = await toBlob(captureTarget, {
         backgroundColor: '#ffffff',
-        width,
-        height,
+        width: square.width,
+        height: square.height,
         pixelRatio: 2,
         cacheBust: true,
         style: { overflow: 'visible' },
         filter: (node) => !(node instanceof HTMLElement && node.dataset.captureExclude === 'true'),
       });
+      restoreCaptureScale();
+      restoreCaptureScale = () => {};
       if (!blob) throw new Error('empty Expense Details image');
 
       const dateSlug = period.fromDate && period.toDate
@@ -159,6 +148,7 @@ export function DashboardExpenseDetailsReport({
       console.error('[dashboard] expense details share failed', error);
       toast.error('Could not create the Expense Details image');
     } finally {
+      restoreCaptureScale();
       setPreparingCapture(false);
       setSharing(false);
     }
@@ -167,7 +157,11 @@ export function DashboardExpenseDetailsReport({
   return (
     <div className="relative">
       <div ref={captureRef} data-testid="dashboard-expense-details-capture">
-        <Card className="rounded-xl border border-border bg-card shadow-sm" data-testid="dashboard-expense-details-card">
+        <Card
+          className="aspect-square min-h-0 overflow-hidden rounded-xl border border-border bg-card shadow-sm flex flex-col"
+          data-testid="dashboard-expense-details-card"
+          data-square-report-card
+        >
           <CardHeader className="flex flex-row items-start justify-between gap-3 pb-3">
             <div className="min-w-0">
               <CardTitle className="flex items-center gap-2 text-lg">
@@ -191,7 +185,10 @@ export function DashboardExpenseDetailsReport({
               {sharing ? 'Preparing…' : 'Share'}
             </Button>
           </CardHeader>
-          <CardContent>
+          <CardContent
+            className={`min-h-0 flex-1 ${preparingCapture ? 'overflow-visible' : 'overflow-auto'}`}
+            data-square-report-viewport
+          >
             {isLoading ? (
               <div className="space-y-2" aria-label="Loading expense details">
                 {[...Array(5)].map((_, index) => <Skeleton key={index} className="h-10" />)}
@@ -204,14 +201,12 @@ export function DashboardExpenseDetailsReport({
                 compact
               />
             ) : (
-              <div
-                className={`${preparingCapture ? 'overflow-visible' : 'overflow-x-auto'} w-fit max-w-full rounded-lg border border-border`}
-                style={{ zoom: 1.69 }}
-              >
-                <table
-                  className="w-max border-collapse text-sm"
-                  data-testid="table-dashboard-expense-details"
-                >
+              <div data-square-report-content>
+                <div className={`${preparingCapture ? 'overflow-visible' : 'overflow-x-auto'} w-fit max-w-full rounded-lg border border-border`}>
+                  <table
+                    className="w-max border-collapse text-sm"
+                    data-testid="table-dashboard-expense-details"
+                  >
                   <caption className="sr-only">Expense details · {periodText}</caption>
                   <thead>
                     <tr className="bg-muted/40">
@@ -279,7 +274,8 @@ export function DashboardExpenseDetailsReport({
                       ))}
                     </tr>
                   </tbody>
-                </table>
+                  </table>
+                </div>
               </div>
             )}
           </CardContent>
