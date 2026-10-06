@@ -81,10 +81,10 @@ casts like the old `profit` read.
 
 When the global location filter is set, “Sales & Outstanding by Location” and
 “Expense Details” show only the selected active locations, while the server
-still enforces the caller's authorized data scope. Expense Details include only
-cash- and bank-paid expense-module postings whose debit ledger is under
-`SYS-DIREXP` or `SYS-INDEXP`; omit ledgers whose selected-location values are
-all zero.
+still enforces the caller's authorized data scope. Expense Details include
+cash- and bank-paid expense records and payment vouchers whose debit ledger is
+under `SYS-DIREXP` or `SYS-INDEXP`; omit ledgers whose selected-location values
+are all zero.
 
 **Why:** the user explicitly requested that selecting three locations limits
 both dashboard detail sections to those three, and that Expense Details show
@@ -92,8 +92,10 @@ paid direct/indirect expense ledgers without empty rows.
 
 **How to apply:** filter both `locationSalesReport` and the per-location
 Expense Details arrays using the same selected location set before building the
-response. Keep `cashBankReport` and other dashboard sections unchanged unless
-the requirement explicitly includes them.
+response. For Expense Details, pair both `expense` and `payment` source postings
+against cash/bank credits, then keep only Direct/Indirect Expense ledgers. Keep
+`cashBankReport` and other dashboard sections unchanged unless the requirement
+explicitly includes them.
 
 # Cash receipt rows in the cross-location matrix
 
