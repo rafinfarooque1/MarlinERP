@@ -25,13 +25,13 @@ function AccountTable({
   captureMode: boolean;
 }) {
   return (
-    <section className="space-y-2.5">
-      <h3 className="flex items-center gap-2 text-base font-semibold">
+    <section className="flex min-h-0 flex-1 flex-col gap-2.5">
+      <h3 className="flex shrink-0 items-center gap-2 text-base font-semibold">
         <Icon className="h-4 w-4 text-primary" />
         {title}
       </h3>
-      <div className={`${captureMode ? 'overflow-visible' : 'overflow-x-auto'} w-full max-w-full rounded-lg border border-border`}>
-        <table className="w-full border-collapse text-sm" data-testid={testId}>
+      <div className={`${captureMode ? 'overflow-visible' : 'overflow-x-auto'} min-h-0 flex-1 w-full max-w-full rounded-lg border border-border`}>
+        <table className="h-full w-full border-collapse text-sm [&_th]:align-middle [&_td]:align-middle" data-testid={testId}>
           <caption className="sr-only">{title} account balances and period movements</caption>
           <thead>
             <tr className="bg-muted/40">
@@ -227,7 +227,7 @@ export function DashboardCashBankReport({
                 compact
               />
             ) : (
-              <div className="space-y-6 bg-card p-1" data-square-report-content>
+              <div className="flex h-full min-h-0 flex-col gap-6 bg-card p-1" data-square-report-content>
                 <AccountTable
                   title="Bank"
                   icon={Landmark}

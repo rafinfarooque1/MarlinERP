@@ -170,7 +170,7 @@ export function DashboardLocationSalesReportCard({
             ) : rows.length === 0 ? (
               <EmptyState icon={MapPin} title="No locations in scope" compact />
             ) : (
-              <div data-square-report-content>
+              <div className="h-full min-h-0" data-square-report-content>
                 <DashboardLocationSalesTable
                   rows={rows}
                   totalOutstanding={totalOutstanding}

@@ -201,10 +201,10 @@ export function DashboardExpenseDetailsReport({
                 compact
               />
             ) : (
-              <div data-square-report-content>
-                <div className={`${preparingCapture ? 'overflow-visible' : 'overflow-x-auto'} w-full max-w-full rounded-lg border border-border`}>
+              <div className="h-full min-h-0" data-square-report-content>
+                <div className={`${preparingCapture ? 'overflow-visible' : 'overflow-x-auto'} h-full min-h-0 w-full max-w-full rounded-lg border border-border`}>
                   <table
-                    className="w-full border-collapse text-sm"
+                    className="h-full w-full border-collapse text-sm [&_th]:align-middle [&_td]:align-middle"
                     data-testid="table-dashboard-expense-details"
                   >
                   <caption className="sr-only">Expense details · {periodText}</caption>
