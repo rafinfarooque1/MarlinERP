@@ -43,6 +43,15 @@ export interface BiLocationMetric {
   netProfit: number | null;
 }
 
+export interface DashboardLocationSalesRow {
+  locationType: string;
+  locationId: number;
+  name: string;
+  salesAmount: number;
+  salesQuantity: number;
+  outstandingAmount: number;
+}
+
 export interface DashboardBi {
   /**
    * False when this employee lacks the inventory-valuation right, in which
@@ -135,6 +144,8 @@ export interface DashboardBi {
   financialMatrix: DashboardFinancialMatrix;
   /** Populated only for an explicit All Locations view. */
   locationBreakdown: BiLocationMetric[];
+  /** Period sales and as-of outstanding by active location in the caller's data scope. */
+  locationSalesReport: DashboardLocationSalesRow[];
   topItems: BiTopItem[];
   topCustomers: BiTopCustomer[];
 }

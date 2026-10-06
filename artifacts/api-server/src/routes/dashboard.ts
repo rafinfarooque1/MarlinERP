@@ -957,6 +957,73 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       || (location.locationType === "warehouse" && scope.warehouseIds.includes(location.locationId))
       || (location.locationType === "outlet" && scope.outletIds.includes(location.locationId)));
 
+  // This location table spans the caller's server-authorized locations, like
+  // the financial matrix, independent of the selected display location. Sales
+  // follow the dashboard's selected period; outstanding is an as-of position.
+  const reportSalesConds = [
+    "s.branch_transfer_id IS NULL",
+    "s.cancelled_at IS NULL",
+    visibleLocationSql("COALESCE(s.location_type, 'outlet')", "COALESCE(s.location_id, s.outlet_id)"),
+  ];
+  const reportSalesParams: unknown[] = [];
+  if (fromDate) {
+    reportSalesParams.push(fromDate);
+    reportSalesConds.push(`s.sale_date >= $${reportSalesParams.length}::date`);
+  }
+  if (toDate) {
+    reportSalesParams.push(toDate);
+    reportSalesConds.push(`s.sale_date <= $${reportSalesParams.length}::date`);
+  }
+  if (!scope.isHeadOffice) reportSalesConds.push(scopeSalesWhere(scope, reportSalesParams));
+  const reportSalesByLocationP = pool.query(
+    `SELECT COALESCE(s.location_type, 'outlet') AS location_type,
+            COALESCE(s.location_id, s.outlet_id) AS location_id,
+            COALESCE(w.name, o.name, 'Unknown') AS name,
+            COALESCE(SUM(s.total_amount::numeric), 0)::float AS sales_amount,
+            COALESCE(SUM(line_totals.quantity), 0)::float AS sales_quantity
+       FROM sales s
+       LEFT JOIN warehouses w
+         ON COALESCE(s.location_type, 'outlet') = 'warehouse'
+        AND w.id = COALESCE(s.location_id, s.outlet_id)
+       LEFT JOIN outlets o
+         ON COALESCE(s.location_type, 'outlet') = 'outlet'
+        AND o.id = COALESCE(s.location_id, s.outlet_id)
+       LEFT JOIN LATERAL (
+         SELECT COALESCE(SUM((li->>'quantity')::numeric), 0) AS quantity
+           FROM jsonb_array_elements(COALESCE(s.line_items, '[]'::jsonb)) AS li
+       ) line_totals ON TRUE
+      WHERE ${reportSalesConds.join(" AND ")}
+      GROUP BY 1, 2, 3`,
+    reportSalesParams,
+  );
+
+  const reportOutstandingConds = [
+    "s.branch_transfer_id IS NULL",
+    "s.cancelled_at IS NULL",
+    visibleLocationSql("COALESCE(s.location_type, 'outlet')", "COALESCE(s.location_id, s.outlet_id)"),
+  ];
+  const reportOutstandingParams: unknown[] = [];
+  let reportOutstandingExpr = outstandingExpr("s");
+  if (toDate) {
+    reportOutstandingParams.push(toDate);
+    const asOfParam = `$${reportOutstandingParams.length}`;
+    reportOutstandingExpr = outstandingAsOfExpr("s", asOfParam);
+    reportOutstandingConds.push(`s.sale_date::date <= ${asOfParam}::date`);
+  }
+  reportOutstandingConds.push(`${reportOutstandingExpr} > 0.009`);
+  if (!scope.isHeadOffice) {
+    reportOutstandingConds.push(scopeSalesWhere(scope, reportOutstandingParams));
+  }
+  const reportOutstandingByLocationP = pool.query(
+    `SELECT COALESCE(s.location_type, 'outlet') AS location_type,
+            COALESCE(s.location_id, s.outlet_id) AS location_id,
+            COALESCE(SUM(${reportOutstandingExpr}), 0)::float AS outstanding_amount
+       FROM sales s
+      WHERE ${reportOutstandingConds.join(" AND ")}
+      GROUP BY 1, 2`,
+    reportOutstandingParams,
+  );
+
   const matrixOpeningToDate = fromDate
     ? (() => {
         const date = new Date(`${fromDate}T00:00:00.000Z`);
@@ -968,7 +1035,7 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
     cachedPostings(toDate ? { toDate } : {}),
     ledgerSubtreeLookup(),
   ]);
-  const matrixLocationFigures = await Promise.all(matrixLocations.map(async (location) => {
+  const matrixLocationFiguresP = Promise.all(matrixLocations.map(async (location) => {
     const postingLocation = location.locationType === "headoffice"
       ? ({ type: "headoffice", id: null } as const)
       : ({ type: location.locationType as "warehouse" | "outlet", id: location.locationId } as const);
@@ -1012,6 +1079,37 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       reconciliationPending,
     };
   }));
+  const [matrixLocationFigures, reportSalesByLocation, reportOutstandingByLocation] = await Promise.all([
+    matrixLocationFiguresP,
+    reportSalesByLocationP,
+    reportOutstandingByLocationP,
+  ]);
+
+  const reportSalesByLocationMap = new Map<string, { salesAmount: number; salesQuantity: number }>();
+  for (const row of reportSalesByLocation.rows) {
+    reportSalesByLocationMap.set(locationKey(String(row.location_type), row.location_id), {
+      salesAmount: money(row.sales_amount),
+      salesQuantity: qty(row.sales_quantity),
+    });
+  }
+  const reportOutstandingByLocationMap = new Map<string, number>();
+  for (const row of reportOutstandingByLocation.rows) {
+    reportOutstandingByLocationMap.set(
+      locationKey(String(row.location_type), row.location_id),
+      money(row.outstanding_amount),
+    );
+  }
+  const locationSalesReport = matrixLocations.map((location) => {
+    const key = locationKey(location.locationType, location.locationId);
+    const sales = reportSalesByLocationMap.get(key);
+    return {
+      ...location,
+      salesAmount: sales?.salesAmount ?? 0,
+      salesQuantity: sales?.salesQuantity ?? 0,
+      outstandingAmount: reportOutstandingByLocationMap.get(key) ?? 0,
+    };
+  });
+
   // Company-level openings and unlocated postings are a separate posting
   // bucket, not part of any branch slice. Only callers with company-wide data
   // scope may see it; adding it as a matrix column makes the location slices
@@ -1373,6 +1471,7 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
     todayMoney: moneyFlows,
     financialMatrix,
     locationBreakdown,
+    locationSalesReport,
     topItems: topItemsRows.rows.map((r: any) => ({
       itemId: Number(r.item_id), name: r.name, qty: qty(r.qty), revenue: money(r.revenue),
     })),
