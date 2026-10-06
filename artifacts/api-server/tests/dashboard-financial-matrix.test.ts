@@ -51,7 +51,7 @@ const result = rangeCashReceiptBreakdown(postings as never[], {
   fromDate: "2026-10-03",
   toDate: "2026-10-03",
   location: { type: "warehouse", id: 7 },
-  subtree: (code) => code === "STD-CASH" ? [10] : code === "STD-BANK" ? [20] : [],
+  subtree: testSubtree,
 });
 
 assert.deepEqual(result, {
@@ -64,7 +64,7 @@ const bankReceipts = rangeBankReceiptBreakdown(postings as never[], {
   fromDate: "2026-10-03",
   toDate: "2026-10-03",
   location: { type: "warehouse", id: 7 },
-  subtree: (code) => code === "STD-CASH" ? [10] : code === "STD-BANK" ? [20] : [],
+  subtree: testSubtree,
 });
 
 assert.deepEqual(bankReceipts, {
@@ -77,26 +77,30 @@ const cashExpenses = rangeCashExpensesByLedger(postings as never[], {
   fromDate: "2026-10-03",
   toDate: "2026-10-03",
   location: { type: "warehouse", id: 7 },
-  subtree: (code) => code === "STD-CASH" ? [10] : code === "STD-BANK" ? [20] : [],
+  subtree: testSubtree,
 });
 
 assert.deepEqual(cashExpenses, {
-  total: 15.25,
-  ledgers: [{ ledgerId: 30, amount: 15.25 }],
+  total: 30.25,
+  ledgers: [
+    { ledgerId: 30, amount: 15.25 },
+    { ledgerId: 35, amount: 15 },
+  ],
 });
 
 const bankExpenses = rangeBankExpensesByLedger(postings as never[], {
   fromDate: "2026-10-03",
   toDate: "2026-10-03",
   location: { type: "warehouse", id: 7 },
-  subtree: (code) => code === "STD-CASH" ? [10] : code === "STD-BANK" ? [20] : [],
+  subtree: testSubtree,
 });
 
 assert.deepEqual(bankExpenses, {
-  total: 67.5,
+  total: 85.5,
   ledgers: [
     { ledgerId: 30, amount: 40 },
     { ledgerId: 34, amount: 27.5 },
+    { ledgerId: 36, amount: 18 },
   ],
 });
 
