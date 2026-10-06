@@ -192,6 +192,64 @@ try {
       `biH=${biH?.sales?.total} regH=${regH?.totals?.total} biL=${biL?.sales?.total}`);
   }
 
+  // A selected multi-location filter must narrow both dashboard detail tables.
+  console.log("\n[1b] Selected-location Sales/Outstanding and Expense Details");
+  const allLocationsBi = (await get(`/dashboard/bi?fromDate=${EPOCH}&toDate=${TODAY}`)).data;
+  const dashboardLocationKey = (location) =>
+    location.locationType === "headoffice"
+      ? "headoffice"
+      : `${location.locationType}:${location.locationId}`;
+  const availableLocationKeys = (allLocationsBi?.locationSalesReport ?? [])
+    .map(dashboardLocationKey)
+    .slice(0, 3);
+  if (availableLocationKeys.length > 0) {
+    const selectedLocationKeys = [...availableLocationKeys];
+    if (selectedLocationKeys.length < 3) {
+      const [unusedIds] = await q(
+        `SELECT (SELECT COALESCE(MAX(id), 0) + 1 FROM warehouses)::int AS warehouse_id,
+                (SELECT COALESCE(MAX(id), 0) + 1 FROM outlets)::int AS outlet_id`,
+      );
+      for (const key of [`warehouse:${unusedIds.warehouse_id}`, `outlet:${unusedIds.outlet_id}`]) {
+        if (selectedLocationKeys.length < 3 && !selectedLocationKeys.includes(key)) {
+          selectedLocationKeys.push(key);
+        }
+      }
+    }
+    const selectedLocationBi = (await get(
+      `/dashboard/bi?fromDate=${EPOCH}&toDate=${TODAY}&locationKeys=${encodeURIComponent(selectedLocationKeys.join(","))}`,
+    )).data;
+    const expectedLocationKeys = selectedLocationKeys.filter((key) => availableLocationKeys.includes(key));
+    const hasExactlySelectedLocations = (locations) =>
+      Array.isArray(locations)
+      && locations.length === expectedLocationKeys.length
+      && expectedLocationKeys.every((key) => locations.some((location) => dashboardLocationKey(location) === key));
+    assert("Sales & Outstanding by Location contains only selected active locations",
+      hasExactlySelectedLocations(selectedLocationBi?.locationSalesReport),
+      JSON.stringify(selectedLocationBi?.locationSalesReport?.map(dashboardLocationKey)));
+    const expenseMatrix = selectedLocationBi?.financialMatrix;
+    assert("Expense Details contains only selected active locations",
+      hasExactlySelectedLocations(expenseMatrix?.locations),
+      JSON.stringify(expenseMatrix?.locations?.map(dashboardLocationKey)));
+    const expenseLedgers = [
+      ...(expenseMatrix?.cashExpenseLedgers ?? []),
+      ...(expenseMatrix?.bankExpenseLedgers ?? []),
+    ];
+    const expenseLedgersAreVisibleAndAligned = expenseLedgers.every((ledger) =>
+      Array.isArray(ledger.values)
+      && ledger.values.length === expenseMatrix.locations.length
+      && ledger.values.some((value) => Math.round(Number(value ?? 0) * 100) !== 0));
+    const expenseTotalsReconcile = expenseMatrix?.locations.every((_, index) =>
+      near(expenseMatrix.cashExpenses[index],
+        (expenseMatrix.cashExpenseLedgers ?? []).reduce((sum, ledger) => sum + Number(ledger.values[index] ?? 0), 0))
+      && near(expenseMatrix.bankExpenses[index],
+        (expenseMatrix.bankExpenseLedgers ?? []).reduce((sum, ledger) => sum + Number(ledger.values[index] ?? 0), 0)));
+    assert("Expense Details includes cash/bank-paid ledger values and omits zero-only ledgers",
+      expenseLedgersAreVisibleAndAligned && expenseTotalsReconcile,
+      JSON.stringify({ cash: expenseMatrix?.cashExpenseLedgers, bank: expenseMatrix?.bankExpenseLedgers }));
+  } else {
+    console.log("  - Skipping selected-location assertions: no active locations are available");
+  }
+
   // ── [2] Warehouse sales included (#37) ────────────────────────────────────
   console.log("\n[2] /dashboard/summary includes warehouse sales (#37)");
   const [dbSum] = await q(
