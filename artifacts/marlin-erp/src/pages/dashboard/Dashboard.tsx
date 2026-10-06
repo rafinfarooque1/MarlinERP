@@ -1,12 +1,7 @@
 import { useMemo, useRef, useState, useLayoutEffect } from 'react';
-import { useQuery } from '@tanstack/react-query';
 import {
   useGetDashboardBi,
-  useAssetSummary,
-  getStockAlerts,
-  customFetch,
   type DashboardBiFilters,
-  type ReceivablesAging,
 } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { usePermission } from '@/lib/usePermission';
@@ -22,11 +17,11 @@ import { toast } from 'sonner';
 import { PageHeader } from '@/components/app/page-header';
 import { EmptyState } from '@/components/app/empty-state';
 import {
-  ShieldOff, TrendingUp, ShoppingCart, Factory, Boxes,
-  Landmark, Trophy, Users, AlertTriangle, Clock, MapPin,
+  ShieldOff, TrendingUp, ShoppingCart, Boxes,
+  Landmark, Trophy, Users, MapPin,
   Warehouse, Store, ArrowUpRight, ArrowDownRight, Wallet,
   Receipt, PieChart, BarChart3, Banknote, HandCoins,
-  LayoutDashboard, Share2, Loader2, Hourglass, ChevronRight, Scale, type LucideIcon,
+  LayoutDashboard, Share2, Loader2, type LucideIcon,
 } from 'lucide-react';
 import { useLocation } from 'wouter';
 import {
@@ -272,7 +267,6 @@ export default function Dashboard() {
 
   const s = bi?.sales;
   const salesDayMax = Math.max(0, ...(s?.byDay.map(d => d.total) ?? [0]));
-  const prodDayMax = Math.max(0, ...(bi?.production.byDay.map(d => d.qty) ?? [0]));
   const payMax = Math.max(0, ...(s?.byPaymentMode.map(p => p.total) ?? [0]));
   const locMax = Math.max(0, ...(s?.byLocation.map(l => l.total) ?? [0]));
   const topItemMax = Math.max(0, ...(bi?.topItems.map(i => i.revenue) ?? [0]));
@@ -870,80 +864,8 @@ export default function Dashboard() {
           </SectionCard>
         </div>
 
-        {/* ── Production + inventory + top customers ──────────────────────── */}
+        {/* ── Top customers ──────────────────────────────────────────────── */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-          <SectionCard
-            title="Production"
-            icon={<Factory className="w-5 h-5 text-chart-3" />}
-            description={bi ? `${num(bi.production.batches)} batch${bi.production.batches !== 1 ? 'es' : ''}` : undefined}
-          >
-            {isLoading ? (
-              <div className="space-y-3">{[...Array(4)].map((_, i) => <Skeleton key={i} className="h-8" />)}</div>
-            ) : !bi || bi.production.byDay.length === 0 ? (
-              <Empty message="No production in this period" />
-            ) : (
-              <>
-                <div className="grid grid-cols-2 gap-2 mb-4">
-                  <div className="rounded-lg border border-border bg-muted/10 p-2 text-center">
-                    <p className="text-[10px] text-muted-foreground">Output</p>
-                    <p className="font-bold font-mono text-sm">{num(bi.production.outputQty)}</p>
-                  </div>
-                  <div className="rounded-lg border border-border bg-muted/10 p-2 text-center">
-                    <p className="text-[10px] text-muted-foreground">Wastage</p>
-                    <p className="font-bold font-mono text-sm text-amber-600">
-                      {num(bi.production.wastageQty)} ({bi.production.wastagePct}%)
-                    </p>
-                  </div>
-                </div>
-                <div className="space-y-3">
-                  {bi.production.byDay.map(d => (
-                    <BarRow
-                      key={d.date}
-                      label={fmtDate(d.date)}
-                      value={d.qty}
-                      max={prodDayMax}
-                      color="hsl(var(--chart-3))"
-                      valueLabel={num(d.qty)}
-                    />
-                  ))}
-                </div>
-              </>
-            )}
-          </SectionCard>
-
-          <SectionCard title="Inventory" icon={<Boxes className="w-5 h-5 text-primary" />}>
-            {isLoading ? (
-              <div className="space-y-3">{[...Array(4)].map((_, i) => <Skeleton key={i} className="h-10" />)}</div>
-            ) : !bi ? (
-              <Empty message="No inventory data" />
-            ) : (
-              <div className="space-y-2.5">
-                {bi.canViewValuation && (
-                  <StatRow icon={<Landmark className="w-4 h-4 text-primary" />} label="Valuation" value={fmt(bi.inventory.valuation ?? 0)} />
-                )}
-                <StatRow icon={<Boxes className="w-4 h-4 text-muted-foreground" />} label="Products in stock" value={num(bi.inventory.itemCount)} />
-                <StatRow
-                  icon={<AlertTriangle className="w-4 h-4 text-destructive" />}
-                  label="Low-stock alerts"
-                  value={num(bi.inventory.lowStockCount)}
-                  tone={bi.inventory.lowStockCount > 0 ? 'neg' : undefined}
-                />
-                <StatRow
-                  icon={<Clock className="w-4 h-4 text-amber-600" />}
-                  label="Expiring ≤ 30 days"
-                  value={num(bi.inventory.expiringSoonCount)}
-                  tone={bi.inventory.expiringSoonCount > 0 ? 'warn' : undefined}
-                />
-                <div className="pt-2 mt-2 border-t border-border space-y-2.5">
-                  <StatRow icon={<ArrowUpRight className="w-4 h-4 text-emerald-600" />} label="Cash inflow" value={fmt(bi.cash.inflow)} tone="pos" />
-                  <StatRow icon={<ArrowDownRight className="w-4 h-4 text-red-500" />} label="Cash outflow" value={fmt(bi.cash.outflow)} tone="neg" />
-                </div>
-              </div>
-            )}
-          </SectionCard>
-
-          <AssetsSection />
-
           <SectionCard
             title="Top Customers"
             icon={<Users className="w-5 h-5 text-chart-2" />}
@@ -972,15 +894,6 @@ export default function Dashboard() {
           </SectionCard>
         </div>
 
-        {/* ── Receivables ageing + stock alerts ───────────────────────────── */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <AgeingSnapshot asOf={range.to || undefined} onOpen={drillTo('/reports/parties', 'receivables')} />
-          <StockAlertsCard
-            expiringSoonCount={bi?.inventory.expiringSoonCount ?? 0}
-            onOpenReorder={drillTo('/reports/inventory', 'reorder')}
-            onOpenExpiry={drillTo('/reports/inventory', 'near_expiry')}
-          />
-        </div>
         <DashboardFinancialMatrixSection
           data={bi?.financialMatrix}
           isLoading={isLoading}
@@ -1006,235 +919,5 @@ export default function Dashboard() {
         </div>
       )}
     </AppLayout>
-  );
-}
-
-/**
- * Receivables ageing snapshot — reads the SAME endpoint as the Parties →
- * Receivables report (as-of the dashboard range end), so every figure here
- * equals that report opened from the card. Hidden entirely for users who
- * can't open that report (the endpoint would 403 for them anyway).
- */
-function AgeingSnapshot({ asOf, onOpen }: { asOf?: string; onOpen: () => void }) {
-  const outstandingPerm = usePermission('page:/outstanding');
-  const customersPerm = usePermission('page:/customers');
-  const canView = outstandingPerm.canView || customersPerm.canView;
-  const { locationState } = useLocationContext();
-  // The endpoint follows the global x-location headers, so the header context
-  // must be part of the key or a location switch would serve a stale slice.
-  // First element mirrors getReceivablesAgingQueryKey() — the existing
-  // returns/receipts invalidations refresh this widget too.
-  const locKey = JSON.stringify(locationFilterParams(locationState));
-  const { data, isLoading } = useQuery({
-    queryKey: ['/api/outstanding/receivables', asOf ?? '', locKey],
-    queryFn: () => customFetch<ReceivablesAging>(`/api/outstanding/receivables${asOf ? `?asOf=${asOf}` : ''}`),
-    enabled: canView,
-  });
-  if (!canView) return null;
-
-  const t = data?.totals;
-  const buckets = [
-    { label: '0–30 d', value: t?.b0_30 ?? 0 },
-    { label: '31–60 d', value: t?.b31_60 ?? 0 },
-    { label: '61–90 d', value: t?.b61_90 ?? 0 },
-    { label: '> 90 d', value: t?.b90p ?? 0 },
-  ];
-  const top = (data?.customers ?? [])
-    .filter((c) => c.netDue > 0)
-    .sort((a, b) => b.netDue - a.netDue)
-    .slice(0, 5);
-  const topMax = Math.max(0, ...top.map((c) => c.netDue));
-
-  return (
-    <SectionCard
-      title="Receivables Ageing"
-      icon={<Hourglass className="w-5 h-5 text-amber-600" />}
-      description={data ? `Net due ${fmt(t?.netDue ?? 0)} as of ${fmtDate(data.asOf)}` : undefined}
-    >
-      {isLoading ? (
-        <div className="space-y-3">{[...Array(4)].map((_, i) => <Skeleton key={i} className="h-8" />)}</div>
-      ) : !data ? (
-        <Empty message="No receivables data" />
-      ) : (
-        <div className="space-y-3">
-          <div className="grid grid-cols-4 gap-2">
-            {buckets.map((b) => (
-              <div key={b.label} className="rounded-lg border border-border bg-muted/10 p-2 text-center min-w-0">
-                <p className="text-[10px] text-muted-foreground whitespace-nowrap">{b.label}</p>
-                <p className="text-xs font-bold font-mono truncate" title={fmt(b.value)}>{compactINR(fmt(b.value))}</p>
-              </div>
-            ))}
-          </div>
-          {top.length === 0 ? (
-            <p className="text-sm text-muted-foreground text-center py-3">Nothing outstanding — all collected.</p>
-          ) : (
-            <div className="space-y-2">
-              {top.map((c) => (
-                <BarRow
-                  key={c.customerId}
-                  label={c.name}
-                  sub={c.b90p > 0 ? `${fmt(c.b90p)} over 90 d` : undefined}
-                  value={c.netDue}
-                  max={topMax}
-                  color={c.b90p > 0 ? 'hsl(var(--destructive))' : 'hsl(var(--chart-2))'}
-                  valueLabel={fmt(c.netDue)}
-                />
-              ))}
-            </div>
-          )}
-          <Button variant="ghost" size="sm" className="w-full justify-between" onClick={onOpen}>
-            Open receivables report
-            <ChevronRight className="w-4 h-4" />
-          </Button>
-        </div>
-      )}
-    </SectionCard>
-  );
-}
-
-/**
- * Low-stock + near-expiry alerts — item-level detail behind the Inventory
- * card's alert counts, from the existing /dashboard/stock-alerts endpoint
- * (same LBAC + view-location scoping as every other dashboard figure).
- */
-function StockAlertsCard({ expiringSoonCount, onOpenReorder, onOpenExpiry }: {
-  expiringSoonCount: number;
-  onOpenReorder: () => void;
-  onOpenExpiry: () => void;
-}) {
-  const { locationState } = useLocationContext();
-  const locKey = JSON.stringify(locationFilterParams(locationState));
-  const { data, isLoading } = useQuery({
-    // Same first element as the generated getGetStockAlertsQueryKey() so the
-    // shared /api/dashboard invalidation predicate refreshes this widget.
-    queryKey: ['/api/dashboard/stock-alerts', locKey],
-    queryFn: () => getStockAlerts(),
-  });
-  const alerts = data ?? [];
-
-  return (
-    <SectionCard
-      title="Stock Alerts"
-      icon={<AlertTriangle className="w-5 h-5 text-destructive" />}
-      description="Below reorder level, plus items expiring within 30 days"
-    >
-      {isLoading ? (
-        <div className="space-y-3">{[...Array(4)].map((_, i) => <Skeleton key={i} className="h-8" />)}</div>
-      ) : (
-        <div className="space-y-3">
-          {alerts.length === 0 ? (
-            <p className="text-sm text-muted-foreground text-center py-3">No items below reorder level.</p>
-          ) : (
-            <div className="space-y-2">
-              {alerts.slice(0, 6).map((a, i) => (
-                <div key={`${a.itemId}-${a.branchName}-${i}`} className="flex items-center justify-between gap-2 p-2 rounded-lg border border-border bg-muted/10">
-                  <div className="min-w-0">
-                    <p className="font-medium text-sm truncate">{a.itemName || `Item #${a.itemId}`}</p>
-                    <p className="text-[10px] text-muted-foreground truncate">{a.branchName}</p>
-                  </div>
-                  <div className="text-right shrink-0">
-                    <p className="font-bold text-sm font-mono text-destructive">{num(a.quantity ?? 0)}</p>
-                    {(a as any).reorderLevel != null && (
-                      <p className="text-[10px] text-muted-foreground">reorder at {num((a as any).reorderLevel)}</p>
-                    )}
-                  </div>
-                </div>
-              ))}
-              {alerts.length > 6 && (
-                <p className="text-[11px] text-muted-foreground text-center">+{alerts.length - 6} more in the reorder report</p>
-              )}
-            </div>
-          )}
-          <div className="flex items-center justify-between gap-2 p-2 rounded-lg border border-border bg-muted/10">
-            <div className="flex items-center gap-2 min-w-0">
-              <Clock className="w-4 h-4 text-amber-600 shrink-0" />
-              <span className="text-sm truncate">Expiring ≤ 30 days</span>
-            </div>
-            <span className={`font-bold text-sm font-mono ${expiringSoonCount > 0 ? 'text-amber-600' : ''}`}>{num(expiringSoonCount)}</span>
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            <Button variant="ghost" size="sm" className="justify-between" onClick={onOpenReorder}>
-              Reorder report
-              <ChevronRight className="w-4 h-4" />
-            </Button>
-            <Button variant="ghost" size="sm" className="justify-between" onClick={onOpenExpiry}>
-              Near-expiry report
-              <ChevronRight className="w-4 h-4" />
-            </Button>
-          </div>
-        </div>
-      )}
-    </SectionCard>
-  );
-}
-
-/**
- * Fixed-asset summary — visible only to users with asset view rights. Renders
- * nothing (not an empty shell) for everyone else: the summary endpoint would
- * 403 for them anyway.
- */
-function AssetsSection() {
-  const registerPerm = usePermission('page:/assets/register');
-  const purchasesPerm = usePermission('page:/assets/purchases');
-  const reportsPerm = usePermission('page:/assets/reports');
-  const canSee = registerPerm.canView || purchasesPerm.canView || reportsPerm.canView;
-  const { data: summary, isLoading } = useAssetSummary(canSee);
-
-  if (!canSee) return null;
-
-  const byLocMax = Math.max(0, ...(summary?.byLocation.map(l => l.value) ?? [0]));
-
-  return (
-    <SectionCard
-      title="Assets"
-      icon={<Landmark className="w-5 h-5 text-primary" />}
-      description="Fixed assets at cost — separate from inventory"
-    >
-      {isLoading || !summary ? (
-        <div className="space-y-3">{[...Array(4)].map((_, i) => <Skeleton key={i} className="h-10" />)}</div>
-      ) : (
-        <div className="space-y-2.5">
-          <StatRow icon={<Boxes className="w-4 h-4 text-muted-foreground" />} label="Total assets" value={num(summary.totalAssets)} />
-          <StatRow icon={<Landmark className="w-4 h-4 text-primary" />} label="Asset value" value={fmt(summary.assetValue)} />
-          <StatRow
-            icon={<ShoppingCart className="w-4 h-4 text-emerald-600" />}
-            label="Purchased this month"
-            value={<>{num(summary.purchasedThisMonth.count)} <span className="text-muted-foreground font-normal">· {fmt(summary.purchasedThisMonth.value)}</span></>}
-          />
-          <StatRow
-            icon={<Clock className="w-4 h-4 text-amber-600" />}
-            label={`Warranty ending ≤ ${summary.warrantyExpiringSoon.withinDays} days`}
-            value={num(summary.warrantyExpiringSoon.count)}
-            tone={summary.warrantyExpiringSoon.count > 0 ? 'warn' : undefined}
-          />
-          {summary.byLocation.length > 0 && (
-            <div className="pt-2 mt-2 border-t border-border space-y-2">
-              <p className="text-[10px] uppercase tracking-wider text-muted-foreground">By location</p>
-              {summary.byLocation.slice(0, 5).map(l => (
-                <BarRow
-                  key={`${l.locationType}:${l.locationId}`}
-                  label={l.name}
-                  value={l.value}
-                  max={byLocMax}
-                  color={WAREHOUSE_COLOR}
-                  valueLabel={`${l.count} · ${fmt(l.value)}`}
-                />
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-    </SectionCard>
-  );
-}
-function StatRow({ icon, label, value, tone }: {
-  icon: React.ReactNode; label: string; value: React.ReactNode; tone?: 'pos' | 'neg' | 'warn';
-}) {
-  const cls = tone === 'pos' ? 'text-emerald-600' : tone === 'neg' ? 'text-red-500' : tone === 'warn' ? 'text-amber-600' : '';
-  return (
-    <div className="flex items-center justify-between gap-2">
-      <span className="flex items-center gap-2 text-sm text-muted-foreground">{icon}{label}</span>
-      <span className={`font-bold font-mono text-sm ${cls}`}>{value}</span>
-    </div>
   );
 }
