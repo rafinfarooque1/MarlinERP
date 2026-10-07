@@ -1269,6 +1269,30 @@ export const GetSaleResponse = zod.object({
 
 
 /**
+ * @summary Cancel a sale and reverse its stock and derived accounting effects
+ */
+export const CancelSaleParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const cancelSaleBodyReasonMax = 500;
+
+
+
+export const CancelSaleBody = zod.object({
+  "reason": zod.string().max(cancelSaleBodyReasonMax).optional().describe('Optional cancellation reason recorded in the activity trail.')
+})
+
+export const CancelSaleResponse = zod.object({
+  "id": zod.number(),
+  "invoiceNumber": zod.string(),
+  "cancelled": zod.literal(true),
+  "reversedLines": zod.number(),
+  "totalAmount": zod.number()
+})
+
+
+/**
  * @summary Save or clear an invoice's shipped-from address override
  */
 export const UpdateSaleShipFromAddressParams = zod.object({

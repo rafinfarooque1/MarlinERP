@@ -23,6 +23,8 @@ export * from './bulkAttendanceCorrection';
 export * from './bulkAttendanceCorrectionLeaveType';
 export * from './bulkAttendanceCorrectionResult';
 export * from './bulkAttendanceCorrectionStatus';
+export * from './cancelSaleInput';
+export * from './cancelSaleResult';
 export * from './cashBankAccount';
 export * from './cashBankAccountAccountType';
 export * from './cashBankAccountBalanceSource';

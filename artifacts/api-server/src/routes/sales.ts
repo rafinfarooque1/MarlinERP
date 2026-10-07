@@ -1982,7 +1982,23 @@ router.put("/sales/:id", requireModuleAction("page:/sales/pos", "edit"), async (
     // stale by the time we write; the figure that goes into the UPDATE must
     // come from the state visible AFTER the lock is held, or a concurrent
     // unwind is silently overwritten.
-    await editTx.query(`SELECT id FROM sales WHERE id = $1 FOR UPDATE`, [id]);
+    const { rows: [lockedSaleState] } = await editTx.query<{ cancelled_at: Date | string | null }>(
+      `SELECT cancelled_at FROM sales WHERE id = $1 FOR UPDATE`,
+      [id],
+    );
+    if (!lockedSaleState) {
+      await editTx.query('ROLLBACK');
+      res.status(404).json({ error: "Sale not found" });
+      return;
+    }
+    if (lockedSaleState.cancelled_at) {
+      await editTx.query('ROLLBACK');
+      res.status(409).json({
+        error: `Invoice ${existingRaw.invoice_number} has been cancelled and cannot be edited.`,
+        code: 'SALE_CANCELLED',
+      });
+      return;
+    }
     // ── Counter-settlement history follows the edit ──────────────────────────
     // The counter row is a restatement of the sale's own settlement, so an edit
     // must never leave a stale one behind. Clear every billing-time settlement
@@ -2576,6 +2592,9 @@ router.post("/sales/:id/cancel", requireModuleAction("page:/sales/pos", "delete"
         unitCost: Number(li.unitPrice ?? 0),
         docType: 'sale', docId: id,
         notes: `${sale.invoice_number} — cancelled${reason ? `: ${reason}` : ''}`,
+        // Cancellation is a new stock event; never replay it onto the sale's
+        // original (possibly already closed) business date.
+        txnDate: null,
       };
     }));
 

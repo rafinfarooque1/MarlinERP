@@ -757,6 +757,22 @@ export interface ShipFromAddressInput {
   address: string | null;
 }
 
+export interface CancelSaleInput {
+  /**
+     * Optional cancellation reason recorded in the activity trail.
+     * @maxLength 500
+     */
+  reason?: string;
+}
+
+export interface CancelSaleResult {
+  id: number;
+  invoiceNumber: string;
+  cancelled: true;
+  reversedLines: number;
+  totalAmount: number;
+}
+
 export interface ShipFromAddressResponse {
   /** @nullable */
   shipFromAddress: string | null;
