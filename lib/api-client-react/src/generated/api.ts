@@ -30,6 +30,8 @@ import type {
   AuthResponse,
   BulkAttendanceCorrection,
   BulkAttendanceCorrectionResult,
+  CancelSaleInput,
+  CancelSaleResult,
   CashBankAccount,
   CashBankInput,
   CashBankUpdate,
@@ -3712,6 +3714,78 @@ export function useGetSale<TData = Awaited<ReturnType<typeof getSale>>, TError =
 
 
 
+
+export const getCancelSaleUrl = (id: number,) => {
+
+
+
+
+  return `/api/sales/${id}/cancel`
+}
+
+/**
+ * @summary Cancel a sale and reverse its stock and derived accounting effects
+ */
+export const cancelSale = async (id: number,
+    cancelSaleInput: CancelSaleInput, options?: RequestInit): Promise<CancelSaleResult> => {
+
+  return customFetch<CancelSaleResult>(getCancelSaleUrl(id),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(cancelSaleInput)
+  }
+);}
+
+
+
+
+
+export const getCancelSaleMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof cancelSale>>, TError,{id: number;data: BodyType<CancelSaleInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof cancelSale>>, TError,{id: number;data: BodyType<CancelSaleInput>}, TContext> => {
+
+const mutationKey = ['cancelSale'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof cancelSale>>, {id: number;data: BodyType<CancelSaleInput>}> = (props) => {
+          const {id,data} = props ?? {};
+
+          return  cancelSale(id,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type CancelSaleMutationResult = NonNullable<Awaited<ReturnType<typeof cancelSale>>>
+    export type CancelSaleMutationBody = BodyType<CancelSaleInput>
+    export type CancelSaleMutationError = ErrorType<void>
+
+    /**
+ * @summary Cancel a sale and reverse its stock and derived accounting effects
+ */
+export const useCancelSale = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof cancelSale>>, TError,{id: number;data: BodyType<CancelSaleInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof cancelSale>>,
+        TError,
+        {id: number;data: BodyType<CancelSaleInput>},
+        TContext
+      > => {
+      return useMutation(getCancelSaleMutationOptions(options));
+    }
 
 export const getUpdateSaleShipFromAddressUrl = (id: number,) => {
 

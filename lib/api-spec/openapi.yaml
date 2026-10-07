@@ -790,6 +790,29 @@ paths:
               schema:
                 $ref: "#/components/schemas/Sale"
 
+  /sales/{id}/cancel:
+    post:
+      operationId: cancelSale
+      tags: [sales]
+      summary: Cancel a sale and reverse its stock and derived accounting effects
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CancelSaleInput"
+      responses:
+        "200":
+          description: Sale cancelled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CancelSaleResult"
+        "409":
+          description: The sale cannot be cancelled in its current state
+
   /sales/{id}/ship-from-address:
     patch:
       operationId: updateSaleShipFromAddress
@@ -3061,6 +3084,30 @@ components:
           description: >
             Saved source-address override. Send null or an empty string to
             return to the current address on the issuing or dispatching location.
+
+    CancelSaleInput:
+      type: object
+      properties:
+        reason:
+          type: string
+          maxLength: 500
+          description: Optional cancellation reason recorded in the activity trail.
+
+    CancelSaleResult:
+      type: object
+      required: [id, invoiceNumber, cancelled, reversedLines, totalAmount]
+      properties:
+        id:
+          type: integer
+        invoiceNumber:
+          type: string
+        cancelled:
+          type: boolean
+          enum: [true]
+        reversedLines:
+          type: integer
+        totalAmount:
+          type: number
 
     ShipFromAddressResponse:
       type: object

@@ -7,7 +7,7 @@ import {
   useListItems, useListItemPrices, useListStock, useGetCompanySettings,
   useListCoupons,
   customFetch,
-  useGetSale, useGetSalePayments, useCreateSalePayment, useUpdateSale, useUpdateSaleShipFromAddress,
+  useGetSale, useGetSalePayments, useCreateSalePayment, useUpdateSale, useUpdateSaleShipFromAddress, useCancelSale,
   ensureInvoiceShareLink, absoluteShareUrl,
   usePartyAdvance, getPartyAdvanceQueryKey,
 } from '@workspace/api-client-react';
@@ -172,6 +172,9 @@ const saleStatusLabel = (sale: any): string | undefined => {
   const mode = paymentModeLabel(sale?.paymentMode);
   return mode ? `Paid · ${mode}` : 'Paid';
 };
+
+const saleIsCancelled = (sale: any): boolean =>
+  Boolean(sale?.isCancelled || sale?.cancelledAt || sale?.cancelled_at || sale?.paymentStatus === 'cancelled');
 
 // ── Form Schema ─────────────────────────────────────────────────────────────────
 
@@ -423,6 +426,8 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   const [statusFilter, setStatusFilter] = useState<'all' | 'unpaid' | 'partially_paid' | 'paid'>('all');
   const [isOpen, setIsOpen] = useState(false);
   const [viewItem, setViewItem] = useState<any>(null);
+  const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
+  const [cancelReason, setCancelReason] = useState('');
   const [shipFromEditSale, setShipFromEditSale] = useState<any>(null);
   const [shipFromAddressDraft, setShipFromAddressDraft] = useState('');
 
@@ -573,6 +578,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   const createMutation = useCreateSale();
   const updateMutation = useUpdateSale();
   const shipFromMutation = useUpdateSaleShipFromAddress();
+  const cancelSaleMutation = useCancelSale();
   const openShipFromAddressEditor = (sale: any) => {
     setShipFromAddressDraft(String(sale.shipFromAddress ?? ''));
     setShipFromEditSale(sale);
@@ -596,6 +602,35 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
         onError: (error: any) => toast.error(error?.data?.error || error?.message || 'Could not save shipped-from address'),
       },
     );
+  };
+
+  const confirmCancelSale = async () => {
+    if (!viewItem || cancelSaleMutation.isPending) return;
+    const id = Number(viewItem.id);
+    const invoiceNumber = formatSalesInvoiceDisplayNumber(viewItem.invoiceNumber);
+    try {
+      await cancelSaleMutation.mutateAsync({
+        id,
+        data: { reason: cancelReason.trim() || undefined },
+      });
+      await Promise.all([
+        invalidateSalesData(),
+        queryClient.invalidateQueries({
+          predicate: query => {
+            const key = String(query.queryKey[0] ?? '');
+            return key.startsWith('/api/accounts')
+              || key.startsWith('/api/receipts')
+              || key.startsWith('/api/reports');
+          },
+        }),
+      ]);
+      setCancelDialogOpen(false);
+      setCancelReason('');
+      setViewItem(null);
+      toast.success(`${invoiceNumber} cancelled; stock was restored.`);
+    } catch (error: any) {
+      toast.error(error?.data?.error || error?.message || 'Could not cancel sale');
+    }
   };
 
   // editItem holds the sale being edited; null means "create" mode
@@ -1820,7 +1855,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
                       <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(sale)} title="View"><Eye className="w-4 h-4" /></Button>
-                      {perm.canEdit && <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-amber-500" onClick={() => openEdit(sale)} title="Edit sale"><Pencil className="w-4 h-4" /></Button>}
+                      {perm.canEdit && !saleIsCancelled(sale) && <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-amber-500" onClick={() => openEdit(sale)} title="Edit sale"><Pencil className="w-4 h-4" /></Button>}
                       {perm.canDownload && <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-emerald-600" onClick={() => void handleDownloadPDF(sale)} title="Download PDF"><FileDown className="w-4 h-4" /></Button>}
                       {perm.canDownload && (
                         <Button
@@ -1884,7 +1919,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                         </div>
                         <div className="flex gap-1">
                           <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(sale)} title="View"><Eye className="w-4 h-4" /></Button>
-                          {perm.canEdit && <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-amber-500" onClick={() => openEdit(sale)} title="Edit sale"><Pencil className="w-4 h-4" /></Button>}
+                          {perm.canEdit && !saleIsCancelled(sale) && <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-amber-500" onClick={() => openEdit(sale)} title="Edit sale"><Pencil className="w-4 h-4" /></Button>}
                           {perm.canDownload && <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-emerald-600" onClick={() => void handleDownloadPDF(sale)} title="Download PDF"><FileDown className="w-4 h-4" /></Button>}
                           {perm.canDownload && (
                             <Button
@@ -2876,9 +2911,19 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                     <WhatsAppIcon className="w-3.5 h-3.5" /> WhatsApp
                   </Button>
                 )}
-                {perm.canEdit && viewItem && (
+                {perm.canEdit && viewItem && !saleIsCancelled(viewItem) && (
                   <Button variant="outline" size="sm" className="gap-1.5" onClick={() => { setViewItem(null); openEdit(viewItem); }}>
                     <Pencil className="w-3.5 h-3.5" /> Edit
+                  </Button>
+                )}
+                {perm.canDelete && viewItem && !saleIsCancelled(viewItem) && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="gap-1.5 border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                    onClick={() => { setCancelReason(''); setCancelDialogOpen(true); }}
+                  >
+                    <Trash2 className="w-3.5 h-3.5" /> Cancel bill
                   </Button>
                 )}
               </div>
@@ -3348,6 +3393,51 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
           )}
         </SheetContent>
       </Sheet>
+
+      <AlertDialog
+        open={cancelDialogOpen}
+        onOpenChange={open => {
+          if (cancelSaleMutation.isPending) return;
+          setCancelDialogOpen(open);
+          if (!open) setCancelReason('');
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Cancel this sale bill?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This keeps the invoice as a cancelled record, restores its stock, and removes its derived sales and GST postings.
+              It is recorded as a current-date cancellation, so it does not rewrite closed stock history.
+              Receipt-backed collections or existing sales returns must be handled first.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-1.5">
+            <label htmlFor="sale-cancel-reason" className="text-sm font-medium">Reason (optional)</label>
+            <Textarea
+              id="sale-cancel-reason"
+              value={cancelReason}
+              onChange={event => setCancelReason(event.target.value)}
+              maxLength={500}
+              rows={3}
+              placeholder="Why is this invoice being cancelled?"
+              disabled={cancelSaleMutation.isPending}
+            />
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={cancelSaleMutation.isPending}>Keep bill</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={cancelSaleMutation.isPending}
+              onClick={event => {
+                event.preventDefault();
+                void confirmCancelSale();
+              }}
+            >
+              {cancelSaleMutation.isPending ? 'Cancelling…' : 'Cancel bill'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <Dialog open={!!shipFromEditSale} onOpenChange={open => !open && setShipFromEditSale(null)}>
         <DialogContent className="sm:max-w-lg">
