@@ -83,10 +83,11 @@ console.log('\n[0] Authentication and fixtures');
 
 // Item + vendor are recreated each run under the tag; older tagged rows are
 // left alone (documents referencing them must keep their names).
+const itemName = `${TAG} Filter Item ${Date.now()}`;
 const itemId = (await sql(
   `INSERT INTO items (name, unit, hsn_code, tax_rate, mrp, item_code, barcode, status)
    VALUES ($1,'KG','08119010',5,100,'FG-${TAG}-${Date.now() % 100000}','','active') RETURNING id`,
-  [`${TAG} Filter Item ${Date.now()}`])).rows[0].id;
+  [itemName])).rows[0].id;
 const vendorRes = await post('/vendors', {
   name: `${TAG} Fresh Vendor ${Date.now()}`, state: 'Karnataka', gstNumber: '29ZZGSF1234F1Z5',
 });
@@ -149,6 +150,66 @@ const docRow = (docs, type, num) => (docs?.[type] ?? []).find(r => r.documentNum
   assert('Fresh vendor bill → status unpaid, mode "Credit"',
     !!bill && bill.paymentStatus === 'unpaid' && bill.paymentModes === 'Credit',
     `status=${bill?.paymentStatus} modes=${bill?.paymentModes}`);
+}
+
+// Item-wise mode carries one row per source line, for both sales and purchase
+// bills, with party registration details and the invoice total repeated.
+{
+  const qs = 'fromDate=2026-08-01&toDate=2026-08-01';
+  const itemReport = await get(`/gst/item-wise-summary?${qs}&gstin=${GSTIN1}`);
+  const docs = await get(`/gst/documents?${qs}&gstin=${GSTIN1}`);
+  assert('Item-wise GST endpoint returns outward and inward arrays',
+    itemReport.status === 200
+      && Array.isArray(itemReport.data?.outward)
+      && Array.isArray(itemReport.data?.inward),
+    `status=${itemReport.status}`);
+  const saleLines = itemReport.data?.outward?.filter(r => r.documentNumber === saleInvoice) ?? [];
+  const purchaseLines = itemReport.data?.inward?.filter(r => r.documentNumber === invoiceNo) ?? [];
+  const saleDoc = docRow(docs.data, 'outward', saleInvoice);
+  const purchaseDoc = docRow(docs.data, 'inward', invoiceNo);
+  const saleLine = saleLines[0];
+  const purchaseLine = purchaseLines[0];
+
+  assert('Sales item row includes date, invoice, party, state and item identity',
+    saleLines.length === 1
+      && saleLine.date === '2026-08-01'
+      && saleLine.partyName === customerRes.data.name
+      && saleLine.partyGstin === ''
+      && saleLine.state === 'Karnataka'
+      && saleLine.stateCode === '29'
+      && saleLine.itemName === itemName
+      && saleLine.hsnCode === '08119010'
+      && saleLine.unit === 'KG',
+    JSON.stringify(saleLine));
+  assert('Sales item row carries quantity, taxable amount, GST heads and invoice value',
+    !!saleLine && !!saleDoc
+      && Number(saleLine.quantity) === 2
+      && Math.abs(Number(saleLine.taxableAmount) - Number(saleDoc.taxableValue)) < 0.01
+      && Math.abs(Number(saleLine.cgst) - Number(saleDoc.cgst)) < 0.01
+      && Math.abs(Number(saleLine.sgst) - Number(saleDoc.sgst)) < 0.01
+      && Math.abs(Number(saleLine.igst) - Number(saleDoc.igst)) < 0.01
+      && Math.abs(Number(saleLine.invoiceValue) - Number(saleDoc.invoiceValue)) < 0.01,
+    JSON.stringify(saleLine));
+  assert('Purchase item row includes date, invoice, vendor GSTIN, state and item identity',
+    purchaseLines.length === 1
+      && purchaseLine.date === '2026-08-01'
+      && purchaseLine.partyName === vendorRes.data.name
+      && purchaseLine.partyGstin === '29ZZGSF1234F1Z5'
+      && purchaseLine.state === 'Karnataka'
+      && purchaseLine.stateCode === '29'
+      && purchaseLine.itemName === itemName
+      && purchaseLine.hsnCode === '08119010'
+      && purchaseLine.unit === 'KG',
+    JSON.stringify(purchaseLine));
+  assert('Purchase item row carries quantity, taxable amount, GST heads and invoice value',
+    !!purchaseLine && !!purchaseDoc
+      && Number(purchaseLine.quantity) === 10
+      && Math.abs(Number(purchaseLine.taxableAmount) - Number(purchaseDoc.taxableValue)) < 0.01
+      && Math.abs(Number(purchaseLine.cgst) - Number(purchaseDoc.cgst)) < 0.01
+      && Math.abs(Number(purchaseLine.sgst) - Number(purchaseDoc.sgst)) < 0.01
+      && Math.abs(Number(purchaseLine.igst) - Number(purchaseDoc.igst)) < 0.01
+      && Math.abs(Number(purchaseLine.invoiceValue) - Number(purchaseDoc.invoiceValue)) < 0.01,
+    JSON.stringify(purchaseLine));
 }
 
 // Partial cash payment: 2 × ₹100 = ₹200 total, pay ₹80 cash.

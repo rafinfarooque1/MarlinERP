@@ -1724,6 +1724,29 @@ export interface GstSummary {
   byWarehouse?: GstSummaryByWarehouseItem[];
 }
 
+export interface GstItemWiseRow {
+  date: string;
+  documentNumber: string;
+  partyName: string;
+  partyGstin: string;
+  state: string;
+  stateCode: string;
+  itemName: string;
+  hsnCode: string;
+  quantity: number;
+  unit: string;
+  taxableAmount: number;
+  cgst: number;
+  sgst: number;
+  igst: number;
+  invoiceValue: number;
+}
+
+export interface GstItemWiseSummary {
+  outward: GstItemWiseRow[];
+  inward: GstItemWiseRow[];
+}
+
 export interface CompanySettings {
   id?: number;
   companyName?: string;
@@ -2319,6 +2342,16 @@ export type DeleteCashBankAccount200 = {
 export type GetGstSummaryParams = {
 fromDate?: string;
 toDate?: string;
+};
+
+export type GetGstItemWiseSummaryParams = {
+fromDate?: string;
+toDate?: string;
+gstin?: string;
+/**
+ * @minimum 1
+ */
+warehouseId?: number;
 };
 
 export type ListReconciliationPendingQueueParams = {

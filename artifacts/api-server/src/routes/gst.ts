@@ -1,7 +1,9 @@
 import { Router, type IRouter } from "express";
 import { pool } from "@workspace/db";
+import { GetGstItemWiseSummaryResponse } from "@workspace/api-zod";
 import { buildDerivedPostings } from "./journal";
 import { lineTaxHeads } from "../lib/gst";
+import { stateCodeFromState } from "../lib/gstTransfer";
 import { requireModuleView } from "../middleware/permissions";
 import { isIsoDate } from "../lib/dateInput";
 import {
@@ -1235,6 +1237,108 @@ router.get("/gst/documents", requireModuleView(["page:/accounts/gst", "page:/acc
       inward: { count: inward.length, taxableValue: sum(inward, "taxableValue"), taxAmount: sum(inward, "taxAmount"), invoiceValue: sum(inward, "invoiceValue") },
     },
   });
+});
+
+// ── Item-wise invoice register (outward sales + inward purchases) ────────────
+
+router.get("/gst/item-wise-summary", requireModuleView(["page:/accounts/gst", "page:/accounts/gst-returns"]), async (req, res): Promise<void> => {
+  const { fromDate, toDate } = parseRange(req);
+  const scope = await parseGstScope(req);
+  const [matMap, salesResult, purchasesResult] = await Promise.all([
+    materialHsnMap(),
+    (async () => {
+      const params: any[] = [];
+      const { rows } = await pool.query(
+        `SELECT s.id, s.invoice_number, s.sale_date, s.total_amount, s.line_items,
+                s.party_name, s.party_gstin, s.party_state,
+                c.name AS customer_name, c.gst_number AS customer_gstin, c.state AS customer_state
+           FROM sales s
+           LEFT JOIN customers c ON c.id = s.customer_id
+          WHERE s.cancelled_at IS NULL
+            AND ${visibleLocationSql("COALESCE(s.location_type, 'outlet')", "COALESCE(s.location_id, s.outlet_id)")}
+            ${rangeFilter("s.sale_date", fromDate, toDate, params)}${scope ? salesScopeCond("s", scope, params) : ""}
+          ORDER BY s.sale_date, s.id`,
+        params,
+      );
+      return rows;
+    })(),
+    (async () => {
+      const params: any[] = [];
+      const { rows } = await pool.query(
+        `SELECT p.id, p.invoice_number, p.purchase_date, p.total_amount, p.line_items,
+                p.party_name, p.party_gstin, p.party_state,
+                v.name AS vendor_name, v.gst_number AS vendor_gstin, v.state AS vendor_state
+           FROM purchases p
+           LEFT JOIN vendors v ON v.id = p.vendor_id
+          WHERE p.cancelled_at IS NULL
+            AND ${visibleLocationSql("COALESCE(p.location_type, p.branch_type, 'headoffice')", "COALESCE(p.location_id, p.branch_id, 0)")}
+            ${rangeFilter("p.purchase_date", fromDate, toDate, params)}${scope ? purchaseScopeCond("p", scope, params) : ""}
+          ORDER BY p.purchase_date, p.id`,
+        params,
+      );
+      return rows;
+    })(),
+  ]);
+
+  const stateCode = (state: string, gstin: string): string => {
+    const gstinCode = /^(\d{2})/.exec(gstin)?.[1];
+    if (gstinCode) return gstinCode;
+    const normalized = state.trim();
+    return /^\d{2}$/.test(normalized) ? normalized : stateCodeFromState(normalized);
+  };
+  const makeRows = (documents: any[], direction: "sale" | "purchase") =>
+    documents.flatMap((doc: any) => {
+      const lines = Array.isArray(doc.line_items) ? doc.line_items : [];
+      const date = iso(direction === "sale" ? doc.sale_date : doc.purchase_date);
+      const partyName = String(direction === "sale"
+        ? doc.party_name || doc.customer_name || "Walk-in"
+        : doc.party_name || doc.vendor_name || "");
+      const partyGstin = String((direction === "sale"
+        ? doc.party_gstin || doc.customer_gstin
+        : doc.party_gstin || doc.vendor_gstin) ?? "").trim();
+      const state = String((direction === "sale"
+        ? doc.party_state || doc.customer_state
+        : doc.party_state || doc.vendor_state) ?? "").trim();
+      const code = stateCode(state, partyGstin);
+      const itemType = direction === "sale" ? "item" : undefined;
+
+      return lines.map((line: any) => {
+        const materialType = direction === "sale" ? itemType : String(line.materialType ?? "");
+        const materialId = direction === "sale" ? line.itemId : line.materialId;
+        const master = materialId == null ? undefined : matMap.get(`${materialType}:${materialId}`);
+        const quantity = Number(line.quantity ?? 0);
+        const taxableAmount = direction === "sale"
+          ? Number(line.lineSubtotal ?? (quantity * Number(line.unitPrice ?? 0) - Number(line.discount ?? 0)))
+          : Number(line.taxableValue ?? 0);
+        const heads = lineTaxHeads(line);
+        const fallbackName = materialId == null
+          ? ""
+          : `${direction === "sale" ? "Item" : materialType === "raw_material" ? "Packing Material" : materialType === "item" ? "Item Name (SKU)" : "Material"} #${materialId}`;
+
+        return {
+          date,
+          documentNumber: String(doc.invoice_number ?? ""),
+          partyName,
+          partyGstin,
+          state,
+          stateCode: code,
+          itemName: String(line.itemName || line.materialName || master?.name || fallbackName),
+          hsnCode: String(line.hsnCode || master?.hsn || ""),
+          quantity,
+          unit: String(line.unit || master?.unit || ""),
+          taxableAmount: round2(taxableAmount),
+          cgst: round2(heads.cgst),
+          sgst: round2(heads.sgst),
+          igst: round2(heads.igst),
+          invoiceValue: round2(Number(doc.total_amount ?? 0)),
+        };
+      });
+    });
+
+  res.json(GetGstItemWiseSummaryResponse.parse({
+    outward: makeRows(salesResult, "sale"),
+    inward: makeRows(purchasesResult, "purchase"),
+  }));
 });
 
 export default router;
