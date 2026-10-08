@@ -2968,6 +2968,57 @@ export const GetGstSummaryResponse = zod.object({
 
 
 /**
+ * @summary GST invoice item details for a period
+ */
+
+
+
+export const GetGstItemWiseSummaryQueryParams = zod.object({
+  "fromDate": zod.coerce.string().optional(),
+  "toDate": zod.coerce.string().optional(),
+  "gstin": zod.coerce.string().optional(),
+  "warehouseId": zod.coerce.number().min(1).optional()
+})
+
+export const GetGstItemWiseSummaryResponse = zod.object({
+  "outward": zod.array(zod.object({
+  "date": zod.string(),
+  "documentNumber": zod.string(),
+  "partyName": zod.string(),
+  "partyGstin": zod.string(),
+  "state": zod.string(),
+  "stateCode": zod.string(),
+  "itemName": zod.string(),
+  "hsnCode": zod.string(),
+  "quantity": zod.number(),
+  "unit": zod.string(),
+  "taxableAmount": zod.number(),
+  "cgst": zod.number(),
+  "sgst": zod.number(),
+  "igst": zod.number(),
+  "invoiceValue": zod.number()
+})),
+  "inward": zod.array(zod.object({
+  "date": zod.string(),
+  "documentNumber": zod.string(),
+  "partyName": zod.string(),
+  "partyGstin": zod.string(),
+  "state": zod.string(),
+  "stateCode": zod.string(),
+  "itemName": zod.string(),
+  "hsnCode": zod.string(),
+  "quantity": zod.number(),
+  "unit": zod.string(),
+  "taxableAmount": zod.number(),
+  "cgst": zod.number(),
+  "sgst": zod.number(),
+  "igst": zod.number(),
+  "invoiceValue": zod.number()
+}))
+})
+
+
+/**
  * @summary Get company settings
  */
 export const GetCompanySettingsResponse = zod.object({

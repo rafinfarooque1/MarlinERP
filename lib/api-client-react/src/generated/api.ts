@@ -55,8 +55,10 @@ import type {
   Expense,
   ExpenseInput,
   GetDashboardUnpaidSalesBillsParams,
+  GetGstItemWiseSummaryParams,
   GetGstSummaryParams,
   GetLedgerStatementParams,
+  GstItemWiseSummary,
   GstSummary,
   HealthStatus,
   Hierarchy,
@@ -7995,6 +7997,90 @@ export function useGetGstSummary<TData = Awaited<ReturnType<typeof getGstSummary
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
 
   const queryOptions = getGetGstSummaryQueryOptions(params,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getGetGstItemWiseSummaryUrl = (params?: GetGstItemWiseSummaryParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : String(value))
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/gst/item-wise-summary?${stringifiedParams}` : `/api/gst/item-wise-summary`
+}
+
+/**
+ * @summary GST invoice item details for a period
+ */
+export const getGstItemWiseSummary = async (params?: GetGstItemWiseSummaryParams, options?: RequestInit): Promise<GstItemWiseSummary> => {
+
+  return customFetch<GstItemWiseSummary>(getGetGstItemWiseSummaryUrl(params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetGstItemWiseSummaryQueryKey = (params?: GetGstItemWiseSummaryParams,) => {
+    return [
+    `/api/gst/item-wise-summary`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getGetGstItemWiseSummaryQueryOptions = <TData = Awaited<ReturnType<typeof getGstItemWiseSummary>>, TError = ErrorType<unknown>>(params?: GetGstItemWiseSummaryParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getGstItemWiseSummary>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetGstItemWiseSummaryQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getGstItemWiseSummary>>> = ({ signal }) => getGstItemWiseSummary(params, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getGstItemWiseSummary>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetGstItemWiseSummaryQueryResult = NonNullable<Awaited<ReturnType<typeof getGstItemWiseSummary>>>
+export type GetGstItemWiseSummaryQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary GST invoice item details for a period
+ */
+
+export function useGetGstItemWiseSummary<TData = Awaited<ReturnType<typeof getGstItemWiseSummary>>, TError = ErrorType<unknown>>(
+ params?: GetGstItemWiseSummaryParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getGstItemWiseSummary>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetGstItemWiseSummaryQueryOptions(params,options)
 
   const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
 
