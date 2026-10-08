@@ -114,6 +114,34 @@ export const GetDashboardSummaryResponse = zod.object({
 
 
 /**
+ * @summary List unpaid sales bills grouped by salesperson
+ */
+
+
+
+export const GetDashboardUnpaidSalesBillsQueryParams = zod.object({
+  "locationType": zod.enum(['outlet', 'warehouse', 'headoffice']).optional(),
+  "locationId": zod.coerce.number().min(1).optional(),
+  "locationKeys": zod.coerce.string().optional().describe('Comma-separated location keys, or \"none\" for an empty scope.')
+})
+
+export const GetDashboardUnpaidSalesBillsResponse = zod.object({
+  "salespeople": zod.array(zod.object({
+  "employeeId": zod.number().nullable(),
+  "name": zod.string()
+})),
+  "rows": zod.array(zod.object({
+  "saleId": zod.number(),
+  "salespersonEmployeeId": zod.number().nullable(),
+  "salespersonName": zod.string(),
+  "customerName": zod.string(),
+  "invoiceNumber": zod.string(),
+  "unpaidAmount": zod.number()
+}))
+})
+
+
+/**
  * @summary Low stock alerts across all branches
  */
 export const GetStockAlertsResponseItem = zod.object({

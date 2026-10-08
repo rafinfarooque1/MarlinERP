@@ -1,7 +1,9 @@
 import { useMemo, useRef, useState, useLayoutEffect } from 'react';
 import {
   useGetDashboardBi,
+  useGetDashboardUnpaidSalesBills,
   type DashboardBiFilters,
+  type GetDashboardUnpaidSalesBillsParams,
 } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { usePermission } from '@/lib/usePermission';
@@ -34,6 +36,7 @@ import { DashboardLocationBreakdown } from './DashboardLocationBreakdown';
 import { DashboardLocationSalesReportCard } from './DashboardLocationSalesReportCard';
 import { DashboardExpenseDetailsReport } from './DashboardExpenseDetailsReport';
 import { DashboardCashBankReport } from './DashboardCashBankReport';
+import { DashboardUnpaidSalesBillsReport } from './DashboardUnpaidSalesBillsReport';
 
 // ── Small helpers ───────────────────────────────────────────────────────────
 
@@ -245,7 +248,24 @@ export default function Dashboard() {
     return f;
   }, [range.from, range.to, locationState]);
 
+  const unpaidSalesBillFilters = useMemo<GetDashboardUnpaidSalesBillsParams>(() => {
+    const f: GetDashboardUnpaidSalesBillsParams = {};
+    const loc = locationFilterParams(locationState);
+    if (loc.locationType && loc.locationId) {
+      f.locationType = loc.locationType;
+      f.locationId = loc.locationId;
+    }
+    const keys = locationKeysParams(locationState);
+    if (keys) f.locationKeys = keys.join(',');
+    return f;
+  }, [locationState]);
+
   const { data: bi, isLoading, isError } = useGetDashboardBi(filters);
+  const {
+    data: unpaidSalesBills,
+    isLoading: unpaidSalesBillsLoading,
+    isError: unpaidSalesBillsError,
+  } = useGetDashboardUnpaidSalesBills(unpaidSalesBillFilters);
 
   const pLabel = periodLabel(range.from || undefined, range.to || undefined);
   const reportLocationLabel = locationState.locationKeys?.length
@@ -921,6 +941,14 @@ export default function Dashboard() {
               toDate={range.to || undefined}
             />
           </div>
+        </div>
+
+        <div className="min-w-0">
+          <DashboardUnpaidSalesBillsReport
+            data={unpaidSalesBills}
+            isLoading={unpaidSalesBillsLoading}
+            isError={unpaidSalesBillsError}
+          />
         </div>
 
         <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-2">
