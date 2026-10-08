@@ -136,6 +136,8 @@ export const GetDashboardUnpaidSalesBillsResponse = zod.object({
   "salespersonName": zod.string(),
   "customerName": zod.string(),
   "invoiceNumber": zod.string(),
+  "locationName": zod.string(),
+  "billAmount": zod.number(),
   "unpaidAmount": zod.number()
 }))
 })

@@ -524,9 +524,15 @@ router.get("/dashboard/unpaid-sales-bills", requireModuleView("page:/"), async (
                    ELSE COALESCE(NULLIF(TRIM(s.salesperson), ''), 'Unassigned') END AS salesperson_name,
               COALESCE(NULLIF(TRIM(c.name), ''), 'Walk-in') AS customer_name,
               COALESCE(NULLIF(TRIM(s.invoice_number), ''), '#' || s.id::text) AS invoice_number,
+               COALESCE(w.name, o.name,
+                 CASE WHEN ${locationTypeExpr} = 'headoffice' THEN 'Head Office' ELSE 'Unknown' END
+               ) AS location_name,
+               s.total_amount::numeric AS bill_amount,
               ${outstandingExpr("s")} AS unpaid_amount
          FROM sales s
          LEFT JOIN customers c ON c.id = s.customer_id
+          LEFT JOIN warehouses w ON ${locationTypeExpr} = 'warehouse' AND w.id = ${locationIdExpr}
+          LEFT JOIN outlets o ON ${locationTypeExpr} = 'outlet' AND o.id = ${locationIdExpr}
         WHERE ${where}
           AND ${outstandingExpr("s")} > 0.005
         ORDER BY salesperson_name, customer_name, s.sale_date, s.id`,
@@ -545,6 +551,8 @@ router.get("/dashboard/unpaid-sales-bills", requireModuleView("page:/"), async (
       salespersonName: String(row.salesperson_name ?? "Unassigned"),
       customerName: String(row.customer_name ?? "Walk-in"),
       invoiceNumber: String(row.invoice_number ?? `#${row.sale_id}`),
+      locationName: String(row.location_name ?? "Unknown"),
+      billAmount: Number(row.bill_amount ?? 0),
       unpaidAmount: Number(row.unpaid_amount ?? 0),
     })),
   });

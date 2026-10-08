@@ -191,6 +191,8 @@ export function DashboardUnpaidSalesBillsReport({
                       <th scope="col" className="whitespace-nowrap border border-border px-2 py-1 text-left font-semibold">Sales Man</th>
                       <th scope="col" className="border border-border px-2 py-1 text-left font-semibold">Vendor</th>
                       <th scope="col" className="whitespace-nowrap border border-border px-2 py-1 text-left font-semibold">Bill no</th>
+                      <th scope="col" className="border border-border px-2 py-1 text-left font-semibold">Location</th>
+                      <th scope="col" className="whitespace-nowrap border border-border px-2 py-1 text-right font-semibold">Bill amount</th>
                       <th scope="col" className="whitespace-nowrap border border-border px-2 py-1 text-right font-semibold">Unpaid amount</th>
                     </tr>
                   </thead>
@@ -200,6 +202,10 @@ export function DashboardUnpaidSalesBillsReport({
                         <td className="border border-border px-2 py-1">{row.salespersonName}</td>
                         <td className="border border-border px-2 py-1">{row.customerName}</td>
                         <td className="border border-border px-2 py-1">{row.invoiceNumber}</td>
+                        <td className="border border-border px-2 py-1">{row.locationName}</td>
+                        <td className="whitespace-nowrap border border-border px-2 py-1 text-right font-mono tabular-nums">
+                          {fmt(row.billAmount)}
+                        </td>
                         <td className="whitespace-nowrap border border-border px-2 py-1 text-right font-mono tabular-nums">
                           {fmt(row.unpaidAmount)}
                         </td>
@@ -208,7 +214,7 @@ export function DashboardUnpaidSalesBillsReport({
                   </tbody>
                   <tfoot>
                     <tr className="bg-primary/10 font-bold" data-testid="row-unpaid-sales-bills-total">
-                      <th scope="row" colSpan={3} className="border border-border px-2 py-1 text-left">Total unpaid</th>
+                      <th scope="row" colSpan={5} className="border border-border px-2 py-1 text-left">Total unpaid</th>
                       <td className="whitespace-nowrap border border-border px-2 py-1 text-right font-mono tabular-nums">
                         {fmt(totalUnpaid)}
                       </td>

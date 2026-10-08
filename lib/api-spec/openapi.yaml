@@ -2282,7 +2282,7 @@ components:
 
     DashboardUnpaidSalesBill:
       type: object
-      required: [saleId, salespersonEmployeeId, salespersonName, customerName, invoiceNumber, unpaidAmount]
+      required: [saleId, salespersonEmployeeId, salespersonName, customerName, invoiceNumber, locationName, billAmount, unpaidAmount]
       properties:
         saleId:
           type: integer
@@ -2294,6 +2294,10 @@ components:
           type: string
         invoiceNumber:
           type: string
+        locationName:
+          type: string
+        billAmount:
+          type: number
         unpaidAmount:
           type: number
 
