@@ -465,6 +465,91 @@ router.get("/dashboard/sales-trend", requireModuleView("page:/"), async (req, re
   res.json(rows);
 });
 
+router.get("/dashboard/unpaid-sales-bills", requireModuleView("page:/"), async (req, res): Promise<void> => {
+  const { scope, viewLoc } = await dashboardScope(req);
+  const locationTypeExpr = "COALESCE(s.location_type, 'outlet')";
+  const locationIdExpr = "COALESCE(s.location_id, s.outlet_id)";
+  const conditions = [
+    "s.branch_transfer_id IS NULL",
+    "s.cancelled_at IS NULL",
+    visibleLocationSql(locationTypeExpr, locationIdExpr),
+  ];
+  const params: unknown[] = [];
+  pushLocationFilter(conditions, params, viewLoc, locationTypeExpr, locationIdExpr);
+  if (!scope.isHeadOffice) {
+    conditions.push(scopeLocWhere(scope, params, locationTypeExpr, locationIdExpr));
+  }
+
+  const rawLocationKeys = typeof req.query.locationKeys === "string"
+    ? req.query.locationKeys.trim()
+    : "";
+  if (rawLocationKeys === "none") {
+    res.json({ salespeople: [], rows: [] });
+    return;
+  }
+  if (rawLocationKeys) {
+    const keys = rawLocationKeys.split(",").map((key) => key.trim());
+    if (keys.some((key) => !/^(headoffice|(?:warehouse|outlet):[1-9]\d*)$/.test(key))) {
+      res.status(400).json({ error: "locationKeys must contain headoffice, warehouse:<id>, or outlet:<id>" });
+      return;
+    }
+    const locationConditions = keys.map((key) => {
+      if (key === "headoffice") return `${locationTypeExpr} = 'headoffice'`;
+      const [type, rawId] = key.split(":");
+      params.push(type);
+      const typeParam = params.length;
+      params.push(Number(rawId));
+      const idParam = params.length;
+      return `(${locationTypeExpr} = $${typeParam} AND ${locationIdExpr} = $${idParam})`;
+    });
+    conditions.push(`(${locationConditions.join(" OR ")})`);
+  }
+
+  const where = conditions.join(" AND ");
+  const [salespeopleResult, billsResult] = await Promise.all([
+    pool.query<any>(
+      `SELECT DISTINCT ON (s.salesperson_employee_id)
+              s.salesperson_employee_id,
+              CASE WHEN s.salesperson_employee_id IS NULL THEN 'Unassigned'
+                   ELSE COALESCE(NULLIF(TRIM(s.salesperson), ''), 'Unassigned') END AS salesperson_name
+         FROM sales s
+        WHERE ${where}
+        ORDER BY s.salesperson_employee_id NULLS LAST, s.sale_date DESC, s.id DESC`,
+      params,
+    ),
+    pool.query<any>(
+      `SELECT s.id AS sale_id,
+              s.salesperson_employee_id,
+              CASE WHEN s.salesperson_employee_id IS NULL THEN 'Unassigned'
+                   ELSE COALESCE(NULLIF(TRIM(s.salesperson), ''), 'Unassigned') END AS salesperson_name,
+              COALESCE(NULLIF(TRIM(c.name), ''), 'Walk-in') AS customer_name,
+              COALESCE(NULLIF(TRIM(s.invoice_number), ''), '#' || s.id::text) AS invoice_number,
+              ${outstandingExpr("s")} AS unpaid_amount
+         FROM sales s
+         LEFT JOIN customers c ON c.id = s.customer_id
+        WHERE ${where}
+          AND ${outstandingExpr("s")} > 0.005
+        ORDER BY salesperson_name, customer_name, s.sale_date, s.id`,
+      params,
+    ),
+  ]);
+
+  res.json({
+    salespeople: salespeopleResult.rows.map((row: any) => ({
+      employeeId: row.salesperson_employee_id == null ? null : Number(row.salesperson_employee_id),
+      name: String(row.salesperson_name ?? "Unassigned"),
+    })),
+    rows: billsResult.rows.map((row: any) => ({
+      saleId: Number(row.sale_id),
+      salespersonEmployeeId: row.salesperson_employee_id == null ? null : Number(row.salesperson_employee_id),
+      salespersonName: String(row.salesperson_name ?? "Unassigned"),
+      customerName: String(row.customer_name ?? "Walk-in"),
+      invoiceNumber: String(row.invoice_number ?? `#${row.sale_id}`),
+      unpaidAmount: Number(row.unpaid_amount ?? 0),
+    })),
+  });
+});
+
 router.get("/dashboard/top-items", requireModuleView("page:/"), async (req, res): Promise<void> => {
   const f = salesWhere({ ...(req.query as Record<string, unknown>), ...(getLocationFilter(req) ?? {}) });
   if (f.error) { res.status(400).json({ error: f.error }); return; }
