@@ -13,5 +13,7 @@ export interface DashboardUnpaidSalesBill {
   salespersonName: string;
   customerName: string;
   invoiceNumber: string;
+  locationName: string;
+  billAmount: number;
   unpaidAmount: number;
 }
