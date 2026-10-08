@@ -23,7 +23,8 @@ import { EmptyState } from '@/components/app/empty-state';
 import { TableSkeleton } from '@/components/app/loading-skeletons';
 import { Checkbox } from '@/components/ui/checkbox';
 import {
-  GST_ITEMWISE_PDF_COLUMNS, GstItemWiseTable, gstItemWiseCsvRow, gstItemWisePdfRow,
+  GST_ITEMWISE_INWARD_PDF_COLUMNS, GST_ITEMWISE_OUTWARD_PDF_COLUMNS,
+  GstItemWiseTable, gstItemWiseCsvRow, gstItemWisePdfRow,
 } from './GstItemWiseReport';
 
 const fmt = (n: number) => `₹${Math.abs(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -231,12 +232,12 @@ export default function GstSummary() {
         sections: [
           {
             heading: 'Outward Sales (Item-wise)',
-            columns: GST_ITEMWISE_PDF_COLUMNS,
+            columns: GST_ITEMWISE_OUTWARD_PDF_COLUMNS,
             rows: itemWiseOutward.map(r => gstItemWisePdfRow(r, true)),
           },
           {
             heading: 'Inward Purchases (Item-wise)',
-            columns: GST_ITEMWISE_PDF_COLUMNS,
+            columns: GST_ITEMWISE_INWARD_PDF_COLUMNS,
             rows: itemWiseInward.map(r => gstItemWisePdfRow(r, false)),
           },
         ],

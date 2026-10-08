@@ -22,4 +22,10 @@ export interface GstItemWiseRow {
   sgst: number;
   igst: number;
   invoiceValue: number;
+  /** Salesperson name for outward sales rows; omitted for purchase rows. */
+  salesperson?: string;
+  /** Invoice-level amount received, repeated for each outward item line. */
+  amountReceived?: number;
+  /** Invoice-level outstanding balance, repeated for each outward item line. */
+  balanceDue?: number;
 }

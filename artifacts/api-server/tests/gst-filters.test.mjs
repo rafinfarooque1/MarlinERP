@@ -152,8 +152,8 @@ const docRow = (docs, type, num) => (docs?.[type] ?? []).find(r => r.documentNum
     `status=${bill?.paymentStatus} modes=${bill?.paymentModes}`);
 }
 
-// Item-wise mode carries one row per source line, for both sales and purchase
-// bills, with party registration details and the invoice total repeated.
+// Item-wise mode carries one row per source line, with receivables repeated on
+// each sales line and no receivables fields on purchase rows.
 {
   const qs = 'fromDate=2026-08-01&toDate=2026-08-01';
   const itemReport = await get(`/gst/item-wise-summary?${qs}&gstin=${GSTIN1}`);
@@ -179,11 +179,14 @@ const docRow = (docs, type, num) => (docs?.[type] ?? []).find(r => r.documentNum
       && saleLine.stateCode === '29'
       && saleLine.itemName === itemName
       && saleLine.hsnCode === '08119010'
-      && saleLine.unit === 'KG',
+      && saleLine.unit === 'KG'
+      && saleLine.salesperson === 'Unassigned',
     JSON.stringify(saleLine));
   assert('Sales item row carries quantity, taxable amount, GST heads and invoice value',
     !!saleLine && !!saleDoc
       && Number(saleLine.quantity) === 2
+      && Number(saleLine.amountReceived) === 0
+      && Math.abs(Number(saleLine.balanceDue) - Number(saleLine.invoiceValue)) < 0.01
       && Math.abs(Number(saleLine.taxableAmount) - Number(saleDoc.taxableValue)) < 0.01
       && Math.abs(Number(saleLine.cgst) - Number(saleDoc.cgst)) < 0.01
       && Math.abs(Number(saleLine.sgst) - Number(saleDoc.sgst)) < 0.01
@@ -199,7 +202,10 @@ const docRow = (docs, type, num) => (docs?.[type] ?? []).find(r => r.documentNum
       && purchaseLine.stateCode === '29'
       && purchaseLine.itemName === itemName
       && purchaseLine.hsnCode === '08119010'
-      && purchaseLine.unit === 'KG',
+      && purchaseLine.unit === 'KG'
+      && !('salesperson' in purchaseLine)
+      && !('amountReceived' in purchaseLine)
+      && !('balanceDue' in purchaseLine),
     JSON.stringify(purchaseLine));
   assert('Purchase item row carries quantity, taxable amount, GST heads and invoice value',
     !!purchaseLine && !!purchaseDoc
@@ -218,9 +224,15 @@ const docRow = (docs, type, num) => (docs?.[type] ?? []).find(r => r.documentNum
   assert('Partial cash payment accepted', pay.status === 200 || pay.status === 201, JSON.stringify(pay.data).slice(0, 120));
   const docs = (await get('/gst/documents?fromDate=2026-08-01&toDate=2026-08-01')).data;
   const sale = docRow(docs, 'outward', saleInvoice);
+  const itemReport = (await get('/gst/item-wise-summary?fromDate=2026-08-01&toDate=2026-08-01')).data;
+  const itemSale = itemReport?.outward?.find(r => r.documentNumber === saleInvoice);
   assert('Partially-paid sale → "Cash + Credit"',
     sale?.paymentStatus === 'partially_paid' && sale?.paymentModes === 'Cash + Credit',
     `status=${sale?.paymentStatus} modes=${sale?.paymentModes}`);
+  assert('Item-wise receivables show the partial payment and remaining balance',
+    Number(itemSale?.amountReceived) === 80
+      && Math.abs(Number(itemSale?.balanceDue) - (Number(itemSale?.invoiceValue) - 80)) < 0.01,
+    JSON.stringify(itemSale));
 }
 
 // ── 3. Filter partition & dead-end scopes ───────────────────────────────────
