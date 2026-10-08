@@ -93,6 +93,27 @@ export interface DashboardSummary {
   cashBalance?: number;
 }
 
+export interface DashboardSalespersonOption {
+  /** @nullable */
+  employeeId: number | null;
+  name: string;
+}
+
+export interface DashboardUnpaidSalesBill {
+  saleId: number;
+  /** @nullable */
+  salespersonEmployeeId: number | null;
+  salespersonName: string;
+  customerName: string;
+  invoiceNumber: string;
+  unpaidAmount: number;
+}
+
+export interface DashboardUnpaidSalesBills {
+  salespeople: DashboardSalespersonOption[];
+  rows: DashboardUnpaidSalesBill[];
+}
+
 export interface StockAlert {
   itemId?: number;
   itemName?: string;
@@ -2158,6 +2179,27 @@ export interface RentApiLedgerPosting {
   creditLedger: string;
   amount: number;
 }
+
+export type GetDashboardUnpaidSalesBillsParams = {
+locationType?: GetDashboardUnpaidSalesBillsLocationType;
+/**
+ * @minimum 1
+ */
+locationId?: number;
+/**
+ * Comma-separated location keys, or "none" for an empty scope.
+ */
+locationKeys?: string;
+};
+
+export type GetDashboardUnpaidSalesBillsLocationType = typeof GetDashboardUnpaidSalesBillsLocationType[keyof typeof GetDashboardUnpaidSalesBillsLocationType];
+
+
+export const GetDashboardUnpaidSalesBillsLocationType = {
+  outlet: 'outlet',
+  warehouse: 'warehouse',
+  headoffice: 'headoffice',
+} as const;
 
 export type ListStockParams = {
 branchId?: number;

@@ -45,6 +45,7 @@ import type {
   CustomerInput,
   CustomerUpdate,
   DashboardSummary,
+  DashboardUnpaidSalesBills,
   DeleteCashBankAccount200,
   DeleteQuotation200,
   DeleteQuotationPaymentTerm200,
@@ -53,6 +54,7 @@ import type {
   EmployeeUpdate,
   Expense,
   ExpenseInput,
+  GetDashboardUnpaidSalesBillsParams,
   GetGstSummaryParams,
   GetLedgerStatementParams,
   GstSummary,
@@ -598,6 +600,90 @@ export function useGetDashboardSummary<TData = Awaited<ReturnType<typeof getDash
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
 
   const queryOptions = getGetDashboardSummaryQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getGetDashboardUnpaidSalesBillsUrl = (params?: GetDashboardUnpaidSalesBillsParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : String(value))
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/dashboard/unpaid-sales-bills?${stringifiedParams}` : `/api/dashboard/unpaid-sales-bills`
+}
+
+/**
+ * @summary List unpaid sales bills grouped by salesperson
+ */
+export const getDashboardUnpaidSalesBills = async (params?: GetDashboardUnpaidSalesBillsParams, options?: RequestInit): Promise<DashboardUnpaidSalesBills> => {
+
+  return customFetch<DashboardUnpaidSalesBills>(getGetDashboardUnpaidSalesBillsUrl(params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetDashboardUnpaidSalesBillsQueryKey = (params?: GetDashboardUnpaidSalesBillsParams,) => {
+    return [
+    `/api/dashboard/unpaid-sales-bills`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getGetDashboardUnpaidSalesBillsQueryOptions = <TData = Awaited<ReturnType<typeof getDashboardUnpaidSalesBills>>, TError = ErrorType<void>>(params?: GetDashboardUnpaidSalesBillsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getDashboardUnpaidSalesBills>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetDashboardUnpaidSalesBillsQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getDashboardUnpaidSalesBills>>> = ({ signal }) => getDashboardUnpaidSalesBills(params, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getDashboardUnpaidSalesBills>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetDashboardUnpaidSalesBillsQueryResult = NonNullable<Awaited<ReturnType<typeof getDashboardUnpaidSalesBills>>>
+export type GetDashboardUnpaidSalesBillsQueryError = ErrorType<void>
+
+
+/**
+ * @summary List unpaid sales bills grouped by salesperson
+ */
+
+export function useGetDashboardUnpaidSalesBills<TData = Awaited<ReturnType<typeof getDashboardUnpaidSalesBills>>, TError = ErrorType<void>>(
+ params?: GetDashboardUnpaidSalesBillsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getDashboardUnpaidSalesBills>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetDashboardUnpaidSalesBillsQueryOptions(params,options)
 
   const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
 
