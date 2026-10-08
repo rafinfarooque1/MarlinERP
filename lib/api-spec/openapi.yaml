@@ -123,6 +123,37 @@ paths:
               schema:
                 $ref: "#/components/schemas/DashboardSummary"
 
+  /dashboard/unpaid-sales-bills:
+    get:
+      operationId: getDashboardUnpaidSalesBills
+      tags: [dashboard]
+      summary: List unpaid sales bills grouped by salesperson
+      parameters:
+        - name: locationType
+          in: query
+          schema:
+            type: string
+            enum: [outlet, warehouse, headoffice]
+        - name: locationId
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+        - name: locationKeys
+          in: query
+          description: Comma-separated location keys, or "none" for an empty scope.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Outstanding sales bills and salesperson choices
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardUnpaidSalesBills"
+        "400":
+          description: Invalid location filter
+
   /dashboard/stock-alerts:
     get:
       operationId: getStockAlerts
@@ -2207,6 +2238,45 @@ components:
         bankBalance:
           type: number
         cashBalance:
+          type: number
+
+    DashboardUnpaidSalesBills:
+      type: object
+      required: [salespeople, rows]
+      properties:
+        salespeople:
+          type: array
+          items:
+            $ref: "#/components/schemas/DashboardSalespersonOption"
+        rows:
+          type: array
+          items:
+            $ref: "#/components/schemas/DashboardUnpaidSalesBill"
+
+    DashboardSalespersonOption:
+      type: object
+      required: [employeeId, name]
+      properties:
+        employeeId:
+          type: [integer, "null"]
+        name:
+          type: string
+
+    DashboardUnpaidSalesBill:
+      type: object
+      required: [saleId, salespersonEmployeeId, salespersonName, customerName, invoiceNumber, unpaidAmount]
+      properties:
+        saleId:
+          type: integer
+        salespersonEmployeeId:
+          type: [integer, "null"]
+        salespersonName:
+          type: string
+        customerName:
+          type: string
+        invoiceNumber:
+          type: string
+        unpaidAmount:
           type: number
 
     StockAlert:
