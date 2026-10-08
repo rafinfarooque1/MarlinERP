@@ -1821,6 +1821,24 @@ paths:
               schema:
                 $ref: "#/components/schemas/GstSummary"
 
+  /gst/item-wise-summary:
+    get:
+      operationId: getGstItemWiseSummary
+      tags: [gst]
+      summary: GST invoice item details for a period
+      parameters:
+        - { name: fromDate, in: query, schema: { type: string } }
+        - { name: toDate, in: query, schema: { type: string } }
+        - { name: gstin, in: query, schema: { type: string } }
+        - { name: warehouseId, in: query, schema: { type: integer, minimum: 1 } }
+      responses:
+        "200":
+          description: Outward sales and inward purchase invoice lines
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GstItemWiseSummary"
+
   # ── COMPANY SETTINGS ──────────────────────────────────────────────────────
   /company/settings:
     get:
@@ -4300,6 +4318,54 @@ components:
               gstNumber: { type: string }
               salesTax: { type: number }
               purchaseTax: { type: number }
+
+    GstItemWiseSummary:
+      type: object
+      required: [outward, inward]
+      properties:
+        outward:
+          type: array
+          items:
+            $ref: "#/components/schemas/GstItemWiseRow"
+        inward:
+          type: array
+          items:
+            $ref: "#/components/schemas/GstItemWiseRow"
+
+    GstItemWiseRow:
+      type: object
+      required: [date, documentNumber, partyName, partyGstin, state, stateCode, itemName, hsnCode, quantity, unit, taxableAmount, cgst, sgst, igst, invoiceValue]
+      properties:
+        date:
+          type: string
+        documentNumber:
+          type: string
+        partyName:
+          type: string
+        partyGstin:
+          type: string
+        state:
+          type: string
+        stateCode:
+          type: string
+        itemName:
+          type: string
+        hsnCode:
+          type: string
+        quantity:
+          type: number
+        unit:
+          type: string
+        taxableAmount:
+          type: number
+        cgst:
+          type: number
+        sgst:
+          type: number
+        igst:
+          type: number
+        invoiceValue:
+          type: number
 
     # COMPANY
     CompanySettings:
