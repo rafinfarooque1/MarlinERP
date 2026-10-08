@@ -1249,7 +1249,7 @@ router.get("/gst/item-wise-summary", requireModuleView(["page:/accounts/gst", "p
     (async () => {
       const params: any[] = [];
       const { rows } = await pool.query(
-        `SELECT s.id, s.invoice_number, s.sale_date, s.total_amount, s.line_items,
+        `SELECT s.id, s.invoice_number, s.sale_date, s.total_amount, s.line_items, s.salesperson,
                 s.party_name, s.party_gstin, s.party_state,
                 c.name AS customer_name, c.gst_number AS customer_gstin, c.state AS customer_state
            FROM sales s
@@ -1279,6 +1279,7 @@ router.get("/gst/item-wise-summary", requireModuleView(["page:/accounts/gst", "p
       return rows;
     })(),
   ]);
+  const salePositions = await loadPaymentPositions(pool, salesResult.map((sale: any) => Number(sale.id)));
 
   const stateCode = (state: string, gstin: string): string => {
     const gstinCode = /^(\d{2})/.exec(gstin)?.[1];
@@ -1301,6 +1302,7 @@ router.get("/gst/item-wise-summary", requireModuleView(["page:/accounts/gst", "p
         : doc.party_state || doc.vendor_state) ?? "").trim();
       const code = stateCode(state, partyGstin);
       const itemType = direction === "sale" ? "item" : undefined;
+      const paymentPosition = direction === "sale" ? salePositions.get(Number(doc.id)) : undefined;
 
       return lines.map((line: any) => {
         const materialType = direction === "sale" ? itemType : String(line.materialType ?? "");
@@ -1331,6 +1333,11 @@ router.get("/gst/item-wise-summary", requireModuleView(["page:/accounts/gst", "p
           sgst: round2(heads.sgst),
           igst: round2(heads.igst),
           invoiceValue: round2(Number(doc.total_amount ?? 0)),
+          ...(direction === "sale" ? {
+            salesperson: String(doc.salesperson || "Unassigned"),
+            amountReceived: round2(paymentPosition?.amountReceived ?? 0),
+            balanceDue: round2(paymentPosition?.outstanding ?? 0),
+          } : {}),
         };
       });
     });

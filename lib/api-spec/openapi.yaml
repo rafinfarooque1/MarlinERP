@@ -4366,6 +4366,15 @@ components:
           type: number
         invoiceValue:
           type: number
+        salesperson:
+          type: string
+          description: Salesperson name for outward sales rows; omitted for purchase rows.
+        amountReceived:
+          type: number
+          description: Invoice-level amount received, repeated for each outward item line.
+        balanceDue:
+          type: number
+          description: Invoice-level outstanding balance, repeated for each outward item line.
 
     # COMPANY
     CompanySettings:

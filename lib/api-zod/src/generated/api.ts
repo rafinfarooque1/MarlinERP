@@ -2996,7 +2996,10 @@ export const GetGstItemWiseSummaryResponse = zod.object({
   "cgst": zod.number(),
   "sgst": zod.number(),
   "igst": zod.number(),
-  "invoiceValue": zod.number()
+  "invoiceValue": zod.number(),
+  "salesperson": zod.string().optional().describe('Salesperson name for outward sales rows; omitted for purchase rows.'),
+  "amountReceived": zod.number().optional().describe('Invoice-level amount received, repeated for each outward item line.'),
+  "balanceDue": zod.number().optional().describe('Invoice-level outstanding balance, repeated for each outward item line.')
 })),
   "inward": zod.array(zod.object({
   "date": zod.string(),
@@ -3013,7 +3016,10 @@ export const GetGstItemWiseSummaryResponse = zod.object({
   "cgst": zod.number(),
   "sgst": zod.number(),
   "igst": zod.number(),
-  "invoiceValue": zod.number()
+  "invoiceValue": zod.number(),
+  "salesperson": zod.string().optional().describe('Salesperson name for outward sales rows; omitted for purchase rows.'),
+  "amountReceived": zod.number().optional().describe('Invoice-level amount received, repeated for each outward item line.'),
+  "balanceDue": zod.number().optional().describe('Invoice-level outstanding balance, repeated for each outward item line.')
 }))
 })
 
