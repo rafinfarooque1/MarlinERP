@@ -30,6 +30,27 @@ setLocationContextGetter(() => {
   }
 });
 
+// A tab left open across a publish can still request a hashed chunk from the
+// previous build. The static SPA rewrite returns index.html for that missing
+// asset, which browsers reject as a JavaScript MIME mismatch. Recover once per
+// minute by reloading onto the current build instead of leaving the user stuck.
+window.addEventListener('vite:preloadError', (event) => {
+  let shouldReload = false;
+  try {
+    const key = 'marlin:chunk-reload-at';
+    const lastReloadAt = Number(sessionStorage.getItem(key));
+    shouldReload = !lastReloadAt || Date.now() - lastReloadAt > 60_000;
+    if (shouldReload) sessionStorage.setItem(key, String(Date.now()));
+  } catch {
+    // If session storage is unavailable, let Vite report the original error.
+  }
+
+  if (shouldReload) {
+    event.preventDefault();
+    window.location.reload();
+  }
+});
+
 createRoot(document.getElementById('root')!).render(
   <ThemeProvider>
     <App />
