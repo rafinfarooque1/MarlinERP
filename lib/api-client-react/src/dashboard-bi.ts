@@ -52,6 +52,14 @@ export interface DashboardLocationSalesRow {
   outstandingAmount: number;
 }
 
+export interface DashboardEmployeeSalesRow {
+  employeeId: number | null;
+  name: string;
+  salesAmount: number;
+  salesQuantity: number;
+  outstandingAmount: number;
+}
+
 export interface DashboardBi {
   /**
    * False when this employee lacks the inventory-valuation right, in which
@@ -149,6 +157,10 @@ export interface DashboardBi {
   locationBreakdown: BiLocationMetric[];
   /** Period sales and as-of outstanding by active location in the caller's data scope. */
   locationSalesReport: DashboardLocationSalesRow[];
+  /** Period sales and invoice-based outstanding by snapshotted salesperson. */
+  employeeSalesReport: DashboardEmployeeSalesRow[];
+  /** Adjustment that reconciles employee invoice outstanding to location receivables-ledger outstanding. */
+  employeeSalesLedgerAdjustment: number;
   topItems: BiTopItem[];
   topCustomers: BiTopCustomer[];
 }

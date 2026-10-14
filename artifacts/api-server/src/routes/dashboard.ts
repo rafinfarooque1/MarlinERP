@@ -1134,7 +1134,11 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
     const asOf = toDate ? "$2" : "CURRENT_DATE";
     return pool.query(
       `SELECT s.salesperson_employee_id AS employee_id,
-              COALESCE(NULLIF(TRIM(s.salesperson), ''), 'Unassigned') AS name,
+              COALESCE(
+                (ARRAY_AGG(NULLIF(TRIM(s.salesperson), '') ORDER BY s.sale_date DESC, s.id DESC)
+                  FILTER (WHERE NULLIF(TRIM(s.salesperson), '') IS NOT NULL))[1],
+                'Unassigned'
+              ) AS name,
               COALESCE(SUM(CASE WHEN ${inPeriod} THEN s.total_amount::numeric ELSE 0 END), 0)::float AS sales_amount,
               COALESCE(SUM(CASE WHEN ${inPeriod} THEN line_totals.quantity ELSE 0 END), 0)::float AS sales_quantity,
               COALESCE(SUM(CASE WHEN s.customer_id IS NOT NULL
@@ -1145,7 +1149,7 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
              FROM jsonb_array_elements(COALESCE(s.line_items, '[]'::jsonb)) AS li
          ) line_totals ON TRUE
         WHERE ${conditions.join(" AND ")}
-        GROUP BY s.salesperson_employee_id, COALESCE(NULLIF(TRIM(s.salesperson), ''), 'Unassigned')
+         GROUP BY s.salesperson_employee_id
        HAVING COALESCE(SUM(CASE WHEN ${inPeriod} THEN s.total_amount::numeric ELSE 0 END), 0) <> 0
            OR COALESCE(SUM(CASE WHEN ${inPeriod} THEN line_totals.quantity ELSE 0 END), 0) <> 0
            OR COALESCE(SUM(CASE WHEN s.customer_id IS NOT NULL
