@@ -1,16 +1,20 @@
 import { useRef, useState } from 'react';
-import type { DashboardLocationSalesRow } from '@workspace/api-client-react';
+import type { DashboardEmployeeSalesRow, DashboardLocationSalesRow } from '@workspace/api-client-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/app/empty-state';
 import { Loader2, MapPin, Share2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { DashboardLocationSalesTable } from './DashboardLocationSalesTable';
+import { DashboardEmployeeSalesTable } from './DashboardEmployeeSalesTable';
 import { measureReportCaptureDimensions } from './report-capture-size';
 
 export function DashboardLocationSalesReportCard({
   rows,
+  employeeRows,
+  employeeLedgerAdjustment,
   totalOutstanding,
   isLoading,
   isError,
@@ -19,6 +23,8 @@ export function DashboardLocationSalesReportCard({
   toDate,
 }: {
   rows?: DashboardLocationSalesRow[];
+  employeeRows?: DashboardEmployeeSalesRow[];
+  employeeLedgerAdjustment?: number;
   totalOutstanding?: number;
   isLoading: boolean;
   isError: boolean;
@@ -29,6 +35,7 @@ export function DashboardLocationSalesReportCard({
   const captureRef = useRef<HTMLDivElement>(null);
   const [sharing, setSharing] = useState(false);
   const [preparingCapture, setPreparingCapture] = useState(false);
+  const [showEmployeeBreakdown, setShowEmployeeBreakdown] = useState(false);
 
   const shareReport = async () => {
     if (sharing) return;
@@ -62,7 +69,7 @@ export function DashboardLocationSalesReportCard({
       await document.fonts.ready;
       const { toBlob } = await import('html-to-image');
       const table = captureTarget.querySelector<HTMLTableElement>('table');
-      if (!table) throw new Error('location sales table not found');
+      if (!table) throw new Error('sales report table not found');
       const dimensions = measureReportCaptureDimensions(captureTarget);
 
       console.debug('[dashboard] location report share: capture bounds', {
@@ -167,6 +174,27 @@ export function DashboardLocationSalesReportCard({
                   totalOutstanding={totalOutstanding}
                   captureMode={preparingCapture}
                 />
+                <label
+                  className="mt-4 flex w-fit cursor-pointer items-center gap-2 text-sm font-medium"
+                >
+                  <Checkbox
+                    checked={showEmployeeBreakdown}
+                    onCheckedChange={(checked) => setShowEmployeeBreakdown(checked === true)}
+                    aria-label="Show salesperson breakdown"
+                    data-testid="checkbox-salesperson-breakdown"
+                  />
+                  Show salesperson breakdown
+                </label>
+                {showEmployeeBreakdown && (
+                  <div className="mt-3">
+                    <DashboardEmployeeSalesTable
+                      rows={employeeRows ?? []}
+                      ledgerAdjustment={employeeLedgerAdjustment ?? 0}
+                      totalOutstanding={totalOutstanding}
+                      captureMode={preparingCapture}
+                    />
+                  </div>
+                )}
               </div>
             )}
           </CardContent>

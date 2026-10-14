@@ -929,6 +929,8 @@ export default function Dashboard() {
           <div className="min-w-0">
             <DashboardLocationSalesReportCard
               rows={bi?.locationSalesReport}
+              employeeRows={bi?.employeeSalesReport}
+              employeeLedgerAdjustment={bi?.employeeSalesLedgerAdjustment}
               totalOutstanding={
                 bi?.scope?.isAllLocations && typeof bi?.receivables?.total === 'number'
                   ? bi.receivables.total

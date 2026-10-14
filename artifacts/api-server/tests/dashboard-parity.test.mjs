@@ -164,6 +164,23 @@ try {
     assert(`bi.sales.count == register invoices (${label})`,
       Number(bi?.sales?.count ?? -1) === Number(reg?.totals?.invoices ?? -2),
       `bi=${bi?.sales?.count} reg=${reg?.totals?.invoices}`);
+    const employeeSales = bi?.employeeSalesReport ?? [];
+    const employeeSalesAmount = employeeSales.reduce((sum, row) => sum + Number(row.salesAmount ?? 0), 0);
+    const employeeSalesQuantity = employeeSales.reduce((sum, row) => sum + Number(row.salesQuantity ?? 0), 0);
+    const locationSalesQuantity = (bi?.locationSalesReport ?? [])
+      .reduce((sum, row) => sum + Number(row.salesQuantity ?? 0), 0);
+    const employeeOutstanding = employeeSales.reduce((sum, row) => sum + Number(row.outstandingAmount ?? 0), 0);
+    const locationOutstanding = (bi?.locationSalesReport ?? [])
+      .reduce((sum, row) => sum + Number(row.outstandingAmount ?? 0), 0);
+    assert(`salesperson sales reconcile with dashboard sales (${label})`,
+      near(employeeSalesAmount, bi?.sales?.total),
+      `employee=${employeeSalesAmount} dashboard=${bi?.sales?.total}`);
+    assert(`salesperson quantities reconcile with location quantities (${label})`,
+      near(employeeSalesQuantity, locationSalesQuantity),
+      `employee=${employeeSalesQuantity} location=${locationSalesQuantity}`);
+    assert(`salesperson outstanding plus ledger adjustment reconciles (${label})`,
+      near(employeeOutstanding + Number(bi?.employeeSalesLedgerAdjustment ?? NaN), locationOutstanding),
+      `employee=${employeeOutstanding} adjustment=${bi?.employeeSalesLedgerAdjustment} location=${locationOutstanding}`);
   }
 
   // A location slice (explicit params, as HO can select) must agree too.
@@ -186,6 +203,12 @@ try {
       && biL.locationSalesReport.length === 1
       && near(biL.locationSalesReport[0].outstandingAmount, biL?.receivables?.total),
       JSON.stringify({ report: biL?.locationSalesReport, receivables: biL?.receivables?.total }));
+    const locationEmployeeOutstanding = (biL?.employeeSalesReport ?? [])
+      .reduce((sum, row) => sum + Number(row.outstandingAmount ?? 0), 0)
+      + Number(biL?.employeeSalesLedgerAdjustment ?? NaN);
+    assert("selected-location salesperson outstanding reconciles to receivables",
+      near(locationEmployeeOutstanding, biL?.receivables?.total),
+      `employee+adjustment=${locationEmployeeOutstanding} receivables=${biL?.receivables?.total}`);
 
     // The drill-down premise: the URL carries only view+range — location rides
     // on the global x-location headers. Both endpoints must honour them alike.
