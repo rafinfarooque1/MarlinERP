@@ -1114,6 +1114,46 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       GROUP BY 1, 2, 3`,
     reportSalesParams,
   );
+  const reportSalesBySalespersonP = (() => {
+    const params: unknown[] = [fromDate || "", toDate || ""];
+    const conditions = [
+      "s.branch_transfer_id IS NULL",
+      "s.cancelled_at IS NULL",
+      visibleLocationSql("COALESCE(s.location_type, 'outlet')", "COALESCE(s.location_id, s.outlet_id)"),
+      `s.sale_date::date <= COALESCE(NULLIF($2, '')::date, CURRENT_DATE)`,
+    ];
+    const allowedLocationKeys = dashboardReportLocations.map((location) =>
+      locationKey(location.locationType, location.locationId));
+    params.push(allowedLocationKeys);
+    conditions.push(
+      `CONCAT(COALESCE(s.location_type, 'outlet'), ':', COALESCE(s.location_id, s.outlet_id)) = ANY($3::text[])`,
+    );
+    if (!scope.isHeadOffice) conditions.push(scopeSalesWhere(scope, params));
+    const inPeriod = `($1 = '' OR s.sale_date::date >= $1::date)
+      AND ($2 = '' OR s.sale_date::date <= $2::date)`;
+    const asOf = toDate ? "$2" : "CURRENT_DATE";
+    return pool.query(
+      `SELECT s.salesperson_employee_id AS employee_id,
+              COALESCE(NULLIF(TRIM(s.salesperson), ''), 'Unassigned') AS name,
+              COALESCE(SUM(CASE WHEN ${inPeriod} THEN s.total_amount::numeric ELSE 0 END), 0)::float AS sales_amount,
+              COALESCE(SUM(CASE WHEN ${inPeriod} THEN line_totals.quantity ELSE 0 END), 0)::float AS sales_quantity,
+              COALESCE(SUM(CASE WHEN s.customer_id IS NOT NULL
+                                THEN ${outstandingAsOfExpr("s", asOf)} ELSE 0 END), 0)::float AS outstanding_amount
+         FROM sales s
+         LEFT JOIN LATERAL (
+           SELECT COALESCE(SUM((li->>'quantity')::numeric), 0) AS quantity
+             FROM jsonb_array_elements(COALESCE(s.line_items, '[]'::jsonb)) AS li
+         ) line_totals ON TRUE
+        WHERE ${conditions.join(" AND ")}
+        GROUP BY s.salesperson_employee_id, COALESCE(NULLIF(TRIM(s.salesperson), ''), 'Unassigned')
+       HAVING COALESCE(SUM(CASE WHEN ${inPeriod} THEN s.total_amount::numeric ELSE 0 END), 0) <> 0
+           OR COALESCE(SUM(CASE WHEN ${inPeriod} THEN line_totals.quantity ELSE 0 END), 0) <> 0
+           OR COALESCE(SUM(CASE WHEN s.customer_id IS NOT NULL
+                                THEN ${outstandingAsOfExpr("s", asOf)} ELSE 0 END), 0) <> 0
+        ORDER BY sales_amount DESC, name`,
+      params,
+    );
+  })();
 
   const matrixOpeningToDate = fromDate
     ? (() => {
@@ -1197,9 +1237,10 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       reconciliationPending,
     };
   }));
-  const [matrixLocationFigures, reportSalesByLocation, cashBankReport] = await Promise.all([
+  const [matrixLocationFigures, reportSalesByLocation, reportSalesBySalesperson, cashBankReport] = await Promise.all([
     matrixLocationFiguresP,
     reportSalesByLocationP,
+    reportSalesBySalespersonP,
     cashBankReportP,
   ]);
 
@@ -1286,6 +1327,20 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       });
     }
   }
+  const employeeSalesReport = reportSalesBySalesperson.rows.map((row: any) => ({
+    employeeId: row.employee_id == null ? null : Number(row.employee_id),
+    name: String(row.name ?? "Unassigned"),
+    salesAmount: money(row.sales_amount),
+    salesQuantity: qty(row.sales_quantity),
+    outstandingAmount: money(row.outstanding_amount),
+  }));
+  const invoiceOutstandingByEmployee = money(employeeSalesReport.reduce(
+    (sum: number, row: { outstandingAmount: number }) => sum + row.outstandingAmount, 0,
+  ));
+  const ledgerOutstandingInScope = money(locationSalesReport.reduce(
+    (sum: number, row: { outstandingAmount: number }) => sum + row.outstandingAmount, 0,
+  ));
+  const employeeSalesLedgerAdjustment = money(ledgerOutstandingInScope - invoiceOutstandingByEmployee);
 
   const matrixOpeningCash = matrixLocationFigures.map((figure) => figure.openingCash);
   const matrixCashReceiptBySale = matrixLocationFigures.map((figure) => figure.cashReceiptBySale);
@@ -1602,6 +1657,8 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       ? locationBreakdown
       : locationBreakdown.map(({ grossProfit: _grossProfit, netProfit: _netProfit, ...safe }) => safe),
     locationSalesReport,
+    employeeSalesReport,
+    employeeSalesLedgerAdjustment,
     topItems: topItemsRows.rows.map((r: any) => ({
       itemId: Number(r.item_id), name: r.name, qty: qty(r.qty), revenue: money(r.revenue),
     })),
