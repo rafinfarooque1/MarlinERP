@@ -3182,8 +3182,6 @@ export const ListReconciliationPendingQueueResponse = zod.array(ListReconciliati
 /**
  * @summary Settle selected pending reconciliation queue items
  */
-export const settleReconciliationPendingQueueBodyProcessingChargeMin = 0;
-
 export const settleReconciliationPendingQueueBodyItemsMax = 500;
 
 
@@ -3191,7 +3189,7 @@ export const settleReconciliationPendingQueueBodyItemsMax = 500;
 export const SettleReconciliationPendingQueueBody = zod.object({
   "bankAccountId": zod.number(),
   "reconciliationDate": zod.coerce.date(),
-  "processingCharge": zod.number().min(settleReconciliationPendingQueueBodyProcessingChargeMin).optional(),
+  "processingCharge": zod.number().optional(),
   "items": zod.array(zod.object({
   "kind": zod.enum(['sale_payment', 'manual_voucher']),
   "id": zod.number(),

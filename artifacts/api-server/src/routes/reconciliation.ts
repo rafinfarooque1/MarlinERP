@@ -3020,9 +3020,9 @@ router.post("/reconciliation/settle-queue", requireModuleAction("page:/accounts/
   if (!isIsoDate(reconciliationDate)) {
     res.status(400).json({ error: "reconciliationDate must be a real YYYY-MM-DD date." }); return;
   }
-  if (!Number.isFinite(processingChargeInput) || processingChargeInput < 0
+  if (!Number.isFinite(processingChargeInput)
     || Math.abs(processingChargeInput * 100 - Math.round(processingChargeInput * 100)) > 1e-6) {
-    res.status(400).json({ error: "processingCharge must be a non-negative amount with no more than 2 decimal places." }); return;
+    res.status(400).json({ error: "processingCharge must be an amount with no more than 2 decimal places." }); return;
   }
   if (await respondIfMonthLocked(res, pool, [reconciliationDate], "bank reconciliation settlement")) return;
 
@@ -3284,9 +3284,10 @@ router.post("/reconciliation/settle-queue", requireModuleAction("page:/accounts/
     }
     const grossCents = allRows.reduce((sum, row) => sum + Math.abs(Math.round(Number(row.amount) * 100)), 0);
     const processingChargeCents = Math.round(processingChargeInput * 100);
-    if (!isOutflow && processingChargeCents >= grossCents) {
+    if ((!isOutflow && processingChargeCents >= grossCents)
+      || (isOutflow && processingChargeCents <= -grossCents)) {
       await client.query("ROLLBACK");
-      res.status(400).json({ error: "Processing charges must be less than the gross amount for an incoming batch." }); return;
+      res.status(400).json({ error: "The processing charge or rebate cannot reduce the settlement amount to zero or below." }); return;
     }
     const bankCents = isOutflow
       ? grossCents + processingChargeCents
@@ -3296,7 +3297,7 @@ router.post("/reconciliation/settle-queue", requireModuleAction("page:/accounts/
     const postingAmount = bankCents / 100;
     const netDirection = isOutflow ? "out" : "in";
     let processingChargeLedgerId: number | null = null;
-    if (processingChargeCents > 0) {
+    if (processingChargeCents !== 0) {
       const { rows: [chargeLedger] } = await client.query(
         `SELECT id FROM account_ledgers WHERE code = 'STD-PROC-CHG' AND COALESCE(is_active, true) FOR SHARE`,
       );
@@ -3334,15 +3335,23 @@ router.post("/reconciliation/settle-queue", requireModuleAction("page:/accounts/
     const settlementLines = isOutflow
       ? [
           { ledgerId: Number(clearing.id), debit: grossAmount, credit: 0 },
-          ...(processingCharge > 0
-            ? [{ ledgerId: Number(processingChargeLedgerId), debit: processingCharge, credit: 0 }]
+          ...(processingCharge !== 0
+            ? [{
+                ledgerId: Number(processingChargeLedgerId),
+                debit: Math.max(processingCharge, 0),
+                credit: Math.max(-processingCharge, 0),
+              }]
             : []),
           { ledgerId: Number(account.ledger_id), debit: 0, credit: postingAmount },
         ]
       : [
           { ledgerId: Number(account.ledger_id), debit: postingAmount, credit: 0 },
-          ...(processingCharge > 0
-            ? [{ ledgerId: Number(processingChargeLedgerId), debit: processingCharge, credit: 0 }]
+          ...(processingCharge !== 0
+            ? [{
+                ledgerId: Number(processingChargeLedgerId),
+                debit: Math.max(processingCharge, 0),
+                credit: Math.max(-processingCharge, 0),
+              }]
             : []),
           { ledgerId: Number(clearing.id), debit: 0, credit: grossAmount },
         ];

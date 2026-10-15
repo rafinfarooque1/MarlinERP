@@ -163,9 +163,10 @@ export default function Reconciliation() {
     : Number(pendingProcessingCharge);
   const pendingProcessingChargeCents = Math.round(pendingProcessingChargeValue * 100);
   const pendingProcessingChargeValid = Number.isFinite(pendingProcessingChargeValue)
-    && pendingProcessingChargeValue >= 0
     && Math.abs(pendingProcessingChargeValue * 100 - pendingProcessingChargeCents) < 1e-6
-    && (selectedPendingDirection === 'out' || pendingProcessingChargeCents < Math.round(selectedPendingGross * 100));
+    && (selectedPendingDirection === 'out'
+      ? pendingProcessingChargeCents > -Math.round(selectedPendingGross * 100)
+      : pendingProcessingChargeCents < Math.round(selectedPendingGross * 100));
   const selectedPendingBankAmount = selectedPendingDirection === 'out'
     ? selectedPendingGross + (pendingProcessingChargeValid ? pendingProcessingChargeValue : 0)
     : selectedPendingGross - (pendingProcessingChargeValid ? pendingProcessingChargeValue : 0);
@@ -532,9 +533,7 @@ export default function Reconciliation() {
   async function submitPendingReconciliation() {
     if (!selectedPendingRows.length || !pendingBankAccountId || !pendingDate) return;
     if (!pendingProcessingChargeValid) {
-      toast.error(selectedPendingDirection === 'in'
-        ? 'Incoming processing charges must be non-negative, have at most two decimal places, and be less than the gross amount.'
-        : 'Processing charges must be non-negative and have at most two decimal places.');
+      toast.error('Processing charge must have at most two decimal places and cannot reduce the settlement amount to zero or below.');
       return;
     }
     try {
@@ -1176,15 +1175,15 @@ export default function Reconciliation() {
               <label className="space-y-1 block text-sm">
                 <span className="font-medium">Processing charge</span>
                 <Input
-                  inputMode="decimal"
+                  type="number"
+                  step="0.01"
                   value={pendingProcessingCharge}
                   onChange={e => setPendingProcessingCharge(e.target.value)}
                   placeholder="0.00"
+                  data-testid="input-pending-processing-charge"
                 />
                 <span className="text-xs text-muted-foreground">
-                  {selectedPendingDirection === 'out'
-                    ? 'Added to the bank outflow and recorded as Bank & Processor Charges.'
-                    : 'Deducted from the bank receipt and recorded as Bank & Processor Charges.'}
+                  Positive values are charges; negative values are rebates credited to Bank &amp; Processor Charges.
                 </span>
               </label>
               <label className="space-y-1 block text-sm">
