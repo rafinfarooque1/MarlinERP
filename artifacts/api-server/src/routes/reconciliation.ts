@@ -1240,16 +1240,43 @@ router.get("/reconciliation/bank-batches/:id", requireModuleView("page:/accounts
 // receipt, payment, journal voucher, customer-ledger leg, or bank posting.
 router.post("/reconciliation/bank-batches", requireModuleAction("page:/accounts/reconciliation", "add"), async (req, res): Promise<void> => {
   const body = (req.body ?? {}) as Record<string, any>;
-  const selected = Array.isArray(body.transactions) ? body.transactions : [];
-  const bankAccountId = Number(body.bankAccountId);
+  const isBulk = Array.isArray(body.groups);
+  const rawGroups = isBulk
+    ? body.groups
+    : [{ bankAccountId: body.bankAccountId, transactions: body.transactions, processingCharge: body.processingCharge }];
   const reconciliationDate = String(body.reconciliationDate ?? "");
-  const chargeText = body.processingCharge == null ? "0" : String(body.processingCharge).trim();
-  if (selected.length === 0 || selected.length > 500) {
-    res.status(400).json({ error: "Select between 1 and 500 bank transactions." });
+  if (!Array.isArray(rawGroups) || rawGroups.length === 0 || rawGroups.length > 100) {
+    res.status(400).json({ error: "Select bank transactions from 1 to 100 bank accounts." });
     return;
   }
-  if (!Number.isInteger(bankAccountId) || bankAccountId <= 0) {
-    res.status(400).json({ error: "bankAccountId is required." });
+  const groups = rawGroups.map((group: any) => {
+    const selected = Array.isArray(group?.transactions) ? group.transactions : [];
+    const rawChargeText = group?.processingCharge == null ? "" : String(group.processingCharge).trim();
+    const chargeText = rawChargeText === "" ? "0" : rawChargeText;
+    return {
+      bankAccountId: Number(group?.bankAccountId),
+      selected,
+      chargeText,
+      processingCharge: Math.round(Number(chargeText) * 100) / 100,
+      identities: selected.map((item: any) => ({
+        entryId: String(item?.entryId ?? "").trim(),
+        ledgerId: Number(item?.ledgerId),
+        bankAccountId: Number(group?.bankAccountId),
+      })),
+      chosen: [] as any[],
+      grossAmount: 0,
+      netAmount: 0,
+    };
+  });
+  const totalSelected = groups.reduce((sum: number, group: any) => sum + group.selected.length, 0);
+  if (totalSelected === 0 || totalSelected > 500 || groups.some((group: any) => group.selected.length === 0)) {
+    res.status(400).json({ error: "Select between 1 and 500 bank transactions, with at least one per account." });
+    return;
+  }
+  const accountIds = groups.map((group: any) => group.bankAccountId);
+  if (groups.some((group: any) => !Number.isInteger(group.bankAccountId) || group.bankAccountId <= 0)
+    || new Set(accountIds).size !== accountIds.length) {
+    res.status(400).json({ error: "Each bank account may appear only once and must be valid." });
     return;
   }
   if (!isIsoDate(reconciliationDate)) {
@@ -1260,15 +1287,11 @@ router.post("/reconciliation/bank-batches", requireModuleAction("page:/accounts/
   // server's current calendar year. This matters when an old bank statement is
   // reviewed today or a future-dated statement is prepared in advance.
   const reconciliationYear = Number(reconciliationDate.slice(0, 4));
-  if (!/^\d+(?:\.\d{1,2})?$/.test(chargeText)) {
-    res.status(400).json({ error: "processingCharge must be a non-negative amount with at most two decimals." });
+  if (groups.some((group: any) => !/^\d+(?:\.\d{1,2})?$/.test(group.chargeText))) {
+    res.status(400).json({ error: "Each processing charge must be a non-negative amount with at most two decimals." });
     return;
   }
-  const processingCharge = Math.round(Number(chargeText) * 100) / 100;
-  const identities = selected.map((item: any) => ({
-    entryId: String(item?.entryId ?? "").trim(),
-    ledgerId: Number(item?.ledgerId),
-  }));
+  const identities = groups.flatMap((group: any) => group.identities);
   if (identities.some((x: any) => !x.entryId || x.entryId.length > 200 || !Number.isInteger(x.ledgerId) || x.ledgerId <= 0)) {
     res.status(400).json({ error: "Every transaction must contain a valid entryId and ledgerId." });
     return;
@@ -1287,7 +1310,7 @@ router.post("/reconciliation/bank-batches", requireModuleAction("page:/accounts/
     const access = await bookAccessScope((req as any).employee ?? {});
     const requestedLocation = getLocationFilter(req);
     const requestedPostingLocation = getPostingLocationFilter(req);
-    const { rows: [account] } = await client.query(
+    const { rows: accountRows } = await client.query(
       `SELECT cba.id AS account_id, cba.ledger_id, cba.name, cba.account_type,
               COALESCE(cba.location_type, 'headoffice') AS location_type,
               COALESCE(cba.location_id, 0) AS location_id,
@@ -1304,14 +1327,16 @@ router.post("/reconciliation/bank-batches", requireModuleAction("page:/accounts/
          JOIN account_ledgers al ON al.id = cba.ledger_id
          LEFT JOIN warehouses w ON cba.location_type = 'warehouse' AND w.id = cba.location_id
          LEFT JOIN outlets o ON cba.location_type = 'outlet' AND o.id = cba.location_id
-        WHERE cba.id = $1 AND cba.account_type <> 'cash'
+        WHERE cba.id = ANY($1::int[]) AND cba.account_type <> 'cash'
           AND COALESCE(al.is_active, true)
+        ORDER BY cba.id
         FOR UPDATE OF cba`,
-      [bankAccountId],
+      [accountIds],
     );
-    if (!account
-      || (access.ledgerIds && !access.ledgerIds.has(Number(account.ledger_id)))
-       || !matchesAccountLocation(account, requestedLocation)) {
+    const accountsById = new Map(accountRows.map((account: any) => [Number(account.account_id), account]));
+    if (accountRows.length !== groups.length || accountRows.some((account: any) =>
+      (access.ledgerIds && !access.ledgerIds.has(Number(account.ledger_id)))
+      || !matchesAccountLocation(account, requestedLocation))) {
       await client.query("ROLLBACK");
       res.status(404).json({ error: "Bank account not found." });
       return;
@@ -1348,12 +1373,13 @@ router.post("/reconciliation/bank-batches", requireModuleAction("page:/accounts/
       }
     }
 
-    const chosen: any[] = [];
+    const chosenByIdentity = new Map<string, any>();
     for (const identity of identities) {
       const posting = byKey.get(`${identity.ledgerId}:${identity.entryId}`);
-      if (!posting || identity.ledgerId !== Number(account.ledger_id) || posting.source === "opening_balance") {
+      const account = accountsById.get(identity.bankAccountId) as any;
+      if (!account || !posting || identity.ledgerId !== Number(account.ledger_id) || posting.source === "opening_balance") {
         await client.query("ROLLBACK");
-        res.status(409).json({ error: `Transaction ${identity.entryId} is not an eligible transaction in the selected bank account.` });
+        res.status(409).json({ error: `Transaction ${identity.entryId} is not eligible in its selected bank account.` });
         return;
       }
       if (access.ledgerIds && !access.ledgerIds.has(identity.ledgerId)
@@ -1384,16 +1410,21 @@ router.post("/reconciliation/bank-batches", requireModuleAction("page:/accounts/
         res.status(409).json({ error: `Transaction ${identity.entryId} is already reconciled.` });
         return;
       }
-      chosen.push(posting);
+      chosenByIdentity.set(`${identity.ledgerId}:${identity.entryId}`, posting);
     }
 
-    const grossAmount = Math.round(chosen.reduce((sum, p) =>
-      sum + Math.abs(Number(p.debit) - Number(p.credit)), 0) * 100) / 100;
-    const netAmount = Math.round((grossAmount - processingCharge) * 100) / 100;
-    if (processingCharge > grossAmount) {
-      await client.query("ROLLBACK");
-      res.status(400).json({ error: "processingCharge cannot exceed the selected gross amount." });
-      return;
+    for (const group of groups as any[]) {
+      group.chosen = group.identities.map((identity: any) =>
+        chosenByIdentity.get(`${identity.ledgerId}:${identity.entryId}`),
+      );
+      group.grossAmount = Math.round(group.chosen.reduce((sum: number, posting: any) =>
+        sum + Math.abs(Number(posting.debit) - Number(posting.credit)), 0) * 100) / 100;
+      group.netAmount = Math.round((group.grossAmount - group.processingCharge) * 100) / 100;
+      if (group.processingCharge > group.grossAmount) {
+        await client.query("ROLLBACK");
+        res.status(400).json({ error: `Processing charge cannot exceed the selected gross amount for bank account ${group.bankAccountId}.` });
+        return;
+      }
     }
 
     await client.query(
@@ -1406,75 +1437,91 @@ router.post("/reconciliation/bank-batches", requireModuleAction("page:/accounts/
         WHERE batch_reference ~ ('^BANK-RECON-' || $1::text || '-\\d+$')`,
       [reconciliationYear],
     );
-    const sequence = Number(maxRow.max_seq) + 1;
-    const batchReference = `BANK-RECON-${reconciliationYear}-${String(sequence).padStart(4, "0")}`;
-    const { rows: [batch] } = await client.query(
-      `INSERT INTO bank_reconciliation_batches
-         (batch_reference, reconciliation_date, bank_account_id, bank_ledger_id,
-          location_type, location_id, gross_amount, processing_charge, net_amount,
-          accounting_impact, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'none',$10)
-       RETURNING id`,
-      [
-        batchReference, reconciliationDate, Number(account.account_id), Number(account.ledger_id),
-        account.location_type, Number(account.location_id), grossAmount, processingCharge,
-        netAmount, (req as any).employee?.username ?? "system",
-      ],
-    );
-    for (const posting of chosen) {
-      await client.query(
-        `INSERT INTO bank_reconciliation_batch_items
-           (batch_id, entry_id, ledger_id, source, transaction_date, debit, credit, amount)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+    const firstSequence = Number(maxRow.max_seq) + 1;
+    const createdBatches: any[] = [];
+    for (let index = 0; index < groups.length; index++) {
+      const group = groups[index] as any;
+      const account = accountsById.get(group.bankAccountId) as any;
+      const batchReference = `BANK-RECON-${reconciliationYear}-${String(firstSequence + index).padStart(4, "0")}`;
+      const { rows: [batch] } = await client.query(
+        `INSERT INTO bank_reconciliation_batches
+           (batch_reference, reconciliation_date, bank_account_id, bank_ledger_id,
+            location_type, location_id, gross_amount, processing_charge, net_amount,
+            accounting_impact, created_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'none',$10)
+         RETURNING id`,
         [
-          batch.id, posting.entryId, Number(posting.ledgerId), posting.source, String(posting.date).slice(0, 10),
-          Number(posting.debit), Number(posting.credit),
-          Math.abs(Number(posting.debit) - Number(posting.credit)),
+          batchReference, reconciliationDate, Number(account.account_id), Number(account.ledger_id),
+          account.location_type, Number(account.location_id), group.grossAmount, group.processingCharge,
+          group.netAmount, (req as any).employee?.username ?? "system",
         ],
       );
-      await client.query(
-        `INSERT INTO bank_reconciliation_entries
-           (entry_id, ledger_id, source, transaction_date, debit, credit, voucher_number,
-             description, location_type, location_id, status, reconciled_at, reconciled_by,
-             unreconciled_at, unreconciled_by, reconciliation_reference)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'reconciled',now(),$11,NULL,NULL,$12)
-         ON CONFLICT (ledger_id, entry_id) DO UPDATE
-           SET source=EXCLUDED.source, transaction_date=EXCLUDED.transaction_date,
-               debit=EXCLUDED.debit, credit=EXCLUDED.credit,
-               voucher_number=EXCLUDED.voucher_number, description=EXCLUDED.description,
-               location_type=EXCLUDED.location_type, location_id=EXCLUDED.location_id,
-                status='reconciled', reconciled_at=now(), reconciled_by=EXCLUDED.reconciled_by,
-                unreconciled_at=NULL, unreconciled_by=NULL,
-                reconciliation_reference=EXCLUDED.reconciliation_reference`,
-        [
-          posting.entryId, Number(posting.ledgerId), posting.source, String(posting.date).slice(0, 10),
-          Number(posting.debit), Number(posting.credit), posting.voucherNumber ?? null,
-          posting.description ?? "", posting.locationType ?? null, posting.locationId ?? null,
-           (req as any).employee?.username ?? "system", batchReference,
-        ],
-      );
-    }
-    await logActivityInTransaction(client, {
-      action: "CREATE",
-      module: "reconciliation",
-      entityType: "bank_reconciliation_batch",
-      entityId: batch.id,
-      description: `Bank reconciliation batch ${batchReference}`,
-      metadata: {
-        after: {
-          batchReference, bankAccountId: Number(account.account_id), bankLedgerId: Number(account.ledger_id),
-          itemCount: chosen.length, grossAmount, processingCharge, netAmount,
-          accountingImpact: "none",
+      for (const posting of group.chosen) {
+        await client.query(
+          `INSERT INTO bank_reconciliation_batch_items
+             (batch_id, entry_id, ledger_id, source, transaction_date, debit, credit, amount)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+          [
+            batch.id, posting.entryId, Number(posting.ledgerId), posting.source, String(posting.date).slice(0, 10),
+            Number(posting.debit), Number(posting.credit),
+            Math.abs(Number(posting.debit) - Number(posting.credit)),
+          ],
+        );
+        await client.query(
+          `INSERT INTO bank_reconciliation_entries
+             (entry_id, ledger_id, source, transaction_date, debit, credit, voucher_number,
+               description, location_type, location_id, status, reconciled_at, reconciled_by,
+               unreconciled_at, unreconciled_by, reconciliation_reference)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'reconciled',now(),$11,NULL,NULL,$12)
+           ON CONFLICT (ledger_id, entry_id) DO UPDATE
+             SET source=EXCLUDED.source, transaction_date=EXCLUDED.transaction_date,
+                 debit=EXCLUDED.debit, credit=EXCLUDED.credit,
+                 voucher_number=EXCLUDED.voucher_number, description=EXCLUDED.description,
+                 location_type=EXCLUDED.location_type, location_id=EXCLUDED.location_id,
+                  status='reconciled', reconciled_at=now(), reconciled_by=EXCLUDED.reconciled_by,
+                  unreconciled_at=NULL, unreconciled_by=NULL,
+                  reconciliation_reference=EXCLUDED.reconciliation_reference`,
+          [
+            posting.entryId, Number(posting.ledgerId), posting.source, String(posting.date).slice(0, 10),
+            Number(posting.debit), Number(posting.credit), posting.voucherNumber ?? null,
+            posting.description ?? "", posting.locationType ?? null, posting.locationId ?? null,
+            (req as any).employee?.username ?? "system", batchReference,
+          ],
+        );
+      }
+      await logActivityInTransaction(client, {
+        action: "CREATE",
+        module: "reconciliation",
+        entityType: "bank_reconciliation_batch",
+        entityId: batch.id,
+        description: `Bank reconciliation batch ${batchReference}`,
+        metadata: {
+          after: {
+            batchReference, bankAccountId: Number(account.account_id), bankLedgerId: Number(account.ledger_id),
+            itemCount: group.chosen.length, grossAmount: group.grossAmount,
+            processingCharge: group.processingCharge, netAmount: group.netAmount,
+            accountingImpact: "none",
+          },
         },
-      },
-      user: (req as any).employee?.username,
-    });
+        user: (req as any).employee?.username,
+      });
+      createdBatches.push({
+        id: Number(batch.id), batchReference, reconciliationDate,
+        bankAccountId: Number(account.account_id), bankLedgerId: Number(account.ledger_id),
+        itemCount: group.chosen.length, grossAmount: group.grossAmount,
+        processingCharge: group.processingCharge, netAmount: group.netAmount,
+        accountingImpact: "none", status: "active",
+      });
+    }
     await client.query("COMMIT");
+    if (!isBulk) {
+      res.status(201).json(createdBatches[0]);
+      return;
+    }
     res.status(201).json({
-      id: Number(batch.id), batchReference, reconciliationDate,
-      bankAccountId: Number(account.account_id), bankLedgerId: Number(account.ledger_id),
-      itemCount: chosen.length, grossAmount, processingCharge, netAmount,
-      accountingImpact: "none", status: "active",
+      batches: createdBatches,
+      batchCount: createdBatches.length,
+      itemCount: createdBatches.reduce((sum, batch) => sum + batch.itemCount, 0),
     });
   } catch (err: any) {
     await client.query("ROLLBACK").catch(() => {});
