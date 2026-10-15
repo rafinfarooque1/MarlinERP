@@ -103,6 +103,7 @@ export default function Reconciliation() {
   const [batchBankAccountId, setBatchBankAccountId] = useState('');
   const [reconciliationDate, setReconciliationDate] = useState(localDateValue);
   const [processingCharge, setProcessingCharge] = useState('0');
+  const [processingChargesByAccount, setProcessingChargesByAccount] = useState<Record<string, string>>({});
   const [pendingSelected, setPendingSelected] = useState<Set<string>>(new Set());
   const [pendingOpen, setPendingOpen] = useState(false);
   const [pendingBankAccountId, setPendingBankAccountId] = useState('');
@@ -288,6 +289,40 @@ export default function Reconciliation() {
   );
   const isOtherSelectedAccount = (entry: typeof transactions[number]) =>
     selectedAccountId != null && Number(entry.accountId) !== Number(selectedAccountId);
+  const selectedAccountGroups = Array.from(
+    selectedTransactions.reduce((groups, transaction) => {
+      const group = groups.get(Number(transaction.accountId)) ?? [];
+      group.push(transaction);
+      groups.set(Number(transaction.accountId), group);
+      return groups;
+    }, new Map<number, typeof selectedTransactions>()),
+  ).map(([accountId, accountTransactions]) => {
+    const transaction = accountTransactions[0];
+    const account = bankLedgers.find(item =>
+      Number(item.accountId) === accountId && Number(item.ledgerId) === Number(transaction.ledgerId));
+    return {
+      bankAccountId: accountId,
+      bankLedgerId: Number(transaction.ledgerId),
+      accountName: account?.name ?? transaction.accountName,
+      locationName: account?.locationName ?? transaction.accountLocationName,
+      transactions: accountTransactions,
+      grossAmount: accountTransactions.reduce((sum, item) => sum + Number(item.amount || 0), 0),
+      processingCharge: processingChargesByAccount[String(accountId)] ?? '0',
+    };
+  });
+  const selectedAccountChargesValid = selectedAccountGroups.every(group => {
+    const charge = Number(group.processingCharge);
+    return Number.isFinite(charge) && charge >= 0 && charge <= group.grossAmount
+      && Math.abs(charge * 100 - Math.round(charge * 100)) < 1e-6;
+  });
+  const selectedAccountGroupsValid = selectedAccountGroups.every(group =>
+    bankLedgers.some(account =>
+      Number(account.accountId) === group.bankAccountId
+      && Number(account.ledgerId) === group.bankLedgerId));
+  const totalSelectedProcessingCharge = selectedAccountGroups.reduce(
+    (sum, group) => sum + Number(group.processingCharge || 0),
+    0,
+  );
   // Batch creation must stay attached to the exact Cash & Bank account that
   // owns the selected ledger postings. Keep the selector's options consistent
   // with the server's ledger-identity validation.
@@ -401,7 +436,7 @@ export default function Reconciliation() {
   function toggleSelected(entry: typeof transactions[number], checked: boolean) {
     if (!entry.reconciliationEligible
       || (entry.reconciliationStatus === 'reconciled' && !isEditableBatchItem(entry))) return;
-    if (checked && isOtherSelectedAccount(entry)) return;
+    if (checked && editBatchId != null && isOtherSelectedAccount(entry)) return;
     setSelectedKeys(previous => {
       const next = new Set(previous);
       if (checked) next.add(entry.id); else next.delete(entry.id);
@@ -420,18 +455,25 @@ export default function Reconciliation() {
     }
     const first = selectedTransactions[0] ?? selectableVisible[0];
     if (!first?.accountId) return;
-    const sameAccount = selectableVisible.filter(t => Number(t.accountId) === Number(first.accountId));
+    const entriesToSelect = editBatchId != null
+      ? selectableVisible.filter(t => Number(t.accountId) === Number(first.accountId))
+      : selectableVisible;
     setSelectedKeys(previous => {
       const next = new Set(previous);
-      sameAccount.forEach(t => next.add(t.id));
+      entriesToSelect.forEach(t => next.add(t.id));
       return next;
     });
   }
 
   async function submitBatch() {
-    if (!selectedTransactions.length || !selectedAccountId || selectedMixedAccounts) return;
-    if (!batchBankAccountId || !selectedBatchAccountIsValid) {
+    if (!selectedTransactions.length) return;
+    if (editBatchId != null && (!selectedAccountId || selectedMixedAccounts)) return;
+    if (editBatchId != null && (!batchBankAccountId || !selectedBatchAccountIsValid)) {
       toast.error('Select the Bank Account that contains the selected transactions.');
+      return;
+    }
+    if (editBatchId == null && (!selectedAccountGroupsValid || !selectedAccountChargesValid)) {
+      toast.error('Check each bank account and processing charge before submitting.');
       return;
     }
     try {
@@ -443,22 +485,29 @@ export default function Reconciliation() {
         });
       } else {
         await createBatchMutation.mutateAsync({
-          bankAccountId: Number(batchBankAccountId),
-          transactions: transactionsPayload,
+          groups: selectedAccountGroups.map(group => ({
+            bankAccountId: group.bankAccountId,
+            transactions: group.transactions.map(t => ({ entryId: t.entryId, ledgerId: t.ledgerId })),
+            processingCharge: group.processingCharge,
+          })),
           reconciliationDate,
-          processingCharge,
         });
       }
       setSelectedKeys(new Set());
       setBatchOpen(false);
       setEditBatchId(null);
       setProcessingCharge('0');
+      setProcessingChargesByAccount({});
       trackEvent('bank_reconciliation_saved', {
         operation: editBatchId != null ? 'edit' : 'create',
         transaction_count: transactionsPayload.length,
-        has_processing_charge: Number(processingCharge) > 0,
+        has_processing_charge: editBatchId != null
+          ? Number(processingCharge) > 0
+          : totalSelectedProcessingCharge > 0,
       });
-      toast.success(editBatchId != null ? 'Bank reconciliation batch updated.' : 'Bank reconciliation batch created.');
+      toast.success(editBatchId != null
+        ? 'Bank reconciliation batch updated.'
+        : `${selectedAccountGroups.length} bank reconciliation batch${selectedAccountGroups.length === 1 ? '' : 'es'} created.`);
     } catch (e: any) {
       toast.error(e?.data?.error || e?.message || 'Unable to reconcile selected transactions.');
     }
@@ -467,6 +516,9 @@ export default function Reconciliation() {
   function openCreateBatch() {
     setEditBatchId(null);
     setBatchBankAccountId('');
+    setProcessingChargesByAccount(Object.fromEntries(
+      selectedAccountGroups.map(group => [String(group.bankAccountId), '0']),
+    ));
     setActiveSection('to-reconcile');
     setReconciliationDate(localDateValue());
     setProcessingCharge('0');
@@ -809,7 +861,7 @@ export default function Reconciliation() {
           <div className="flex flex-wrap items-center gap-2">
             <Button
               size="sm"
-              disabled={!perm.canEdit || selectedTransactions.length === 0 || selectedMixedAccounts}
+              disabled={!perm.canEdit || selectedTransactions.length === 0 || (editBatchId != null && selectedMixedAccounts)}
               onClick={openCreateBatch}
               data-testid="button-reconcile-selected"
             >
@@ -828,7 +880,9 @@ export default function Reconciliation() {
                   Clear selection
                 </Button>
                 <span className="text-xs text-muted-foreground">
-                  One batch can contain one bank account. Clear the selection to choose another.
+                  {editBatchId != null
+                    ? 'An edited batch must stay with one bank account.'
+                    : `${selectedAccountGroups.length} separate batch${selectedAccountGroups.length === 1 ? '' : 'es'} will be created, one per bank account.`}
                 </span>
               </>
             ) : null}
@@ -932,7 +986,7 @@ export default function Reconciliation() {
                   const disabled = !perm.canEdit || (isLedgerRow
                     ? !ledger?.reconciliationEligible
                       || (ledger?.reconciliationStatus === 'reconciled' && !isEditableBatchItem(ledger))
-                      || (!!ledger && !selectedKeys.has(ledger.id) && isOtherSelectedAccount(ledger))
+                      || (!!ledger && editBatchId != null && !selectedKeys.has(ledger.id) && isOtherSelectedAccount(ledger))
                     : false);
                   return (
                     <article key={`mobile-${row.key}`} className="rounded-lg border border-border bg-card p-3">
@@ -1005,7 +1059,7 @@ export default function Reconciliation() {
                     const disabled = !perm.canEdit || (isLedgerRow
                       ? !ledger?.reconciliationEligible
                         || (ledger?.reconciliationStatus === 'reconciled' && !isEditableBatchItem(ledger))
-                        || (!!ledger && !selectedKeys.has(ledger.id) && isOtherSelectedAccount(ledger))
+                        || (!!ledger && editBatchId != null && !selectedKeys.has(ledger.id) && isOtherSelectedAccount(ledger))
                       : false);
                     return (
                       <TableRow key={row.key}>
@@ -1150,63 +1204,88 @@ export default function Reconciliation() {
         ) : null}
 
         <Dialog open={batchOpen} onOpenChange={setBatchOpen}>
-          <DialogContent className="sm:max-w-md">
+          <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
             <DialogHeader>
-            <DialogTitle>{editBatchId != null ? 'Edit reconciliation batch' : 'Reconcile selected transactions'}</DialogTitle>
+              <DialogTitle>{editBatchId != null ? 'Edit reconciliation batch' : 'Reconcile selected transactions'}</DialogTitle>
               <DialogDescription>
-              {editBatchId != null
-                ? 'Replace the reviewed transactions or update the batch metadata. Removed transactions become unreconciled. Accounting postings are not changed.'
-                : 'This creates one review batch and updates reconciliation status. It does not create or alter accounting postings.'}
+                {editBatchId != null
+                  ? 'Replace the reviewed transactions or update the batch metadata. Removed transactions become unreconciled. Accounting postings are not changed.'
+                  : `This creates ${selectedAccountGroups.length} separate review batch${selectedAccountGroups.length === 1 ? '' : 'es'}, one per bank account. It does not create or alter accounting postings.`}
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-3 text-sm">
-                <div><span className="text-muted-foreground">Transactions</span><div className="font-semibold">{selectedTransactions.length}</div></div>
-                <div className="space-y-1.5">
-                  <label htmlFor="reconciliation-bank-account" className="text-muted-foreground">
-                    Bank Account <span className="text-destructive">*</span>
+              {editBatchId != null ? (
+                <>
+                  <div className="grid grid-cols-2 gap-3 text-sm">
+                    <div><span className="text-muted-foreground">Transactions</span><div className="font-semibold">{selectedTransactions.length}</div></div>
+                    <div className="space-y-1.5">
+                      <label htmlFor="reconciliation-bank-account" className="text-muted-foreground">
+                        Bank Account <span className="text-destructive">*</span>
+                      </label>
+                      <Select value={batchBankAccountId} onValueChange={setBatchBankAccountId} disabled>
+                        <SelectTrigger id="reconciliation-bank-account" className="h-9" data-testid="select-reconciliation-bank-account">
+                          <SelectValue placeholder="Select bank account" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {reconciliationBankAccounts.map(account => (
+                            <SelectItem key={account.accountId} value={String(account.accountId)}>
+                              {account.name} · {account.locationName}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div><span className="text-muted-foreground">Gross amount</span><div className="font-semibold">{fmt(selectedGross)}</div></div>
+                    <div><span className="text-muted-foreground">Net amount</span><div className="font-semibold">{fmt(Math.max(0, selectedGross - Number(processingCharge || 0)))}</div></div>
+                  </div>
+                  <label className="block space-y-1 text-sm">
+                    <span className="font-medium">Processing charge</span>
+                    <Input inputMode="decimal" value={processingCharge} onChange={e => setProcessingCharge(e.target.value)} placeholder="0.00" />
+                    <span className="text-xs text-muted-foreground">Stored as batch metadata; it does not reduce the original transactions.</span>
                   </label>
-                  <Select
-                    value={batchBankAccountId}
-                    onValueChange={setBatchBankAccountId}
-                    disabled={editBatchId != null || bankLedgersLoading || reconciliationBankAccounts.length === 0}
-                  >
-                    <SelectTrigger
-                      id="reconciliation-bank-account"
-                      className="h-9"
-                      data-testid="select-reconciliation-bank-account"
-                    >
-                      <SelectValue placeholder={
-                        bankLedgersLoading
-                          ? 'Loading bank accounts…'
-                          : reconciliationBankAccounts.length === 0
-                            ? 'No matching bank account'
-                            : 'Select bank account'
-                      } />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {reconciliationBankAccounts.map(account => (
-                        <SelectItem key={account.accountId} value={String(account.accountId)}>
-                          {account.name} · {account.locationName}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <p className="text-xs text-muted-foreground">
-                    Choose the account that owns the selected transactions.
-                  </p>
-                </div>
-                <div><span className="text-muted-foreground">Gross amount</span><div className="font-semibold">{fmt(selectedGross)}</div></div>
-                <div><span className="text-muted-foreground">Net amount</span><div className="font-semibold">{fmt(Math.max(0, selectedGross - Number(processingCharge || 0)))}</div></div>
-              </div>
+                </>
+              ) : (
+                <>
+                  <div className="grid grid-cols-2 gap-3 rounded-lg border p-3 text-sm">
+                    <div><span className="text-muted-foreground">Transactions</span><div className="font-semibold">{selectedTransactions.length}</div></div>
+                    <div><span className="text-muted-foreground">Bank accounts</span><div className="font-semibold">{selectedAccountGroups.length}</div></div>
+                    <div><span className="text-muted-foreground">Total gross</span><div className="font-semibold">{fmt(selectedGross)}</div></div>
+                    <div><span className="text-muted-foreground">Total net</span><div className="font-semibold">{fmt(selectedGross - totalSelectedProcessingCharge)}</div></div>
+                  </div>
+                  <div className="space-y-3">
+                    {selectedAccountGroups.map(group => (
+                      <div key={group.bankAccountId} className="space-y-3 rounded-lg border p-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="font-medium">{group.accountName}</div>
+                          <div className="text-right text-xs text-muted-foreground">{group.locationName}</div>
+                        </div>
+                        <div className="grid grid-cols-2 gap-3 text-sm">
+                          <div><span className="text-muted-foreground">Entries</span><div className="font-semibold">{group.transactions.length}</div></div>
+                          <div><span className="text-muted-foreground">Gross</span><div className="font-semibold">{fmt(group.grossAmount)}</div></div>
+                          <label className="space-y-1">
+                            <span className="text-muted-foreground">Processing charge</span>
+                            <Input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={group.processingCharge}
+                              onChange={e => setProcessingChargesByAccount(previous => ({
+                                ...previous,
+                                [String(group.bankAccountId)]: e.target.value,
+                              }))}
+                              data-testid={`input-processing-charge-${group.bankAccountId}`}
+                            />
+                          </label>
+                          <div><span className="text-muted-foreground">Net</span><div className="font-semibold">{fmt(group.grossAmount - Number(group.processingCharge || 0))}</div></div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
               <label className="space-y-1 block text-sm">
                 <span className="font-medium">Reconciliation date</span>
                 <Input type="date" value={reconciliationDate} onChange={e => setReconciliationDate(e.target.value)} />
-              </label>
-              <label className="space-y-1 block text-sm">
-                <span className="font-medium">Processing charge</span>
-                <Input inputMode="decimal" value={processingCharge} onChange={e => setProcessingCharge(e.target.value)} placeholder="0.00" />
-                <span className="text-xs text-muted-foreground">Stored as batch metadata; it does not reduce the original transactions.</span>
               </label>
             </div>
             <DialogFooter>
@@ -1217,14 +1296,13 @@ export default function Reconciliation() {
                   createBatchMutation.isPending
                   || updateBatchMutation.isPending
                   || !reconciliationDate
-                  || selectedMixedAccounts
-                  || !batchBankAccountId
-                  || !selectedBatchAccountIsValid
+                  || (editBatchId != null && (selectedMixedAccounts || !batchBankAccountId || !selectedBatchAccountIsValid))
+                  || (editBatchId == null && (!selectedAccountGroupsValid || !selectedAccountChargesValid))
                 }
               >
                 {createBatchMutation.isPending || updateBatchMutation.isPending
                   ? 'Saving…'
-                  : editBatchId != null ? 'Save batch changes' : 'Confirm reconciliation'}
+                  : editBatchId != null ? 'Save batch changes' : `Create ${selectedAccountGroups.length} batch${selectedAccountGroups.length === 1 ? '' : 'es'}`}
               </Button>
             </DialogFooter>
           </DialogContent>
