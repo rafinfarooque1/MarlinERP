@@ -4504,6 +4504,10 @@ components:
         - locationId
         - platformLedgerId
         - platformName
+        - clearingReceiptId
+        - clearingReceiptAmount
+        - clearingReceiptAdvanceAmount
+        - clearingReceiptPendingCount
       properties:
         key:
           type: string
@@ -4545,6 +4549,14 @@ components:
           type: ["integer", "null"]
         platformName:
           type: ["string", "null"]
+        clearingReceiptId:
+          type: ["integer", "null"]
+        clearingReceiptAmount:
+          type: ["number", "null"]
+        clearingReceiptAdvanceAmount:
+          type: ["number", "null"]
+        clearingReceiptPendingCount:
+          type: ["integer", "null"]
 
     ReconciliationQueueSettlementRequest:
       type: object

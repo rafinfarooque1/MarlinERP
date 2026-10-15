@@ -37,4 +37,12 @@ export interface ReconciliationPendingQueueItem {
   platformLedgerId: number | null;
   /** @nullable */
   platformName: string | null;
+  /** @nullable */
+  clearingReceiptId: number | null;
+  /** @nullable */
+  clearingReceiptAmount: number | null;
+  /** @nullable */
+  clearingReceiptAdvanceAmount: number | null;
+  /** @nullable */
+  clearingReceiptPendingCount: number | null;
 }

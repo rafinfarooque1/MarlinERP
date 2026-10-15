@@ -153,10 +153,35 @@ export default function Reconciliation() {
     locationId: pendingLocation.id,
   });
   const settlementBankLedgers = pendingBankLedgers.filter(account => account.accountType === 'bank');
-  const selectedPendingGross = selectedPendingRows.reduce(
+  const selectedReceiptCounts = new Map<number, number>();
+  for (const item of selectedPendingRows) {
+    if (item.clearingReceiptId != null) {
+      selectedReceiptCounts.set(
+        item.clearingReceiptId,
+        (selectedReceiptCounts.get(item.clearingReceiptId) ?? 0) + 1,
+      );
+    }
+  }
+  const countedReceiptIds = new Set<number>();
+  const selectedPendingGross = selectedPendingRows.reduce((sum, item) => {
+    const receiptId = item.clearingReceiptId;
+    if (
+      receiptId != null
+      && item.clearingReceiptAmount != null
+      && item.clearingReceiptPendingCount != null
+      && selectedReceiptCounts.get(receiptId) === item.clearingReceiptPendingCount
+    ) {
+      if (countedReceiptIds.has(receiptId)) return sum;
+      countedReceiptIds.add(receiptId);
+      return sum + Math.abs(Math.round(item.clearingReceiptAmount * 100));
+    }
+    return sum + Math.abs(Math.round(Number(item.amount) * 100));
+  }, 0) / 100;
+  const selectedPendingAllocationGross = selectedPendingRows.reduce(
     (sum, item) => sum + Math.abs(Math.round(Number(item.amount) * 100)),
     0,
   ) / 100;
+  const selectedPendingAdvance = Math.max(0, selectedPendingGross - selectedPendingAllocationGross);
   const selectedPendingDirection = selectedPendingRows[0]?.direction ?? 'in';
   const pendingProcessingChargeValue = pendingProcessingCharge.trim() === ''
     ? 0
@@ -1172,6 +1197,11 @@ export default function Reconciliation() {
                   <div className="font-semibold">{fmt(selectedPendingBankAmount)}</div>
                 </div>
               </div>
+              {selectedPendingAdvance >= 0.005 && (
+                <div className="text-xs text-muted-foreground">
+                  Receipt total includes {fmt(selectedPendingAdvance)} in unallocated advance from linked receipts.
+                </div>
+              )}
               <label className="space-y-1 block text-sm">
                 <span className="font-medium">Processing charge</span>
                 <Input
