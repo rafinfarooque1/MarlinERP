@@ -4557,7 +4557,6 @@ components:
           format: date
         processingCharge:
           type: number
-          minimum: 0
         items:
           type: array
           minItems: 1

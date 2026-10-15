@@ -1905,7 +1905,6 @@ export interface ReconciliationQueueSettlementItem {
 export interface ReconciliationQueueSettlementRequest {
   bankAccountId: number;
   reconciliationDate: string;
-  /** @minimum 0 */
   processingCharge?: number;
   /**
      * @minItems 1
