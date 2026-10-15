@@ -2542,8 +2542,14 @@ router.get("/reconciliation/pending-queue", requireModuleView("page:/accounts/re
     saleConds.push(`sp.online_platform_ledger_id = $${saleParams.length}`);
   }
   const { rows: saleRows } = await pool.query(
-    `SELECT sp.id, sp.payment_date AS transaction_date, sp.method,
+       `SELECT sp.id, sp.payment_date AS transaction_date, sp.method,
             sp.amount::numeric AS amount, sp.reference_number, sp.notes AS narration,
+             sp.clearing_receipt_id,
+             pending_receipt.amount::numeric AS clearing_receipt_amount,
+             pending_receipt.advance_amount::numeric AS clearing_receipt_advance_amount,
+             (SELECT COUNT(*)::int FROM sale_payments pending_sp
+               WHERE pending_sp.clearing_receipt_id = sp.clearing_receipt_id
+                 AND pending_sp.reconciliation_status = 'pending') AS clearing_receipt_pending_count,
             sp.online_platform_ledger_id AS platform_ledger_id,
             platform.name AS platform_name,
             s.invoice_number, s.location_type, s.location_id::int AS location_id,
@@ -2692,6 +2698,10 @@ router.get("/reconciliation/pending-queue", requireModuleView("page:/accounts/re
       locationId: Number(r.location_id ?? 0),
       platformLedgerId: r.platform_ledger_id == null ? null : Number(r.platform_ledger_id),
       platformName: r.platform_name ?? null,
+      clearingReceiptId: r.clearing_receipt_id == null ? null : Number(r.clearing_receipt_id),
+      clearingReceiptAmount: r.clearing_receipt_amount == null ? null : Number(r.clearing_receipt_amount),
+      clearingReceiptAdvanceAmount: r.clearing_receipt_advance_amount == null ? null : Number(r.clearing_receipt_advance_amount),
+      clearingReceiptPendingCount: r.clearing_receipt_pending_count == null ? null : Number(r.clearing_receipt_pending_count),
     })),
     ...manualRows.map((r: any) => ({
       key: String(r.item_key),
@@ -2712,6 +2722,10 @@ router.get("/reconciliation/pending-queue", requireModuleView("page:/accounts/re
       locationId: Number(r.location_id ?? 0),
       platformLedgerId: r.platform_ledger_id == null ? null : Number(r.platform_ledger_id),
       platformName: r.platform_name ?? null,
+      clearingReceiptId: null,
+      clearingReceiptAmount: null,
+      clearingReceiptAdvanceAmount: null,
+      clearingReceiptPendingCount: null,
     })),
   ].sort((a: any, b: any) =>
     b.transactionDate.localeCompare(a.transactionDate) || a.key.localeCompare(b.key),
@@ -3086,6 +3100,7 @@ router.post("/reconciliation/settle-queue", requireModuleAction("page:/accounts/
     const manualPaymentIds = identities.filter(x => x.kind === "manual_voucher" && x.voucherKind === "payment").map(x => x.id);
     const manualReceiptIds = identities.filter(x => x.kind === "manual_voucher" && x.voucherKind === "receipt").map(x => x.id);
     const electronicModes = new Set(["upi", "bank", "card", "bank_transfer", "online", "swiggy", "zomato", "other_online"]);
+    const settlementReceiptCents = new Map<number, number>();
     let saleRows: any[] = [];
     if (saleIds.length) {
       const result = await client.query(
@@ -3132,16 +3147,24 @@ router.post("/reconciliation/settle-queue", requireModuleAction("page:/accounts/
             res.status(409).json({ error: "Select every pending allocation linked to the same clearing receipt." }); return;
           }
           const { rows: [receipt] } = await client.query(
-            `SELECT id, amount::numeric AS amount, received_in_ledger_id
+            `SELECT id, source, amount::numeric AS amount, advance_amount::numeric AS advance_amount,
+                    received_in_ledger_id
                FROM receipts WHERE id = $1 FOR UPDATE`,
             [receiptId],
           );
           const allocated = pendingForReceipt.reduce((sum: number, row: any) => sum + Math.round(Number(row.amount) * 100), 0);
+          const advanceCents = receipt?.source === "allocation"
+            ? Math.round(Number(receipt.advance_amount ?? 0) * 100)
+            : 0;
+          const receiptCents = receipt ? Math.round(Number(receipt.amount) * 100) : 0;
           if (!receipt || Number(receipt.received_in_ledger_id) !== Number(clearing.id)
-            || allocated !== Math.round(Number(receipt.amount) * 100)) {
+            || pendingForReceipt.length !== linkedPayments.length
+            || advanceCents < 0
+            || allocated + advanceCents !== receiptCents) {
             await client.query("ROLLBACK");
             res.status(409).json({ error: "A clearing receipt no longer matches its pending collection allocations." }); return;
           }
+          settlementReceiptCents.set(receiptId, receiptCents);
           const { rows: [alreadyReconciled] } = await client.query(
             `SELECT 1 FROM bank_reconciliation_entries
               WHERE ledger_id = $1 AND entry_id = $2 AND status = 'reconciled'`,
@@ -3282,7 +3305,21 @@ router.post("/reconciliation/settle-queue", requireModuleAction("page:/accounts/
       await client.query("ROLLBACK");
       res.status(400).json({ error: "Reconcile incoming receipts and outgoing payments in separate batches." }); return;
     }
-    const grossCents = allRows.reduce((sum, row) => sum + Math.abs(Math.round(Number(row.amount) * 100)), 0);
+    const countedSaleReceiptIds = new Set<number>();
+    const saleGrossCents = saleRows.reduce((sum: number, row: any) => {
+      if (row.clearing_receipt_id == null) {
+        return sum + Math.abs(Math.round(Number(row.amount) * 100));
+      }
+      const receiptId = Number(row.clearing_receipt_id);
+      if (countedSaleReceiptIds.has(receiptId)) return sum;
+      countedSaleReceiptIds.add(receiptId);
+      return sum + (settlementReceiptCents.get(receiptId) ?? Math.abs(Math.round(Number(row.amount) * 100)));
+    }, 0);
+    const manualGrossCents = manualRows.reduce(
+      (sum: number, row: any) => sum + Math.abs(Math.round(Number(row.amount) * 100)),
+      0,
+    );
+    const grossCents = saleGrossCents + manualGrossCents;
     const processingChargeCents = Math.round(processingChargeInput * 100);
     if ((!isOutflow && processingChargeCents >= grossCents)
       || (isOutflow && processingChargeCents <= -grossCents)) {

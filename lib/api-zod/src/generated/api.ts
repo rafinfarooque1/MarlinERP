@@ -3174,7 +3174,11 @@ export const ListReconciliationPendingQueueResponseItem = zod.object({
   "locationType": zod.string(),
   "locationId": zod.number(),
   "platformLedgerId": zod.number().nullable(),
-  "platformName": zod.string().nullable()
+  "platformName": zod.string().nullable(),
+  "clearingReceiptId": zod.number().nullable(),
+  "clearingReceiptAmount": zod.number().nullable(),
+  "clearingReceiptAdvanceAmount": zod.number().nullable(),
+  "clearingReceiptPendingCount": zod.number().nullable()
 })
 export const ListReconciliationPendingQueueResponse = zod.array(ListReconciliationPendingQueueResponseItem)
 
