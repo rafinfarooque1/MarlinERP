@@ -130,9 +130,6 @@ export default function Reconciliation() {
   const { data: pendingQueue = [], isLoading: pendingQueueLoading } = useGetReconciliationPendingQueue({
     locationType: filterType,
     locationId,
-    fromDate: fromDate || undefined,
-    toDate: toDate || undefined,
-    search: search.trim() || undefined,
   });
   const transactions = transactionResult?.transactions ?? [];
   const createBatchMutation = useCreateBankReconciliationBatch();
@@ -251,7 +248,20 @@ export default function Reconciliation() {
   const visiblePendingQueue = activeSection === 'to-reconcile' && editBatchId == null
     ? pendingQueue.filter(item => {
       const category = categoryForPending(String(item.method));
+      const normalizedSearch = search.trim().toLocaleLowerCase();
+      const searchMatches = !normalizedSearch || [
+        item.voucherNumber,
+        item.referenceNumber,
+        item.narration,
+        item.partyName,
+        item.invoiceNumber,
+        item.customerName,
+        item.platformName,
+      ].some(value => String(value ?? '').toLocaleLowerCase().includes(normalizedSearch));
       return matchesCategory(category)
+        && (!fromDate || item.transactionDate >= fromDate)
+        && (!toDate || item.transactionDate <= toDate)
+        && searchMatches
         && (selectedPlatformIds.size === 0
           || (item.platformLedgerId != null && selectedPlatformIds.has(Number(item.platformLedgerId))));
     })
@@ -517,7 +527,6 @@ export default function Reconciliation() {
   }
 
   function togglePending(voucher: typeof pendingQueue[number], checked: boolean) {
-    const key = voucher.key;
     if (checked && selectedPendingRows.length > 0) {
       const first = selectedPendingRows[0];
       if (first.direction !== voucher.direction) {
@@ -529,16 +538,39 @@ export default function Reconciliation() {
         return;
       }
     }
+    const receiptSiblings = voucher.clearingReceiptId == null
+      ? [voucher]
+      : pendingQueue.filter(item => item.clearingReceiptId === voucher.clearingReceiptId);
+    if (
+      checked
+      && voucher.clearingReceiptId != null
+      && voucher.clearingReceiptPendingCount != null
+      && receiptSiblings.length !== voucher.clearingReceiptPendingCount
+    ) {
+      toast.error('Not all pending allocations for this receipt are available. Refresh the queue and try again.');
+      return;
+    }
+    const affectedKeys = new Set(receiptSiblings.map(item => item.key));
     setPendingSelected(previous => {
       const next = new Set(previous);
-      if (checked) next.add(key); else next.delete(key);
+      for (const key of affectedKeys) {
+        if (checked) next.add(key); else next.delete(key);
+      }
       return next;
     });
   }
 
   function toggleAllPendingBankCollections() {
     if (!canSelectAllPendingBankCollections) return;
+    const visibleReceiptIds = new Set(visiblePendingBankCollections
+      .map(item => item.clearingReceiptId)
+      .filter((id): id is number => id != null));
     const keys = new Set(visiblePendingBankCollections.map(item => item.key));
+    for (const item of pendingQueue) {
+      if (item.clearingReceiptId != null && visibleReceiptIds.has(item.clearingReceiptId)) {
+        keys.add(item.key);
+      }
+    }
     if (allPendingBankCollectionsSelected) {
       setPendingSelected(previous => new Set([...previous].filter(key => !keys.has(key))));
       return;
@@ -1184,7 +1216,7 @@ export default function Reconciliation() {
             <DialogHeader>
               <DialogTitle>Settle pending reconciliation items</DialogTitle>
               <DialogDescription>
-                This posts one bank settlement entry for the selected vouchers and collections.
+                This posts one bank settlement entry for the selected vouchers and collections. Selecting any allocation also includes every pending allocation linked to that clearing receipt.
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-4">
