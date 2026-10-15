@@ -283,7 +283,11 @@ export default function Reconciliation() {
   const selectedTransactions = transactions.filter(t => selectedKeys.has(t.id));
   const selectedGross = selectedTransactions.reduce((sum, t) => sum + Number(t.amount || 0), 0);
   const selectedAccountId = selectedTransactions[0]?.accountId ?? null;
-  const selectedMixedAccounts = selectedTransactions.some(t => t.accountId !== selectedAccountId);
+  const selectedMixedAccounts = selectedTransactions.some(
+    t => Number(t.accountId) !== Number(selectedAccountId),
+  );
+  const isOtherSelectedAccount = (entry: typeof transactions[number]) =>
+    selectedAccountId != null && Number(entry.accountId) !== Number(selectedAccountId);
   // Batch creation must stay attached to the exact Cash & Bank account that
   // owns the selected ledger postings. Keep the selector's options consistent
   // with the server's ledger-identity validation.
@@ -397,10 +401,7 @@ export default function Reconciliation() {
   function toggleSelected(entry: typeof transactions[number], checked: boolean) {
     if (!entry.reconciliationEligible
       || (entry.reconciliationStatus === 'reconciled' && !isEditableBatchItem(entry))) return;
-    if (checked && selectedAccountId != null && entry.accountId !== selectedAccountId) {
-      toast.error('A reconciliation batch can contain only one bank account.');
-      return;
-    }
+    if (checked && isOtherSelectedAccount(entry)) return;
     setSelectedKeys(previous => {
       const next = new Set(previous);
       if (checked) next.add(entry.id); else next.delete(entry.id);
@@ -419,7 +420,7 @@ export default function Reconciliation() {
     }
     const first = selectedTransactions[0] ?? selectableVisible[0];
     if (!first?.accountId) return;
-    const sameAccount = selectableVisible.filter(t => t.accountId === first.accountId);
+    const sameAccount = selectableVisible.filter(t => Number(t.accountId) === Number(first.accountId));
     setSelectedKeys(previous => {
       const next = new Set(previous);
       sameAccount.forEach(t => next.add(t.id));
@@ -815,6 +816,22 @@ export default function Reconciliation() {
               <CheckSquare className="mr-2 h-4 w-4" />
               Reconcile selected{selectedTransactions.length ? ` (${selectedTransactions.length})` : ''}
             </Button>
+            {selectedTransactions.length > 0 ? (
+              <>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={!perm.canEdit}
+                  onClick={() => setSelectedKeys(new Set())}
+                  data-testid="button-clear-reconciliation-selection"
+                >
+                  Clear selection
+                </Button>
+                <span className="text-xs text-muted-foreground">
+                  One batch can contain one bank account. Clear the selection to choose another.
+                </span>
+              </>
+            ) : null}
             {visiblePendingBankCollections.length > 0 ? (
               <>
                 <Button
@@ -915,6 +932,7 @@ export default function Reconciliation() {
                   const disabled = !perm.canEdit || (isLedgerRow
                     ? !ledger?.reconciliationEligible
                       || (ledger?.reconciliationStatus === 'reconciled' && !isEditableBatchItem(ledger))
+                      || (!!ledger && !selectedKeys.has(ledger.id) && isOtherSelectedAccount(ledger))
                     : false);
                   return (
                     <article key={`mobile-${row.key}`} className="rounded-lg border border-border bg-card p-3">
@@ -987,6 +1005,7 @@ export default function Reconciliation() {
                     const disabled = !perm.canEdit || (isLedgerRow
                       ? !ledger?.reconciliationEligible
                         || (ledger?.reconciliationStatus === 'reconciled' && !isEditableBatchItem(ledger))
+                        || (!!ledger && !selectedKeys.has(ledger.id) && isOtherSelectedAccount(ledger))
                       : false);
                     return (
                       <TableRow key={row.key}>
