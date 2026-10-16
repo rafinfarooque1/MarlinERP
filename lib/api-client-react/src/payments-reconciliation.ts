@@ -551,11 +551,12 @@ export function useCreateBankReconciliationBatch() {
       groups: {
         bankAccountId: number;
         transactions: { entryId: string; ledgerId: number }[];
-        processingCharge: string | number;
       }[];
       reconciliationDate: string;
+      destinationBankAccountId: number;
+      processingCharge: string | number;
     }) =>
-      customFetch<{ batches: BankReconciliationBatch[]; batchCount: number; itemCount: number }>("/api/reconciliation/bank-batches", {
+      customFetch<BankReconciliationBatch>("/api/reconciliation/bank-batches", {
         method: "POST",
         body: JSON.stringify(data),
         headers: { "Content-Type": "application/json" },
