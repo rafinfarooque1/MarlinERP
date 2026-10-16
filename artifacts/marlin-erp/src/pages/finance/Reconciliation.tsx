@@ -103,7 +103,6 @@ export default function Reconciliation() {
   const [batchBankAccountId, setBatchBankAccountId] = useState('');
   const [reconciliationDate, setReconciliationDate] = useState(localDateValue);
   const [processingCharge, setProcessingCharge] = useState('0');
-  const [processingChargesByAccount, setProcessingChargesByAccount] = useState<Record<string, string>>({});
   const [pendingSelected, setPendingSelected] = useState<Set<string>>(new Set());
   const [pendingOpen, setPendingOpen] = useState(false);
   const [pendingBankAccountId, setPendingBankAccountId] = useState('');
@@ -307,22 +306,17 @@ export default function Reconciliation() {
       locationName: account?.locationName ?? transaction.accountLocationName,
       transactions: accountTransactions,
       grossAmount: accountTransactions.reduce((sum, item) => sum + Number(item.amount || 0), 0),
-      processingCharge: processingChargesByAccount[String(accountId)] ?? '0',
     };
   });
-  const selectedAccountChargesValid = selectedAccountGroups.every(group => {
-    const charge = Number(group.processingCharge);
-    return Number.isFinite(charge) && charge >= 0 && charge <= group.grossAmount
-      && Math.abs(charge * 100 - Math.round(charge * 100)) < 1e-6;
-  });
+  const processingChargeValue = processingCharge.trim() === '' ? 0 : Number(processingCharge);
+  const selectedAccountChargesValid = Number.isFinite(processingChargeValue)
+    && processingChargeValue >= 0
+    && processingChargeValue < selectedGross
+    && Math.abs(processingChargeValue * 100 - Math.round(processingChargeValue * 100)) < 1e-6;
   const selectedAccountGroupsValid = selectedAccountGroups.every(group =>
     bankLedgers.some(account =>
       Number(account.accountId) === group.bankAccountId
       && Number(account.ledgerId) === group.bankLedgerId));
-  const totalSelectedProcessingCharge = selectedAccountGroups.reduce(
-    (sum, group) => sum + Number(group.processingCharge || 0),
-    0,
-  );
   // Batch creation must stay attached to the exact Cash & Bank account that
   // owns the selected ledger postings. Keep the selector's options consistent
   // with the server's ledger-identity validation.
