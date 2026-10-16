@@ -172,6 +172,10 @@ export default function Attendance() {
   const perm = usePermission('page:/hr/attendance');
   const { data: user } = useGetMe();
   const isAdmin = (user as any)?.branchType === 'headoffice';
+  const canRecordWarehouseAttendance = !isAdmin
+    && (user as any)?.branchType === 'warehouse'
+    && perm.canDownload;
+  const canPunchAttendance = perm.canAdd || canRecordWarehouseAttendance;
 
   // "Today" is the COMPANY's operational day (IST by default), not the
   // browser's calendar: it gates the In/Out buttons, and the server files
@@ -798,7 +802,7 @@ export default function Attendance() {
   // ═══════════════════════════════════════════════════════════════════════════
   // ADMIN VIEW — all employees, branch filter, check-in/out
   // ═══════════════════════════════════════════════════════════════════════════
-  if (isAdmin) {
+  if (isAdmin || canRecordWarehouseAttendance) {
     return (
       <AppLayout>
         <div className="space-y-6">
@@ -887,11 +891,11 @@ export default function Attendance() {
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
               <Input placeholder="Search employee..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9" />
             </div>
-            <FilterPanel
-              activeCount={(branchTypeFilter !== 'all' ? 1 : 0) + (branchLocId !== 'all' ? 1 : 0)}
-              onClear={() => { setBranchTypeFilter('all'); setBranchLocId('all'); }}
-              className="shrink-0"
-            >
+             {isAdmin && <FilterPanel
+               activeCount={(branchTypeFilter !== 'all' ? 1 : 0) + (branchLocId !== 'all' ? 1 : 0)}
+               onClear={() => { setBranchTypeFilter('all'); setBranchLocId('all'); }}
+               className="shrink-0"
+             >
               <Select value={branchTypeFilter} onValueChange={v => { setBranchTypeFilter(v); setBranchLocId('all'); }}>
                 <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="All Branches" /></SelectTrigger>
                 <SelectContent>
@@ -919,7 +923,7 @@ export default function Attendance() {
                   </SelectContent>
                 </Select>
               )}
-            </FilterPanel>
+             </FilterPanel>}
           </div>
           )}
 
@@ -1150,14 +1154,14 @@ export default function Attendance() {
                     <TableCell><StatusBadge status={a.status} /></TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-1">
-                        {perm.canAdd && (
+                        {canPunchAttendance && (
                         <Button variant="outline" size="sm" className="h-7 text-xs gap-1"
                           disabled={!!a.openPunchIn || locLoading === a.employeeId || a.status === 'leave' || date !== today}
                           onClick={() => handleMark(a.employeeId, 'checkin')}>
                           {locLoading === a.employeeId ? <Loader2 className="w-3 h-3 animate-spin" /> : <LogIn className="w-3 h-3" />} In
                         </Button>
                         )}
-                        {perm.canAdd && (
+                        {canPunchAttendance && (
                         <Button variant="outline" size="sm" className="h-7 text-xs gap-1"
                           disabled={(!a.openPunchIn && !(a.checkIn && !a.checkOut)) || locLoading === a.employeeId || date !== today}
                           onClick={() => handleMark(a.employeeId, 'checkout')}>

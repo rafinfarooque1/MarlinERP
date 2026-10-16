@@ -218,6 +218,10 @@ export function permOwner(path: string): string {
  *                             earlier; the route goes with the module now)
  *   /headoffice/stock-ledger  Live Stock, Item Tracking & Storage Locations
  *                             cover inventory history
+ *   /assets/register          Asset register UI is retired; asset records and
+ *                             accounting history remain available to owners.
+ *   /hr/advances               Advance UI is retired; payroll dependencies and
+ *                             historical advance records remain intact.
  *
  * What "retired" means here:
  *   • AppLayout drops the sidebar links for every role (no gap, no badge).
@@ -237,6 +241,8 @@ export const RETIRED_PAGE_HREFS: ReadonlySet<string> = new Set([
   '/sales/expenses',
   '/accounts/expenses',
   '/headoffice/stock-ledger',
+  '/assets/register',
+  '/hr/advances',
 ]);
 
 /** One row in the permissions table — maps to a nav link the user can see */

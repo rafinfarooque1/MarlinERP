@@ -351,6 +351,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   // until they narrow. Filtering happens server-side (from/to on /sales).
   const range = useDateRange('all');
   const [search, setSearch] = useState('');
+  const [itemWise, setItemWise] = useState(false);
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const PAGE_SIZE = 25;
 
@@ -1672,6 +1673,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
     date: s => (s as any).saleDate,
     location: s => s.outletName,
     customer: s => s.customerName || 'Walk-in',
+    salesman: s => (s as any).salesperson ?? (s as any).salesperson_employee_id ?? '',
     status: s => (s as any).paymentStatus ?? 'paid',
     tax: s => Number((s as any).taxTotal) || null,
     discount: s => (s as any)._discountTotal || null,
@@ -1800,6 +1802,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                 <SortableHead k="date" sort={sort}>Date</SortableHead>
                 <SortableHead k="location" sort={sort}>Location</SortableHead>
                 <SortableHead k="customer" sort={sort}>Customer</SortableHead>
+                <SortableHead k="salesman" sort={sort}>Salesman</SortableHead>
                 <SortableHead k="status" sort={sort}>Status</SortableHead>
                 <SortableHead k="tax" sort={sort} className="text-right">Tax</SortableHead>
                 <SortableHead k="discount" sort={sort} className="text-right">Discount</SortableHead>
@@ -1810,9 +1813,9 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
             </TableHeader>
             <TableBody>
               {isLoading ? (
-                <TableRow><TableCell colSpan={10} className="p-0"><TableSkeleton rows={6} cols={10} /></TableCell></TableRow>
+                <TableRow><TableCell colSpan={11} className="p-0"><TableSkeleton rows={6} cols={11} /></TableCell></TableRow>
               ) : filtered.length === 0 ? (
-                <TableRow><TableCell colSpan={10} className="p-0">
+                <TableRow><TableCell colSpan={11} className="p-0">
                   <EmptyState icon={Receipt} title="No sales recorded yet" hint="Record your first retail transaction to see it here." compact />
                 </TableCell></TableRow>
               ) : sorted.map(sale => (
@@ -1823,6 +1826,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                   </TableCell>
                   <TableCell className="text-sm">{sale.outletName}</TableCell>
                   <TableCell className="text-sm">{sale.customerName || 'Walk-in'}</TableCell>
+                  <TableCell className="text-sm">{(sale as any).salesperson || '—'}</TableCell>
                   <TableCell>
                      <StatusBadge
                        status={(sale as any).paymentStatus ?? 'paid'}
@@ -1908,6 +1912,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                       <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
                         <p className="text-muted-foreground">Location: <span className="text-foreground">{sale.outletName}</span></p>
                         <p className="text-muted-foreground">Customer: <span className="text-foreground">{sale.customerName || 'Walk-in'}</span></p>
+                        <p className="text-muted-foreground">Salesman: <span className="text-foreground">{(sale as any).salesperson || '—'}</span></p>
                         <p className="text-muted-foreground">Charges: <span className={cn('font-mono', saleOtherChargesTotal(sale) > 0 ? 'text-amber-600' : 'text-foreground')}>{inr(saleOtherChargesTotal(sale))}</span></p>
                       </div>
                       <div className="flex items-end justify-between gap-2 pt-1">
@@ -1948,7 +1953,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                 Showing {Math.min(sales.length, totalSales)} of {totalSales} sales
                 {isFetching && !isFetchingNextPage ? ' · refreshing…' : ''}
               </span>
-              <div className="flex items-center gap-3">
+              <div className="flex flex-wrap items-center justify-end gap-3">
                 <span className="font-bold text-emerald-500">
                   Loaded total: {inr(filtered.reduce((s, r) => s + Number(r.totalAmount || 0), 0))}
                 </span>
@@ -1957,7 +1962,59 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                     {isFetchingNextPage ? 'Loading…' : 'Load More'}
                   </Button>
                 )}
+                <Button
+                  type="button"
+                  variant={itemWise ? 'default' : 'outline'}
+                  size="sm"
+                  className="h-7 px-3 text-xs"
+                  aria-pressed={itemWise}
+                  onClick={() => setItemWise(value => !value)}
+                  data-testid="button-item-wise-sales"
+                >
+                  {itemWise ? 'Hide item-wise' : 'Item-wise'}
+                </Button>
               </div>
+            </div>
+          )}
+          {itemWise && (
+            <div className="border-t border-border">
+              <div className="px-4 py-3">
+                <h3 className="text-sm font-semibold">Item-wise sales</h3>
+                <p className="text-xs text-muted-foreground">Items for the currently loaded sales and selected filters.</p>
+              </div>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Invoice</TableHead>
+                    <TableHead>Date</TableHead>
+                    <TableHead>Salesman</TableHead>
+                    <TableHead>Item</TableHead>
+                    <TableHead className="text-right">Quantity</TableHead>
+                    <TableHead className="text-right">Unit rate</TableHead>
+                    <TableHead className="text-right">Discount</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {filtered.flatMap(sale => ((sale as any).lineItems ?? []).map((line: any, index: number) => {
+                    const itemId = Number(line.itemId ?? line.item_id);
+                    const itemName = line.itemName ?? line.item_name ?? itemsMap.get(itemId)?.name ?? `Item #${itemId}`;
+                    return (
+                      <TableRow key={`${sale.id}:${index}`}>
+                        <TableCell className="font-mono">{formatSalesInvoiceDisplayNumber(sale.invoiceNumber)}</TableCell>
+                        <TableCell>{formatDate(sale.saleDate)}</TableCell>
+                        <TableCell>{(sale as any).salesperson || '—'}</TableCell>
+                        <TableCell>{itemName}</TableCell>
+                        <TableCell className="text-right">{line.quantity ?? line.qty ?? '—'}</TableCell>
+                        <TableCell className="text-right font-mono">{line.unitPrice != null ? inr(Number(line.unitPrice)) : '—'}</TableCell>
+                        <TableCell className="text-right font-mono">{Number(line.discount) > 0 ? inr(Number(line.discount)) : '—'}</TableCell>
+                      </TableRow>
+                    );
+                  }))}
+                  {!filtered.some(sale => ((sale as any).lineItems ?? []).length > 0) && (
+                    <TableRow><TableCell colSpan={7} className="py-8 text-center text-muted-foreground">No item details in the loaded sales.</TableCell></TableRow>
+                  )}
+                </TableBody>
+              </Table>
             </div>
           )}
         </div>

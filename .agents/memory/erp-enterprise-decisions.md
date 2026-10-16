@@ -62,6 +62,12 @@ to backfill them for this deployment.
 
 ## Other standing decisions
 
+- Do not add manager-specific payroll exceptions; the owner says the ERP is for employees and has no managers.
+
+  **Why:** the owner explicitly excluded manager handling from the ERP update.
+
+  **How to apply:** model attendance and payroll access through existing employee identities and explicit permissions, not a separate manager role or branch.
+
 - **Outlets convert to warehouses**, history preserved; Outlet then hides behind a Settings
   toggle defaulting off, with all outlet code left in place for reactivation.
 - **Reserved stock is enforced, not merely displayed** — covers in-transit-outbound and
