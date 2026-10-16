@@ -73,7 +73,7 @@ The sidebar and permissions UI are derived from `moduleRegistry.ts`. Links can b
 
 ### Operations
 
-- **Point of Sale** (`/sales/pos`): location-based invoice entry, customer selection, item pricing, discounts/coupons, tax calculation, optional other charges, collections, and invoice output.
+- **Point of Sale** (`/sales/pos`): location-based invoice entry, customer and salesman assignment, item pricing, discounts/coupons, tax calculation, optional other charges, collections, invoice output, and an item-wise sales view.
 - **Quotations** (`/sales/quotations`): customer offers and shareable quote documents. Quotes do not post stock or financial transactions; converting a quote creates a sale through the normal sales flow.
 - **Stock Transfer** (`/transfers`): two-step dispatch and receipt between locations, with rejection/reversal handling.
 - **Customer management** (`/customers`): customer identity and tax details used by sales, returns, receipts, and receivables.
@@ -107,7 +107,6 @@ The sidebar and permissions UI are derived from `moduleRegistry.ts`. Links can b
 ### Asset management
 
 - **Asset Purchases** (`/assets/purchases`): capital asset acquisition, separate from stock purchases.
-- **Asset Register** (`/assets/register`): asset identity and current register data.
 - **Asset Categories** (`/assets/categories`): classification for the fixed-asset register.
 - **Asset Transfers** (`/assets/transfers`): movement of asset custody/location.
 - **Asset Disposal** (`/assets/disposal`): disposal events and their accounting trail.
@@ -118,7 +117,6 @@ The sidebar and permissions UI are derived from `moduleRegistry.ts`. Links can b
 - **Employees** (`/hr/employees`): workforce records, employment status, location, and employee-linked settings.
 - **Attendance** (`/hr/attendance`): attendance summaries and punch sessions; leave administration is reached from this HR surface.
 - **Payroll** (`/hr/payroll`): period-based payroll preparation, review, approval, and payslip support.
-- **Advances** (`/hr/advances`): employee advance and recovery workflows.
 - **Rent Management** (`/hr/rent`): location rent agreements, periods, and payment tracking.
 - **Hierarchy** (`/hr/hierarchy`): role tree and permission-group assignment.
 
@@ -151,7 +149,7 @@ The sidebar and permissions UI are derived from `moduleRegistry.ts`. Links can b
 
 ### Retired web surfaces
 
-Some historical pages are intentionally hidden and are not active navigation modules. Current retirement includes standalone expense entry pages and the standalone stock-ledger page; the historical data remains available to supported reports and owning workflows. The current UI registry and route table, not old screenshots or old documentation, determine whether a page is active.
+Some historical pages are intentionally hidden and are not active navigation modules. Retired surfaces include standalone expense entry pages, the standalone stock-ledger page, Asset Register, and Advances. Their historical data and any owning payroll/accounting dependencies remain available to supported reports and workflows. The current UI registry and route table, not old screenshots or old documentation, determine whether a page is active.
 
 ## 4. Core business domains and data
 
@@ -328,7 +326,7 @@ Router filenames live in `artifacts/api-server/src/routes/`. Routers are mounted
 
 - **Operational reports:** sales register/by item/location, purchase register/by vendor/material, discounts, returns, stock, inventory valuation/ageing, production, dispatch, and party balances.
 - **Financial reports:** ledger statements, day book, cash book, bank book, trial balance, profit and loss, balance sheet, and GST reporting.
-- **Dashboard:** summarizes selected operational and financial measures and links users to owning reports.
+- **Dashboard:** summarizes selected operational and financial measures, links users to owning reports, and supports permission-gated Excel export of the displayed KPI report.
 - **Exports:** CSV/XLSX/PDF exports should use the same filters, date range, scope, and total definitions as their rendered report.
 - **Business documents:** invoice, quotation, challan, voucher, payslip, return, and location-profile output are generated through owning server-side services.
 

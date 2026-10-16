@@ -23,13 +23,13 @@ import {
   Landmark, Trophy, Users,
   Warehouse, Store, ArrowUpRight, ArrowDownRight, Wallet,
   Receipt, PieChart, BarChart3, Banknote, HandCoins,
-  LayoutDashboard, Share2, Loader2, type LucideIcon,
+  LayoutDashboard, Share2, Loader2, Sheet, type LucideIcon,
 } from 'lucide-react';
 import { useLocation } from 'wouter';
 import {
   fmt, num, fmtDate, periodLabel,
   useDateRange, RangeBar, SummaryCards, LocationBadge, TONE_CLS,
-  type CardTone, type SummaryCard,
+  exportReportXlsx, type ReportDoc, type CardTone, type SummaryCard,
 } from '@/pages/reports/shared';
 import { DashboardShareReport, type ShareKpi } from './DashboardShareReport';
 import { DashboardLocationBreakdown } from './DashboardLocationBreakdown';
@@ -356,6 +356,7 @@ export default function Dashboard() {
   // cropped page screenshot.
   const shareRef = useRef<HTMLDivElement>(null);
   const [sharing, setSharing] = useState(false);
+  const [exportingExcel, setExportingExcel] = useState(false);
   const shareDashboard = async () => {
     if (sharing) return;
     if (isLoading || !bi) {
@@ -579,6 +580,31 @@ export default function Dashboard() {
         : undefined,
     }];
   });
+  const exportDashboardExcel = async () => {
+    if (!dashPerm.canDownload || isLoading || !bi || exportingExcel) return;
+    const rows: (string | number)[][] = [];
+    for (const card of shareCards) {
+      rows.push([card.label, card.value, card.hint ?? '']);
+      for (const line of card.locationLines ?? []) rows.push(['', '', `${line.label}: ${line.value}`]);
+    }
+    const doc: ReportDoc = {
+      title: 'Business Dashboard',
+      subtitle: `${pLabel} · ${reportLocationLabel ?? 'All Locations'} · ${reportMode === 'details' ? 'Details' : 'Consolidated'}`,
+      sections: [{
+        columns: [{ label: 'Metric' }, { label: 'Value', align: 'right' }, { label: 'Location breakdown' }],
+        rows,
+      }],
+    };
+    setExportingExcel(true);
+    try {
+      await exportReportXlsx(doc);
+      toast.success('Dashboard Excel downloaded');
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Excel export failed');
+    } finally {
+      setExportingExcel(false);
+    }
+  };
 
   // Mobile-only card set: same figures, order and tones as summaryCards, but
   // with shorter labels, subtle icons, structured breakdown lines and one-line
@@ -721,6 +747,18 @@ export default function Dashboard() {
                 {sharing ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Share2 className="w-4 h-4 mr-1.5" />}
                 Share
               </Button>
+              {dashPerm.canDownload && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void exportDashboardExcel()}
+                  disabled={exportingExcel || isLoading || !bi}
+                  data-testid="button-export-dashboard-excel"
+                >
+                  {exportingExcel ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Sheet className="w-4 h-4 mr-1.5" />}
+                  Excel
+                </Button>
+              )}
               <div
                 role="group"
                 aria-label="Share report mode"

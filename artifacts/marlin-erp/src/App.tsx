@@ -31,7 +31,6 @@ import Employees from './pages/hr/Employees';
 import Payroll from './pages/hr/Payroll';
 import Attendance from './pages/hr/Attendance';
 import Leave from './pages/hr/Leave';
-import Advances from './pages/hr/Advances';
 import RentManagement from './pages/hr/RentManagement';
 
 import Customers from './pages/customers/Customers';
@@ -61,7 +60,6 @@ import TrialBalance from './pages/accounts/TrialBalance';
 import ItemMaster from './pages/production/ItemMaster';
 
 import AssetPurchases from './pages/assets/AssetPurchases';
-import AssetRegister from './pages/assets/AssetRegister';
 import AssetCategories from './pages/assets/AssetCategories';
 import AssetTransfers from './pages/assets/AssetTransfers';
 import AssetDisposal from './pages/assets/AssetDisposal';
@@ -285,9 +283,6 @@ function Router() {
         {/* Satellite: /hr/leave → /hr/attendance permission */}
         <PermGuard href="/hr/leave" pageName="Leave"><Leave /></PermGuard>
       </Route>
-      <Route path="/hr/advances">
-        <PermGuard href="/hr/advances" pageName="Advances"><Advances /></PermGuard>
-      </Route>
       <Route path="/hr/rent">
         <PermGuard href="/hr/rent" pageName="Rent Management"><RentManagement /></PermGuard>
       </Route>
@@ -369,9 +364,6 @@ function Router() {
       {/* Assets — standalone Asset Management module */}
       <Route path="/assets/purchases">
         <PermGuard href="/assets/purchases" pageName="Asset Purchases"><AssetPurchases /></PermGuard>
-      </Route>
-      <Route path="/assets/register">
-        <PermGuard href="/assets/register" pageName="Asset Register"><AssetRegister /></PermGuard>
       </Route>
       <Route path="/assets/categories">
         <PermGuard href="/assets/categories" pageName="Asset Categories"><AssetCategories /></PermGuard>
