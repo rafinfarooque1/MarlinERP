@@ -1,0 +1,420 @@
+Complete ERP Update Requirements – Existing ERP System
+
+Update my existing ERP system with all the requirements listed below. Do not rebuild the ERP from scratch. Review the existing codebase, understand the current architecture, database, modules, permissions, accounting logic, and workflows before making changes. Preserve all existing working features that are not affected by these updates.
+
+1. Dashboard and Reports – Export to Excel
+
+* Add an Export to Excel button next to the existing Share button on every dashboard and report where a Share button is available.
+* The exported Excel file must contain the relevant data displayed in the dashboard or report, respecting the selected date range, global filters, location filters, and user permissions.
+* Ensure that the Excel export works correctly across all applicable modules and reports.
+
+2. Point of Sale (POS)
+
+* Add a Salesman column to the Point of Sale list.
+* Display the name of the salesman assigned to each sale.
+* Add an Item-wise checkbox or button at the bottom-right corner of the POS screen.
+* When Item-wise is selected, display the individual items included in each sale, allowing users to view sales item by item.
+* Ensure that the existing POS workflow, sales records, payment collection, and reports continue to work correctly.
+
+3. Cash Balance and Bank Deposits
+
+* In the Cash Balance module, retain and display the history of deposits made to the bank.
+* Remove the Mark as Received option from the bank deposit workflow.
+* When a deposit is recorded as deposited to the bank, automatically create an entry in the Bank Reconciliation module.
+* The deposit must appear in the reconciliation list and should affect the appropriate bank ledger only after reconciliation.
+* Maintain a complete deposit history for reference and auditing.
+
+4. Receipt Vouchers and Payment Vouchers
+
+Receipt Vouchers
+
+* Sales vouchers must never appear in the Receipt Vouchers list. Remove any existing logic that incorrectly displays sales vouchers as receipt vouchers.
+* The Receipt Vouchers list must contain only:
+    1. Receipt vouchers entered manually.
+    2. Receipts recorded through the POS Collect Payment workflow when the customer pays through a bank, UPI, or another supported electronic payment method.
+* These receipts must be recorded correctly and sent to the Bank Reconciliation module when applicable.
+* Do not create duplicate receipt entries for the same transaction.
+* Keep sales vouchers and receipt vouchers as separate transaction types.
+
+Payment Vouchers
+
+* The Payment Vouchers list must contain only actual payment vouchers entered through the manual payment voucher workflow.
+* Do not display purchase vouchers, unrelated transactions, or other voucher types as payment vouchers.
+* Maintain proper separation between payment vouchers, receipt vouchers, sales vouchers, and purchase vouchers.
+* Electronic payments and applicable bank transactions must be available for reconciliation without creating duplicate accounting entries.
+
+5. Live Stock – Storage Location and Item Tracking
+
+* Combine the Storage Location, Item Tracking, and related stock information into a single, convenient interface.
+* Display the Storage Location directly in the Live Stock list.
+* Provide an option to edit the storage location directly from the Live Stock screen, subject to the user’s permissions.
+* Add an information (i) button for each stock item.
+* When the user clicks the information button, display the complete item tracking history, including the relevant stock movements, transaction details, and storage location information.
+* Users should be able to view the storage location and item tracking details without navigating to separate pages.
+* Improve the existing UI so the information is presented clearly and efficiently on one screen.
+
+6. Production, Customers, Purchases, Vendors, and Existing Modules
+
+* The existing Production batches module and Production reports are already available. Preserve their functionality.
+* Customer details, Purchases, and Vendors modules are already available. Preserve their functionality.
+* Review the existing MRC/material requirements and inventory operations modules to ensure that they continue to function properly.
+* Do not unnecessarily rebuild or duplicate modules that are already working.
+* Make only the required changes and ensure that all affected workflows remain integrated with accounting and reporting.
+
+7. Inventory Verification, Stock Loss, Damage, Wastage, and Expiry
+
+Create a proper accounting workflow for stock verification and inventory adjustments.
+
+* When stock verification is performed and the actual stock quantity is lower or higher than the recorded quantity, record the difference correctly.
+* When stock is damaged, wasted, or expired in any warehouse, record the relevant inventory adjustment.
+* Create or configure a dedicated ledger named Stock Verification and map it correctly within the Chart of Accounts.
+* All stock verification adjustments must create appropriate ledger entries.
+* Stock shortages, damage, wastage, and expiry must be reflected as losses in the Profit and Loss (P&L) statement.
+* Stock shortages and losses should reduce the P&L appropriately.
+* When verified stock is higher than the recorded stock, account for the adjustment using the correct accounting treatment rather than automatically treating every adjustment as a loss.
+* Ensure that stock quantities, inventory valuation, the Stock Verification ledger, the General Ledger, and the P&L remain consistent.
+* Record the affected warehouse, item, quantity, reason for adjustment, date, and value so that the adjustment can be traced and audited.
+* Avoid duplicate postings or incorrect automatic ledger creation.
+
+8. Assets Module
+
+* The separate Asset Register/Asset Registration module is not required in the current ERP interface.
+* Remove the unnecessary Asset Register module from the relevant navigation and user interface.
+* Do not remove or damage existing sales vouchers, accounting records, or other modules that are already functioning correctly.
+* Before removing any module, check its dependencies and ensure that existing accounting data is preserved.
+* Remove unnecessary automatically generated asset-related ledgers only after verifying that they are not required by existing transactions or valid accounting rules.
+
+9. HR – Employee Attendance Permissions
+
+Implement warehouse-specific attendance permissions.
+
+* If an employee has the relevant attendance permission enabled, that employee must be able to enter check-in and check-out records for employees belonging to the warehouse assigned to them.
+* This functionality must be available to authorized employees, not only administrators.
+* The permission must allow check-in and check-out entry only. It must not automatically grant permission to edit employee profiles, approve payroll, access other HR information, or perform unrelated administrative actions.
+* Employees must only be able to record attendance for their assigned warehouse.
+* They must not be able to view or modify attendance for other warehouses unless explicitly authorized by a separate permission.
+* Enforce these restrictions in both the user interface and the backend/API.
+* Ensure that attendance records are saved against the correct employee, warehouse, date, and time.
+
+10. Payroll and Employee Salary Downloads
+
+* Add or maintain an employee salary slip download option in Payroll.
+* Once payroll has been approved, the relevant employee must be able to download their own approved salary slip.
+* Employees must not be given an unnecessary payment-processing option within Payroll.
+* The payroll approval workflow and employee download workflow must remain separate from payment execution.
+* Remove the unnecessary Advance module from the ERP interface.
+* If advance-related records or transactions are required by the existing backend or accounting system, preserve the necessary records and dependencies while removing the unwanted user-facing module.
+* For the two designated managers, once Sree has approved their payroll or the applicable approval, the approval must remain final as intended. Do not display unnecessary payment options for these two managers.
+* Do not create payment transactions for these managers through the unwanted payment options.
+* Preserve their existing approved records and ensure that the special handling applies only to the two designated managers, not to all employees.
+
+11. Warehouse Disable/Delete Behaviour
+
+* In the Inventory/Warehouse management module, when a warehouse is disabled or deleted according to the existing warehouse management workflow, it must no longer appear as an active operational location.
+* A disabled warehouse must not appear in active warehouse selectors, inventory operations, POS location selectors where applicable, payments, vouchers, or new transactions.
+* It must not appear in current operational reports as an active warehouse.
+* Ensure that disabled warehouses are consistently excluded across the entire ERP, including dashboards, reports, accounting views, and other modules.
+* Do not leave stale warehouse references in dropdowns, filters, or new transaction forms.
+* Preserve historical transactions and audit records where required for accounting, legal compliance, and reporting. Historical records should retain the correct warehouse reference rather than being deleted indiscriminately.
+* If a warehouse is permanently deleted, follow the existing data-integrity rules and prevent deletion when historical transactions require the warehouse record to remain.
+* Ensure that disabling a warehouse does not corrupt historical financial data or break existing reports.
+
+12. Company Settings and Administration
+
+Review and ensure the proper functioning of the following sections under Company/Settings:
+
+* Company Profile – already working; preserve its functionality.
+* Audit Log – already working; preserve its functionality.
+* Permissions – review and fix any issues.
+* Login History – review and ensure that it works correctly.
+* Backup and Reset – review and ensure that the functions work correctly and safely.
+* Import – the existing Import module is available; preserve its functionality.
+
+Ensure that administrative settings, permissions, and audit records are consistent across the application.
+
+13. Global Location Filter – Strict Data Isolation
+
+This requirement is critical.
+
+* When the Admin uses the ERP, the data displayed must be restricted to the locations selected in the Global Filter.
+* If the Admin selects one warehouse, only data belonging to that warehouse must be displayed.
+* If the Admin selects multiple locations, only data belonging to those selected locations must be displayed.
+* No unselected warehouse, outlet, or other location data must appear anywhere in the ERP while the filter is active.
+* Apply the selected location filter consistently across:
+    * All dashboards.
+    * All reports.
+    * Point of Sale.
+    * Live Stock and inventory.
+    * Stock transfers.
+    * Purchases and vendors, wherever location filtering applies.
+    * Sales and customers, wherever location filtering applies.
+    * Cash Balance and bank-related views.
+    * Receipt Vouchers and Payment Vouchers.
+    * Bank Reconciliation.
+    * General Ledger and Chart of Accounts transaction details.
+    * Profit and Loss and other financial reports.
+    * HR and attendance reports.
+    * Payroll-related reports.
+    * Excel exports and other report downloads.
+* Do not rely only on frontend filtering. Enforce the location restrictions in backend queries and APIs so unselected location data cannot be retrieved through direct requests.
+* Ensure that changing the Global Filter immediately updates the displayed data and totals.
+* Verify that no stale, cached, or previously selected location data remains visible after changing the filter.
+* The Admin must see only the data permitted by the currently selected locations and applicable access rules.
+* Preserve legitimate consolidated reporting when all relevant locations are intentionally selected or when an authorized report explicitly requires consolidated data.
+
+14. Accounting Reports and Bank Reconciliation – Rebuild the Workflow
+
+The existing Bank Reconciliation workflow must be reviewed and corrected comprehensively. Remove or replace the incorrect reconciliation logic and rebuild the workflow according to the requirements below.
+
+14.1 Start Reconciliation Fresh
+
+* Review the existing reconciliation records, bank ledger entries, electronic payment records, and accounting postings before changing the implementation.
+* Reset or clear the existing reconciliation list as required so reconciliation can start from the beginning.
+* Do not blindly delete historical accounting transactions or posted ledger entries. Reverse or reset existing reconciliation-related postings safely, maintain an audit trail, and prevent duplicate entries.
+* Ensure that transactions previously entered through POS, Receipt Vouchers, Payment Vouchers, electronic payments, or direct bank entries are correctly available for reconciliation.
+* Make sure the new workflow does not duplicate existing transactions.
+
+14.2 Transactions That Must Appear in Reconciliation
+
+The reconciliation list must include all applicable unreconciled bank and electronic payment transactions, including:
+
+* POS payments collected through bank or UPI.
+* Electronic payments.
+* UPI transactions.
+* Online payments.
+* Applicable manually entered Receipt Vouchers.
+* Applicable manually entered Payment Vouchers.
+* Bank deposits recorded through Cash Balance.
+* Applicable direct bank transactions, including transactions recorded against a bank such as Federal Bank.
+* Other supported bank-related transactions that have not yet been reconciled.
+
+All applicable transactions must flow directly into the reconciliation list without requiring unnecessary intermediate cash book assignments.
+
+Transactions must not be considered reconciled merely because they were entered in POS, Receipt Vouchers, Payment Vouchers, or a bank account. They must remain pending until reconciliation is completed.
+
+14.3 Bank Ledger Posting Rules
+
+* Transactions must not affect the final bank ledger balance through the reconciliation workflow until they are reconciled.
+* Once a transaction is reconciled, post the appropriate accounting entry to the selected bank ledger.
+* If reconciliation is reset, reverse the reconciliation-generated posting safely and return the transaction to the pending reconciliation list.
+* Do not remove legitimate original transaction entries when resetting reconciliation.
+* Ensure that the bank ledger balance, reconciliation records, and General Ledger remain consistent.
+* Prevent duplicate bank ledger postings if the same transaction is reconciled, reset, and reconciled again.
+
+14.4 Reconciliation List – Simple Inline Interface
+
+The reconciliation screen must be simple and easy to use. Do not create separate pop-up windows for normal reconciliation.
+
+The list must display the relevant transaction information, including:
+
+* Transaction date.
+* Bill number or transaction reference.
+* Transaction amount.
+* Warehouse/location.
+* Payment method or transaction type.
+* Reconciliation status.
+
+For each transaction, provide the required reconciliation controls directly within the list or the same screen.
+
+The user must be able to select the bank, processing charge, and reconciliation date without leaving the reconciliation screen.
+
+14.5 Single-Transaction Reconciliation
+
+For a single transaction:
+
+1. Select the unreconciled transaction from the list.
+2. Select the appropriate bank ledger.
+3. Enter or select the processing charge, if applicable.
+4. Select the date on which the entry should be posted to the bank ledger.
+5. Click Reconcile.
+
+The system must calculate the final amount correctly, post the entry to the selected bank ledger using the selected reconciliation date, and update the reconciliation status.
+
+14.6 Multiple-Transaction Reconciliation
+
+* Allow multiple unreconciled transactions to be selected from the same list.
+* When multiple transactions are selected, provide one bank selection, one reconciliation date, and the applicable processing charge input for the selected group.
+* Reconcile all selected transactions together through a single action.
+* The system must calculate the total of all selected transactions and apply the processing charge correctly.
+* When multiple transactions are reconciled together, the bank ledger posting should be consolidated into one appropriate net entry for that bank, with sufficient references or linked transaction details to maintain traceability.
+* The user should not have to open separate pop-up windows for individual transactions.
+* If selected transactions belong to different banks or incompatible transaction groups, prevent incorrect consolidation and ask the user to separate the selections as necessary.
+* Maintain the original transaction-level reconciliation details even when the bank ledger posting is consolidated.
+
+14.7 Processing Charge Calculation
+
+Processing charges must be calculated consistently.
+
+* If the processing charge is negative, add its absolute amount to the selected transaction total.
+* If the processing charge is positive, subtract it from the selected transaction total.
+* If there is no processing charge, use the original selected transaction total.
+* Display the original total, processing charge, and final reconciled amount clearly before reconciliation.
+* Post the correct net amount to the selected bank ledger.
+* Record the processing charge in the appropriate accounting ledger or expense account according to the existing accounting structure.
+* Do not treat the processing charge merely as a number added to or subtracted from the bank balance without recording the corresponding accounting entry.
+* Ensure that the processing charge treatment is consistent for both single and multiple reconciliation.
+
+14.8 Bank and UPI Selection
+
+* Provide a Bank selection option when reconciling a bank transaction.
+* For UPI and online transactions, display the appropriate payment method and relevant bank or settlement details.
+* Allow the user to choose the appropriate bank ledger for reconciliation.
+* Support all relevant bank accounts, not only the bank accounts currently associated with a specific cash book.
+* Reconciliation must not be restricted to a single bank or a particular cash book.
+* The selected bank ledger must receive the correct reconciled entry.
+
+14.9 Reconciliation Ledger Details
+
+* After reconciliation, the entry must appear in the appropriate bank ledger with the selected reconciliation date.
+* Add or improve an information (i) button in the bank ledger so the user can inspect the details of the reconciled entry.
+* The information view must show the reconciled amount, related transactions, original amounts, processing charge, final net amount, date, and relevant references.
+* For consolidated reconciliation entries, allow the user to identify all the original transactions included in the total.
+* Preserve an audit trail of the reconciliation action and any subsequent reversal or reset.
+
+14.10 Remove the Cash Book/Bank Book Reconciliation Toggle
+
+* Remove the unnecessary reconciliation toggle button from Cash Book and Bank Book.
+* Reconciliation must be managed through the dedicated Bank Reconciliation module.
+* Keep Cash Book and Bank Book focused on their respective accounting records and balances.
+* If the existing Cash Book or Bank Book modules are no longer required in their current form, review dependencies before removing them. Do not break valid accounting functionality.
+
+15. Chart of Accounts, General Ledger, and P&L Integration
+
+The Chart of Accounts and General Ledger must be properly integrated with every relevant ERP module.
+
+15.1 Every Relevant Transaction Must Be Accounted For
+
+* All relevant transactions created in the ERP must generate the appropriate ledger entries.
+* This includes sales, purchases, receipt vouchers, payment vouchers, reconciliation, stock transfers, stock verification, inventory adjustments, attendance/payroll-related accounting, and other modules that have financial effects.
+* Not every operational event must create a financial entry. Only events with an accounting impact should post to the General Ledger, according to the applicable accounting rules.
+* Ensure that every transaction with a financial impact is mapped to the correct ledger account.
+* Every ledger entry must be traceable to its originating transaction.
+* The Chart of Accounts and P&L must reflect the correct accounting entries.
+* Prevent duplicate postings, missing ledgers, and incorrect automatic ledger creation.
+
+15.2 Chart of Accounts Integration
+
+* Verify that all required ledgers used by the existing ERP modules are available in the Chart of Accounts.
+* Ensure that every required ledger is mapped correctly to the General Ledger, Balance Sheet, P&L, or other appropriate report.
+* Fix the underlying cause of the Book Integrate Check Failed error.
+* Do not hide the error or bypass the accounting validation to make the application appear functional.
+* Every module must integrate with the accounting system correctly.
+* Verify the integration after changes to the database schema, ledger mappings, or accounting workflows.
+
+15.3 Remove Unnecessary or Incorrect System-Generated Ledgers
+
+* Review the existing Chart of Accounts and P&L for unnecessary ledgers that were created automatically because of bugs or incorrect logic.
+* Examples include unwanted Accumulated Depreciation, Loss on Asset Disposal, Depreciation Expense, and other unused asset-related system-generated ledgers.
+* Remove or disable unnecessary ledgers only after confirming that they are not referenced by valid historical transactions, statutory reports, or active accounting rules.
+* Do not automatically delete legitimate accounts that are required for accounting compliance.
+* Correct the logic that generated unwanted ledgers so the same problem does not occur again.
+
+15.4 Correct Inter-Branch and Warehouse Ledger Names
+
+* Review the inter-branch payable and receivable ledgers.
+* Do not use generic or incorrect names such as Warehouse 1 to Warehouse 2, Warehouse 1 to Warehouse 3, or Warehouse 1 to Warehouse 4 when the system should display the actual warehouse name.
+* Use the actual names of the warehouses configured in the ERP.
+* Where separate inter-branch ledgers are required, use clear and consistent names based on the actual source and destination locations.
+* Ensure that warehouse names are displayed correctly in the Chart of Accounts, General Ledger, reconciliation details, and reports.
+* Do not create unnecessary duplicate ledgers for every warehouse combination if the existing accounting design can correctly handle the transactions through properly mapped accounts and references.
+
+15.5 P&L Accuracy
+
+* Ensure that stock verification losses, damage, wastage, and expiry are reflected in the P&L using the correct expense or loss accounts.
+* Ensure that reconciliation processing charges are recorded correctly.
+* Ensure that sales, purchases, expenses, payroll-related accounting, and other financial transactions are reflected correctly.
+* Remove incorrect duplicate or unwanted system-generated entries from the P&L.
+* Ensure that the P&L agrees with the underlying ledger entries and applicable accounting rules.
+
+16. Accounting Reports
+
+Review the following reports and ensure that they work correctly after the changes:
+
+* Monthly Reports.
+* Bank Reconciliation.
+* GST Summary.
+* GST Returns.
+* Trial Balance.
+* Cash Book.
+* Bank Book.
+* Ledger Statements.
+* Chart of Accounts.
+* Profit and Loss Statement.
+* Balance Sheet.
+* Other existing financial and operational reports affected by the changes.
+
+The existing Ledger Statement functionality is already working and should be preserved unless a specific correction is necessary.
+
+Ensure that report totals, dates, locations, ledger balances, and transaction details agree with the underlying data.
+
+17. Data Integrity and Backend Requirements
+
+* Inspect the existing backend, database schema, APIs, accounting services, permissions, and frontend before modifying the ERP.
+* Fix the underlying causes of bugs instead of applying frontend-only workarounds.
+* Maintain consistency between the frontend, backend, database, ledger postings, and reports.
+* Use database transactions for accounting operations that require multiple related updates.
+* Prevent duplicate entries when users retry actions or when a transaction is reconciled more than once.
+* Ensure that reset, delete, disable, and reversal actions follow proper data-integrity rules.
+* Preserve historical financial records and audit trails wherever required.
+* Apply database migrations safely if any schema changes are necessary.
+* Do not introduce unnecessary modules, duplicate ledgers, duplicate transactions, or additional workflows.
+* Maintain existing functionality that is not part of the requested changes.
+
+18. Mandatory Testing and Verification Before Approval or Live Deployment
+
+I am using Replit’s free AI for ERP development and updates. Use the available Replit AI assistance to implement the changes, but do not assume that the changes are correct simply because the code was modified or the application builds successfully.
+
+Every update must be tested and verified before it is marked complete, approved, or published to the live ERP.
+
+For every change:
+
+1. Identify the modules, reports, backend APIs, database tables, permissions, and accounting workflows affected.
+2. Review the existing implementation before making changes.
+3. Implement the required update.
+4. Test the modified module and all related modules.
+5. Verify that the relevant reports display correct data and calculations.
+6. Verify the selected Global Filter and location-based data restrictions.
+7. Test the relevant accounting entries, ledger balances, reconciliation, and P&L effects.
+8. Test permissions using the appropriate user roles and warehouse assignments.
+9. Check for frontend errors, backend errors, database errors, duplicate entries, missing entries, and broken workflows.
+10. Run the available automated tests, type checks, lint checks, and build checks where applicable.
+11. Verify the affected functionality manually when automated tests are insufficient.
+12. Fix any issues discovered and repeat the relevant tests.
+13. Provide a clear summary of the changes, tests performed, test results, and any remaining issues.
+
+Approval Gate
+
+* Do not mark an update as complete merely because the code has been changed.
+* Do not claim that a module or report is working correctly unless it has been tested.
+* Do not proceed to the final approval or publishing step until the relevant modules and reports have been verified.
+* Do not automatically publish changes to the live ERP.
+* Before publishing, present the test results and request my explicit confirmation.
+* Only publish to the live environment after I have reviewed the results and given approval.
+* If any test fails, any report is incorrect, or any issue remains unresolved, clearly report the problem and fix it before requesting approval.
+* If a test cannot be performed, state that clearly instead of claiming that it passed.
+* Use the available Replit free AI capabilities efficiently, and do not assume that AI-generated code is correct without verification.
+
+19. Final Acceptance Criteria
+
+The update is complete only when all the following conditions are met:
+
+* Export to Excel works for all applicable dashboards and reports.
+* POS displays the assigned salesman and supports item-wise viewing.
+* Cash Balance maintains deposit history and sends applicable deposits to reconciliation.
+* Receipt Vouchers and Payment Vouchers contain only their correct transaction types.
+* Live Stock displays storage location and item tracking together on one screen.
+* Stock verification, damage, wastage, expiry, and shortages are accounted for correctly.
+* Attendance permissions are restricted to the authorized employee’s assigned warehouse.
+* Approved payroll salary slips can be downloaded by the relevant employees without unwanted payment options.
+* The Advance module and unnecessary Asset Register interface are removed without breaking backend dependencies.
+* Disabled warehouses are excluded from active operations while historical records remain accurate.
+* Company settings, permissions, login history, audit logs, backup/reset, and imports work correctly.
+* The Global Filter restricts data across all relevant screens, reports, and Excel exports.
+* The redesigned reconciliation workflow supports single and multiple transactions, correct processing charges, bank selection, posting dates, and proper ledger integration.
+* The Chart of Accounts, General Ledger, Trial Balance, P&L, Balance Sheet, GST reports, and other relevant reports are accurate.
+* The Book Integrate Check Failed error is resolved at its underlying cause.
+* Unnecessary or incorrectly generated system ledgers are corrected without damaging valid accounting records.
+* All relevant tests pass, and no known critical issue remains unresolved.
+* My explicit approval is obtained before the changes are published to the live ERP.
+
+Important: First inspect the current ERP and prepare an implementation plan. Make the changes carefully in the existing codebase, test each affected workflow, verify the accounting and reporting results, and wait for my explicit approval before publishing anything to the live environment.
