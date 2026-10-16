@@ -142,7 +142,7 @@
 - [Route-guard audit CI](route-guard-audit.md) — audit-route-guards.ts fails CI on unguarded writes (exemptions stay exact) + check-permissions #6 pins App.tsx guard keys; a comment claiming a fix ≠ the fix.
 - [Mobile app distribution](mobile-app-distribution.md) — no app stores BY CHOICE: Android ships ONLY via the automated EAS pipeline → storage manifest (atomic swap + grace copy; upload UI/URL proxy REMOVED); raw .ipa always rejected.
 - [HR employee lifecycle](hr-employee-lifecycle.md) — app-created employees carry a pay_components row (delete removes it, history blocks with 400); leave cancel = status flip; POS cash sale payments are receipt-backed → system-delete the receipt before cancel.
-- [Bank Book reconciliation identity](bank-book-reconciliation.md) — status keys are exact posting ledger + derived entry id; one-step reconciliation is metadata-only and never posts accounting
+- [Bank Book reconciliation identity](bank-book-reconciliation.md) — exact posting identity; selected bank amounts now settle as one combined entry against Electronic Clearing, with fees to Processor Charges
 - [Bank matrix pending line](bank-matrix-pending.md) — pending means incoming bank sales/receipts awaiting destination; current and informational, never a closing-balance adjustment
 - [Salesman assignment](salesman-assignment.md) — store employee ID plus name snapshot; validate new assignments by activity/location and grandfather unchanged historical assignments
 - [Location-authoritative inventory costing](location-cost-checkpoints.md) — global product average changes must not revalue unchanged branch stock or create artificial Gross Profit
