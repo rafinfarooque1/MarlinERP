@@ -71,3 +71,17 @@ mtime_ms = 1789711762523
 storage_uri = "gcs://replit-rams-assets-sisko/rams/assets/repl:bd7bcd33-774f-4b61-bf46-8afc6db19a81/d280f81b-514c-43bb-9375-584d91c2cf3f/70f9b781-974f-479d-8f38-2bac2ba812ba"
 storage_version_token = "1789711787784769"
 content_type = "text/markdown"
+
+[[outputs]]
+id = "_DxamihjndiJRCBlfyYlK"
+uri = "file://docs/ERP_STRUCTURE_CURRENT.md"
+type = "text"
+title = "Frozen Fruits ERP — Current System Structure"
+description = "Current ERP architecture, active modules, data domains, workflows, security controls, and API map. Reconciliation and Chart of Accounts modules are excluded."
+logical_id = "46aae4fc-e7b2-4b69-9236-51283de82726"
+content_hash = "sha256:340d7abd5fac7b767826a79d7c72391b5ff592ee18b0583ce7e06557f53d5edf"
+size = 27155
+mtime_ms = 1792139746016
+storage_uri = "gcs://replit-rams-assets-sisko/rams/assets/repl:bd7bcd33-774f-4b61-bf46-8afc6db19a81/46aae4fc-e7b2-4b69-9236-51283de82726/73d038d4-bb12-40f5-9ed2-9e7c5763c1c0"
+storage_version_token = "1792139770919376"
+content_type = "text/markdown"
