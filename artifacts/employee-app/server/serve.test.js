@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
-const { resolveStaticFilePath, requestOrigin, escapeHtml } = require('./serve');
+const { resolveStaticFilePath, resolveManifestPath, requestOrigin, escapeHtml } = require('./serve');
 
 test('resolves a normal static asset under the static build root', () => {
   const result = resolveStaticFilePath('/assets/app.js');
@@ -12,6 +12,19 @@ test('rejects literal and encoded path traversal', () => {
   assert.equal(resolveStaticFilePath('/../../server/serve.js'), null);
   assert.equal(resolveStaticFilePath('/%2e%2e/%2e%2e/server/serve.js'), null);
   assert.equal(resolveStaticFilePath('/%2e%2e%2fserver%2fserve.js'), null);
+});
+
+test('resolves manifests only for supported Expo platforms', () => {
+  assert.equal(
+    resolveManifestPath('ios'),
+    path.resolve(__dirname, '..', 'static-build', 'ios', 'manifest.json'),
+  );
+  assert.equal(
+    resolveManifestPath('android'),
+    path.resolve(__dirname, '..', 'static-build', 'android', 'manifest.json'),
+  );
+  assert.equal(resolveManifestPath('web'), null);
+  assert.equal(resolveManifestPath('../../server'), null);
 });
 
 test('rejects malformed escapes and null bytes', () => {

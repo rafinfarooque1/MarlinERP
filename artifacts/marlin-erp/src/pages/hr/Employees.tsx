@@ -393,13 +393,15 @@ export default function Employees() {
     : e.employmentStatus === 'inactive' ? 'Inactive'
     : 'Resigned';
 
-  const filtered = employees.filter(e => {
+  const matchingEmployees = employees.filter(e => {
     const matchSearch = e.name.toLowerCase().includes(search.toLowerCase()) || e.username.toLowerCase().includes(search.toLowerCase());
-    const matchStatus = statusFilter === 'all' ? true : statusFilter === 'active' ? e.isActive : !e.isActive;
     const matchBranchType = branchTypeFilter === 'all' || (e as any).branchType === branchTypeFilter;
     const matchBranchLoc = branchLocId === 'all' || String((e as any).branchId) === branchLocId;
-    return matchSearch && matchStatus && matchBranchType && matchBranchLoc;
+    return matchSearch && matchBranchType && matchBranchLoc;
   });
+  const filtered = matchingEmployees.filter(e => (
+    statusFilter === 'all' || (statusFilter === 'active' ? e.isActive : !e.isActive)
+  ));
 
   const { sorted, sort } = useTableSort(filtered, {
     employee: (e: any) => e.name,
@@ -410,10 +412,12 @@ export default function Employees() {
   });
   const { pageRows, pagerProps } = useClientPage(sorted);
 
-  const activeCount   = employees.filter(e => e.isActive).length;
-  const inactiveCount = employees.filter(e => !e.isActive).length;
+  const activeCount   = filtered.filter(e => e.isActive).length;
+  const inactiveCount = filtered.filter(e => !e.isActive).length;
+  const activeFilterCount = matchingEmployees.filter(e => e.isActive).length;
+  const inactiveFilterCount = matchingEmployees.filter(e => !e.isActive).length;
   const currentDays = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate();
-  const activeMonthlySalary = employees.filter(e => e.isActive).reduce((sum, e) => {
+  const activeMonthlySalary = filtered.filter(e => e.isActive).reduce((sum, e) => {
     const wage = (e as any).dailyWage;
     return sum + (wage == null ? Number((e as any).salary || 0) : Number(wage) * currentDays);
   }, 0);
@@ -454,7 +458,7 @@ export default function Employees() {
         />
 
         <SummaryCardGrid>
-          <SummaryCard label="Total Employees" value={String(employees.length)} icon={Users} loading={isLoading} />
+          <SummaryCard label="Total Employees" value={String(filtered.length)} icon={Users} loading={isLoading} />
           <SummaryCard label="Active" value={String(activeCount)} icon={UserCheck} tone="positive" loading={isLoading} />
           <SummaryCard label="Resigned / Left" value={String(inactiveCount)} icon={UserMinus} tone="warning" loading={isLoading} />
           <SummaryCard label="Active Monthly Basic" value={`₹${activeMonthlySalary.toLocaleString('en-IN')}`} icon={Wallet} tone="info" loading={isLoading} />
@@ -462,18 +466,23 @@ export default function Employees() {
 
         {/* Filters */}
         <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-center flex-wrap">
-          <div className="flex items-center gap-1 p-1 bg-muted/30 rounded-lg border border-border">
+          <div
+            role="group"
+            aria-label="Employee status"
+            className="flex items-center gap-1 p-1 bg-muted/30 rounded-lg border border-border"
+          >
             {(['all', 'active', 'inactive'] as StatusFilter[]).map(s => (
               <button
                 key={s}
-                onClick={() => setStatusFilter(s)}
+                onClick={() => { setStatusFilter(s); pagerProps.onPageChange(1); }}
+                aria-pressed={statusFilter === s}
                 className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${statusFilter === s ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
               >
-                {s === 'all' ? `All (${employees.length})` : s === 'active' ? `Active (${activeCount})` : `Resigned (${inactiveCount})`}
+                {s === 'all' ? `All (${matchingEmployees.length})` : s === 'active' ? `Active (${activeFilterCount})` : `Resigned (${inactiveFilterCount})`}
               </button>
             ))}
           </div>
-          <Select value={branchTypeFilter} onValueChange={v => { setBranchTypeFilter(v); setBranchLocId('all'); }}>
+          <Select value={branchTypeFilter} onValueChange={v => { setBranchTypeFilter(v); setBranchLocId('all'); pagerProps.onPageChange(1); }}>
             <SelectTrigger className="h-7 w-38 text-xs"><SelectValue placeholder="All Branches" /></SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All Branches</SelectItem>
@@ -483,7 +492,7 @@ export default function Employees() {
             </SelectContent>
           </Select>
           {branchTypeFilter === 'warehouse' && (
-            <Select value={branchLocId} onValueChange={setBranchLocId}>
+            <Select value={branchLocId} onValueChange={v => { setBranchLocId(v); pagerProps.onPageChange(1); }}>
               <SelectTrigger className="h-7 w-44 text-xs"><SelectValue placeholder="All Warehouses" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All Warehouses</SelectItem>
@@ -492,7 +501,7 @@ export default function Employees() {
             </Select>
           )}
           {branchTypeFilter === 'outlet' && (
-            <Select value={branchLocId} onValueChange={setBranchLocId}>
+            <Select value={branchLocId} onValueChange={v => { setBranchLocId(v); pagerProps.onPageChange(1); }}>
               <SelectTrigger className="h-7 w-44 text-xs"><SelectValue placeholder="All Outlets" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All Outlets</SelectItem>
@@ -505,7 +514,7 @@ export default function Employees() {
         <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
           <div className="p-4 border-b border-border flex items-center gap-2 bg-muted/20">
             <Search className="w-4 h-4 text-muted-foreground" />
-            <Input placeholder="Search name or username..." value={search} onChange={e => setSearch(e.target.value)} className="border-transparent bg-transparent focus-visible:ring-0 max-w-xs max-md:max-w-full" />
+            <Input placeholder="Search name or username..." value={search} onChange={e => { setSearch(e.target.value); pagerProps.onPageChange(1); }} className="border-transparent bg-transparent focus-visible:ring-0 max-w-xs max-md:max-w-full" />
           </div>
           <Table>
             <TableHeader>

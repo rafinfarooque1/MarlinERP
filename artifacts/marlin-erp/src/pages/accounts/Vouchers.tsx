@@ -1155,16 +1155,23 @@ export default function Vouchers() {
 
                 return (
                   <Fragment key={row.key}>
-                    <TableRow
-                      className={`hover:bg-muted/10 ${isJV && jvLines.length > 0 ? 'cursor-pointer' : ''}`}
-                      onClick={() => isJV && jvLines.length > 0 && setExpanded(isExpanded ? null : row.key)}
-                    >
+                    <TableRow className="hover:bg-muted/10">
                       {/* Expand toggle for JV */}
                       <TableCell className="w-8 text-center">
                         {isJV && jvLines.length > 0 ? (
-                          isExpanded
-                            ? <ChevronDown className="h-4 w-4 text-muted-foreground" />
-                            : <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7"
+                            aria-label={`${isExpanded ? 'Collapse' : 'Expand'} journal voucher ${row.voucherNumber} lines`}
+                            aria-expanded={isExpanded}
+                            onClick={() => setExpanded(isExpanded ? null : row.key)}
+                          >
+                            {isExpanded
+                              ? <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                              : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
+                          </Button>
                         ) : null}
                       </TableCell>
 
