@@ -5199,6 +5199,8 @@ router.get("/accounts/financial-statements/monthly", requireModuleView(["page:/a
     put("assetsTotal", bs.assets.total);
     put("pandl", bs.liabilities.pandlCarryForward);
     put("bsClosingStock", bs.assets.closingStock);
+    put("bsClosingStockOnHand", bs.assets.closingStockOnHand);
+    put("bsClosingStockInTransit", bs.assets.closingStockInTransit);
     put("sales", pl.incomes.sales);
     put("salesReturns", pl.incomes.salesReturns);
     put("purchases", pl.expenses.purchases);
@@ -5209,8 +5211,6 @@ router.get("/accounts/financial-statements/monthly", requireModuleView(["page:/a
     put("closingStockInTransit", pl.incomes.closingStockInTransit);
     put("openingStock", pl.expenses.openingStock);
     put("closingStock", pl.incomes.closingStock);
-    put("bsClosingStockOnHand", bs.assets.closingStockOnHand);
-    put("bsClosingStockInTransit", bs.assets.closingStockInTransit);
     put("gp", pl.summary?.grossProfit ?? null);
     put("np", pl.netProfit);
   };

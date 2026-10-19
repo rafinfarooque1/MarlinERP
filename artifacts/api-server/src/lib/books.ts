@@ -37,6 +37,11 @@ import { filterPostingsByLocation, type PostingLocationFilter } from "./postingL
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
 const r3 = (n: number) => Math.round(n * 1000) / 1000;
+
+/** Closing stock is both a P&L valuation input and an asset on the Balance Sheet. */
+export function balanceSheetAssetsTotal(fixedAssets: number, currentAssets: number, closingStock: number): number {
+  return r2(fixedAssets + currentAssets + closingStock);
+}
 // Shape AND calendar validity (rejects 2026-02-30) — these values reach real
 // DATE columns, where an impossible date raises 22007 instead of storing text.
 const isDate = (s: unknown): s is string => isIsoDate(s);
@@ -1061,7 +1066,7 @@ export interface Books {
     assets: {
       fixedAssets: StatementGroup;
       currentAssets: StatementGroup;
-      /** Compatibility fields; stock is P&L-only and excluded from the Balance Sheet. */
+      /** Inventory valued at cost; included in both the P&L carry-forward and Balance Sheet assets. */
       closingStock: number;
       closingStockOnHand: number;
       closingStockInTransit: number;
@@ -1348,8 +1353,9 @@ export async function buildBooks(
 
   // Retained earnings must be cumulative to match the cumulative ledger
   // balances, so it is recomputed over everything to date rather than reusing
-  // the period profit. Closing stock is the only inventory carried in — the
-  // capitalisation overlay is excluded from both sides.
+  // the period profit. Closing stock affects retained earnings through COGS
+  // and is also presented as an inventory asset; the capitalisation overlay
+  // is excluded from both sides.
   let cumulativeIncome = 0;
   let cumulativeExpense = 0;
   const unclassified: string[] = [];
@@ -1368,9 +1374,10 @@ export async function buildBooks(
   }
   const retainedEarnings = r2(cumulativeIncome + closing.total - cumulativeExpense);
 
-  // Stock is included in the P&L's COGS calculation, but is intentionally not
-  // presented as a Balance Sheet asset.
-  const assetsTotal = r2(fixedGroup.total + curaGroup.total);
+  // The stock adjustment increases retained earnings; the matching physical
+  // inventory must appear in Balance Sheet assets or the statement is short by
+  // exactly closing stock.
+  const assetsTotal = balanceSheetAssetsTotal(fixedGroup.total, curaGroup.total, closing.total);
   const liabilitiesTotal = r2(capitalGroup.total + loansGroup.total + curlGroup.total + retainedEarnings);
   const difference = r2(assetsTotal - liabilitiesTotal);
 
@@ -1449,11 +1456,10 @@ export async function buildBooks(
     }
   }
   if (Math.abs(difference) >= 0.01) {
-    const unexplainedAfterStockExclusion = r2(difference + closing.total);
-    const gapDetail = Math.abs(unexplainedAfterStockExclusion) <= 0.01
-      ? `Assets and liabilities differ by ₹${Math.abs(difference).toFixed(2)} because closing stock of ₹${closing.total.toFixed(2)} is excluded from Balance Sheet assets but remains in P&L carry-forward.`
-      : `Assets and liabilities differ by ₹${Math.abs(difference).toFixed(2)}. After accounting for the intentionally excluded closing stock of ₹${closing.total.toFixed(2)}, an additional difference of ₹${Math.abs(unexplainedAfterStockExclusion).toFixed(2)} remains.`;
-    addIntegrityIssue(gapDetail, "FAIL");
+    addIntegrityIssue(
+      `Assets and liabilities differ by ₹${Math.abs(difference).toFixed(2)} after including closing stock in Balance Sheet assets.`,
+      "FAIL",
+    );
   }
   const status: BooksIntegrity["status"] = hasIntegrityFailure || Math.abs(difference) >= 0.01
     ? "FAIL"
@@ -1522,9 +1528,9 @@ export async function buildBooks(
       assets: {
         fixedAssets: fixedGroup,
         currentAssets: curaGroup,
-        closingStock: 0,
-        closingStockOnHand: 0,
-        closingStockInTransit: 0,
+        closingStock: closing.total,
+        closingStockOnHand: r2(Math.max(0, closing.total - closing.inTransit)),
+        closingStockInTransit: closing.inTransit,
         total: assetsTotal,
       },
     },

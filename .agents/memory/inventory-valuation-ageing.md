@@ -46,6 +46,18 @@ implementation.
 **Valued at cost, never MRP.** Closing stock used to be MRP-priced and read from a retired
 counter.
 
+**Closing stock belongs in both financial statements.** The P&L includes it in the COGS
+calculation, which carries into retained earnings; the same closing valuation must also be
+included as a Balance Sheet asset. Omitting that asset makes the Balance Sheet short by exactly
+closing stock.
+
+**Why:** a measured imbalance equal to closing stock is not an unverified valuation issue or a
+balancing plug; it is the missing inventory asset.
+
+**How to apply:** keep the P&L and Balance Sheet stock values sourced from the same closing
+valuation. Reconcile the displayed asset and statement totals, including month-wise and PDF
+outputs.
+
 **Consequence to state out loud whenever this is touched:** reported profit changed when
 closing stock started including materials, in-transit and cost pricing. The in-transit portion
 is reported as its own figure so the difference is auditable instead of mysterious. Producing
