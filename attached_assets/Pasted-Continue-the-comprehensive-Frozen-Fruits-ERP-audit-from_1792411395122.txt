@@ -1,0 +1,18 @@
+Continue the comprehensive Frozen Fruits ERP audit from the current checkpoint. Do not repeat completed work unnecessarily.
+
+Prioritize the unresolved issues from the previous audit report:
+
+1. Investigate all nine dependency advisory instances. Identify affected packages, severity, exploitability, and safe compatible upgrades. Avoid unnecessary major upgrades.
+2. Investigate both SAST path-access alerts and fix any verified path traversal or unauthorized file-access risks.
+3. Diagnose why the HoundDog scan failed schema validation and correct the configuration or report the exact blocker.
+4. Investigate the production stock-close PostgreSQL authentication timeout. Inspect the error and configuration without printing secrets or changing DATABASE_URL. Do not run destructive operations.
+5. Continue reviewing every ERP module for functional bugs, inconsistent UI, broken actions, validation errors, and accessibility problems.
+6. Visually verify the signed-in pages where the available preview and authentication tools permit it. Do not claim visual verification if login is unavailable.
+7. Review the new Employee Directory pagination, including page changes, filtering, sorting, empty results, page-size changes, and ensuring CSV export and summary figures use the full filtered dataset.
+8. Investigate the 67 API test files that were skipped. Determine which can safely run using mocks, temporary isolated transactions, or non-destructive existing test facilities within Replit. Do not create an external database, request Neon credentials, alter DATABASE_URL, or run destructive tests against the existing database.
+9. If database integration tests cannot safely run, report precisely which tests remain unverified and why. Do not mark them as passed.
+10. Re-run the relevant type checks, tests, security scans, and production build after each fix.
+
+Preserve existing business data, accounting history, inventory, permissions, and all ERP modules. Make small, reversible changes. Do not publish, deploy, force-push, or perform destructive database operations without my approval.
+
+Work through the remaining issues in priority order. At the end, provide a checklist showing each finding, the fix made, the test performed, its actual result, and anything still unresolved. Continue until all issues that can be safely verified in the current Replit environment have been addressed.
