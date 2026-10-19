@@ -103,6 +103,14 @@ export default defineConfig({
     fs: {
       strict: true,
     },
+    // Replit routed /api to the API server through its own proxy; outside
+    // Replit the dev server has to forward it, or login returns HTTP 404.
+    proxy: {
+      '/api': {
+        target: process.env.API_PROXY_TARGET ?? 'http://localhost:8080',
+        changeOrigin: true,
+      },
+    },
   },
   preview: {
     port,
