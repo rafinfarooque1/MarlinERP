@@ -97,11 +97,13 @@ async function allLocationLedgers(): Promise<LocationLedgerRow[]> {
     FROM cash_bank_accounts cba
     JOIN cash_bank_account_locations l ON l.account_id = cba.id
     WHERE cba.ledger_id IS NOT NULL
+      AND cba.account_type NOT IN ('bank', 'online')
       AND l.location_type IN ('warehouse', 'outlet')
     UNION ALL
     SELECT cba.ledger_id, cba.location_type, cba.location_id, 'cash' AS kind
     FROM cash_bank_accounts cba
     WHERE cba.ledger_id IS NOT NULL
+      AND cba.account_type NOT IN ('bank', 'online')
       AND cba.location_type IN ('warehouse', 'outlet')
       AND NOT EXISTS (
         SELECT 1 FROM cash_bank_account_locations l WHERE l.account_id = cba.id
@@ -126,12 +128,19 @@ export async function scopeLedgerIds(scope: DataScope): Promise<number[]> {
   return [...new Set(rows.filter((r) => inScope(scope, r)).map((r) => r.ledger_id))];
 }
 
-/** Cash ledger ids the caller owns — the only accounts they may move money through. */
+/** Cash ledgers owned by the caller plus globally shared Bank/Online ledgers they may use. */
 export async function scopeCashLedgerIds(scope: DataScope): Promise<number[]> {
   if (scope.isHeadOffice) return [];
   const rows = await allLocationLedgers();
+  const { rows: sharedRows } = await pool.query<{ ledger_id: number }>(
+    `SELECT ledger_id FROM cash_bank_accounts
+      WHERE account_type IN ('bank', 'online') AND ledger_id IS NOT NULL`,
+  );
   return [
-    ...new Set(rows.filter((r) => r.kind === "cash" && inScope(scope, r)).map((r) => r.ledger_id)),
+    ...new Set([
+      ...rows.filter((r) => r.kind === "cash" && inScope(scope, r)).map((r) => r.ledger_id),
+      ...sharedRows.map((r) => Number(r.ledger_id)),
+    ]),
   ];
 }
 
@@ -440,6 +449,7 @@ export async function locationOwnedLedgerMap(): Promise<Map<number, LedgerOwner[
     LEFT JOIN warehouses w ON l.location_type = 'warehouse' AND w.id = l.location_id
     LEFT JOIN outlets    o ON l.location_type = 'outlet'    AND o.id = l.location_id
     WHERE cba.ledger_id IS NOT NULL
+      AND cba.account_type NOT IN ('bank', 'online')
       AND l.location_type IN ('warehouse', 'outlet')
     UNION ALL
     SELECT cba.location_type AS lt, cba.location_id AS id,
@@ -449,6 +459,7 @@ export async function locationOwnedLedgerMap(): Promise<Map<number, LedgerOwner[
     LEFT JOIN warehouses w ON cba.location_type = 'warehouse' AND w.id = cba.location_id
     LEFT JOIN outlets    o ON cba.location_type = 'outlet'    AND o.id = cba.location_id
     WHERE cba.ledger_id IS NOT NULL
+      AND cba.account_type NOT IN ('bank', 'online')
       AND cba.location_type IN ('warehouse', 'outlet')
       AND NOT EXISTS (
         SELECT 1 FROM cash_bank_account_locations l WHERE l.account_id = cba.id
@@ -499,7 +510,8 @@ export async function resolveMoneyVoucherLocation(
   // owner. Legacy rows without memberships still fall back to their scalar
   // location.
   const { rows: membershipRows } = await pool.query(
-    `SELECT COALESCE(l.location_type, cba.location_type) AS location_type,
+    `SELECT cba.account_type,
+            COALESCE(l.location_type, cba.location_type) AS location_type,
             COALESCE(l.location_id, cba.location_id) AS location_id,
             CASE COALESCE(l.location_type, cba.location_type)
               WHEN 'headoffice' THEN 'Head Office'
@@ -512,10 +524,15 @@ export async function resolveMoneyVoucherLocation(
                              AND w.id = COALESCE(l.location_id, cba.location_id)
        LEFT JOIN outlets o ON COALESCE(l.location_type, cba.location_type) = 'outlet'
                           AND o.id = COALESCE(l.location_id, cba.location_id)
-      WHERE cba.ledger_id = $1`,
+      WHERE cba.ledger_id = $1 AND cba.account_type NOT IN ('bank', 'online')`,
     [tillLedgerId],
   );
-  const owners = membershipRows.length > 0
+  const { rows: [accountTypeRow] } = await pool.query<{ account_type: string | null }>(
+    `SELECT account_type FROM cash_bank_accounts WHERE ledger_id = $1 LIMIT 1`,
+    [tillLedgerId],
+  );
+  const sharedAccount = accountTypeRow?.account_type === "bank" || accountTypeRow?.account_type === "online";
+  const owners = sharedAccount ? [] : membershipRows.length > 0
     ? membershipRows.map((row: any) => ({
         locationType: String(row.location_type),
         locationId: Number(row.location_id),
@@ -526,7 +543,7 @@ export async function resolveMoneyVoucherLocation(
   // account is HO-eligible only when it has an explicit headoffice:0 row.
   const hoSet = new Set(await headOfficeCashBankLedgerIds());
   if (membershipRows.length === 0) for (const id of owned.keys()) hoSet.delete(id);
-  const isHoTill = membershipRows.length > 0
+  const isHoTill = sharedAccount ? false : membershipRows.length > 0
     ? owners.some((owner) => owner.locationType === "headoffice")
     : hoSet.has(Number(tillLedgerId));
 

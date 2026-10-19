@@ -15,14 +15,11 @@ export interface CashBankInput {
   bankName?: string;
   accountNumber?: string;
   ifscCode?: string;
-  /** Legacy single-location input for older clients; prefer locations for new Cash, Bank, and Online accounts. */
+  /** Legacy location input for Cash accounts only. Bank and Online accounts are shared by all warehouses and outlets. */
   locationType?: CashBankInputLocationType;
-  /** Required with locationType when using legacy single-location input. */
+  /** Required with locationType for legacy Cash account input. */
   locationId?: number;
-  /**
-     * Cash, Bank, and Online accounts can be assigned to one or more locations.
-     * @minItems 1
-     */
+  /** Cash accounts require one or more locations. Bank and Online accounts are global and must not be assigned. */
   locations?: CashBankLocation[];
   /** Recorded as the backing ledger's opening balance (debit) through the opening-balances store — never a stored column. Absent or blank means 0. */
   openingBalance?: number;

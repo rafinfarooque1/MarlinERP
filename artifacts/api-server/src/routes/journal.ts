@@ -8,7 +8,7 @@ import { logActivity, logActivityInTransaction } from "../lib/audit";
 import { lineTaxHeads } from "../lib/gst";
 import { clearsThroughBank } from "../lib/paymentModes";
 import { isIsoDate } from "../lib/dateInput";
-import { callerLocation, ownLocationScope, foreignPartyLedgerIds, locationOwnedLedgerMap, scopeLedgerIds, checkVoucherPartyLocation } from "../lib/moneyScope";
+import { callerLocation, ownLocationScope, foreignPartyLedgerIds, locationOwnedLedgerMap, scopeLedgerIds, scopeCashLedgerIds, checkVoucherPartyLocation } from "../lib/moneyScope";
 import { getUserDataScope, isLocationInScope, type DataScope } from "../lib/dataScope";
 import { outletWritesBlocked } from "../lib/featureFlags";
 import { respondIfMonthLocked, isMonthLocked, ymOfDate, monthLockedBody } from "../lib/periodLock";
@@ -112,20 +112,33 @@ export async function ledgerBookKind(ledgerId: number, q: Q = pool): Promise<Boo
 export async function bookAccessScope(employee: {
   branchType?: string;
   branchId?: number;
-}): Promise<{ dataScope: DataScope; ledgerIds: Set<number> | null }> {
+}): Promise<{
+  dataScope: DataScope;
+  ledgerIds: Set<number> | null;
+  ownedLedgerIds: Set<number> | null;
+}> {
   if (!employee.branchType || employee.branchType === "headoffice") {
     return {
       dataScope: { isHeadOffice: true, warehouseIds: [], outletIds: [] },
       ledgerIds: null,
+      ownedLedgerIds: null,
     };
   }
   const dataScope = await getUserDataScope({
     branchType: employee.branchType,
     branchId: Number(employee.branchId ?? 0),
   });
+  const [ownedIds, availableMoneyIds] = await Promise.all([
+    scopeLedgerIds(dataScope),
+    scopeCashLedgerIds(dataScope),
+  ]);
   return {
     dataScope,
-    ledgerIds: new Set(await scopeLedgerIds(dataScope)),
+    // Shared Bank/Online ledgers may be selected in a branch's books and
+    // reconciliation, but they do not grant visibility to other locations'
+    // postings on that ledger.
+    ledgerIds: new Set([...ownedIds, ...availableMoneyIds]),
+    ownedLedgerIds: new Set(ownedIds),
   };
 }
 
@@ -470,7 +483,8 @@ async function checkLinesLocation(
                              AND w.id = COALESCE(l.location_id, cba.location_id)
        LEFT JOIN outlets o ON COALESCE(l.location_type, cba.location_type) = 'outlet'
                           AND o.id = COALESCE(l.location_id, cba.location_id)
-      WHERE cba.ledger_id = ANY($1::int[])`, [ids],
+      WHERE cba.ledger_id = ANY($1::int[])
+        AND cba.account_type NOT IN ('bank', 'online')`, [ids],
   );
   const accountMemberships = new Map<number, Array<{ locationType: string; locationId: number; name: string }>>();
   for (const row of membershipRows) {
@@ -483,6 +497,12 @@ async function checkLinesLocation(
   // Managed accounts use their explicit scalar owner.
   const hoCashBank = await ledgerIdsUnderCodes(["STD-CASH", "STD-BANK"]);
   for (const id of owned.keys()) if (!accountMemberships.has(id)) hoCashBank.delete(id);
+  const { rows: sharedMoneyRows } = await pool.query(
+    `SELECT ledger_id FROM cash_bank_accounts
+      WHERE account_type IN ('bank', 'online') AND ledger_id = ANY($1::int[])`,
+    [ids],
+  );
+  for (const row of sharedMoneyRows) hoCashBank.delete(Number(row.ledger_id));
 
   const { rows: named } = await pool.query(
     `SELECT id, name FROM account_ledgers WHERE id = ANY($1)`, [ids]
@@ -612,6 +632,12 @@ router.get("/accounts/voucher-locations", requireModuleView(["page:/accounts/vou
   const ownedMap = await locationOwnedLedgerMap();
   const hoCashBank = await ledgerIdsUnderCodes(["STD-CASH", "STD-BANK", "STD-ONLINE"]);
   for (const id of ownedMap.keys()) hoCashBank.delete(id);
+  const { rows: sharedRows } = await pool.query(
+    `SELECT cba.ledger_id FROM cash_bank_accounts cba
+       JOIN account_ledgers al ON al.id = cba.ledger_id AND COALESCE(al.is_active, true)
+      WHERE cba.account_type IN ('bank', 'online') AND cba.ledger_id IS NOT NULL`,
+  );
+  const sharedIds = sharedRows.map((row: any) => Number(row.ledger_id));
   const { rows: inactiveLedgers } = await pool.query(
     `SELECT id FROM account_ledgers WHERE NOT COALESCE(is_active, true)`,
   );
@@ -626,6 +652,7 @@ router.get("/accounts/voucher-locations", requireModuleView(["page:/accounts/vou
        JOIN account_ledgers al ON al.id = cba.ledger_id AND COALESCE(al.is_active, true)
        LEFT JOIN cash_bank_account_locations l ON l.account_id = cba.id
       WHERE cba.ledger_id IS NOT NULL
+        AND cba.account_type NOT IN ('bank', 'online')
         AND COALESCE(l.location_type, cba.location_type) IN ('headoffice','warehouse','outlet')`,
   );
   // An account is offered at every assigned location.
@@ -637,12 +664,13 @@ router.get("/accounts/voucher-locations", requireModuleView(["page:/accounts/vou
     .map((r: any) => Number(r.ledger_id));
 
   const all = [
-    { locationType: "headoffice", locationId: 0, name: "Head Office", cashBankLedgerIds: [...hoCashBank] },
+    { locationType: "headoffice", locationId: 0, name: "Head Office", cashBankLedgerIds: [...new Set([...hoCashBank, ...sharedIds])] },
     ...whs.map((w: any) => ({
       locationType: "warehouse", locationId: Number(w.id), name: w.name,
       cashBankLedgerIds: [...new Set([
         ...(w.cash_ledger_id ? [Number(w.cash_ledger_id)] : []),
         ...branchCba("warehouse", Number(w.id)),
+        ...sharedIds,
       ])],
     })),
     ...outs.map((o: any) => ({
@@ -650,6 +678,7 @@ router.get("/accounts/voucher-locations", requireModuleView(["page:/accounts/vou
       cashBankLedgerIds: [...new Set([
         ...(o.cash_ledger_id ? [Number(o.cash_ledger_id)] : []),
         ...branchCba("outlet", Number(o.id)),
+        ...sharedIds,
       ])],
     })),
   ];
@@ -2115,7 +2144,7 @@ router.get("/accounts/cash-bank-book", requireModuleView(["page:/accounts/cash-b
     toDate,
     locFilter,
     dataScope: access.dataScope,
-    accessibleLedgerIds: access.ledgerIds ? [...access.ledgerIds] : undefined,
+    accessibleLedgerIds: access.ownedLedgerIds ? [...access.ownedLedgerIds] : undefined,
   });
   if (!result) { res.status(404).json({ error: "Ledger not found" }); return; }
   res.json(result);

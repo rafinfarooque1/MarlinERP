@@ -3,22 +3,19 @@ name: Cash/Bank and Online multi-location assignment
 description: Rules for managed money-account availability across assigned locations.
 ---
 
-Bank, Cash, and Online accounts may be assigned to multiple locations through the existing
-`cash_bank_account_locations` junction table. That membership set is
-authoritative for branch availability, money-account pickers, reconciliation,
-and location-filtered account lists. The scalar `location_type`/`location_id`
-columns remain as a legacy primary compatibility value; new writes keep them
-set to the first selected assignment. UPI and Other legacy account types retain
-single-location behavior.
+Bank and Online accounts are global: every warehouse and outlet, including
+ones created later, can use them without a location assignment. Legacy
+`cash_bank_account_locations` rows for those types are inert and must not block
+use, reconciliation, or location-filtered account lists. Cash remains
+location-assigned; never rewrite historical transaction location stamps.
 
-**Why:** Shared money accounts need explicit location availability, while
-historical payments, receipts, vouchers, and journal entries still retain
-their original location stamps and must not be rewritten.
+**Why:** The user requested Bank and Online to be common to all current and
+future warehouses and outlets, with no assignment step.
 
-**How to apply:** Use the junction memberships for availability and matching;
-fall back to the scalar fields only for legacy rows with no junction entry.
-The Cash & Bank form uses a location multi-select for Cash, Bank, and Online
-accounts. Never rewrite historical document stamps.
+**How to apply:** Keep location memberships and ownership checks for Cash, but
+exclude Bank/Online from location ownership and expose them in all account
+pickers, book views, collections, and reconciliation. Do not rewrite historical
+document stamps.
 
 Money-account root additions must be included in every ledger-tree reader and
 location picker, not only in the Cash & Bank account endpoint. Voucher forms

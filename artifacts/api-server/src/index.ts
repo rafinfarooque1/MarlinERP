@@ -4806,11 +4806,11 @@ await pool.query(`
   }
 }
 
-// Cash, Bank, and Online memberships describe availability and may be
-// multi-location. Do not canonicalize memberships at boot: choosing a member
-// changes future voucher availability. Legacy UPI/Other rows are included in
-// the multi-location allowlist because the Online migration below converts
-// them; only unknown account types should be reported here.
+// Cash memberships describe location availability. Historical Bank/Online
+// memberships remain stored for compatibility but are ignored for availability.
+// Legacy UPI/Other rows are included in the multi-location allowlist because
+// the Online migration below converts them; only unknown account types should
+// be reported here.
 try {
   const { rows } = await pool.query(`
     SELECT l.account_id, COUNT(*)::int AS memberships

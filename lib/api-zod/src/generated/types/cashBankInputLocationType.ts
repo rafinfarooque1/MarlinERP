@@ -7,7 +7,7 @@
  */
 
 /**
- * Legacy single-location input for older clients; prefer locations for new Cash, Bank, and Online accounts.
+ * Legacy location input for Cash accounts only. Bank and Online accounts are shared by all warehouses and outlets.
  */
 export type CashBankInputLocationType = typeof CashBankInputLocationType[keyof typeof CashBankInputLocationType];
 

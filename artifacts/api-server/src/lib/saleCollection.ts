@@ -65,7 +65,8 @@ export async function resolveReceiveIntoAccount(
          FROM cash_bank_accounts cba
          LEFT JOIN cash_bank_account_locations l
            ON l.account_id = cba.id AND l.location_type = 'headoffice'
-        WHERE cba.ledger_id IS NOT NULL
+      WHERE cba.ledger_id IS NOT NULL
+        AND cba.account_type NOT IN ('bank', 'online')
           AND (
             l.account_id IS NOT NULL
             OR (
