@@ -23,6 +23,7 @@ import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { TablePager, useClientPage } from '@/components/ui/table-pager';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -464,6 +465,8 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
     by: r => r.createdBy,
     amount: r => Number(r.amount),
   });
+  const { pageRows, pagerProps } = useClientPage(sorted);
+  const goToFirstPage = () => pagerProps.onPageChange(1);
 
   const total = filtered.reduce((s, r) => s + Number(r.amount), 0);
   const hasFilters = search || fromDate || toDate || cashFilter !== 'all' || byFilter !== 'all';
@@ -475,6 +478,7 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
     setToDate('');
     setCashFilter('all');
     setByFilter('all');
+    goToFirstPage();
   };
   const exportCsv = () => downloadCSV(C.csvName, filtered.map(r => ({
     Voucher: r.voucherNumber,
@@ -784,7 +788,7 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
             }`}>
               <Search className="w-4 h-4 text-muted-foreground shrink-0" />
               <Input placeholder="Search voucher no, party, reference or narration…" value={search}
-                onChange={e => setSearch(e.target.value)}
+                onChange={e => { setSearch(e.target.value); goToFirstPage(); }}
                 className={isReceipt
                   ? 'h-10 border-0 bg-transparent px-0 text-sm shadow-none focus-visible:ring-0'
                   : 'border-transparent bg-transparent focus-visible:ring-0 max-w-md max-md:max-w-full'} />
@@ -794,20 +798,20 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
                 <FilterPanel activeCount={activeFilterCount} defaultOpen className="min-w-0">
                   <label className="space-y-1 text-xs text-muted-foreground">
                     <span>From date</span>
-                    <Input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} className="h-8 text-xs" title="From date" />
+                    <Input type="date" value={fromDate} onChange={e => { setFromDate(e.target.value); goToFirstPage(); }} className="h-8 text-xs" title="From date" />
                   </label>
                   <label className="space-y-1 text-xs text-muted-foreground">
                     <span>To date</span>
-                    <Input type="date" value={toDate} onChange={e => setToDate(e.target.value)} className="h-8 text-xs" title="To date" />
+                    <Input type="date" value={toDate} onChange={e => { setToDate(e.target.value); goToFirstPage(); }} className="h-8 text-xs" title="To date" />
                   </label>
-                  <Select value={cashFilter} onValueChange={setCashFilter}>
+                  <Select value={cashFilter} onValueChange={v => { setCashFilter(v); goToFirstPage(); }}>
                     <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Cash / Bank" /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="all">All Cash / Bank accounts</SelectItem>
                       {(cashBankAccounts as any[]).map(a => <SelectItem key={a.id} value={String(a.id)}>{a.name}</SelectItem>)}
                     </SelectContent>
                   </Select>
-                  <Select value={byFilter} onValueChange={setByFilter}>
+                  <Select value={byFilter} onValueChange={v => { setByFilter(v); goToFirstPage(); }}>
                     <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Created by" /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="all">All users</SelectItem>
@@ -821,17 +825,17 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
               </div>
             ) : (
               <div className="flex flex-wrap items-center gap-2">
-                <Input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} className="w-[150px] h-8 text-xs" title="From date" />
+                <Input type="date" value={fromDate} onChange={e => { setFromDate(e.target.value); goToFirstPage(); }} className="w-[150px] h-8 text-xs" title="From date" />
                 <span className="text-xs text-muted-foreground">to</span>
-                <Input type="date" value={toDate} onChange={e => setToDate(e.target.value)} className="w-[150px] h-8 text-xs" title="To date" />
-                <Select value={cashFilter} onValueChange={setCashFilter}>
+                <Input type="date" value={toDate} onChange={e => { setToDate(e.target.value); goToFirstPage(); }} className="w-[150px] h-8 text-xs" title="To date" />
+                <Select value={cashFilter} onValueChange={v => { setCashFilter(v); goToFirstPage(); }}>
                   <SelectTrigger className="w-[190px] h-8 text-xs"><SelectValue placeholder="Cash / Bank" /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">All Cash / Bank accounts</SelectItem>
                     {(cashBankAccounts as any[]).map(a => <SelectItem key={a.id} value={String(a.id)}>{a.name}</SelectItem>)}
                   </SelectContent>
                 </Select>
-                <Select value={byFilter} onValueChange={setByFilter}>
+                <Select value={byFilter} onValueChange={v => { setByFilter(v); goToFirstPage(); }}>
                   <SelectTrigger className="w-[150px] h-8 text-xs"><SelectValue placeholder="Created by" /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">All users</SelectItem>
@@ -870,7 +874,7 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
                   <C.Icon className="w-10 h-10 mx-auto mb-3 opacity-20" />
                   <p>{hasFilters ? 'No vouchers match the filters' : `No ${C.title.toLowerCase()}s yet`}</p>
                 </TableCell></TableRow>
-              ) : sorted.map((r, index) => (
+              ) : pageRows.map((r, index) => (
                 <TableRow key={r.id} className={isReceipt
                   ? `group transition-colors hover:bg-primary/[0.035] ${index % 2 === 1 ? 'bg-muted/[0.12]' : 'bg-card'}`
                   : 'hover:bg-muted/10'}>
@@ -942,6 +946,7 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
               ))}
             </TableBody>
           </Table>
+          <TablePager {...pagerProps} className="border-t border-border px-4" />
         </div>
       </div>
 

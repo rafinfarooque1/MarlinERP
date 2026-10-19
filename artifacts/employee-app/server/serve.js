@@ -46,7 +46,12 @@ function getAppName() {
 }
 
 function serveManifest(platform, res) {
-  const manifestPath = path.join(STATIC_ROOT, platform, 'manifest.json');
+  const manifestPath = resolveManifestPath(platform);
+  if (manifestPath === null) {
+    res.writeHead(404, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ error: `Manifest not found for platform: ${platform}` }));
+    return;
+  }
 
   if (!fs.existsSync(manifestPath)) {
     res.writeHead(404, { 'content-type': 'application/json' });
@@ -63,6 +68,12 @@ function serveManifest(platform, res) {
     'expo-sfv-version': '0',
   });
   res.end(manifest);
+}
+
+function resolveManifestPath(platform) {
+  if (platform === 'ios') return path.join(STATIC_ROOT, 'ios', 'manifest.json');
+  if (platform === 'android') return path.join(STATIC_ROOT, 'android', 'manifest.json');
+  return null;
 }
 
 function serveLandingPage(req, res, landingPageTemplate, appName) {
@@ -191,4 +202,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { resolveStaticFilePath, requestOrigin, escapeHtml };
+module.exports = { resolveStaticFilePath, resolveManifestPath, requestOrigin, escapeHtml };
