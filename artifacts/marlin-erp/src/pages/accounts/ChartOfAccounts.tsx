@@ -1039,12 +1039,14 @@ function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, on
                     <>
                       <MwGroupBlock group={bs.assets.fixedAssets} seriesKey="grp:fixed" monthly={monthly} expansion={bsExpansion} />
                       <MwGroupBlock group={bs.assets.currentAssets} seriesKey="grp:curassets" monthly={monthly} expansion={bsExpansion} />
+                      <MwAutoRow label="Closing Stock" values={mwS('bsClosingStock')} total={bs.assets.closingStock} monthly={monthly} accent="text-foreground/80 font-semibold" />
                     </>
                   ) : (
                     <>
                       <GroupBlock group={bs.assets.fixedAssets} onCreated={onCreated} expansion={bsExpansion} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={canAdd} canEdit={canEdit} canDelete={canDelete} />
 
                       <GroupBlock group={bs.assets.currentAssets} onCreated={onCreated} expansion={bsExpansion} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={canAdd} canEdit={canEdit} canDelete={canDelete} />
+                      <AutoRow label="Closing Stock" amount={bs.assets.closingStock} sub="valued inventory asset" accent="text-foreground/80 font-semibold" />
                     </>
                   ))}
                 </Panel>
