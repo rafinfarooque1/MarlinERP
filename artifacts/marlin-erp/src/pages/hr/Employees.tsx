@@ -13,6 +13,7 @@ import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { TablePager, useClientPage } from '@/components/ui/table-pager';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
@@ -407,6 +408,7 @@ export default function Employees() {
     salary: (e: any) => Number(e.salary || 0),
     status: (e: any) => statusLabel(e),
   });
+  const { pageRows, pagerProps } = useClientPage(sorted);
 
   const activeCount   = employees.filter(e => e.isActive).length;
   const inactiveCount = employees.filter(e => !e.isActive).length;
@@ -523,7 +525,7 @@ export default function Employees() {
                 <TableRow><TableCell colSpan={6} className="p-0">
                   <EmptyState icon={Users} title="No employees found" hint={search ? 'No employees match your search or filters.' : 'Add your first employee to get started.'} compact />
                 </TableCell></TableRow>
-              ) : sorted.map(emp => (
+              ) : pageRows.map(emp => (
                 <TableRow key={emp.id} className={`hover:bg-muted/10 ${!emp.isActive ? 'opacity-60' : ''}`}>
                   <TableCell>
                     <div className="flex items-center gap-3">
@@ -591,6 +593,7 @@ export default function Employees() {
               ))}
             </TableBody>
           </Table>
+          <TablePager {...pagerProps} className="border-t border-border px-4" />
         </div>
       </div>
 

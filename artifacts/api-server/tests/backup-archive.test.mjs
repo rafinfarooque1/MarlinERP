@@ -1,7 +1,7 @@
 /**
  * In-process zip implementation — unit tests (regression for "spawn zip ENOENT":
  * production has no zip/unzip binaries, so archiving must never shell out).
- * Run: node artifacts/api-server/tests/backup-archive.test.mjs
+ * Run: pnpm --filter @workspace/api-server exec tsx tests/backup-archive.test.mjs
  */
 import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
 import { createWriteStream } from "node:fs";
