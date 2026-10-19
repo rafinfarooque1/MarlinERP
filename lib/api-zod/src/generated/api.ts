@@ -2791,22 +2791,19 @@ export const ListCashBankAccountsResponse = zod.array(ListCashBankAccountsRespon
 /**
  * @summary Create a cash, bank, or online account (provisions its ledger under the matching chart head)
  */
-
-
-
 export const CreateCashBankAccountBody = zod.object({
   "name": zod.string(),
   "accountType": zod.enum(['cash', 'bank', 'online']),
   "bankName": zod.string().optional(),
   "accountNumber": zod.string().optional(),
   "ifscCode": zod.string().optional(),
-  "locationType": zod.enum(['headoffice', 'warehouse', 'outlet']).optional().describe('Legacy single-location input for older clients; prefer locations for new Cash, Bank, and Online accounts.'),
-  "locationId": zod.number().optional().describe('Required with locationType when using legacy single-location input.'),
+  "locationType": zod.enum(['headoffice', 'warehouse', 'outlet']).optional().describe('Legacy location input for Cash accounts only. Bank and Online accounts are shared by all warehouses and outlets.'),
+  "locationId": zod.number().optional().describe('Required with locationType for legacy Cash account input.'),
   "locations": zod.array(zod.object({
   "locationType": zod.enum(['headoffice', 'warehouse', 'outlet']),
   "locationId": zod.number(),
   "locationName": zod.string().nullish()
-})).min(1).optional().describe('Cash, Bank, and Online accounts can be assigned to one or more locations.'),
+})).optional().describe('Cash accounts require one or more locations. Bank and Online accounts are global and must not be assigned.'),
   "openingBalance": zod.number().optional().describe('Recorded as the backing ledger\'s opening balance (debit) through the opening-balances store — never a stored column. Absent or blank means 0.'),
   "requiresReconciliation": zod.boolean().optional().describe('Bank\/Online accounts only — whether collections into this account must pass through Reconciliation before hitting the bank balance. Defaults to true for bank\/online, ignored for cash.')
 })

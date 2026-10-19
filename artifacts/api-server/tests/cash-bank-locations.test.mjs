@@ -2,8 +2,8 @@
  * Cash/Bank account availability regression.
  *
  * Read-only: this suite creates, edits and deletes no business data. It proves
- * that an account is emitted once with its assigned locations, and that a
- * one-or-more-location filter narrows accounts without duplicating them.
+ * that shared Bank/Online accounts remain visible across location filters,
+ * while location-assigned Cash accounts stay scoped.
  *
  * Required environment: TEST_USERNAME and TEST_PASSWORD.
  * Run: node artifacts/api-server/tests/cash-bank-locations.test.mjs
@@ -74,11 +74,17 @@ async function run() {
     const id = Number(account.id);
     assert(`account ${id} appears once`, !accountIds.has(id));
     accountIds.add(id);
-    assert(`account ${id} has one canonical primary location`, ["headoffice", "warehouse", "outlet"].includes(account.locationType));
-    assert(`account ${id} has a canonical location id`, Number.isInteger(Number(account.locationId)));
+    const isShared = account.accountType === "bank" || account.accountType === "online";
     const assignedKeys = keysOf(account);
-    assert(`account ${id} has at least one assigned location`, assignedKeys.size > 0);
-    if (account.source === "module") {
+    if (isShared) {
+      assert(`shared account ${id} has no location memberships`, Array.isArray(account.locations) && account.locations.length === 0);
+      assert(`shared account ${id} is identified as global`, account.locationName === "All warehouses and outlets");
+    } else {
+      assert(`account ${id} has one canonical primary location`, ["headoffice", "warehouse", "outlet"].includes(account.locationType));
+      assert(`account ${id} has a canonical location id`, Number.isInteger(Number(account.locationId)));
+      assert(`account ${id} has at least one assigned location`, assignedKeys.size > 0);
+    }
+    if (account.source === "module" && !isShared) {
       assert(`managed account ${id} exposes its location memberships`, Array.isArray(account.locations) && account.locations.length > 0);
       assert(`managed account ${id} keeps its primary location among its memberships`, assignedKeys.has(keyOf(account)));
       assert(`managed account ${id} has unique location memberships`, assignedKeys.size === account.locations.length);
@@ -86,7 +92,11 @@ async function run() {
     assert(`account ${id} has numeric ledger balance`, Number.isFinite(Number(account.balance)));
   }
 
-  const mapped = (all.data ?? []).find((account) => keysOf(account).size > 0);
+  const mapped = (all.data ?? []).find((account) =>
+    account.accountType !== "bank" && account.accountType !== "online"
+    && ["headoffice", "warehouse", "outlet"].includes(account.locationType)
+    && keysOf(account).size > 0,
+  );
   if (!mapped) {
     console.log("  • No Cash/Bank account is available to exercise the location filter.");
   } else {
@@ -96,7 +106,8 @@ async function run() {
     assert("location-filtered response is an array", Array.isArray(narrowed.data));
     const selectedKeys = new Set(selected.split(","));
     for (const account of narrowed.data ?? []) {
-      const matches = [...keysOf(account)].some((key) => selectedKeys.has(key));
+      const matches = account.accountType === "bank" || account.accountType === "online"
+        || [...keysOf(account)].some((key) => selectedKeys.has(key));
       assert(`filtered account ${account.id} is available at a selected location`, matches);
       assert(`filtered account ${account.id} remains unique`, !accountIds.has(`filtered:${account.id}`));
       accountIds.add(`filtered:${account.id}`);

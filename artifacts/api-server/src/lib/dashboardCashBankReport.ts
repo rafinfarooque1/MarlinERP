@@ -152,7 +152,7 @@ export async function buildDashboardCashBankReport(opts: {
   const [ledgerResult, accountResult, warehouseResult, outletsBlocked] = await Promise.all([
     pool.query(`SELECT id, name FROM account_ledgers WHERE id = ANY($1::int[])`, [allLedgerIds]),
     pool.query(`
-      SELECT c.id, c.name, c.ledger_id, c.location_type, c.location_id,
+      SELECT c.id, c.name, c.ledger_id, c.account_type, c.location_type, c.location_id,
              COALESCE((
                SELECT json_agg(json_build_object(
                  'location_type', l.location_type,
@@ -223,7 +223,8 @@ export async function buildDashboardCashBankReport(opts: {
             ? 0
             : account.location_id,
         }];
-    const hasVisibleMembership = memberships.some((membership: any) => {
+    const hasVisibleMembership = account.account_type === "bank" || account.account_type === "online"
+      || memberships.some((membership: any) => {
       const key = locationKey(membership.location_type, membership.location_id);
       return key != null && activeLocationKeys.has(key);
     });

@@ -39,6 +39,8 @@ export const ONLINE_ROOT_CODE = "STD-ONLINE";
 export type CashBankLocation = { locationType: "headoffice" | "warehouse" | "outlet"; locationId: number };
 type LocationResult = { ok: true; location: CashBankLocation } | { ok: false; error: string };
 export const CASH_BANK_LOCATION_CONFLICT = "CASH_BANK_LOCATION_CONFLICT";
+export const isGloballySharedCashBankType = (type: unknown): boolean =>
+  type === "bank" || type === "online";
 
 /** Explicit single-owner input only. Never turn blank or malformed input into HO. */
 export function parseCashBankLocation(body: Record<string, unknown>): LocationResult {
@@ -63,6 +65,9 @@ export function parseCashBankLocations(
   body: Record<string, unknown>,
   accountType: unknown,
 ): { ok: true; locations: CashBankLocation[] } | { ok: false; error: string } {
+  // Bank and Online accounts are company-wide. Legacy location payloads are
+  // accepted for backwards compatibility but never define availability.
+  if (isGloballySharedCashBankType(accountType)) return { ok: true, locations: [] };
   if (body.locations !== undefined) {
     if (accountType !== "bank" && accountType !== "cash" && accountType !== "online") {
       return { ok: false, error: "Only Cash, Bank, and Online accounts can be assigned to multiple locations." };
@@ -104,6 +109,9 @@ export function diagnoseCashBankLocation(
   account: { account_type?: unknown; location_type?: unknown; location_id?: unknown },
   memberships: Array<{ location_type?: unknown; location_id?: unknown }>,
 ): LocationResult {
+  if (isGloballySharedCashBankType(account.account_type)) {
+    return { ok: true, location: { locationType: "headoffice", locationId: 0 } };
+  }
   const owner = parseCashBankLocation({ locationType: account.location_type, locationId: account.location_id });
   const conflict = {
     ok: false as const,

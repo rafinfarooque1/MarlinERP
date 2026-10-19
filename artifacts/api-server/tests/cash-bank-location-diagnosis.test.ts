@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { cashBankLedgerLocationError, diagnoseCashBankLocation } from "../src/lib/cashBankLedgers.ts";
+import { cashBankLedgerLocationError, diagnoseCashBankLocation, parseCashBankLocations } from "../src/lib/cashBankLedgers.ts";
 
 test("accepts valid multi-location memberships returned in database snake_case", () => {
   const result = diagnoseCashBankLocation(
@@ -20,7 +20,7 @@ test("accepts valid multi-location memberships returned in database snake_case",
   }
 });
 
-test("still blocks a multi-location account when its scalar owner is not assigned", () => {
+test("Bank availability ignores legacy location memberships", () => {
   const result = diagnoseCashBankLocation(
     { account_type: "bank", location_type: "warehouse", location_id: 5 },
     [
@@ -29,7 +29,24 @@ test("still blocks a multi-location account when its scalar owner is not assigne
     ],
   );
 
-  assert.equal(result.ok, false);
+  assert.equal(result.ok, true);
+  if (result.ok) {
+    assert.deepEqual(result.location, { locationType: "headoffice", locationId: 0 });
+  }
+});
+
+test("new Bank and Online accounts need no location assignments", () => {
+  assert.deepEqual(parseCashBankLocations({}, "bank"), { ok: true, locations: [] });
+  assert.deepEqual(parseCashBankLocations({}, "online"), { ok: true, locations: [] });
+  assert.deepEqual(parseCashBankLocations({ locations: [] }, "online"), { ok: true, locations: [] });
+});
+
+test("Cash accounts remain location-assigned", () => {
+  assert.equal(parseCashBankLocations({}, "cash").ok, false);
+  assert.deepEqual(
+    parseCashBankLocations({ locations: [{ locationType: "warehouse", locationId: 7 }] }, "cash"),
+    { ok: true, locations: [{ locationType: "warehouse", locationId: 7 }] },
+  );
 });
 
 function statusQueryable(active: boolean) {

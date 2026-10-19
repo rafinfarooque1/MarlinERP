@@ -158,22 +158,7 @@ export async function warehouseDeleteSummary(c: Queryable, id: number): Promise<
              + (SELECT COUNT(*) FROM rent_payments WHERE warehouse_id = $1)
              + (SELECT COUNT(*) FROM rent_periods WHERE warehouse_id = $1) AS count`),
   ]);
-  const bankAccounts = await one(
-    `SELECT COUNT(*) FILTER (WHERE cba.account_type <> 'cash') AS count
-       FROM cash_bank_accounts cba
-       WHERE (
-         EXISTS (
-           SELECT 1 FROM cash_bank_account_locations l
-            WHERE l.account_id = cba.id
-              AND l.location_type = 'warehouse' AND l.location_id = $1
-         )
-         OR (
-           NOT EXISTS (
-             SELECT 1 FROM cash_bank_account_locations l WHERE l.account_id = cba.id
-           )
-           AND cba.location_type = 'warehouse' AND cba.location_id = $1
-         )
-       )`);
+  const bankAccounts = 0; // Bank and Online accounts are shared, not warehouse-owned.
 
   // Money documents derive two postings each; JV lines are stored directly.
   const ledgerEntries = jvLines + 2 * (sales + purchases + receipts + payments + expenses);
@@ -277,7 +262,8 @@ export async function permanentlyDeleteWarehouse(
     const cbaLedgers = (await client.query<{ ledger_id: number | null }>(
       `SELECT cba.ledger_id
          FROM cash_bank_accounts cba
-        WHERE cba.location_type = 'warehouse' AND cba.location_id = $1`, [id],
+        WHERE cba.account_type NOT IN ('bank', 'online')
+          AND cba.location_type = 'warehouse' AND cba.location_id = $1`, [id],
     )).rows.map((r: { ledger_id: number | null }) => r.ledger_id).filter((x: number | null): x is number => x != null);
     const ownLedgerIds = [wh.cash_ledger_id, wh.sales_ledger_id, wh.purchase_ledger_id, ...rentLedgers, ...cbaLedgers]
       .filter((x): x is number => x != null);
@@ -396,6 +382,7 @@ export async function permanentlyDeleteWarehouse(
       `SELECT DISTINCT cba.ledger_id
          FROM cash_bank_accounts cba
         WHERE cba.ledger_id = ANY($1::int[])
+          AND cba.account_type NOT IN ('bank', 'online')
           AND (cba.location_type <> 'warehouse' OR cba.location_id <> $2)`, [ownLedgerIds, id]);
     const survivingSharedIds = new Set(survivingShared.map((row) => Number(row.ledger_id)));
     const removableOwnLedgerIds = ownLedgerIds.filter((ledgerId) => !survivingSharedIds.has(Number(ledgerId)));

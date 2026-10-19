@@ -443,11 +443,8 @@ router.get("/accounts/cash-bank-ledgers", requireModuleView(["page:/accounts/cas
       if (r.parent_id && ids.has(r.parent_id)) ids.add(r.id);
     }
   }
-  // LBAC: this list populates the "money account" pickers on Payments and
-  // Receipts. A branch may only move its OWN money, so it sees its own till
-  // plus the Cash & Bank accounts assigned to its location (both come from
-  // scopeCashLedgerIds) — never another branch's accounts or the company-wide
-  // tree. Head Office keeps the full cash + bank tree.
+  // Bank and Online accounts are shared company-wide. Cash remains limited to
+  // the caller's own location, and inactive ledgers remain excluded below.
   const cbScope = ownLocationScope((req as any).employee);
   if (!cbScope.isHeadOffice) {
     const own = await scopeCashLedgerIds(cbScope);
@@ -3656,8 +3653,9 @@ router.get("/accounts/cash-bank", requireModuleView("page:/accounts/cash-bank"),
     const bal = lid ? idx.net(lid) : null;
     const scalarType = c.location_type ?? "headoffice";
     const scalarId = scalarType === "headoffice" ? 0 : (c.location_id != null ? Number(c.location_id) : 0);
+    const isGlobal = c.account_type === "bank" || c.account_type === "online";
     const rawMemberships = Array.isArray(c.memberships) ? c.memberships : [];
-    const assignedLocations: Array<{ locationType: string; locationId: number }> = (rawMemberships.length > 0 ? rawMemberships : [{
+    const assignedLocations: Array<{ locationType: string; locationId: number }> = isGlobal ? [] : (rawMemberships.length > 0 ? rawMemberships : [{
       location_type: scalarType,
       location_id: scalarId,
     }]).map((location: any) => ({
@@ -3666,13 +3664,13 @@ router.get("/accounts/cash-bank", requireModuleView("page:/accounts/cash-bank"),
     })).filter((location: { locationType: string; locationId: number }) =>
       !hiddenLocationKeys.has(`${location.locationType}:${location.locationId}`));
     const assignedKeys = new Set<string>(assignedLocations.map((location) => `${location.locationType}:${location.locationId}`));
-    if (selectedKeys.size > 0 && ![...assignedKeys].some((key) => selectedKeys.has(key))) continue;
-    if (!scope.isHeadOffice && ![...assignedKeys].some((key) => allowedKeys?.has(key))) continue;
+    if (!isGlobal && selectedKeys.size > 0 && ![...assignedKeys].some((key) => selectedKeys.has(key))) continue;
+    if (!isGlobal && !scope.isHeadOffice && ![...assignedKeys].some((key) => allowedKeys?.has(key))) continue;
     const primaryLocation = assignedLocations[0] ?? null;
     const accountLocation = {
       locationType: primaryLocation?.locationType ?? null,
       locationId: primaryLocation?.locationId ?? null,
-      locationName: assignedLocations.map((location) => locName(location.locationType, location.locationId)).join(", "),
+      locationName: isGlobal ? "All warehouses and outlets" : assignedLocations.map((location) => locName(location.locationType, location.locationId)).join(", "),
     };
     const balance = lid && selectedNet ? (selectedNet.get(lid) ?? 0) : null;
     const ownership = diagnoseCashBankLocation(c, rawMemberships);
@@ -3806,7 +3804,7 @@ router.post("/accounts/cash-bank", requireModuleAction("page:/accounts/cash-bank
     return;
   }
   const locations = resolvedLocations.locations;
-  const loc = locations[0];
+  const loc = locations[0] ?? { locationType: "headoffice", locationId: 0 };
 
   // One name per account, checked against both the module and the subtree the
   // ledger will join — a duplicate ledger name under the same head would make
@@ -3944,8 +3942,9 @@ router.patch("/accounts/cash-bank/:id", requireModuleAction("page:/accounts/cash
     push("requires_reconciliation", body.requiresReconciliation === true);
   }
 
-  let locationsToSet: Array<{ locationType: string; locationId: number }> | null = null;
-  if (body.locations !== undefined) {
+  let locationsToSet: Array<{ locationType: string; locationId: number }> | null =
+    acc.account_type === "bank" || acc.account_type === "online" ? [] : null;
+  if (locationsToSet === null && body.locations !== undefined) {
     if (body.locationType !== undefined || body.locationId !== undefined) {
       res.status(400).json({ error: "Send either locations or the legacy locationType/locationId fields, not both." });
       return;
@@ -3953,7 +3952,7 @@ router.patch("/accounts/cash-bank/:id", requireModuleAction("page:/accounts/cash
     const resolved = await resolveCashBankLocations(body, acc.account_type);
     if (!resolved.ok) { res.status(resolved.status).json({ error: resolved.error, ...(resolved.code ? { code: resolved.code } : {}) }); return; }
     locationsToSet = resolved.locations;
-  } else if (body.locationType !== undefined || body.locationId !== undefined) {
+  } else if (locationsToSet === null && (body.locationType !== undefined || body.locationId !== undefined)) {
     const resolved = await resolveCashBankLocations({
       locationType: body.locationType === undefined ? acc.location_type : body.locationType,
       locationId: body.locationId === undefined ? acc.location_id : body.locationId,
@@ -3961,7 +3960,9 @@ router.patch("/accounts/cash-bank/:id", requireModuleAction("page:/accounts/cash
     if (!resolved.ok) { res.status(resolved.status).json({ error: resolved.error, ...(resolved.code ? { code: resolved.code } : {}) }); return; }
     locationsToSet = resolved.locations;
   }
-  const locationToSet = locationsToSet?.[0] ?? null;
+  const locationToSet = locationsToSet !== null && (acc.account_type === "bank" || acc.account_type === "online")
+    ? { locationType: "headoffice", locationId: 0 }
+    : locationsToSet?.[0] ?? null;
   let activeChange: { before: boolean; after: boolean } | null = null;
   if (locationToSet) {
     push("location_type", locationToSet.locationType);
@@ -4022,7 +4023,7 @@ router.patch("/accounts/cash-bank/:id", requireModuleAction("page:/accounts/cash
     if (newName !== undefined && acc.ledger_id != null) {
       await write.query(`UPDATE account_ledgers SET name = $1 WHERE id = $2`, [newName, Number(acc.ledger_id)]);
     }
-    if (locationsToSet) {
+    if (locationsToSet !== null) {
       await write.query(`DELETE FROM cash_bank_account_locations WHERE account_id = $1`, [id]);
       for (const location of locationsToSet) {
         await write.query(
@@ -4044,7 +4045,7 @@ router.patch("/accounts/cash-bank/:id", requireModuleAction("page:/accounts/cash
           ...(activeChange ? { isActive: activeChange.before } : {}),
         },
         after: {
-          ...(locationsToSet ? { locations: locationsToSet } : ownership.location),
+          ...(locationsToSet !== null ? { locations: locationsToSet } : ownership.location),
           ...(activeChange ? { isActive: activeChange.after } : {}),
         },
       },
@@ -4105,7 +4106,7 @@ router.patch("/accounts/cash-bank/:id", requireModuleAction("page:/accounts/cash
     ledgerId: fresh.ledger_id != null ? Number(fresh.ledger_id) : null,
     locationType: fresh.location_type ?? "headoffice",
     locationId: fresh.location_id != null ? Number(fresh.location_id) : 0,
-    locations: freshMemberships.map((location: any) => ({
+    locations: (fresh.account_type === "bank" || fresh.account_type === "online" ? [] : freshMemberships).map((location: any) => ({
       locationType: String(location.location_type),
       locationId: Number(location.location_id),
     })),

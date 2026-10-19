@@ -30,9 +30,6 @@ import { TableSkeleton } from '@/components/app/loading-skeletons';
 import { TablePager, useClientPage } from '@/components/ui/table-pager';
 
 const BAD_BALANCE = 'Please enter a valid opening balance.';
-const supportsMultipleLocations = (accountType: string) =>
-  accountType === 'cash' || accountType === 'bank' || accountType === 'online';
-
 const schema = z.object({
   name: z.string().min(2, 'Name required (at least 2 characters)'),
   accountType: z.enum(['cash', 'bank', 'online']),
@@ -58,7 +55,7 @@ const schema = z.object({
     .multipleOf(0.01, 'Opening balance can have at most two decimal places.')
     .max(9999999999.99, 'Opening balance is larger than this field can store.'),
 }).superRefine((value, ctx) => {
-  if (supportsMultipleLocations(value.accountType)) {
+  if (value.accountType === 'cash') {
     if (value.locationKeys.length === 0) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['locationKeys'], message: 'Select at least one location.' });
     }
@@ -138,7 +135,9 @@ export default function CashBank() {
   };
 
   const onSubmit = (data: FormValues) => {
-    const locations = data.locationKeys.map((key) => splitLocationKey(key));
+    const locations = data.accountType === 'cash'
+      ? data.locationKeys.map((key) => splitLocationKey(key))
+      : [];
     if (isEdit) {
       // Opening balance is only sent when the user typed one — 0 would
       // otherwise silently wipe an existing opening figure on every rename.
@@ -161,7 +160,7 @@ export default function CashBank() {
       createMutation.mutate({
         data: {
           ...rest,
-          locations,
+          ...(data.accountType === 'cash' ? { locations } : {}),
         } as any,
       }, {
         onSuccess: () => { toast.success('Account added — its ledger now appears under Chart of Accounts'); refresh(); setIsOpen(false); form.reset(); },
@@ -192,6 +191,9 @@ export default function CashBank() {
     ? allLocationOptions.filter((location) => location.key === ownLocationKey)
     : allLocationOptions;
   const locationText = (a: any) => a.locationName ?? (
+    a.accountType === 'bank' || a.accountType === 'online'
+      ? 'All warehouses and outlets'
+      :
     a.locationType === 'warehouse'
       ? warehouses.find((w: any) => Number(w.id) === Number(a.locationId))?.name ?? 'Warehouse'
       : a.locationType === 'outlet'
@@ -491,7 +493,7 @@ export default function CashBank() {
                     {isEdit && <p className="text-xs text-muted-foreground">Type decides the ledger's group and cannot change.</p>}
                     <FormMessage /></FormItem>
                 )} />
-                {supportsMultipleLocations(watchType) && (
+                {watchType === 'cash' && (
                   <FormField control={form.control} name="locationKeys" render={({ field }) => (
                     <FormItem className="sm:col-span-2">
                       <FormLabel>Available at locations <span className="text-destructive">*</span></FormLabel>
@@ -520,6 +522,11 @@ export default function CashBank() {
                       <FormMessage />
                     </FormItem>
                   )} />
+                )}
+                {(watchType === 'bank' || watchType === 'online') && (
+                  <div className="sm:col-span-2 rounded-lg border border-border bg-muted/20 px-3 py-2 text-sm">
+                    Available to all warehouses and outlets. No location assignment is needed.
+                  </div>
                 )}
                 <p className="text-xs text-muted-foreground sm:col-span-2">Existing transactions keep their original location.</p>
               </div>

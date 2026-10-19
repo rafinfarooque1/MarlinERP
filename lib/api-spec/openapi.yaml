@@ -4194,14 +4194,13 @@ components:
         locationType:
           type: string
           enum: [headoffice, warehouse, outlet]
-          description: Legacy single-location input for older clients; prefer locations for new Cash, Bank, and Online accounts.
+          description: Legacy location input for Cash accounts only. Bank and Online accounts are shared by all warehouses and outlets.
         locationId:
           type: integer
-          description: Required with locationType when using legacy single-location input.
+          description: Required with locationType for legacy Cash account input.
         locations:
           type: array
-          minItems: 1
-          description: Cash, Bank, and Online accounts can be assigned to one or more locations.
+          description: Cash accounts require one or more locations. Bank and Online accounts are global and must not be assigned.
           items:
             $ref: "#/components/schemas/CashBankLocation"
         openingBalance:

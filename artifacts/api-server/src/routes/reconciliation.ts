@@ -138,6 +138,7 @@ function accountLocations(row: any): Array<{ location_type: string; location_id:
 
 function matchesAccountLocation(row: any, location: { locationType: string; locationId: number } | null): boolean {
   if (!location) return true;
+  if (row.account_type === "bank" || row.account_type === "online") return true;
   return accountLocations(row).some((assigned) =>
     assigned.location_type === location.locationType
     && (location.locationType === "headoffice" || assigned.location_id === Number(location.locationId)),
@@ -2364,7 +2365,7 @@ router.post(
         q: client,
         ledgerId,
         dataScope: access.dataScope,
-        accessibleLedgerIds: access.ledgerIds ? [...access.ledgerIds] : undefined,
+        accessibleLedgerIds: access.ownedLedgerIds ? [...access.ownedLedgerIds] : undefined,
       });
       const entry = book?.entries.find((candidate: any) =>
         candidate.entryId === entryId && Number(candidate.ledgerId) === ledgerId,
