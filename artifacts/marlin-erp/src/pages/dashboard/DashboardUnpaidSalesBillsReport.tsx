@@ -132,7 +132,7 @@ export function DashboardUnpaidSalesBillsReport({
                 Unpaid Sales Bills
               </CardTitle>
               <CardDescription className="mt-1.5">
-                Current outstanding invoices · {selectedName}
+                Per-invoice dues; customer ledger balance may include credits or extra payments from other invoices · {selectedName}
               </CardDescription>
             </div>
             <div className="flex shrink-0 items-center gap-2" data-capture-exclude="true">
@@ -193,7 +193,7 @@ export function DashboardUnpaidSalesBillsReport({
                       <th scope="col" className="whitespace-nowrap border border-border px-2 py-1 text-left font-semibold">Bill no</th>
                       <th scope="col" className="border border-border px-2 py-1 text-left font-semibold">Location</th>
                       <th scope="col" className="whitespace-nowrap border border-border px-2 py-1 text-right font-semibold">Bill amount</th>
-                      <th scope="col" className="whitespace-nowrap border border-border px-2 py-1 text-right font-semibold">Unpaid amount</th>
+                      <th scope="col" className="whitespace-nowrap border border-border px-2 py-1 text-right font-semibold">Invoice due</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -214,7 +214,7 @@ export function DashboardUnpaidSalesBillsReport({
                   </tbody>
                   <tfoot>
                     <tr className="bg-primary/10 font-bold" data-testid="row-unpaid-sales-bills-total">
-                      <th scope="row" colSpan={5} className="border border-border px-2 py-1 text-left">Total unpaid</th>
+                      <th scope="row" colSpan={5} className="border border-border px-2 py-1 text-left">Total invoice dues</th>
                       <td className="whitespace-nowrap border border-border px-2 py-1 text-right font-mono tabular-nums">
                         {fmt(totalUnpaid)}
                       </td>
