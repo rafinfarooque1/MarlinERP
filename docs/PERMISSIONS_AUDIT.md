@@ -31,9 +31,9 @@ This check runs in `pnpm --filter @workspace/scripts run typecheck`; an unguarde
 
 ## Summary
 
-- Routes scanned: **414** across 42 route files
-- Write endpoints: **198**, of which **183** carry `requireModuleAction` middleware
-- Documented exemptions (self-service / level-1 / dynamic in-handler guards): **15**
+- Routes scanned: **416** across 42 route files
+- Write endpoints: **198**, of which **181** carry `requireModuleAction` middleware
+- Documented exemptions (self-service / level-1 / dynamic in-handler guards): **17**
 
 ## Documented write exemptions
 
@@ -50,6 +50,8 @@ This check runs in `pnpm --filter @workspace/scripts run typecheck`; an unguarde
 | `POST /accounting-periods/:year/:month/lock` | requireModuleView + isAdmin() in-handler: month locking is level-1-only, deliberately above the five-action model. |
 | `POST /accounting-periods/:year/:month/unlock` | requireModuleView + isAdmin() in-handler + mandatory reason; level-1-only. |
 | `POST /hr/leaves/:id/cancel` | View-gated; handler enforces caller.id === leave.employee_id (only the requester may cancel a PENDING request; approvers reject instead, which records who/why). |
+| `POST /hr/attendance/check-in` | Custom requireAttendancePunchPermission middleware checks attendance add/download rights; handler restricts punches to self or active employees in the caller warehouse and checks the accounting-period lock. |
+| `POST /hr/attendance/check-out` | Custom requireAttendancePunchPermission middleware checks attendance add/download rights; handler restricts punches to self or active employees in the caller warehouse and checks the accounting-period lock. |
 | `POST /pdf/money-voucher` | requireModuleAction(kindKey, "download") invoked in-handler — the receipt/payment page key is derived from the voucher kind in the body (any-of bound to request kind). |
 | `POST /sales/:id/share-token` | hasModuleAction(download on POS/Outstanding) + LBAC sale-scope check in-handler; token is minutes-lived. |
 | `PATCH /customers/:id` | isActive changes require requireModuleAction(delete); mixed status + field changes require both delete and edit; other changes require edit. |
@@ -257,9 +259,10 @@ level-1 admin gates, and LBAC markers detected inside the handler body.
 | GET | `/dashboard/stock-alerts` | `view: page:/` | — |
 | GET | `/dashboard/recent-activity` | `view: page:/` | — |
 | GET | `/dashboard/sales-trend` | `view: page:/` | `LBAC` |
+| GET | `/dashboard/unpaid-sales-bills` | `view: page:/` | — |
 | GET | `/dashboard/top-items` | `view: page:/` | `LBAC` |
 | GET | `/dashboard/sales-by-location` | `view: page:/` | `LBAC` |
-| GET | `/dashboard/bi` | `view: page:/` | `LBAC` |
+| GET | `/dashboard/bi` | `view: page:/` | `hasModuleAction delete: page:/`<br>`LBAC` |
 | GET | `/dashboard/production-trend` | `view: page:/` | — |
 
 ### dispatch.ts
@@ -295,6 +298,7 @@ level-1 admin gates, and LBAC markers detected inside the handler body.
 | GET | `/gst/reconciliation` | `view: page:/accounts/gst-returns` | — |
 | GET | `/gst/filters` | `view: page:/accounts/gst, page:/accounts/gst-returns` | — |
 | GET | `/gst/documents` | `view: page:/accounts/gst, page:/accounts/gst-returns` | — |
+| GET | `/gst/item-wise-summary` | `view: page:/accounts/gst, page:/accounts/gst-returns` | — |
 
 ### health.ts
 
@@ -330,14 +334,14 @@ level-1 admin gates, and LBAC markers detected inside the handler body.
 | POST | `/hr/advances` | `add: page:/hr/advances` | — |
 | PATCH | `/hr/advances/:id` | `edit: page:/hr/advances` | — |
 | DELETE | `/hr/advances/:id` | `delete: page:/hr/advances` | — |
-| GET | `/hr/attendance` | `view: page:/hr/attendance` | — |
+| GET | `/hr/attendance` | `view: page:/hr/attendance` | `hasModuleAction download: page:/hr/attendance` |
 | GET | `/hr/attendance/config` | `view: page:/hr/attendance` | `dynamic view: page:/hr/attendance` |
 | GET | `/hr/holidays` | `view: page:/hr/attendance` | — |
 | POST | `/hr/holidays` | `edit: page:/hr/attendance` | — |
 | DELETE | `/hr/holidays/:id` | `edit: page:/hr/attendance` | — |
 | GET | `/hr/leave-balance` | `view: page:/hr/attendance` | — |
-| POST | `/hr/attendance/check-in` | `add: page:/hr/attendance` | — |
-| POST | `/hr/attendance/check-out` | `add: page:/hr/attendance` | — |
+| POST | `/hr/attendance/check-in` | *exempt (see table above)* | — |
+| POST | `/hr/attendance/check-out` | *exempt (see table above)* | — |
 | GET | `/hr/leaves` | `view: page:/hr/attendance` | `hasModuleAction edit: page:/hr/attendance`<br>`LBAC` |
 | POST | `/hr/leaves` | `add: page:/hr/attendance` | — |
 | POST | `/hr/leaves/:id/approve` | `edit: page:/hr/attendance` | `LBAC` |
