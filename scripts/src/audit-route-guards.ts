@@ -65,6 +65,8 @@ const EXEMPTIONS: Record<string, string> = {
 
   // Self-service business action — requester-only by construction.
   'POST /hr/leaves/:id/cancel': 'View-gated; handler enforces caller.id === leave.employee_id (only the requester may cancel a PENDING request; approvers reject instead, which records who/why).',
+  'POST /hr/attendance/check-in': 'Custom requireAttendancePunchPermission middleware checks attendance add/download rights; handler restricts punches to self or active employees in the caller warehouse and checks the accounting-period lock.',
+  'POST /hr/attendance/check-out': 'Custom requireAttendancePunchPermission middleware checks attendance add/download rights; handler restricts punches to self or active employees in the caller warehouse and checks the accounting-period lock.',
 
   // Dynamic guards — the page key and/or action depends on the request body, so
   // the check runs in-handler through the SAME requireModuleAction/hasModuleAction code.
