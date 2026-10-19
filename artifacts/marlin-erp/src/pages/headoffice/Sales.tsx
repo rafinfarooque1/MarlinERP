@@ -1711,6 +1711,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                   .filter(s => statusFilter === 'all' || ((s as any).paymentStatus ?? 'paid') === statusFilter)
                   .map(s => ({
                   Invoice: formatSalesInvoiceDisplayNumber(s.invoiceNumber), Date: formatDate(s.saleDate), Outlet: s.outletName,
+                  Salesman: s.salesperson || 'Unassigned',
                   Customer: s.customerName || 'Walk-in', Payment: paymentModeLabel(s.paymentMode),
                   Subtotal: s.subtotal, Tax: s.taxTotal,
                   Discount: (Number((s as any).discountTotal ?? 0)
