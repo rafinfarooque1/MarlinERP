@@ -7,4 +7,4 @@ Historical stock evidence is an additive, source-backed record, not a stock move
 
 **Why:** Rewriting operational stock or creating balancing journals would fabricate business activity. Missing historical quantity or cost evidence must remain visible rather than being inferred from today's product master.
 
-**How to apply:** Require per-product/location quantities, historical costs, and a source reference; validate the approved on-hand checkpoint against recorded later movements and current stock. Keep sender-owned in-transit value derived from the reservation history at the cutoff. Do not reuse the additive Opening Stock importer.
+**How to apply:** Require per-product/location quantities, historical costs, and a source reference; validate the approved on-hand checkpoint against recorded later movements and current stock. Keep sender-owned in-transit value derived from the reservation history at the cutoff. A transfer-in ledger date is not receipt proof: block approval when its receipt date is after the cutoff or sender reservation remains unreleased past it. Do not reuse the additive Opening Stock importer.

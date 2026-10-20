@@ -26,6 +26,12 @@ import { visibleLocationSql } from "../lib/warehouseVisibility";
 import { deductMaterialAt, creditMaterialAt, paiseConservativeBlendCost } from "../lib/materialStock";
 import { outletWritesBlocked, OUTLETS_DISABLED_MESSAGE, OUTLETS_DISABLED_CODE } from "../lib/featureFlags";
 import { isLevelOneAdmin } from "../lib/adminGate";
+import {
+  historicalEvidenceKey,
+  historicalTransferReceiptConflicts,
+  duplicateHistoricalEvidenceKeys,
+  missingHistoricalEvidenceKeys,
+} from "../lib/historicalStockEvidenceRules";
 import { productBatchIdentity, blockedByInactiveProducts, INACTIVE_PRODUCT_CODE, isProductKind } from "../lib/productIdentity";
 import {
   reservedSql, availabilityAt, insufficientStockMessage, reserveStock, releaseReservations,
@@ -35,6 +41,7 @@ import {
 const router = Router();
 
 router.get("/stock/historical-evidence/:date", requireModuleView("page:/headoffice/inventory-reports"), async (req, res): Promise<void> => {
+  if (!(await isLevelOneAdmin(req.employee))) { res.status(403).json({ error: "Only an Administrator can view company-wide historical stock evidence." }); return; }
   const date = String(req.params.date ?? "");
   if (!isIsoDate(date)) { res.status(400).json({ error: "date must be YYYY-MM-DD" }); return; }
   const { rows: [header] } = await pool.query(
@@ -71,7 +78,6 @@ router.post("/stock/historical-evidence", requireModuleAction("page:/headoffice/
     res.status(400).json({ error: "Source document and at least one evidence line are required." }); return;
   }
   const lines: Array<{ materialType: string; refId: number; branchType: string; branchId: number; quantity: number; unitCost: number; value: number }> = [];
-  const seen = new Set<string>();
   for (const raw of rawLines) {
     const materialType = String(raw?.materialType ?? "");
     const refId = Number(raw?.refId);
@@ -79,18 +85,20 @@ router.post("/stock/historical-evidence", requireModuleAction("page:/headoffice/
     const branchId = Number(raw?.branchId);
     const quantity = Number(raw?.quantity);
     const unitCost = Number(raw?.unitCost);
-    const key = `${materialType}:${refId}:${branchType}:${branchId}`;
+    const key = historicalEvidenceKey({ materialType, refId, branchType, branchId });
     if (!["item","material","raw_material"].includes(materialType)
       || !Number.isInteger(refId) || refId <= 0
       || !["headoffice","warehouse","outlet"].includes(branchType)
       || !Number.isInteger(branchId) || branchId < 0
       || !Number.isFinite(quantity) || quantity < 0
       || !Number.isFinite(unitCost) || unitCost < 0
-      || (quantity > 0 && unitCost <= 0) || seen.has(key)) {
+      || (quantity > 0 && unitCost <= 0)) {
       res.status(400).json({ error: "Evidence lines require unique product/location keys, non-negative quantities, and a positive cost for positive stock." }); return;
     }
-    seen.add(key);
     lines.push({ materialType, refId, branchType, branchId, quantity, unitCost, value: Math.round(quantity * unitCost * 10000) / 10000 });
+  }
+  if (duplicateHistoricalEvidenceKeys(lines).length) {
+    res.status(400).json({ error: "Evidence lines require unique product/location keys." }); return;
   }
   const knownProducts = await batchResolveMeta(pool, lines.map((l) => ({ materialType: l.materialType, refId: l.refId })));
   if (knownProducts.size < new Set(lines.map((l) => `${l.materialType}:${l.refId}`)).size) {
@@ -124,7 +132,10 @@ router.post("/stock/historical-evidence", requireModuleAction("page:/headoffice/
       WHERE COALESCE(c.qty,0)-COALESCE(l.after_qty,0)>0.001`,
     [effectiveDate],
   );
-  const missing = expected.rows.filter((r: any) => !seen.has(`${r.material_type}:${r.ref_id}:${r.branch_type}:${r.branch_id}`));
+  const missing = missingHistoricalEvidenceKeys(
+    expected.rows.map((r: any) => ({ materialType: r.material_type, refId: Number(r.ref_id), branchType: r.branch_type, branchId: Number(r.branch_id) })),
+    lines.map((l) => ({ materialType: l.materialType, refId: l.refId, branchType: l.branchType, branchId: l.branchId })),
+  );
   if (missing.length) {
     res.status(400).json({ error: `The schedule is incomplete: ${missing.length} positive product/location line(s) from the stock evidence report are missing.` }); return;
   }
@@ -165,6 +176,15 @@ router.patch("/stock/historical-evidence/:id/approve", requireModuleAction("page
       [id],
     );
     if (!draft) { await client.query("ROLLBACK"); res.status(409).json({ error: "Evidence is missing or is no longer a draft." }); return; }
+    const transferConflicts = await historicalTransferReceiptConflicts(client, draft.effective_date);
+    if (transferConflicts.length) {
+      await client.query("ROLLBACK");
+      res.status(409).json({
+        error: "A transfer-in is ledger-dated by the cutoff but lacks matching receipt evidence. Reconcile the transfer document before approving this checkpoint.",
+        transferConflicts,
+      });
+      return;
+    }
     const { rows: [mismatch] } = await client.query(
       `WITH evidence AS (
          SELECT material_type,ref_id,branch_type,branch_id,quantity

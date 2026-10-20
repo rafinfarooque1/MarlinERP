@@ -1,5 +1,30 @@
 import assert from "node:assert/strict";
 import { stockAsOf } from "../src/lib/books";
+import {
+  duplicateHistoricalEvidenceKeys,
+  missingHistoricalEvidenceKeys,
+  historicalTransferReceiptConflicts,
+} from "../src/lib/historicalStockEvidenceRules";
+
+const expectedKeys = [
+  { materialType: "item", refId: 82, branchType: "warehouse", branchId: 4 },
+  { materialType: "item", refId: 41, branchType: "warehouse", branchId: 4 },
+];
+assert.equal(missingHistoricalEvidenceKeys(expectedKeys, [expectedKeys[0]]).length, 1, "Incomplete schedules must identify uncovered keys.");
+assert.equal(duplicateHistoricalEvidenceKeys([expectedKeys[0], expectedKeys[0]]).length, 1, "Duplicate product/location lines must be rejected.");
+
+const conflictRows = await historicalTransferReceiptConflicts({
+  async query(sql, params = []) {
+    assert.match(sql, /r\.released_at::date>\$1::date/);
+    assert.deepEqual(params, ["2026-08-31"]);
+    return { rows: [{
+      transfer_id: 3, material_type: "item", ref_id: 82, destination_type: "warehouse",
+      destination_id: 4, quantity: "100", received_date: null,
+      reservation_released_at: "2026-09-01T04:56:21.074Z", reservation_status: "released",
+    }] };
+  },
+}, "2026-08-31");
+assert.equal(conflictRows[0].transfer_id, 3, "A ledger receipt before a later reservation release must block approval.");
 
 const queries: Array<{ sql: string; params: unknown[] }> = [];
 const q = {
@@ -39,4 +64,4 @@ assert.equal(warehouse.items[0].materialType, "item");
 const invalid = await stockAsOf("2026-02-30", null, q as any);
 assert.equal(invalid.total, 0);
 assert.equal(queries.length, 9, "Invalid dates must return without querying or writing.");
-console.log("historical-stock-evidence: approved date, multi-location filtering, historical cost, and invalid date passed");
+console.log("historical-stock-evidence: completeness, duplicate lines, transit receipt conflict, location filtering, historical cost, and invalid date passed");
