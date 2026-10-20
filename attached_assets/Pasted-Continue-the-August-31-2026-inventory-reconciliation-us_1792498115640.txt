@@ -1,0 +1,26 @@
+Continue the August 31, 2026 inventory reconciliation using the generated `August 31 inventory evidence exceptions` report.
+
+Investigate every product/location record and resolve all discrepancies that can be established from existing source records. Do not stop at generating another report.
+
+1. Investigate the two Calicut quantity conflicts first:
+   - Mango Slice: August 27 count and subsequent movements imply 34 units, while the August 31 ledger rewind shows 30 units.
+   - Mulberry: August 27 count shows 102 units, while the August 31 ledger rewind shows 98 units.
+   Trace the original count sheets, purchase receipts, sales, returns, stock transfers, adjustments, and movement timestamps. Identify the actual cause and propose a correction supported by source evidence. Do not change live quantities without authorization.
+
+2. Review all remaining product/location records. Separate verified quantities, limited evidence, conflicting evidence, and missing evidence. Use existing dated records wherever possible.
+
+3. Investigate historical costs using purchase invoices, landed costs, batch/lot records, transfer costing, and stock valuation history. Reconstruct historical valuation only where the original costing method and complete movement history support it. Never substitute current item costs for historical costs or assume that the latest purchase price is the remaining stock cost.
+
+4. Verify that August 31 closing stock becomes September 1 opening stock for every product and location. Ensure in-transit quantities are accounted for separately and are not double-counted as on-hand stock.
+
+5. Reconcile inventory valuation to the inventory general-ledger balance and confirm that purchases, cost of goods sold, closing stock, profit and loss, and balance sheet use consistent accounting data.
+
+6. Correct any software defects found in the report calculations, date filters, stock-movement calculations, costing logic, or reconciliation status. Add regression tests for the identified conflicts and date boundaries.
+
+7. Preserve the existing Replit database and business records. Do not create fake evidence, silently adjust stock, post balancing journals, delete transactions, or run destructive tests against live data.
+
+8. Keep unsupported records flagged as unverified. Allow approval only when the required evidence, movement reconciliation, historical cost basis, and authorized approval are present.
+
+9. After implementation, run safe tests and typechecks, report the files changed and results, list every remaining exception, and state clearly whether the September Profit & Loss and Balance Sheet are reliable.
+
+Work through the actual underlying records and code, not just the warning text. Do not claim that an issue is fixed unless the evidence and tests demonstrate it.
