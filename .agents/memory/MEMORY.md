@@ -30,6 +30,7 @@
 - [Verifying costing on live data](verifying-costing-on-live-data.md) — create+delete of a batch permanently lowers item avg cost; a balanced TB does NOT prove the test left no trace.
 - [Stock reservations](stock-reservations.md) — hold reduces available, in_transit does NOT (already deducted); lock the stock row inside the deducting txn; `hold` has no producer yet, keep it.
 - [Inventory valuation & ageing](inventory-valuation-ageing.md) — live valuation is shared by report/dashboard/current close; historical P&L has a distinct flagged rewind; movement class = last OUTBOUND only.
+- [Historical stock evidence](historical-stock-evidence.md) — approved historical checkpoints are separate from live stock; sender-owned transit remains sourced from reservation history.
 - [Salary accrual](salary-accrual-attendance.md) + [Employment status & LWD](employment-status-lwd.md) + [Statutory payroll](statutory-payroll.md) — approval re-checks attendance under the lock; LWD bounds accrual; rates snapshotted per run, corrections are reversals.
 - [Historical stock dating](historical-stock-dating.md) — stock_ledger.created_at is an INSERT time, not a business date; past-date stock is mostly not derivable; anchor "held nothing" on document dates.
 - [Zero-transfer integrity](zero-transfer-integrity.md) — no transfer movements means zero transfer adjustment; do not inherit unrelated historical checkpoint warnings.

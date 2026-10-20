@@ -21,6 +21,7 @@ import {
   useDateRange, RangeBar, ReportPicker, SummaryCards, LocationBadge, RTable, ExportButtons, exportReportPdf, reportViewFromUrl,
   periodLabel, type Col, type ReportDoc,
 } from '../shared';
+import HistoricalStockEvidencePanel from './HistoricalStockEvidencePanel';
 
 type InvReport = 'valuation' | 'near_expiry' | 'expired' | 'movement' | 'reorder' | 'transfers' | 'gst_transfers';
 
@@ -103,6 +104,7 @@ function ValuationReport({ canDownload }: { canDownload: boolean }) {
 
   return (
     <div className="space-y-4">
+      <HistoricalStockEvidencePanel />
       <div className="flex flex-wrap items-center gap-2">
         <label className="text-xs text-muted-foreground flex items-center gap-1.5">
           As of <Input type="date" value={asOf} onChange={(e) => setAsOf(e.target.value)} className="h-8 w-36 text-xs" />

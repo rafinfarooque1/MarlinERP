@@ -85,3 +85,31 @@ mtime_ms = 1792139746016
 storage_uri = "gcs://replit-rams-assets-sisko/rams/assets/repl:bd7bcd33-774f-4b61-bf46-8afc6db19a81/46aae4fc-e7b2-4b69-9236-51283de82726/73d038d4-bb12-40f5-9ed2-9e7c5763c1c0"
 storage_version_token = "1792139770919376"
 content_type = "text/markdown"
+
+[[outputs]]
+id = "Rcv1vzE0N3uQw1v_48xA5"
+uri = "file://generated-artifacts/august-31-stock-evidence.csv"
+type = "table"
+title = "August 31, 2026 historical stock evidence report"
+description = "Read-only line-level report for 209 product/location keys. Historical unit cost and extended value are blank where no exact August 31 cost checkpoint exists; current product costs were not substituted."
+logical_id = "dcb363aa-0fa5-4544-9242-5e9f62b16ca4"
+content_hash = "sha256:ecbd95b7e5fa3754e72ed157db0ac83e5bb648d6b0f02d35b11aa9a669c403b3"
+size = 50905
+mtime_ms = 1792486950084
+storage_uri = "gcs://replit-rams-assets-sisko/rams/assets/repl:bd7bcd33-774f-4b61-bf46-8afc6db19a81/dcb363aa-0fa5-4544-9242-5e9f62b16ca4/e37c8ead-19b3-474a-b316-504faaded4b7"
+storage_version_token = "1792486971699941"
+content_type = "text/csv"
+
+[[outputs]]
+id = "r9B3lOcBM0isZtuol23xP"
+uri = "file://generated-artifacts/august-31-in-transit-evidence.csv"
+type = "table"
+title = "August 31 in-transit stock evidence"
+description = "Two sender-owned in-transit lines from the read-only cutoff query, including recorded dispatch cost and transfer reference."
+logical_id = "e6735ac2-8435-4822-b9c1-63c8f8a30b70"
+content_hash = "sha256:cd9cc4ffa687bbe54400e294d45e0392033c14280ed916fdb0a7daca86d62fab"
+size = 489
+mtime_ms = 1792487619126
+storage_uri = "gcs://replit-rams-assets-sisko/rams/assets/repl:bd7bcd33-774f-4b61-bf46-8afc6db19a81/e6735ac2-8435-4822-b9c1-63c8f8a30b70/9ee15234-ae70-4f2f-a782-a94a6407bf06"
+storage_version_token = "1792487621181052"
+content_type = "text/csv"

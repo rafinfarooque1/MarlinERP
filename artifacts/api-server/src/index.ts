@@ -22,6 +22,7 @@ import { addExpensePaymentModes } from "./migrations/expensePaymentModes";
 import { addFixedAssets } from "./migrations/fixedAssets";
 import { addAssetModule } from "./migrations/assetModule";
 import { addInventoryValuation } from "./migrations/inventoryValuation";
+import { addHistoricalStockEvidence } from "./migrations/historicalStockEvidence";
 import { addAssetDepreciation } from "./migrations/assetDepreciation";
 import { correctVendorAllocations } from "./migrations/vendorAllocationCorrection";
 import { repairAssetPurchaseAccounting } from "./migrations/assetPurchaseAccountingRepair";
@@ -4987,6 +4988,7 @@ await addFixedAssets(pool);
 await addAssetModule(pool);
 await repairAssetPurchaseAccounting(pool);
 await addInventoryValuation(pool);
+await addHistoricalStockEvidence(pool);
 await addAssetDepreciation(pool);
 await correctVendorAllocations(pool);
 
