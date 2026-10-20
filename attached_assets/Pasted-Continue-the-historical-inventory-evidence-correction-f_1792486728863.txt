@@ -1,0 +1,22 @@
+Continue the historical inventory evidence correction for my ERP.
+
+The accounting date rules are confirmed:
+- Closing stock on 31 August 2026 equals opening stock on 1 September 2026.
+- Closing stock on 30 August 2026 equals opening stock on 31 August 2026.
+
+The current September opening stock value of ₹9,651,948.51 is unverified because 120 product/location lines lack persisted historical cost evidence. Current quantities match the net stock ledger on 209 checked lines, but current product costs must not be used as a substitute for historical costs.
+
+Implement a safe, auditable historical inventory evidence workflow.
+
+1. Inspect the existing inventory schema, valuation methods, stock movement history, location structure, costing rules, and accounting ledger.
+2. Provide a report listing every product/location line at 31 August 2026 with its opening quantity, movements, calculated closing quantity, historical unit cost, extended value, evidence source, and verification status.
+3. Identify missing or conflicting evidence without inventing quantities, costs, or transactions.
+4. Create a separate historical stock-evidence entry or import workflow for authorized users. It must support a specific effective date, product, location, quantity, unit cost, source document, approval status, and audit trail.
+5. Do not reuse the existing Opening Stock importer if it adds quantities to current inventory. Historical evidence must not increase or decrease live stock merely because a backdated checkpoint is entered.
+6. Prevent duplicate checkpoints, validate dates and quantities, and require approval before evidence affects authoritative financial reports.
+7. Reconcile the approved 31 August closing stock against the 1 September opening stock, inventory movements, valuation records, and general ledger.
+8. Recalculate September COGS and Profit & Loss only when the necessary opening and closing valuation evidence is verified. Preserve the warning whenever evidence is incomplete.
+9. Add tests for date boundaries, multiple locations, missing historical costs, duplicate evidence, stock transfers, returns, and ledger reconciliation.
+10. Preserve all existing business data. Do not create artificial journal entries, change historical transactions silently, reset the database, or run destructive tests against live data.
+
+First produce the product/location evidence report and identify exactly which source documents or approved records are missing. Do not invent missing values. Then implement the safe workflow, test it, and report the actual results.
