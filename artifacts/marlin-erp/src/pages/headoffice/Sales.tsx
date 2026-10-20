@@ -1276,6 +1276,10 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   const hasItems = fields.some((_, i) => (form.watch(`lineItems.${i}.itemId`) ?? 0) > 0);
 
   const onSubmit = (data: FormValues) => {
+    if (!editItem && (!Number.isInteger(Number(data.salespersonEmployeeId)) || Number(data.salespersonEmployeeId) <= 0)) {
+      form.setError('salespersonEmployeeId', { type: 'required', message: 'Select a salesman before recording the sale' });
+      return;
+    }
     if (data.paymentMode === 'credit' && !data.customerId) {
       toast.error('Credit sales need a registered customer — pick one or change the payment mode.');
       focusField('customerId', scopeRef.current);
@@ -1711,7 +1715,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
             formatSalesInvoiceDisplayNumber(s.invoiceNumber),
             formatDate(s.saleDate),
             s.outletName || '',
-            s.salesperson || 'Unassigned',
+            s.salesperson || '—',
             s.customerName || 'Walk-in',
             paymentModeLabel(s.paymentMode),
             Number(s.subtotal ?? 0),
@@ -1758,7 +1762,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                     .filter(s => statusFilter === 'all' || ((s as any).paymentStatus ?? 'paid') === statusFilter)
                     .map(s => ({
                     Invoice: formatSalesInvoiceDisplayNumber(s.invoiceNumber), Date: formatDate(s.saleDate), Outlet: s.outletName,
-                    Salesman: s.salesperson || 'Unassigned',
+                    Salesman: s.salesperson || '—',
                     Customer: s.customerName || 'Walk-in', Payment: paymentModeLabel(s.paymentMode),
                     Subtotal: s.subtotal, Tax: s.taxTotal,
                     Discount: (Number((s as any).discountTotal ?? 0)
@@ -2222,19 +2226,30 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                   const selected = eligible.find((p: any) => Number(p.id) === Number(field.value));
                   return (
                     <FormItem>
-                      <FormLabel>Salesman <span className="text-xs text-muted-foreground font-normal">(optional)</span></FormLabel>
+                      <FormLabel>
+                        Salesman {!editItem && <span className="text-destructive">*</span>}
+                      </FormLabel>
                       <Select
-                        value={field.value ? String(field.value) : 'unassigned'}
-                        onValueChange={v => field.onChange(v === 'unassigned' ? undefined : Number(v))}
+                        value={field.value ? String(field.value) : undefined}
+                        onValueChange={v => {
+                          field.onChange(Number(v));
+                          form.clearErrors('salespersonEmployeeId');
+                        }}
                       >
-                        <FormControl><SelectTrigger><SelectValue placeholder="Unassigned" /></SelectTrigger></FormControl>
+                        <FormControl><SelectTrigger><SelectValue placeholder="Select salesman" /></SelectTrigger></FormControl>
                         <SelectContent>
-                          <SelectItem value="unassigned">Unassigned</SelectItem>
-                          {eligible.map((p: any) => (
+                          {eligible.length > 0 ? eligible.map((p: any) => (
                             <SelectItem key={p.id} value={String(p.id)}>{p.name}</SelectItem>
-                          ))}
+                          )) : (
+                            <div className="px-2 py-1.5 text-sm text-muted-foreground">
+                              {locationId > 0 ? 'No eligible salespeople at this location' : 'Select a selling location first'}
+                            </div>
+                          )}
                         </SelectContent>
                       </Select>
+                      {editItem && !field.value && (
+                        <p className="text-xs text-muted-foreground">This historical sale has no recorded salesman.</p>
+                      )}
                       {field.value && !selected && (
                         <p className="text-xs text-muted-foreground">Previously assigned: {field.value}</p>
                       )}
