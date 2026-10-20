@@ -121,3 +121,17 @@ type = "table"
 title = "August 31 inventory exceptions"
 description = "209 product/location rows with count, transfer, movement-boundary, dated-lot-cost, and missing-evidence classifications."
 logical_id = "5265656f-7a51-4e23-b6ff-60b8b29998a5"
+
+[[outputs]]
+id = "vDH-mCt2IJrOibAFFHFQx"
+uri = "file://generated-artifacts/august-31-calicut-lot-reconstruction.csv"
+type = "table"
+title = "August 31 Calicut lot reconstruction"
+description = "Candidate Mango Slice and Mulberry residual lots, costed only from dated purchase lots and batch-level sales, returns, and transfers. Counts remain unapproved."
+logical_id = "6ca36a96-77cb-4906-8abd-46a647463e5d"
+content_hash = "sha256:d21835c5a41c3dbd677604d1041ea25f4bb36b1e84dd54be6dd1a4a530a962ea"
+size = 1370
+mtime_ms = 1792501561299
+storage_uri = "gcs://replit-rams-assets-sisko/rams/assets/repl:bd7bcd33-774f-4b61-bf46-8afc6db19a81/6ca36a96-77cb-4906-8abd-46a647463e5d/a4d0933b-2d3d-4f56-a659-a57e3c56ea17"
+storage_version_token = "1792501563306583"
+content_type = "text/csv"
