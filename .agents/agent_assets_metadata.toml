@@ -135,3 +135,59 @@ mtime_ms = 1792501561299
 storage_uri = "gcs://replit-rams-assets-sisko/rams/assets/repl:bd7bcd33-774f-4b61-bf46-8afc6db19a81/6ca36a96-77cb-4906-8abd-46a647463e5d/a4d0933b-2d3d-4f56-a659-a57e3c56ea17"
 storage_version_token = "1792501563306583"
 content_type = "text/csv"
+
+[[outputs]]
+id = "f8DQOaQ_3A-GECCcqCAF-"
+uri = "file://generated-artifacts/inventory-evidence-requests.csv"
+type = "table"
+title = "Inventory reconciliation evidence request list"
+description = "Prioritized source records and accountant decisions needed to resolve the August opening, September close, transfer cutoff, batch chronology, and GL reconciliation."
+logical_id = "89a4a392-d7c2-44ff-81e7-8ee989384555"
+content_hash = "sha256:d936328ea263494b620a9c0f4876320eedef13d10830e0217e89e7fe45a85bb5"
+size = 4165
+mtime_ms = 1792502269360
+storage_uri = "gcs://replit-rams-assets-sisko/rams/assets/repl:bd7bcd33-774f-4b61-bf46-8afc6db19a81/89a4a392-d7c2-44ff-81e7-8ee989384555/a7b1bea7-1315-4b86-ba03-2234c6159595"
+storage_version_token = "1792502271636874"
+content_type = "text/csv"
+
+[[outputs]]
+id = "PUIf2i4ofIk6gSEjJlmae"
+uri = "file://generated-artifacts/inventory-exception-register.csv"
+type = "table"
+title = "Consolidated inventory exception register"
+description = "320 rows: all 209 August 31 product/location combinations plus all 111 September 30 valuation issues, with quantities, cost/value status, report impact, evidence gaps, and required documents or approvals."
+logical_id = "05df7b33-2e80-4f0a-a15e-9ae30ee87c58"
+content_hash = "sha256:4a85c6f6a7d95c42cad8c82fa36bf8b8a3543160747f2705f65e2a2dcf326a9f"
+size = 360760
+mtime_ms = 1792502229908
+storage_uri = "gcs://replit-rams-assets-sisko/rams/assets/repl:bd7bcd33-774f-4b61-bf46-8afc6db19a81/05df7b33-2e80-4f0a-a15e-9ae30ee87c58/c7602cd2-b491-4eaf-b6e7-b446ace168d6"
+storage_version_token = "1792502383105579"
+content_type = "text/csv"
+
+[[outputs]]
+id = "GvNKyqOCa0pGRqk-VLMu0"
+uri = "file://generated-artifacts/backdated-batch-allocation-audit.csv"
+type = "table"
+title = "Backdated batch allocation audit"
+description = "133 sale-to-purchase-lot allocation rows where the batch purchase date is later than the sale business date; includes source documents and allocated-cost exposure, not a proven misstatement."
+logical_id = "b2323687-10a5-49a3-9ea1-5318a5c67be3"
+content_hash = "sha256:72bebb97a7fa1480c27c107f73312747f864972626f5993a570615c982b13b70"
+size = 24363
+mtime_ms = 1792502229948
+storage_uri = "gcs://replit-rams-assets-sisko/rams/assets/repl:bd7bcd33-774f-4b61-bf46-8afc6db19a81/b2323687-10a5-49a3-9ea1-5318a5c67be3/ad4b7108-0fe6-48b2-88c3-528ed4848c1b"
+storage_version_token = "1792502384449461"
+content_type = "text/csv"
+
+[[outputs]]
+id = "jRdozea6RSAPDl_VIluW1"
+uri = "file://generated-artifacts/inventory-gl-reconciliation.csv"
+type = "table"
+title = "Inventory general-ledger reconciliation"
+description = "Derived postings and net balances through September 30 for Opening Stock, Closing Stock, and Finished Goods Inventory accounts."
+logical_id = "52c1b88e-bea4-401b-900f-0d4d6a010dbb"
+content_hash = "sha256:c441c47d11c22eaeaecbd91fc2315b5fc3b8633d46c97ee2d4f13b34f5fef124"
+size = 242
+mtime_ms = 1792502230068
+storage_uri = "gcs://replit-rams-assets-sisko/rams/assets/repl:bd7bcd33-774f-4b61-bf46-8afc6db19a81/52c1b88e-bea4-401b-900f-0d4d6a010dbb/5ca18bf6-a100-424a-8c0f-da8d20a7cc98"
+storage_version_token = "1792502385752059"
+content_type = "text/csv"
