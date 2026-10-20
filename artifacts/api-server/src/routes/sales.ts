@@ -800,6 +800,10 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
     res.status(403).json({ error: "You can only record sales for a location in your assigned scope." });
     return;
   }
+  if (!Number.isInteger(parsed.data.salespersonEmployeeId) || Number(parsed.data.salespersonEmployeeId) <= 0) {
+    res.status(400).json({ error: "Select an active salesperson before recording the sale." });
+    return;
+  }
   const createSalesperson = await resolveSaleSalesperson(
     pgPool, parsed.data.salespersonEmployeeId, locationType, locationId,
   );
