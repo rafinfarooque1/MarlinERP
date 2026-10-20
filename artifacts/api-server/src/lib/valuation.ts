@@ -195,6 +195,96 @@ export interface ValuationSummary {
   grandTotal: number;
 }
 
+async function approvedHistoricalRows(q: Queryable, scope: ValuationScope, issues: ValuationIssue[]): Promise<ValuationRow[] | null> {
+  if (!isIsoDate(scope.asOf)) return null;
+  const { rows: [header] } = await q.query(
+    `SELECT id FROM historical_stock_evidence
+      WHERE effective_date=$1::date AND status='approved'`,
+    [scope.asOf],
+  );
+  if (!header) return null;
+  const params: unknown[] = [Number(header.id)];
+  const filters = ["l.evidence_id=$1"];
+  if (scope.branchPairs?.length) {
+    const pairs = scope.branchPairs.map((pair) => {
+      params.push(pair.type, pair.id);
+      return `(l.branch_type=$${params.length - 1} AND l.branch_id=$${params.length})`;
+    });
+    filters.push(`(${pairs.join(" OR ")})`);
+  } else {
+    if (scope.branchType) { params.push(scope.branchType); filters.push(`l.branch_type=$${params.length}`); }
+    if (scope.branchId != null) { params.push(scope.branchId); filters.push(`l.branch_id=$${params.length}`); }
+  }
+  if (scope.materialType) { params.push(scope.materialType); filters.push(`l.material_type=$${params.length}`); }
+  const { rows } = await q.query(
+    `SELECT l.material_type,l.ref_id,l.branch_type,l.branch_id,
+            l.quantity::numeric quantity,l.unit_cost::numeric unit_cost,l.value::numeric value,
+            COALESCE(i.name,m.name,rm.name,'') item_name,COALESCE(i.unit,m.unit,rm.unit,'') unit
+       FROM historical_stock_evidence_lines l
+       LEFT JOIN items i ON l.material_type='item' AND i.id=l.ref_id
+       LEFT JOIN materials m ON l.material_type='material' AND m.id=l.ref_id
+       LEFT JOIN raw_materials rm ON l.material_type='raw_material' AND rm.id=l.ref_id
+      WHERE ${filters.join(" AND ")}
+      ORDER BY l.branch_type,l.branch_id,l.material_type,l.ref_id`,
+    params,
+  );
+  const stockRows: ValuationRow[] = rows
+    .filter((r: any) => Number(r.quantity) > 0
+      && locationInScope(scope.dataScope, r.branch_type, Number(r.branch_id)))
+    .map((r: any) => ({
+      materialType: r.material_type as ProductKind,
+      refId: Number(r.ref_id), itemName: String(r.item_name), unit: String(r.unit),
+      branchType: String(r.branch_type), branchId: Number(r.branch_id),
+      quantity: Number(r.quantity), reserved: 0, available: Number(r.quantity),
+      unitCost: Number(r.unit_cost), value: Number(r.value), inTransit: false,
+    }));
+  if (scope.includeInTransit === false) return stockRows;
+  const transit = await activeInTransit(q as any, { asOf: scope.asOf });
+  const scopedTransit = transit.filter((r) => {
+    const branchMatches = scope.branchPairs?.length
+      ? scope.branchPairs.some((pair) => pair.type === r.branchType && Number(pair.id) === Number(r.branchId))
+      : (!scope.branchType || scope.branchType === r.branchType)
+        && (scope.branchId == null || Number(scope.branchId) === Number(r.branchId));
+    return branchMatches && locationInScope(scope.dataScope, r.branchType, Number(r.branchId));
+  }).filter((r) => r.quantity > 0);
+  for (const r of scopedTransit.filter((row) => !(row.unitCost > 0))) {
+    issues.push({
+      code: "missing_in_transit_cost",
+      materialType: r.materialType,
+      refId: Number(r.refId),
+      branchType: r.branchType,
+      branchId: Number(r.branchId),
+      asOf: scope.asOf,
+      quantity: Number(r.quantity),
+      message: `In-transit stock ${r.materialType} #${r.refId} at ${r.branchType} ${r.branchId} has no positive dispatch cost for ${scope.asOf}.`,
+    });
+  }
+  const transitRows = scopedTransit.filter((r) => r.unitCost > 0)
+    .map((r) => ({
+      materialType: r.materialType as ProductKind,
+      refId: Number(r.refId),
+      itemName: "",
+      unit: "",
+      branchType: r.branchType,
+      branchId: Number(r.branchId),
+      quantity: Number(r.quantity),
+      reserved: 0,
+      available: 0,
+      unitCost: Number(r.unitCost),
+      value: Number(r.value),
+      inTransit: true,
+    }));
+  if (transitRows.length) {
+    const names = await resolveProductNames(q as any, transitRows.map((r) => ({ materialType: r.materialType, refId: r.refId })));
+    for (const r of transitRows) {
+      const meta = names.get(`${r.materialType}:${r.refId}`);
+      r.itemName = meta?.name ?? `${r.materialType} #${r.refId}`;
+      r.unit = meta?.unit ?? "";
+    }
+  }
+  return [...stockRows, ...transitRows];
+}
+
 export interface ValuationIssue {
   code: string;
   materialType: string;
@@ -436,7 +526,7 @@ export async function resolveProductNames(
 /** Rows plus every roll-up a report, statement or dashboard needs. */
 export async function stockValuation(q: Queryable, scope: ValuationScope = {}): Promise<ValuationSummary> {
   const issues: ValuationIssue[] = [];
-  const rows = await buildStockValuationRows(q, scope, issues);
+  const rows = await approvedHistoricalRows(q, scope, issues) ?? await buildStockValuationRows(q, scope, issues);
 
   const locMap = new Map<string, ValuationSummary["byLocation"][number]>();
   const typeMap = new Map<ProductKind, ValuationSummary["byType"][number]>();

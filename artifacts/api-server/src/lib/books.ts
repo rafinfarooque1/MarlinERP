@@ -187,6 +187,7 @@ export interface StockAtDate {
    */
   reliable: boolean;
   note: string | null;
+  evidenceSource?: string | null;
 }
 
 export interface StockTransferOpeningAdjustmentLine {
@@ -686,6 +687,83 @@ export async function stockAsOf(asOf: string | null | undefined, scope?: StockBr
     }
     return sql;
   };
+
+  const { rows: [approvedEvidence] } = await q.query(
+    `SELECT id, source_document
+       FROM historical_stock_evidence
+      WHERE effective_date = $1::date AND status = 'approved'`,
+    [asOf],
+  );
+  if (approvedEvidence) {
+    const transitRows = (await activeInTransit(q as any, { asOf }))
+      .filter((t) => !scope || (
+        scope.branchPairs?.length
+          ? scope.branchPairs.some((pair) => pair.type === t.branchType && Number(pair.id) === Number(t.branchId))
+          : scope.branchType === t.branchType && (scope.branchId == null || Number(scope.branchId) === Number(t.branchId))
+      ));
+    const lineParams: unknown[] = [Number(approvedEvidence.id)];
+    const lineWhere = branchWhere("l", lineParams).replace(/^ WHERE /, " AND ");
+    const { rows } = await q.query(
+      `SELECT l.material_type, l.ref_id, l.branch_type, l.branch_id,
+              l.quantity::numeric AS quantity, l.unit_cost::numeric AS unit_cost,
+              l.value::numeric AS value
+         FROM historical_stock_evidence_lines l
+        WHERE l.evidence_id = $1${lineWhere}`,
+      lineParams,
+    );
+    const names = await resolveProductNames(q as any, [
+      ...rows.map((r: any) => ({ materialType: r.material_type, refId: Number(r.ref_id) })),
+      ...transitRows.map((r) => ({ materialType: r.materialType, refId: r.refId })),
+    ]);
+    const items: ValuedItem[] = [];
+    let total = 0;
+    let inTransit = 0;
+    let unverifiedTransit = false;
+    for (const row of rows) {
+      const materialType = String(row.material_type) as ValuedItem["materialType"];
+      const refId = Number(row.ref_id);
+      const meta = names.get(`${materialType}:${refId}`);
+      if (!meta) continue;
+      const stock = Number(row.quantity);
+      if (stock <= 0) continue;
+      const value = r2(Number(row.value));
+      total = r2(total + value);
+      items.push({
+        id: refId, name: meta.name, unit: meta.unit, stock,
+        unitCost: Number(row.unit_cost), total: value, materialType,
+        typeLabel: materialType === "item" ? "Finished Good"
+          : materialType === "material" ? "Raw Material" : "Packing Material",
+      });
+    }
+    for (const transit of transitRows) {
+      const quantity = r3(Number(transit.quantity));
+      const unitCost = Number(transit.unitCost);
+      const meta = names.get(`${transit.materialType}:${transit.refId}`);
+      if (!(quantity > 0)) continue;
+      if (!meta || !Number.isFinite(unitCost) || unitCost <= 0) { unverifiedTransit = true; continue; }
+      const value = r2(quantity * unitCost);
+      total = r2(total + value);
+      inTransit = r2(inTransit + value);
+      const existing = items.find((item) => item.materialType === transit.materialType && item.id === transit.refId);
+      if (existing) {
+        existing.stock = r3(existing.stock + quantity);
+        existing.total = r2(existing.total + value);
+        existing.unitCost = existing.stock > 0 ? r2(existing.total / existing.stock) : unitCost;
+      } else {
+        items.push({
+          id: transit.refId, name: meta.name, unit: meta.unit, stock: quantity,
+          unitCost, total: value, materialType: transit.materialType,
+          typeLabel: transit.materialType === "item" ? "Finished Good"
+            : transit.materialType === "material" ? "Raw Material" : "Packing Material",
+        });
+      }
+    }
+    return {
+      total, inTransit, items, reliable: !unverifiedTransit,
+      note: unverifiedTransit ? "Approved on-hand evidence is present, but at least one in-transit line has no positive dispatch cost." : null,
+      evidenceSource: String(approvedEvidence.source_document),
+    };
+  }
 
   // Earliest movement ever recorded. On its own this does NOT mean the business
   // held nothing before it — `created_at` is when the row was written, not when
