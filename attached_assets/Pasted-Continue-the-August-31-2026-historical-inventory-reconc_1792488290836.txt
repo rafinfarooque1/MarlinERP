@@ -1,0 +1,16 @@
+Continue the August 31, 2026 historical inventory reconciliation from the current checkpoint.
+
+The historical evidence workflow has been implemented, but no evidence has been entered or approved. Do not mark the warning resolved yet.
+
+1. Review `august-31-stock-evidence.csv` and `august-31-in-transit-evidence.csv`.
+2. Inspect the two in-transit lines linked to stock transfer 3 and verify their quantities, dispatch costs, destination, cutoff status, and source documents. Do not assume that in-transit stock is physically received or part of on-hand stock.
+3. Identify which product/location lines have reliable historical quantity evidence, reliable historical unit-cost evidence, both, or neither.
+4. Investigate whether the August 27 physical count at warehouse 2 can support any limited reconciliation. Do not treat its +2 variance as approved evidence for August 31.
+5. Search the existing records for dated purchase costs, batch costs, stock valuation snapshots, approved stock counts, transfer records, and opening-stock entries that could independently support historical values.
+6. Produce a clear exception report identifying the missing evidence for each product/location line. Do not substitute current product costs for historical costs.
+7. Verify that the evidence import and approval workflow correctly handles incomplete records, duplicate checkpoints, in-transit stock, location isolation, and audit history.
+8. Keep all entries as drafts until the required supporting records and approval are available. Do not invent missing costs, quantities, approvals, or journal entries.
+9. Reconcile approved historical stock evidence against later stock movements and the general ledger before allowing the September Profit & Loss report to be treated as authoritative.
+10. Preserve existing business data. Do not run destructive tests or migrations against the live Replit database.
+
+At the end, report the exact evidence still needed from the business, the lines that can be verified from existing records, and whether the warning can legitimately be cleared. Keep the warning if evidence remains incomplete.
