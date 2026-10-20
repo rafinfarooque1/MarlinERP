@@ -1425,7 +1425,7 @@ export async function buildBooks(
   }
   if (fromDate && !opening.reliable) {
     addIntegrityIssue(
-      `Opening stock as at ${previousDay(fromDate)} cannot be established from stock movement history, so cost of goods sold and net profit are understated or overstated by the true opening position.`,
+      `Opening stock as at ${previousDay(fromDate)} is unverified: ${opening.note ?? "the required historical quantity and cost evidence is unavailable."}`,
       "UNVERIFIED",
     );
   }

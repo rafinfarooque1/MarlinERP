@@ -325,6 +325,38 @@ console.log('\n[10b] Month boundary: month 1 closing == month 2 opening');
     Number.isFinite(augustClosing) && Number.isFinite(septemberOpening) &&
       augustClosing === septemberOpening,
     `closing=${augustClosing} opening=${septemberOpening}`);
+
+  const septemberMonth = await get('/accounts/financial-statements?fromDate=2026-09-01&toDate=2026-09-30');
+  const monthPl = septemberMonth.data?.profitAndLoss;
+  const monthExpenses = monthPl?.expenses;
+  const monthIncomes = monthPl?.incomes;
+  const monthSummary = monthPl?.summary;
+  const expectedCogs = Number(monthExpenses?.openingStock ?? NaN)
+    + Number(monthExpenses?.purchases ?? NaN)
+    + Number(monthExpenses?.directExpenses?.total ?? NaN)
+    - Number(monthIncomes?.closingStock ?? NaN);
+  assert('September opening stock exposes its evidence status and note',
+    typeof monthExpenses?.openingStockReliable === 'boolean'
+      && (monthExpenses.openingStockReliable
+        ? monthExpenses.openingStockNote == null
+        : typeof monthExpenses.openingStockNote === 'string' && monthExpenses.openingStockNote.length > 0),
+    JSON.stringify({ reliable: monthExpenses?.openingStockReliable, note: monthExpenses?.openingStockNote }));
+  assert('Unverified opening stock keeps a visible Books evidence warning',
+    monthExpenses?.openingStockReliable !== false
+      || (septemberMonth.data?.integrity?.issues ?? []).some((issue) =>
+        String(issue).includes('Opening stock as at 2026-08-31 is unverified')
+        && String(issue).includes(String(monthExpenses.openingStockNote))),
+    JSON.stringify(septemberMonth.data?.integrity?.issues));
+  assert('COGS reconciles to opening stock + purchases + direct costs − closing stock',
+    Number.isFinite(expectedCogs) && Number.isFinite(Number(monthSummary?.costOfGoodsSold))
+      && Math.abs(expectedCogs - Number(monthSummary.costOfGoodsSold)) < 0.02,
+    `expected=${expectedCogs} actual=${monthSummary?.costOfGoodsSold}`);
+  assert('P&L gross profit and net profit identities reconcile',
+    Math.abs(Number(monthSummary?.revenue) - Number(monthSummary?.costOfGoodsSold)
+      - Number(monthSummary?.grossProfit)) < 0.02
+      && Math.abs(Number(monthSummary?.grossProfit) + Number(monthSummary?.otherIncome)
+        - Number(monthSummary?.operatingExpenses) - Number(monthSummary?.netProfit)) < 0.02,
+    JSON.stringify(monthSummary));
 }
 
 console.log('\n[11] Delete: the bill leaves history as if dated movements never happened');
