@@ -30,7 +30,7 @@ export default function HistoricalStockEvidencePanel() {
   const { data, refetch } = useQuery({
     queryKey: ["historical-stock-evidence", date],
     queryFn: () => customFetch<EvidenceResponse>(`/api/stock/historical-evidence/${date}`),
-    enabled: /^\d{4}-\d{2}-\d{2}$/.test(date),
+    enabled: canManage && /^\d{4}-\d{2}-\d{2}$/.test(date),
   });
 
   async function saveDraft() {
