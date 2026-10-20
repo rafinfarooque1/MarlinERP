@@ -16,8 +16,9 @@ const fromDate = "2026-09-01";
 const toDate = "2026-09-30";
 
 try {
-  const [books, closingValuation, movementReconciliation] = await Promise.all([
+  const [books, augustBooks, closingValuation, movementReconciliation] = await Promise.all([
     buildBooks(buildDerivedPostings, { fromDate, toDate }),
+    buildBooks(buildDerivedPostings, { fromDate: "2026-04-01", toDate: "2026-08-31" }),
     stockValuation(pool, { asOf: toDate, includeInTransit: true }),
     pool.query(`
       WITH ledger AS (
@@ -76,6 +77,10 @@ try {
     Math.abs(incomes.closingStock - closingValuation.grandTotal) < 0.02,
     "P&L closing inventory must match the dated inventory valuation.",
   );
+  assert.ok(
+    Math.abs(augustBooks.profitAndLoss.incomes.closingStock - expenses.openingStockPhysical) < 0.02,
+    "August 31 closing stock must be September 1 physical opening stock.",
+  );
 
   const expectedCogs =
     expenses.openingStock + expenses.purchases + expenses.directExpenses.total - incomes.closingStock;
@@ -102,6 +107,8 @@ try {
     openingStockReliable: expenses.openingStockReliable,
     openingStockNote: expenses.openingStockNote,
     movementMismatches: movementReconciliation.rows[0].mismatched_keys,
+    august31ClosingEqualsSeptember1Opening:
+      augustBooks.profitAndLoss.incomes.closingStock === expenses.openingStockPhysical,
     closingStock: incomes.closingStock,
     closingValuation: closingValuation.grandTotal,
     cogs: summary.costOfGoodsSold,
