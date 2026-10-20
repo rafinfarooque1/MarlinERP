@@ -170,19 +170,6 @@ export default function NewSaleScreen() {
     );
   }, [locked, globalLoc.locationType, globalLoc.locationId, globalLoc.locationName]);
 
-  React.useEffect(() => {
-    if (salespeopleLoading) return;
-    const allSalespeople = (salespeople as any[]) ?? [];
-    const eligible = saleLoc
-      ? allSalespeople.filter(p => p.branchType === 'headoffice'
-        || (p.branchType === saleLoc.locationType && Number(p.branchId) === Number(saleLoc.locationId)))
-      : allSalespeople;
-    if (eligible.some(p => Number(p.id) === Number(salesperson?.id))) return;
-    const first = eligible[0];
-    if (!first && !salesperson) return;
-    setSalesperson(first ? { id: Number(first.id), name: String(first.name) } : null);
-  }, [salespeople, salespeopleLoading, saleLoc?.locationType, saleLoc?.locationId, salesperson?.id]);
-
   const totals = useMemo(() => computeCartTotals(lines, billDiscount), [lines, billDiscount]);
 
   // Receive-into accounts of the SALE's location. HO uses the head-office set;

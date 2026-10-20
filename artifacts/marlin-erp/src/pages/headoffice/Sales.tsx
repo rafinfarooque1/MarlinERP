@@ -949,28 +949,6 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   }, []);
   const watchLocationType = form.watch('locationType');
   const watchLocationId = form.watch('locationId');
-  const watchSalespersonEmployeeId = form.watch('salespersonEmployeeId');
-  useEffect(() => {
-    if (!isOpen || editItem || salespeopleLoading) return;
-    const allSalespeople = salespeople as any[];
-    const eligible = Number(watchLocationId) > 0
-      ? allSalespeople.filter((p: any) =>
-          p.branchType === 'headoffice'
-          || (p.branchType === watchLocationType && Number(p.branchId) === Number(watchLocationId))
-        )
-      : allSalespeople;
-    if (eligible.some((p: any) => Number(p.id) === Number(watchSalespersonEmployeeId))) return;
-    const firstId = eligible[0] ? Number(eligible[0].id) : undefined;
-    if (firstId === undefined && watchSalespersonEmployeeId == null) return;
-    form.setValue('salespersonEmployeeId', firstId, {
-      shouldDirty: false,
-      shouldValidate: false,
-    });
-    form.clearErrors('salespersonEmployeeId');
-  }, [
-    isOpen, editItem, salespeopleLoading, salespeople,
-    watchLocationType, watchLocationId, watchSalespersonEmployeeId, form,
-  ]);
   const watchCustomerId = form.watch('customerId');
   const watchPaymentMode = form.watch('paymentMode');
 
@@ -2152,8 +2130,22 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                     <Select
                       onValueChange={v => {
                         const [type, idStr] = v.split(':');
-                        field.onChange(Number(idStr));
-                        form.setValue('locationType', type as 'outlet' | 'warehouse' | 'headoffice');
+                        const nextLocationId = Number(idStr);
+                        const nextLocationType = type as 'outlet' | 'warehouse' | 'headoffice';
+                        field.onChange(nextLocationId);
+                        form.setValue('locationType', nextLocationType);
+                        if (!editItem && !salespeopleLoading) {
+                          const selectedId = Number(form.getValues('salespersonEmployeeId') ?? 0);
+                          const stillEligible = (salespeople as any[]).some((p: any) =>
+                            Number(p.id) === selectedId
+                            && (p.branchType === 'headoffice'
+                              || (p.branchType === nextLocationType && Number(p.branchId) === nextLocationId))
+                          );
+                          if (selectedId > 0 && !stillEligible) {
+                            form.setValue('salespersonEmployeeId', undefined, { shouldDirty: true });
+                            form.clearErrors('salespersonEmployeeId');
+                          }
+                        }
                         form.setValue('lineItems', [{ itemId: 0, quantity: 1, unitPrice: 0, unitDiscount: 0, taxable: customerHasGstin, taxableTouched: false }]);
                       }}
                       value={field.value && field.value > 0 ? `${form.watch('locationType')}:${field.value}` : ''}
