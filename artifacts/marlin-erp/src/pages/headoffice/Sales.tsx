@@ -2230,7 +2230,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                         Salesman {!editItem && <span className="text-destructive">*</span>}
                       </FormLabel>
                       <Select
-                        value={field.value ? String(field.value) : undefined}
+                        value={field.value ? String(field.value) : ''}
                         onValueChange={v => {
                           field.onChange(Number(v));
                           form.clearErrors('salespersonEmployeeId');
@@ -2241,9 +2241,9 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                           {eligible.length > 0 ? eligible.map((p: any) => (
                             <SelectItem key={p.id} value={String(p.id)}>{p.name}</SelectItem>
                           )) : (
-                            <div className="px-2 py-1.5 text-sm text-muted-foreground">
+                            <SelectItem value="__none" disabled>
                               {locationId > 0 ? 'No eligible salespeople at this location' : 'Select a selling location first'}
-                            </div>
+                            </SelectItem>
                           )}
                         </SelectContent>
                       </Select>
