@@ -29,6 +29,7 @@
 import { pool } from "@workspace/db";
 import { stockValuation, resolveProductNames, type ValuedItem } from "./valuation";
 import { activeInTransit } from "./reservations";
+import { historicalTransferReceiptConflicts } from "./historicalStockEvidenceRules";
 
 /** A queryable database handle (pg pool or PoolClient), per lib/importVouchers.ts. */
 type Q = { query: Function };
@@ -181,9 +182,9 @@ export interface StockAtDate {
   inTransit: number;
   items: ValuedItem[];
   /**
-   * false when stock history cannot account for the movement between the
-   * requested date and today, so the figure is a best estimate rather than a
-   * fact. Surfaced on the statement instead of being hidden.
+   * false when quantity, valuation, or transfer ownership cannot be established
+   * from dated evidence. Unknown historical costs are omitted, never replaced
+   * with the current product-master cost.
    */
   reliable: boolean;
   note: string | null;
@@ -826,9 +827,8 @@ export async function stockAsOf(asOf: string | null | undefined, scope?: StockBr
             scs.branch_id::int AS branch_id, scs.quantity::numeric AS quantity,
             scs.unit_cost::numeric AS unit_cost, scs.value::numeric AS value
        FROM stock_cost_snapshots scs
-      WHERE scs.as_of_date <= $1::date${snapshotWhere.replace(/^ WHERE /, " AND ")}
-      ORDER BY scs.material_type, scs.ref_id, scs.branch_type, scs.branch_id,
-               scs.as_of_date DESC, scs.id DESC`,
+      WHERE scs.as_of_date = $1::date${snapshotWhere.replace(/^ WHERE /, " AND ")}
+      ORDER BY scs.material_type, scs.ref_id, scs.branch_type, scs.branch_id, scs.id DESC`,
     snapshotParams,
   );
   const todayByKey = new Map<string, number>();
@@ -837,10 +837,13 @@ export async function stockAsOf(asOf: string | null | undefined, scope?: StockBr
   }
   const snapshotByKey = new Map<string, { quantity: number; unitCost: number; value: number }>();
   for (const r of snapshots) {
-    snapshotByKey.set(
-      `${r.material_type}:${r.ref_id}:${r.branch_type}:${r.branch_id}`,
-      { quantity: Number(r.quantity), unitCost: Number(r.unit_cost), value: Number(r.value) },
-    );
+    const key = `${r.material_type}:${r.ref_id}:${r.branch_type}:${r.branch_id}`;
+    if (!snapshotByKey.has(key)) {
+      snapshotByKey.set(
+        key,
+        { quantity: Number(r.quantity), unitCost: Number(r.unit_cost), value: Number(r.value) },
+      );
+    }
   }
 
   // Every line either the quantity truth or the movement log knows about. The
@@ -863,10 +866,23 @@ export async function stockAsOf(asOf: string | null | undefined, scope?: StockBr
         : scope.branchType === t.branchType
           && (scope.branchId == null || Number(scope.branchId) === Number(t.branchId))
     ));
+  const transferConflicts = (await historicalTransferReceiptConflicts(q as any, asOf))
+    .filter((t) => !scope || (
+      scope.branchPairs?.length
+        ? scope.branchPairs.some((pair) =>
+            pair.type === t.destination_type && Number(pair.id) === Number(t.destination_id))
+        : scope.branchType === t.destination_type
+          && (scope.branchId == null || Number(scope.branchId) === Number(t.destination_id))
+    ));
+  const unreceivedTransferQty = new Map<string, number>();
+  for (const row of transferConflicts) {
+    const key = `${row.material_type}:${row.ref_id}:${row.destination_type}:${row.destination_id}`;
+    unreceivedTransferQty.set(key, (unreceivedTransferQty.get(key) ?? 0) + Number(row.quantity));
+  }
 
-  // Cost for on-hand rows comes from persisted checkpoints where available,
-  // then the same avg-cost-else-cost product-master fallback as stockValuation.
-  // Transit rows use this lookup only for product identity and display names.
+  // Historical on-hand costs come only from an exact-date persisted checkpoint.
+  // Transit rows use product lookup only for identity/display; their cost is
+  // taken from reservation history.
   const meta = await resolveProductNames(q as any, [
     ...[...keys].map(parseKey),
     ...transitRows.map((t) => ({ materialType: t.materialType, refId: t.refId })),
@@ -888,9 +904,24 @@ export async function stockAsOf(asOf: string | null | undefined, scope?: StockBr
     if (!explained) unreconciled += 1;
 
     const snapshot = snapshotByKey.get(key);
-    const qty = snapshot
-      ? Math.round(snapshot.quantity * 1000) / 1000
-      : Math.round((todayQty - (afterByKey.get(key) ?? 0)) * 1000) / 1000;
+    const disputedTransferQty = unreceivedTransferQty.get(key) ?? 0;
+    if (snapshot && disputedTransferQty > 0) {
+      // An old checkpoint may have been approved before transfer receipt
+      // contradictions were detected. Do not guess whether it included the
+      // destination posting; keep the sender-owned transit line separate.
+      noCostHistory += 1;
+      continue;
+    }
+    // A transfer-in posted by the cutoff is not on-hand when its sender
+    // reservation remains open past that cutoff. Keep the exact dispatched
+    // quantity in transit, and remove the contradictory inbound ledger entry
+    // from the destination rewind to avoid counting it twice.
+    const quantityBeforeTransferCorrection = snapshot
+      ? snapshot.quantity
+      : todayQty - (afterByKey.get(key) ?? 0);
+    const qty = Math.round(
+      (quantityBeforeTransferCorrection - disputedTransferQty) * 1000,
+    ) / 1000;
     if (qty <= 0) continue;
 
     const { materialType, refId } = parseKey(key);
@@ -899,9 +930,21 @@ export async function stockAsOf(asOf: string | null | undefined, scope?: StockBr
     // — must not be quietly valued at nothing.
     if (!info) { unvalued += 1; continue; }
 
-    if (!snapshot) noCostHistory += 1;
-    const unitCost = snapshot?.unitCost ?? info.unitCost;
-    const value = snapshot ? r2(snapshot.value) : r2(qty * unitCost);
+    if (!snapshot) {
+      noCostHistory += 1;
+      continue;
+    }
+    if (qty > 0 && (!(snapshot.unitCost > 0) || !(snapshot.value > 0))) {
+      noCostHistory += 1;
+      continue;
+    }
+    const rewindQty = todayQty - (afterByKey.get(key) ?? 0);
+    if (Math.abs(snapshot.quantity - rewindQty) > 0.001) {
+      noCostHistory += 1;
+      continue;
+    }
+    const unitCost = snapshot.unitCost;
+    const value = r2(snapshot.value);
     total = r2(total + value);
     const pk = `${materialType}:${refId}`;
     const prev = byProduct.get(pk);
@@ -981,7 +1024,10 @@ export async function stockAsOf(asOf: string | null | undefined, scope?: StockBr
     reasons.push(`${unvalued} line${unvalued === 1 ? "" : "s"} held stock on that date but the product record no longer exists, so it could not be valued`);
   }
   if (noCostHistory > 0) {
-    reasons.push(`${noCostHistory} product/location line${noCostHistory === 1 ? "" : "s"} has no persisted cost checkpoint for that date`);
+    reasons.push(`${noCostHistory} product/location line${noCostHistory === 1 ? "" : "s"} has no exact-date persisted cost checkpoint; current item costs were not substituted`);
+  }
+  if (transferConflicts.length > 0) {
+    reasons.push(`${transferConflicts.length} transfer-in line${transferConflicts.length === 1 ? "" : "s"} has a ledger date before its receipt/reservation evidence; excluded from destination on-hand and retained as transit where supported`);
   }
   if (missingTransitCost > 0) {
     reasons.push(`${missingTransitCost} in-transit line${missingTransitCost === 1 ? "" : "s"} has no positive evidenced dispatch cost`);
@@ -994,7 +1040,7 @@ export async function stockAsOf(asOf: string | null | undefined, scope?: StockBr
     items: [...byProduct.values()].sort((a, b) => a.name.localeCompare(b.name)),
     reliable: complete,
     note: complete ? null
-      : `Stock ${reasons.join("; and ")}. The position on ${asOf} is therefore derived rather than recorded and should not be relied on.`,
+      : `Stock ${reasons.join("; and ")}. Only source-backed values are included; unknown historical costs were omitted rather than replaced with current item costs. The position on ${asOf} is not reliable.`,
   };
 }
 

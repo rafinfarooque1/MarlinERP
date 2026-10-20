@@ -75,8 +75,15 @@ try {
   );
   assert.ok(
     Math.abs(incomes.closingStock - closingValuation.grandTotal) < 0.02,
-    "P&L closing inventory must match the dated inventory valuation.",
+    "P&L closing stock and the dated inventory valuation must use the same evidence-backed partial value.",
   );
+  if (!incomes.closingStockReliable) {
+    assert.match(
+      incomes.closingStockNote ?? "",
+      /exact-date persisted cost checkpoint|Closing stock for a past date uses persisted cost checkpoints/,
+      "When dated costs are unavailable, closing stock must remain visibly unverified instead of borrowing current costs.",
+    );
+  }
   assert.ok(
     Math.abs(augustBooks.profitAndLoss.incomes.closingStock - expenses.openingStockPhysical) < 0.02,
     "August 31 closing stock must be September 1 physical opening stock.",

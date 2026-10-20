@@ -26,6 +26,7 @@
  */
 
 import { activeInTransit, reservedSql, type ReservationProductKind } from "./reservations";
+import { historicalTransferReceiptConflicts } from "./historicalStockEvidenceRules";
 import { scopeBranchWhere, type DataScope } from "./dataScope";
 import { isIsoDate } from "./dateInput";
 
@@ -344,11 +345,17 @@ async function buildStockValuationRows(q: Queryable, scope: ValuationScope, issu
                CASE WHEN s.quantity > 0 THEN s.value::numeric / s.quantity::numeric
                     ELSE s.unit_cost::numeric END AS unit_cost,
                s.value AS checkpoint_value,
-               CASE
-                 WHEN s.id IS NULL AND ABS(COALESCE(current_stock.quantity, 0) - movement.after_cutoff) > 0.0001
+                CASE
+                  WHEN s.id IS NULL AND ABS(COALESCE(current_stock.quantity, 0) - movement.after_cutoff) > 0.0001
                    THEN 'MISSING_COST_CHECKPOINT'
-                 WHEN s.id IS NOT NULL AND ABS(s.quantity - (COALESCE(current_stock.quantity, 0) - movement.after_checkpoint)) > 0.0001
+                  WHEN s.id IS NOT NULL AND (
+                    ABS(s.quantity - (COALESCE(current_stock.quantity, 0) - movement.after_checkpoint)) > 0.0001
+                    OR ABS(s.quantity - (COALESCE(current_stock.quantity, 0) - movement.after_cutoff)) > 0.0001
+                  )
                    THEN 'CHECKPOINT_QUANTITY_MISMATCH'
+                  WHEN s.id IS NOT NULL AND s.quantity > 0
+                    AND (COALESCE(s.value, 0) <= 0 OR COALESCE(s.unit_cost, 0) <= 0)
+                    THEN 'INVALID_CHECKPOINT_COST'
                  ELSE NULL END AS evidence_issue
           FROM inventory_keys k
           LEFT JOIN stock_entries current_stock ON current_stock.item_id = k.ref_id
@@ -358,8 +365,8 @@ async function buildStockValuationRows(q: Queryable, scope: ValuationScope, issu
             SELECT * FROM stock_cost_snapshots scs
              WHERE scs.ref_id = k.ref_id AND scs.material_type = k.material_type
                AND scs.branch_type = k.branch_type AND scs.branch_id = k.branch_id
-               AND scs.as_of_date <= $1::date
-             ORDER BY scs.as_of_date DESC, scs.id DESC LIMIT 1
+                AND scs.as_of_date = $1::date
+              ORDER BY scs.id DESC LIMIT 1
           ) s ON TRUE
           LEFT JOIN LATERAL (
             SELECT COALESCE(SUM(sl.qty_change) FILTER (WHERE COALESCE(sl.txn_date, sl.created_at::date) > $1::date), 0) AS after_cutoff,
@@ -394,9 +401,31 @@ async function buildStockValuationRows(q: Queryable, scope: ValuationScope, issu
     params,
   );
 
+  const transferConflicts = scope.asOf
+    ? (await historicalTransferReceiptConflicts(q, scope.asOf))
+      .filter((t) => (!scope.branchType || t.destination_type === scope.branchType)
+        && (scope.branchId == null || Number(t.destination_id) === Number(scope.branchId))
+        && (!scope.branchPairs?.length || scope.branchPairs.some((p) =>
+          p.type === t.destination_type && Number(p.id) === Number(t.destination_id)))
+        && locationInScope(scope.dataScope, t.destination_type, Number(t.destination_id)))
+    : [];
+  const conflictKeys = new Set(transferConflicts.map((t) =>
+    productLocationIdentityKey(t.material_type, Number(t.ref_id), t.destination_type, Number(t.destination_id)),
+  ));
+  for (const transferConflict of transferConflicts) {
+    issues.push({
+      code: "TRANSFER_RECEIPT_DATE_CONFLICT",
+      materialType: transferConflict.material_type, refId: Number(transferConflict.ref_id),
+      branchType: transferConflict.destination_type, branchId: Number(transferConflict.destination_id),
+      asOf: scope.asOf, quantity: Number(transferConflict.quantity),
+      message: `Transfer ${transferConflict.transfer_id} has a destination ledger receipt by ${scope.asOf}, but sender reservation/receipt evidence does not prove it was received by that cutoff. The destination line is excluded; sender-owned transit remains separate.`,
+    });
+  }
   const onHand: ValuationRow[] = rows.flatMap((r: any) => {
     const quantity = r3(Number(r.quantity));
-    if (r.evidence_issue || (scope.asOf && r.unit_cost == null) || quantity < 0) {
+    const key = productLocationIdentityKey(r.material_type, Number(r.ref_id), r.branch_type, Number(r.branch_id));
+    if (conflictKeys.has(key)) return [];
+    if (r.evidence_issue || (scope.asOf && (r.unit_cost == null || Number(r.unit_cost) <= 0 && quantity > 0)) || quantity < 0) {
       issues.push({
         code: r.evidence_issue ?? (quantity < 0 ? "NEGATIVE_HISTORICAL_STOCK" : "MISSING_COST_CHECKPOINT"),
         materialType: r.material_type, refId: Number(r.ref_id), branchType: r.branch_type,
