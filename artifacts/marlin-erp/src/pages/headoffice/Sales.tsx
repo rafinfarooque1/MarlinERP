@@ -34,7 +34,7 @@ import {
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { useDateRange, RangeBar } from '@/pages/reports/shared';
+import { useDateRange, RangeBar, exportReportXlsx } from '@/pages/reports/shared';
 import { useLocationContext } from '@/lib/locationContext';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem } from '@/components/ui/command';
@@ -55,7 +55,7 @@ import {
 } from '@/lib/invoiceShare';
 import {
   Plus, Search, Trash2, CreditCard, Calendar, Receipt,
-  Download, Eye, PackageOpen, FileDown, AlertTriangle,
+  Download, Eye, PackageOpen, FileDown, FileSpreadsheet, Loader2, AlertTriangle,
   UserPlus, Check, ChevronsUpDown, Banknote, IndianRupee, Pencil, Printer,
   History,
 } from 'lucide-react';
@@ -425,6 +425,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   const { data: items = [] } = useListItems();
   const { data: companySettings } = useGetCompanySettings();
   const [statusFilter, setStatusFilter] = useState<'all' | 'unpaid' | 'partially_paid' | 'paid'>('all');
+  const [isExportingExcel, setIsExportingExcel] = useState(false);
   const [isOpen, setIsOpen] = useState(false);
   const [viewItem, setViewItem] = useState<any>(null);
   const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
