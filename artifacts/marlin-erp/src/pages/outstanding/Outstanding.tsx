@@ -51,7 +51,10 @@ export default function Outstanding() {
 
   const q = search.trim().toLowerCase();
 
-  const customers = ((recv as any)?.customers ?? []).filter((c: any) => !q || c.name?.toLowerCase().includes(q) || c.phone?.includes(q));
+  const customers = ((recv as any)?.customers ?? []).filter((c: any) =>
+    (Math.abs(Number(c.netDue ?? 0)) > 0.004 || Number(c.advance ?? 0) > 0.004)
+    && (!q || c.name?.toLowerCase().includes(q) || c.phone?.includes(q))
+  );
   const vendors = ((pay as any)?.vendors ?? []).filter((v: any) => !q || v.name?.toLowerCase().includes(q) || v.phone?.includes(q));
 
   const totals: any = tab === 'receivables' ? (recv as any)?.totals : (pay as any)?.totals;
@@ -158,7 +161,11 @@ export default function Outstanding() {
           {tab === 'receivables' && (recvLoading ? (
             <div className="p-10 text-center text-muted-foreground text-sm">Loading receivables…</div>
           ) : customers.length === 0 ? (
-            <EmptyState icon={HandCoins} title="Nothing outstanding" hint="All customer invoices are fully paid." />
+            <EmptyState
+              icon={HandCoins}
+              title={q ? 'No matching customers with an outstanding balance' : 'Nothing outstanding'}
+              hint={q ? 'Try a different customer search.' : 'All customer balances are settled.'}
+            />
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">

@@ -1684,6 +1684,51 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   const itemsMap = new Map(items.map(i => [i.id, i]));
   const viewedCharges = saleOtherCharges(viewItem);
   const viewedChargesTotal = saleOtherChargesTotal(viewItem);
+  const exportSalesToExcel = async () => {
+    if (isExportingExcel) return;
+    setIsExportingExcel(true);
+    try {
+      const exportRows = (await fetchAllSales(salesListFilters))
+        .filter(s => statusFilter === 'all' || ((s as any).paymentStatus ?? 'paid') === statusFilter);
+      if (exportRows.length > 3000) {
+        toast.error('Excel export supports up to 3,000 sales. Narrow the filters or use CSV.');
+        return;
+      }
+      await exportReportXlsx({
+        title: 'Point of Sale',
+        filename: 'sales',
+        orientation: 'landscape',
+        sections: [{
+          columns: [
+            { label: 'Invoice' }, { label: 'Date' }, { label: 'Outlet' },
+            { label: 'Salesman' }, { label: 'Customer' }, { label: 'Payment' },
+            { label: 'Subtotal', align: 'right' }, { label: 'Tax', align: 'right' },
+            { label: 'Discount', align: 'right' }, { label: 'Charges', align: 'right' },
+            { label: 'Total', align: 'right' },
+          ],
+          rows: exportRows.map(s => [
+            formatSalesInvoiceDisplayNumber(s.invoiceNumber),
+            formatDate(s.saleDate),
+            s.outletName || '',
+            s.salesperson || 'Unassigned',
+            s.customerName || 'Walk-in',
+            paymentModeLabel(s.paymentMode),
+            Number(s.subtotal ?? 0),
+            Number(s.taxTotal ?? 0),
+            Number((s as any).discountTotal ?? 0)
+              + (((s as any).lineItems as any[]) ?? []).reduce((sum: number, li: any) => sum + Number(li?.discount ?? 0), 0),
+            saleOtherChargesTotal(s),
+            Number(s.totalAmount ?? 0),
+          ]),
+        }],
+      });
+      toast.success('Excel file downloaded');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Excel export failed');
+    } finally {
+      setIsExportingExcel(false);
+    }
+  };
 
   if (!perm.isLoading && !perm.canView) {
     return (
@@ -1707,20 +1752,28 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
           actions={
             <>
               {perm.canDownload && (
-                <Button variant="outline" size="sm" onClick={async () => downloadCSV('sales.csv', (await fetchAllSales(salesListFilters))
-                  .filter(s => statusFilter === 'all' || ((s as any).paymentStatus ?? 'paid') === statusFilter)
-                  .map(s => ({
-                  Invoice: formatSalesInvoiceDisplayNumber(s.invoiceNumber), Date: formatDate(s.saleDate), Outlet: s.outletName,
-                  Salesman: s.salesperson || 'Unassigned',
-                  Customer: s.customerName || 'Walk-in', Payment: paymentModeLabel(s.paymentMode),
-                  Subtotal: s.subtotal, Tax: s.taxTotal,
-                  Discount: (Number((s as any).discountTotal ?? 0)
-                    + (((s as any).lineItems as any[]) ?? []).reduce((acc: number, li: any) => acc + Number(li?.discount ?? 0), 0)).toFixed(2),
-                  Charges: saleOtherChargesTotal(s).toFixed(2),
-                  Total: s.totalAmount,
-                })))}>
-                  <Download className="w-4 h-4 mr-2" /> Export
-                </Button>
+                <>
+                  <Button variant="outline" size="sm" onClick={async () => downloadCSV('sales.csv', (await fetchAllSales(salesListFilters))
+                    .filter(s => statusFilter === 'all' || ((s as any).paymentStatus ?? 'paid') === statusFilter)
+                    .map(s => ({
+                    Invoice: formatSalesInvoiceDisplayNumber(s.invoiceNumber), Date: formatDate(s.saleDate), Outlet: s.outletName,
+                    Salesman: s.salesperson || 'Unassigned',
+                    Customer: s.customerName || 'Walk-in', Payment: paymentModeLabel(s.paymentMode),
+                    Subtotal: s.subtotal, Tax: s.taxTotal,
+                    Discount: (Number((s as any).discountTotal ?? 0)
+                      + (((s as any).lineItems as any[]) ?? []).reduce((acc: number, li: any) => acc + Number(li?.discount ?? 0), 0)).toFixed(2),
+                    Charges: saleOtherChargesTotal(s).toFixed(2),
+                    Total: s.totalAmount,
+                  })))}>
+                    <Download className="w-4 h-4 mr-2" /> CSV
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={exportSalesToExcel} disabled={isExportingExcel}>
+                    {isExportingExcel
+                      ? <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      : <FileSpreadsheet className="w-4 h-4 mr-2" />}
+                    Excel
+                  </Button>
+                </>
               )}
               {perm.canAdd && (
                 <Button onClick={() => { form.reset(effectiveDefaultValues); setIsOpen(true); }}>
