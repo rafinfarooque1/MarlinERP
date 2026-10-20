@@ -170,6 +170,19 @@ export default function NewSaleScreen() {
     );
   }, [locked, globalLoc.locationType, globalLoc.locationId, globalLoc.locationName]);
 
+  React.useEffect(() => {
+    if (salespeopleLoading) return;
+    const allSalespeople = (salespeople as any[]) ?? [];
+    const eligible = saleLoc
+      ? allSalespeople.filter(p => p.branchType === 'headoffice'
+        || (p.branchType === saleLoc.locationType && Number(p.branchId) === Number(saleLoc.locationId)))
+      : allSalespeople;
+    if (eligible.some(p => Number(p.id) === Number(salesperson?.id))) return;
+    const first = eligible[0];
+    if (!first && !salesperson) return;
+    setSalesperson(first ? { id: Number(first.id), name: String(first.name) } : null);
+  }, [salespeople, salespeopleLoading, saleLoc?.locationType, saleLoc?.locationId, salesperson?.id]);
+
   const totals = useMemo(() => computeCartTotals(lines, billDiscount), [lines, billDiscount]);
 
   // Receive-into accounts of the SALE's location. HO uses the head-office set;
@@ -546,8 +559,9 @@ export default function NewSaleScreen() {
     sublabel: [c.phone, (c.gstNumber ?? c.gst_number) ? 'GSTIN' : null].filter(Boolean).join(' · ') || undefined,
   }));
   const salespersonItems: PickerItem[] = ((salespeople as any[]) ?? [])
-    .filter(p => p.branchType === 'headoffice'
-      || (p.branchType === saleLoc?.locationType && Number(p.branchId) === Number(saleLoc?.locationId)))
+    .filter(p => !saleLoc
+      || p.branchType === 'headoffice'
+      || (p.branchType === saleLoc.locationType && Number(p.branchId) === Number(saleLoc.locationId)))
     .map(p => ({ key: String(p.id), label: String(p.name) }));
 
   const itemPickerItems: PickerItem[] = ((items as any[]) ?? [])
@@ -655,13 +669,17 @@ export default function NewSaleScreen() {
           <Text style={styles.fieldLabel}>Salesman *</Text>
           <Pressable onPress={() => setSalespersonPickerOpen(true)} style={({ pressed }) => [styles.selectBox, pressed && { opacity: 0.8 }]}>
             <Text style={salesperson ? styles.valueText : styles.placeholderText}>
-              {salesperson ? salesperson.name : 'Select salesman'}
+              {salesperson ? salesperson.name : salespeopleLoading ? 'Loading salespeople…' : 'Select salesman'}
             </Text>
             <Feather name="chevron-down" size={18} color={colors.mutedForeground} />
           </Pressable>
           {!salespeopleLoading && salespersonItems.length === 0 ? (
             <Text style={styles.mutedText}>
-              {saleLoc ? 'No eligible salespeople are assigned to this location.' : 'Choose a selling location first.'}
+              {saleLoc
+                ? 'No eligible salespeople are assigned to this location.'
+                : (salespeople as any[]).length > 0
+                  ? 'Choose a selling location first.'
+                  : 'No active salespeople are available.'}
             </Text>
           ) : null}
 

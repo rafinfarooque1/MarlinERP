@@ -418,7 +418,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
       ? customFetch(`/api/customers?locationType=${forceLocationType}&locationId=${forceLocationId}`)
       : customFetch('/api/customers'),
   });
-  const { data: salespeople = [] } = useQuery<any[]>({
+  const { data: salespeople = [], isLoading: salespeopleLoading } = useQuery<any[]>({
     queryKey: ['/api/sales/salespeople'],
     queryFn: () => customFetch('/api/sales/salespeople'),
   });
@@ -949,6 +949,28 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   }, []);
   const watchLocationType = form.watch('locationType');
   const watchLocationId = form.watch('locationId');
+  const watchSalespersonEmployeeId = form.watch('salespersonEmployeeId');
+  useEffect(() => {
+    if (!isOpen || editItem || salespeopleLoading) return;
+    const allSalespeople = salespeople as any[];
+    const eligible = Number(watchLocationId) > 0
+      ? allSalespeople.filter((p: any) =>
+          p.branchType === 'headoffice'
+          || (p.branchType === watchLocationType && Number(p.branchId) === Number(watchLocationId))
+        )
+      : allSalespeople;
+    if (eligible.some((p: any) => Number(p.id) === Number(watchSalespersonEmployeeId))) return;
+    const firstId = eligible[0] ? Number(eligible[0].id) : undefined;
+    if (firstId === undefined && watchSalespersonEmployeeId == null) return;
+    form.setValue('salespersonEmployeeId', firstId, {
+      shouldDirty: false,
+      shouldValidate: false,
+    });
+    form.clearErrors('salespersonEmployeeId');
+  }, [
+    isOpen, editItem, salespeopleLoading, salespeople,
+    watchLocationType, watchLocationId, watchSalespersonEmployeeId, form,
+  ]);
   const watchCustomerId = form.watch('customerId');
   const watchPaymentMode = form.watch('paymentMode');
 
@@ -2219,10 +2241,12 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                 <FormField control={form.control} name="salespersonEmployeeId" render={({ field }) => {
                   const locationType = form.watch('locationType');
                   const locationId = Number(form.watch('locationId') || 0);
-                  const eligible = (salespeople as any[]).filter((p: any) =>
-                    p.branchType === 'headoffice'
-                    || (p.branchType === locationType && Number(p.branchId) === locationId)
-                  );
+                  const eligible = locationId > 0
+                    ? (salespeople as any[]).filter((p: any) =>
+                        p.branchType === 'headoffice'
+                        || (p.branchType === locationType && Number(p.branchId) === locationId)
+                      )
+                    : salespeople as any[];
                   const selected = eligible.find((p: any) => Number(p.id) === Number(field.value));
                   return (
                     <FormItem>
@@ -2236,7 +2260,14 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                           form.clearErrors('salespersonEmployeeId');
                         }}
                       >
-                        <FormControl><SelectTrigger><SelectValue placeholder="Select salesman" /></SelectTrigger></FormControl>
+                        <FormControl>
+                          <SelectTrigger>
+                            <SelectValue placeholder={salespeopleLoading
+                              ? 'Loading salespeople…'
+                              : eligible.length > 0 ? 'Select salesman' : 'No eligible salespeople'}
+                            />
+                          </SelectTrigger>
+                        </FormControl>
                         <SelectContent>
                           {eligible.length > 0 ? eligible.map((p: any) => (
                             <SelectItem key={p.id} value={String(p.id)}>{p.name}</SelectItem>
