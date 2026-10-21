@@ -1,0 +1,18 @@
+Continue the inventory reconciliation for my MarlinERP project. I have physically checked the stock, and all physical quantities match the ERP quantities.
+
+Keep all current stock quantities unchanged. Work in READ-ONLY mode only.
+
+Please complete the remaining historical and accounting investigation:
+
+1. **Transfer 3:** Investigate the Avocado batch discrepancy between batch 3073 and batch 3075. Review the receipt date, source cost, destination cost, transfer ledger records, and related reservations. Do not guess which batch was physically dispatched.
+2. **Historical inventory:** Review the August 31, 2026 opening inventory and September 30, 2026 closing inventory evidence. Clearly distinguish verified records from reconstructed or unsupported values.
+3. **Missing costs:** Investigate all 106 missing September cost checkpoints and identify the evidence needed for each unresolved item.
+4. **Transfer conflicts:** Investigate Transfers 9, 14, 15, 23, and 24 and identify the exact unresolved quantity, receipt, batch, and cost issues.
+5. **Historical batch allocations:** Review the 133 backdated allocation records and identify which original sale or purchase records are needed to resolve them.
+6. **General ledger:** Reconcile the September trial balance and inventory accounts against the inventory valuation and ERP reports. Identify missing evidence and any accounting decisions requiring the authorized accountant.
+7. Prepare one consolidated exception register with each issue, evidence available, missing evidence, proposed resolution, and responsible person.
+8. Produce a prioritized action checklist and explain exactly what I must do next.
+
+Do not change stock, batch references, receipt dates, costs, reservations, approvals, journals, or any other business data. Do not run migrations, restart the API, or mark the reconciliation complete. Do not invent missing quantities or costs.
+
+At the end, state which issues are fully resolved, which remain unresolved, and whether the September P&L and Balance Sheet can safely be finalized. Stop after presenting the findings.
