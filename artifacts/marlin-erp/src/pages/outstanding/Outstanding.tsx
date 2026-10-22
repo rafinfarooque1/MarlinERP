@@ -4,12 +4,15 @@ import { AppLayout } from '@/components/layout/AppLayout';
 import { usePermission } from '@/lib/usePermission';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
-import { HandCoins, ChevronDown, ChevronRight, Search, Wallet, Phone, ShieldOff } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { HandCoins, ChevronDown, ChevronRight, Search, Wallet, Phone, ShieldOff, FileSpreadsheet, FileText, Loader2 } from 'lucide-react';
 import { PageHeader } from '@/components/app/page-header';
 import { EmptyState } from '@/components/app/empty-state';
 import { inr } from '@/lib/currency';
 import { formatDateOrDash } from '@/lib/date';
 import { formatSalesInvoiceDisplayNumber } from '@/lib/invoiceNumber';
+import { exportReportPdf, exportReportXlsx, type ReportDoc } from '../reports/shared';
+import { toast } from 'sonner';
 
 const dfmt = (d?: string | null) => formatDateOrDash(d);
 
@@ -41,7 +44,8 @@ export default function Outstanding() {
   const perm = usePermission('page:/outstanding');
   const [tab, setTab] = useState<'receivables' | 'payables'>('receivables');
   const [search, setSearch] = useState('');
-  const [expanded, setExpanded] = useState<number | null>(null);
+  const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set());
+  const [exporting, setExporting] = useState<'pdf' | 'excel' | null>(null);
   // Historical position: empty = today (the original, current view). Aging is
   // a position, so a single as-of date is the whole date dimension here.
   const [asOf, setAsOf] = useState('');
@@ -58,6 +62,153 @@ export default function Outstanding() {
   const vendors = ((pay as any)?.vendors ?? []).filter((v: any) => !q || v.name?.toLowerCase().includes(q) || v.phone?.includes(q));
 
   const totals: any = tab === 'receivables' ? (recv as any)?.totals : (pay as any)?.totals;
+  const visibleParties: any[] = tab === 'receivables' ? customers : vendors;
+  const partyKey = (partyTab: 'receivables' | 'payables', id: number | string) =>
+    `${partyTab}:${id}`;
+  const isExpanded = (id: number | string) => expandedKeys.has(partyKey(tab, id));
+  const allVisibleExpanded = visibleParties.length > 0
+    && visibleParties.every((party) => isExpanded(tab === 'receivables' ? party.customerId : party.vendorId));
+
+  const toggleAll = () => {
+    if (allVisibleExpanded) {
+      setExpandedKeys(new Set());
+      return;
+    }
+    setExpandedKeys(new Set(visibleParties.map((party) =>
+      partyKey(tab, tab === 'receivables' ? party.customerId : party.vendorId),
+    )));
+  };
+
+  const buildReportDoc = (): ReportDoc => {
+    const rows = tab === 'receivables' ? customers : vendors;
+    const hasExpandedParties = rows.some((party: any) => {
+      const id = tab === 'receivables' ? party.customerId : party.vendorId;
+      return isExpanded(id);
+    });
+    const detailRows = rows.flatMap((party: any) => {
+      const id = tab === 'receivables' ? party.customerId : party.vendorId;
+      if (!isExpanded(id)) return [];
+      if (tab === 'receivables') {
+        return (party.invoices ?? []).map((invoice: any) => [
+          party.name,
+          formatSalesInvoiceDisplayNumber(invoice.invoiceNumber || `Sale #${invoice.saleId}`),
+          dfmt(invoice.saleDate),
+          dfmt(invoice.dueDate),
+          Number(invoice.daysOverdue) > 0 ? `${invoice.daysOverdue} d` : 'Current',
+          Number(invoice.total ?? 0),
+          Number(invoice.paid ?? 0),
+          Number(invoice.creditNotes ?? 0),
+          Number(invoice.balance ?? 0),
+        ]);
+      }
+      return (party.bills ?? []).map((bill: any) => [
+        party.name,
+        bill.invoiceNumber || `PB #${String(bill.purchaseId ?? bill.assetPurchaseId).padStart(4, '0')}`,
+        dfmt(bill.purchaseDate),
+        Number(bill.daysOld ?? 0),
+        Number(bill.total ?? 0),
+        Number(bill.allocated ?? 0),
+        Number(bill.balance ?? 0),
+      ]);
+    });
+
+    const ageRows = BUCKETS.map((bucket) => [bucket.label, Number(totals?.[bucket.key] ?? 0)]);
+    const summaryRows: (string | number)[][] = [
+      [tab === 'receivables' ? 'Aged bills' : 'Aged bills payable', Number(totals?.totalDue ?? 0)],
+      ...ageRows,
+      ['Balance (ledger)', Number(totals?.netDue ?? 0)],
+      [
+        tab === 'receivables' ? 'Ledger balance without dated invoices' : 'Ledger balance without dated bills',
+        Number(tab === 'receivables' ? totals?.uninvoiced ?? 0 : totals?.unbilled ?? 0),
+      ],
+    ];
+
+    const sections: ReportDoc['sections'] = [
+      {
+        heading: 'Overall aging totals',
+        columns: [{ label: 'Measure', width: 2 }, { label: 'Amount', align: 'right', width: 1 }],
+        rows: summaryRows,
+      },
+      {
+        heading: tab === 'receivables' ? 'Customer balances' : 'Vendor balances',
+        columns: tab === 'receivables' ? [
+          { label: 'Customer', width: 2 }, { label: 'Phone', width: 1.2 },
+          { label: 'Credit limit', align: 'right', width: 1.1 },
+          { label: '0–30 d', align: 'right', width: 1 }, { label: '31–60 d', align: 'right', width: 1 },
+          { label: '61–90 d', align: 'right', width: 1 }, { label: '90+ d', align: 'right', width: 1 },
+          { label: 'Credit notes', align: 'right', width: 1.1 }, { label: 'Net due', align: 'right', width: 1.1 },
+        ] : [
+          { label: 'Vendor', width: 2 }, { label: 'Phone', width: 1.2 },
+          { label: 'Billed', align: 'right', width: 1.1 }, { label: 'Paid', align: 'right', width: 1.1 },
+          { label: '0–30 d', align: 'right', width: 1 }, { label: '31–60 d', align: 'right', width: 1 },
+          { label: '61–90 d', align: 'right', width: 1 }, { label: '90+ d', align: 'right', width: 1 },
+          { label: 'Debit notes', align: 'right', width: 1.1 }, { label: 'Net due', align: 'right', width: 1.1 },
+        ],
+        rows: tab === 'receivables'
+          ? customers.map((customer: any) => [
+            customer.name, customer.phone ?? '', Number(customer.creditLimit ?? 0),
+            ...BUCKETS.map((bucket) => Number(customer[bucket.key] ?? 0)),
+            Number(customer.creditNotes ?? 0), Number(customer.netDue ?? 0),
+          ])
+          : vendors.map((vendor: any) => [
+            vendor.name, vendor.phone ?? '', Number(vendor.totalBilled ?? 0), Number(vendor.totalPaid ?? 0),
+            ...BUCKETS.map((bucket) => Number(vendor[bucket.key] ?? 0)),
+            Number(vendor.debitNotes ?? 0), Number(vendor.netDue ?? 0),
+          ]),
+      },
+    ];
+
+    if (hasExpandedParties) {
+      sections.push({
+        heading: tab === 'receivables' ? 'Expanded invoice details' : 'Expanded bill details',
+        columns: tab === 'receivables' ? [
+          { label: 'Customer', width: 1.5 }, { label: 'Invoice', width: 1.4 },
+          { label: 'Sale date', width: 1 }, { label: 'Due date', width: 1 },
+          { label: 'Overdue', align: 'right', width: 0.8 },
+          { label: 'Total', align: 'right', width: 1 }, { label: 'Paid', align: 'right', width: 1 },
+          { label: 'Credit note', align: 'right', width: 1 }, { label: 'Balance', align: 'right', width: 1 },
+        ] : [
+          { label: 'Vendor', width: 1.5 }, { label: 'Bill', width: 1.4 },
+          { label: 'Date', width: 1 }, { label: 'Age (days)', align: 'right', width: 0.8 },
+          { label: 'Total', align: 'right', width: 1 }, { label: 'Allocated', align: 'right', width: 1 },
+          { label: 'Balance', align: 'right', width: 1 },
+        ],
+        rows: detailRows,
+      });
+    }
+
+    const mode = hasExpandedParties ? 'Expanded details' : 'Collapsed summary';
+    const tabLabel = tab === 'receivables' ? 'Receivables' : 'Payables';
+    return {
+      title: `${tabLabel} Outstanding`,
+      subtitle: `As of ${asOf ? dfmt(asOf) : 'Today'} · ${mode}`,
+      metaRows: [
+        ['As of', asOf ? dfmt(asOf) : 'Today'],
+        ['Party rows', String(rows.length)],
+        ['Search', q || 'All parties'],
+        ['Detail view', mode],
+      ],
+      orientation: 'landscape',
+      sections,
+      filename: `${tabLabel.toLowerCase()}-outstanding-${asOf || 'today'}-${mode === 'Expanded details' ? 'expanded' : 'collapsed'}`,
+    };
+  };
+
+  const runExport = (kind: 'pdf' | 'excel') => {
+    if (exporting || !perm.canDownload) return;
+    setExporting(kind);
+    // Keep PDF generation in the click call stack so its preview window is not
+    // blocked by the browser. The document is built from the current UI state.
+    try {
+      const task = kind === 'pdf' ? exportReportPdf(buildReportDoc()) : exportReportXlsx(buildReportDoc());
+      void task
+        .catch((error: any) => toast.error(error?.message ?? `Could not export ${kind.toUpperCase()}`))
+        .finally(() => setExporting(null));
+    } catch (error: any) {
+      toast.error(error?.message ?? `Could not export ${kind.toUpperCase()}`);
+      setExporting(null);
+    }
+  };
 
   if (!perm.isLoading && !perm.canView) {
     return (
@@ -92,7 +243,7 @@ export default function Outstanding() {
             {([['receivables', 'Receivables'], ['payables', 'Payables']] as const).map(([k, label]) => (
               <button
                 key={k}
-                onClick={() => { setTab(k); setExpanded(null); }}
+                onClick={() => { setTab(k); setExpandedKeys(new Set()); }}
                 className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${tab === k ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
               >
                 {label}
@@ -110,6 +261,45 @@ export default function Outstanding() {
               <button onClick={() => setAsOf('')} className="text-xs text-muted-foreground hover:text-foreground underline">
                 Today
               </button>
+            )}
+          </div>
+          <div className="flex flex-wrap items-center gap-2 ml-auto">
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={toggleAll}
+              disabled={visibleParties.length === 0 || (tab === 'receivables' ? recvLoading : payLoading)}
+              data-testid="button-toggle-all-outstanding"
+              aria-label={allVisibleExpanded ? 'Collapse all parties' : 'Expand all parties'}
+            >
+              {allVisibleExpanded ? 'Collapse all' : 'Expand all'}
+            </Button>
+            {perm.canDownload && (
+              <>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => runExport('excel')}
+                  disabled={exporting !== null || visibleParties.length === 0 || (tab === 'receivables' ? recvLoading : payLoading)}
+                  data-testid="button-export-outstanding-excel"
+                >
+                  {exporting === 'excel' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileSpreadsheet className="mr-2 h-4 w-4" />}
+                  Excel
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => runExport('pdf')}
+                  disabled={exporting !== null || visibleParties.length === 0 || (tab === 'receivables' ? recvLoading : payLoading)}
+                  data-testid="button-export-outstanding-pdf"
+                >
+                  {exporting === 'pdf' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileText className="mr-2 h-4 w-4" />}
+                  PDF
+                </Button>
+              </>
             )}
           </div>
         </div>
@@ -181,10 +371,21 @@ export default function Outstanding() {
                 <tbody>
                   {customers.map((c: any) => (
                     <Fragment key={c.customerId}>
-                      <tr className="border-t border-border hover:bg-muted/10 cursor-pointer" onClick={() => setExpanded(expanded === c.customerId ? null : c.customerId)}>
+                      <tr
+                        className="border-t border-border hover:bg-muted/10 cursor-pointer"
+                        onClick={() => setExpandedKeys((previous) => {
+                          const next = new Set(previous);
+                          const key = partyKey('receivables', c.customerId);
+                          if (next.has(key)) next.delete(key);
+                          else next.add(key);
+                          return next;
+                        })}
+                        aria-expanded={isExpanded(c.customerId)}
+                        data-testid={`row-outstanding-customer-${c.customerId}`}
+                      >
                         <td className="px-4 py-2.5">
                           <div className="flex items-center gap-2">
-                            {expanded === c.customerId ? <ChevronDown className="w-4 h-4 text-muted-foreground" /> : <ChevronRight className="w-4 h-4 text-muted-foreground" />}
+                            {isExpanded(c.customerId) ? <ChevronDown className="w-4 h-4 text-muted-foreground" /> : <ChevronRight className="w-4 h-4 text-muted-foreground" />}
                             <div>
                               <p className="font-medium">{c.name}</p>
                               {c.phone && <p className="text-xs text-muted-foreground flex items-center gap-1"><Phone className="w-3 h-3" />{c.phone}</p>}
@@ -203,7 +404,7 @@ export default function Outstanding() {
                         <td className="px-3 py-2.5 text-right font-mono text-emerald-600">{Number(c.creditNotes) > 0 ? `-${inr(c.creditNotes)}` : '—'}</td>
                         <td className="px-4 py-2.5 text-right font-mono font-bold">{inr(c.netDue)}</td>
                       </tr>
-                      {expanded === c.customerId && (
+                      {isExpanded(c.customerId) && (
                         <tr className="border-t border-border bg-muted/10">
                           <td colSpan={8} className="px-4 py-3">
                             <table className="w-full text-xs">
@@ -269,10 +470,21 @@ export default function Outstanding() {
                 <tbody>
                   {vendors.map((v: any) => (
                     <Fragment key={v.vendorId}>
-                      <tr className="border-t border-border hover:bg-muted/10 cursor-pointer" onClick={() => setExpanded(expanded === v.vendorId ? null : v.vendorId)}>
+                      <tr
+                        className="border-t border-border hover:bg-muted/10 cursor-pointer"
+                        onClick={() => setExpandedKeys((previous) => {
+                          const next = new Set(previous);
+                          const key = partyKey('payables', v.vendorId);
+                          if (next.has(key)) next.delete(key);
+                          else next.add(key);
+                          return next;
+                        })}
+                        aria-expanded={isExpanded(v.vendorId)}
+                        data-testid={`row-outstanding-vendor-${v.vendorId}`}
+                      >
                         <td className="px-4 py-2.5">
                           <div className="flex items-center gap-2">
-                            {expanded === v.vendorId ? <ChevronDown className="w-4 h-4 text-muted-foreground" /> : <ChevronRight className="w-4 h-4 text-muted-foreground" />}
+                            {isExpanded(v.vendorId) ? <ChevronDown className="w-4 h-4 text-muted-foreground" /> : <ChevronRight className="w-4 h-4 text-muted-foreground" />}
                             <div>
                               <p className="font-medium">{v.name}</p>
                               {v.phone && <p className="text-xs text-muted-foreground flex items-center gap-1"><Phone className="w-3 h-3" />{v.phone}</p>}
@@ -292,7 +504,7 @@ export default function Outstanding() {
                         <td className="px-3 py-2.5 text-right font-mono text-emerald-600">{Number(v.debitNotes) > 0 ? `-${inr(v.debitNotes)}` : '—'}</td>
                         <td className="px-4 py-2.5 text-right font-mono font-bold">{inr(v.netDue)}</td>
                       </tr>
-                      {expanded === v.vendorId && (
+                      {isExpanded(v.vendorId) && (
                         <tr className="border-t border-border bg-muted/10">
                           <td colSpan={9} className="px-4 py-3">
                             <table className="w-full text-xs">

@@ -238,6 +238,7 @@ const REPORT_EXPORT_PAGES = [
   "page:/accounts/cash-book",
   "page:/accounts/bank-book",
   "page:/accounts/trial-balance",
+  "page:/outstanding",
 ];
 
 /**
