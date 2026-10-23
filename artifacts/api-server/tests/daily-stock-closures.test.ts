@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   assertStockDatesOpen,
   assertStockLedgerRestatementOpen,
+  ensureDailyStockClosures,
   rebaseStockDailyCloseAfterReset,
 } from "../src/lib/dailyStockClosures.ts";
 
@@ -191,4 +192,40 @@ test("factory reset can rebase while its session-level close lock is already hel
   assert.equal(result.baselineRows, 2);
   assert.equal(db.calls.some(({ sql }) => sql.includes("pg_advisory_xact_lock")), false,
     "the helper must not wait on a second session's lock while the reset owns the global lock");
+});
+
+test("a later business-date movement is reversed out of the earlier daily close", async () => {
+  const calls: Array<{ sql: string; params?: unknown[] }> = [];
+  const client = {
+    async query(sql: string, params?: unknown[]) {
+      calls.push({ sql, params });
+      if (sql.includes("SELECT general_settings")) return { rows: [{ general_settings: { timeZone: "Asia/Kolkata" } }] };
+      if (sql.includes("AS company_today")) return { rows: [{ company_today: "2026-10-02" }] };
+      if (sql.includes("baseline_time_zone")) {
+        return { rows: [{
+          baseline_date: "2026-10-01",
+          baseline_time_zone: "Asia/Kolkata",
+          baseline_ledger_id: "41",
+          closed_through: "2026-09-30",
+        }] };
+      }
+      if (sql.includes("AS last_movement_date")) return { rows: [{ last_movement_date: null }] };
+      if (sql.includes("AS mismatch_count")) return { rows: [{ mismatch_count: 0 }] };
+      if (sql.includes("AS count") && sql.includes("completed_at IS NULL")) return { rows: [{ count: 1 }] };
+      if (sql.includes("AS through_date") && sql.includes("completed_at IS NOT NULL")) {
+        return { rows: [{ count: 1, through_date: "2026-10-01" }] };
+      }
+      if (sql.includes("SELECT COUNT(*)::int FROM stock_daily_close_entries")) return { rows: [{ count: 0 }] };
+      return { rows: [] };
+    },
+    release() {},
+  };
+  const result = await ensureDailyStockClosures({ connect: async () => client } as any);
+  assert.equal(result.closedDates, 1);
+  assert.equal(result.throughDate, "2026-10-01");
+
+  const materialize = calls.find(({ sql }) => sql.includes("INSERT INTO stock_daily_close_entries"));
+  assert.ok(materialize, "the close entry query should execute");
+  assert.match(materialize!.sql, /COALESCE\(s\.quantity, 0\) - COALESCE\(f\.after_close_qty, 0\)/);
+  assert.match(materialize!.sql, /COALESCE\(m\.txn_date, m\.created_at::date\) > d\.close_date/);
 });
