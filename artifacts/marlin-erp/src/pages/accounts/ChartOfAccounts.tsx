@@ -855,12 +855,21 @@ function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, on
   const grossSales      = inc?.grossSales ?? ((inc?.sales ?? 0) + salesReturns);
   const purchaseReturns = exp?.purchaseReturns ?? 0;
   const transferPnl = !!pl?.stockTransfersIncludedInPnl;
+  const profitEvidenceReliable =
+    exp?.openingStockReliable === true
+    && inc?.closingStockEvidenceReliable === true;
+  const profitEvidenceNote =
+    !profitEvidenceReliable
+      ? [exp?.openingStockNote, inc?.closingStockNote].filter(Boolean).join(" ")
+        || "Opening or closing stock evidence is incomplete for this period."
+      : null;
   const transferIn = transferPnl ? Number(exp?.stockTransferIn ?? 0) : 0;
   const transferOut = transferPnl ? Number(inc?.stockTransferOut ?? 0) : 0;
   const purchasesForDisplay = exp?.purchases ?? 0;
-  const grossProfit     = pl ? (pl.summary?.grossProfit
+  const grossProfit     = pl && profitEvidenceReliable ? (pl.summary?.grossProfit
     ?? ((inc ? inc.sales + inc.closingStock + inc.directIncomes.total + transferOut : 0)
       - (exp ? exp.openingStock + exp.purchases + transferIn + exp.directExpenses.total : 0))) : null;
+  const netProfit = pl && profitEvidenceReliable ? pl.netProfit : null;
   // Each Trading side includes the GP c/d balancing row (debit when profit,
   // credit when loss), so the two panel headers always show the SAME total —
   // that is what makes it a balanced two-sided account.
@@ -1092,6 +1101,12 @@ function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, on
                 expandableIds={plExpandable}
                 onManage={onManage}
               />
+              {!profitEvidenceReliable && (
+                <p role="status" data-testid="coa-profit-unverified" className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-300">
+                  Gross and net profit are not shown because the inventory evidence for this period is incomplete.
+                  {profitEvidenceNote ? ` ${profitEvidenceNote}` : ""}
+                </p>
+              )}
 
               {/* ── Trading Account ── */}
               <div className="mb-3 mt-1 flex items-center gap-3">
@@ -1343,17 +1358,17 @@ function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, on
               </div>
 
               {/* ── Net P&L banner — unchanged, closing the statement ── */}
-              {pl && (
+              {pl && netProfit !== null && (
                 <div
                   data-testid="coa-net-profit"
                   className={`flex flex-wrap items-center gap-3 px-4 py-3.5 rounded-xl mt-5 text-sm font-semibold shadow-sm
-                  ${pl.netProfit >= 0
+                  ${netProfit >= 0
                     ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
                     : 'bg-red-500/10 text-red-400 border border-red-500/20'}`}>
-                  {pl.netProfit >= 0 ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />}
-                  <span>{pl.netProfit >= 0 ? 'Net Profit' : 'Net Loss'}</span>
+                  {netProfit >= 0 ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />}
+                  <span>{netProfit >= 0 ? 'Net Profit' : 'Net Loss'}</span>
                   <span className="text-[10px] font-normal opacity-70">Gross {grossProfit !== null && grossProfit < 0 ? 'Loss' : 'Profit'} + Other Income − Indirect Expenses</span>
-                  <span className="font-mono text-base ml-auto">{fmt(Math.abs(pl.netProfit))}</span>
+                  <span className="font-mono text-base ml-auto">{fmt(Math.abs(netProfit))}</span>
                   {monthly && <MwBannerChips monthly={monthly} values={mwS('np')} testPrefix="mw-np" />}
                 </div>
               )}

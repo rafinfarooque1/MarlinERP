@@ -1157,6 +1157,8 @@ export interface Books {
       closingStockItems: ValuedItem[];
       /** Sender-owned transit included in closingStock; rendered separately in location statements. */
       closingStockInTransit: number;
+      /** Actual evidence completeness, distinct from the historical/derived presentation flag below. */
+      closingStockEvidenceReliable: boolean;
       /** false when the closing position is rewound from history rather than read. */
       closingStockReliable: boolean;
       closingStockNote: string | null;
@@ -1619,6 +1621,7 @@ export async function buildBooks(
         closingStockOnHand: r2(Math.max(0, closing.total - closing.inTransit)),
         closingStockItems: closing.items,
         closingStockInTransit: closing.inTransit,
+        closingStockEvidenceReliable: closing.reliable,
         closingStockReliable: closing.reliable && !historicalClose,
         closingStockNote: historicalClose
           ? [closing.note, HISTORICAL_CLOSE_NOTE].filter(Boolean).join(" ")

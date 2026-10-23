@@ -385,6 +385,15 @@ try {
     const s = fs?.profitAndLoss?.summary;
     assert(`P&L summary present (${label})`, !!s, JSON.stringify(fs).slice(0, 120));
     if (!s) continue;
+    const inventoryEvidenceReliable =
+      fs?.profitAndLoss?.expenses?.openingStockReliable === true
+      && fs?.profitAndLoss?.incomes?.closingStockEvidenceReliable === true;
+    if (!inventoryEvidenceReliable) {
+      assert(`unverified inventory suppresses dashboard profit (${label})`,
+        bi?.profit?.gross === null && bi?.profit?.net === null && bi?.profit?.cogs === null,
+        JSON.stringify(bi?.profit));
+      continue;
+    }
     assert(`bi.profit.cogs == P&L costOfGoodsSold (${label})`,
       near(bi?.profit?.cogs, s.costOfGoodsSold), `bi=${bi?.profit?.cogs} pl=${s.costOfGoodsSold}`);
     assert(`bi.profit.gross == P&L grossProfit (${label})`,

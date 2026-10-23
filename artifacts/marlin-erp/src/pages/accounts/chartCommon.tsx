@@ -35,6 +35,7 @@ export interface FinancialStatements {
     stockTransfersIncludedInPnl?: boolean;
     expenses: {
       openingStock: number; openingStockItems: StockItem[];
+      openingStockReliable?: boolean; openingStockNote?: string | null;
       openingStockTransferAdjustment?: number;
       purchases: number;
       stockTransferIn?: number;
@@ -52,7 +53,8 @@ export interface FinancialStatements {
       /** The Sales group tree behind the single `sales` figure. */
       salesGroup?: GroupSummary;
       closingStock: number; closingStockOnHand?: number; closingStockItems: StockItem[];
-      closingStockInTransit?: number; stockTransferOut?: number;
+      closingStockInTransit?: number; closingStockEvidenceReliable?: boolean;
+      closingStockReliable?: boolean; closingStockNote?: string | null; stockTransferOut?: number;
       directIncomes: GroupSummary; indirectIncomes: GroupSummary; total: number;
     };
     /** Same engine figures the dashboard GP/NP tiles read — never recompute these. */
