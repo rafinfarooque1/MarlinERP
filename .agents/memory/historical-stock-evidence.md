@@ -9,7 +9,9 @@ A prior persisted cost checkpoint may be carried forward only when there is trus
 
 **Why:** the ERP is the user's only available source; missing dated evidence must be investigated in existing ERP records before requesting an external backup, while unproven reconstruction would fabricate historical profit.
 
-**How to apply:** inspect existing checkpoints and the evidence that covers the intervening period first. Never replace an unsupported historical cost with today's item cost or clear an integrity warning just to make the report look complete.
+**How to apply:** when an ERP-generated worksheet flags missing history, trace its lookup predicates and joins against purchases, batches, transfers, production, and ledger records before concluding source data is absent. Inspect checkpoints and intervening movement evidence; never substitute today's cost or clear a warning to make a report look complete.
+
+**Why:** the business confirmed that purchase, sales, production, batch, movement, and transfer data are already entered in the ERP and that its worksheet is generated from the same database; a warning may be a calculation-path limitation rather than missing source data.
 
 **Why:** Rewriting operational stock or creating balancing journals would fabricate business activity. Missing historical quantity or cost evidence must remain visible rather than being inferred from today's product master.
 
