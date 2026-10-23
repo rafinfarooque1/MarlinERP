@@ -1024,7 +1024,9 @@ export async function stockAsOf(asOf: string | null | undefined, scope?: StockBr
     reasons.push(`${unvalued} line${unvalued === 1 ? "" : "s"} held stock on that date but the product record no longer exists, so it could not be valued`);
   }
   if (noCostHistory > 0) {
-    reasons.push(`${noCostHistory} product/location line${noCostHistory === 1 ? "" : "s"} has no exact-date persisted cost checkpoint; current item costs were not substituted`);
+    reasons.push(
+      `${noCostHistory} product/location line${noCostHistory === 1 ? "" : "s"} has no exact-date persisted ERP cost checkpoint; current item costs were not substituted`,
+    );
   }
   if (transferConflicts.length > 0) {
     reasons.push(`${transferConflicts.length} transfer-in line${transferConflicts.length === 1 ? "" : "s"} has a ledger date before its receipt/reservation evidence; excluded from destination on-hand and retained as transit where supported`);
@@ -1040,7 +1042,7 @@ export async function stockAsOf(asOf: string | null | undefined, scope?: StockBr
     items: [...byProduct.values()].sort((a, b) => a.name.localeCompare(b.name)),
     reliable: complete,
     note: complete ? null
-      : `Stock ${reasons.join("; and ")}. Only source-backed values are included; unknown historical costs were omitted rather than replaced with current item costs. The position on ${asOf} is not reliable.`,
+      : `Stock ${reasons.join("; and ")}. Current ERP stock data is present, but those historical costs are not established. Only source-backed values are included; unknown historical costs were omitted rather than replaced with current item costs. The position on ${asOf} is not reliable.`,
   };
 }
 

@@ -462,39 +462,42 @@ function GroupBlock({ group, onCreated, expansion, onBankAdd, onDelete, onRename
 }
 
 /* ── auto row ────────────────────────────────────────────────────────────────── */
-function AutoRow({ label, amount, sub, accent, depth = 0 }: {
-  label: string; amount: number; sub?: string; accent?: string; depth?: number;
+function AutoRow({ label, amount, sub, accent, depth = 0, unverified = false }: {
+  label: string; amount: number; sub?: string; accent?: string; depth?: number; unverified?: boolean;
 }) {
   const { enabled: valuedOnly } = useValueFilter();
-  if (valuedOnly && !hasDisplayedValue(amount)) return null;
+  if (valuedOnly && !unverified && !hasDisplayedValue(amount)) return null;
   const pl = `${8 + depth * 16}px`;
   return (
     <div className={`flex items-center gap-2 py-1.5 ${accent ?? ''}`} style={{ paddingLeft: pl }}>
       <span className={`flex-1 text-xs ${accent ? 'font-medium' : 'text-muted-foreground italic'}`}>{label}</span>
       {sub && <span className="text-[10px] text-muted-foreground/50 italic">{sub}</span>}
-      <span className="text-[11px] font-mono tabular-nums text-muted-foreground pr-3">{fmt(amount)}</span>
+      <span className="text-[11px] font-mono tabular-nums text-muted-foreground pr-3">{unverified ? 'Unverified' : fmt(amount)}</span>
     </div>
   );
 }
 
 /* ── stock breakdown ────────────────────────────────────────────────────────── */
-function StockBlock({ label, items, total }: { label: string; items: StockItem[]; total: number }) {
+function StockBlock({ label, items, total, unverified = false }: { label: string; items: StockItem[]; total: number; unverified?: boolean }) {
   const [open, setOpen] = useState(false);
   const { enabled: valuedOnly } = useValueFilter();
-  if (valuedOnly && !hasDisplayedValue(total) && !items.some(item => hasDisplayedValue(item.total))) return null;
+  if (valuedOnly && !unverified && !hasDisplayedValue(total) && !items.some(item => hasDisplayedValue(item.total))) return null;
   return (
     <div className="mb-1">
       <button
-        onClick={() => setOpen(o => !o)}
+        onClick={() => { if (!unverified) setOpen(o => !o); }}
+        disabled={unverified}
         className="flex items-center gap-2 w-full py-2 px-2 hover:bg-muted/5 rounded transition-colors"
       >
         <Package className="w-3 h-3 text-muted-foreground/50 shrink-0" />
-        <span className="flex-1 text-xs font-semibold text-foreground/80 text-left">{label}</span>
-        {total > 0
+        <span className="flex-1 text-xs font-semibold text-foreground/80 text-left">{unverified ? `${label} (unverified)` : label}</span>
+        {unverified
+          ? <span className="text-xs font-medium text-amber-600 dark:text-amber-300">Unverified</span>
+          : total > 0
           ? <span className="text-xs font-mono tabular-nums text-foreground/70">{fmt(total)}</span>
           : <span className="text-xs text-muted-foreground/40 italic">₹0.00</span>
         }
-        {items.length > 0 && (open ? <ChevronDown className="w-3 h-3 text-muted-foreground/50" /> : <ChevronRight className="w-3 h-3 text-muted-foreground/50" />)}
+        {!unverified && items.length > 0 && (open ? <ChevronDown className="w-3 h-3 text-muted-foreground/50" /> : <ChevronRight className="w-3 h-3 text-muted-foreground/50" />)}
       </button>
 
       {open && items.length > 0 && (
@@ -523,11 +526,12 @@ function StockBlock({ label, items, total }: { label: string; items: StockItem[]
 const Divider = () => <div className="border-t border-border/30 my-2 mx-2" />;
 
 /* ── section panel ───────────────────────────────────────────────────────────── */
-function Panel({ title, icon: Icon, total, hdrClass, borderClass, monthly, children }: {
+function Panel({ title, icon: Icon, total, hdrClass, borderClass, monthly, children, totalUnverified = false }: {
   title: string; icon: React.ElementType; total: number;
   hdrClass: string; borderClass: string;
   /** Month Wise mode — the body gains the column header row and scrolls horizontally. */
   monthly?: MonthlyView;
+  totalUnverified?: boolean;
   children: React.ReactNode;
 }) {
   return (
@@ -536,7 +540,7 @@ function Panel({ title, icon: Icon, total, hdrClass, borderClass, monthly, child
       <div className={`flex items-center gap-2 px-4 py-3 ${hdrClass}`}>
         <Icon className="w-4 h-4 shrink-0" />
         <span className="flex-1 text-sm font-bold uppercase tracking-widest">{title}</span>
-        <span className="text-sm font-mono font-bold tabular-nums">{fmt(total)}</span>
+        <span className="text-sm font-mono font-bold tabular-nums">{totalUnverified ? 'Unverified' : fmt(total)}</span>
       </div>
       {/* Body — ONE horizontal scroll region per panel; the account-name column
           is sticky inside it, so month columns scroll under the names. */}
@@ -764,21 +768,25 @@ function MwGroupBlock({ group, seriesKey, monthly, expansion }: {
 }
 
 /** Auto/summary rows (Sales Account, Opening Stock, Reserves & Surplus, …). */
-function MwAutoRow({ label, values, total, monthly, accent, sub }: {
+function MwAutoRow({ label, values, total, monthly, accent, sub, unverified = false }: {
   label: string; values: number[]; total: number; monthly: MonthlyView;
-  accent?: string; sub?: string;
+  accent?: string; sub?: string; unverified?: boolean;
 }) {
   const { enabled: valuedOnly } = useValueFilter();
-  if (valuedOnly && !hasDisplayedValue(total, values)) return null;
+  if (valuedOnly && !unverified && !hasDisplayedValue(total, values)) return null;
   return (
     <div className="flex items-center w-max min-w-full">
       <div className={`${MW_NAME} flex items-center gap-2 py-1.5 pl-3 pr-2`}>
-        <span className={`flex-1 truncate text-xs ${accent ?? 'text-muted-foreground italic'}`}>{label}</span>
+        <span className={`flex-1 truncate text-xs ${accent ?? 'text-muted-foreground italic'}`}>{unverified ? `${label} (unverified)` : label}</span>
         {sub && <span className="text-[10px] text-muted-foreground/50 italic truncate max-w-[90px]">{sub}</span>}
       </div>
-      <MwCells monthly={monthly} values={values} />
+      {unverified
+        ? monthly.months.map((month) => (
+            <span key={month.key} className="w-28 shrink-0 py-1.5 pr-2 text-right text-[10px] text-amber-600 dark:text-amber-300">Unverified</span>
+          ))
+        : <MwCells monthly={monthly} values={values} />}
       <span className={`${MW_TOTAL} py-1.5 text-[11px] font-mono tabular-nums ${accent ?? 'text-muted-foreground'}`}>
-        {total === 0 ? '—' : fmt(total)}
+        {unverified ? 'Unverified' : total === 0 ? '—' : fmt(total)}
       </span>
     </div>
   );
@@ -1066,6 +1074,7 @@ function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, on
                 <Panel
                   title="Assets" icon={TrendingUp}
                   total={bs?.assets.total ?? 0}
+                  totalUnverified={inc?.closingStockEvidenceReliable === false}
                   hdrClass="bg-muted/35 text-emerald-700 dark:text-emerald-400 border-b border-border"
                   borderClass="border-border border-l-2 border-l-emerald-500/40"
                   monthly={monthly}
@@ -1074,14 +1083,14 @@ function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, on
                     <>
                       <MwGroupBlock group={bs.assets.fixedAssets} seriesKey="grp:fixed" monthly={monthly} expansion={bsExpansion} />
                       <MwGroupBlock group={bs.assets.currentAssets} seriesKey="grp:curassets" monthly={monthly} expansion={bsExpansion} />
-                      <MwAutoRow label="Closing Stock" values={mwS('bsClosingStock')} total={bs.assets.closingStock} monthly={monthly} accent="text-foreground/80 font-semibold" />
+                      <MwAutoRow label="Closing Stock" values={mwS('bsClosingStock')} total={bs.assets.closingStock} monthly={monthly} accent="text-foreground/80 font-semibold" unverified={inc?.closingStockEvidenceReliable === false} />
                     </>
                   ) : (
                     <>
                       <GroupBlock group={bs.assets.fixedAssets} onCreated={onCreated} expansion={bsExpansion} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={canAdd} canEdit={canEdit} canDelete={canDelete} />
 
                       <GroupBlock group={bs.assets.currentAssets} onCreated={onCreated} expansion={bsExpansion} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={canAdd} canEdit={canEdit} canDelete={canDelete} />
-                      <AutoRow label="Closing Stock" amount={bs.assets.closingStock} sub="valued inventory asset" accent="text-foreground/80 font-semibold" />
+                      <AutoRow label="Closing Stock" amount={bs.assets.closingStock} sub="valued inventory asset" accent="text-foreground/80 font-semibold" unverified={inc?.closingStockEvidenceReliable === false} />
                     </>
                   ))}
                 </Panel>
@@ -1119,6 +1128,7 @@ function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, on
                 <Panel
                   title="Expense (Debit)" icon={TrendingDown}
                   total={tradingExpTotal}
+                  totalUnverified={!profitEvidenceReliable}
                   hdrClass="bg-muted/35 text-red-600 dark:text-red-400 border-b border-border"
                   borderClass="border-border border-l-2 border-l-red-500/40"
                   monthly={monthly}
@@ -1128,7 +1138,7 @@ function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, on
                       {/* P&L cells are month ACTIVITY — every row's months sum to
                           its Total. Opening/Closing stock per month are the
                           engine's own boundary valuations for that month. */}
-                      <MwAutoRow label="Opening Stock" values={mwS('openingStock')} total={exp.openingStock} monthly={monthly} accent="text-foreground/80 font-semibold" />
+                      <MwAutoRow label="Opening Stock" values={mwS('openingStock')} total={exp.openingStock} monthly={monthly} accent="text-foreground/80 font-semibold" unverified={!exp.openingStockReliable} />
                       {purchaseReturns !== 0 ? (
                         <>
                           <MwAutoRow label="Purchase Account" values={mwGrossPur} total={purchasesForDisplay + purchaseReturns} monthly={monthly} sub="auto" />
@@ -1158,6 +1168,7 @@ function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, on
                         label="Opening Stock"
                         items={exp.openingStockItems}
                         total={exp.openingStock}
+                        unverified={!exp.openingStockReliable}
                       />
 
                       {/* Purchase Account (auto) — gross + returns split shown only
@@ -1196,6 +1207,7 @@ function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, on
                 <Panel
                   title="Income (Credit)" icon={TrendingUp}
                   total={tradingIncTotal}
+                  totalUnverified={!profitEvidenceReliable}
                   hdrClass="bg-muted/35 text-emerald-700 dark:text-emerald-400 border-b border-border"
                   borderClass="border-border border-l-2 border-l-emerald-500/40"
                   monthly={monthly}
@@ -1216,10 +1228,10 @@ function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, on
                        {showTransferOutLine && <MwAutoRow label="Stock Transfer Out" values={mwTransferOut} total={transferOut} monthly={monthly} />}
                        {transferPnl ? (
                          <>
-                            <MwAutoRow label="Closing Stock (on hand)" values={mwS('closingStockOnHand')} total={Number(inc.closingStockOnHand ?? inc.closingStock)} monthly={monthly} accent="text-foreground/80 font-semibold" />
+                             <MwAutoRow label="Closing Stock (on hand)" values={mwS('closingStockOnHand')} total={Number(inc.closingStockOnHand ?? inc.closingStock)} monthly={monthly} accent="text-foreground/80 font-semibold" unverified={inc.closingStockEvidenceReliable === false} />
                             {showClosingTransitLine && <MwAutoRow label="Stock in Transit" values={mwS('closingStockInTransit')} total={Number(inc.closingStockInTransit ?? 0)} monthly={monthly} />}
                          </>
-                       ) : <MwAutoRow label="Closing Stock" values={mwS('closingStock')} total={inc.closingStock} monthly={monthly} accent="text-foreground/80 font-semibold" />}
+                        ) : <MwAutoRow label="Closing Stock" values={mwS('closingStock')} total={inc.closingStock} monthly={monthly} accent="text-foreground/80 font-semibold" unverified={inc.closingStockEvidenceReliable === false} />}
                       {grossProfit !== null && grossProfit < 0 && (
                         <>
                           <Divider />
@@ -1250,11 +1262,11 @@ function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, on
                       {/* Closing Stock */}
                        {transferPnl ? (
                          <>
-                            <StockBlock label="Closing Stock (on hand)" items={inc.closingStockItems} total={Number(inc.closingStockOnHand ?? inc.closingStock)} />
+                            <StockBlock label="Closing Stock (on hand)" items={inc.closingStockItems} total={Number(inc.closingStockOnHand ?? inc.closingStock)} unverified={inc.closingStockEvidenceReliable === false} />
                             {showClosingTransitLine && <AutoRow label="Stock in Transit" amount={Number(inc.closingStockInTransit ?? 0)} />}
                          </>
                        ) : (
-                         <StockBlock label="Closing Stock" items={inc.closingStockItems} total={inc.closingStock} />
+                          <StockBlock label="Closing Stock" items={inc.closingStockItems} total={inc.closingStock} unverified={inc.closingStockEvidenceReliable === false} />
                        )}
 
                       {/* Balancing transfer — makes both Trading sides equal */}
