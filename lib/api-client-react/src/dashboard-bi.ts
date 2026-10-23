@@ -138,7 +138,10 @@ export interface DashboardBi {
    * The whole object is omitted unless the caller has Delete permission on the
    * dashboard; within it, fields are `null` when no honest figure is available.
    */
-  profit?: { gross: number | null; net: number | null; cogs: number | null; companyWide: boolean };
+  profit?: {
+    gross: number | null; net: number | null; cogs: number | null;
+    companyWide: boolean; reliable: boolean; note: string | null;
+  };
   /**
    * Money movement over the cash and bank ledger subtrees for the selected
    * range and location, from the SAME derived-posting stream as the balance

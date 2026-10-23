@@ -53,7 +53,13 @@ export interface CompanyFinancials {
    * figures is what guarantees the dashboard tiles always reconcile with the
    * Profit & Loss statement for the same period and location slice.
    */
-  profit: { gross: number; net: number; cogs: number };
+  profit: {
+    gross: number | null;
+    net: number | null;
+    cogs: number | null;
+    reliable: boolean;
+    note: string | null;
+  };
   /** Cumulative to `toDate` — a balance is a position, not a period flow. */
   bankBalance: number;
   cashBalance: number;
@@ -511,6 +517,19 @@ export async function companyFinancials(
   const salary = r2(findBalance(groups, "STD-SALARY-EXP") ?? 0);
   const rent = r2(findBalance(groups, "STD-GRP-RENT-EXP") ?? 0);
   const total = r2(direct + indirect);
+  const profitReliable =
+    books.profitAndLoss.expenses.openingStockReliable
+    && books.profitAndLoss.incomes.closingStockEvidenceReliable;
+  const profitNote = profitReliable
+    ? null
+    : [
+        !books.profitAndLoss.expenses.openingStockReliable
+          ? books.profitAndLoss.expenses.openingStockNote
+          : null,
+        !books.profitAndLoss.incomes.closingStockEvidenceReliable
+          ? books.profitAndLoss.incomes.closingStockNote
+          : null,
+      ].filter(Boolean).join(" ") || "Inventory evidence is incomplete for this period.";
 
   return {
     expenses: {
@@ -519,12 +538,17 @@ export async function companyFinancials(
       ledgers: expenseLedgers,
     },
     profit: {
-      gross: r2(books.profitAndLoss.summary.grossProfit),
-      net: r2(books.profitAndLoss.summary.netProfit),
+      // Inventory is part of COGS. If either stock boundary is not evidenced,
+      // the resulting profit is only a partial arithmetic result, not a figure
+      // that should be presented as established.
+      gross: profitReliable ? r2(books.profitAndLoss.summary.grossProfit) : null,
+      net: profitReliable ? r2(books.profitAndLoss.summary.netProfit) : null,
       // COGS off the same P&L summary (opening stock + purchases + direct
       // expenses − closing stock) — the dashboard tile must equal the
       // "Cost of Goods Sold" line on the statement, never a re-sum.
-      cogs: r2(books.profitAndLoss.summary.costOfGoodsSold),
+      cogs: profitReliable ? r2(books.profitAndLoss.summary.costOfGoodsSold) : null,
+      reliable: profitReliable,
+      note: profitNote,
     },
     ...controls,
   };

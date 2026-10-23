@@ -313,16 +313,21 @@ export default function Dashboard() {
   const showLocationBreakdown = reportMode === 'details' &&
     (!!bi?.scope.isAllLocations || (locationState.locationKeys?.length ?? 0) > 0);
   const locationBreakdown = bi?.locationBreakdown ?? [];
-  const selectedMetric = (metric: keyof typeof locationBreakdown[number]) =>
-    locationState.locationKeys?.length
-      ? locationBreakdown.reduce((sum, row) => sum + Number(row[metric] ?? 0), 0)
-      : null;
+  const selectedMetric = (metric: keyof typeof locationBreakdown[number]) => {
+    if (!locationState.locationKeys?.length) return null;
+    if (!locationBreakdown.length) return null;
+    if (locationBreakdown.some((row) => row[metric] == null)) return null;
+    return locationBreakdown.reduce((sum, row) => sum + Number(row[metric]), 0);
+  };
   const dashboardValue = (metric: keyof typeof locationBreakdown[number], fallback: number | null | undefined) =>
     selectedMetric(metric) ?? fallback;
   type BreakdownMetric = keyof Omit<typeof locationBreakdown[number], 'locationType' | 'locationId' | 'name'>;
   const locationLines = (metric: BreakdownMetric) =>
     showLocationBreakdown
-      ? locationBreakdown.map((l) => ({ label: l.name, value: fmt(l[metric] as number | null) }))
+      ? locationBreakdown.map((l) => ({
+          label: l.name,
+          value: l[metric] == null ? '—' : fmt(l[metric] as number),
+        }))
       : undefined;
   const locationHint = (metric: BreakdownMetric, fallback?: React.ReactNode): React.ReactNode =>
     showLocationBreakdown
@@ -534,14 +539,14 @@ export default function Dashboard() {
         label: 'GP',
         value: dashboardValue('grossProfit', pf?.gross) == null ? '—' : fmt(dashboardValue('grossProfit', pf?.gross)!),
         tone: pf?.gross == null ? 'default' as const : pf.gross >= 0 ? 'pos' as const : 'neg' as const,
-        hint: locationHint('grossProfit', 'Gross Profit · tap for P&L'),
+        hint: locationHint('grossProfit', pf?.note ?? 'Gross Profit · tap for P&L'),
         onClick: drill('pl-gross-profit'),
       },
       {
         label: 'NP',
         value: dashboardValue('netProfit', pf?.net) == null ? '—' : fmt(dashboardValue('netProfit', pf?.net)!),
         tone: pf?.net == null ? 'default' as const : pf.net >= 0 ? 'pos' as const : 'neg' as const,
-        hint: locationHint('netProfit', 'Net Profit · tap for P&L'),
+        hint: locationHint('netProfit', pf?.note ?? 'Net Profit · tap for P&L'),
         onClick: drill('pl-net-profit'),
       },
     ] : []),
@@ -713,7 +718,7 @@ export default function Dashboard() {
         value: dashboardValue('grossProfit', pf?.gross) == null ? '—' : fmt(dashboardValue('grossProfit', pf?.gross)!),
         tone: pf?.gross == null ? 'default' as const : pf.gross >= 0 ? 'pos' as const : 'neg' as const,
         lines: locationLines('grossProfit'),
-        desc: showLocationBreakdown ? undefined : 'Gross Profit',
+        desc: showLocationBreakdown ? undefined : pf?.note ?? 'Gross Profit',
         onClick: drill('pl-gross-profit'),
       },
       {
@@ -722,7 +727,7 @@ export default function Dashboard() {
         value: dashboardValue('netProfit', pf?.net) == null ? '—' : fmt(dashboardValue('netProfit', pf?.net)!),
         tone: pf?.net == null ? 'default' as const : pf.net >= 0 ? 'pos' as const : 'neg' as const,
         lines: locationLines('netProfit'),
-        desc: showLocationBreakdown ? undefined : 'Net Profit',
+        desc: showLocationBreakdown ? undefined : pf?.note ?? 'Net Profit',
         onClick: drill('pl-net-profit'),
         spanTwo: true,
       },

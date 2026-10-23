@@ -1639,6 +1639,8 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
         // "Cost of Goods Sold" line for the same range and location.
         cogs: accounting ? accounting.profit.cogs : null,
         companyWide: !postingLoc,
+        reliable: accounting?.profit.reliable ?? false,
+        note: accounting?.profit.note ?? "Profit could not be established for this period.",
       },
     } : {}),
     // Bank only — physical cash stays in the separate `cash` figures, matching
