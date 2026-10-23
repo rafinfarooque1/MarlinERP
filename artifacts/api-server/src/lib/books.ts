@@ -827,8 +827,9 @@ export async function stockAsOf(asOf: string | null | undefined, scope?: StockBr
             scs.branch_id::int AS branch_id, scs.quantity::numeric AS quantity,
             scs.unit_cost::numeric AS unit_cost, scs.value::numeric AS value
        FROM stock_cost_snapshots scs
-      WHERE scs.as_of_date = $1::date${snapshotWhere.replace(/^ WHERE /, " AND ")}
-      ORDER BY scs.material_type, scs.ref_id, scs.branch_type, scs.branch_id, scs.id DESC`,
+       WHERE scs.as_of_date <= $1::date${snapshotWhere.replace(/^ WHERE /, " AND ")}
+       ORDER BY scs.material_type, scs.ref_id, scs.branch_type, scs.branch_id,
+                scs.as_of_date DESC, scs.id DESC`,
     snapshotParams,
   );
   const todayByKey = new Map<string, number>();
