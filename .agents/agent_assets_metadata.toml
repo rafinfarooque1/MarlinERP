@@ -205,3 +205,17 @@ mtime_ms = 1792781588910
 storage_uri = "gcs://replit-rams-assets-sisko/rams/assets/repl:bd7bcd33-774f-4b61-bf46-8afc6db19a81/8627e160-8c55-4850-b1b3-271ceb60d26b/994a2a0b-64a1-4b8c-9d17-c0256433e763"
 storage_version_token = "1792781599112444"
 content_type = "text/csv"
+
+[[outputs]]
+id = "to_dKy9aMpnOn3tSiuy5W"
+uri = "file://.agents/outputs/production-inventory-audit-2026-09-30.csv"
+type = "table"
+title = "Production September 30 inventory evidence audit"
+description = "106 production product/location rows with September 30 quantity comparisons, nearest prior checkpoint candidates, and linked source movements. No candidate is marked as an approved September 30 cost."
+logical_id = "34cf9b09-4971-4527-af69-6feccc907c20"
+content_hash = "sha256:262134d638623ef86ccf166230cbf5faded7524662dbf4c7d3f79628f6570757"
+size = 37402
+mtime_ms = 1792785876553
+storage_uri = "gcs://replit-rams-assets-sisko/rams/assets/repl:bd7bcd33-774f-4b61-bf46-8afc6db19a81/34cf9b09-4971-4527-af69-6feccc907c20/6eed400a-0ae7-434f-a316-7ad0ff24d8a7"
+storage_version_token = "1792785878308812"
+content_type = "text/csv"
