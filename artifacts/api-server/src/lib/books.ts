@@ -30,6 +30,7 @@ import { pool } from "@workspace/db";
 import { stockValuation, resolveProductNames, type ValuedItem } from "./valuation";
 import { activeInTransit } from "./reservations";
 import { historicalTransferReceiptConflicts, resolveHistoricalBatchCoverage } from "./historicalStockEvidenceRules";
+import { allocateReceived } from "./batches";
 
 /** A queryable database handle (pg pool or PoolClient), per lib/importVouchers.ts. */
 type Q = { query: Function };
@@ -53,7 +54,7 @@ async function historicalBatchCost(
   key: { materialType: string; refId: number; branchType: string; branchId: number },
   asOf: string,
   expectedQuantity: number,
-): Promise<{ ok: true; unitCost: number; batchNumber: string } | { ok: false; reason: string }> {
+): Promise<{ ok: true; unitCost: number; value: number; batchNumber: string } | { ok: false; reason: string }> {
   const { rows } = await q.query(
     `SELECT sl.txn_type, sl.txn_date::text AS txn_date, sl.doc_type,
             sl.doc_id::int AS doc_id, sl.qty_change::numeric AS qty_change,
@@ -108,10 +109,25 @@ async function historicalBatchCost(
         allocations.push({ docType, docId, batchNumber: String(b.batchNumber ?? ""), quantity: Number(b.quantity), unitCost: Number(b.unitCost) });
       }
     } else if (docType === "stock_transfer") {
-      const raw = row.txn_type === "transfer_in" ? row.received_lines : row.transfer_lines;
-      lines = asJsonArray(raw).filter(matches);
-      for (const line of lines) for (const b of asJsonArray(line.batchBreakdown)) {
-        allocations.push({ docType, docId, batchNumber: String(b.batchNumber ?? ""), quantity: Number(b.quantity), unitCost: Number(b.unitCost) });
+      const dispatchLines = asJsonArray(row.transfer_lines).filter(matches);
+      if (row.txn_type === "transfer_in") {
+        const receivedLines = asJsonArray(row.received_lines).filter(matches);
+        // Receipt rows persist the received quantity, while lot identity and
+        // cost remain on the dispatched line. The operational receipt path
+        // pairs these by transferLineId; older documents have no such id, so
+        // only a unique product line can be paired without guessing.
+        if (dispatchLines.length !== 1 || receivedLines.length !== 1) {
+          return { ok: false, reason: `transfer ${docId} has ambiguous dispatch/receipt lines for batch allocation` };
+        }
+        const receivedQty = Number(receivedLines[0].quantity);
+        const allocated = allocateReceived(asJsonArray(dispatchLines[0].batchBreakdown), receivedQty);
+        for (const b of allocated) {
+          allocations.push({ docType, docId, batchNumber: String(b.batchNumber ?? ""), quantity: Number(b.quantity), unitCost: Number(b.unitCost) });
+        }
+      } else {
+        for (const line of dispatchLines) for (const b of asJsonArray(line.batchBreakdown)) {
+          allocations.push({ docType, docId, batchNumber: String(b.batchNumber ?? ""), quantity: Number(b.quantity), unitCost: Number(b.unitCost) });
+        }
       }
     }
   }
@@ -1023,7 +1039,7 @@ export async function stockAsOf(asOf: string | null | undefined, scope?: StockBr
         batchFallbackFailures.push(`${info.name}: ${batch.reason}`);
         continue;
       }
-      snapshot = { quantity: qty, unitCost: batch.unitCost, value: r2(qty * batch.unitCost) };
+      snapshot = { quantity: qty, unitCost: batch.unitCost, value: batch.value };
     }
     const rewindQty = todayQty - (afterByKey.get(key) ?? 0);
     if (Math.abs(snapshot.quantity - rewindQty) > 0.001) {
