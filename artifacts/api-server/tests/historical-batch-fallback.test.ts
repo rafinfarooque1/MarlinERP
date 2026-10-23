@@ -83,6 +83,18 @@ assert.equal(resolveHistoricalBatchCoverage(mango.expected, mango.movements, man
   "purchase and allocation cost conflicts fail closed");
 assert.equal(resolveHistoricalBatchCoverage(mango.expected, mango.movements, mango.allocations.map((a) => ({ ...a, purchaseCost: false }))).ok, false,
   "purchase-backed cost evidence is required");
+const purchaseAllocation = mango.allocations.find((a) => a.purchaseCost)!;
+const conflictingPurchaseCosts = [
+  ...mango.allocations.filter((a) => !a.purchaseCost),
+  { ...purchaseAllocation, quantity: 1032, unitCost: 90 },
+  { ...purchaseAllocation, quantity: 1032, unitCost: 91 },
+];
+assert.equal(resolveHistoricalBatchCoverage(mango.expected, mango.movements, conflictingPurchaseCosts).ok, false,
+  "conflicting purchase-cost evidence fails closed");
+assert.equal(resolveHistoricalBatchCoverage(mango.expected, mango.movements, [
+  ...mango.allocations,
+  { docType: "purchase", docId: 999, batchNumber: mango.batch, quantity: 1, unitCost: 90 },
+]).ok, false, "source allocations without matching ledger documents fail closed");
 
 function dbFor(fixture: typeof mango) {
   const rows = fixture.docs.map((d) => ({
