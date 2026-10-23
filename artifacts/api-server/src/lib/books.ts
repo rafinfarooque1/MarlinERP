@@ -29,7 +29,7 @@
 import { pool } from "@workspace/db";
 import { stockValuation, resolveProductNames, type ValuedItem } from "./valuation";
 import { activeInTransit } from "./reservations";
-import { historicalTransferReceiptConflicts } from "./historicalStockEvidenceRules";
+import { historicalTransferReceiptConflicts, resolveHistoricalBatchCoverage } from "./historicalStockEvidenceRules";
 
 /** A queryable database handle (pg pool or PoolClient), per lib/importVouchers.ts. */
 type Q = { query: Function };
@@ -38,6 +38,85 @@ import { filterPostingsByLocation, type PostingLocationFilter } from "./postingL
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
 const r3 = (n: number) => Math.round(n * 1000) / 1000;
+
+function asJsonArray(value: unknown): any[] {
+  if (Array.isArray(value)) return value;
+  if (typeof value !== "string") return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch { return []; }
+}
+
+async function historicalBatchCost(
+  q: Q,
+  key: { materialType: string; refId: number; branchType: string; branchId: number },
+  asOf: string,
+  expectedQuantity: number,
+): Promise<{ ok: true; unitCost: number; batchNumber: string } | { ok: false; reason: string }> {
+  const { rows } = await q.query(
+    `SELECT sl.txn_type, sl.txn_date::text AS txn_date, sl.doc_type,
+            sl.doc_id::int AS doc_id, sl.qty_change::numeric AS qty_change,
+            to_jsonb(p)->'line_items' AS purchase_lines,
+            to_jsonb(s)->'line_items' AS sale_lines,
+            to_jsonb(t)->'line_items' AS transfer_lines,
+            to_jsonb(t)->'received_line_items' AS received_lines
+       FROM stock_ledger sl
+       LEFT JOIN purchases p ON sl.doc_type = 'purchase' AND p.id = sl.doc_id
+       LEFT JOIN sales s ON sl.doc_type = 'sale' AND s.id = sl.doc_id
+       LEFT JOIN stock_transfers t ON sl.doc_type = 'stock_transfer' AND t.id = sl.doc_id
+      WHERE sl.material_type = $1 AND sl.ref_id = $2
+        AND sl.branch_type = $3 AND sl.branch_id = $4
+        AND (sl.txn_date <= $5::date OR sl.txn_date IS NULL)
+      ORDER BY sl.txn_date NULLS FIRST, sl.id`,
+    [key.materialType, key.refId, key.branchType, key.branchId, asOf],
+  );
+  const movements = rows.map((r: any) => ({
+    txnType: String(r.txn_type),
+    txnDate: r.txn_date == null ? null : String(r.txn_date).slice(0, 10),
+    docType: String(r.doc_type ?? ""),
+    docId: r.doc_id == null ? null : Number(r.doc_id),
+    qtyChange: r.qty_change,
+  }));
+  const allocations: Array<{
+    docType: string; docId: number; batchNumber: string; quantity: number; unitCost: number; purchaseCost?: boolean;
+  }> = [];
+  const seen = new Set<string>();
+  const matches = (line: any) =>
+    String(line?.materialType ?? "item") === key.materialType
+    && Number(line?.itemId ?? line?.materialId) === key.refId;
+  for (const row of rows as any[]) {
+    if (row.doc_id == null) continue;
+    const docType = String(row.doc_type ?? "");
+    const docId = Number(row.doc_id);
+    const sourceKey = `${docType}:${docId}:${row.txn_type === "transfer_in" ? "in" : row.txn_type === "transfer_out" ? "out" : "doc"}`;
+    if (seen.has(sourceKey)) continue;
+    seen.add(sourceKey);
+    let lines: any[] = [];
+    if (docType === "purchase") {
+      lines = asJsonArray(row.purchase_lines).filter(matches);
+      for (const line of lines) {
+        allocations.push({
+          docType, docId, batchNumber: String(line.batchNumber ?? ""),
+          quantity: Number(line.quantity), unitCost: Number(line.costPerUnit ?? line.unitCost),
+          purchaseCost: true,
+        });
+      }
+    } else if (docType === "sale") {
+      lines = asJsonArray(row.sale_lines).filter(matches);
+      for (const line of lines) for (const b of asJsonArray(line.batchBreakdown)) {
+        allocations.push({ docType, docId, batchNumber: String(b.batchNumber ?? ""), quantity: Number(b.quantity), unitCost: Number(b.unitCost) });
+      }
+    } else if (docType === "stock_transfer") {
+      const raw = row.txn_type === "transfer_in" ? row.received_lines : row.transfer_lines;
+      lines = asJsonArray(raw).filter(matches);
+      for (const line of lines) for (const b of asJsonArray(line.batchBreakdown)) {
+        allocations.push({ docType, docId, batchNumber: String(b.batchNumber ?? ""), quantity: Number(b.quantity), unitCost: Number(b.unitCost) });
+      }
+    }
+  }
+  return resolveHistoricalBatchCoverage(expectedQuantity, movements, allocations);
+}
 
 /** Closing stock is both a P&L valuation input and an asset on the Balance Sheet. */
 export function balanceSheetAssetsTotal(fixedAssets: number, currentAssets: number, closingStock: number): number {
@@ -896,6 +975,7 @@ export async function stockAsOf(asOf: string | null | undefined, scope?: StockBr
   let unvalued = 0;
   let noCostHistory = 0;
   let missingTransitCost = 0;
+  const batchFallbackFailures: string[] = [];
 
   for (const key of keys) {
     const todayQty = todayByKey.get(key) ?? 0;
@@ -904,9 +984,9 @@ export async function stockAsOf(asOf: string | null | undefined, scope?: StockBr
     const explained = logged === undefined ? todayQty === 0 : Math.abs(logged - todayQty) <= 0.001;
     if (!explained) unreconciled += 1;
 
-    const snapshot = snapshotByKey.get(key);
+    let snapshot = snapshotByKey.get(key);
     const disputedTransferQty = unreceivedTransferQty.get(key) ?? 0;
-    if (snapshot && disputedTransferQty > 0) {
+    if (disputedTransferQty > 0) {
       // An old checkpoint may have been approved before transfer receipt
       // contradictions were detected. Do not guess whether it included the
       // destination posting; keep the sender-owned transit line separate.
@@ -931,13 +1011,19 @@ export async function stockAsOf(asOf: string | null | undefined, scope?: StockBr
     // — must not be quietly valued at nothing.
     if (!info) { unvalued += 1; continue; }
 
-    if (!snapshot) {
-      noCostHistory += 1;
-      continue;
-    }
-    if (qty > 0 && (!(snapshot.unitCost > 0) || !(snapshot.value > 0))) {
-      noCostHistory += 1;
-      continue;
+    if (!snapshot || !(snapshot.unitCost > 0) || !(snapshot.value > 0)) {
+      const batch = await historicalBatchCost(
+        q as Q,
+        { materialType, refId, branchType: key.split(":")[2], branchId: Number(key.split(":")[3]) },
+        asOf,
+        qty,
+      );
+      if (!batch.ok) {
+        noCostHistory += 1;
+        batchFallbackFailures.push(`${info.name}: ${batch.reason}`);
+        continue;
+      }
+      snapshot = { quantity: qty, unitCost: batch.unitCost, value: r2(qty * batch.unitCost) };
     }
     const rewindQty = todayQty - (afterByKey.get(key) ?? 0);
     if (Math.abs(snapshot.quantity - rewindQty) > 0.001) {
@@ -1028,6 +1114,9 @@ export async function stockAsOf(asOf: string | null | undefined, scope?: StockBr
     reasons.push(
       `${noCostHistory} product/location line${noCostHistory === 1 ? "" : "s"} has no positive, quantity-reconciled ERP cost checkpoint on or before the requested date; current item costs were not substituted`,
     );
+    if (batchFallbackFailures.length) {
+      reasons.push(`Historical batch fallback was not proven for: ${batchFallbackFailures.join("; ")}`);
+    }
   }
   if (transferConflicts.length > 0) {
     reasons.push(`${transferConflicts.length} transfer-in line${transferConflicts.length === 1 ? "" : "s"} has a ledger date before its receipt/reservation evidence; excluded from destination on-hand and retained as transit where supported`);

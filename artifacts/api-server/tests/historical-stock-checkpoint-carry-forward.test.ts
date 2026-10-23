@@ -7,6 +7,9 @@ function fakeDb(checkpoint: "exact" | "prior" | "later" | "none") {
       if (sql.includes("FROM historical_stock_evidence") && sql.includes("source_document")) {
         return { rows: [] };
       }
+      if (sql.includes("LEFT JOIN purchases p") && sql.includes("received_line_items")) {
+        return { rows: [] };
+      }
       if (sql.includes("SELECT MIN(COALESCE(txn_date, created_at::date))")) {
         return { rows: [{ first_move: "2026-09-01" }] };
       }

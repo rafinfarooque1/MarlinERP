@@ -25,6 +25,78 @@ export function duplicateHistoricalEvidenceKeys(rows: EvidenceKey[]): string[] {
   return [...duplicates];
 }
 
+export type HistoricalBatchLedgerMove = {
+  txnType: string;
+  txnDate: string | null;
+  docType: string;
+  docId: number | null;
+  qtyChange: unknown;
+};
+
+export type HistoricalBatchAllocation = {
+  docType: string;
+  docId: number;
+  batchNumber: string;
+  quantity: unknown;
+  unitCost: unknown;
+  purchaseCost?: boolean;
+};
+
+export function resolveHistoricalBatchCoverage(
+  expectedQuantity: number,
+  movements: HistoricalBatchLedgerMove[],
+  allocations: HistoricalBatchAllocation[],
+): { ok: true; unitCost: number; batchNumber: string } | { ok: false; reason: string } {
+  if (!Number.isFinite(expectedQuantity) || expectedQuantity <= 0) {
+    return { ok: false, reason: "cutoff quantity is not positive and finite" };
+  }
+  if (!movements.length || movements.some((m) => !m.txnDate)) {
+    return { ok: false, reason: "one or more historical movements have no business date" };
+  }
+  const allowed = new Set(["purchase", "sale", "sale_reversal", "sale_cancellation", "transfer_in", "transfer_out"]);
+  if (movements.some((m) => !allowed.has(m.txnType) || m.docId == null)) {
+    return { ok: false, reason: "movement type or source document is unsupported or missing" };
+  }
+  const ledgerQty = movements.reduce((sum, m) => sum + Number(m.qtyChange), 0);
+  if (Math.abs(ledgerQty - expectedQuantity) > 0.001) {
+    return { ok: false, reason: `dated ledger quantity ${ledgerQty} does not reconcile to cutoff quantity ${expectedQuantity}` };
+  }
+  const docs = new Map<string, number>();
+  for (const m of movements) {
+    const key = `${m.docType}:${m.docId}`;
+    docs.set(key, (docs.get(key) ?? 0) + Number(m.qtyChange));
+  }
+  const allocated = new Map<string, number>();
+  for (const a of allocations) {
+    const qty = Number(a.quantity);
+    const cost = Number(a.unitCost);
+    if (!a.batchNumber || !Number.isFinite(qty) || qty <= 0 || !Number.isFinite(cost) || cost <= 0) {
+      return { ok: false, reason: "a source allocation has missing batch identity, quantity, or positive cost" };
+    }
+    const key = `${a.docType}:${a.docId}`;
+    allocated.set(key, (allocated.get(key) ?? 0) + qty);
+  }
+  if (!allocations.length) return { ok: false, reason: "no source batch allocations were found" };
+  for (const [key, net] of docs) {
+    const qty = allocated.get(key);
+    if (qty == null || (Math.abs(net) > 0.001 && Math.abs(Math.abs(net) - qty) > 0.001)) {
+      return { ok: false, reason: `batch allocation for ${key} does not reconcile to its net ledger movement` };
+    }
+  }
+  if ([...allocated.keys()].some((key) => !docs.has(key))) {
+    return { ok: false, reason: "source batch allocation has no matching ledger movement" };
+  }
+  const batches = new Set(allocations.map((a) => a.batchNumber));
+  if (batches.size !== 1) return { ok: false, reason: "multiple batch identities contribute to the cutoff balance" };
+  const costRows = allocations.filter((a) => a.purchaseCost);
+  if (!costRows.length) return { ok: false, reason: "no purchase-backed batch cost was found" };
+  const costs = new Set(costRows.map((a) => Number(a.unitCost).toFixed(4)));
+  if (costs.size !== 1 || allocations.some((a) => Number(a.unitCost).toFixed(4) !== [...costs][0])) {
+    return { ok: false, reason: "batch costs conflict with the purchase-backed unit cost" };
+  }
+  return { ok: true, unitCost: Number(costRows[0].unitCost), batchNumber: [...batches][0] };
+}
+
 type Queryable = { query: (sql: string, params?: unknown[]) => Promise<{ rows: any[] }> };
 
 export function isHistoricalTransferReceiptReconciled(
