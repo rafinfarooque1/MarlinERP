@@ -49,6 +49,25 @@ assert.equal(isHistoricalTransferReceiptReconciled({
   reservation_count: 1,
   all_reservations_released_by_cutoff: false,
 }, "2026-08-31"), true, "An evidenced partial receipt must reconcile while its shortage remains reserved in transit.");
+const productionPartialReceiptShapes = [
+  { dispatched: 35, received: 30, transit: 5 },
+  { dispatched: 27, received: 26, transit: 1 },
+  { dispatched: 27, received: 26, transit: 1 },
+  { dispatched: 20, received: 18, transit: 2 },
+  { dispatched: 72, received: 36, transit: 36 },
+];
+for (const receipt of productionPartialReceiptShapes) {
+  assert.equal(isHistoricalTransferReceiptReconciled({
+    received_date: "2026-09-09",
+    receipt_evidence_date: "2026-09-09",
+    quantity: String(receipt.received),
+    received_quantity: String(receipt.received),
+    dispatched_quantity: String(receipt.dispatched),
+    reserved_quantity_at_cutoff: String(receipt.transit),
+    reservation_count: 2,
+    all_reservations_released_by_cutoff: false,
+  }, "2026-09-30"), true, "A partial destination receipt must remain on hand while only its undelivered balance stays in transit.");
+}
 assert.equal(isHistoricalTransferReceiptReconciled({
   received_date: null,
   receipt_evidence_date: "2026-09-01",
