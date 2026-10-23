@@ -85,7 +85,7 @@ interface FinancialStatements {
  * exactly what they always were, so PDF/CSV exports (which read the full,
  * unfiltered list) are untouched by collapsing.
  */
-interface Line { name: string; amount: number; depth: number; bold?: boolean; key: string; parentKey: string | null; hasChildren?: boolean }
+interface Line { name: string; amount: number | null; depth: number; bold?: boolean; key: string; parentKey: string | null; hasChildren?: boolean }
 
 /**
  * Flatten a group into indented lines.
@@ -281,10 +281,11 @@ function visibleLines(lines: Line[], expanded: Set<string>): Line[] {
  * deeper sub-ledgers closed).
  */
 function LineTable({
-  lines, total, totalLabel, loading, expanded, onToggle,
+  lines, total, totalLabel, loading, expanded, onToggle, totalUnverified = false,
 }: {
   lines: Line[]; total: number; totalLabel: string; loading?: boolean;
   expanded: Set<string>; onToggle: (key: string) => void;
+  totalUnverified?: boolean;
 }) {
   const rows = useMemo(() => visibleLines(lines, expanded), [lines, expanded]);
   return (
@@ -310,12 +311,12 @@ function LineTable({
           </span>
         ) },
         { key: 'amount', label: 'Amount', align: 'right', sortable: false, render: (l) => (
-          <span className={l.bold ? 'font-bold' : ''}>{fmt(l.amount)}</span>
+          <span className={l.amount == null ? 'text-amber-600 dark:text-amber-300' : l.bold ? 'font-bold' : ''}>{l.amount == null ? 'Unverified' : fmt(l.amount)}</span>
         ) },
       ] satisfies Col<Line>[]}
       rows={rows} loading={loading} rowKey={(l) => l.key}
       empty="No entries"
-      footer={[totalLabel, fmt(total)]}
+      footer={[totalLabel, totalUnverified ? 'Unverified' : fmt(total)]}
     />
   );
 }
@@ -393,6 +394,8 @@ function PnlReport({ range, loc, canDownload }: { range: RangeState; loc: Locati
   const transferIn = transferPnl ? Number((pl?.expenses as any)?.stockTransferIn ?? 0) : 0;
   const transferOut = transferPnl ? Number((pl?.incomes as any)?.stockTransferOut ?? 0) : 0;
   const purchasesForDisplay = pl?.expenses.purchases ?? 0;
+  const openingStockReliable = pl?.expenses.openingStockReliable === true;
+  const closingStockReliable = pl?.incomes.closingStockEvidenceReliable === true;
   const goodsAvailable = pl
     ? pl.expenses.openingStock + purchasesForDisplay + transferIn + pl.expenses.directExpenses.total
     : 0;
@@ -427,18 +430,18 @@ function PnlReport({ range, loc, canDownload }: { range: RangeState; loc: Locati
     { name: 'Net Sales', amount: pl.incomes.sales, kind: 'sub' },
     ...(Math.abs(directIncome) > 0.005 ? [{ name: 'Add: Direct Income', amount: directIncome }] : []),
     ...(transferPnl && Math.abs(transferOut) > 0.005 ? [{ name: 'Add: Stock Transfer Out', amount: transferOut }] : []),
-    { name: 'Opening Stock', amount: pl.expenses.openingStock },
+    { name: openingStockReliable ? 'Opening Stock' : 'Opening Stock (unverified)', amount: openingStockReliable ? pl.expenses.openingStock : null },
     { name: 'Add: Purchases (net of returns)', amount: purchasesForDisplay },
     ...(transferPnl && Math.abs(transferIn) > 0.005 ? [{ name: 'Add: Purchase Stock Transfer In', amount: transferIn }] : []),
     { name: 'Add: Direct Expenses', amount: pl.expenses.directExpenses.total },
-    { name: 'Goods Available for Sale', amount: goodsAvailable, kind: 'sub' },
+    { name: 'Goods Available for Sale', amount: openingStockReliable ? goodsAvailable : null, kind: 'sub' },
     ...(transferPnl
       ? [
-        { name: 'Less: Closing Stock (on hand)', amount: Number((pl.incomes as any).closingStockOnHand ?? pl.incomes.closingStock), less: true },
+        { name: closingStockReliable ? 'Less: Closing Stock (on hand)' : 'Less: Closing Stock (unverified)', amount: closingStockReliable ? Number((pl.incomes as any).closingStockOnHand ?? pl.incomes.closingStock) : null, less: true },
         ...(Math.abs(Number(pl.incomes.closingStockInTransit ?? 0)) > 0.005
           ? [{ name: 'Less: Stock in Transit', amount: Number(pl.incomes.closingStockInTransit), less: true }] : []),
       ]
-      : [{ name: 'Less: Closing Stock', amount: pl.incomes.closingStock, less: true }]),
+      : [{ name: closingStockReliable ? 'Less: Closing Stock' : 'Less: Closing Stock (unverified)', amount: closingStockReliable ? pl.incomes.closingStock : null, less: true }]),
     { name: 'Cost of Goods Sold (COGS)', amount: profitEvidenceReliable ? s?.costOfGoodsSold ?? 0 : null, kind: 'sub', id: 'pl-cogs' },
     { name: profitEvidenceReliable ? `Gross ${(s?.grossProfit ?? 0) >= 0 ? 'Profit' : 'Loss'} (GP)` : 'Gross Profit (unverified)', amount: profitEvidenceReliable ? Math.abs(s?.grossProfit ?? 0) : null, kind: 'total', id: 'pl-gross-profit' },
     { name: 'Add: Other Income', amount: s?.otherIncome ?? 0 },
@@ -467,7 +470,7 @@ function PnlReport({ range, loc, canDownload }: { range: RangeState; loc: Locati
   }, [isLoading]);
 
   const expenseLines: Line[] = pl ? [
-    { name: 'Opening Stock', amount: pl.expenses.openingStock, depth: 0, key: 'pl:openingStock', parentKey: null },
+    { name: openingStockReliable ? 'Opening Stock' : 'Opening Stock (unverified)', amount: openingStockReliable ? pl.expenses.openingStock : null, depth: 0, key: 'pl:openingStock', parentKey: null },
     { name: 'Purchases', amount: purchasesForDisplay, depth: 0, key: 'pl:purchases', parentKey: null },
     ...(transferPnl && Math.abs(transferIn) > 0.005
       ? [{ name: 'Purchase Stock Transfer In', amount: transferIn, depth: 0, key: 'pl:transferIn', parentKey: null }] : []),
@@ -480,13 +483,13 @@ function PnlReport({ range, loc, canDownload }: { range: RangeState; loc: Locati
       ? [{ name: 'Stock Transfer Out', amount: transferOut, depth: 0, key: 'pl:transferOut', parentKey: null }] : []),
     ...(transferPnl
       ? [
-        { name: 'Closing Stock (on hand)', amount: Number((pl.incomes as any).closingStockOnHand ?? pl.incomes.closingStock), depth: 0, key: 'pl:closingStock', parentKey: null },
+        { name: closingStockReliable ? 'Closing Stock (on hand)' : 'Closing Stock (unverified)', amount: closingStockReliable ? Number((pl.incomes as any).closingStockOnHand ?? pl.incomes.closingStock) : null, depth: 0, key: 'pl:closingStock', parentKey: null },
         ...(Math.abs(Number(pl.incomes.closingStockInTransit ?? 0)) > 0.005
           ? [{ name: 'Stock in Transit', amount: Number(pl.incomes.closingStockInTransit), depth: 0, key: 'pl:closingStockTransit', parentKey: null }] : []),
       ]
       : [
         {
-          name: 'Closing Stock', amount: pl.incomes.closingStock, depth: 0,
+          name: closingStockReliable ? 'Closing Stock' : 'Closing Stock (unverified)', amount: closingStockReliable ? pl.incomes.closingStock : null, depth: 0,
           key: 'pl:closingStock', parentKey: null,
           hasChildren: pl.incomes.closingStockInTransit > 0.005,
         },
@@ -501,7 +504,7 @@ function PnlReport({ range, loc, canDownload }: { range: RangeState; loc: Locati
   const expCol = useCollapse(expenseLines, (l) => l.depth === 0);
   const incCol = useCollapse(incomeLines, (l) => l.depth === 0);
 
-  const toRows = (lines: Line[]) => lines.map((l) => [`${'   '.repeat(l.depth)}${l.name}`, pdfMoney(l.amount)] as (string | number)[]);
+  const toRows = (lines: Line[]) => lines.map((l) => [`${'   '.repeat(l.depth)}${l.name}`, l.amount == null ? 'Unverified' : pdfMoney(l.amount)] as (string | number)[]);
 
   const doc = (): ReportDoc => ({
     title: 'Profit & Loss Statement',
@@ -526,20 +529,21 @@ function PnlReport({ range, loc, canDownload }: { range: RangeState; loc: Locati
         heading: 'Expenses',
         columns: [{ label: 'Particulars', width: 3 }, MONEY_COL],
         rows: toRows(expenseLines),
-        totalsRow: ['Total Expenses', pdfMoney(pl?.expenses.total)],
+        totalsRow: ['Total Expenses', openingStockReliable ? pdfMoney(pl?.expenses.total) : 'Unverified'],
       },
       {
         heading: 'Incomes',
         columns: [{ label: 'Particulars', width: 3 }, MONEY_COL],
         rows: toRows(incomeLines),
-        totalsRow: ['Total Incomes', pdfMoney(pl?.incomes.total)],
+        totalsRow: ['Total Incomes', closingStockReliable ? pdfMoney(pl?.incomes.total) : 'Unverified'],
       },
     ],
     footerNote: (profitEvidenceReliable
       ? `Net ${(pl?.netProfit ?? 0) >= 0 ? 'Profit' : 'Loss'}: ${pdfMoney(Math.abs(pl?.netProfit ?? 0))}. `
       : 'Gross and net profit are unverified because inventory evidence is incomplete. ')
       + `Inventory is periodic: purchases are expensed and stock enters through opening and closing stock, valued at weighted-average cost.`
-      + (pl?.expenses.openingStockReliable === false ? ` Opening stock is incomplete — see the note on screen.` : ''),
+      + (pl?.expenses.openingStockReliable === false ? ` Opening stock is incomplete — see the note on screen.` : '')
+      + (pl?.incomes.closingStockEvidenceReliable === false ? ` Closing stock is incomplete — see the note on screen.` : ''),
   });
 
   return (
@@ -552,10 +556,10 @@ function PnlReport({ range, loc, canDownload }: { range: RangeState; loc: Locati
           doc={doc}
           onCSV={() => downloadCSV('profit-and-loss.csv', [
             ...stmtRows.map((r) => ({ Side: 'Statement', Particulars: r.name, 'Amount (₹)': r.amount == null ? 'Unverified' : r.amount.toFixed(2) })),
-            ...expenseLines.map((l) => ({ Side: 'Expenses', Particulars: l.name, 'Amount (₹)': l.amount.toFixed(2) })),
-            { Side: 'Expenses', Particulars: 'TOTAL', 'Amount (₹)': (pl?.expenses.total ?? 0).toFixed(2) },
-            ...incomeLines.map((l) => ({ Side: 'Incomes', Particulars: l.name, 'Amount (₹)': l.amount.toFixed(2) })),
-            { Side: 'Incomes', Particulars: 'TOTAL', 'Amount (₹)': (pl?.incomes.total ?? 0).toFixed(2) },
+            ...expenseLines.map((l) => ({ Side: 'Expenses', Particulars: l.name, 'Amount (₹)': l.amount == null ? 'Unverified' : l.amount.toFixed(2) })),
+            { Side: 'Expenses', Particulars: 'TOTAL', 'Amount (₹)': openingStockReliable ? (pl?.expenses.total ?? 0).toFixed(2) : 'Unverified' },
+            ...incomeLines.map((l) => ({ Side: 'Incomes', Particulars: l.name, 'Amount (₹)': l.amount == null ? 'Unverified' : l.amount.toFixed(2) })),
+            { Side: 'Incomes', Particulars: 'TOTAL', 'Amount (₹)': closingStockReliable ? (pl?.incomes.total ?? 0).toFixed(2) : 'Unverified' },
             { Side: '', Particulars: profitEvidenceReliable ? 'NET PROFIT' : 'NET PROFIT (UNVERIFIED)', 'Amount (₹)': profitEvidenceReliable ? (pl?.netProfit ?? 0).toFixed(2) : 'Unverified' },
           ])}
         />
@@ -632,14 +636,14 @@ function PnlReport({ range, loc, canDownload }: { range: RangeState; loc: Locati
             <h3 className="text-sm font-semibold text-muted-foreground">Expenses</h3>
             <DisclosureControls expandAll={expCol.expandAll} collapseAll={expCol.collapseAll} disabled={isLoading || !expCol.hasCollapsible} />
           </div>
-          <LineTable lines={expenseLines} total={pl?.expenses.total ?? 0} totalLabel="Total Expenses" loading={isLoading} expanded={expCol.expanded} onToggle={expCol.toggle} />
+          <LineTable lines={expenseLines} total={pl?.expenses.total ?? 0} totalLabel="Total Expenses" totalUnverified={!openingStockReliable} loading={isLoading} expanded={expCol.expanded} onToggle={expCol.toggle} />
         </div>
         <div className="space-y-2">
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-semibold text-muted-foreground">Incomes</h3>
             <DisclosureControls expandAll={incCol.expandAll} collapseAll={incCol.collapseAll} disabled={isLoading || !incCol.hasCollapsible} />
           </div>
-          <LineTable lines={incomeLines} total={pl?.incomes.total ?? 0} totalLabel="Total Incomes" loading={isLoading} expanded={incCol.expanded} onToggle={incCol.toggle} />
+          <LineTable lines={incomeLines} total={pl?.incomes.total ?? 0} totalLabel="Total Incomes" totalUnverified={!closingStockReliable} loading={isLoading} expanded={incCol.expanded} onToggle={incCol.toggle} />
         </div>
       </div>
     </div>
@@ -681,7 +685,7 @@ function BalanceSheetReport({ range, loc, canDownload }: { range: RangeState; lo
   const liaCol = useCollapse(liabilityLines, (l) => l.depth === 0);
   const astCol = useCollapse(assetLines, (l) => l.depth === 0);
 
-  const toRows = (lines: Line[]) => lines.map((l) => [`${'   '.repeat(l.depth)}${l.name}`, pdfMoney(l.amount)] as (string | number)[]);
+  const toRows = (lines: Line[]) => lines.map((l) => [`${'   '.repeat(l.depth)}${l.name}`, l.amount == null ? 'Unverified' : pdfMoney(l.amount)] as (string | number)[]);
   const asAt = range.to || 'today';
 
   const doc = (): ReportDoc => ({
@@ -721,9 +725,9 @@ function BalanceSheetReport({ range, loc, canDownload }: { range: RangeState; lo
           disabled={isLoading || !bs}
           doc={doc}
           onCSV={() => downloadCSV('balance-sheet.csv', [
-            ...liabilityLines.map((l) => ({ Side: 'Liabilities', Particulars: l.name, 'Amount (₹)': l.amount.toFixed(2) })),
+            ...liabilityLines.map((l) => ({ Side: 'Liabilities', Particulars: l.name, 'Amount (₹)': l.amount == null ? 'Unverified' : l.amount.toFixed(2) })),
             { Side: 'Liabilities', Particulars: 'TOTAL', 'Amount (₹)': (bs?.liabilities.total ?? 0).toFixed(2) },
-            ...assetLines.map((l) => ({ Side: 'Assets', Particulars: l.name, 'Amount (₹)': l.amount.toFixed(2) })),
+            ...assetLines.map((l) => ({ Side: 'Assets', Particulars: l.name, 'Amount (₹)': l.amount == null ? 'Unverified' : l.amount.toFixed(2) })),
             { Side: 'Assets', Particulars: 'TOTAL', 'Amount (₹)': (bs?.assets.total ?? 0).toFixed(2) },
           ])}
         />
