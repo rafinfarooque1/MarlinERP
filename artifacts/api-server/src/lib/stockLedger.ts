@@ -92,8 +92,8 @@ export async function writeStockLedger(
           quantity, unit_cost, value, source, source_id)
        SELECT COALESCE($7::date, CURRENT_DATE), se.material_type, se.item_id,
               se.branch_type, se.branch_id, se.quantity::numeric,
-                 COALESCE($8::numeric, previous_cost.unit_cost, se.cost_price::numeric),
-                 (se.quantity::numeric * COALESCE($8::numeric, previous_cost.unit_cost, se.cost_price::numeric))::numeric,
+                  COALESCE(NULLIF($8::numeric, 0), NULLIF(previous_cost.unit_cost, 0), NULLIF(se.cost_price::numeric, 0), 0),
+                  (se.quantity::numeric * COALESCE(NULLIF($8::numeric, 0), NULLIF(previous_cost.unit_cost, 0), NULLIF(se.cost_price::numeric, 0), 0))::numeric,
               $1, $6
          FROM stock_entries se
           LEFT JOIN LATERAL (

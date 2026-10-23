@@ -252,12 +252,20 @@ export async function ensureDailyStockClosures(pool: Pool): Promise<{ closedDate
          INSERT INTO ${ENTRIES_TABLE}
            (close_date, material_type, ref_id, branch_type, branch_id, quantity)
          SELECT d.close_date, k.material_type, k.ref_id, k.branch_type, k.branch_id,
-                COALESCE(s.quantity, 0)::numeric
+                 (COALESCE(s.quantity, 0) - COALESCE(f.after_close_qty, 0))::numeric
            FROM due_dates d
            CROSS JOIN keys k
            LEFT JOIN current_stock s
              ON s.material_type = k.material_type AND s.ref_id = k.ref_id
-            AND s.branch_type = k.branch_type AND s.branch_id = k.branch_id`,
+             AND s.branch_type = k.branch_type AND s.branch_id = k.branch_id
+            LEFT JOIN LATERAL (
+              SELECT COALESCE(SUM(m.qty_change::numeric), 0)::numeric AS after_close_qty
+                FROM stock_ledger m
+               WHERE m.id > $3::bigint
+                 AND m.material_type = k.material_type AND m.ref_id = k.ref_id
+                 AND m.branch_type = k.branch_type AND m.branch_id = k.branch_id
+                 AND COALESCE(m.txn_date, m.created_at::date) > d.close_date
+            ) f ON TRUE`,
         [firstDueDate, throughDate, baselineLedgerId],
       );
       await client.query(
