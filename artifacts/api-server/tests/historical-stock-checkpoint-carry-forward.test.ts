@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { stockAsOf } from "../src/lib/books";
 
-function fakeDb(hasExactDateCheckpoint: boolean) {
+function fakeDb(checkpoint: "exact" | "prior" | "later" | "none") {
   return {
     async query(sql: string) {
       if (sql.includes("FROM historical_stock_evidence") && sql.includes("source_document")) {
@@ -37,8 +37,12 @@ function fakeDb(hasExactDateCheckpoint: boolean) {
         };
       }
       if (sql.includes("FROM stock_cost_snapshots scs")) {
-        assert.match(sql, /scs\.as_of_date = \$1::date/, "Historical valuation requires a checkpoint on the requested date.");
-        if (!hasExactDateCheckpoint) return { rows: [] };
+        assert.match(sql, /scs\.as_of_date <= \$1::date/, "Historical valuation may carry forward a dated checkpoint.");
+        assert.match(sql, /scs\.as_of_date DESC, scs\.id DESC/, "The newest eligible checkpoint must win.");
+        if (checkpoint === "none") return { rows: [] };
+        const date = checkpoint === "exact" ? "2026-09-30"
+          : checkpoint === "later" ? "2026-09-25" : "2026-09-14";
+        const unitCost = checkpoint === "later" ? "7" : "5";
         return {
           rows: [{
             material_type: "item",
@@ -46,9 +50,9 @@ function fakeDb(hasExactDateCheckpoint: boolean) {
             branch_type: "warehouse",
             branch_id: 3,
             quantity: "10",
-            unit_cost: "5",
-            value: "50",
-            as_of_date: "2026-09-30",
+            unit_cost: unitCost,
+            value: String(Number(unitCost) * 10),
+            as_of_date: date,
           }],
         };
       }
@@ -62,15 +66,23 @@ function fakeDb(hasExactDateCheckpoint: boolean) {
   };
 }
 
-const exact = await stockAsOf("2026-09-30", null, fakeDb(true) as any);
+const exact = await stockAsOf("2026-09-30", null, fakeDb("exact") as any);
 assert.equal(exact.reliable, true, "An exact-date persisted checkpoint is authoritative.");
 assert.equal(exact.total, 50, "Use the persisted checkpoint value.");
 assert.equal(exact.items[0]?.unitCost, 5, "Do not substitute the current product-master cost.");
 
-const missingExact = await stockAsOf("2026-09-30", null, fakeDb(false) as any);
-assert.equal(missingExact.reliable, false, "A checkpoint from another date is not enough to establish historical cost.");
-assert.equal(missingExact.total, 0, "Do not include an unverified historical on-hand value.");
-assert.match(missingExact.note ?? "", /Current ERP stock data is present/);
-assert.match(missingExact.note ?? "", /current item costs were not substituted/);
+const prior = await stockAsOf("2026-09-30", null, fakeDb("prior") as any);
+assert.equal(prior.reliable, true, "A prior checkpoint is valid when its quantity reconciles and no later movement is present.");
+assert.equal(prior.total, 50, "Carry forward the persisted historical value rather than recomputing from current cost.");
+
+const later = await stockAsOf("2026-09-30", null, fakeDb("later") as any);
+assert.equal(later.reliable, true, "The latest checkpoint before the requested date is selected.");
+assert.equal(later.total, 70, "A later checkpoint supersedes an older one.");
+
+const missing = await stockAsOf("2026-09-30", null, fakeDb("none") as any);
+assert.equal(missing.reliable, false, "A genuinely absent checkpoint remains unverified.");
+assert.equal(missing.total, 0, "Do not include an unverified historical on-hand value.");
+assert.match(missing.note ?? "", /Current ERP stock data is present/);
+assert.match(missing.note ?? "", /current item costs were not substituted/);
 
 console.log("historical-stock-checkpoint-carry-forward: exact-date checkpoints are accepted; current ERP costs are not substituted for missing history");
