@@ -73,6 +73,8 @@ assert.equal(resolveHistoricalBatchCoverage(mango.expected, mango.movements, man
   "missing source allocations fail closed");
 assert.equal(resolveHistoricalBatchCoverage(mango.expected, mango.movements.map((m, i) => i === 0 ? { ...m, txnDate: null } : m), mango.allocations).ok, false,
   "undated movements fail closed");
+assert.equal(resolveHistoricalBatchCoverage(mango.expected, mango.movements.map((m, i) => i === 0 ? { ...m, txnDate: "2026-02-30" } : m), mango.allocations).ok, false,
+  "impossible business dates fail closed");
 assert.equal(resolveHistoricalBatchCoverage(mango.expected + 1, mango.movements, mango.allocations).ok, false,
   "ledger and cutoff quantity conflicts fail closed");
 assert.equal(resolveHistoricalBatchCoverage(mango.expected, mango.movements, mango.allocations.map((a, i) => i === 1 ? { ...a, batchNumber: "OTHER" } : a)).ok, false,
@@ -101,7 +103,7 @@ function dbFor(fixture: typeof mango) {
       }
       if (sql.includes("FROM stock_entries se")) return { rows: [{ material_type: "item", ref_id: 9, branch_type: "warehouse", branch_id: 5, quantity: String(fixture.expected) }] };
       if (sql.includes("FROM stock_cost_snapshots scs")) return { rows: [] };
-      if (sql.includes("LEFT JOIN purchases p") && sql.includes("received_line_items")) return { rows };
+      if (sql.includes("to_jsonb(p)->'line_items'") && sql.includes("received_line_items")) return { rows };
       if (sql.includes("FROM stock_reservations")) return { rows: [] };
       if (sql.includes("FROM stock_transfers t")) return { rows: [] };
       if (sql.includes("FROM items")) return { rows: [{ id: 9, name: fixture.batch, unit: "kg", unit_cost: "999" }] };
@@ -112,7 +114,7 @@ function dbFor(fixture: typeof mango) {
 
 for (const fixture of [mango, strawberry]) {
   const result = await stockAsOf("2026-09-30", null, dbFor(fixture) as any);
-  assert.equal(result.reliable, true, "stockAsOf accepts fully dated, purchase-backed batch coverage");
+  assert.equal(result.reliable, true, `stockAsOf accepts fully dated, purchase-backed batch coverage: ${result.note}`);
   assert.equal(result.items[0]?.stock, fixture.expected);
   assert.equal(result.items[0]?.unitCost, fixture.cost);
   assert.equal(result.total, fixture.expected * fixture.cost);
