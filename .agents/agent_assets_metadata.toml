@@ -191,3 +191,17 @@ mtime_ms = 1792502230068
 storage_uri = "gcs://replit-rams-assets-sisko/rams/assets/repl:bd7bcd33-774f-4b61-bf46-8afc6db19a81/52c1b88e-bea4-401b-900f-0d4d6a010dbb/5ca18bf6-a100-424a-8c0f-da8d20a7cc98"
 storage_version_token = "1792502385752059"
 content_type = "text/csv"
+
+[[outputs]]
+id = "Q1scsvaN9Sy8KFl8acnCA"
+uri = "file://.agents/outputs/historical-stock-audit-2026-09-30.csv"
+type = "table"
+title = "September 30, 2026 stock evidence audit"
+description = "110 affected product/location lines with cutoff quantities, nearest earlier checkpoint context, and latest pre-cutoff ledger movement. Earlier costs are explicitly marked as non-authoritative for September 30."
+logical_id = "8627e160-8c55-4850-b1b3-271ceb60d26b"
+content_hash = "sha256:b04396ebd28966b870f1460110d883545aeb12362f544289048e8ed20483ac96"
+size = 30574
+mtime_ms = 1792781588910
+storage_uri = "gcs://replit-rams-assets-sisko/rams/assets/repl:bd7bcd33-774f-4b61-bf46-8afc6db19a81/8627e160-8c55-4850-b1b3-271ceb60d26b/994a2a0b-64a1-4b8c-9d17-c0256433e763"
+storage_version_token = "1792781599112444"
+content_type = "text/csv"
