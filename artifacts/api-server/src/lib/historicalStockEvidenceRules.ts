@@ -48,7 +48,7 @@ export function resolveHistoricalBatchCoverage(
   expectedQuantity: number,
   movements: HistoricalBatchLedgerMove[],
   allocations: HistoricalBatchAllocation[],
-): { ok: true; unitCost: number; batchNumber: string } | { ok: false; reason: string } {
+): { ok: true; unitCost: number; value: number; batchNumber: string } | { ok: false; reason: string } {
   if (!Number.isFinite(expectedQuantity) || expectedQuantity <= 0) {
     return { ok: false, reason: "cutoff quantity is not positive and finite" };
   }
@@ -64,9 +64,11 @@ export function resolveHistoricalBatchCoverage(
     return { ok: false, reason: `dated ledger quantity ${ledgerQty} does not reconcile to cutoff quantity ${expectedQuantity}` };
   }
   const docs = new Map<string, number>();
+  const docMoves = new Map<string, HistoricalBatchLedgerMove[]>();
   for (const m of movements) {
     const key = `${m.docType}:${m.docId}`;
     docs.set(key, (docs.get(key) ?? 0) + Number(m.qtyChange));
+    docMoves.set(key, [...(docMoves.get(key) ?? []), m]);
   }
   const allocated = new Map<string, number>();
   for (const a of allocations) {
@@ -81,6 +83,17 @@ export function resolveHistoricalBatchCoverage(
   if (!allocations.length) return { ok: false, reason: "no source batch allocations were found" };
   for (const [key, net] of docs) {
     const qty = allocated.get(key);
+    if (Math.abs(net) <= 0.001 && qty == null) {
+      const moves = docMoves.get(key) ?? [];
+      const sold = moves.filter((m) => m.txnType === "sale")
+        .reduce((sum, m) => sum + Math.min(0, Number(m.qtyChange)), 0);
+      const restored = moves.filter((m) => m.txnType === "sale_reversal" || m.txnType === "sale_cancellation")
+        .reduce((sum, m) => sum + Math.max(0, Number(m.qtyChange)), 0);
+      if (!(sold < 0 && restored > 0 && Math.abs(sold + restored) <= 0.001)) {
+        return { ok: false, reason: `zero-net movement for ${key} is not a balanced sale reversal` };
+      }
+      continue;
+    }
     if (qty == null || (Math.abs(net) > 0.001 && Math.abs(Math.abs(net) - qty) > 0.001)) {
       return { ok: false, reason: `batch allocation for ${key} does not reconcile to its net ledger movement` };
     }
@@ -88,15 +101,46 @@ export function resolveHistoricalBatchCoverage(
   if ([...allocated.keys()].some((key) => !docs.has(key))) {
     return { ok: false, reason: "source batch allocation has no matching ledger movement" };
   }
-  const batches = new Set(allocations.map((a) => a.batchNumber));
-  if (batches.size !== 1) return { ok: false, reason: "multiple batch identities contribute to the cutoff balance" };
-  const costRows = allocations.filter((a) => a.purchaseCost);
-  if (!costRows.length) return { ok: false, reason: "no purchase-backed batch cost was found" };
-  const costs = new Set(costRows.map((a) => Number(a.unitCost).toFixed(4)));
-  if (costs.size !== 1 || allocations.some((a) => Number(a.unitCost).toFixed(4) !== [...costs][0])) {
-    return { ok: false, reason: "batch costs conflict with the purchase-backed unit cost" };
+  const batchBalances = new Map<string, number>();
+  for (const [key, net] of docs) {
+    if (Math.abs(net) <= 0.001) continue;
+    const sign = Math.sign(net);
+    for (const a of allocations.filter((row) => `${row.docType}:${row.docId}` === key)) {
+      batchBalances.set(a.batchNumber, (batchBalances.get(a.batchNumber) ?? 0) + sign * Number(a.quantity));
+    }
   }
-  return { ok: true, unitCost: Number(costRows[0].unitCost), batchNumber: [...batches][0] };
+  if ([...batchBalances.values()].some((qty) => qty < -0.001)) {
+    return { ok: false, reason: "a batch has a negative reconstructed cutoff balance" };
+  }
+  const positiveBatches = [...batchBalances].filter(([, qty]) => qty > 0.001);
+  const reconstructedQty = positiveBatches.reduce((sum, [, qty]) => sum + qty, 0);
+  if (Math.abs(reconstructedQty - expectedQuantity) > 0.001) {
+    return { ok: false, reason: `batch balances total ${reconstructedQty} but cutoff quantity is ${expectedQuantity}` };
+  }
+  const purchaseCosts = new Map<string, Set<string>>();
+  for (const row of allocations.filter((a) => a.purchaseCost)) {
+    const costs = purchaseCosts.get(row.batchNumber) ?? new Set<string>();
+    costs.add(Number(row.unitCost).toFixed(4));
+    purchaseCosts.set(row.batchNumber, costs);
+  }
+  let totalValue = 0;
+  for (const [batch, qty] of positiveBatches) {
+    const costs = purchaseCosts.get(batch);
+    if (!costs?.size) return { ok: false, reason: `batch ${batch} has no purchase-backed cost` };
+    if (costs.size !== 1) return { ok: false, reason: `batch ${batch} has conflicting purchase costs` };
+    const cost = Number([...costs][0]);
+    if (allocations.some((a) => a.batchNumber === batch && Number(a.unitCost).toFixed(4) !== cost.toFixed(4))) {
+      return { ok: false, reason: `batch ${batch} movements conflict with its purchase-backed cost` };
+    }
+    totalValue += qty * cost;
+  }
+  if (!positiveBatches.length) return { ok: false, reason: "no positive historical batch balance remains at the cutoff" };
+  return {
+    ok: true,
+    unitCost: totalValue / expectedQuantity,
+    value: Math.round(totalValue * 100) / 100,
+    batchNumber: positiveBatches.map(([batch]) => batch).join(", "),
+  };
 }
 
 type Queryable = { query: (sql: string, params?: unknown[]) => Promise<{ rows: any[] }> };

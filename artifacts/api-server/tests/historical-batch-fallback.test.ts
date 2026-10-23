@@ -4,7 +4,7 @@ import { resolveHistoricalBatchCoverage } from "../src/lib/historicalStockEviden
 
 type Doc = {
   docType: string; docId: number; txnType: string; qty: number; lines: any[];
-  purchaseLines?: any[];
+  purchaseLines?: any[]; receivedQty?: number;
 };
 
 function makeCase(args: {
@@ -69,6 +69,18 @@ for (const fixture of [mango, strawberry]) {
   }
 }
 
+const multiBatch = resolveHistoricalBatchCoverage(80, [
+  { txnType: "purchase", txnDate: "2026-06-01", docType: "purchase", docId: 1, qtyChange: 40 },
+  { txnType: "purchase", txnDate: "2026-06-02", docType: "purchase", docId: 2, qtyChange: 60 },
+  { txnType: "sale", txnDate: "2026-06-03", docType: "sale", docId: 3, qtyChange: -20 },
+], [
+  { docType: "purchase", docId: 1, batchNumber: "LOT-A", quantity: 40, unitCost: 10, purchaseCost: true },
+  { docType: "purchase", docId: 2, batchNumber: "LOT-B", quantity: 60, unitCost: 20, purchaseCost: true },
+  { docType: "sale", docId: 3, batchNumber: "LOT-A", quantity: 20, unitCost: 10 },
+]);
+assert.equal(multiBatch.ok, true, "complete evidence may support more than one batch and purchase cost");
+if (multiBatch.ok) assert.equal(multiBatch.unitCost, 17.5, "mixed batches are valued at their weighted historical unit cost");
+
 assert.equal(resolveHistoricalBatchCoverage(mango.expected, mango.movements, mango.allocations.slice(0, -1)).ok, false,
   "missing source allocations fail closed");
 assert.equal(resolveHistoricalBatchCoverage(mango.expected, mango.movements.map((m, i) => i === 0 ? { ...m, txnDate: null } : m), mango.allocations).ok, false,
@@ -95,15 +107,25 @@ assert.equal(resolveHistoricalBatchCoverage(mango.expected, mango.movements, [
   ...mango.allocations,
   { docType: "purchase", docId: 999, batchNumber: mango.batch, quantity: 1, unitCost: 90 },
 ]).ok, false, "source allocations without matching ledger documents fail closed");
+const reversedSaleId = strawberry.movements.find((m) => m.txnType === "sale_reversal")?.docId;
+assert.ok(reversedSaleId != null);
+assert.equal(resolveHistoricalBatchCoverage(strawberry.expected, strawberry.movements,
+  strawberry.allocations.filter((a) => a.docId !== reversedSaleId)).ok, true,
+  "a fully balanced sale/reversal pair with zero net quantity does not require a current sale line");
 
 function dbFor(fixture: typeof mango) {
+  const reversedSaleId = fixture.docs.find((d) => d.txnType === "sale_reversal")?.docId;
   const rows = fixture.docs.map((d) => ({
     txn_type: d.txnType, txn_date: "2026-09-20", doc_type: d.docType, doc_id: d.docId,
     qty_change: d.qty,
     purchase_lines: d.purchaseLines ?? null,
-    sale_lines: d.docType === "sale" ? d.lines : null,
-    transfer_lines: d.docType === "stock_transfer" && d.txnType === "transfer_out" ? d.lines : null,
-    received_lines: d.docType === "stock_transfer" && d.txnType === "transfer_in" ? d.lines : null,
+    sale_lines: d.docType === "sale"
+      ? d.docId === reversedSaleId ? [{ itemId: 88, quantity: 1, batchBreakdown: [] }] : d.lines
+      : null,
+    transfer_lines: d.docType === "stock_transfer" ? d.lines : null,
+    received_lines: d.docType === "stock_transfer" && d.txnType === "transfer_in"
+      ? d.lines.map(({ batchBreakdown: _ignored, ...line }) => ({ ...line, quantity: d.receivedQty ?? line.quantity, costPrice: 0 }))
+      : null,
   }));
   return {
     async query(sql: string) {
