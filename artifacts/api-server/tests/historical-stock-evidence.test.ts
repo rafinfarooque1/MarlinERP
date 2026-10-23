@@ -4,6 +4,7 @@ import {
   duplicateHistoricalEvidenceKeys,
   missingHistoricalEvidenceKeys,
   historicalTransferReceiptConflicts,
+  isHistoricalTransferReceiptReconciled,
 } from "../src/lib/historicalStockEvidenceRules";
 
 const expectedKeys = [
@@ -15,16 +16,59 @@ assert.equal(duplicateHistoricalEvidenceKeys([expectedKeys[0], expectedKeys[0]])
 
 const conflictRows = await historicalTransferReceiptConflicts({
   async query(sql, params = []) {
-    assert.match(sql, /r\.released_at::date>\$1::date/);
+    assert.match(sql, /p\.branch_transfer_id=t\.id/);
+    assert.match(sql, /received_line_items/);
     assert.deepEqual(params, ["2026-08-31"]);
-    return { rows: [{
-      transfer_id: 3, material_type: "item", ref_id: 82, destination_type: "warehouse",
-      destination_id: 4, quantity: "100", received_date: null,
-      reservation_released_at: "2026-09-01T04:56:21.074Z", reservation_status: "released",
-    }] };
+    return { rows: [
+      {
+        transfer_id: 3, material_type: "item", ref_id: 82, destination_type: "warehouse",
+        destination_id: 4, quantity: "95", received_date: null,
+        receipt_evidence_date: "2026-08-31", dispatched_quantity: "100",
+        received_quantity: "95", reserved_quantity_at_cutoff: "5", reservation_count: 1,
+        all_reservations_released_by_cutoff: false,
+      },
+      {
+        transfer_id: 4, material_type: "item", ref_id: 41, destination_type: "warehouse",
+        destination_id: 3, quantity: "20", received_date: null,
+        receipt_evidence_date: null, dispatched_quantity: "20",
+        received_quantity: "20", reserved_quantity_at_cutoff: "0", reservation_count: 1,
+        all_reservations_released_by_cutoff: false,
+      },
+    ] };
   },
 }, "2026-08-31");
-assert.equal(conflictRows[0].transfer_id, 3, "A ledger receipt before a later reservation release must block approval.");
+assert.equal(conflictRows.length, 1);
+assert.equal(conflictRows[0].transfer_id, 4, "Missing linked receipt evidence must still block approval.");
+assert.equal(isHistoricalTransferReceiptReconciled({
+  received_date: null,
+  receipt_evidence_date: "2026-08-31",
+  quantity: "95",
+  received_quantity: "95",
+  dispatched_quantity: "100",
+  reserved_quantity_at_cutoff: "5",
+  reservation_count: 1,
+  all_reservations_released_by_cutoff: false,
+}, "2026-08-31"), true, "An evidenced partial receipt must reconcile while its shortage remains reserved in transit.");
+assert.equal(isHistoricalTransferReceiptReconciled({
+  received_date: null,
+  receipt_evidence_date: "2026-09-01",
+  quantity: "95",
+  received_quantity: "95",
+  dispatched_quantity: "100",
+  reserved_quantity_at_cutoff: "5",
+  reservation_count: 1,
+  all_reservations_released_by_cutoff: false,
+}, "2026-08-31"), false, "Receipt evidence after the cutoff must not be counted.");
+assert.equal(isHistoricalTransferReceiptReconciled({
+  received_date: null,
+  receipt_evidence_date: null,
+  quantity: "50",
+  received_quantity: "50",
+  dispatched_quantity: "50",
+  reserved_quantity_at_cutoff: "0",
+  reservation_count: 1,
+  all_reservations_released_by_cutoff: true,
+}, "2026-08-31"), true, "A fully released reservation with a matching receipt ledger remains valid legacy evidence.");
 
 const queries: Array<{ sql: string; params: unknown[] }> = [];
 const q = {

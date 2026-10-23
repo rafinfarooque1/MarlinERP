@@ -83,10 +83,10 @@ try {
   const septemberClose = await stockValuation(pool, { asOf: "2026-09-30", includeInTransit: true });
   assert.equal(
     septemberClose.issues.filter((issue) => issue.code === "TRANSFER_RECEIPT_DATE_CONFLICT").length,
-    5,
-    "All transfer receipt/reservation conflicts at the September cutoff must remain visible.",
+    0,
+    "Source-documented partial receipts must remain on-hand while only their unreconciled shortfalls remain in transit.",
   );
-  assert.equal(septemberClose.reliable, false);
+  assert.equal(septemberClose.reliable, false, "Uncosted on-hand lines still prevent a reliable full valuation.");
 
   console.log(JSON.stringify({
     countLines: rows.map((row) => ({
