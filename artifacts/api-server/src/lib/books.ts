@@ -1112,7 +1112,7 @@ export async function stockAsOf(asOf: string | null | undefined, scope?: StockBr
   }
   if (noCostHistory > 0) {
     reasons.push(
-      `${noCostHistory} product/location line${noCostHistory === 1 ? "" : "s"} has no positive, quantity-reconciled ERP cost checkpoint on or before the requested date; current item costs were not substituted`,
+      `${noCostHistory} product/location line${noCostHistory === 1 ? "" : "s"} has no positive, quantity-reconciled cost checkpoint or complete historical batch evidence on or before the requested date; current item costs were not substituted`,
     );
     if (batchFallbackFailures.length) {
       reasons.push(`Historical batch fallback was not proven for: ${batchFallbackFailures.join("; ")}`);

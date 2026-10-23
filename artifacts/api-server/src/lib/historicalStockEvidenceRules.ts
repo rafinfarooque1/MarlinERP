@@ -1,3 +1,5 @@
+import { isIsoDate } from "./dateInput";
+
 export type EvidenceKey = {
   materialType: string;
   refId: number;
@@ -50,8 +52,8 @@ export function resolveHistoricalBatchCoverage(
   if (!Number.isFinite(expectedQuantity) || expectedQuantity <= 0) {
     return { ok: false, reason: "cutoff quantity is not positive and finite" };
   }
-  if (!movements.length || movements.some((m) => !m.txnDate)) {
-    return { ok: false, reason: "one or more historical movements have no business date" };
+  if (!movements.length || movements.some((m) => !isIsoDate(m.txnDate))) {
+    return { ok: false, reason: "one or more historical movements have a missing or invalid business date" };
   }
   const allowed = new Set(["purchase", "sale", "sale_reversal", "sale_cancellation", "transfer_in", "transfer_out"]);
   if (movements.some((m) => !allowed.has(m.txnType) || m.docId == null)) {
