@@ -19,7 +19,7 @@ import {
   MOVEMENT_CLASS_DAYS, type MovementClass,
 } from "../lib/inventoryAging";
 import { visibleLocationSql } from "../lib/warehouseVisibility";
-import { stockAsOf, todayISO } from "../lib/books";
+import { companyTodayISO, stockAsOf } from "../lib/books";
 
 const router = Router();
 
@@ -336,7 +336,7 @@ router.get("/stock/valuation", requireModuleView("page:/headoffice/inventory-rep
   if (asOf && !isIsoDate(asOf)) {
     res.status(400).json({ error: "asOf must be a valid YYYY-MM-DD date" }); return;
   }
-  const today = todayISO();
+  const today = await companyTodayISO(pool);
   if (asOf && asOf > today) {
     res.status(400).json({ error: "asOf cannot be in the future" }); return;
   }

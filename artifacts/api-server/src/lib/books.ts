@@ -160,6 +160,34 @@ export function todayISO(): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
+export function dateISOInTimeZone(date: Date, timeZone: string): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone, year: "numeric", month: "2-digit", day: "2-digit",
+  }).formatToParts(date);
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((value) => value.type === type)?.value ?? "";
+  return `${part("year")}-${part("month")}-${part("day")}`;
+}
+
+/** Current business date in the company's configured timezone. */
+export async function companyTodayISO(q: Q = pool, now = new Date()): Promise<string> {
+  const { rows: [row] } = await q.query(
+    `SELECT general_settings FROM company_settings LIMIT 1`,
+  );
+  let settings = row?.general_settings as Record<string, unknown> | string | null | undefined;
+  if (typeof settings === "string") {
+    try { settings = JSON.parse(settings) as Record<string, unknown>; }
+    catch { settings = null; }
+  }
+  let timeZone = String(settings?.timeZone ?? "Asia/Kolkata").trim() || "Asia/Kolkata";
+  try {
+    new Intl.DateTimeFormat("en-CA", { timeZone }).format(now);
+  } catch {
+    timeZone = "Asia/Kolkata";
+  }
+  return dateISOInTimeZone(now, timeZone);
+}
+
 // ── Chart of accounts ──────────────────────────────────────────────────────
 
 /** Root system groups that make up the profit & loss account. */
@@ -1336,6 +1364,7 @@ export async function buildBooks(
   const toDate = isDate(opts.toDate) ? opts.toDate : null;
   const location = opts.location ?? null;
   const q = opts.q ?? pool;
+  const companyToday = await companyTodayISO(q);
 
   const chart = await loadChart(q);
   const allPostings = await buildDerivedPostings(toDate ? { toDate, q } : { q });
@@ -1452,7 +1481,7 @@ export async function buildBooks(
       : null;
   const includeLocationTransfersInPnl = !!location && location.type !== "company";
   const skipStock = location?.type === "company";
-  const historicalClose = toDate !== null && toDate < todayISO();
+  const historicalClose = toDate !== null && toDate < companyToday;
   const closing = skipStock ? emptyStock
       : historicalClose ? await stockAsOf(toDate, stockScope, q)
       : await closingStockAt(stockScope, q, { includeInTransit: true });
@@ -1467,7 +1496,7 @@ export async function buildBooks(
     && fromDate !== null
     && toDate !== null
     && fromDate === toDate
-    && toDate === todayISO()
+    && toDate === companyToday
     && !(await hasStockMovementInRange(fromDate, toDate, stockScope, q));
   const normalOpening = skipStock || sameDayNoStockMovement ? emptyStock
     : fromDate ? await stockAsOf(previousDay(fromDate), stockScope, q) : await stockAsOf(null, undefined, q);
