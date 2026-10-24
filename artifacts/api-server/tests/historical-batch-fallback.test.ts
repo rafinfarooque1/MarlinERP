@@ -4,12 +4,14 @@ import { resolveHistoricalBatchCoverage } from "../src/lib/historicalStockEviden
 
 type Doc = {
   docType: string; docId: number; txnType: string; qty: number; lines: any[];
-  purchaseLines?: any[]; returnLines?: any[]; receivedQty?: number;
+  purchaseLines?: any[]; returnLines?: any[]; purchaseReturnLines?: any[];
+  purchaseSourceLines?: any[]; receivedQty?: number;
 };
 
 function makeCase(args: {
   expected: number; cost: number; batch: string; purchase: number;
-  inbound: number[]; outbound: number[]; sales: number[]; returns?: number[]; zeroSale?: number;
+  inbound: number[]; outbound: number[]; sales: number[];
+  returns?: number[]; purchaseReturns?: number[]; zeroSale?: number;
 }) {
   const docs: Doc[] = [{
     docType: "purchase", docId: 78, txnType: "purchase", qty: args.purchase,
@@ -33,6 +35,12 @@ function makeCase(args: {
     lines: [],
     returnLines: [{ itemId: 9, quantity: qty, batchRestore: [{ batchNumber: args.batch, quantity: qty, unitCost: args.cost }] }],
   });
+  for (const qty of args.purchaseReturns ?? []) docs.push({
+    docType: "purchase_return", docId: id++, txnType: "purchase_return", qty: -qty,
+    lines: [],
+    purchaseReturnLines: [{ lineIndex: 0, materialType: "item", materialId: 9, quantity: qty, unitCost: args.cost }],
+    purchaseSourceLines: docs[0].purchaseLines,
+  });
   if (args.zeroSale) docs.push({
     docType: "sale", docId: id++, txnType: "sale", qty: -args.zeroSale,
     lines: [{ itemId: 9, quantity: args.zeroSale, batchBreakdown: [{ batchNumber: args.batch, quantity: args.zeroSale, unitCost: args.cost }] }],
@@ -45,6 +53,11 @@ function makeCase(args: {
   }));
   const allocations = docs.flatMap((d) => (d.docType === "purchase" ? d.purchaseLines! : d.docType === "sales_return"
     ? d.returnLines!.flatMap((line) => line.batchRestore)
+    : d.docType === "purchase_return"
+    ? d.purchaseReturnLines!.map((line) => ({
+        batchNumber: d.purchaseSourceLines![line.lineIndex].batchNumber,
+        quantity: line.quantity, unitCost: line.unitCost,
+      }))
     : d.lines.flatMap((l) => d.docType === "sale"
     ? l.batchBreakdown.map((b: any) => ({ ...b, docType: d.docType, docId: d.docId }))
     : l.batchBreakdown.map((b: any) => ({ ...b, docType: d.docType, docId: d.docId }))))
@@ -68,8 +81,12 @@ const returnedLot = makeCase({
   expected: 70, cost: 42.5, batch: "PUR-20260615-00001", purchase: 100,
   inbound: [], outbound: [], sales: [40], returns: [10],
 });
+const purchaseReturnedLot = makeCase({
+  expected: 90, cost: 42.5, batch: "PUR-20260615-00002", purchase: 100,
+  inbound: [], outbound: [], sales: [], purchaseReturns: [10],
+});
 
-for (const fixture of [mango, strawberry, returnedLot]) {
+for (const fixture of [mango, strawberry, returnedLot, purchaseReturnedLot]) {
   const resolved = resolveHistoricalBatchCoverage(fixture.expected, fixture.movements, fixture.allocations);
   assert.equal(resolved.ok, true);
   if (resolved.ok) {
@@ -133,7 +150,9 @@ function dbFor(fixture: typeof mango) {
     sale_lines: d.docType === "sale"
       ? d.docId === reversedSaleId ? [{ itemId: 88, quantity: 1, batchBreakdown: [] }] : d.lines
       : null,
-    return_lines: d.returnLines ?? null,
+    sales_return_lines: d.returnLines ?? null,
+    purchase_return_lines: d.purchaseReturnLines ?? null,
+    purchase_source_lines: d.purchaseSourceLines ?? null,
     transfer_lines: d.docType === "stock_transfer" ? d.lines : null,
     received_lines: d.docType === "stock_transfer" && d.txnType === "transfer_in"
       ? d.lines.map(({ batchBreakdown: _ignored, ...line }) => ({ ...line, quantity: d.receivedQty ?? line.quantity, costPrice: 0 }))
@@ -149,7 +168,7 @@ function dbFor(fixture: typeof mango) {
       }
       if (sql.includes("FROM stock_entries se")) return { rows: [{ material_type: "item", ref_id: 9, branch_type: "warehouse", branch_id: 5, quantity: String(fixture.expected) }] };
       if (sql.includes("FROM stock_cost_snapshots scs")) return { rows: [] };
-       if (sql.includes("to_jsonb(p)->'line_items'") && sql.includes("return_lines") && sql.includes("received_line_items")) return { rows };
+      if (sql.includes("purchase_return_lines") && sql.includes("purchase_source_lines") && sql.includes("received_line_items")) return { rows };
       if (sql.includes("FROM stock_reservations")) return { rows: [] };
       if (sql.includes("FROM stock_transfers t")) return { rows: [] };
       if (sql.includes("FROM items")) return { rows: [{ id: 9, name: fixture.batch, unit: "kg", unit_cost: "999" }] };
@@ -158,7 +177,7 @@ function dbFor(fixture: typeof mango) {
   };
 }
 
-for (const fixture of [mango, strawberry, returnedLot]) {
+for (const fixture of [mango, strawberry, returnedLot, purchaseReturnedLot]) {
   const result = await stockAsOf("2026-09-30", null, dbFor(fixture) as any);
   assert.equal(result.reliable, true, `stockAsOf accepts fully dated, purchase-backed batch coverage: ${result.note}`);
   assert.equal(result.items[0]?.stock, fixture.expected);

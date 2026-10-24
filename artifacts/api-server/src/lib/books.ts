@@ -60,13 +60,17 @@ async function historicalBatchCost(
             sl.doc_id::int AS doc_id, sl.qty_change::numeric AS qty_change,
             to_jsonb(p)->'line_items' AS purchase_lines,
             to_jsonb(s)->'line_items' AS sale_lines,
-             to_jsonb(sr)->'line_items' AS return_lines,
+            to_jsonb(sr)->'line_items' AS sales_return_lines,
+            to_jsonb(pr)->'line_items' AS purchase_return_lines,
+            to_jsonb(purchase_source)->'line_items' AS purchase_source_lines,
             to_jsonb(t)->'line_items' AS transfer_lines,
             to_jsonb(t)->'received_line_items' AS received_lines
        FROM stock_ledger sl
        LEFT JOIN purchases p ON sl.doc_type = 'purchase' AND p.id = sl.doc_id
        LEFT JOIN sales s ON sl.doc_type = 'sale' AND s.id = sl.doc_id
         LEFT JOIN sales_returns sr ON sl.doc_type = 'sales_return' AND sr.id = sl.doc_id
+        LEFT JOIN purchase_returns pr ON sl.doc_type = 'purchase_return' AND pr.id = sl.doc_id
+        LEFT JOIN purchases purchase_source ON purchase_source.id = pr.purchase_id
        LEFT JOIN stock_transfers t ON sl.doc_type = 'stock_transfer' AND t.id = sl.doc_id
       WHERE sl.material_type = $1 AND sl.ref_id = $2
         AND sl.branch_type = $3 AND sl.branch_id = $4
@@ -114,9 +118,28 @@ async function historicalBatchCost(
       // Returns persist the exact batch restoration chosen from the original
       // sale. The return ledger row intentionally has no unit cost, so use
       // that source-backed allocation rather than the mutable batch table.
-      lines = asJsonArray(row.return_lines).filter(matches);
+      lines = asJsonArray(row.sales_return_lines).filter(matches);
       for (const line of lines) for (const b of asJsonArray(line.batchRestore)) {
         allocations.push({ docType, docId, batchNumber: String(b.batchNumber ?? ""), quantity: Number(b.quantity), unitCost: Number(b.unitCost) });
+      }
+    } else if (docType === "purchase_return") {
+      const sourceLines = asJsonArray(row.purchase_source_lines);
+      lines = asJsonArray(row.purchase_return_lines).filter(matches);
+      for (const line of lines) {
+        const lineIndex = Number(line.lineIndex);
+        const source = Number.isInteger(lineIndex) && lineIndex >= 0 ? sourceLines[lineIndex] : undefined;
+        const returnCost = Number(line.unitCost);
+        const sourceCost = Number(source?.costPerUnit ?? source?.unitCost);
+        if (!source || !matches(source) || !String(source.batchNumber ?? "").trim()
+            || !Number.isFinite(returnCost) || returnCost <= 0
+            || !Number.isFinite(sourceCost) || sourceCost <= 0
+            || Math.abs(returnCost - sourceCost) > 0.0001) {
+          return { ok: false, reason: `purchase return ${docId} has no matching purchase-line batch cost` };
+        }
+        allocations.push({
+          docType, docId, batchNumber: String(source.batchNumber),
+          quantity: Number(line.quantity), unitCost: returnCost,
+        });
       }
     } else if (docType === "stock_transfer") {
       const dispatchLines = asJsonArray(row.transfer_lines).filter(matches);
