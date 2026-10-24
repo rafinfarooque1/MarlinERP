@@ -33,6 +33,7 @@ export type HistoricalBatchLedgerMove = {
   docType: string;
   docId: number | null;
   qtyChange: unknown;
+  unitCost?: unknown;
 };
 
 export type HistoricalBatchAllocation = {
@@ -81,8 +82,44 @@ export function resolveHistoricalBatchCoverage(
     docs.set(key, (docs.get(key) ?? 0) + Number(m.qtyChange));
     docMoves.set(key, [...(docMoves.get(key) ?? []), m]);
   }
+  // A purchase line can be removed from the current bill after it is confirmed
+  // to have been a non-stock charge, while its old stock-ledger row remains.
+  // Reconcile that stale positive movement only when one fully-consumed sale
+  // has the exact same dated ledger quantity, batch, and recorded cost. This
+  // pair can neutralize a zero-balance lot, but is never cost evidence for stock
+  // remaining at the cutoff.
+  const reconciledAllocations = [...allocations];
+  for (const [purchaseKey, net] of docs) {
+    const purchaseMoves = docMoves.get(purchaseKey) ?? [];
+    if (!purchaseKey.startsWith("purchase:") || net <= 0.001
+        || reconciledAllocations.some((a) => `${a.docType}:${a.docId}` === purchaseKey)
+        || purchaseMoves.length !== 1 || purchaseMoves[0].txnType !== "purchase") continue;
+    const cost = Number(purchaseMoves[0].unitCost);
+    if (!Number.isFinite(cost) || cost <= 0) continue;
+    const matches = [...docs.entries()].flatMap(([saleKey, saleNet]) => {
+      if (!saleKey.startsWith("sale:") || Math.abs(saleNet + net) > 0.001) return [];
+      const saleAllocations = reconciledAllocations.filter((a) => `${a.docType}:${a.docId}` === saleKey);
+      const quantity = saleAllocations.reduce((sum, a) => sum + Number(a.quantity), 0);
+      const batchCosts = new Set(saleAllocations.map((a) =>
+        `${a.batchNumber}\u0000${Number(a.unitCost).toFixed(4)}`));
+      if (Math.abs(quantity - net) > 0.001 || batchCosts.size !== 1) return [];
+      const [identity] = [...batchCosts][0].split("\u0000");
+      const match = saleAllocations[0];
+      if (Math.abs(Number(match.unitCost) - cost) > 0.0001) return [];
+      return [{ saleKey, batchNumber: identity }];
+    });
+    if (matches.length !== 1) continue;
+    reconciledAllocations.push({
+      docType: "purchase",
+      docId: Number(purchaseKey.slice("purchase:".length)),
+      batchNumber: matches[0].batchNumber,
+      quantity: net,
+      unitCost: cost,
+    });
+  }
+
   const allocated = new Map<string, number>();
-  for (const a of allocations) {
+  for (const a of reconciledAllocations) {
     const qty = Number(a.quantity);
     const cost = Number(a.unitCost);
     if (!a.batchNumber || !Number.isFinite(qty) || qty <= 0 || !Number.isFinite(cost) || cost <= 0) {
@@ -126,7 +163,7 @@ export function resolveHistoricalBatchCoverage(
   for (const [key, net] of docs) {
     if (Math.abs(net) <= 0.001) continue;
     const sign = Math.sign(net);
-    for (const a of allocations.filter((row) => `${row.docType}:${row.docId}` === key)) {
+    for (const a of reconciledAllocations.filter((row) => `${row.docType}:${row.docId}` === key)) {
       batchBalances.set(a.batchNumber, (batchBalances.get(a.batchNumber) ?? 0) + sign * Number(a.quantity));
     }
   }
@@ -139,7 +176,7 @@ export function resolveHistoricalBatchCoverage(
     return { ok: false, reason: `batch balances total ${reconstructedQty} but cutoff quantity is ${expectedQuantity}` };
   }
   const purchaseCosts = new Map<string, Set<string>>();
-  for (const row of allocations.filter((a) => a.purchaseCost || a.costEvidence)) {
+  for (const row of reconciledAllocations.filter((a) => a.purchaseCost || a.costEvidence)) {
     const costs = purchaseCosts.get(row.batchNumber) ?? new Set<string>();
     costs.add(Number(row.unitCost).toFixed(4));
     purchaseCosts.set(row.batchNumber, costs);
@@ -160,7 +197,7 @@ export function resolveHistoricalBatchCoverage(
     if (!costs?.size) return { ok: false, reason: `batch ${batch} has no purchase-backed cost` };
     if (costs.size !== 1) return { ok: false, reason: `batch ${batch} has conflicting purchase costs` };
     const cost = Number([...costs][0]);
-    if (allocations.some((a) => a.batchNumber === batch && Number(a.unitCost).toFixed(4) !== cost.toFixed(4))) {
+    if (reconciledAllocations.some((a) => a.batchNumber === batch && Number(a.unitCost).toFixed(4) !== cost.toFixed(4))) {
       return { ok: false, reason: `batch ${batch} movements conflict with its purchase-backed cost` };
     }
     totalValue += qty * cost;
@@ -219,17 +256,28 @@ export function isHistoricalTransferReceiptReconciled(
 export async function historicalTransferReceiptConflicts(q: Queryable, asOf: string): Promise<any[]> {
   const { rows } = await q.query(
     `WITH transfer_receipts AS (
-       SELECT doc_id AS transfer_id,material_type,ref_id,branch_type AS destination_type,
-              branch_id AS destination_id,SUM(qty_change::numeric)::numeric AS quantity
-         FROM stock_ledger
-        WHERE doc_type='stock_transfer' AND txn_type='transfer_in'
-          AND COALESCE(txn_date,created_at::date)<=$1::date
-        GROUP BY doc_id,material_type,ref_id,branch_type,branch_id
+       SELECT sl.doc_id AS transfer_id,sl.material_type,sl.ref_id,
+              sl.branch_type AS destination_type,sl.branch_id AS destination_id,
+              SUM(sl.qty_change::numeric)::numeric AS quantity,
+              MAX(sl.created_at::date)::text AS receipt_created_date
+         FROM stock_ledger sl
+         JOIN stock_transfers source_transfer
+           ON sl.doc_type='stock_transfer' AND source_transfer.id=sl.doc_id
+         LEFT JOIN journal_vouchers source_voucher
+           ON source_voucher.id=source_transfer.receive_voucher_id
+         LEFT JOIN purchases source_purchase
+           ON source_purchase.id=source_transfer.purchase_id
+          AND source_purchase.branch_transfer_id=source_transfer.id
+        WHERE sl.txn_type='transfer_in'
+          AND COALESCE(source_transfer.received_date::date,source_voucher.voucher_date::date,
+                       source_purchase.purchase_date::date,sl.created_at::date)<=$1::date
+        GROUP BY sl.doc_id,sl.material_type,sl.ref_id,sl.branch_type,sl.branch_id
      )
      SELECT t.id AS transfer_id,sl.material_type,sl.ref_id,sl.destination_type,
             sl.destination_id,sl.quantity,
             t.received_date::text AS received_date,
-            COALESCE(t.received_date,rv.voucher_date,p.purchase_date)::text AS receipt_evidence_date,
+             COALESCE(t.received_date::date,rv.voucher_date::date,p.purchase_date::date,
+                      sl.receipt_created_date::date)::text AS receipt_evidence_date,
             dispatched.quantity AS dispatched_quantity,received.quantity AS received_quantity,
             reservations.reserved_quantity_at_cutoff,reservations.reservation_count,
             reservations.all_reservations_released_by_cutoff

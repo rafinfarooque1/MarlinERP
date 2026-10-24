@@ -57,7 +57,12 @@ async function historicalBatchCost(
   purchaseCostsByProduct: Map<string, Array<{ batchNumber: string; unitCost: unknown }>>,
 ): Promise<{ ok: true; unitCost: number; value: number; batchNumber: string } | { ok: false; reason: string }> {
   const { rows } = await q.query(
-    `SELECT sl.txn_type, sl.txn_date::text AS txn_date, sl.doc_type,
+    `SELECT sl.txn_type,
+            (CASE WHEN sl.doc_type = 'stock_transfer' AND sl.txn_type = 'transfer_in'
+                  THEN COALESCE(t.received_date::date, receipt_voucher.voucher_date::date,
+                                receipt_purchase.purchase_date::date, sl.created_at::date)
+                  ELSE COALESCE(sl.txn_date, sl.created_at::date) END)::text AS txn_date,
+            sl.doc_type,
             sl.doc_id::int AS doc_id, sl.qty_change::numeric AS qty_change,
             sl.unit_cost::numeric AS unit_cost,
             to_jsonb(p)->'line_items' AS purchase_lines,
@@ -86,10 +91,19 @@ async function historicalBatchCost(
          AND adjustment_batch.source = 'adjustment'
          AND adjustment_batch.source_id = sl.doc_id
        LEFT JOIN stock_transfers t ON sl.doc_type = 'stock_transfer' AND t.id = sl.doc_id
+        LEFT JOIN journal_vouchers receipt_voucher ON receipt_voucher.id = t.receive_voucher_id
+        LEFT JOIN purchases receipt_purchase
+          ON receipt_purchase.id = t.purchase_id AND receipt_purchase.branch_transfer_id = t.id
       WHERE sl.material_type = $1 AND sl.ref_id = $2
         AND sl.branch_type = $3 AND sl.branch_id = $4
-        AND (sl.txn_date <= $5::date OR sl.txn_date IS NULL)
-      ORDER BY sl.txn_date NULLS FIRST, sl.id`,
+         AND (CASE WHEN sl.doc_type = 'stock_transfer' AND sl.txn_type = 'transfer_in'
+                   THEN COALESCE(t.received_date::date, receipt_voucher.voucher_date::date,
+                                 receipt_purchase.purchase_date::date, sl.created_at::date)
+                   ELSE COALESCE(sl.txn_date, sl.created_at::date) END) <= $5::date
+       ORDER BY CASE WHEN sl.doc_type = 'stock_transfer' AND sl.txn_type = 'transfer_in'
+                     THEN COALESCE(t.received_date::date, receipt_voucher.voucher_date::date,
+                                   receipt_purchase.purchase_date::date, sl.created_at::date)
+                     ELSE COALESCE(sl.txn_date, sl.created_at::date) END, sl.id`,
     [key.materialType, key.refId, key.branchType, key.branchId, asOf],
   );
   const movements = rows.map((r: any) => ({
@@ -98,6 +112,7 @@ async function historicalBatchCost(
     docType: String(r.doc_type ?? ""),
     docId: r.doc_id == null ? null : Number(r.doc_id),
     qtyChange: r.qty_change,
+    unitCost: r.unit_cost,
   }));
   const allocations: Array<{
     docType: string; docId: number; batchNumber: string; quantity: number; unitCost: number;
@@ -422,15 +437,19 @@ export async function stockTransferOpeningAdjustment(
   q: Q = pool,
 ): Promise<StockTransferOpeningAdjustment> {
   const params: unknown[] = [];
+  const movementDate = `CASE WHEN sl.doc_type = 'stock_transfer' AND sl.txn_type = 'transfer_in'
+    THEN COALESCE(transfer_doc.received_date::date, receipt_voucher.voucher_date::date,
+                  receipt_purchase.purchase_date::date, sl.created_at::date)
+    ELSE COALESCE(sl.txn_date, sl.created_at::date) END`;
   const conds = [`sl.txn_type IN ('transfer_out', 'transfer_in')`];
 
   if (fromDate) {
     params.push(fromDate);
-    conds.push(`COALESCE(sl.txn_date, sl.created_at::date) >= $${params.length}::date`);
+    conds.push(`${movementDate} >= $${params.length}::date`);
   }
   if (toDate) {
     params.push(toDate);
-    conds.push(`COALESCE(sl.txn_date, sl.created_at::date) <= $${params.length}::date`);
+    conds.push(`${movementDate} <= $${params.length}::date`);
   }
 
   if (scope) {
@@ -470,6 +489,10 @@ export async function stockTransferOpeningAdjustment(
        FROM stock_ledger sl
        LEFT JOIN stock_transfers transfer_doc
          ON sl.doc_type = 'stock_transfer' AND transfer_doc.id = sl.doc_id
+        LEFT JOIN journal_vouchers receipt_voucher ON receipt_voucher.id = transfer_doc.receive_voucher_id
+        LEFT JOIN purchases receipt_purchase
+          ON receipt_purchase.id = transfer_doc.purchase_id
+         AND receipt_purchase.branch_transfer_id = transfer_doc.id
        LEFT JOIN LATERAL (
          SELECT SUM(original.quantity::numeric) AS total_qty,
                 SUM(original.quantity::numeric)
@@ -988,10 +1011,20 @@ export async function stockAsOf(
   const mvParams: unknown[] = [asOf];
   const mvWhere = branchWhere("sl", mvParams);
   const { rows: moves } = await q.query(
-    `SELECT material_type, ref_id::int AS ref_id, branch_type, branch_id::int AS branch_id,
-            COALESCE(SUM(qty_change::numeric) FILTER (WHERE COALESCE(txn_date, created_at::date) > $1::date), 0) AS after_qty,
+    `SELECT sl.material_type, sl.ref_id::int AS ref_id,
+            sl.branch_type, sl.branch_id::int AS branch_id,
+             COALESCE(SUM(sl.qty_change::numeric) FILTER (WHERE
+               CASE WHEN sl.doc_type = 'stock_transfer' AND sl.txn_type = 'transfer_in'
+                    THEN COALESCE(t.received_date::date, receipt_voucher.voucher_date::date,
+                                  receipt_purchase.purchase_date::date, sl.created_at::date)
+                    ELSE COALESCE(sl.txn_date, sl.created_at::date) END > $1::date), 0) AS after_qty,
             COALESCE(SUM(qty_change::numeric), 0) AS all_qty
-       FROM stock_ledger sl${mvWhere}
+        FROM stock_ledger sl
+        LEFT JOIN stock_transfers t ON sl.doc_type = 'stock_transfer' AND t.id = sl.doc_id
+        LEFT JOIN journal_vouchers receipt_voucher ON receipt_voucher.id = t.receive_voucher_id
+        LEFT JOIN purchases receipt_purchase
+          ON receipt_purchase.id = t.purchase_id AND receipt_purchase.branch_transfer_id = t.id
+        ${mvWhere}
       GROUP BY 1, 2, 3, 4`,
     mvParams,
   );

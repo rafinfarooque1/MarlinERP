@@ -32,3 +32,9 @@ Daily-close quantity snapshots can include a future business-date movement if it
 **Why:** Production's September 30 close included an October 1 sale created on September 30 local time, producing a lower quantity than the September 30 cost checkpoints.
 
 **How to apply:** For historical cutoffs, prefer business-date-aware reconciliation and flag same-day future-dated postings; do not use an unqualified current-stock snapshot to overwrite an exact-date cost snapshot.
+
+For transfer-in rows without an explicit receipt date, use the linked receipt voucher/purchase date or ledger creation date as the event-date fallback, consistently in statements and inventory valuation. A corrected non-stock purchase line may pair with a missing source allocation only when one sale allocation exactly matches the product, quantity, batch, and positive ledger cost and the lot is fully consumed; never use that inferred pair to cost positive cutoff stock.
+
+**Why:** Imported bill corrections can intentionally leave obsolete ledger rows for consumed lots, while transfer ledger business dates can precede actual receipt evidence. Exact consumed-pair reconciliation avoids inventing remaining stock or cost; consistent receipt dating avoids backdating stock into an earlier cutoff.
+
+**How to apply:** Keep these exceptions generic and fail closed on ambiguity, mismatched quantities/costs, or any positive balance lacking purchase-backed cost.
