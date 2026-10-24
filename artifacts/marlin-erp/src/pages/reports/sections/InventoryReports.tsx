@@ -71,6 +71,9 @@ function ValuationReport({ canDownload }: { canDownload: boolean }) {
     subtitle: `Snapshot as of ${asOf}`,
     metaRows: [
       ['As of', asOf],
+      ['Calculation reliability', data?.reliable === false ? 'Partial' : 'Reconciled'],
+      ['Review / approval state', 'Not changed by this report'],
+      ...(data?.note ? [['Calculation note', data.note] as [string, string]] : []),
       ['Locations', String(byLocation.length)],
       ['On-hand value', pdfMoney(onHandValue)],
       ['In-transit value', pdfMoney(inTransitValue)],
@@ -145,10 +148,28 @@ function ValuationReport({ canDownload }: { canDownload: boolean }) {
             'In Transit': r.inTransit ? 'Yes' : 'No',
             Qty: r.quantity, Reserved: r.reserved, Available: r.available,
             'Avg Cost (₹)': r.avgCost.toFixed(2), 'Value (₹)': r.value.toFixed(2),
+            'Calculation Reliability': data?.reliable === false ? 'Partial' : 'Reconciled',
+            'Review / Approval State': 'Not changed by this report',
+            'Calculation Note': data?.note ?? '',
           })))}
           doc={stockValuationDoc}
         />
       </div>
+
+      {data && (
+        <div
+          role={data.reliable ? 'status' : 'alert'}
+          className={`rounded-md border px-3 py-2 text-sm ${
+            data.reliable
+              ? 'border-emerald-500/30 bg-emerald-500/5 text-emerald-800 dark:text-emerald-300'
+              : 'border-amber-500/40 bg-amber-500/5 text-amber-900 dark:text-amber-200'
+          }`}
+        >
+          <strong>{data.reliable ? 'Valuation calculation reconciles' : 'Partial valuation — review required'}</strong>
+          <p className="mt-1 text-xs">This status describes calculation reliability only; it does not approve or change accountant-review records.</p>
+          {data.note && <p className="mt-1 text-xs">{data.note}</p>}
+        </div>
+      )}
 
       <SummaryCards cards={[
         { label: 'Grand Total', value: fmt(grandTotal), tone: 'accent' },
