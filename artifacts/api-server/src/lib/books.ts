@@ -60,11 +60,13 @@ async function historicalBatchCost(
             sl.doc_id::int AS doc_id, sl.qty_change::numeric AS qty_change,
             to_jsonb(p)->'line_items' AS purchase_lines,
             to_jsonb(s)->'line_items' AS sale_lines,
+             to_jsonb(sr)->'line_items' AS return_lines,
             to_jsonb(t)->'line_items' AS transfer_lines,
             to_jsonb(t)->'received_line_items' AS received_lines
        FROM stock_ledger sl
        LEFT JOIN purchases p ON sl.doc_type = 'purchase' AND p.id = sl.doc_id
        LEFT JOIN sales s ON sl.doc_type = 'sale' AND s.id = sl.doc_id
+        LEFT JOIN sales_returns sr ON sl.doc_type = 'sales_return' AND sr.id = sl.doc_id
        LEFT JOIN stock_transfers t ON sl.doc_type = 'stock_transfer' AND t.id = sl.doc_id
       WHERE sl.material_type = $1 AND sl.ref_id = $2
         AND sl.branch_type = $3 AND sl.branch_id = $4
@@ -106,6 +108,14 @@ async function historicalBatchCost(
     } else if (docType === "sale") {
       lines = asJsonArray(row.sale_lines).filter(matches);
       for (const line of lines) for (const b of asJsonArray(line.batchBreakdown)) {
+        allocations.push({ docType, docId, batchNumber: String(b.batchNumber ?? ""), quantity: Number(b.quantity), unitCost: Number(b.unitCost) });
+      }
+    } else if (docType === "sales_return") {
+      // Returns persist the exact batch restoration chosen from the original
+      // sale. The return ledger row intentionally has no unit cost, so use
+      // that source-backed allocation rather than the mutable batch table.
+      lines = asJsonArray(row.return_lines).filter(matches);
+      for (const line of lines) for (const b of asJsonArray(line.batchRestore)) {
         allocations.push({ docType, docId, batchNumber: String(b.batchNumber ?? ""), quantity: Number(b.quantity), unitCost: Number(b.unitCost) });
       }
     } else if (docType === "stock_transfer") {

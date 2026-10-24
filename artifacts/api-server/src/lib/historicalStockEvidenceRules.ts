@@ -55,7 +55,7 @@ export function resolveHistoricalBatchCoverage(
   if (!movements.length || movements.some((m) => !isIsoDate(m.txnDate))) {
     return { ok: false, reason: "one or more historical movements have a missing or invalid business date" };
   }
-  const allowed = new Set(["purchase", "sale", "sale_reversal", "sale_cancellation", "transfer_in", "transfer_out"]);
+  const allowed = new Set(["purchase", "sale", "sale_reversal", "sale_cancellation", "sales_return", "transfer_in", "transfer_out"]);
   if (movements.some((m) => !allowed.has(m.txnType) || m.docId == null)) {
     return { ok: false, reason: "movement type or source document is unsupported or missing" };
   }
