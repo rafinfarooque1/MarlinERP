@@ -42,12 +42,19 @@ export type HistoricalBatchAllocation = {
   quantity: unknown;
   unitCost: unknown;
   purchaseCost?: boolean;
+  costEvidence?: boolean;
+};
+
+export type HistoricalPurchaseBatchCost = {
+  batchNumber: string;
+  unitCost: unknown;
 };
 
 export function resolveHistoricalBatchCoverage(
   expectedQuantity: number,
   movements: HistoricalBatchLedgerMove[],
   allocations: HistoricalBatchAllocation[],
+  purchaseBatchCosts: HistoricalPurchaseBatchCost[] = [],
 ): { ok: true; unitCost: number; value: number; batchNumber: string } | { ok: false; reason: string } {
   if (!Number.isFinite(expectedQuantity) || expectedQuantity <= 0) {
     return { ok: false, reason: "cutoff quantity is not positive and finite" };
@@ -56,7 +63,8 @@ export function resolveHistoricalBatchCoverage(
     return { ok: false, reason: "one or more historical movements have a missing or invalid business date" };
   }
   const allowed = new Set([
-    "purchase", "purchase_return", "sale", "sale_reversal", "sale_cancellation",
+    "purchase", "purchase_reversal", "purchase_return", "sale", "sale_reversal", "sale_cancellation",
+    "adjustment",
     "sales_return", "transfer_in", "transfer_out",
   ]);
   if (movements.some((m) => !allowed.has(m.txnType) || m.docId == null)) {
@@ -86,8 +94,18 @@ export function resolveHistoricalBatchCoverage(
   if (!allocations.length) return { ok: false, reason: "no source batch allocations were found" };
   for (const [key, net] of docs) {
     const qty = allocated.get(key);
+    const moves = docMoves.get(key) ?? [];
+    const purchased = moves.filter((m) => m.txnType === "purchase")
+      .reduce((sum, m) => sum + Math.max(0, Number(m.qtyChange)), 0);
+    const purchaseReversed = moves.filter((m) => m.txnType === "purchase_reversal")
+      .reduce((sum, m) => sum + Math.min(0, Number(m.qtyChange)), 0);
+    const balancedPurchaseReversal = purchased > 0 && purchaseReversed < 0
+      && Math.abs(purchased + purchaseReversed) <= 0.001;
+    if (Math.abs(net) <= 0.001 && balancedPurchaseReversal && qty != null) {
+      return { ok: false, reason: `zero-net purchase document ${key} has active batch allocations` };
+    }
     if (Math.abs(net) <= 0.001 && qty == null) {
-      const moves = docMoves.get(key) ?? [];
+      if (balancedPurchaseReversal) continue;
       const sold = moves.filter((m) => m.txnType === "sale")
         .reduce((sum, m) => sum + Math.min(0, Number(m.qtyChange)), 0);
       const restored = moves.filter((m) => m.txnType === "sale_reversal" || m.txnType === "sale_cancellation")
@@ -121,10 +139,20 @@ export function resolveHistoricalBatchCoverage(
     return { ok: false, reason: `batch balances total ${reconstructedQty} but cutoff quantity is ${expectedQuantity}` };
   }
   const purchaseCosts = new Map<string, Set<string>>();
-  for (const row of allocations.filter((a) => a.purchaseCost)) {
+  for (const row of allocations.filter((a) => a.purchaseCost || a.costEvidence)) {
     const costs = purchaseCosts.get(row.batchNumber) ?? new Set<string>();
     costs.add(Number(row.unitCost).toFixed(4));
     purchaseCosts.set(row.batchNumber, costs);
+  }
+  for (const row of purchaseBatchCosts) {
+    const batchNumber = String(row.batchNumber ?? "").trim();
+    const unitCost = Number(row.unitCost);
+    if (!batchNumber || !Number.isFinite(unitCost) || unitCost <= 0) {
+      return { ok: false, reason: "purchase-backed batch cost evidence is invalid" };
+    }
+    const costs = purchaseCosts.get(batchNumber) ?? new Set<string>();
+    costs.add(unitCost.toFixed(4));
+    purchaseCosts.set(batchNumber, costs);
   }
   let totalValue = 0;
   for (const [batch, qty] of positiveBatches) {
