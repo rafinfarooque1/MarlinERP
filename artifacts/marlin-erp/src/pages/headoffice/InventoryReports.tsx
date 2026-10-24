@@ -182,6 +182,9 @@ export default function InventoryReports() {
       'In Transit': r.inTransit ? 'Yes' : 'No',
       Quantity: r.quantity, Reserved: r.reserved, Available: r.available,
       'Avg Cost': r.avgCost, Value: r.value,
+      'Calculation Reliability': val?.reliable === false ? 'Partial' : 'Reconciled',
+      'Review / Approval State': 'Not changed by this report',
+      'Calculation Note': val?.note ?? '',
     })));
   };
   const exportNearExpiry = () => {
@@ -266,6 +269,21 @@ export default function InventoryReports() {
                 </Select>
               )}
             </div>
+
+            {val && (
+              <div
+                role={val.reliable ? 'status' : 'alert'}
+                className={`rounded-md border px-3 py-2 text-sm ${
+                  val.reliable
+                    ? 'border-emerald-500/30 bg-emerald-500/5 text-emerald-800 dark:text-emerald-300'
+                    : 'border-amber-500/40 bg-amber-500/5 text-amber-900 dark:text-amber-200'
+                }`}
+              >
+                <strong>{val.reliable ? 'Valuation calculation reconciles' : 'Partial valuation — review required'}</strong>
+                <p className="mt-1 text-xs">This status describes calculation reliability only; it does not approve or change accountant-review records.</p>
+                {val.note && <p className="mt-1 text-xs">{val.note}</p>}
+              </div>
+            )}
 
             <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
               <StatCard label="Grand Total" value={fmt(val?.grandTotal ?? 0)} accent="text-emerald-500" />

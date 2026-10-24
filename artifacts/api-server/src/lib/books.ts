@@ -757,7 +757,12 @@ async function inceptionDate(q: Q = pool): Promise<string | null> {
  * historical cost truth. Sender-owned in-transit stock is added from the
  * reservation lifecycle and its recorded receipt date.
  */
-export async function stockAsOf(asOf: string | null | undefined, scope?: StockBranchScope | null, q: Q = pool): Promise<StockAtDate> {
+export async function stockAsOf(
+  asOf: string | null | undefined,
+  scope?: StockBranchScope | null,
+  q: Q = pool,
+  options: { includeInTransit?: boolean } = {},
+): Promise<StockAtDate> {
   if (!isDate(asOf)) {
     return { total: 0, inTransit: 0, items: [], reliable: true, note: null };
   }
@@ -791,7 +796,7 @@ export async function stockAsOf(asOf: string | null | undefined, scope?: StockBr
     [asOf],
   );
   if (approvedEvidence) {
-    const transitRows = (await activeInTransit(q as any, { asOf }))
+    const transitRows = options.includeInTransit === false ? [] : (await activeInTransit(q as any, { asOf }))
       .filter((t) => !scope || (
         scope.branchPairs?.length
           ? scope.branchPairs.some((pair) => pair.type === t.branchType && Number(pair.id) === Number(t.branchId))
@@ -954,7 +959,7 @@ export async function stockAsOf(asOf: string | null | undefined, scope?: StockBr
   // A dispatched transfer remains owned by its sender until its recorded
   // receipt date. Reservation rows preserve the dispatch cost, so do not use a
   // mutable product-master cost when rebuilding this historical position.
-  const transitRows = (await activeInTransit(q as any, { asOf }))
+  const transitRows = options.includeInTransit === false ? [] : (await activeInTransit(q as any, { asOf }))
     .filter((t) => !scope || (
       scope.branchPairs?.length
         ? scope.branchPairs.some((pair) =>
