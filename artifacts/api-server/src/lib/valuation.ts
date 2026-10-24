@@ -369,9 +369,24 @@ async function buildStockValuationRows(q: Queryable, scope: ValuationScope, issu
               ORDER BY scs.id DESC LIMIT 1
           ) s ON TRUE
           LEFT JOIN LATERAL (
-            SELECT COALESCE(SUM(sl.qty_change) FILTER (WHERE COALESCE(sl.txn_date, sl.created_at::date) > $1::date), 0) AS after_cutoff,
-                   COALESCE(SUM(sl.qty_change) FILTER (WHERE COALESCE(sl.txn_date, sl.created_at::date) > s.as_of_date), 0) AS after_checkpoint
+             SELECT COALESCE(SUM(sl.qty_change) FILTER (WHERE
+                      CASE WHEN sl.doc_type = 'stock_transfer' AND sl.txn_type = 'transfer_in'
+                           THEN COALESCE(transfer_doc.received_date::date, receipt_voucher.voucher_date::date,
+                                         receipt_purchase.purchase_date::date, sl.created_at::date)
+                           ELSE COALESCE(sl.txn_date, sl.created_at::date) END > $1::date), 0) AS after_cutoff,
+                    COALESCE(SUM(sl.qty_change) FILTER (WHERE
+                      CASE WHEN sl.doc_type = 'stock_transfer' AND sl.txn_type = 'transfer_in'
+                           THEN COALESCE(transfer_doc.received_date::date, receipt_voucher.voucher_date::date,
+                                         receipt_purchase.purchase_date::date, sl.created_at::date)
+                           ELSE COALESCE(sl.txn_date, sl.created_at::date) END > s.as_of_date), 0) AS after_checkpoint
               FROM stock_ledger sl
+               LEFT JOIN stock_transfers transfer_doc
+                 ON sl.doc_type = 'stock_transfer' AND transfer_doc.id = sl.doc_id
+               LEFT JOIN journal_vouchers receipt_voucher
+                 ON receipt_voucher.id = transfer_doc.receive_voucher_id
+               LEFT JOIN purchases receipt_purchase
+                 ON receipt_purchase.id = transfer_doc.purchase_id
+                AND receipt_purchase.branch_transfer_id = transfer_doc.id
              WHERE sl.ref_id = k.ref_id AND sl.material_type = k.material_type
                AND sl.branch_type = k.branch_type AND sl.branch_id = k.branch_id
           ) movement ON TRUE

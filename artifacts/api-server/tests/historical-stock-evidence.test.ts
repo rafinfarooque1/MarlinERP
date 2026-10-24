@@ -18,6 +18,8 @@ const conflictRows = await historicalTransferReceiptConflicts({
   async query(sql, params = []) {
     assert.match(sql, /p\.branch_transfer_id=t\.id/);
     assert.match(sql, /received_line_items/);
+    assert.match(sql, /COALESCE\(source_transfer\.received_date::date,source_voucher\.voucher_date::date,\s*source_purchase\.purchase_date::date,sl\.created_at::date\)/);
+    assert.doesNotMatch(sql, /COALESCE\(txn_date,created_at::date\)<=\$1::date/);
     assert.deepEqual(params, ["2026-08-31"]);
     return { rows: [
       {

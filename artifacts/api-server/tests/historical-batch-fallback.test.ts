@@ -208,6 +208,22 @@ assert.equal(resolveHistoricalBatchCoverage(25, [{
 }], [
   { docType: "purchase", docId: 504, batchNumber: transferredPurchasedLot.batch, quantity: 25, unitCost: 90, purchaseCost: true },
 ]).ok, false, "zero-net purchase reversals with stale source allocations fail quantity reconciliation");
+const staleNonStockPurchase = resolveHistoricalBatchCoverage(8, [
+  { txnType: "purchase", txnDate: "2026-06-12", docType: "purchase", docId: 40, qtyChange: 10, unitCost: 190 },
+  { txnType: "purchase", txnDate: "2026-07-04", docType: "purchase", docId: 38, qtyChange: 1, unitCost: 1200 },
+  { txnType: "sale", txnDate: "2026-07-22", docType: "sale", docId: 1006, qtyChange: -1, unitCost: 1200 },
+  { txnType: "sale", txnDate: "2026-07-28", docType: "sale", docId: 1032, qtyChange: -2, unitCost: 190 },
+], [
+  { docType: "purchase", docId: 40, batchNumber: "PUR-20260612-00327", quantity: 10, unitCost: 190, purchaseCost: true },
+  { docType: "sale", docId: 1006, batchNumber: "PUR-20260704-00323", quantity: 1, unitCost: 1200 },
+  { docType: "sale", docId: 1032, batchNumber: "PUR-20260612-00327", quantity: 2, unitCost: 190 },
+]);
+assert.equal(staleNonStockPurchase.ok, true,
+  "a removed non-stock purchase line may neutralize only an exact, fully-consumed matching sale batch");
+if (staleNonStockPurchase.ok) {
+  assert.equal(staleNonStockPurchase.value, 1520,
+    "the consumed non-stock batch contributes no value to the remaining historical stock");
+}
 const verifiedAdjustment = resolveHistoricalBatchCoverage(5, [
   { txnType: "purchase", txnDate: "2026-08-25", docType: "purchase", docId: 505, qtyChange: 3 },
   { txnType: "adjustment", txnDate: "2026-08-27", docType: "stock_verification", docId: 506, qtyChange: 2 },
