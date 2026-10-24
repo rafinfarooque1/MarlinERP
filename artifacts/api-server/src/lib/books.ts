@@ -54,15 +54,19 @@ async function historicalBatchCost(
   key: { materialType: string; refId: number; branchType: string; branchId: number },
   asOf: string,
   expectedQuantity: number,
+  purchaseCostsByProduct: Map<string, Array<{ batchNumber: string; unitCost: unknown }>>,
 ): Promise<{ ok: true; unitCost: number; value: number; batchNumber: string } | { ok: false; reason: string }> {
   const { rows } = await q.query(
     `SELECT sl.txn_type, sl.txn_date::text AS txn_date, sl.doc_type,
             sl.doc_id::int AS doc_id, sl.qty_change::numeric AS qty_change,
+            sl.unit_cost::numeric AS unit_cost,
             to_jsonb(p)->'line_items' AS purchase_lines,
             to_jsonb(s)->'line_items' AS sale_lines,
             to_jsonb(sr)->'line_items' AS sales_return_lines,
             to_jsonb(pr)->'line_items' AS purchase_return_lines,
             to_jsonb(purchase_source)->'line_items' AS purchase_source_lines,
+            to_jsonb(sv)->'lines' AS verification_lines,
+            adjustment_batch.unit_cost::numeric AS adjustment_batch_cost,
             to_jsonb(t)->'line_items' AS transfer_lines,
             to_jsonb(t)->'received_line_items' AS received_lines
        FROM stock_ledger sl
@@ -71,6 +75,16 @@ async function historicalBatchCost(
         LEFT JOIN sales_returns sr ON sl.doc_type = 'sales_return' AND sr.id = sl.doc_id
         LEFT JOIN purchase_returns pr ON sl.doc_type = 'purchase_return' AND pr.id = sl.doc_id
         LEFT JOIN purchases purchase_source ON purchase_source.id = pr.purchase_id
+        LEFT JOIN stock_verifications sv ON sl.doc_type = 'stock_verification' AND sv.id = sl.doc_id
+        LEFT JOIN stock_batches adjustment_batch
+          ON sl.doc_type = 'stock_verification'
+         AND sl.txn_type = 'adjustment'
+         AND adjustment_batch.item_id = sl.ref_id
+         AND adjustment_batch.branch_type = sl.branch_type
+         AND adjustment_batch.branch_id = sl.branch_id
+         AND adjustment_batch.batch_number = 'ADJ-' || sl.doc_id::text
+         AND adjustment_batch.source = 'adjustment'
+         AND adjustment_batch.source_id = sl.doc_id
        LEFT JOIN stock_transfers t ON sl.doc_type = 'stock_transfer' AND t.id = sl.doc_id
       WHERE sl.material_type = $1 AND sl.ref_id = $2
         AND sl.branch_type = $3 AND sl.branch_id = $4
@@ -86,7 +100,8 @@ async function historicalBatchCost(
     qtyChange: r.qty_change,
   }));
   const allocations: Array<{
-    docType: string; docId: number; batchNumber: string; quantity: number; unitCost: number; purchaseCost?: boolean;
+    docType: string; docId: number; batchNumber: string; quantity: number; unitCost: number;
+    purchaseCost?: boolean; costEvidence?: boolean;
   }> = [];
   const seen = new Set<string>();
   const matches = (line: any) =>
@@ -141,6 +156,22 @@ async function historicalBatchCost(
           quantity: Number(line.quantity), unitCost: returnCost,
         });
       }
+    } else if (docType === "stock_verification") {
+      const verificationLines = asJsonArray(row.verification_lines).filter(matches);
+      const variance = Number(verificationLines[0]?.variance);
+      const unitCost = Number(row.unit_cost);
+      const batchCost = Number(row.adjustment_batch_cost);
+      if (row.txn_type !== "adjustment" || verificationLines.length !== 1
+          || !Number.isFinite(variance) || variance <= 0
+          || Math.abs(variance - Number(row.qty_change)) > 0.001
+          || !Number.isFinite(unitCost) || unitCost <= 0
+          || !Number.isFinite(batchCost) || Math.abs(unitCost - batchCost) > 0.0001) {
+        return { ok: false, reason: `stock verification ${docId} has no exact positive adjustment batch cost` };
+      }
+      allocations.push({
+        docType, docId, batchNumber: `ADJ-${docId}`,
+        quantity: variance, unitCost, costEvidence: true,
+      });
     } else if (docType === "stock_transfer") {
       const dispatchLines = asJsonArray(row.transfer_lines).filter(matches);
       if (row.txn_type === "transfer_in") {
@@ -164,7 +195,15 @@ async function historicalBatchCost(
       }
     }
   }
-  return resolveHistoricalBatchCoverage(expectedQuantity, movements, allocations);
+  // A transfer can move a purchased batch to a location that has no local
+  // purchase row. Use the exact batch/product purchase evidence prefetched for
+  // this valuation, never mutable stock_batches quantities.
+  return resolveHistoricalBatchCoverage(
+    expectedQuantity,
+    movements,
+    allocations,
+    purchaseCostsByProduct.get(`${key.materialType}:${key.refId}`) ?? [],
+  );
 }
 
 /** Closing stock is both a P&L valuation input and an asset on the Balance Sheet. */
@@ -1050,6 +1089,59 @@ export async function stockAsOf(
     ...transitRows.map((t) => ({ materialType: t.materialType, refId: t.refId })),
   ]);
 
+  // Purchase-backed costs are independent of the location that currently
+  // holds a transferred batch. Load the exact product/batch source costs once
+  // per valuation rather than doing an additional query for every stock line.
+  const costProducts = [...new Map(
+    [...keys].map(parseKey).map((r) => [`${r.materialType}:${r.refId}`, r] as const),
+  ).values()];
+  const purchaseCostsByProduct = new Map<string, Array<{ batchNumber: string; unitCost: unknown }>>();
+  if (costProducts.length) {
+    const { rows: sourceCosts } = await q.query(
+      `/* historical purchase batch cost catalog */
+       WITH requested AS (
+         SELECT DISTINCT material_type, ref_id
+           FROM unnest($2::text[], $3::int[]) AS pair(material_type, ref_id)
+       )
+       SELECT DISTINCT requested.material_type, requested.ref_id,
+              li->>'batchNumber' AS batch_number,
+              COALESCE(NULLIF(li->>'costPerUnit', '')::numeric,
+                       NULLIF(li->>'unitCost', '')::numeric) AS unit_cost
+         FROM requested
+         JOIN purchases p ON p.cancelled_at IS NULL AND p.purchase_date <= $1::date
+         CROSS JOIN LATERAL jsonb_array_elements(COALESCE(p.line_items, '[]'::jsonb)) li
+        WHERE COALESCE(NULLIF(li->>'materialType', ''), 'item') = requested.material_type
+          AND COALESCE(NULLIF(li->>'itemId', '')::int,
+                       NULLIF(li->>'materialId', '')::int) = requested.ref_id
+          AND NULLIF(li->>'batchNumber', '') IS NOT NULL
+          AND COALESCE(NULLIF(li->>'costPerUnit', '')::numeric,
+                       NULLIF(li->>'unitCost', '')::numeric) > 0
+          AND COALESCE(NULLIF(li->>'quantity', '')::numeric, 0) > 0
+          AND EXISTS (
+            SELECT 1
+              FROM stock_ledger source
+             WHERE source.doc_type = 'purchase'
+               AND source.doc_id = p.id
+               AND source.txn_type = 'purchase'
+               AND source.material_type = requested.material_type
+               AND source.ref_id = requested.ref_id
+               AND source.qty_change > 0
+               AND source.unit_cost = COALESCE(
+                     NULLIF(li->>'costPerUnit', '')::numeric,
+                     NULLIF(li->>'unitCost', '')::numeric
+                   )
+               AND COALESCE(source.txn_date, source.created_at::date) <= $1::date
+          )`,
+      [asOf, costProducts.map((r) => r.materialType), costProducts.map((r) => r.refId)],
+    );
+    for (const row of sourceCosts) {
+      const key = `${row.material_type}:${row.ref_id}`;
+      const rows = purchaseCostsByProduct.get(key) ?? [];
+      rows.push({ batchNumber: String(row.batch_number), unitCost: row.unit_cost });
+      purchaseCostsByProduct.set(key, rows);
+    }
+  }
+
   const byProduct = new Map<string, ValuedItem>();
   let total = 0;
   let inTransit = 0;
@@ -1099,6 +1191,7 @@ export async function stockAsOf(
         { materialType, refId, branchType: key.split(":")[2], branchId: Number(key.split(":")[3]) },
         asOf,
         qty,
+        purchaseCostsByProduct,
       );
       if (!batch.ok) {
         noCostHistory += 1;

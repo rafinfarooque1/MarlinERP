@@ -85,6 +85,23 @@ const purchaseReturnedLot = makeCase({
   expected: 90, cost: 42.5, batch: "PUR-20260615-00002", purchase: 100,
   inbound: [], outbound: [], sales: [], purchaseReturns: [10],
 });
+const transferredPurchasedLot = {
+  expected: 25,
+  cost: 90,
+  batch: "PUR-20260520-00455",
+  purchaseBatchCosts: [{
+    material_type: "item", ref_id: 9,
+    batch_number: "PUR-20260520-00455", unit_cost: "90",
+  }],
+  docs: [{
+    docType: "stock_transfer", docId: 501, txnType: "transfer_in", qty: 25,
+    lines: [{
+      materialType: "item", itemId: 9, quantity: 25,
+      batchBreakdown: [{ batchNumber: "PUR-20260520-00455", quantity: 25, unitCost: 90 }],
+    }],
+    receivedQty: 25,
+  }],
+};
 
 for (const fixture of [mango, strawberry, returnedLot, purchaseReturnedLot]) {
   const resolved = resolveHistoricalBatchCoverage(fixture.expected, fixture.movements, fixture.allocations);
@@ -135,13 +152,95 @@ assert.equal(resolveHistoricalBatchCoverage(mango.expected, mango.movements, [
   ...mango.allocations,
   { docType: "purchase", docId: 999, batchNumber: mango.batch, quantity: 1, unitCost: 90 },
 ]).ok, false, "source allocations without matching ledger documents fail closed");
+assert.equal(resolveHistoricalBatchCoverage(25, [{
+  txnType: "transfer_in", txnDate: "2026-08-26", docType: "stock_transfer", docId: 501, qtyChange: 25,
+}], [{
+  docType: "stock_transfer", docId: 501, batchNumber: transferredPurchasedLot.batch,
+  quantity: 25, unitCost: 90,
+}], [{ batchNumber: transferredPurchasedLot.batch, unitCost: 90 }]).ok, true,
+"a transferred batch may use its exact purchase-line cost when a dated purchase ledger row proves its source");
+assert.equal(resolveHistoricalBatchCoverage(25, [{
+  txnType: "transfer_in", txnDate: "2026-08-26", docType: "stock_transfer", docId: 501, qtyChange: 25,
+}], [{
+  docType: "stock_transfer", docId: 501, batchNumber: transferredPurchasedLot.batch,
+  quantity: 25, unitCost: 90,
+}], [
+  ...transferredPurchasedLot.purchaseBatchCosts,
+  { batchNumber: transferredPurchasedLot.batch, unitCost: 91 },
+]).ok, false, "conflicting purchase-line costs for a batch remain unverified");
+assert.equal(resolveHistoricalBatchCoverage(25, [{
+  txnType: "purchase", txnDate: "2026-08-26", docType: "purchase", docId: 501, qtyChange: 50,
+}, {
+  txnType: "purchase_reversal", txnDate: "2026-08-27", docType: "purchase", docId: 501, qtyChange: -25,
+}], [{
+  docType: "purchase", docId: 501, batchNumber: transferredPurchasedLot.batch,
+  quantity: 25, unitCost: 90, purchaseCost: true,
+}]).ok, true, "purchase reversals resolve only when the current source line exactly reconciles the net ledger movement");
+assert.equal(resolveHistoricalBatchCoverage(25, [{
+  txnType: "purchase", txnDate: "2026-08-26", docType: "purchase", docId: 501, qtyChange: 50,
+}, {
+  txnType: "purchase_reversal", txnDate: "2026-08-27", docType: "purchase", docId: 501, qtyChange: -26,
+}], [{
+  docType: "purchase", docId: 501, batchNumber: transferredPurchasedLot.batch,
+  quantity: 25, unitCost: 90, purchaseCost: true,
+}]).ok, false, "purchase reversals with a source-line/net quantity mismatch fail closed");
+assert.equal(resolveHistoricalBatchCoverage(25, [{
+  txnType: "purchase", txnDate: "2026-08-26", docType: "purchase", docId: 505, qtyChange: 25,
+}, {
+  txnType: "purchase", txnDate: "2026-08-26", docType: "purchase", docId: 506, qtyChange: 10,
+}, {
+  txnType: "purchase_reversal", txnDate: "2026-08-27", docType: "purchase", docId: 506, qtyChange: -10,
+}], [{
+  docType: "purchase", docId: 505, batchNumber: transferredPurchasedLot.batch,
+  quantity: 25, unitCost: 90, purchaseCost: true,
+}]).ok, true, "balanced zero-net purchase reversals need no active batch allocation");
+assert.equal(resolveHistoricalBatchCoverage(25, [{
+  txnType: "purchase", txnDate: "2026-08-26", docType: "purchase", docId: 503, qtyChange: 25,
+}, {
+  txnType: "purchase_reversal", txnDate: "2026-08-27", docType: "purchase", docId: 503, qtyChange: -25,
+}], [
+  { docType: "purchase", docId: 503, batchNumber: transferredPurchasedLot.batch, quantity: 25, unitCost: 90, purchaseCost: true },
+]).ok, false, "zero-net purchase lines with an unmatched allocation fail closed");
+assert.equal(resolveHistoricalBatchCoverage(25, [{
+  txnType: "purchase", txnDate: "2026-08-26", docType: "purchase", docId: 504, qtyChange: 25,
+}, {
+  txnType: "purchase_reversal", txnDate: "2026-08-27", docType: "purchase", docId: 504, qtyChange: -25,
+}], [
+  { docType: "purchase", docId: 504, batchNumber: transferredPurchasedLot.batch, quantity: 25, unitCost: 90, purchaseCost: true },
+]).ok, false, "zero-net purchase reversals with stale source allocations fail quantity reconciliation");
+const verifiedAdjustment = resolveHistoricalBatchCoverage(5, [
+  { txnType: "purchase", txnDate: "2026-08-25", docType: "purchase", docId: 505, qtyChange: 3 },
+  { txnType: "adjustment", txnDate: "2026-08-27", docType: "stock_verification", docId: 506, qtyChange: 2 },
+], [
+  { docType: "purchase", docId: 505, batchNumber: "PUR-1", quantity: 3, unitCost: 10, purchaseCost: true },
+  { docType: "stock_verification", docId: 506, batchNumber: "ADJ-506", quantity: 2, unitCost: 115.07, costEvidence: true },
+]);
+assert.equal(verifiedAdjustment.ok, true, "a positive count adjustment uses its persisted verification cost and adjustment batch");
+if (verifiedAdjustment.ok) assert.equal(verifiedAdjustment.value, 260.14);
+assert.equal(resolveHistoricalBatchCoverage(5, [
+  { txnType: "purchase", txnDate: "2026-08-25", docType: "purchase", docId: 505, qtyChange: 3 },
+  { txnType: "adjustment", txnDate: "2026-08-27", docType: "stock_verification", docId: 506, qtyChange: 2 },
+], [
+  { docType: "purchase", docId: 505, batchNumber: "PUR-1", quantity: 3, unitCost: 10, purchaseCost: true },
+  { docType: "stock_verification", docId: 506, batchNumber: "ADJ-506", quantity: 2, unitCost: 115.07 },
+]).ok, false, "an adjustment batch without trusted persisted cost evidence fails closed");
 const reversedSaleId = strawberry.movements.find((m) => m.txnType === "sale_reversal")?.docId;
 assert.ok(reversedSaleId != null);
 assert.equal(resolveHistoricalBatchCoverage(strawberry.expected, strawberry.movements,
   strawberry.allocations.filter((a) => a.docId !== reversedSaleId)).ok, true,
   "a fully balanced sale/reversal pair with zero net quantity does not require a current sale line");
 
-function dbFor(fixture: typeof mango) {
+type StockAsOfFixture = {
+  docs: Doc[];
+  expected: number;
+  cost: number;
+  batch: string;
+  purchaseBatchCosts?: Array<{
+    material_type: string; ref_id: number; batch_number: string; unit_cost: string;
+  }>;
+};
+
+function dbFor(fixture: StockAsOfFixture) {
   const reversedSaleId = fixture.docs.find((d) => d.txnType === "sale_reversal")?.docId;
   const rows = fixture.docs.map((d) => ({
     txn_type: d.txnType, txn_date: "2026-09-20", doc_type: d.docType, doc_id: d.docId,
@@ -168,6 +267,9 @@ function dbFor(fixture: typeof mango) {
       }
       if (sql.includes("FROM stock_entries se")) return { rows: [{ material_type: "item", ref_id: 9, branch_type: "warehouse", branch_id: 5, quantity: String(fixture.expected) }] };
       if (sql.includes("FROM stock_cost_snapshots scs")) return { rows: [] };
+      if (sql.includes("historical purchase batch cost catalog")) {
+        return { rows: fixture.purchaseBatchCosts ?? [] };
+      }
       if (sql.includes("purchase_return_lines") && sql.includes("purchase_source_lines") && sql.includes("received_line_items")) return { rows };
       if (sql.includes("FROM stock_reservations")) return { rows: [] };
       if (sql.includes("FROM stock_transfers t")) return { rows: [] };
@@ -177,7 +279,7 @@ function dbFor(fixture: typeof mango) {
   };
 }
 
-for (const fixture of [mango, strawberry, returnedLot, purchaseReturnedLot]) {
+for (const fixture of [mango, strawberry, returnedLot, purchaseReturnedLot, transferredPurchasedLot]) {
   const result = await stockAsOf("2026-09-30", null, dbFor(fixture) as any);
   assert.equal(result.reliable, true, `stockAsOf accepts fully dated, purchase-backed batch coverage: ${result.note}`);
   assert.equal(result.items[0]?.stock, fixture.expected);
