@@ -571,6 +571,62 @@ export async function resolveProductNames(
 export async function stockValuation(q: Queryable, scope: ValuationScope = {}): Promise<ValuationSummary> {
   const issues: ValuationIssue[] = [];
   const rows = await approvedHistoricalRows(q, scope, issues) ?? await buildStockValuationRows(q, scope, issues);
+  if (isIsoDate(scope.asOf)) {
+    const fallbackIssues = issues.filter((issue) =>
+      ["MISSING_COST_CHECKPOINT", "CHECKPOINT_QUANTITY_MISMATCH", "INVALID_CHECKPOINT_COST"].includes(issue.code),
+    );
+    const locations = new Map<string, { branchType: string; branchId: number }>();
+    for (const issue of fallbackIssues) {
+      locations.set(`${issue.branchType}:${issue.branchId}`, {
+        branchType: issue.branchType, branchId: Number(issue.branchId),
+      });
+    }
+    if (locations.size) {
+      // Load Books lazily to share its complete historical batch resolver without
+      // creating a module-initialization cycle (Books uses this live valuation).
+      const { stockAsOf } = await import("./books");
+      const resolvedIssueKeys = new Set<string>();
+      for (const location of locations.values()) {
+        const historical = await stockAsOf(
+          scope.asOf,
+          location,
+          q as any,
+          { includeInTransit: false },
+        );
+        if (!historical.reliable) continue;
+        for (const issue of fallbackIssues.filter((candidate) =>
+          candidate.branchType === location.branchType
+          && Number(candidate.branchId) === location.branchId,
+        )) {
+          const item = historical.items.find((candidate) =>
+            candidate.materialType === issue.materialType && candidate.id === Number(issue.refId),
+          );
+          if (!item || Math.abs(item.stock - Number(issue.quantity)) > 0.001) continue;
+          rows.push({
+            materialType: issue.materialType as ProductKind,
+            refId: Number(issue.refId),
+            itemName: item.name,
+            unit: item.unit,
+            branchType: issue.branchType,
+            branchId: Number(issue.branchId),
+            quantity: item.stock,
+            reserved: 0,
+            available: item.stock,
+            unitCost: item.unitCost,
+            value: item.total,
+            inTransit: false,
+          });
+          resolvedIssueKeys.add(`${issue.code}:${issue.materialType}:${issue.refId}:${issue.branchType}:${issue.branchId}`);
+        }
+      }
+      for (let i = issues.length - 1; i >= 0; i--) {
+        const issue = issues[i];
+        if (resolvedIssueKeys.has(
+          `${issue.code}:${issue.materialType}:${issue.refId}:${issue.branchType}:${issue.branchId}`,
+        )) issues.splice(i, 1);
+      }
+    }
+  }
 
   const locMap = new Map<string, ValuationSummary["byLocation"][number]>();
   const typeMap = new Map<ProductKind, ValuationSummary["byType"][number]>();

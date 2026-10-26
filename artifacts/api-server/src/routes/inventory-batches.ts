@@ -19,7 +19,7 @@ import {
   MOVEMENT_CLASS_DAYS, type MovementClass,
 } from "../lib/inventoryAging";
 import { visibleLocationSql } from "../lib/warehouseVisibility";
-import { companyTodayISO, stockAsOf } from "../lib/books";
+import { companyTodayISO } from "../lib/books";
 
 const router = Router();
 
@@ -356,64 +356,14 @@ router.get("/stock/valuation", requireModuleView("page:/headoffice/inventory-rep
       branchId: branchId != null && branchId !== "" ? Number(branchId) : undefined,
       materialType: (materialType as ProductKind | undefined) || undefined,
       asOf: historicalAsOf,
-      includeInTransit: !historicalAsOf,
+      includeInTransit: true,
       dataScope,
     }),
     buildBranchMaps(),
   ]);
 
-  const fallbackRows: typeof valuation.rows = [];
-  const resolvedIssueKeys = new Set<string>();
-  if (historicalAsOf) {
-    const fallbackIssues = valuation.issues.filter((issue) =>
-      ["MISSING_COST_CHECKPOINT", "CHECKPOINT_QUANTITY_MISMATCH", "INVALID_CHECKPOINT_COST"].includes(issue.code),
-    );
-    const locations = new Map<string, { branchType: string; branchId: number }>();
-    for (const issue of fallbackIssues) {
-      locations.set(`${issue.branchType}:${issue.branchId}`, {
-        branchType: issue.branchType,
-        branchId: Number(issue.branchId),
-      });
-    }
-    for (const location of locations.values()) {
-      const historical = await stockAsOf(
-        historicalAsOf,
-        { branchType: location.branchType, branchId: location.branchId },
-        pool,
-        { includeInTransit: false },
-      );
-      // Fail closed: do not lift a row out of a location whose complete
-      // historical position still has unresolved evidence.
-      if (!historical.reliable) continue;
-      for (const issue of fallbackIssues.filter((candidate) =>
-        candidate.branchType === location.branchType && Number(candidate.branchId) === location.branchId,
-      )) {
-        const item = historical.items.find((candidate) =>
-          candidate.materialType === issue.materialType && candidate.id === Number(issue.refId),
-        );
-        if (!item || Math.abs(item.stock - Number(issue.quantity)) > 0.001) continue;
-        fallbackRows.push({
-          materialType: issue.materialType as ProductKind,
-          refId: Number(issue.refId),
-          itemName: item.name,
-          unit: item.unit,
-          branchType: issue.branchType,
-          branchId: Number(issue.branchId),
-          quantity: item.stock,
-          reserved: 0,
-          available: item.stock,
-          unitCost: item.unitCost,
-          value: item.total,
-          inTransit: false,
-        });
-        resolvedIssueKeys.add(`${issue.code}:${issue.materialType}:${issue.refId}:${issue.branchType}:${issue.branchId}`);
-      }
-    }
-  }
-  const effectiveIssues = valuation.issues.filter((issue) =>
-    !resolvedIssueKeys.has(`${issue.code}:${issue.materialType}:${issue.refId}:${issue.branchType}:${issue.branchId}`),
-  );
-  const visibleRows = await retainVisibleValuationRows([...valuation.rows, ...fallbackRows]);
+  const effectiveIssues = valuation.issues;
+  const visibleRows = await retainVisibleValuationRows(valuation.rows);
   const rows = visibleRows.map((r) => ({
     // `itemId` is kept for callers that predate materials being included; refId is
     // the honest name now that the id space is polymorphic.
