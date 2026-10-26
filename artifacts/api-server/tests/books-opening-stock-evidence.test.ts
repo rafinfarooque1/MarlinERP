@@ -16,10 +16,11 @@ const fromDate = "2026-09-01";
 const toDate = "2026-09-30";
 
 try {
-  const [books, augustBooks, closingValuation, movementReconciliation] = await Promise.all([
+  const [books, augustBooks, closingValuation, augustValuation, movementReconciliation] = await Promise.all([
     buildBooks(buildDerivedPostings, { fromDate, toDate }),
     buildBooks(buildDerivedPostings, { fromDate: "2026-04-01", toDate: "2026-08-31" }),
     stockValuation(pool, { asOf: toDate, includeInTransit: true }),
+    stockValuation(pool, { asOf: "2026-08-31", includeInTransit: true }),
     pool.query(`
       WITH ledger AS (
         SELECT material_type, ref_id, branch_type, branch_id,
@@ -87,6 +88,10 @@ try {
   assert.ok(
     Math.abs(augustBooks.profitAndLoss.incomes.closingStock - expenses.openingStockPhysical) < 0.02,
     "August 31 closing stock must be September 1 physical opening stock.",
+  );
+  assert.ok(
+    Math.abs(augustBooks.profitAndLoss.incomes.closingStock - augustValuation.grandTotal) < 0.02,
+    "August 31 Books closing stock and Inventory Valuation must use the same evidence-backed valuation.",
   );
 
   const expectedCogs =
