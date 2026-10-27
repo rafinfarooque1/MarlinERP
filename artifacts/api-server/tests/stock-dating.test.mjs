@@ -62,9 +62,19 @@ async function cleanup() {
   for (const id of createdPurchases) { await del(`/purchases/${id}`).catch(() => {}); }
   await sql(`DELETE FROM purchases WHERE vendor_id IN (SELECT id FROM vendors WHERE name LIKE $1)`, [`${TAG}%`]);
   await sql(`DELETE FROM stock_ledger WHERE item_name LIKE $1 OR notes LIKE $1`, [`${TAG}%`]);
-  const matIds = [fixtures.matA, fixtures.matB].filter(Boolean);
+  // On a rerun after an interrupted process, the in-memory fixture IDs are
+  // gone. Resolve tagged masters before deleting them so their stock rows
+  // are cleaned too instead of being stranded as orphans.
+  const { rows: taggedMaterials } = await sql(
+    `SELECT id FROM materials WHERE name LIKE $1`, [`${TAG}%`]);
+  const matIds = [...new Set([
+    fixtures.matA,
+    fixtures.matB,
+    ...taggedMaterials.map((row) => Number(row.id)),
+  ].filter(Boolean))];
   if (matIds.length) {
     await sql(`DELETE FROM stock_ledger WHERE material_type = 'material' AND ref_id = ANY($1::int[])`, [matIds]);
+    await sql(`DELETE FROM stock_cost_snapshots WHERE material_type = 'material' AND ref_id = ANY($1::int[])`, [matIds]);
     await sql(`DELETE FROM stock_batches WHERE item_id = ANY($1::int[]) AND material_type = 'material'`, [matIds]);
     await sql(`DELETE FROM stock_entries WHERE item_id = ANY($1::int[]) AND material_type = 'material'`, [matIds]);
   }
