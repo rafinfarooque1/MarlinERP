@@ -198,7 +198,7 @@ const saleLineSchema = z.object({
 /** One shared column template for the cart header strip and every ≥lg row —
  *  the Purchase master's table pattern. Below lg the cells wrap into labelled
  *  2/4-column grids instead; no horizontal scrolling at any width. */
-const SALE_GRID_LG = 'lg:grid-cols-[minmax(200px,1fr)_88px_72px_88px_96px_88px_60px_104px_32px]';
+const SALE_GRID_LG = 'lg:grid-cols-[minmax(200px,1fr)_88px_72px_96px_88px_60px_104px_32px]';
 
 /** Other Charges on the invoice — Packing & Transport, freight, hamali,
  *  courier… Flat post-tax amounts the customer owes on top of the goods
@@ -2528,7 +2528,6 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                       <span>Item</span>
                       <span>SKU</span>
                       <span className="text-right">Qty</span>
-                      <span className="text-right">Item Rate ₹</span>
                       <span className="text-right">Sale Rate ₹</span>
                       <span className="text-right">Disc/Unit ₹</span>
                       <span className="text-center">GST %</span>
@@ -2616,14 +2615,6 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                               )} />
                               {itemId > 0 && <p className="text-[10px] text-muted-foreground text-right">max {maxQty}</p>}
                             </div>
-                            {/* Item Rate — display-only; the sale price floor. */}
-                            <div className="space-y-1 min-w-0">
-                              <CellLabel>Item Rate ₹</CellLabel>
-                              <div className="h-9 flex items-center justify-end text-xs font-mono">
-                                {(() => { const m = getMrpFloor(itemId); return m > 0 ? inr(m) : '—'; })()}
-                              </div>
-                            </div>
-
                               {/* Sale Rate — editable UPWARD only. Floor = Item Master
                                   Rate (or, on an old invoice, the line's saved
                                   price if the master rose since). Anything below
@@ -2634,7 +2625,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                                   const floor = getMrpFloor(itemId);
                                   return (
                                     <FormItem className="space-y-1">
-                                      <CellLabel>Rate ₹</CellLabel>
+                                      <CellLabel>Sale Rate ₹</CellLabel>
                                       <FormControl>
                                         <Input
                                           type="number"
