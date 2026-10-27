@@ -59,7 +59,10 @@ const schema = z.object({
   taxRate:     z.coerce.number().min(0).max(28).optional(),
   cost:        z.coerce.number().min(0).optional(),
   mrp:         z.coerce.number().min(0).optional(),
-  lockingRate: z.coerce.number().min(0, 'Locking Rate cannot be negative').optional(),
+  lockingRate: z.preprocess(
+    value => value === '' || value == null ? undefined : value,
+    z.coerce.number().min(0, 'Locking Rate cannot be negative').optional(),
+  ),
   reorderLevel: z.coerce.number().min(0).optional(),
   description: z.string().optional(),
   // Left blank, the server issues both from a per-type sequence (FG/RM/PM-0001
@@ -67,6 +70,14 @@ const schema = z.object({
   itemCode:    z.string().trim().max(32, 'Max 32 characters').regex(/^\S*$/, 'No spaces allowed').optional(),
   barcode:     z.string().trim().max(64, 'Max 64 characters').regex(/^\S*$/, 'No spaces allowed').optional(),
   status:      z.enum(['active', 'inactive']),
+}).superRefine((values, ctx) => {
+  if (values.itemType === 'item' && values.lockingRate != null && values.lockingRate > Number(values.mrp ?? 0)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['lockingRate'],
+      message: 'Locking Rate cannot exceed the normal selling rate',
+    });
+  }
 });
 type FormValues = z.infer<typeof schema>;
 
@@ -135,7 +146,7 @@ export default function ItemMaster() {
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
-    defaultValues: { itemType: 'raw_material', name: '', unit: '', hsnCode: '', taxRate: 5, cost: 0, mrp: 0, lockingRate: undefined, reorderLevel: 10, description: '' },
+    defaultValues: { itemType: 'item', name: '', unit: '', hsnCode: '', taxRate: 5, cost: 0, mrp: 0, lockingRate: undefined, reorderLevel: 10, description: '' },
   });
 
   const watchType = form.watch('itemType');
@@ -188,6 +199,7 @@ export default function ItemMaster() {
     hsn: (i: any) => i.hsnCode,
     tax: (i: any) => Number(i.taxRate) || null,
     mrp: (i: any) => Number(i.mrp ?? 0),
+    lockingRate: (i: any) => i._type === 'item' && i.lockingRate != null ? Number(i.lockingRate) : null,
     stock: (i: any) => Number(i._resolvedStock ?? 0),
     status: (i: any) => isActiveProduct(i) ? 'Active' : 'Inactive',
   });
@@ -198,7 +210,7 @@ export default function ItemMaster() {
 
   const openAdd = (type?: ItemType) => {
     setEditTarget(null);
-    form.reset({ itemType: type || 'raw_material', name: '', unit: units[0] || '', hsnCode: '', taxRate: 5, cost: 0, mrp: 0, lockingRate: undefined, reorderLevel: 10, description: '', itemCode: '', barcode: '', status: 'active' });
+    form.reset({ itemType: type || 'item', name: '', unit: units[0] || '', hsnCode: '', taxRate: 5, cost: 0, mrp: 0, lockingRate: undefined, reorderLevel: 10, description: '', itemCode: '', barcode: '', status: 'active' });
     setIsOpen(true);
   };
 
@@ -338,6 +350,7 @@ export default function ItemMaster() {
                   Code: (i as any).itemCode || '', Barcode: (i as any).barcode || '',
                   Type: (TYPE_LABELS as any)[i._type] ?? i._type, Name: i.name, Unit: i.unit,
                   Rate: Number((i as any).mrp ?? 0),
+                  'Locking Rate': i._type === 'item' && (i as any).lockingRate != null ? Number((i as any).lockingRate) : '',
                   HSN: (i as any).hsnCode || '', 'Tax%': (i as any).taxRate || '',
                   Stock: i.stock, Status: isActiveProduct(i) ? 'Active' : 'Inactive',
                   Description: i.description || '',
@@ -448,6 +461,7 @@ export default function ItemMaster() {
                 <SortableHead k="hsn" sort={sort}>HSN</SortableHead>
                 <SortableHead k="tax" sort={sort}>Tax</SortableHead>
                 <SortableHead k="mrp" sort={sort} className="text-right">Rate (₹)</SortableHead>
+                <SortableHead k="lockingRate" sort={sort} className="text-right">Locking Rate (₹)</SortableHead>
                 <SortableHead k="stock" sort={sort} className="text-right">
                   {locType === 'all' ? 'Stock' :
                    locType === 'headoffice' ? 'HO Stock' :
@@ -461,7 +475,7 @@ export default function ItemMaster() {
             </TableHeader>
             <TableBody>
               {filtered.length === 0 ? (
-                <TableRow><TableCell colSpan={10} className="p-0">
+                <TableRow><TableCell colSpan={11} className="p-0">
                   <EmptyState icon={Layers} title="No items found" hint="Packing materials, raw materials and SKUs appear here." compact />
                 </TableCell></TableRow>
               ) : pageRows.map(item => {
@@ -492,6 +506,11 @@ export default function ItemMaster() {
                   <TableCell className="text-sm">{(item as any).taxRate ? `${Number((item as any).taxRate)}%` : '—'}</TableCell>
                   <TableCell className="text-right font-mono text-sm">
                     {displayCost > 0 ? `₹${displayCost.toLocaleString('en-IN', { minimumFractionDigits: 2 })}` : '—'}
+                  </TableCell>
+                  <TableCell className="text-right font-mono text-sm">
+                    {item._type === 'item' && (item as any).lockingRate != null
+                      ? `₹${Number((item as any).lockingRate).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`
+                      : '—'}
                   </TableCell>
                   <TableCell className="text-right font-mono font-bold">
                     {(() => {
@@ -532,7 +551,7 @@ export default function ItemMaster() {
 
       {/* Create/Edit Dialog */}
       <Dialog open={isOpen} onOpenChange={v => { setIsOpen(v); if (!v) { setEditTarget(null); } }}>
-        <DialogContent className="sm:max-w-lg">
+        <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{editTarget ? 'Edit Item' : 'Add New Item'}</DialogTitle>
           </DialogHeader>
@@ -611,7 +630,8 @@ export default function ItemMaster() {
                   <FormField control={form.control} name="lockingRate" render={({ field }) => (
                     <FormItem>
                       <FormLabel>Locking Rate (₹)</FormLabel>
-                      <FormControl><Input type="number" min={0} step="0.01" placeholder="Optional minimum selling rate" className="font-mono" {...field} value={field.value ?? ''} /></FormControl>
+                      <FormControl><Input data-testid="input-locking-rate" type="number" min={0} step="0.01" placeholder="Optional minimum selling rate" className="font-mono" {...field} value={field.value ?? ''} /></FormControl>
+                      <p className="text-[11px] text-muted-foreground">Optional per-unit minimum selling rate. Leave blank to use the normal rate floor.</p>
                       <FormMessage />
                     </FormItem>
                   )} />
