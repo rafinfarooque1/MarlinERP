@@ -185,6 +185,9 @@ export interface Item {
   /** @nullable */
   description?: string | null;
   productionStock?: number;
+  mrp?: number;
+  /** @nullable */
+  lockingRate?: number | null;
   createdAt: string;
 }
 
@@ -194,6 +197,9 @@ export interface ItemInput {
   taxRate?: number;
   unit: string;
   description?: string;
+  mrp?: number;
+  /** @nullable */
+  lockingRate?: number | null;
 }
 
 export interface ItemUpdate {
@@ -202,6 +208,9 @@ export interface ItemUpdate {
   taxRate?: number;
   unit?: string;
   description?: string;
+  mrp?: number;
+  /** @nullable */
+  lockingRate?: number | null;
 }
 
 export type PurchaseLineItemMaterialType = typeof PurchaseLineItemMaterialType[keyof typeof PurchaseLineItemMaterialType];
@@ -812,6 +821,8 @@ export interface SaleInput {
   saleDate: string;
   lineItems: SaleLineItem[];
   paymentMode: string;
+  /** Explicit administrator request to sell below a configured locking rate; server verifies role. */
+  overrideLockingRate?: boolean;
   /**
      * Location-assigned Cash account for cash payments, or required Online platform sub-ledger for an Online POS payment.
      * @minimum 1

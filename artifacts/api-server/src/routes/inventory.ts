@@ -127,6 +127,7 @@ const fmtItem = (r: any) => ({
   // column, which is correct there because a new item holds no stock yet.
   productionStock: Number(r.derived_stock ?? r.production_stock ?? 0),
   mrp: Number(r.mrp || 0),
+  lockingRate: r.locking_rate == null ? null : Number(r.locking_rate),
   cost: Number(r.cost || 0),
   reorderLevel: Number(r.reorder_level ?? 10), avgCost: Number(r.avg_cost || 0),
   itemCode: r.item_code || '', barcode: r.barcode || '',
@@ -352,7 +353,7 @@ router.get("/items", requireModuleView(["page:/production/item-master", "page:/p
   const filter = statusFilter(req, res);
   if (!filter) return;
   const result = await pool.query(
-    `SELECT id, name, hsn_code, tax_rate, unit, description, production_stock, mrp, cost, reorder_level, avg_cost,
+     `SELECT id, name, hsn_code, tax_rate, unit, description, production_stock, mrp, locking_rate, cost, reorder_level, avg_cost,
             item_code, barcode, status, created_at, updated_at,
             COALESCE((SELECT SUM(se.quantity::numeric) FROM stock_entries se
                        WHERE se.item_id = items.id AND se.material_type = 'item'), 0)::float AS derived_stock
@@ -362,15 +363,18 @@ router.get("/items", requireModuleView(["page:/production/item-master", "page:/p
 });
 
 router.post("/items", hoOnly, requireModuleAction("page:/production/item-master", "add"), async (req, res): Promise<void> => {
-  const { name, hsnCode, taxRate, unit, description, cost, reorderLevel, mrp } = req.body;
+  const { name, hsnCode, taxRate, unit, description, cost, reorderLevel, mrp, lockingRate } = req.body;
   if (!name || !unit) { res.status(400).json({ error: "name and unit are required" }); return; }
   if (slabViolation(taxRate, res)) return;
+  if (lockingRate != null && (!Number.isFinite(Number(lockingRate)) || Number(lockingRate) < 0 || Number(lockingRate) > Number(mrp ?? 0))) {
+    res.status(400).json({ error: Number(lockingRate) < 0 ? "Locking rate must be a non-negative amount" : "Locking rate cannot exceed the normal selling rate" }); return;
+  }
   if (identityViolation(req.body, res)) return;
   await handleWrite(res, async () => {
     // Shared creation core — the ERP Migration Wizard imports items through
     // the exact same insert (identity from the per-kind sequence).
     const created = await createItemCore(pool, {
-      name, hsnCode, taxRate, unit, description, cost, reorderLevel, mrp,
+      name, hsnCode, taxRate, unit, description, cost, reorderLevel, mrp, lockingRate,
       itemCode: req.body.itemCode, barcode: req.body.barcode, status: req.body.status,
     });
     res.status(201).json(fmtItem(created.row));
@@ -392,6 +396,17 @@ router.patch("/items/:id", hoOnly, requireModuleAction("page:/production/item-ma
   const id = parseInt(req.params.id, 10);
   const { name, hsnCode, taxRate, unit, description, cost, reorderLevel, mrp } = req.body;
   if (slabViolation(taxRate, res)) return;
+  const lockingRate = req.body.lockingRate;
+  if (lockingRate !== undefined && lockingRate !== null && (!Number.isFinite(Number(lockingRate)) || Number(lockingRate) < 0)) {
+    res.status(400).json({ error: "Locking rate must be a non-negative amount" }); return;
+  }
+  if (lockingRate != null || mrp != null) {
+    const current = await pool.query(`SELECT mrp FROM items WHERE id=$1`, [id]);
+    if (!current.rows[0]) { res.status(404).json({ error: "Not found" }); return; }
+    const effectiveMrp = mrp == null ? Number(current.rows[0].mrp ?? 0) : Number(mrp);
+    const effectiveLock = lockingRate === undefined ? Number((await pool.query(`SELECT locking_rate FROM items WHERE id=$1`, [id])).rows[0]?.locking_rate ?? 0) : Number(lockingRate ?? 0);
+    if (effectiveLock > effectiveMrp) { res.status(400).json({ error: "Locking rate cannot exceed the normal selling rate" }); return; }
+  }
   if (identityViolation(req.body, res)) return;
   await handleWrite(res, async () => {
     const result = await pool.query(
@@ -404,6 +419,7 @@ router.patch("/items/:id", hoOnly, requireModuleAction("page:/production/item-ma
         cost = COALESCE($6, cost),
         reorder_level = COALESCE($7, reorder_level),
         mrp = COALESCE($8, mrp),
+        locking_rate = CASE WHEN $13::boolean THEN $14::numeric ELSE locking_rate END,
         item_code = COALESCE($10, item_code),
         barcode = COALESCE($11, barcode),
         status = COALESCE($12, status),
@@ -415,7 +431,8 @@ router.patch("/items/:id", hoOnly, requireModuleAction("page:/production/item-ma
        reorderLevel != null ? Number(reorderLevel) : null,
        mrp != null ? Number(mrp) : null, id,
        trimOrNull(req.body.itemCode), trimOrNull(req.body.barcode),
-       isProductStatus(req.body.status) ? req.body.status : null]
+        isProductStatus(req.body.status) ? req.body.status : null,
+        lockingRate !== undefined, lockingRate == null ? null : Number(lockingRate)]
     );
     if (!result.rows[0]) { res.status(404).json({ error: "Not found" }); return; }
     res.json(fmtItem(result.rows[0]));

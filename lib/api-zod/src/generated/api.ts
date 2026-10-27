@@ -328,6 +328,8 @@ export const ListItemsResponseItem = zod.object({
   "unit": zod.string().optional(),
   "description": zod.string().nullish(),
   "productionStock": zod.number().optional(),
+  "mrp": zod.number().optional(),
+  "lockingRate": zod.number().nullish(),
   "createdAt": zod.string()
 })
 export const ListItemsResponse = zod.array(ListItemsResponseItem)
@@ -341,7 +343,9 @@ export const CreateItemBody = zod.object({
   "hsnCode": zod.string(),
   "taxRate": zod.number().optional(),
   "unit": zod.string(),
-  "description": zod.string().optional()
+  "description": zod.string().optional(),
+  "mrp": zod.number().optional(),
+  "lockingRate": zod.number().nullish()
 })
 
 export const CreateItemResponse = zod.object({
@@ -352,6 +356,8 @@ export const CreateItemResponse = zod.object({
   "unit": zod.string().optional(),
   "description": zod.string().nullish(),
   "productionStock": zod.number().optional(),
+  "mrp": zod.number().optional(),
+  "lockingRate": zod.number().nullish(),
   "createdAt": zod.string()
 })
 
@@ -368,6 +374,8 @@ export const GetItemResponse = zod.object({
   "unit": zod.string().optional(),
   "description": zod.string().nullish(),
   "productionStock": zod.number().optional(),
+  "mrp": zod.number().optional(),
+  "lockingRate": zod.number().nullish(),
   "createdAt": zod.string()
 })
 
@@ -381,7 +389,9 @@ export const UpdateItemBody = zod.object({
   "hsnCode": zod.string().optional(),
   "taxRate": zod.number().optional(),
   "unit": zod.string().optional(),
-  "description": zod.string().optional()
+  "description": zod.string().optional(),
+  "mrp": zod.number().optional(),
+  "lockingRate": zod.number().nullish()
 })
 
 export const UpdateItemResponse = zod.object({
@@ -392,6 +402,8 @@ export const UpdateItemResponse = zod.object({
   "unit": zod.string().optional(),
   "description": zod.string().nullish(),
   "productionStock": zod.number().optional(),
+  "mrp": zod.number().optional(),
+  "lockingRate": zod.number().nullish(),
   "createdAt": zod.string()
 })
 
@@ -1190,6 +1202,7 @@ export const CreateSaleBody = zod.object({
   "masterMrp": zod.number().optional().describe('QUOTATION lines only, server-stamped: the Item Master MRP as of the moment the quotation was saved. A line whose unitPrice exceeds its masterMrp is a deliberate quotation-level MRP raise (the master item is never modified). Absent on sale lines and on quotations saved before this field existed.\n')
 })),
   "paymentMode": zod.string(),
+  "overrideLockingRate": zod.boolean().optional().describe('Explicit administrator request to sell below a configured locking rate; server verifies role.'),
   "receivedInLedgerId": zod.number().min(1).optional().describe('Location-assigned Cash account for cash payments, or required Online platform sub-ledger for an Online POS payment.'),
   "couponCode": zod.string().optional(),
   "billDiscount": zod.number().optional().describe('Pre-tax invoice-level discount, allocated across lines.'),

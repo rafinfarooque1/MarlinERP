@@ -21,6 +21,7 @@ export interface ItemCreateInput {
   cost?: number | null;
   reorderLevel?: number | null;
   mrp?: number | null;
+  lockingRate?: number | null;
   itemCode?: string | null;
   barcode?: string | null;
   status?: string | null;
@@ -40,6 +41,12 @@ export function itemCreateError(input: ItemCreateInput): string | null {
   }
   if (input.taxRate != null && !isValidGstSlab(input.taxRate)) {
     return gstSlabErrorMessage(input.taxRate);
+  }
+  if (input.lockingRate != null && (!Number.isFinite(Number(input.lockingRate)) || Number(input.lockingRate) < 0)) {
+    return "Locking rate must be a non-negative amount";
+  }
+  if (input.lockingRate != null && Number(input.lockingRate) > Number(input.mrp ?? 0)) {
+    return "Locking rate cannot exceed the normal selling rate";
   }
   const code = trimOrNull(input.itemCode);
   const barcode = trimOrNull(input.barcode);
@@ -64,11 +71,11 @@ export async function createItemCore(
   const barcode = trimOrNull(input.barcode) ?? generated.barcode;
   const status = isProductStatus(input.status) ? input.status : "active";
   const { rows: [row] } = await q.query(
-    `INSERT INTO items (name, hsn_code, tax_rate, unit, description, cost, reorder_level, mrp, item_code, barcode, status)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+    `INSERT INTO items (name, hsn_code, tax_rate, unit, description, cost, reorder_level, mrp, locking_rate, item_code, barcode, status)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
     [String(input.name).trim(), trimOrNull(input.hsnCode) ?? "", Number(input.taxRate ?? 0),
      String(input.unit).trim(), trimOrNull(input.description), Number(input.cost ?? 0),
-     Number(input.reorderLevel ?? 10), Number(input.mrp ?? 0), itemCode, barcode, status],
+      Number(input.reorderLevel ?? 10), Number(input.mrp ?? 0), input.lockingRate == null ? null : Number(input.lockingRate), itemCode, barcode, status],
   );
   return { id: Number(row.id), itemCode, barcode, row };
 }

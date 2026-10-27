@@ -19,6 +19,8 @@ export interface SaleInput {
   saleDate: string;
   lineItems: SaleLineItem[];
   paymentMode: string;
+  /** Explicit administrator request to sell below a configured locking rate; server verifies role. */
+  overrideLockingRate?: boolean;
   /**
      * Location-assigned Cash account for cash payments, or required Online platform sub-ledger for an Online POS payment.
      * @minimum 1

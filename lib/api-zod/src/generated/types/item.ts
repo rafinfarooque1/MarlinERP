@@ -15,5 +15,8 @@ export interface Item {
   /** @nullable */
   description?: string | null;
   productionStock?: number;
+  mrp?: number;
+  /** @nullable */
+  lockingRate?: number | null;
   createdAt: string;
 }
