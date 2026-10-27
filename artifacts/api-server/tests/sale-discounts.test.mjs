@@ -22,8 +22,10 @@ import bcrypt from 'bcryptjs';
 const BASE = process.env.API_URL || 'http://localhost:8080/api';
 const TAG = 'ZZTEST';
 const WH = 2; // Marlin Mangaluru Depot — same warehouse the other suites use
+const TEST_DATE = new Date().toISOString().slice(0, 10);
 const PROBE_USER = 'zztest_locking_rate_admin';
 const PROBE_PASS = 'ZzLockRate#1';
+let probeUserId = 0;
 
 let authToken = '';
 let passed = 0, failed = 0;
@@ -128,9 +130,10 @@ await sql(
   `INSERT INTO employees
      (name, username, password_hash, hierarchy_id, branch_type, branch_id,
       salary, join_date, is_active, must_change_password)
-   VALUES ($1,$2,$3,$4,'headoffice',0,0,CURRENT_DATE,true,false)`,
+   VALUES ($1,$2,$3,$4,'headoffice',0,0,CURRENT_DATE,true,false) RETURNING id`,
   [`${TAG} Locking Rate Admin`, PROBE_USER, bcrypt.hashSync(PROBE_PASS, 10), rootAdmin.hierarchy_id],
 );
+probeUserId = (await sql(`SELECT id FROM employees WHERE username=$1`, [PROBE_USER])).rows[0].id;
 const loginRes = await post('/auth/login', { username: PROBE_USER, password: PROBE_PASS });
 authToken = loginRes.data?.token ?? '';
 assert('Admin login returns a token', !!authToken, `status=${loginRes.status}`);
@@ -172,7 +175,7 @@ preEntryIds = preEntries.map(r => r.id);
 
 for (const [materialId, quantity] of [[fixtures.itemA, 200], [fixtures.itemB, 100]]) {
   const res = await post('/purchases', {
-    vendorId: fixtures.vendorId, purchaseDate: '2026-07-30', vendorInvoiceDate: '2026-07-29',
+    vendorId: fixtures.vendorId, purchaseDate: TEST_DATE, vendorInvoiceDate: TEST_DATE,
     locationType: 'warehouse', locationId: WH,
     lineItems: [{ materialType: 'item', materialId, quantity, unitCost: 50, mfgDate: '2026-07-01', expiryDate: '2027-07-01' }],
   });
@@ -182,7 +185,7 @@ for (const [materialId, quantity] of [[fixtures.itemA, 200], [fixtures.itemB, 10
 
 const salePayload = (lineItems, extra = {}) => ({
   outletId: WH, locationType: 'warehouse', locationId: WH,
-  saleDate: '2026-07-31', paymentMode: 'cash', lineItems, ...extra,
+  saleDate: TEST_DATE, paymentMode: 'cash', salespersonEmployeeId: probeUserId, lineItems, ...extra,
 });
 async function createSale(lineItems, extra = {}) {
   const res = await post('/sales', salePayload(lineItems, extra));
@@ -222,6 +225,7 @@ console.log('\n[LR] Locking Rate: create/edit discounts and administrator overri
     [{ itemId: fixtures.itemA, quantity: 1, unitPrice: 100, unitDiscount: 25 }],
     { overrideLockingRate: true });
   assert('Explicit admin create override succeeds', createOverride.status === 201, JSON.stringify(createOverride.data).slice(0, 160));
+  await sql(`UPDATE items SET locking_rate = NULL WHERE id = $1`, [fixtures.itemA]);
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -412,12 +416,12 @@ console.log('\n[X] Books stay coherent across all of it');
 // ───────────────────────────────────────────────────────────────────────────
 console.log('\n[cleanup] Removing fixtures');
 await cleanup();
-await cleanupProbeUser();
 assert('Fixture stock fully removed', await stockOf(fixtures.itemA) === 0 && await stockOf(fixtures.itemB) === 0);
 const tbFinal = await snapshotTB();
 assert('Trial balance matches the pre-test snapshot',
   tbFinal.totalDr === tbBefore.totalDr && tbFinal.totalCr === tbBefore.totalCr,
   `before ${tbBefore.totalDr}/${tbBefore.totalCr} after ${tbFinal.totalDr}/${tbFinal.totalCr}`);
+await cleanupProbeUser();
 
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failures.length) console.log('Failed:', failures.join(' | '));
