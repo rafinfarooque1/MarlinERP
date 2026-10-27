@@ -43,3 +43,15 @@ keep the pair-payable postings unchanged. The transfer-in amount is already
 separate from ordinary purchases; include it once in goods available and
 COGS. Keep monthly statements, on-screen reports, PDFs, and canonical exports
 aligned on the same transfer and stock split.
+
+For voucher-mode short receipts, the destination Transfer-In voucher is based
+on the quantity actually received; the shortfall remains sender-owned in
+transit. Invoice-mode transfers remain priced from dispatched lines because
+the outward tax invoice is still the full legal document.
+
+**Why:** charging the destination for unreceived goods made its historical
+Transfer-In expense exceed received stock, while the missing quantity was
+still valued as sender-owned transit.
+
+**How to apply:** build voucher-mode receipt totals from received lines; do not
+shrink an already-issued invoice or change the dispatch-side Transfer-Out.

@@ -1624,28 +1624,37 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction("page:/transfer
         });
       } else {
         const toLocGst = await resolveLocationGst(pool, row.to_type, Number(row.to_id));
-           const fromLocGst = await resolveLocationGst(pool, row.from_type, Number(row.from_id));
-        const gstAmt = Number(row.gst_amount ?? 0);
-       const halfGst = Math.round(gstAmt / 2 * 100) / 100;
-       const storedGst: GstTotals = {
-          taxableValue: Number(row.transfer_value),
-         cgst:  row.tax_type === 'cgst_sgst' ? halfGst : 0,
-         sgst:  row.tax_type === 'cgst_sgst' ? Math.round((gstAmt - halfGst) * 100) / 100 : 0,
-          igst:  row.tax_type === 'igst'       ? gstAmt     : 0,
-          totalGst: gstAmt,
-          totalWithGst: Number(row.transfer_value) + gstAmt,
-        };
-        receiveVoucherId = await createReceiveVoucher({
+        const fromLocGst = await resolveLocationGst(pool, row.from_type, Number(row.from_id));
+        // Voucher-mode accounting follows what was actually received. Any
+        // shortfall remains sender-owned in transit and must not be expensed
+        // at the destination. Invoice-mode documents above intentionally stay
+        // at dispatched quantity because they represent the full tax invoice.
+        const receivedAccountingLines = await buildTransferInvoiceLines(
           client,
-          challanNumber: row.challan_number,
-          transferDate: txnDate,
-          toLocation: toLocGst,
-           fromLocation: fromLocGst,
-          gst: storedGst,
+          linesToCredit
+            .filter((line: any) => Number(line.quantity) > 0)
+            .map((line: any) => ({
+              itemId: Number(line.itemId),
+              quantity: Number(line.quantity),
+              costPrice: Number(line.costPrice ?? 0),
+              materialType: line.materialType ?? 'item',
+            })),
           taxType,
-          narration: `Inter-branch transfer ${row.challan_number} — received at ${toLocGst.name}`,
-          createdBy: approvedBy ?? null,
-        });
+        );
+        const receivedTotals = totalsFromLines(receivedAccountingLines);
+        if (receivedTotals.totalWithGst > 0.004) {
+          receiveVoucherId = await createReceiveVoucher({
+            client,
+            challanNumber: row.challan_number,
+            transferDate: txnDate,
+            toLocation: toLocGst,
+            fromLocation: fromLocGst,
+            gst: receivedTotals,
+            taxType,
+            narration: `Inter-branch transfer ${row.challan_number} — received at ${toLocGst.name}`,
+            createdBy: approvedBy ?? null,
+          });
+        }
       }
     }
 
