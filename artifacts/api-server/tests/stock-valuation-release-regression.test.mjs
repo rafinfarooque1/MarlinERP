@@ -17,7 +17,7 @@ function testRouteDateSelection() {
   assert.match(route, /router\.get\("\/stock\/valuation"/);
   assert.match(route, /const today = await companyTodayISO\(pool\)/);
   assert.match(route, /const historicalAsOf = asOf && asOf < today \? asOf : undefined/);
-  assert.match(route, /asOf: historicalAsOf,\s*includeInTransit: !historicalAsOf/);
+  assert.match(route, /asOf: historicalAsOf,\s*includeInTransit: true/);
   assert.match(route, /if \(asOf && asOf > today\)/);
 }
 
