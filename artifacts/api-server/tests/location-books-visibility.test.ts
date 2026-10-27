@@ -88,6 +88,7 @@ try {
       consolidatedDebit: r2([...allByLedger.values()].reduce((sum, row) => sum + row.debit, 0)),
       visibleDebit: r2([...visibleByLedger.values()].reduce((sum, row) => sum + row.debit, 0)),
       hiddenDebit: r2([...hiddenByLedger.values()].reduce((sum, row) => sum + row.debit, 0)),
+      hiddenCredit: r2([...hiddenByLedger.values()].reduce((sum, row) => sum + row.credit, 0)),
     }));
   }
 } finally {

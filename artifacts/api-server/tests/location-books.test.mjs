@@ -67,7 +67,54 @@ async function allSlices() {
   const suppressedHistoryKnown = fullWh.status === 200 && Array.isArray(fullWh.data);
   const suppressedLocations = disabledWarehouseIds.size > 0
     || (!suppressedHistoryKnown);
-  return { slices, suppressedLocations, suppressedHistoryKnown };
+  return { slices, suppressedLocations, suppressedHistoryKnown, disabledWarehouseIds };
+}
+
+// The historical and current Books cutoffs reported for disabled Warehouse 1.
+// Consolidated Day Book keeps its entries; an ordinary location-filtered read
+// must suppress them. The source-level partition test independently attributes
+// the excluded postings by ledger.
+async function testDisabledWarehouseCutoffs(disabledWarehouseIds, slices) {
+  console.log('\n— Disabled Warehouse 1 Books visibility at historical/current cutoffs —');
+  assert('Warehouse 1 is disabled', disabledWarehouseIds.has(1));
+  const expectedHiddenDebit = new Map([
+    ['2026-09-30', 7193404.13],
+    ['2026-10-27', 7210823.45],
+  ]);
+  for (const to of ['2026-09-30', '2026-10-27']) {
+    const range = `from=${FROM}&to=${to}`;
+    const [consolidated, warehouse, ...visibleResponses] = await Promise.all([
+      get(`/reports/fin/day-book?${range}`),
+      get(`/reports/fin/day-book?${range}&locationType=warehouse&locationId=1`),
+      ...slices.map((slice) => get(`/reports/fin/day-book?${range}&${slice.q}`)),
+    ]);
+    assert(`${to}: consolidated Day Book responds 200`, consolidated.status === 200);
+    assert(`${to}: warehouse-filtered Day Book responds 200`, warehouse.status === 200);
+    assert(`${to}: consolidated response remains unfiltered`, !('location' in consolidated.data));
+    assert(`${to}: warehouse response echoes its location`, warehouse.data.location?.type === 'warehouse'
+      && Number(warehouse.data.location?.id) === 1);
+    assert(`${to}: consolidated retains debit and credit history`,
+      Number(consolidated.data.totals?.debit) > 0 && Number(consolidated.data.totals?.credit) > 0);
+    assert(`${to}: disabled warehouse report excludes historical postings`,
+      Number(warehouse.data.totals?.debit ?? 0) === 0
+      && Number(warehouse.data.totals?.credit ?? 0) === 0
+      && Number(warehouse.data.totals?.count ?? 0) === 0);
+    const visibleDebit = r2(visibleResponses.reduce((sum, response) => sum + Number(response.data.totals?.debit ?? 0), 0));
+    const visibleCredit = r2(visibleResponses.reduce((sum, response) => sum + Number(response.data.totals?.credit ?? 0), 0));
+    const hiddenDebit = r2(Number(consolidated.data.totals?.debit ?? 0) - visibleDebit);
+    const hiddenCredit = r2(Number(consolidated.data.totals?.credit ?? 0) - visibleCredit);
+    assert(`${to}: consolidated minus ordinary slices equals Warehouse 1 debit history`,
+      hiddenDebit === expectedHiddenDebit.get(to), `expected ${expectedHiddenDebit.get(to)}, got ${hiddenDebit}`);
+    assert(`${to}: hidden Warehouse 1 debit and credit totals balance`,
+      hiddenDebit === hiddenCredit, `debit=${hiddenDebit}, credit=${hiddenCredit}`);
+    console.log(JSON.stringify({
+      to,
+      consolidated: consolidated.data.totals,
+      visibleSlices: { debit: visibleDebit, credit: visibleCredit },
+      hiddenWarehouse1: { debit: hiddenDebit, credit: hiddenCredit },
+      disabledWarehouse1: warehouse.data.totals,
+    }));
+  }
 }
 
 // ── 1. Trial balance: zero drift + exact partition ───────────────────────────
@@ -208,9 +255,10 @@ async function testAsOfPositions() {
 
 (async () => {
   await login();
-  const { slices, suppressedLocations, suppressedHistoryKnown } = await allSlices();
+  const { slices, suppressedLocations, suppressedHistoryKnown, disabledWarehouseIds } = await allSlices();
   console.log(`Slices under test: ${slices.map((s) => s.name).join(', ')}`);
   if (suppressedLocations) console.log('Disabled-location history is intentionally absent from ordinary location slices.');
+  await testDisabledWarehouseCutoffs(disabledWarehouseIds, slices);
   await testTrialBalance(slices, suppressedLocations, suppressedHistoryKnown);
   await testDayBook(slices, suppressedLocations);
   await testFinancialStatements();
