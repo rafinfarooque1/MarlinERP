@@ -2426,6 +2426,10 @@ components:
           type: ["string", "null"]
         productionStock:
           type: number
+        mrp:
+          type: number
+        lockingRate:
+          type: ["number", "null"]
         createdAt:
           type: string
 
@@ -2443,6 +2447,10 @@ components:
           type: string
         description:
           type: string
+        mrp:
+          type: number
+        lockingRate:
+          type: ["number", "null"]
 
     ItemUpdate:
       type: object
@@ -2457,6 +2465,10 @@ components:
           type: string
         description:
           type: string
+        mrp:
+          type: number
+        lockingRate:
+          type: ["number", "null"]
 
     # PURCHASE
     PurchaseLineItem:
@@ -3227,6 +3239,9 @@ components:
             $ref: "#/components/schemas/SaleLineItem"
         paymentMode:
           type: string
+        overrideLockingRate:
+          type: boolean
+          description: Explicit administrator request to sell below a configured locking rate; server verifies role.
         receivedInLedgerId:
           type: integer
           minimum: 1

@@ -320,6 +320,7 @@ interface SalesProps {
 
 export default function Sales({ forceLocationType, forceLocationId, forceLocationName, permissionModule }: SalesProps = {}) {
   const perm = usePermission(permissionModule ?? 'page:/sales/pos');
+  const [overrideLockingRate, setOverrideLockingRate] = useState(false);
   // Head Office as a selling location is offered only to HO/admin users —
   // branch staff sell from their own location (the server enforces this too).
   const { data: me } = useGetMe();
@@ -637,6 +638,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
 
   // editItem holds the sale being edited; null means "create" mode
   const [editItem, setEditItem] = useState<any>(null);
+  useEffect(() => { if (isOpen) setOverrideLockingRate(false); }, [isOpen, editItem?.id]);
 
   // Convert-from-quotation: set when the Quotations page opened this form
   // prefilled. The id rides on the create payload so the server can stamp
@@ -1083,6 +1085,8 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
     return m;
   }, [editItem]);
   const getMrpFloor = (itemId: number) => {
+    const item = items.find(i => i.id === itemId) as any;
+    if (item?.lockingRate != null) return Number(item.lockingRate);
     const master = getPrice(itemId);
     const saved = savedPriceByItem.get(Number(itemId));
     return saved !== undefined ? Math.min(master, saved) : master;
@@ -1290,7 +1294,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
     for (let i = 0; i < data.lineItems.length; i++) {
       const li = data.lineItems[i];
       const floor = getMrpFloor(li.itemId);
-      if (floor > 0 && Number(li.unitPrice) < floor) {
+      if (!overrideLockingRate && floor > 0 && Number(li.unitPrice) < floor) {
         toast.error(MRP_FLOOR_MESSAGE);
         focusField(`line-mrp-${i}`, scopeRef.current);
         return;
@@ -1354,6 +1358,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
       // value spread from `data`, which is a percentage while the % toggle
       // is on and must never reach the server as-is.
       billDiscount,
+      ...(overrideLockingRate ? { overrideLockingRate: true } : {}),
       // Always sent: on edit the list REPLACES the stored charges, so removing
       // the last row genuinely clears them (absent would preserve).
       otherCharges: (data.otherCharges ?? [])
@@ -2996,6 +3001,10 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                     <span className="font-mono text-primary text-base truncate">{inr(totals.finalAmount)}</span>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
+                    <label className="flex items-center gap-2 text-xs text-muted-foreground max-w-[210px]">
+                      <Checkbox checked={overrideLockingRate} onCheckedChange={v => setOverrideLockingRate(v === true)} />
+                      Admin override of Locking Rate
+                    </label>
                     <DialogClose asChild><Button variant="outline" type="button">Cancel</Button></DialogClose>
                     <Button type="submit" disabled={(editItem ? updateMutation.isPending : createMutation.isPending) || !watchLocationId || (!editItem && availableItems.length === 0) || totals.finalAmount === 0}>
                       {editItem

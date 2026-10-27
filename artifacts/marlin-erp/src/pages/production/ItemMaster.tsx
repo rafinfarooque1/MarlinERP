@@ -59,6 +59,7 @@ const schema = z.object({
   taxRate:     z.coerce.number().min(0).max(28).optional(),
   cost:        z.coerce.number().min(0).optional(),
   mrp:         z.coerce.number().min(0).optional(),
+  lockingRate: z.coerce.number().min(0, 'Locking Rate cannot be negative').optional(),
   reorderLevel: z.coerce.number().min(0).optional(),
   description: z.string().optional(),
   // Left blank, the server issues both from a per-type sequence (FG/RM/PM-0001
@@ -134,7 +135,7 @@ export default function ItemMaster() {
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
-    defaultValues: { itemType: 'raw_material', name: '', unit: '', hsnCode: '', taxRate: 5, cost: 0, mrp: 0, reorderLevel: 10, description: '' },
+    defaultValues: { itemType: 'raw_material', name: '', unit: '', hsnCode: '', taxRate: 5, cost: 0, mrp: 0, lockingRate: undefined, reorderLevel: 10, description: '' },
   });
 
   const watchType = form.watch('itemType');
@@ -197,7 +198,7 @@ export default function ItemMaster() {
 
   const openAdd = (type?: ItemType) => {
     setEditTarget(null);
-    form.reset({ itemType: type || 'raw_material', name: '', unit: units[0] || '', hsnCode: '', taxRate: 5, cost: 0, mrp: 0, reorderLevel: 10, description: '', itemCode: '', barcode: '', status: 'active' });
+    form.reset({ itemType: type || 'raw_material', name: '', unit: units[0] || '', hsnCode: '', taxRate: 5, cost: 0, mrp: 0, lockingRate: undefined, reorderLevel: 10, description: '', itemCode: '', barcode: '', status: 'active' });
     setIsOpen(true);
   };
 
@@ -211,6 +212,7 @@ export default function ItemMaster() {
       taxRate: Number(item.taxRate ?? 5),
       cost: Number(item.cost ?? 0),
       mrp: Number(item.mrp ?? 0),
+      lockingRate: item.lockingRate == null ? undefined : Number(item.lockingRate),
       reorderLevel: Number(item.reorderLevel ?? 10),
       description: item.description || '',
       itemCode: item.itemCode || '',
@@ -276,7 +278,7 @@ export default function ItemMaster() {
       status: data.status,
     };
     const sharedData = { name: data.name, unit: data.unit, description: data.description, hsnCode: data.hsnCode || '', taxRate: Number(data.taxRate ?? 5), mrp: Number(data.mrp ?? 0), ...identity };
-    const itemData = { ...sharedData, cost: Number(data.cost ?? 0), reorderLevel: Number(data.reorderLevel ?? 10) };
+    const itemData = { ...sharedData, lockingRate: data.lockingRate ?? null, cost: Number(data.cost ?? 0), reorderLevel: Number(data.reorderLevel ?? 10) };
 
     if (editTarget) {
       if (type === 'raw_material') updateRM.mutate({ id: editTarget.id, data: sharedData as any }, opts);
@@ -605,6 +607,16 @@ export default function ItemMaster() {
                   </FormItem>
                 )} />
 
+                {watchType === 'item' && (
+                  <FormField control={form.control} name="lockingRate" render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Locking Rate (₹)</FormLabel>
+                      <FormControl><Input type="number" min={0} step="0.01" placeholder="Optional minimum selling rate" className="font-mono" {...field} value={field.value ?? ''} /></FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )} />
+                )}
+
                 {/* Reorder level — finished items only */}
                 {watchType === 'item' && (
                   <FormField control={form.control} name="reorderLevel" render={({ field }) => (
@@ -786,6 +798,10 @@ export default function ItemMaster() {
                     <div className="flex justify-between py-2 border-b border-border">
                       <span className="text-muted-foreground">Reorder Level</span>
                       <span className="font-mono">{Number(viewItem.reorderLevel ?? 10)}</span>
+                    </div>
+                    <div className="flex justify-between py-2 border-b border-border">
+                      <span className="text-muted-foreground">Locking Rate</span>
+                      <span className="font-mono">{viewItem.lockingRate == null ? 'Not set' : `₹${Number(viewItem.lockingRate).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`}</span>
                     </div>
                     <div className="flex justify-between py-2 border-b border-border items-center">
                       <span className="text-muted-foreground">BOM Template</span>

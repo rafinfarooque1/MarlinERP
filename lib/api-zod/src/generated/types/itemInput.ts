@@ -12,4 +12,7 @@ export interface ItemInput {
   taxRate?: number;
   unit: string;
   description?: string;
+  mrp?: number;
+  /** @nullable */
+  lockingRate?: number | null;
 }

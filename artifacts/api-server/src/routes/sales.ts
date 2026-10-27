@@ -36,6 +36,7 @@ import { resolveLocationGst, isInterStateSupply } from "../lib/gstTransfer";
 import { validateOtherCharges, validateSaleOtherCharges, parseStoredOtherCharges, otherChargesTotal, type OtherCharge } from "../lib/otherCharges";
 import { resolveReceiveIntoAccount, postSaleCollectionReceipt, type ReceiveIntoAccount } from "../lib/saleCollection";
 import { visibleLocationSql } from "../lib/warehouseVisibility";
+import { isLevelOneAdmin } from "../lib/adminGate";
 
 const router = Router();
 
@@ -397,6 +398,62 @@ export async function checkMrpFloor(
     }
   }
   return { ok: true };
+}
+
+export async function checkSaleLockingRates(
+  pgPool: { query: (sql: string, params?: any[]) => Promise<{ rows: any[] }> },
+  rawLines: Array<{ itemId: number; quantity: number; unitPrice: number }>,
+  builtLines: Array<{ itemId: number; quantity: number; unitPrice: number; discount?: number; lineSubtotal?: number; taxAmount?: number; priceMode?: string }>,
+  couponDiscount: number,
+  savedFloors?: Map<number, number>,
+  adminOverride = false,
+): Promise<{ ok: true; overrides: Array<Record<string, unknown>> } | { ok: false; error: string }> {
+  const ids = [...new Set(rawLines.map((l) => Number(l.itemId)).filter((id) => Number.isInteger(id) && id > 0))];
+  if (!ids.length) return { ok: true, overrides: [] };
+  const { rows } = await pgPool.query(
+    `SELECT id,name,mrp,locking_rate FROM items WHERE id=ANY($1::int[])`, [ids],
+  );
+  const items = new Map<number, any>(rows.map((r: any) => [Number(r.id), r]));
+  const lineGross = (line: typeof builtLines[number]) => Math.max(0, Number(line.lineSubtotal ?? 0) + Number(line.taxAmount ?? 0));
+  const grossTotal = builtLines.reduce((sum, line) => sum + lineGross(line), 0);
+  const overrides: Array<Record<string, unknown>> = [];
+  for (let i = 0; i < rawLines.length; i++) {
+    const raw = rawLines[i];
+    const built = builtLines[i];
+    const item = items.get(Number(raw.itemId));
+    if (!item || !built) continue;
+    const configured = item.locking_rate != null;
+    const mrp = Number(item.mrp ?? 0);
+    const floor = configured ? Number(item.locking_rate) : mrp;
+    if (floor <= 0) continue;
+    const saved = savedFloors?.get(Number(raw.itemId));
+    const effectiveFloor = !configured && saved !== undefined && saved > 0 ? Math.min(floor, saved) : floor;
+    const gross = lineGross(built);
+    const couponShare = grossTotal > 0 ? couponDiscount * gross / grossTotal : 0;
+    const couponPriceAdjustment = built.priceMode === "exclusive" && gross > 0
+      ? couponShare * Number(built.lineSubtotal ?? 0) / gross
+      : couponShare;
+    const chargedRate = configured
+      ? Math.round((Number(built.quantity) * Number(built.unitPrice) - Number(built.discount ?? 0) - couponPriceAdjustment) / Number(built.quantity) * 100) / 100
+      : Number(raw.unitPrice);
+    if (chargedRate + 0.004 >= effectiveFloor) continue;
+    if (configured && adminOverride) {
+      overrides.push({
+        itemId: Number(raw.itemId), itemName: String(item.name), lockingRate: effectiveFloor,
+        originalPrice: Number(raw.unitPrice), finalPrice: chargedRate,
+        discount: Math.round((Number(built.discount ?? 0) + couponShare) * 100) / 100,
+        couponDiscountShare: Math.round(couponShare * 100) / 100,
+      });
+      continue;
+    }
+    return {
+      ok: false,
+      error: configured
+        ? `Selling price cannot be below the minimum allowed rate of ₹${effectiveFloor.toFixed(2)}. Please contact an administrator.`
+        : `Rate cannot be lower than the Item Master rate. Use Discount if you want to reduce the selling price. (${item.name}: minimum allowed ₹${effectiveFloor.toFixed(2)})`,
+    };
+  }
+  return { ok: true, overrides };
 }
 
 // ── Item Prices ───────────────────────────────────────────────────────────────
@@ -898,16 +955,6 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
     : [];
   const itemTaxMap = new Map(itemsData.map(i => [i.id, { taxRate: Number(i.taxRate), name: i.name, hsnCode: i.hsnCode, unit: i.unit }]));
 
-  // ── MRP floor ─────────────────────────────────────────────────────────────
-  // Line price must be AT or ABOVE the item's master MRP; reductions go
-  // through the discount fields. Enforced here so a direct API call cannot
-  // bypass the POS rule.
-  const mrpCheck = await checkMrpFloor(pgPool, rawLineItems);
-  if (!mrpCheck.ok) {
-    res.status(400).json({ error: mrpCheck.error, code: 'MRP_BELOW_MASTER' });
-    return;
-  }
-
   // ── Build enriched line items with GST ────────────────────────────────────
   // Item discounts, then the pre-tax bill discount allocation, then tax — the
   // one canonical computation shared with PUT (see buildSaleLines).
@@ -932,6 +979,17 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
     return;
   }
   const discountTotal = Math.round(rawDiscountTotal * 100) / 100;
+  if (rawBody.overrideLockingRate != null && typeof rawBody.overrideLockingRate !== "boolean") {
+    res.status(400).json({ error: "overrideLockingRate must be a boolean" }); return;
+  }
+  const lockingOverrideRequested = rawBody.overrideLockingRate === true;
+  const lockingOverrideAdmin = lockingOverrideRequested && await isLevelOneAdmin((req as any).employee);
+  if (lockingOverrideRequested && !lockingOverrideAdmin) {
+    res.status(403).json({ error: "Only an authorized Administrator can override the locking rate." }); return;
+  }
+  const rateCheck = await checkSaleLockingRates(pgPool, rawLineItems, lineItems, discountTotal, undefined, lockingOverrideAdmin);
+  if (!rateCheck.ok) { res.status(400).json({ error: rateCheck.error, code: "LOCKING_RATE_BELOW_FLOOR" }); return; }
+  const lockingOverrides = rateCheck.overrides;
 
   // ── Other Charges (Packing & Transport, Freight, Hamali, Courier…) ────────
   // Money the customer owes ON TOP of the goods: folded into total_amount (the
@@ -1559,6 +1617,12 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
       }
     }
 
+    if (lockingOverrides.length) await logActivityInTransaction(txClient, {
+      action: "UPDATE", module: "sales", entityType: "locking_rate_override", entityId: Number(row.id),
+      user: (req as any).employee?.username,
+      description: `Locking rate override on invoice ${invoiceNumber}`,
+      metadata: { invoiceNumber, locationType, locationId, overrides: lockingOverrides },
+    });
     await logActivityInTransaction(txClient, {
       action: "CREATE", module: "sales", entityType: "sale", entityId: row.id,
       user: (req as any).employee?.username,
@@ -1782,12 +1846,6 @@ router.put("/sales/:id", requireModuleAction("page:/sales/pos", "edit"), async (
       savedFloors.set(iid, prev === undefined ? p : Math.min(prev, p));
     }
   }
-  const mrpCheck = await checkMrpFloor(pgPool, rawLineItems, savedFloors);
-  if (!mrpCheck.ok) {
-    res.status(400).json({ error: mrpCheck.error, code: 'MRP_BELOW_MASTER' });
-    return;
-  }
-
   // Build enriched line items — the SAME canonical computation as creation
   // (per-unit item discounts, pre-tax bill discount allocation, then tax).
   const built = buildSaleLines(rawLineItems, itemTaxMap, isInterState, (parsed.data as any).billDiscount ?? rawBody.billDiscount);
@@ -1808,6 +1866,17 @@ router.put("/sales/:id", requireModuleAction("page:/sales/pos", "edit"), async (
     return;
   }
   const discountTotal = Math.round(rawDiscountTotal * 100) / 100;
+  if (rawBody.overrideLockingRate != null && typeof rawBody.overrideLockingRate !== "boolean") {
+    res.status(400).json({ error: "overrideLockingRate must be a boolean" }); return;
+  }
+  const lockingOverrideRequested = rawBody.overrideLockingRate === true;
+  const lockingOverrideAdmin = lockingOverrideRequested && await isLevelOneAdmin((req as any).employee);
+  if (lockingOverrideRequested && !lockingOverrideAdmin) {
+    res.status(403).json({ error: "Only an authorized Administrator can override the locking rate." }); return;
+  }
+  const rateCheck = await checkSaleLockingRates(pgPool, rawLineItems, lineItems, discountTotal, savedFloors, lockingOverrideAdmin);
+  if (!rateCheck.ok) { res.status(400).json({ error: rateCheck.error, code: "LOCKING_RATE_BELOW_FLOOR" }); return; }
+  const lockingOverrides = rateCheck.overrides;
 
   // ── Other Charges on edit ─────────────────────────────────────────────────
   // A supplied list REPLACES the stored one (full-body PUT semantics, same as
@@ -2378,6 +2447,12 @@ router.put("/sales/:id", requireModuleAction("page:/sales/pos", "edit"), async (
       }
     }
 
+    if (lockingOverrides.length) await logActivityInTransaction(editTx, {
+      action: "UPDATE", module: "sales", entityType: "locking_rate_override", entityId: id,
+      user: (req as any).employee?.username,
+      description: `Locking rate override on invoice ${existingRaw.invoice_number}`,
+      metadata: { invoiceNumber: existingRaw.invoice_number, locationType: newLocationType, locationId: newLocationId, overrides: lockingOverrides },
+    });
     await logActivityInTransaction(editTx, {
       action: "UPDATE", module: "sales", entityType: "sale", entityId: id,
       user: (req as any).employee?.username,
