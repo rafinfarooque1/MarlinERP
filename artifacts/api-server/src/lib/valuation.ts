@@ -570,6 +570,7 @@ export async function resolveProductNames(
 /** Rows plus every roll-up a report, statement or dashboard needs. */
 export async function stockValuation(q: Queryable, scope: ValuationScope = {}): Promise<ValuationSummary> {
   const issues: ValuationIssue[] = [];
+  const historicalWarnings = new Set<string>();
   const rows = await approvedHistoricalRows(q, scope, issues) ?? await buildStockValuationRows(q, scope, issues);
   if (isIsoDate(scope.asOf)) {
     const fallbackIssues = issues.filter((issue) =>
@@ -593,7 +594,11 @@ export async function stockValuation(q: Queryable, scope: ValuationScope = {}): 
           q as any,
           { includeInTransit: false },
         );
-        if (!historical.reliable) continue;
+        // Reliability is position-wide: one unrelated missing product or
+        // unreconciled movement must not discard other lines whose batch
+        // allocations and purchase costs reconcile exactly. Keep the wider
+        // warning, but only adopt individual rows that match the issue quantity.
+        if (!historical.reliable && historical.note) historicalWarnings.add(historical.note);
         for (const issue of fallbackIssues.filter((candidate) =>
           candidate.branchType === location.branchType
           && Number(candidate.branchId) === location.branchId,
@@ -674,8 +679,11 @@ export async function stockValuation(q: Queryable, scope: ValuationScope = {}): 
   }
 
   return {
-    reliable: issues.length === 0,
-    note: issues.length ? issues.map(i => i.message).join(" ") : null,
+    reliable: issues.length === 0 && historicalWarnings.size === 0,
+    note: [
+      ...issues.map(i => i.message),
+      ...historicalWarnings,
+    ].join(" ") || null,
     issues,
     rows,
     byLocation: [...locMap.values()].sort((a, b) => b.value - a.value),
