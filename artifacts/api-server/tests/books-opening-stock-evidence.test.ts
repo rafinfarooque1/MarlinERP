@@ -78,6 +78,17 @@ try {
     Math.abs(incomes.closingStock - closingValuation.grandTotal) < 0.02,
     "P&L closing stock and the dated inventory valuation must use the same evidence-backed partial value.",
   );
+  assert.equal(
+    closingValuation.reliable,
+    incomes.closingStockReliable,
+    "P&L and Inventory Valuation must retain the same historical evidence limitation.",
+  );
+  assert.equal(closingValuation.reliable, false, "An incomplete historical rewind must remain unverified.");
+  assert.equal(
+    incomes.closingStockEvidenceReliable,
+    false,
+    "Books must preserve the underlying movement-history and deleted-product warning.",
+  );
   if (!incomes.closingStockReliable) {
     assert.match(
       incomes.closingStockNote ?? "",

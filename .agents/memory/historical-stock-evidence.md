@@ -27,6 +27,12 @@ Purchase reversals may use the current purchase row only when its batch allocati
 
 **Why:** Production records contained real partial receipts with active reservations for exactly the undelivered balance; treating any active reservation as a conflict hid valid destination stock.
 
+An unreliable overall rewind does not invalidate every line. Inventory Valuation may include a missing-checkpoint line when the shared historical batch resolver proves its exact quantity and purchase-backed cost; it must retain the rewind's broader warning for unrelated gaps or deleted products.
+
+**Why:** Requiring global reliability before accepting any fallback caused Inventory Valuation to omit individually proven batch values that Books correctly included, creating a false report-to-report difference.
+
+**How to apply:** Match each reconstructed row to the reported material, location, and quantity; adopt only that row's source-backed value, remove only its resolved line issue, and keep the aggregate historical warning and unreliable status.
+
 Daily-close quantity snapshots can include a future business-date movement if it was entered before the company's local midnight: the close materializes current `stock_entries`, while the ledger's `txn_date` may be the next day. Compare the close run time, `created_at`, and business date before trusting a close row as a cutoff quantity.
 
 **Why:** Production's September 30 close included an October 1 sale created on September 30 local time, producing a lower quantity than the September 30 cost checkpoints.
