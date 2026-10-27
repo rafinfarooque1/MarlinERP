@@ -14,13 +14,33 @@ import bcrypt from 'bcryptjs';
 
 const BASE = process.env.API_URL || 'http://localhost:8080/api';
 const TAG = 'ZZTRFDATE';
-const D0 = '2026-08-19';
-const D1 = '2026-08-20';
-const D2 = '2026-08-21';
-const D3 = '2026-08-22';
 
 const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
 const sql = (query, params = []) => pool.query(query, params);
+const addDays = (isoDate, days) => {
+  const date = new Date(`${isoDate}T00:00:00.000Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+};
+const { rows: [stockDateState] } = await sql(
+  `SELECT b.baseline_date::text AS baseline_date,
+          COALESCE(NULLIF(cs.general_settings->>'timeZone', ''), b.time_zone, 'Asia/Kolkata') AS time_zone,
+          (clock_timestamp() AT TIME ZONE COALESCE(NULLIF(cs.general_settings->>'timeZone', ''), b.time_zone, 'Asia/Kolkata'))::date::text AS today
+     FROM stock_daily_close_baseline b
+     LEFT JOIN company_settings cs ON true
+    WHERE b.id = 1
+    LIMIT 1`,
+);
+if (!stockDateState) throw new Error('Daily stock baseline is not available');
+const BASELINE_DATE = stockDateState.baseline_date;
+const TODAY = stockDateState.today;
+// API-driven inventory writes and the opening fixture use today's currently
+// open business date. Statements start yesterday, before this isolated fixture
+// existed, so the opening quantity is reconstructed as zero.
+const D0 = addDays(TODAY, -1);
+const D1 = TODAY;
+const D2 = TODAY;
+const D3 = TODAY;
 const PROBE_USER = 'zztrfdate_admin';
 const PROBE_PASS = 'ZzTrfDate#1';
 
@@ -219,7 +239,7 @@ try {
         branch_name, qty_change, unit_cost, doc_type, doc_id, notes, txn_date)
      VALUES ('opening_stock', 'material', $1, $2, 'KG', 'warehouse', $3,
              $4, 12, 100, 'test_fixture', NULL, $5, $6::date)`,
-    [materialId, `${TAG} Material`, sourceId, `${TAG} Source`, `${TAG} opening`, '2026-08-18'],
+    [materialId, `${TAG} Material`, sourceId, `${TAG} Source`, `${TAG} opening`, TODAY],
   );
   // A raw opening movement provides quantity evidence only. Pair it with the
   // authoritative dated cost checkpoint required for historical valuation;
@@ -229,9 +249,9 @@ try {
     `INSERT INTO stock_cost_snapshots
        (as_of_date, material_type, ref_id, branch_type, branch_id,
         quantity, unit_cost, value, source, source_id)
-     VALUES ('2026-08-18', 'material', $1, 'warehouse', $2,
+      VALUES ($3::date, 'material', $1, 'warehouse', $2,
              12, 100, 1200, 'test_opening', NULL)`,
-    [materialId, sourceId],
+    [materialId, sourceId, TODAY],
   );
   assert('Created isolated source and destination fixtures', sourceId > 0 && destinationId > 0 && materialId > 0);
 
@@ -486,41 +506,41 @@ try {
       sourceIssues: sourceDay?.integrity?.issues,
       destinationIssues: destinationDay?.integrity?.issues,
     }));
-  assert('Source opening stays at its physical value; dispatch is shown as Transfer-Out',
-    Number(sourceDay?.profitAndLoss?.expenses?.openingStock) === 1200 &&
-    Number(sourceDay?.profitAndLoss?.incomes?.stockTransferOut) === 400,
+  assert('Source opening is zero before the fixture; net dispatch is shown as Transfer-Out',
+    Number(sourceDay?.profitAndLoss?.expenses?.openingStock) === 0 &&
+    Number(sourceDay?.profitAndLoss?.incomes?.stockTransferOut) === 600,
     JSON.stringify(sourceDay?.profitAndLoss?.expenses));
-  assert('Destination opening stays physical; receipt is shown as Purchase Stock Transfer In',
+  assert('Destination opening stays physical; same-day receipts show as Purchase Stock Transfer In',
     Number(destinationDay?.profitAndLoss?.expenses?.openingStock) === 0 &&
-    Number(destinationDay?.profitAndLoss?.expenses?.stockTransferIn) === 400,
+    Number(destinationDay?.profitAndLoss?.expenses?.stockTransferIn) === 500,
     JSON.stringify(destinationDay?.profitAndLoss?.expenses));
-  assert('Source closing stock shows on-hand after dispatch',
-    Number(sourceDay?.profitAndLoss?.incomes?.closingStockOnHand) === 800 &&
-    Number(sourceDay?.profitAndLoss?.incomes?.closingStock) === 800,
+  assert('Source closing stock separates on-hand from remaining transit',
+    Number(sourceDay?.profitAndLoss?.incomes?.closingStockOnHand) === 600 &&
+    Number(sourceDay?.profitAndLoss?.incomes?.closingStockInTransit) === 100 &&
+    Number(sourceDay?.profitAndLoss?.incomes?.closingStock) === 700,
     JSON.stringify(sourceDay?.profitAndLoss?.incomes));
-  assert('Destination closing stock includes received on-hand stock only',
-    Number(destinationDay?.profitAndLoss?.incomes?.closingStockOnHand) === 400 &&
-    Number(destinationDay?.profitAndLoss?.incomes?.closingStock) === 400,
+  assert('Destination closing stock includes both received quantities only',
+    Number(destinationDay?.profitAndLoss?.incomes?.closingStockOnHand) === 500 &&
+    Number(destinationDay?.profitAndLoss?.incomes?.closingStock) === 500,
     JSON.stringify(destinationDay?.profitAndLoss?.incomes));
   assert('Location Balance Sheets show the same on-hand and transit stock components',
-    Number(sourceDay?.balanceSheet?.assets?.closingStockOnHand) === 800 &&
-    Number(sourceDay?.balanceSheet?.assets?.closingStockInTransit) === 0 &&
-    Number(destinationDay?.balanceSheet?.assets?.closingStockOnHand) === 400 &&
+    Number(sourceDay?.balanceSheet?.assets?.closingStockOnHand) === 600 &&
+    Number(sourceDay?.balanceSheet?.assets?.closingStockInTransit) === 100 &&
+    Number(destinationDay?.balanceSheet?.assets?.closingStockOnHand) === 500 &&
     Number(destinationDay?.balanceSheet?.assets?.closingStockInTransit) === 0,
     JSON.stringify({
       source: sourceDay?.balanceSheet?.assets,
       destination: destinationDay?.balanceSheet?.assets,
     }));
   assert('Completed transfer balances in both location P&Ls',
-    Number(sourceDay?.profitAndLoss?.summary?.costOfGoodsSold) === 400 &&
+    Number(sourceDay?.profitAndLoss?.summary?.costOfGoodsSold) === 500 &&
     Number(destinationDay?.profitAndLoss?.summary?.costOfGoodsSold) === 0 &&
     Number(sourceDay?.profitAndLoss?.netProfit) === 0 &&
     Number(destinationDay?.profitAndLoss?.netProfit) === 0,
     JSON.stringify({ source: sourceDay?.profitAndLoss?.summary, destination: destinationDay?.profitAndLoss?.summary }));
 
-  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Calcutta' });
-  const currentSource = await statement(D0, today, sourceId);
-  const currentDestination = await statement(D0, today, destinationId);
+  const currentSource = await statement(D0, TODAY, sourceId);
+  const currentDestination = await statement(D0, TODAY, destinationId);
   assert('After a short receipt, source P&L shows the remaining dispatch and separate transit value',
     Number(currentSource?.profitAndLoss?.summary?.costOfGoodsSold) === 500 &&
     Number(currentSource?.profitAndLoss?.incomes?.stockTransferOut) === 600 &&
