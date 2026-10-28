@@ -60,6 +60,16 @@ export interface DashboardEmployeeSalesRow {
   outstandingAmount: number;
 }
 
+export interface DashboardAdminDailyReport {
+  openingDueByLocation: Array<{ locationType: string; locationId: number; name: string; amount: number }>;
+  creditReceivedByLocation: Array<{ locationType: string; locationId: number; name: string; amount: number }>;
+  creditSaleByLocation: Array<{ locationType: string; locationId: number; name: string; amount: number }>;
+  expenses: Array<{
+    id: number; source: 'direct' | 'payment'; date: string; narration: string; amount: number;
+    locationType: string; locationId: number; locationName: string;
+  }>;
+}
+
 export interface DashboardBi {
   /**
    * False when this employee lacks the inventory-valuation right, in which
@@ -164,6 +174,8 @@ export interface DashboardBi {
   employeeSalesReport: DashboardEmployeeSalesRow[];
   /** Adjustment that reconciles employee invoice outstanding to location receivables-ledger outstanding. */
   employeeSalesLedgerAdjustment: number;
+  /** Present only for level-1 Administrators; server enforces this boundary. */
+  adminDailyReport?: DashboardAdminDailyReport;
   topItems: BiTopItem[];
   topCustomers: BiTopCustomer[];
 }

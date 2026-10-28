@@ -7,6 +7,7 @@ import {
 } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { usePermission } from '@/lib/usePermission';
+import { useIsAdmin } from '@/lib/useIsAdmin';
 import { formatDateTime } from '@/lib/date';
 import { useLocationContext, locationFilterParams, locationKeysParams } from '@/lib/locationContext';
 import {
@@ -37,6 +38,7 @@ import { DashboardLocationSalesReportCard } from './DashboardLocationSalesReport
 import { DashboardExpenseDetailsReport } from './DashboardExpenseDetailsReport';
 import { DashboardCashBankReport } from './DashboardCashBankReport';
 import { DashboardUnpaidSalesBillsReport } from './DashboardUnpaidSalesBillsReport';
+import { DashboardAdminDailyReport } from './DashboardAdminDailyReport';
 
 // ── Small helpers ───────────────────────────────────────────────────────────
 
@@ -227,6 +229,7 @@ function Empty({ message }: { message: string }) {
 
 export default function Dashboard() {
   const dashPerm = usePermission('page:/');
+  const isAdmin = useIsAdmin();
   // The dashboard is the owner's daily console — it opens on Today. The
   // RangeBar keeps every other preset one tap away.
   const range = useDateRange('today');
@@ -995,6 +998,18 @@ export default function Dashboard() {
             isError={unpaidSalesBillsError}
           />
         </div>
+
+        {isAdmin && (
+          <div className="min-w-0">
+            <DashboardAdminDailyReport
+              data={bi}
+              isLoading={isLoading}
+              isError={isError}
+              fromDate={range.from || undefined}
+              toDate={range.to || undefined}
+            />
+          </div>
+        )}
 
         <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-2">
           <div className="min-w-0">

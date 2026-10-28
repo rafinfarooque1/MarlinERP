@@ -12,6 +12,7 @@ import { isIsoDate } from "../lib/dateInput";
 import { getLocationFilter, getPostingLocationFilter } from "../lib/requestLocation";
 import { visibleLocationSql } from "../lib/warehouseVisibility";
 import { buildDashboardCashBankReport } from "../lib/dashboardCashBankReport";
+import { isLevelOneAdmin } from "../lib/adminGate";
 
 const router = Router();
 
@@ -1346,6 +1347,128 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
   ));
   const employeeSalesLedgerAdjustment = money(ledgerOutstandingInScope - invoiceOutstandingByEmployee);
 
+  // The combined daily sheet is returned only to level-1 Administrators.
+  // Its Due columns use the same location-sliced receivables ledger balance as
+  // the Balance Sheet, not invoice-only exposure.
+  const adminDailyReport = await (async () => {
+    if (!(await isLevelOneAdmin(emp))) return undefined;
+    const allowedKeys = dashboardReportLocations.map((location) =>
+      locationKey(location.locationType, location.locationId));
+    const openingDueByLocation = await Promise.all(matrixLocationFigures.map(async ({ location }) => {
+      const postingLocation = location.locationType === "headoffice"
+        ? ({ type: "headoffice", id: null } as const)
+        : location.locationType === "company"
+          ? ({ type: "company", id: null } as const)
+          : ({ type: location.locationType as "warehouse" | "outlet", id: location.locationId } as const);
+      const opening = matrixOpeningToDate
+        ? await companyBalances(cachedPostings, { toDate: matrixOpeningToDate, location: postingLocation })
+        : { accountsReceivable: 0 };
+      return { ...location, amount: money(opening.accountsReceivable) };
+    }));
+    const expenseLedgerIds = [...matrixSubtree("SYS-DIREXP"), ...matrixSubtree("SYS-INDEXP")];
+    const creditParams: unknown[] = [fromDate || "", toDate || "", allowedKeys];
+    const creditRange = `($1 = '' OR s.sale_date::date >= $1::date)
+      AND ($2 = '' OR s.sale_date::date <= $2::date)`;
+    const creditLocation = `CONCAT(COALESCE(s.location_type, 'outlet'), ':', COALESCE(s.location_id, s.outlet_id)) = ANY($3::text[])`;
+    const [receivedRows, creditSaleRows, expenseRows, locationExpenseRows] = await Promise.all([
+      pool.query(
+        `SELECT COALESCE(s.location_type, 'outlet') AS location_type,
+                COALESCE(s.location_id, s.outlet_id) AS location_id,
+                COALESCE(SUM(sp.amount::numeric), 0)::float AS amount
+           FROM sale_payments sp
+           JOIN sales s ON s.id = sp.sale_id
+          WHERE s.cancelled_at IS NULL AND s.branch_transfer_id IS NULL
+            AND s.payment_mode = 'credit'
+            AND sp.method <> 'advance'
+            AND ($1 = '' OR sp.payment_date::date >= $1::date)
+            AND ($2 = '' OR sp.payment_date::date <= $2::date)
+            AND ${creditLocation}
+          GROUP BY 1, 2`,
+        creditParams,
+      ),
+      pool.query(
+        `SELECT COALESCE(s.location_type, 'outlet') AS location_type,
+                COALESCE(s.location_id, s.outlet_id) AS location_id,
+                COALESCE(SUM(${outstandingAsOfExpr("s", toDate ? "$2" : "CURRENT_DATE")}), 0)::float AS amount
+           FROM sales s
+          WHERE s.cancelled_at IS NULL AND s.branch_transfer_id IS NULL
+            AND s.payment_mode = 'credit' AND ${creditRange} AND ${creditLocation}
+          GROUP BY 1, 2`,
+        creditParams,
+      ),
+      pool.query(
+        `SELECT e.id, e.expense_date AS date, COALESCE(e.description, '') AS narration,
+                e.amount::float AS amount,
+                COALESCE(e.location_type, 'headoffice') AS location_type,
+                COALESCE(e.location_id, 0) AS location_id,
+                COALESCE(w.name, o.name, 'Head Office') AS location_name
+           FROM expenses e
+           LEFT JOIN warehouses w ON e.location_type = 'warehouse' AND w.id = e.location_id
+           LEFT JOIN outlets o ON e.location_type = 'outlet' AND o.id = e.location_id
+          WHERE ($1 = '' OR e.expense_date >= $1::date)
+            AND ($2 = '' OR e.expense_date <= $2::date)
+            AND CONCAT(COALESCE(e.location_type, 'headoffice'), ':', COALESCE(e.location_id, 0)) = ANY($3::text[])
+          ORDER BY e.expense_date, e.id`,
+        creditParams,
+      ),
+      pool.query(
+        `SELECT p.id, p.payment_date AS date, COALESCE(p.narration, '') AS narration,
+                p.amount::float AS amount,
+                COALESCE(p.location_type, 'headoffice') AS location_type,
+                COALESCE(p.location_id, 0) AS location_id,
+                COALESCE(w.name, o.name, 'Head Office') AS location_name
+           FROM payments p
+           LEFT JOIN warehouses w ON p.location_type = 'warehouse' AND w.id = p.location_id
+           LEFT JOIN outlets o ON p.location_type = 'outlet' AND o.id = p.location_id
+          WHERE ($1 = '' OR p.payment_date::date >= $1::date)
+            AND ($2 = '' OR p.payment_date::date <= $2::date)
+            AND CONCAT(COALESCE(p.location_type, 'headoffice'), ':', COALESCE(p.location_id, 0)) = ANY($3::text[])
+            AND p.paid_to_ledger_id = ANY($4::int[])
+          ORDER BY p.payment_date, p.id`,
+        [...creditParams, expenseLedgerIds],
+      ),
+    ]);
+    const amountMap = (rows: any[]) => new Map(rows.map((row) => [
+      locationKey(String(row.location_type), Number(row.location_id)),
+      money(row.amount),
+    ]));
+    const receivedByLocation = amountMap(receivedRows.rows);
+    const creditSaleByLocation = amountMap(creditSaleRows.rows);
+    return {
+      openingDueByLocation,
+      creditReceivedByLocation: dashboardReportLocations.map((location) => ({
+        ...location,
+        amount: receivedByLocation.get(locationKey(location.locationType, location.locationId)) ?? 0,
+      })),
+      creditSaleByLocation: dashboardReportLocations.map((location) => ({
+        ...location,
+        amount: creditSaleByLocation.get(locationKey(location.locationType, location.locationId)) ?? 0,
+      })),
+        expenses: [
+        ...expenseRows.rows.map((row: any) => ({
+        id: Number(row.id),
+        source: "direct" as const,
+        date: asISODate(row.date),
+        narration: String(row.narration || "—"),
+        amount: money(row.amount),
+        locationType: String(row.location_type),
+        locationId: Number(row.location_id),
+        locationName: String(row.location_name),
+        })),
+        ...locationExpenseRows.rows.map((row: any) => ({
+          id: Number(row.id),
+          source: "payment" as const,
+          date: asISODate(row.date),
+          narration: String(row.narration || "—"),
+          amount: money(row.amount),
+          locationType: String(row.location_type),
+          locationId: Number(row.location_id),
+          locationName: String(row.location_name),
+        })),
+      ].sort((a, b) => a.date.localeCompare(b.date) || a.id - b.id),
+    };
+  })();
+
   const matrixOpeningCash = matrixLocationFigures.map((figure) => figure.openingCash);
   const matrixCashReceiptBySale = matrixLocationFigures.map((figure) => figure.cashReceiptBySale);
   const matrixCashReceiptVouchers = matrixLocationFigures.map((figure) => figure.cashReceiptVouchers);
@@ -1659,6 +1782,7 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
     todayMoney: moneyFlows,
     cashBankReport,
     financialMatrix,
+    ...(adminDailyReport ? { adminDailyReport } : {}),
     locationBreakdown: showDashboardProfit
       ? locationBreakdown
       : locationBreakdown.map(({ grossProfit: _grossProfit, netProfit: _netProfit, ...safe }) => safe),
