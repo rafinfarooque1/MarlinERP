@@ -43,6 +43,7 @@ export interface SalesBySalespersonRow {
   salespersonEmployeeId: number | null;
   salespersonName: string;
   invoices: number;
+  qty: number;
   subtotal: number;
   tax: number;
   total: number;
@@ -52,7 +53,7 @@ export interface SalesBySalespersonRow {
 
 export interface SalesBySalespersonResponse {
   rows: SalesBySalespersonRow[];
-  totals: { salespeople: number; invoices: number; subtotal: number; tax: number; total: number; paid: number; outstanding: number };
+  totals: { salespeople: number; invoices: number; qty: number; subtotal: number; tax: number; total: number; paid: number; outstanding: number };
 }
 
 export interface SalesByItemRow {

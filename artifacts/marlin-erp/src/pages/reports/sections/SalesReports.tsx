@@ -362,6 +362,7 @@ function SalespersonReport({ range, canDownload }: { range: RangeState; canDownl
   const cols: Col<(typeof rows)[number]>[] = [
     { key: 'salespersonName', label: 'Salesman', render: (r) => <span className="font-medium">{r.salespersonName}</span> },
     { key: 'invoices', label: 'Invoices', align: 'center' },
+    { key: 'qty', label: 'Qty Sold', align: 'right', render: (r) => num(r.qty) },
     { key: 'subtotal', label: 'Taxable', align: 'right', render: (r) => fmt(r.subtotal) },
     { key: 'tax', label: 'Tax', align: 'right', render: (r) => fmt(r.tax) },
     { key: 'total', label: 'Total', align: 'right', render: (r) => <b>{fmt(r.total)}</b> },
@@ -382,7 +383,7 @@ function SalespersonReport({ range, canDownload }: { range: RangeState; canDownl
         <ExportButtons
           canDownload={canDownload} disabled={isLoading || rows.length === 0}
           onCSV={() => downloadCSV('sales-by-salesman.csv', rows.map((r) => ({
-            Salesman: r.salespersonName, Invoices: r.invoices, 'Taxable (₹)': r.subtotal.toFixed(2),
+            Salesman: r.salespersonName, Invoices: r.invoices, Quantity: r.qty, 'Taxable (₹)': r.subtotal.toFixed(2),
             'Tax (₹)': r.tax.toFixed(2), 'Total (₹)': r.total.toFixed(2),
             'Collected (₹)': r.paid.toFixed(2), 'Outstanding (₹)': r.outstanding.toFixed(2),
           })))}
@@ -393,11 +394,12 @@ function SalespersonReport({ range, canDownload }: { range: RangeState; canDownl
             sections: [{
               columns: [
                 { label: 'Salesman', width: 2 }, { label: 'Invoices', align: 'center' },
+                { label: 'Qty', align: 'right' },
                 { label: 'Taxable', align: 'right' }, { label: 'Tax', align: 'right' },
                 { label: 'Total', align: 'right' }, { label: 'Collected', align: 'right' }, { label: 'Outstanding', align: 'right' },
               ],
-              rows: rows.map((r) => [r.salespersonName, r.invoices, pdfMoney(r.subtotal), pdfMoney(r.tax), pdfMoney(r.total), pdfMoney(r.paid), pdfMoney(r.outstanding)]),
-              totalsRow: ['TOTAL', t?.invoices ?? 0, pdfMoney(t?.subtotal), pdfMoney(t?.tax), pdfMoney(t?.total), pdfMoney(t?.paid), pdfMoney(t?.outstanding)],
+              rows: rows.map((r) => [r.salespersonName, r.invoices, num(r.qty), pdfMoney(r.subtotal), pdfMoney(r.tax), pdfMoney(r.total), pdfMoney(r.paid), pdfMoney(r.outstanding)]),
+              totalsRow: ['TOTAL', t?.invoices ?? 0, num(t?.qty), pdfMoney(t?.subtotal), pdfMoney(t?.tax), pdfMoney(t?.total), pdfMoney(t?.paid), pdfMoney(t?.outstanding)],
             }],
           })}
         />
@@ -405,11 +407,12 @@ function SalespersonReport({ range, canDownload }: { range: RangeState; canDownl
       <SummaryCards cards={[
         { label: 'Salesmen', value: t?.salespeople ?? 0 },
         { label: 'Invoices', value: t?.invoices ?? 0 },
+        { label: 'Qty Sold', value: num(t?.qty) },
         { label: 'Total Billed', value: fmt(t?.total), tone: 'accent' },
         { label: 'Collected', value: fmt(t?.paid), tone: 'pos' },
       ]} />
       <RTable cols={cols} rows={rows} loading={isLoading} rowKey={(r) => r.salespersonEmployeeId ?? 'unassigned'}
-        footer={['TOTAL', t?.invoices ?? 0, fmt(t?.subtotal), fmt(t?.tax), fmt(t?.total), fmt(t?.paid), fmt(t?.outstanding)]} />
+        footer={['TOTAL', t?.invoices ?? 0, num(t?.qty), fmt(t?.subtotal), fmt(t?.tax), fmt(t?.total), fmt(t?.paid), fmt(t?.outstanding)]} />
     </div>
   );
 }

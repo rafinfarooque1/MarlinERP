@@ -151,6 +151,7 @@
 - [Report cache 304 handling](report-cache-304.md) — report fetches must bypass 304 revalidation when the client cannot recover the cached response body
 - [Customer receipt ledger aggregation](receipt-ledger-aggregation.md) — allocation rows are settlement metadata; one receipt posts one customer credit for its full amount
 - [Sales report definitions](sales-report-definitions.md) — Sales Register includes invoice-level charges; By Item is explicitly merchandise-line-only
+- [Sales report fixture drift](sales-report-fixture-drift.md) — captured sales report fixtures can retain invoice totals while payment expectations change; isolate the changed measure before judging failures
 - [Customer disable visibility](customer-disable-visibility.md) — disabled customers remain in Customer management for reactivation and are excluded from all other customer lists and pickers
 - [Locking Rate price floor](locking-rate-policy.md) — configured floors include all discounts; only server-verified admins can override, and every exception is audited
 - [Stock movement test dates](stock-date-fixtures.md) — tests must respect baseline and close-through dates; future movements may not appear in reports
