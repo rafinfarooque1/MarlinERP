@@ -1366,9 +1366,9 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       return { ...location, amount: money(opening.accountsReceivable) };
     }));
     const expenseLedgerIds = [...matrixSubtree("SYS-DIREXP"), ...matrixSubtree("SYS-INDEXP")];
-    const creditParams: unknown[] = [fromDate || "", toDate || "", allowedKeys];
-    const creditRange = `($1 = '' OR s.sale_date::date >= $1::date)
-      AND ($2 = '' OR s.sale_date::date <= $2::date)`;
+    const creditParams: unknown[] = [fromDate || null, toDate || null, allowedKeys];
+    const creditRange = `($1::date IS NULL OR s.sale_date >= $1::date)
+      AND ($2::date IS NULL OR s.sale_date <= $2::date)`;
     const creditLocation = `CONCAT(COALESCE(s.location_type, 'outlet'), ':', COALESCE(s.location_id, s.outlet_id)) = ANY($3::text[])`;
     const [receivedRows, creditSaleRows, expenseRows, locationExpenseRows] = await Promise.all([
       pool.query(
@@ -1380,8 +1380,8 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
           WHERE s.cancelled_at IS NULL AND s.branch_transfer_id IS NULL
             AND s.payment_mode = 'credit'
             AND sp.method <> 'advance'
-            AND ($1 = '' OR sp.payment_date::date >= $1::date)
-            AND ($2 = '' OR sp.payment_date::date <= $2::date)
+            AND ($1::date IS NULL OR sp.payment_date::date >= $1::date)
+            AND ($2::date IS NULL OR sp.payment_date::date <= $2::date)
             AND ${creditLocation}
           GROUP BY 1, 2`,
         creditParams,
@@ -1405,8 +1405,8 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
            FROM expenses e
            LEFT JOIN warehouses w ON e.location_type = 'warehouse' AND w.id = e.location_id
            LEFT JOIN outlets o ON e.location_type = 'outlet' AND o.id = e.location_id
-          WHERE ($1 = '' OR e.expense_date >= $1::date)
-            AND ($2 = '' OR e.expense_date <= $2::date)
+          WHERE ($1::date IS NULL OR e.expense_date >= $1::date)
+            AND ($2::date IS NULL OR e.expense_date <= $2::date)
             AND CONCAT(COALESCE(e.location_type, 'headoffice'), ':', COALESCE(e.location_id, 0)) = ANY($3::text[])
           ORDER BY e.expense_date, e.id`,
         creditParams,
@@ -1420,8 +1420,8 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
            FROM payments p
            LEFT JOIN warehouses w ON p.location_type = 'warehouse' AND w.id = p.location_id
            LEFT JOIN outlets o ON p.location_type = 'outlet' AND o.id = p.location_id
-          WHERE ($1 = '' OR p.payment_date::date >= $1::date)
-            AND ($2 = '' OR p.payment_date::date <= $2::date)
+          WHERE ($1::date IS NULL OR p.payment_date::date >= $1::date)
+            AND ($2::date IS NULL OR p.payment_date::date <= $2::date)
             AND CONCAT(COALESCE(p.location_type, 'headoffice'), ':', COALESCE(p.location_id, 0)) = ANY($3::text[])
             AND p.paid_to_ledger_id = ANY($4::int[])
           ORDER BY p.payment_date, p.id`,
