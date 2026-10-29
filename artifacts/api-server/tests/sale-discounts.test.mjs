@@ -25,7 +25,10 @@ const WH = 2; // Marlin Mangaluru Depot — same warehouse the other suites use
 const TEST_DATE = new Date().toISOString().slice(0, 10);
 const PROBE_USER = 'zztest_locking_rate_admin';
 const PROBE_PASS = 'ZzLockRate#1';
+const PROBE_MANAGER_USER = 'zztest_locking_rate_manager';
+const PROBE_MANAGER_PASS = 'ZzLockRate#2';
 let probeUserId = 0;
+let probeManagerToken = '';
 
 let authToken = '';
 let passed = 0, failed = 0;
@@ -118,6 +121,9 @@ async function cleanupProbeUser() {
   await sql(`DELETE FROM login_lockouts WHERE username = $1`, [PROBE_USER]).catch(() => {});
   await sql(`DELETE FROM login_attempts WHERE username = $1`, [PROBE_USER]).catch(() => {});
   await sql(`DELETE FROM employees WHERE username = $1`, [PROBE_USER]).catch(() => {});
+  await sql(`DELETE FROM login_lockouts WHERE username = $1`, [PROBE_MANAGER_USER]).catch(() => {});
+  await sql(`DELETE FROM login_attempts WHERE username = $1`, [PROBE_MANAGER_USER]).catch(() => {});
+  await sql(`DELETE FROM employees WHERE username = $1`, [PROBE_MANAGER_USER]).catch(() => {});
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -138,6 +144,26 @@ const loginRes = await post('/auth/login', { username: PROBE_USER, password: PRO
 authToken = loginRes.data?.token ?? '';
 assert('Admin login returns a token', !!authToken, `status=${loginRes.status}`);
 if (!authToken) { console.error('FATAL: no token'); await cleanupProbeUser(); process.exit(1); }
+
+const managerHierarchy = (await sql(
+  `SELECT h.id
+     FROM hierarchies h
+     JOIN permissions p ON p.hierarchy_id = h.id
+    WHERE h.level <> 1 AND p.module = 'page:/sales/pos' AND p.can_add = true AND p.can_edit = true
+    ORDER BY h.level, h.id LIMIT 1`,
+)).rows[0];
+if (!managerHierarchy) throw new Error('No non-admin hierarchy with POS add permission is available for the authorization test');
+await sql(
+  `INSERT INTO employees
+     (name, username, password_hash, hierarchy_id, branch_type, branch_id,
+      salary, join_date, is_active, must_change_password)
+   VALUES ($1,$2,$3,$4,'warehouse',$5,0,CURRENT_DATE,true,false)`,
+  [`${TAG} Locking Rate Manager`, PROBE_MANAGER_USER, bcrypt.hashSync(PROBE_MANAGER_PASS, 10), managerHierarchy.id, WH],
+);
+const managerLogin = await post('/auth/login', { username: PROBE_MANAGER_USER, password: PROBE_MANAGER_PASS });
+probeManagerToken = managerLogin.data?.token ?? '';
+assert('Non-admin manager login returns a token', !!probeManagerToken, `status=${managerLogin.status}`);
+if (!probeManagerToken) { console.error('FATAL: no manager token'); await cleanupProbeUser(); process.exit(1); }
 
 await cleanup(); // in case a previous run died mid-way
 const tbBefore = await snapshotTB();
@@ -200,8 +226,29 @@ console.log('\n[LR] Locking Rate: create/edit discounts and administrator overri
   const below = await createSale([{ itemId: fixtures.itemA, quantity: 1, unitPrice: 100, unitDiscount: 21 }]);
   assert('Employee-style create below the effective floor is refused', below.status === 400 && below.data?.code === 'LOCKING_RATE_BELOW_FLOOR', JSON.stringify(below.data));
 
+  const unauthorizedOverride = await post('/sales', salePayload(
+    [{ itemId: fixtures.itemA, quantity: 1, unitPrice: 100, unitDiscount: 25 }],
+    { overrideLockingRate: true },
+  ), probeManagerToken);
+  assert('A non-admin manager direct API override is rejected',
+    unauthorizedOverride.status === 403, JSON.stringify(unauthorizedOverride.data));
+
   const atFloor = await createSale([{ itemId: fixtures.itemA, quantity: 1, unitPrice: 100, unitDiscount: 20 }]);
-  assert('Discounted create exactly at the floor is accepted', atFloor.status === 201, JSON.stringify(atFloor.data).slice(0, 160));
+  assert('Normal sale exactly at the floor succeeds without an override',
+    atFloor.status === 201, JSON.stringify(atFloor.data).slice(0, 160));
+  if (atFloor.status === 201) {
+    const { rows: normalOverrideAudit } = await sql(
+      `SELECT id FROM activity_log WHERE entity_type='locking_rate_override' AND entity_id=$1`,
+      [atFloor.data.id]);
+    assert('Normal at-floor sale creates no override audit entry', normalOverrideAudit.length === 0);
+
+    const unauthorizedEditOverride = await put(`/sales/${atFloor.data.id}`, salePayload(
+      [{ itemId: fixtures.itemA, quantity: 1, unitPrice: 100, unitDiscount: 25 }],
+      { overrideLockingRate: true },
+    ), probeManagerToken);
+    assert('A non-admin manager direct API edit override is rejected',
+      unauthorizedEditOverride.status === 403, JSON.stringify(unauthorizedEditOverride.data));
+  }
   if (atFloor.status === 201) {
     const editBelow = await put(`/sales/${atFloor.data.id}`, salePayload(
       [{ itemId: fixtures.itemA, quantity: 1, unitPrice: 100, unitDiscount: 21 }]));
