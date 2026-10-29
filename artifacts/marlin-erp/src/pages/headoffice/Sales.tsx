@@ -12,6 +12,8 @@ import {
   usePartyAdvance, getPartyAdvanceQueryKey,
 } from '@workspace/api-client-react';
 import { usePermission } from '@/lib/usePermission';
+import { useIsAdmin } from '@/lib/useIsAdmin';
+import { canShowLockingRateOverride } from '@/lib/lockingRateOverride';
 import { formatDate } from '@/lib/date';
 import { isActiveProduct } from '@/lib/productStatus';
 import { useOutletsEnabled, useFeatureFlags } from '@/lib/useFeatureFlags';
@@ -320,6 +322,7 @@ interface SalesProps {
 
 export default function Sales({ forceLocationType, forceLocationId, forceLocationName, permissionModule }: SalesProps = {}) {
   const perm = usePermission(permissionModule ?? 'page:/sales/pos');
+  const isAdmin = useIsAdmin();
   const [overrideLockingRate, setOverrideLockingRate] = useState(false);
   // Head Office as a selling location is offered only to HO/admin users —
   // branch staff sell from their own location (the server enforces this too).
@@ -1278,6 +1281,14 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   const totals = computeCartTotals();
   // True when at least one item is selected
   const hasItems = fields.some((_, i) => (form.watch(`lineItems.${i}.itemId`) ?? 0) > 0);
+  const hasConfiguredLockingRate = (form.watch('lineItems') ?? []).some(line => {
+    const item = items.find(candidate => Number(candidate.id) === Number(line.itemId)) as any;
+    return item?.lockingRate != null;
+  });
+  const showLockingRateOverride = canShowLockingRateOverride(isAdmin, hasConfiguredLockingRate);
+  useEffect(() => {
+    if (!showLockingRateOverride) setOverrideLockingRate(false);
+  }, [showLockingRateOverride]);
 
   const onSubmit = (data: FormValues) => {
     if (!editItem && (!Number.isInteger(Number(data.salespersonEmployeeId)) || Number(data.salespersonEmployeeId) <= 0)) {
@@ -2992,10 +3003,12 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                     <span className="font-mono text-primary text-base truncate">{inr(totals.finalAmount)}</span>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
-                    <label className="flex items-center gap-2 text-xs text-muted-foreground max-w-[210px]">
-                      <Checkbox checked={overrideLockingRate} onCheckedChange={v => setOverrideLockingRate(v === true)} />
-                      Admin override of Locking Rate
-                    </label>
+                    {showLockingRateOverride && (
+                      <label className="flex items-center gap-2 text-xs text-muted-foreground max-w-[210px]">
+                        <Checkbox checked={overrideLockingRate} onCheckedChange={v => setOverrideLockingRate(v === true)} />
+                        Admin override of Locking Rate
+                      </label>
+                    )}
                     <DialogClose asChild><Button variant="outline" type="button">Cancel</Button></DialogClose>
                     <Button type="submit" disabled={(editItem ? updateMutation.isPending : createMutation.isPending) || !watchLocationId || (!editItem && availableItems.length === 0) || totals.finalAmount === 0}>
                       {editItem
