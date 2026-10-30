@@ -31,7 +31,7 @@ export interface GroupSummary {
 export interface FinancialStatements {
   filters: { warehouses: { id: number; name: string }[]; outlets: { id: number; name: string }[] };
   profitAndLoss: {
-    /** True when a location statement includes transfer-in/out in P&L activity. */
+    /** Transfer ledger amounts are memo data; stock-cost adjustment keeps P&L neutral. */
     stockTransfersIncludedInPnl?: boolean;
     expenses: {
       openingStock: number; openingStockItems: StockItem[];

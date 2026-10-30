@@ -8,12 +8,15 @@ dispatch and `Transfer-In` expense at receipt. Cross-GSTIN transfers also carry
 the appropriate GST heads; same-GSTIN transfers use tax-free internal vouchers.
 P&L recognition stays separate from the inter-branch payable.
 
-Location statements include Transfer-Out as income and Transfer-In as purchase
-expense; consolidated statements remain neutral. Do not apply the transfer
-opening-stock adjustment to a location P&L. The P&L includes on-hand and
-sender-owned in-transit stock in its closing-stock calculation; Balance Sheet
-asset totals exclude that calculated stock value. Dispatch reduces sender
-on-hand; transit remains owned by the sender until receipt.
+For P&L reporting, the older location-specific treatment (Transfer-Out as
+income and Transfer-In as purchase expense) is superseded. All stock-owning
+scopes exclude transfer-ledger balances from operating totals and use the dated
+stock-cost movement plus sender-owned transit boundary adjustment. Transfer
+postings remain available as memo/audit data; voucher, payable, and GST postings
+are unchanged. Closing valuation includes sender-owned in-transit stock exactly
+once. Balance Sheet asset totals continue to exclude that calculated stock
+value. Dispatch reduces sender on-hand; transit remains sender-owned until
+receipt.
 
 **Why:** the user explicitly chose to keep stock calculation in the P&L only
 and confirmed excluding it from all Balance Sheet totals after being warned
@@ -38,11 +41,18 @@ must not create duplicate JVs. Legacy voucher-mode history is repaired only
 with additive, balanced adjustment vouchers; keep existing journal lines
 immutable. Migrations are marker-guarded and atomic.
 
-For reporting, apply transfer P&L lines only to location-scoped statements and
-keep the pair-payable postings unchanged. The transfer-in amount is already
-separate from ordinary purchases; include it once in goods available and
-COGS. Keep monthly statements, on-screen reports, PDFs, and canonical exports
-aligned on the same transfer and stock split.
+For reporting, keep the pair-payable postings unchanged. Transfer ledger
+amounts are memo-only, and the dated opening adjustment carries inventory cost
+movement into COGS once. Keep monthly statements, on-screen reports, PDFs, and
+canonical exports aligned on the same transfer and transit boundaries.
+
+**Why:** the corrected reporting requirement is that internal movements cannot
+create artificial profit or loss when authoritative stock valuation already
+reflects them. This supersedes the earlier location-only P&L presentation rule.
+
+**How to apply:** keep raw transfer ledger amounts accessible for audit and
+GST reconciliation, but do not include them in revenue, purchases, expenses,
+COGS, or Gross Profit.
 
 For voucher-mode short receipts, the destination Transfer-In voucher is based
 on the quantity actually received; the shortfall remains sender-owned in
