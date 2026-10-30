@@ -781,6 +781,25 @@ export function applyStockTransferOpeningAdjustment(
   };
 }
 
+export function calculatePnlTotals(input: {
+  sales: number;
+  directIncome: number;
+  openingStock: number;
+  purchases: number;
+  directExpenses: number;
+  closingStock: number;
+  otherIncome: number;
+  indirectExpenses: number;
+}) {
+  const revenue = r2(input.sales + input.directIncome);
+  const costOfGoodsSold = r2(
+    input.openingStock + input.purchases + input.directExpenses - input.closingStock,
+  );
+  const grossProfit = r2(revenue - costOfGoodsSold);
+  const netProfit = r2(grossProfit + input.otherIncome - input.indirectExpenses);
+  return { revenue, costOfGoodsSold, grossProfit, netProfit };
+}
+
 /** One branch's stock filter for the historic rewind and the current read. */
 export interface StockBranchScope {
   branchType: string;
@@ -1420,13 +1439,13 @@ export interface BooksOptions {
 export interface Books {
   period: { fromDate: string | null; toDate: string | null };
   profitAndLoss: {
-    /** True when this location slice includes internal transfer activity in P&L. */
+    /** Transfer postings are retained as memo data and excluded from P&L totals. */
     stockTransfersIncludedInPnl: boolean;
     expenses: {
       openingStock: number;
       /** Physical opening position before the period-scoped transfer adjustment. */
       openingStockPhysical: number;
-      /** Transfer adjustment applied only when transfer ledgers are excluded from P&L. */
+      /** Period stock-cost and transit-boundary adjustment for internal transfers. */
       openingStockTransferAdjustment: number;
       openingStockItems: ValuedItem[];
       openingStockReliable: boolean;
@@ -1638,7 +1657,10 @@ export async function buildBooks(
     location && location.type !== "company"
       ? { branchType: location.type, branchId: location.id, ...(location.identities?.length ? { branchPairs: location.identities } : {}) }
       : null;
-  const includeLocationTransfersInPnl = !!location && location.type !== "company";
+  // Transfer ledgers are memo/audit data, not operating income or COGS. Apply
+  // the dated stock-cost movement and transit-boundary adjustment to every
+  // stock-owning scope so internal relocations remain P&L-neutral even when
+  // the transfer-account amount differs from the authoritative stock value.
   const skipStock = location?.type === "company";
   const historicalClose = toDate !== null && toDate < companyToday;
   const closing = skipStock ? emptyStock
@@ -1659,14 +1681,12 @@ export async function buildBooks(
     && !(await hasStockMovementInRange(fromDate, toDate, stockScope, q));
   const normalOpening = skipStock || sameDayNoStockMovement ? emptyStock
     : fromDate ? await stockAsOf(previousDay(fromDate), stockScope, q) : await stockAsOf(null, undefined, q);
-  const transferOpeningAdjustment = skipStock || sameDayNoStockMovement || includeLocationTransfersInPnl
+  const transferOpeningAdjustment = skipStock || sameDayNoStockMovement
     ? { total: 0, lines: [] }
     : await stockTransferOpeningAdjustment(fromDate, toDate, stockScope, q);
   const opening = sameDayNoStockMovement
     ? { ...closing, note: closing.note }
-    : includeLocationTransfersInPnl
-      ? normalOpening
-      : applyStockTransferOpeningAdjustment(normalOpening, transferOpeningAdjustment);
+    : applyStockTransferOpeningAdjustment(normalOpening, transferOpeningAdjustment);
 
   // ── Group builders ────────────────────────────────────────────────────────
 
@@ -1736,8 +1756,8 @@ export async function buildBooks(
   const transferInNames = new Set(["STD-TRF-IN", "TRANSFER-IN", "transfer-in"]);
   const transferOutNames = new Set(["STD-TRF-OUT", "TRANSFER-OUT", "transfer-out"]);
   // Transfer-In can be parented beneath Purchase Account or Direct Expenses.
-  // Keep both transfer balances separate from their chart subtrees so the
-  // location P&L can present each as one explicit line without double-counting.
+  // Expose both transfer balances separately for audit while removing them
+  // from their chart subtrees and operating P&L totals.
   const stockTransferIn = r2(
     nodeTotal(purchasesGroup, transferInNames) + nodeTotal(directExp, transferInNames),
   );
@@ -1746,25 +1766,26 @@ export async function buildBooks(
   const directExpensesForPnl = stripTransferNodes(directExp, transferInNames);
   const directIncomesForPnl = stripTransferNodes(directInc, transferOutNames);
 
-  // Branch statements show transfer-in as a purchase and transfer-out as
-  // income. Their physical movement is reflected by the location's opening and
-  // closing stock boundaries, so do not also apply the consolidated
-  // transfer-opening adjustment. Company/consolidated statements retain the
-  // neutral treatment: transfer ledgers stay outside operating totals and the
-  // boundary adjustment carries the movement exactly once.
-  const pnlTransferIn = includeLocationTransfersInPnl ? stockTransferIn : 0;
-  const pnlTransferOut = includeLocationTransfersInPnl ? stockTransferOut : 0;
+  // Transfer account postings remain separately exposed below for audit and
+  // reconciliation, but are excluded from operating totals at every scope.
   const totalExpenses = r2(
-    opening.total + purchasesForPnl.total + pnlTransferIn + directExpensesForPnl.total + indirectExp.total,
+    opening.total + purchasesForPnl.total + directExpensesForPnl.total + indirectExp.total,
   );
   const totalIncomes = r2(
-    salesGroup.total + closing.total + directIncomesForPnl.total + pnlTransferOut + indirectInc.total,
+    salesGroup.total + closing.total + directIncomesForPnl.total + indirectInc.total,
   );
-  const netProfit = r2(totalIncomes - totalExpenses);
-
-  const revenue = r2(salesGroup.total + directIncomesForPnl.total + pnlTransferOut);
-  const cogs = r2(opening.total + purchasesForPnl.total + pnlTransferIn + directExpensesForPnl.total - closing.total);
-  const grossProfit = r2(revenue - cogs);
+  const pnlTotals = calculatePnlTotals({
+    sales: salesGroup.total,
+    directIncome: directIncomesForPnl.total,
+    openingStock: opening.total,
+    purchases: purchasesForPnl.total,
+    directExpenses: directExpensesForPnl.total,
+    closingStock: closing.total,
+    otherIncome: indirectInc.total,
+    indirectExpenses: indirectExp.total,
+  });
+  const netProfit = pnlTotals.netProfit;
+  const { revenue, costOfGoodsSold: cogs, grossProfit } = pnlTotals;
   const pct = (part: number, whole: number) => (Math.abs(whole) < 0.005 ? 0 : r2((part / whole) * 100));
 
   // ── Balance sheet (cumulative to `toDate`) ───────────────────────────────
@@ -1895,7 +1916,7 @@ export async function buildBooks(
   return {
     period: { fromDate, toDate },
     profitAndLoss: {
-      stockTransfersIncludedInPnl: includeLocationTransfersInPnl,
+      stockTransfersIncludedInPnl: false,
       expenses: {
         openingStock: opening.total,
         openingStockPhysical: normalOpening.total,

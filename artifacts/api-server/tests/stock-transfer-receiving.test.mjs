@@ -394,23 +394,29 @@ try {
   console.log('\n[2b] Historical P&L after one completed same-day transfer');
   const sourceAfterFull = await statement(D0, D1, sourceId);
   const destinationAfterFull = await statement(D0, D1, destinationId);
-  assert('Both locations report reliable opening stock without a transfer adjustment',
+  assert('Both locations report reliable opening stock with the dated transfer adjustment',
     sourceAfterFull?.profitAndLoss?.expenses?.openingStockReliable === true &&
     destinationAfterFull?.profitAndLoss?.expenses?.openingStockReliable === true &&
-    sourceAfterFull?.profitAndLoss?.stockTransfersIncludedInPnl === true &&
-    destinationAfterFull?.profitAndLoss?.stockTransfersIncludedInPnl === true &&
-    Number(sourceAfterFull?.profitAndLoss?.expenses?.openingStockTransferAdjustment) === 0 &&
-    Number(destinationAfterFull?.profitAndLoss?.expenses?.openingStockTransferAdjustment) === 0,
+    sourceAfterFull?.profitAndLoss?.stockTransfersIncludedInPnl === false &&
+    destinationAfterFull?.profitAndLoss?.stockTransfersIncludedInPnl === false &&
+    Number(sourceAfterFull?.profitAndLoss?.expenses?.openingStockTransferAdjustment) === -400 &&
+    Number(destinationAfterFull?.profitAndLoss?.expenses?.openingStockTransferAdjustment) === 400 &&
+    Number(sourceAfterFull?.profitAndLoss?.expenses?.openingStock) === -400 &&
+    Number(destinationAfterFull?.profitAndLoss?.expenses?.openingStock) === 400,
     JSON.stringify({
       source: sourceAfterFull?.profitAndLoss?.expenses,
       destination: destinationAfterFull?.profitAndLoss?.expenses,
     }));
-  assert('A fully received transfer is P&L-neutral at both locations',
+  assert('A fully received no-sales transfer is P&L-neutral at both locations',
+    Number(sourceAfterFull?.profitAndLoss?.incomes?.sales) === 0 &&
+    Number(destinationAfterFull?.profitAndLoss?.incomes?.sales) === 0 &&
     Number(sourceAfterFull?.profitAndLoss?.incomes?.stockTransferOut) === 400 &&
     Number(sourceAfterFull?.profitAndLoss?.incomes?.closingStockOnHand) === 800 &&
     Number(sourceAfterFull?.profitAndLoss?.incomes?.closingStockInTransit) === 0 &&
     Number(destinationAfterFull?.profitAndLoss?.expenses?.stockTransferIn) === 400 &&
     Number(destinationAfterFull?.profitAndLoss?.incomes?.closingStockOnHand) === 400 &&
+    Number(sourceAfterFull?.profitAndLoss?.summary?.grossProfit) === 0 &&
+    Number(destinationAfterFull?.profitAndLoss?.summary?.grossProfit) === 0 &&
     Number(sourceAfterFull?.profitAndLoss?.netProfit) === 0 &&
     Number(destinationAfterFull?.profitAndLoss?.netProfit) === 0,
     JSON.stringify({
