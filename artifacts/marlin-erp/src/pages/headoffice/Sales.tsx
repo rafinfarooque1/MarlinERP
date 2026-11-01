@@ -14,6 +14,7 @@ import {
 import { usePermission } from '@/lib/usePermission';
 import { useIsAdmin } from '@/lib/useIsAdmin';
 import { canShowLockingRateOverride } from '@/lib/lockingRateOverride';
+import { effectiveSellingRate, getLockingRateIssue } from '@/lib/lockingRateValidation';
 import { formatDate } from '@/lib/date';
 import { isActiveProduct } from '@/lib/productStatus';
 import { useOutletsEnabled, useFeatureFlags } from '@/lib/useFeatureFlags';
@@ -324,6 +325,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   const perm = usePermission(permissionModule ?? 'page:/sales/pos');
   const isAdmin = useIsAdmin();
   const [overrideLockingRate, setOverrideLockingRate] = useState(false);
+  const [validatedLockingLines, setValidatedLockingLines] = useState<Set<string>>(() => new Set());
   // Head Office as a selling location is offered only to HO/admin users —
   // branch staff sell from their own location (the server enforces this too).
   const { data: me } = useGetMe();
@@ -1202,7 +1204,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   const computeCartTotals = () => {
     // Pass 1 — per-line ITEM discounts (₹/unit off the MRP) and each line's
     // pre-bill-discount value ("basis").
-    const prepared: Array<{ qty: number; price: number; taxRate: number; itemDisc: number; basis: number; taxable: boolean }> = [];
+    const prepared: Array<{ lineIndex: number; itemId: number; qty: number; price: number; taxRate: number; itemDisc: number; basis: number; taxable: boolean }> = [];
     let grossItemValue = 0, itemDiscountTotal = 0;
     fields.forEach((_, i) => {
       const itemId = form.watch(`lineItems.${i}.itemId`);
@@ -1215,7 +1217,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
       const itemDisc = Math.round(unitDisc * qty * 100) / 100;
       grossItemValue    += Math.round(qty * price * 100) / 100;
       itemDiscountTotal += itemDisc;
-      prepared.push({ qty, price, taxRate, itemDisc, basis: Math.max(0, Math.round((qty * price - itemDisc) * 100) / 100), taxable });
+      prepared.push({ lineIndex: i, itemId: Number(itemId), qty, price, taxRate, itemDisc, basis: Math.max(0, Math.round((qty * price - itemDisc) * 100) / 100), taxable });
     });
 
     // Pass 2 — allocate the BILL discount paise-exactly across lines in
@@ -1252,9 +1254,11 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
     // (kg goods) an unrounded qty×price−disc base would keep sub-paisa
     // fractions and drift the preview off the persisted invoice.
     let grossTotal = 0, subtotal = 0, cgstTotal = 0, sgstTotal = 0, igstTotal = 0, taxTotal = 0;
+    const lineTaxDetails: Array<{ lineSubtotal: number; lineGross: number }> = [];
     prepared.forEach((p, k) => {
       const adjusted = Math.round((p.basis - shares[k]) * 100) / 100;
       const gst = computeLineGst(1, adjusted, p.taxRate, isInterState, 0, p.taxable);
+      lineTaxDetails.push({ lineSubtotal: gst.lineSubtotal, lineGross: gst.lineGross });
       grossTotal += gst.lineGross;            // FINAL line total, either mode
       subtotal   += gst.lineSubtotal;
       cgstTotal  += gst.cgst;
@@ -1271,14 +1275,54 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
           ? Math.round(grandTotal * Number(appliedCoupon.discountValue) / 100 * 100) / 100
           : Math.min(Number(appliedCoupon.discountValue), grandTotal)
         : 0;
+    // Match the server's Locking Rate basis: per-unit item discount, the
+    // paise-exact bill-discount allocation, then each line's proportional
+    // post-tax coupon share (converted back to taxable basis for exclusive
+    // prices). These are diagnostics only; invoice totals above are unchanged.
+    const effectiveUnitRates = fields.map((_, i) => Number(form.watch(`lineItems.${i}.unitPrice`) ?? 0));
+    prepared.forEach((p, i) => {
+      const { lineSubtotal, lineGross } = lineTaxDetails[i] ?? { lineSubtotal: 0, lineGross: 0 };
+      const couponShare = grossTotal > 0 ? discountAmount * lineGross / grossTotal : 0;
+      const couponPriceAdjustment = p.taxable && lineGross > 0
+        ? couponShare * lineSubtotal / lineGross
+        : couponShare;
+      effectiveUnitRates[p.lineIndex] = effectiveSellingRate(
+        p.qty, p.price, p.itemDisc, shares[i], couponPriceAdjustment,
+      );
+    });
     // Other Charges — flat post-tax amounts on top of the goods (no GST on
     // them), mirroring the server: total = goods + GST − coupon + charges.
     const otherTotal = Math.round(((form.watch('otherCharges') ?? []) as any[])
       .reduce((t, c) => t + (Number(c?.amount) || 0), 0) * 100) / 100;
-    return { grossItemValue, grossTotal, subtotal, cgstTotal, sgstTotal, igstTotal, taxTotal, itemDiscountTotal, basisSum, billDiscount, grandTotal, discountAmount, otherTotal, finalAmount: Math.round((grandTotal - discountAmount + otherTotal) * 100) / 100 };
+    return { grossItemValue, grossTotal, subtotal, cgstTotal, sgstTotal, igstTotal, taxTotal, itemDiscountTotal, basisSum, billDiscount, grandTotal, discountAmount, otherTotal, effectiveUnitRates, finalAmount: Math.round((grandTotal - discountAmount + otherTotal) * 100) / 100 };
   };
 
   const totals = computeCartTotals();
+  const lockingRateIssueAt = (index: number) => {
+    const line = form.watch(`lineItems.${index}`);
+    const item = items.find(candidate => Number(candidate.id) === Number(line?.itemId)) as any;
+    if (!item || item.lockingRate == null) return null;
+    const floor = Number(item.lockingRate);
+    return getLockingRateIssue(
+      String(item.name ?? 'Item'),
+      floor,
+      Number(totals.effectiveUnitRates[index] ?? line?.unitPrice ?? 0),
+    );
+  };
+  const validateLockingLine = (id: string) => {
+    setValidatedLockingLines(previous => new Set(previous).add(id));
+  };
+  const clearLockingLineValidation = (id: string) => {
+    setValidatedLockingLines(previous => {
+      if (!previous.has(id)) return previous;
+      const next = new Set(previous);
+      next.delete(id);
+      return next;
+    });
+  };
+  const validateAllLockingLines = () => {
+    setValidatedLockingLines(new Set(fields.map(field => field.id)));
+  };
   // True when at least one item is selected
   const hasItems = fields.some((_, i) => (form.watch(`lineItems.${i}.itemId`) ?? 0) > 0);
   const hasConfiguredLockingRate = (form.watch('lineItems') ?? []).some(line => {
@@ -1289,8 +1333,26 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   useEffect(() => {
     if (!showLockingRateOverride) setOverrideLockingRate(false);
   }, [showLockingRateOverride]);
+  useEffect(() => {
+    if (!isOpen) setValidatedLockingLines(new Set());
+  }, [isOpen]);
 
   const onSubmit = (data: FormValues) => {
+    const currentTotals = computeCartTotals();
+    const belowLockingRate = data.lineItems
+      .map((line, index) => {
+        const item = items.find(candidate => Number(candidate.id) === Number(line.itemId)) as any;
+        const effectiveRate = Number(currentTotals.effectiveUnitRates[index] ?? line.unitPrice ?? 0);
+        return { index, issue: getLockingRateIssue(String(item?.name ?? 'Item'), item?.lockingRate, effectiveRate) };
+      })
+      .filter(line => line.issue !== null);
+    if (belowLockingRate.length) validateAllLockingLines();
+    if (belowLockingRate.length && !overrideLockingRate) {
+      const first = belowLockingRate[0];
+      toast.error(`${first.issue!.itemName}: effective rate ${inr(first.issue!.effectiveRate)} is below its Locking Rate ${inr(first.issue!.lockingRate)}. An authorized Level-1 Admin override is required.`);
+      focusField(`line-mrp-${first.index}`, scopeRef.current);
+      return;
+    }
     if (!editItem && (!Number.isInteger(Number(data.salespersonEmployeeId)) || Number(data.salespersonEmployeeId) <= 0)) {
       form.setError('salespersonEmployeeId', { type: 'required', message: 'Select a salesman before recording the sale' });
       return;
@@ -2593,6 +2655,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                                         f.onChange(id);
                                         // Auto-fill from Item Master Rate — read-only in sale
                                         form.setValue(`lineItems.${index}.unitPrice`, getPrice(id));
+                                        validateLockingLine(field.id);
                                       }}
                                     /></FormControl>
                                   </div>
@@ -2647,6 +2710,13 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                                           data-field={`line-mrp-${index}`}
                                           data-last-field={!discountsEnabled && index === fields.length - 1 ? '1' : undefined}
                                           {...f}
+                                          onChange={e => {
+                                            f.onChange(e);
+                                            clearLockingLineValidation(field.id);
+                                          }}
+                                          onKeyDown={e => {
+                                            if (e.key === 'Enter') validateLockingLine(field.id);
+                                          }}
                                           onBlur={e => {
                                             f.onBlur();
                                             const v = Number(e.target.value);
@@ -2654,6 +2724,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                                               toast.error(MRP_FLOOR_MESSAGE);
                                               form.setValue(`lineItems.${index}.unitPrice`, floor);
                                             }
+                                            validateLockingLine(field.id);
                                           }}
                                         />
                                       </FormControl>
@@ -2694,6 +2765,17 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                                         data-last-field={index === fields.length - 1 ? '1' : undefined}
                                         {...f}
                                         value={(f.value as any) ?? ''}
+                                        onChange={e => {
+                                          f.onChange(e);
+                                          clearLockingLineValidation(field.id);
+                                        }}
+                                        onKeyDown={e => {
+                                          if (e.key === 'Enter') validateLockingLine(field.id);
+                                        }}
+                                        onBlur={e => {
+                                          f.onBlur();
+                                          validateLockingLine(field.id);
+                                        }}
                                       />
                                     </FormControl>
                                     <FormMessage className="text-[10px]" />
@@ -2721,6 +2803,20 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                               </div>
                               <Button type="button" variant="ghost" size="icon" tabIndex={-1} className="hidden lg:inline-flex h-8 w-8 text-destructive justify-self-end" onClick={() => remove(index)} disabled={fields.length === 1}><Trash2 className="w-3.5 h-3.5" /></Button>
                             </div>
+                          {validatedLockingLines.has(field.id) && (() => {
+                            const issue = lockingRateIssueAt(index);
+                            return issue ? (
+                              <div
+                                role="alert"
+                                data-testid={`locking-rate-warning-${index}`}
+                                className="mx-2 mb-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-300"
+                              >
+                                <strong>{issue.itemName}</strong> is below its Locking Rate. Locking Rate: <strong>{inr(issue.lockingRate)}</strong>;
+                                effective selling rate after discounts: <strong>{inr(issue.effectiveRate)}</strong>;
+                                short by <strong>{inr(issue.difference)}</strong>. An authorized Level-1 Admin override is required to complete this sale.
+                              </div>
+                            ) : null;
+                          })()}
                             {/* Per-line GST breakdown + taxable toggle — the
                                 tinted sub-strip, like the master's batch strip. */}
                             <div data-kbd-row={index} className={TXN_SUBROW}>
@@ -2762,7 +2858,10 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                         );
                       })}
                     </div>
-                    <Button type="button" variant="outline" size="sm" className="mt-2" onClick={() => append({ itemId: 0, quantity: 1, unitPrice: 0, unitDiscount: 0, taxable: customerHasGstin, taxableTouched: false })}>
+                    <Button type="button" variant="outline" size="sm" className="mt-2" onClick={() => {
+                      validateAllLockingLines();
+                      append({ itemId: 0, quantity: 1, unitPrice: 0, unitDiscount: 0, taxable: customerHasGstin, taxableTouched: false });
+                    }}>
                       <Plus className="w-3 h-3 mr-1" /> Add Item
                     </Button>
                   </>
