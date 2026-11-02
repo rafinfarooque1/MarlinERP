@@ -380,7 +380,7 @@ function PnlReport({ range, loc, canDownload }: { range: RangeState; loc: Locati
   const s = pl?.summary;
   const profitEvidenceReliable =
     pl?.expenses.openingStockReliable === true
-    && pl.incomes.closingStockEvidenceReliable === true;
+    && pl.incomes.closingStockReliable === true;
   const locLabel = loc.key ? (options.find((o) => `${o.type}:${o.id}` === loc.key)?.name ?? loc.key) : COMPANY_WIDE;
 
   // ── Standard trading-account presentation ─────────────────────────────────
@@ -395,7 +395,7 @@ function PnlReport({ range, loc, canDownload }: { range: RangeState; loc: Locati
   const transferOut = transferPnl ? Number((pl?.incomes as any)?.stockTransferOut ?? 0) : 0;
   const purchasesForDisplay = pl?.expenses.purchases ?? 0;
   const openingStockReliable = pl?.expenses.openingStockReliable === true;
-  const closingStockReliable = pl?.incomes.closingStockEvidenceReliable === true;
+  const closingStockReliable = pl?.incomes.closingStockReliable === true;
   const goodsAvailable = pl
     ? pl.expenses.openingStock + purchasesForDisplay + transferIn + pl.expenses.directExpenses.total
     : 0;
@@ -442,8 +442,8 @@ function PnlReport({ range, loc, canDownload }: { range: RangeState; loc: Locati
           ? [{ name: 'Less: Stock in Transit', amount: Number(pl.incomes.closingStockInTransit), less: true }] : []),
       ]
       : [{ name: closingStockReliable ? 'Less: Closing Stock' : 'Less: Closing Stock (unverified)', amount: closingStockReliable ? pl.incomes.closingStock : null, less: true }]),
-    { name: 'Cost of Goods Sold (COGS)', amount: profitEvidenceReliable ? s?.costOfGoodsSold ?? 0 : null, kind: 'sub', id: 'pl-cogs' },
-    { name: profitEvidenceReliable ? `Gross ${(s?.grossProfit ?? 0) >= 0 ? 'Profit' : 'Loss'} (GP)` : 'Gross Profit (unverified)', amount: profitEvidenceReliable ? Math.abs(s?.grossProfit ?? 0) : null, kind: 'total', id: 'pl-gross-profit' },
+    { name: `Cost of Goods Sold (COGS)${profitEvidenceReliable ? '' : ' (unverified)'}`, amount: s?.costOfGoodsSold ?? null, kind: 'sub', id: 'pl-cogs' },
+    { name: `${(s?.grossProfit ?? 0) >= 0 ? 'Gross Profit' : 'Gross Loss'} (GP)${profitEvidenceReliable ? '' : ' (unverified)'}`, amount: Math.abs(s?.grossProfit ?? 0), kind: 'total', id: 'pl-gross-profit' },
     { name: 'Add: Other Income', amount: s?.otherIncome ?? 0 },
     { name: 'Less: Indirect Expenses', amount: otherIndirect, less: true },
     { name: 'Less: Financial Charges', amount: financialCharges, less: true },
@@ -452,7 +452,7 @@ function PnlReport({ range, loc, canDownload }: { range: RangeState; loc: Locati
     // figure the dashboard Expenses tile shows (which drills to #pl-expenses).
     // Both addends are the statement's own group totals, never a re-sum.
     { name: 'Total Expenses (Direct + Indirect)', amount: pl.expenses.directExpenses.total + pl.expenses.indirectExpenses.total, kind: 'sub', id: 'pl-expenses' },
-    { name: profitEvidenceReliable ? `Net ${(s?.netProfit ?? 0) >= 0 ? 'Profit' : 'Loss'} (NP)` : 'Net Profit (unverified)', amount: profitEvidenceReliable ? Math.abs(s?.netProfit ?? 0) : null, kind: 'total', id: 'pl-net-profit' },
+    { name: `Net ${(s?.netProfit ?? 0) >= 0 ? 'Profit' : 'Loss'} (NP)${profitEvidenceReliable ? '' : ' (unverified)'}`, amount: Math.abs(s?.netProfit ?? 0), kind: 'total', id: 'pl-net-profit' },
   ] : [];
 
   // Dashboard COGS/GP/NP tiles link here with #pl-cogs / #pl-gross-profit /
@@ -512,8 +512,8 @@ function PnlReport({ range, loc, canDownload }: { range: RangeState; loc: Locati
     metaRows: [
       ['Period', periodLabel(range.from, range.to)],
       ['Revenue', pdfMoney(s?.revenue)],
-      ['Gross Profit', profitEvidenceReliable ? `${pdfMoney(s?.grossProfit)} (${pct(s?.grossMarginPct)})` : 'Unverified — incomplete inventory evidence'],
-      ['Net Profit', profitEvidenceReliable ? `${pdfMoney(s?.netProfit)} (${pct(s?.netMarginPct)})` : 'Unverified — incomplete inventory evidence'],
+      ['Gross Profit', profitEvidenceReliable ? `${pdfMoney(s?.grossProfit)} (${pct(s?.grossMarginPct)})` : `${pdfMoney(s?.grossProfit)} (UNVERIFIED)`],
+      ['Net Profit', profitEvidenceReliable ? `${pdfMoney(s?.netProfit)} (${pct(s?.netMarginPct)})` : `${pdfMoney(s?.netProfit)} (UNVERIFIED)`],
     ],
     sections: [
       {
@@ -523,7 +523,7 @@ function PnlReport({ range, loc, canDownload }: { range: RangeState; loc: Locati
           r.kind === 'total' ? r.name.toUpperCase() : r.name,
           r.amount == null ? 'Unverified' : pdfMoney(r.amount),
         ] as (string | number)[]),
-        totalsRow: [profitEvidenceReliable ? `Net ${(s?.netProfit ?? 0) >= 0 ? 'Profit' : 'Loss'}` : 'Net Profit (unverified)', profitEvidenceReliable ? pdfMoney(Math.abs(s?.netProfit ?? 0)) : 'Unverified'],
+        totalsRow: [`Net ${(s?.netProfit ?? 0) >= 0 ? 'Profit' : 'Loss'}${profitEvidenceReliable ? '' : ' (UNVERIFIED)'}`, pdfMoney(Math.abs(s?.netProfit ?? 0))],
       },
       {
         heading: 'Expenses',
@@ -540,7 +540,7 @@ function PnlReport({ range, loc, canDownload }: { range: RangeState; loc: Locati
     ],
     footerNote: (profitEvidenceReliable
       ? `Net ${(pl?.netProfit ?? 0) >= 0 ? 'Profit' : 'Loss'}: ${pdfMoney(Math.abs(pl?.netProfit ?? 0))}. `
-      : 'Gross and net profit are unverified because inventory evidence is incomplete. ')
+      : `Calculated gross profit ${pdfMoney(s?.grossProfit)} and net profit ${pdfMoney(pl?.netProfit)} are shown as UNVERIFIED because inventory evidence is incomplete. `)
       + `Inventory is periodic: purchases are expensed and stock enters through opening and closing stock, valued at weighted-average cost.`
       + (pl?.expenses.openingStockReliable === false ? ` Opening stock is incomplete — see the note on screen.` : '')
       + (pl?.incomes.closingStockEvidenceReliable === false ? ` Closing stock is incomplete — see the note on screen.` : ''),
@@ -560,7 +560,7 @@ function PnlReport({ range, loc, canDownload }: { range: RangeState; loc: Locati
             { Side: 'Expenses', Particulars: 'TOTAL', 'Amount (₹)': openingStockReliable ? (pl?.expenses.total ?? 0).toFixed(2) : 'Unverified' },
             ...incomeLines.map((l) => ({ Side: 'Incomes', Particulars: l.name, 'Amount (₹)': l.amount == null ? 'Unverified' : l.amount.toFixed(2) })),
             { Side: 'Incomes', Particulars: 'TOTAL', 'Amount (₹)': closingStockReliable ? (pl?.incomes.total ?? 0).toFixed(2) : 'Unverified' },
-            { Side: '', Particulars: profitEvidenceReliable ? 'NET PROFIT' : 'NET PROFIT (UNVERIFIED)', 'Amount (₹)': profitEvidenceReliable ? (pl?.netProfit ?? 0).toFixed(2) : 'Unverified' },
+            { Side: '', Particulars: profitEvidenceReliable ? 'NET PROFIT' : 'NET PROFIT (UNVERIFIED)', 'Amount (₹)': (pl?.netProfit ?? 0).toFixed(2) },
           ])}
         />
       </RangeBar>
@@ -570,9 +570,9 @@ function PnlReport({ range, loc, canDownload }: { range: RangeState; loc: Locati
 
       <SummaryCards cards={[
         { label: 'Revenue (net of GST)', value: fmt(s?.revenue), tone: 'accent' },
-        { label: 'Gross Profit', value: profitEvidenceReliable ? `${fmt(s?.grossProfit)} · ${pct(s?.grossMarginPct)}` : 'Unverified', tone: profitEvidenceReliable ? (s?.grossProfit ?? 0) >= 0 ? 'pos' : 'neg' : 'warn' },
+        { label: 'Gross Profit', value: profitEvidenceReliable ? `${fmt(s?.grossProfit)} · ${pct(s?.grossMarginPct)}` : `${fmt(s?.grossProfit)} · UNVERIFIED`, tone: profitEvidenceReliable ? (s?.grossProfit ?? 0) >= 0 ? 'pos' : 'neg' : 'warn' },
         { label: 'Operating Expenses', value: fmt(s?.operatingExpenses), tone: 'warn' },
-        { label: profitEvidenceReliable ? (s?.netProfit ?? 0) >= 0 ? 'Net Profit' : 'Net Loss' : 'Net Profit', value: profitEvidenceReliable ? `${fmt(Math.abs(s?.netProfit ?? 0))} · ${pct(s?.netMarginPct)}` : 'Unverified', tone: profitEvidenceReliable ? (s?.netProfit ?? 0) >= 0 ? 'pos' : 'neg' : 'warn' },
+        { label: `${(s?.netProfit ?? 0) >= 0 ? 'Net Profit' : 'Net Loss'}${profitEvidenceReliable ? '' : ' (unverified)'}`, value: profitEvidenceReliable ? `${fmt(Math.abs(s?.netProfit ?? 0))} · ${pct(s?.netMarginPct)}` : `${fmt(Math.abs(s?.netProfit ?? 0))} · UNVERIFIED`, tone: profitEvidenceReliable ? (s?.netProfit ?? 0) >= 0 ? 'pos' : 'neg' : 'warn' },
       ]} />
 
       {pl?.expenses.openingStockReliable === false && pl.expenses.openingStockNote && (

@@ -496,12 +496,53 @@ export async function stockTransferOpeningAdjustment(
        LEFT JOIN LATERAL (
          SELECT SUM(original.quantity::numeric) AS total_qty,
                 SUM(original.quantity::numeric)
-                  FILTER (WHERE original.quantity::numeric > 0 AND original.unit_cost::numeric > 0) AS known_qty,
-                SUM(original.quantity::numeric * original.unit_cost::numeric)
-                  FILTER (WHERE original.quantity::numeric > 0 AND original.unit_cost::numeric > 0)
+                   FILTER (WHERE original.quantity::numeric > 0
+                     AND COALESCE(
+                       CASE WHEN original.unit_cost::numeric > 0 THEN original.unit_cost::numeric END,
+                       purchase_batch.unit_cost
+                     ) > 0) AS known_qty,
+                 SUM(original.quantity::numeric * COALESCE(
+                       CASE WHEN original.unit_cost::numeric > 0 THEN original.unit_cost::numeric END,
+                       purchase_batch.unit_cost
+                     ))
+                   FILTER (WHERE original.quantity::numeric > 0
+                     AND COALESCE(
+                       CASE WHEN original.unit_cost::numeric > 0 THEN original.unit_cost::numeric END,
+                       purchase_batch.unit_cost
+                     ) > 0)
                   / NULLIF(SUM(original.quantity::numeric)
-                    FILTER (WHERE original.quantity::numeric > 0 AND original.unit_cost::numeric > 0), 0) AS unit_cost
+                     FILTER (WHERE original.quantity::numeric > 0
+                       AND COALESCE(
+                         CASE WHEN original.unit_cost::numeric > 0 THEN original.unit_cost::numeric END,
+                         purchase_batch.unit_cost
+                       ) > 0), 0) AS unit_cost
            FROM stock_reservations original
+            LEFT JOIN LATERAL (
+              SELECT source_batch.unit_cost::numeric AS unit_cost
+                FROM stock_batches source_batch
+               WHERE source_batch.id = original.batch_id
+                 AND source_batch.item_id = original.ref_id
+                 AND source_batch.material_type = original.material_type
+                 AND source_batch.branch_type = original.branch_type
+                 AND source_batch.branch_id = original.branch_id
+                 AND source_batch.source = 'purchase'
+                 AND source_batch.unit_cost::numeric > 0
+                 AND EXISTS (
+                   SELECT 1
+                     FROM stock_ledger purchase_ledger
+                    WHERE purchase_ledger.doc_type = 'purchase'
+                      AND purchase_ledger.txn_type = 'purchase'
+                      AND purchase_ledger.doc_id = source_batch.source_id
+                      AND purchase_ledger.material_type = original.material_type
+                      AND purchase_ledger.ref_id = original.ref_id
+                      AND purchase_ledger.branch_type = original.branch_type
+                      AND purchase_ledger.branch_id = original.branch_id
+                      AND purchase_ledger.qty_change::numeric > 0
+                      AND purchase_ledger.unit_cost::numeric > 0
+                      AND ABS(purchase_ledger.unit_cost::numeric - source_batch.unit_cost::numeric) < 0.005
+                 )
+               LIMIT 1
+            ) purchase_batch ON TRUE
           WHERE sl.doc_type = 'stock_transfer'
             AND original.doc_type = 'stock_transfer'
             AND original.doc_id = sl.doc_id

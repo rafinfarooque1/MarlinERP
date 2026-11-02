@@ -865,7 +865,7 @@ function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, on
   const transferPnl = !!pl?.stockTransfersIncludedInPnl;
   const profitEvidenceReliable =
     exp?.openingStockReliable === true
-    && inc?.closingStockEvidenceReliable === true;
+    && inc?.closingStockReliable === true;
   const profitEvidenceNote =
     !profitEvidenceReliable
       ? [exp?.openingStockNote, inc?.closingStockNote].filter(Boolean).join(" ")
@@ -874,10 +874,10 @@ function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, on
   const transferIn = transferPnl ? Number(exp?.stockTransferIn ?? 0) : 0;
   const transferOut = transferPnl ? Number(inc?.stockTransferOut ?? 0) : 0;
   const purchasesForDisplay = exp?.purchases ?? 0;
-  const grossProfit     = pl && profitEvidenceReliable ? (pl.summary?.grossProfit
+  const grossProfit     = pl ? (pl.summary?.grossProfit
     ?? ((inc ? inc.sales + inc.closingStock + inc.directIncomes.total + transferOut : 0)
       - (exp ? exp.openingStock + exp.purchases + transferIn + exp.directExpenses.total : 0))) : null;
-  const netProfit = pl && profitEvidenceReliable ? pl.netProfit : null;
+  const netProfit = pl ? pl.netProfit : null;
   // Each Trading side includes the GP c/d balancing row (debit when profit,
   // credit when loss), so the two panel headers always show the SAME total —
   // that is what makes it a balanced two-sided account.
@@ -1112,7 +1112,7 @@ function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, on
               />
               {!profitEvidenceReliable && (
                 <p role="status" data-testid="coa-profit-unverified" className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-300">
-                  Gross and net profit are not shown because the inventory evidence for this period is incomplete.
+                  Calculated gross and net profit are shown as <strong>UNVERIFIED</strong> because the inventory evidence for this period is incomplete.
                   {profitEvidenceNote ? ` ${profitEvidenceNote}` : ""}
                 </p>
               )}
@@ -1228,10 +1228,10 @@ function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, on
                        {showTransferOutLine && <MwAutoRow label="Stock Transfer Out" values={mwTransferOut} total={transferOut} monthly={monthly} />}
                        {transferPnl ? (
                          <>
-                             <MwAutoRow label="Closing Stock (on hand)" values={mwS('closingStockOnHand')} total={Number(inc.closingStockOnHand ?? inc.closingStock)} monthly={monthly} accent="text-foreground/80 font-semibold" unverified={inc.closingStockEvidenceReliable === false} />
+                             <MwAutoRow label="Closing Stock (on hand)" values={mwS('closingStockOnHand')} total={Number(inc.closingStockOnHand ?? inc.closingStock)} monthly={monthly} accent="text-foreground/80 font-semibold" unverified={inc.closingStockReliable === false} />
                             {showClosingTransitLine && <MwAutoRow label="Stock in Transit" values={mwS('closingStockInTransit')} total={Number(inc.closingStockInTransit ?? 0)} monthly={monthly} />}
                          </>
-                        ) : <MwAutoRow label="Closing Stock" values={mwS('closingStock')} total={inc.closingStock} monthly={monthly} accent="text-foreground/80 font-semibold" unverified={inc.closingStockEvidenceReliable === false} />}
+                        ) : <MwAutoRow label="Closing Stock" values={mwS('closingStock')} total={inc.closingStock} monthly={monthly} accent="text-foreground/80 font-semibold" unverified={inc.closingStockReliable === false} />}
                       {grossProfit !== null && grossProfit < 0 && (
                         <>
                           <Divider />
@@ -1262,11 +1262,11 @@ function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, on
                       {/* Closing Stock */}
                        {transferPnl ? (
                          <>
-                            <StockBlock label="Closing Stock (on hand)" items={inc.closingStockItems} total={Number(inc.closingStockOnHand ?? inc.closingStock)} unverified={inc.closingStockEvidenceReliable === false} />
+                            <StockBlock label="Closing Stock (on hand)" items={inc.closingStockItems} total={Number(inc.closingStockOnHand ?? inc.closingStock)} unverified={inc.closingStockReliable === false} />
                             {showClosingTransitLine && <AutoRow label="Stock in Transit" amount={Number(inc.closingStockInTransit ?? 0)} />}
                          </>
                        ) : (
-                          <StockBlock label="Closing Stock" items={inc.closingStockItems} total={inc.closingStock} unverified={inc.closingStockEvidenceReliable === false} />
+                          <StockBlock label="Closing Stock" items={inc.closingStockItems} total={inc.closingStock} unverified={inc.closingStockReliable === false} />
                        )}
 
                       {/* Balancing transfer — makes both Trading sides equal */}
@@ -1291,6 +1291,7 @@ function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, on
                     : 'bg-red-500/10 text-red-400 border border-red-500/20'}`}>
                   {grossProfit >= 0 ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />}
                   <span>{grossProfit >= 0 ? 'Gross Profit' : 'Gross Loss'}</span>
+                  {!profitEvidenceReliable && <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-bold tracking-wide text-amber-700 dark:text-amber-300">UNVERIFIED</span>}
                   <span className="text-[10px] font-normal opacity-70">Net Sales − Cost of Goods Sold · carried down</span>
                   <span className="font-mono text-base ml-auto">{fmt(Math.abs(grossProfit))}</span>
                   {monthly && <MwBannerChips monthly={monthly} values={mwGp} testPrefix="mw-gp" />}
@@ -1379,6 +1380,7 @@ function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, on
                     : 'bg-red-500/10 text-red-400 border border-red-500/20'}`}>
                   {netProfit >= 0 ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />}
                   <span>{netProfit >= 0 ? 'Net Profit' : 'Net Loss'}</span>
+                  {!profitEvidenceReliable && <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-bold tracking-wide text-amber-700 dark:text-amber-300">UNVERIFIED</span>}
                   <span className="text-[10px] font-normal opacity-70">Gross {grossProfit !== null && grossProfit < 0 ? 'Loss' : 'Profit'} + Other Income − Indirect Expenses</span>
                   <span className="font-mono text-base ml-auto">{fmt(Math.abs(netProfit))}</span>
                   {monthly && <MwBannerChips monthly={monthly} values={mwS('np')} testPrefix="mw-np" />}
@@ -1579,7 +1581,10 @@ export default function ChartOfAccounts() {
         p.set('locationId', String(effLoc.locationId));
       }
       const qs = p.toString();
-      return customFetch(`/api/accounts/financial-statements${qs ? `?${qs}` : ''}`, { method: 'GET' });
+      return customFetch(`/api/accounts/financial-statements${qs ? `?${qs}` : ''}`, {
+        method: 'GET',
+        cache: 'no-store',
+      });
     },
     staleTime: 30_000,
   });
@@ -1598,7 +1603,10 @@ export default function ChartOfAccounts() {
         p.set('locationId', String(effLoc.locationId));
       }
       const qs = p.toString();
-      return customFetch(`/api/accounts/financial-statements/monthly${qs ? `?${qs}` : ''}`, { method: 'GET' });
+      return customFetch(`/api/accounts/financial-statements/monthly${qs ? `?${qs}` : ''}`, {
+        method: 'GET',
+        cache: 'no-store',
+      });
     },
     enabled: monthWise,
     staleTime: 30_000,

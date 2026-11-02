@@ -80,14 +80,13 @@ try {
   );
   assert.equal(
     closingValuation.reliable,
-    incomes.closingStockReliable,
-    "P&L and Inventory Valuation must retain the same historical evidence limitation.",
-  );
-  assert.equal(closingValuation.reliable, false, "An incomplete historical rewind must remain unverified.");
-  assert.equal(
     incomes.closingStockEvidenceReliable,
+    "P&L and Inventory Valuation must agree on whether the dated stock value was computed from available evidence.",
+  );
+  assert.equal(
+    incomes.closingStockReliable,
     false,
-    "Books must preserve the underlying movement-history and deleted-product warning.",
+    "A past-date close remains unverified for P&L even when its available evidence can produce a value.",
   );
   if (!incomes.closingStockReliable) {
     assert.match(

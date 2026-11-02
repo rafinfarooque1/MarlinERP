@@ -377,11 +377,11 @@ export async function generateChartOfAccountsPdf(opts: CoaPdfOpts): Promise<void
     const purchaseReturns = exp.purchaseReturns ?? 0;
     const profitEvidenceReliable =
       exp.openingStockReliable === true
-      && inc.closingStockEvidenceReliable === true;
-    const grossProfit: number | null = profitEvidenceReliable ? (pl.summary?.grossProfit
+      && inc.closingStockReliable === true;
+    const grossProfit: number | null = (pl.summary?.grossProfit
       ?? ((inc.sales + inc.closingStock + inc.directIncomes.total + transferOut)
-         - (exp.openingStock + exp.purchases + transferIn + exp.directExpenses.total))) : null;
-    const netProfit: number | null = profitEvidenceReliable ? pl.netProfit : null;
+         - (exp.openingStock + exp.purchases + transferIn + exp.directExpenses.total)));
+    const netProfit: number | null = pl.netProfit;
 
     // Per-month derived arrays — same arithmetic as StatementsView
     const mwSales      = sv('sales');
@@ -408,11 +408,9 @@ export async function generateChartOfAccountsPdf(opts: CoaPdfOpts): Promise<void
     const tradingIncTotal = tradingIncBase + (grossProfit !== null && grossProfit < 0 ? -grossProfit : 0);
     const plExpTotal      = exp.indirectExpenses.total + (grossProfit !== null && grossProfit < 0 ? -grossProfit : 0);
     const plIncTotal      = inc.indirectIncomes.total  + (grossProfit !== null && grossProfit > 0 ?  grossProfit : 0);
-    const grossProfitBanner: Row[] = grossProfit === null
-      ? [rowSect('GROSS / NET PROFIT UNVERIFIED — INCOMPLETE INVENTORY EVIDENCE')]
-      : [{
+    const grossProfitBanner: Row[] = grossProfit === null ? [] : [{
           kind: 'banner',
-          name: grossProfit >= 0 ? 'GROSS PROFIT' : 'GROSS LOSS',
+          name: `${grossProfit >= 0 ? 'GROSS PROFIT' : 'GROSS LOSS'}${profitEvidenceReliable ? '' : ' (UNVERIFIED)'}`,
           indent: 0,
           months: mwGp.map(v => Math.abs(v)),
           total: Math.abs(grossProfit),
@@ -420,7 +418,7 @@ export async function generateChartOfAccountsPdf(opts: CoaPdfOpts): Promise<void
         }];
     const netProfitBanner: Row[] = netProfit === null ? [] : [{
       kind: 'banner',
-      name: netProfit >= 0 ? 'NET PROFIT' : 'NET LOSS',
+      name: `${netProfit >= 0 ? 'NET PROFIT' : 'NET LOSS'}${profitEvidenceReliable ? '' : ' (UNVERIFIED)'}`,
       indent: 0,
       months: mwNp.map(v => Math.abs(v)),
       total: Math.abs(netProfit),
@@ -469,7 +467,7 @@ export async function generateChartOfAccountsPdf(opts: CoaPdfOpts): Promise<void
        ...(transferPnl
          ? [
               rowAuto(
-                inc.closingStockEvidenceReliable ? 'Closing Stock (on hand)' : 'Closing Stock (unverified)',
+                inc.closingStockReliable ? 'Closing Stock (on hand)' : 'Closing Stock (unverified)',
                 inc.closingStockEvidenceReliable ? sv('closingStockOnHand') : zeroArr(N),
                 inc.closingStockEvidenceReliable ? Number((inc as any).closingStockOnHand ?? inc.closingStock) : 0,
                 inc.closingStockEvidenceReliable ? undefined : 'Unverified',
@@ -478,7 +476,7 @@ export async function generateChartOfAccountsPdf(opts: CoaPdfOpts): Promise<void
                 ? [rowAuto('Stock in Transit', sv('closingStockInTransit'), Number(inc.closingStockInTransit ?? 0))] : []),
            ]
           : [rowAuto(
-              inc.closingStockEvidenceReliable ? 'Closing Stock' : 'Closing Stock (unverified)',
+              inc.closingStockReliable ? 'Closing Stock' : 'Closing Stock (unverified)',
               inc.closingStockEvidenceReliable ? sv('closingStock') : zeroArr(N),
               inc.closingStockEvidenceReliable ? inc.closingStock : 0,
               inc.closingStockEvidenceReliable ? undefined : 'Unverified',
