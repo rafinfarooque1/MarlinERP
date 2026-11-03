@@ -1725,7 +1725,7 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction("page:/transfer
           docId: id,
            txnDate: receiptDate,
         };
-      }));
+      }), { allowTransferCheckpointReplay: true });
     }
 
     await logActivityInTransaction(client, {
