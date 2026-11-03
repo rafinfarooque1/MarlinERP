@@ -48,7 +48,7 @@ type TransferCheckpointReplayPlan = {
   snapshots: Array<{ date: string; quantity: number; value: number }>;
 };
 
-async function prepareTransferCheckpointReplay(
+export async function prepareTransferCheckpointReplay(
   db: { query: (...args: any[]) => Promise<any> },
   entries: LedgerEntry[],
 ): Promise<Map<string, TransferCheckpointReplayPlan>> {
@@ -61,27 +61,8 @@ async function prepareTransferCheckpointReplay(
   const plans = new Map<string, TransferCheckpointReplayPlan>();
   for (const [key, group] of groups) {
     const first = group[0];
-    if (
-      group.some(e => e.txnType !== "transfer_in" || e.docType !== "stock_transfer"
-        || e.docId == null || e.txnDate !== first.txnDate
-        || e.snapshotUnitCost == null || e.unitCost == null
-        || Number(e.snapshotUnitCost) !== Number(first.snapshotUnitCost)
-        || Number(e.unitCost) !== Number(first.unitCost)
-        || Number(e.snapshotUnitCost) !== Number(e.unitCost))
-    ) {
-      throw Object.assign(new Error(
-        "Historical checkpoint replay is supported only for transfer receipts whose cost matches the destination valuation.",
-      ), { status: 409, statusCode: 409, code: "STOCK_CHECKPOINT_REPLAY_UNSAFE" });
-    }
     const txnDate = String(first.txnDate ?? "");
-    const unitCost = Number(first.snapshotUnitCost);
-    const sourceId = Number(first.docId);
     const quantityDelta = group.reduce((sum, entry) => sum + Number(entry.qtyChange), 0);
-    if (!isIsoDate(txnDate) || !Number.isInteger(sourceId) || quantityDelta <= 0 || unitCost <= 0) {
-      throw Object.assign(new Error("Transfer checkpoint replay could not validate the receipt."), {
-        status: 409, statusCode: 409, code: "STOCK_CHECKPOINT_REPLAY_UNSAFE",
-      });
-    }
 
     const futureResult = await db.query(
       `SELECT DISTINCT ON (as_of_date)
@@ -97,6 +78,23 @@ async function prepareTransferCheckpointReplay(
       as_of_date: string; quantity: string | number; unit_cost: string | number; value: string | number;
     }>;
     if (!future.some(row => row.as_of_date > txnDate)) continue;
+
+    const unitCost = Number(first.snapshotUnitCost);
+    const sourceId = Number(first.docId);
+    if (
+      !isIsoDate(txnDate) || !Number.isInteger(sourceId) || quantityDelta <= 0 || unitCost <= 0
+      || group.some(e => e.txnType !== "transfer_in" || e.docType !== "stock_transfer"
+        || e.docId == null || Number(e.docId) !== sourceId || Number(e.qtyChange) <= 0
+        || e.txnDate !== first.txnDate
+        || e.snapshotUnitCost == null || e.unitCost == null
+        || Number(e.snapshotUnitCost) !== unitCost
+        || Number(e.unitCost) !== Number(first.unitCost)
+        || Number(e.snapshotUnitCost) !== Number(e.unitCost))
+    ) {
+      throw Object.assign(new Error(
+        "Historical checkpoint replay is supported only for transfer receipts whose cost matches the destination valuation.",
+      ), { status: 409, statusCode: 409, code: "STOCK_CHECKPOINT_REPLAY_UNSAFE" });
+    }
 
     const priorResult = await db.query(
       `SELECT as_of_date::text AS as_of_date, quantity::numeric AS quantity,
