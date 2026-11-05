@@ -550,7 +550,10 @@ function ByItemReport({ range, canDownload }: { range: RangeState; canDownload: 
     to: range.to || undefined,
     customerId: customerId ?? undefined,
   });
-  const rows = data?.rows ?? [];
+  const rows = (data?.rows ?? []).map((row) => ({
+    ...row,
+    averagePerKg: row.qty > 0 ? row.total / row.qty : null,
+  }));
   const t = data?.totals;
 
   return (
@@ -576,7 +579,9 @@ function ByItemReport({ range, canDownload }: { range: RangeState; canDownload: 
           disabled={isLoading || rows.length === 0}
           onCSV={() => downloadCSV('sales-by-item.csv', rows.map((r) => ({
             Customer: selectedCustomerName,
-            Item: r.itemName, Unit: r.unit, Invoices: r.invoices, Qty: r.qty,
+            Item: r.itemName, Unit: r.unit, Invoices: r.invoices,
+            'Avg / kg (₹)': r.averagePerKg == null ? '' : r.averagePerKg.toFixed(2),
+            Qty: r.qty,
             'Taxable (₹)': r.taxable.toFixed(2), 'Tax (₹)': r.tax.toFixed(2), 'Item total incl. tax (₹)': r.total.toFixed(2),
           })))}
           onPDF={() => exportReportPdf({
@@ -591,11 +596,19 @@ function ByItemReport({ range, canDownload }: { range: RangeState; canDownload: 
             sections: [{
               columns: [
                 { label: 'Item', width: 2.4 }, { label: 'Unit' }, { label: 'Invoices', align: 'center' },
-                { label: 'Qty', align: 'right' }, { label: 'Taxable', align: 'right', width: 1.4 },
+                { label: 'Avg / kg', align: 'right', width: 1.3 }, { label: 'Qty', align: 'right' },
+                { label: 'Taxable', align: 'right', width: 1.4 },
                 { label: 'Tax', align: 'right', width: 1.2 }, { label: 'Item total', align: 'right', width: 1.4 },
               ],
-              rows: rows.map((r) => [r.itemName, r.unit, r.invoices, num(r.qty), pdfMoney(r.taxable), pdfMoney(r.tax), pdfMoney(r.total)]),
-              totalsRow: ['TOTAL', '', '', num(t?.qty), pdfMoney(t?.taxable), pdfMoney(t?.tax), pdfMoney(t?.total)],
+              rows: rows.map((r) => [
+                r.itemName, r.unit, r.invoices,
+                r.averagePerKg == null ? '—' : pdfMoney(r.averagePerKg),
+                num(r.qty), pdfMoney(r.taxable), pdfMoney(r.tax), pdfMoney(r.total),
+              ]),
+              totalsRow: [
+                'TOTAL', '', '', t?.qty && t.qty > 0 ? pdfMoney((t.total ?? 0) / t.qty) : '—',
+                num(t?.qty), pdfMoney(t?.taxable), pdfMoney(t?.tax), pdfMoney(t?.total),
+              ],
             }],
           })}
         />
@@ -620,13 +633,17 @@ function ByItemReport({ range, canDownload }: { range: RangeState; canDownload: 
           { key: 'itemName', label: 'Item', render: (r) => <span className="font-medium">{r.itemName}</span> },
           { key: 'unit', label: 'Unit' },
           { key: 'invoices', label: 'Invoices', align: 'center' },
+          { key: 'averagePerKg', label: 'Avg / kg', align: 'right', render: (r) => r.averagePerKg == null ? '—' : fmt(r.averagePerKg) },
           { key: 'qty', label: 'Qty', align: 'right', render: (r) => num(r.qty) },
           { key: 'taxable', label: 'Taxable', align: 'right', render: (r) => fmt(r.taxable) },
           { key: 'tax', label: 'Tax', align: 'right', render: (r) => fmt(r.tax) },
           { key: 'total', label: 'Item total', align: 'right', render: (r) => <b>{fmt(r.total)}</b> },
         ] satisfies Col<(typeof rows)[number]>[]}
         rows={rows} loading={isLoading} rowKey={(r) => r.itemId}
-        footer={['TOTAL', '', '', num(t?.qty), fmt(t?.taxable), fmt(t?.tax), fmt(t?.total)]}
+        footer={[
+          'TOTAL', '', '', t?.qty && t.qty > 0 ? fmt((t.total ?? 0) / t.qty) : '—',
+          num(t?.qty), fmt(t?.taxable), fmt(t?.tax), fmt(t?.total),
+        ]}
       />
     </div>
   );

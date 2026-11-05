@@ -6,12 +6,20 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { GstSummaryByWarehouseItem } from './gstSummaryByWarehouseItem';
+import type { GstSummaryItemRow } from './gstSummaryItemRow';
+import type { GstSummaryMonthRow } from './gstSummaryMonthRow';
+import type { GstSummaryRateRow } from './gstSummaryRateRow';
 
 export interface GstSummary {
-  totalSales?: number;
-  totalTaxCollected?: number;
-  totalPurchases?: number;
-  totalTaxPaid?: number;
-  netGstLiability?: number;
-  byWarehouse?: GstSummaryByWarehouseItem[];
+  totalSales: number;
+  totalTaxCollected: number;
+  totalPurchases: number;
+  totalTaxPaid: number;
+  netGstLiability: number;
+  monthWise: GstSummaryMonthRow[];
+  salesByRate: GstSummaryRateRow[];
+  purchasesByRate: GstSummaryRateRow[];
+  salesByItem: GstSummaryItemRow[];
+  purchasesByItem: GstSummaryItemRow[];
+  byWarehouse: GstSummaryByWarehouseItem[];
 }
