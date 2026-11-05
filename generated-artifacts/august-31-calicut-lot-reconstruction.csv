@@ -1,0 +1,7 @@
+effective_date,product,location,batch_number,source_purchase,source_date,source_qty,unit_cost,current_batch_qty,post_cutoff_sales,post_cutoff_returns,post_cutoff_transfer_out,candidate_aug31_qty,candidate_value,status
+2026-08-31,Mango Slice,warehouse:2,PUR-20260808-00413,55 / B2B/26-27/136,2026-08-09,30,170,0,0,0,0,0,0,Old counted lot: count was 10; sale 1287 and later sales through Aug31 consumed 10 from this batch after verification.
+2026-08-31,Mango Slice,warehouse:2,PUR-20260828-00464,82 / B2B/26-27/156,2026-08-28,30,170,0,28,2,4,30,5100,"Rewound from post-cutoff sale, return, and transfer batch breakdowns; candidate only, count remains unapproved."
+2026-08-31,Mulberry,warehouse:2,PUR-20260616-00369,46 / B2B/26-27/79,2026-06-16,60,350,0,0,0,0,0,0,No remaining quantity at cutoff in the candidate rewind.
+2026-08-31,Mulberry,warehouse:2,PUR-20260517-00387,50 / INV26-27/111,2026-05-17,20,300,0,8,0,7,15,4500,Candidate from later sales and transfer batch breakdown; count remains unapproved.
+2026-08-31,Mulberry,warehouse:2,PUR-20260622-00370,47 / B2B/26-27/84,2026-06-22,105,350,0,2,0,71,73,25550,Candidate from later sales and transfer batch breakdown; count remains unapproved.
+2026-08-31,Mulberry,warehouse:2,PUR-20260820-00442,71 / invoice 7411,2026-08-20,10,280,0,0,0,10,10,2800,Candidate from later transfer batch breakdown; count remains unapproved.

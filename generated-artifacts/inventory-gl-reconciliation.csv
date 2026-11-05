@@ -1,0 +1,4 @@
+ledger_id,account_code,account_name,posting_count_through_2026_09_30,debits,credits,net_debit
+50,SYS-OPSTOCK,Opening Stock,0,0.00,0.00,0.00
+51,SYS-CLSTOCK,Closing Stock,0,0.00,0.00,0.00
+81,STD-FG-INV,Finished Goods Inventory,0,0.00,0.00,0.00

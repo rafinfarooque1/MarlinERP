@@ -1,12 +1,12 @@
 import { isIsoDate } from "./dateInput";
-import { assertStockDatesOpen } from "./dailyStockClosures";
+import { normalizeStockDates } from "./dailyStockClosures";
 
 /**
  * Immutable Stock Ledger — every inventory movement writes one or more entries here.
  * Entries are append-only; no UPDATE or DELETE on this table, with ONE narrow,
  * deliberate exception: `txn_date` (the document's BUSINESS date) follows its
  * document. Date restatements are allowed only while both the old and new
- * business dates remain open; closed dates are immutable.
+ * accounting periods remain open; daily stock snapshots do not lock dates.
  * `created_at` is the immutable insert-time audit stamp and is never rewritten;
  * document edits themselves are recorded in the activity log.
  */
@@ -28,8 +28,8 @@ export interface LedgerEntry {
   /**
    * The BUSINESS date of the movement (the document's own date), YYYY-MM-DD.
    * created_at records when the row was inserted; txn_date records when the
-   * movement happened commercially. Dates before the future-only baseline and
-   * dates already closed by the daily close are refused.
+   * movement happened commercially. Daily close snapshots do not restrict
+   * movement dates; the owning document route applies the accounting-period lock.
    * Omitted → the current company-local business date.
    */
   txnDate?: string | null;
@@ -45,7 +45,7 @@ export async function writeStockLedger(
   // Callers must pass their transaction client: refusing a non-replayable
   // backdate must also roll back the quantity mutation preceding this writer.
   // Validate the complete date set before appending audit/checkpoint records.
-  const { normalizedDates } = await assertStockDatesOpen(db, entries.map(e => e.txnDate));
+  const { normalizedDates } = await normalizeStockDates(db, entries.map(e => e.txnDate));
   const normalizedEntries = entries.map((entry, index) => ({
     ...entry,
     txnDate: normalizedDates[index],

@@ -5131,9 +5131,9 @@ try {
   console.error("[migration] stock_master_guard_trigger FAILED (non-fatal):", (err as Error).message);
 }
 
-// Establish a future-only quantity baseline only after all startup stock
-// cleanup/backfills have completed. This is required for stock writes to be
-// safely enabled; a failure leaves the API unready rather than inventing data.
+// Establish future-only daily snapshot evidence only after startup stock
+// cleanup/backfills have completed. This baseline supports integrity reporting;
+// accounting-period locks, not daily snapshots, govern historical writes.
 try {
   await addStockDailyClosures(pool);
 } catch (err) {

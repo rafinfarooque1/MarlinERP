@@ -9,7 +9,6 @@ import { isValidGstSlab, gstSlabErrorMessage } from "../lib/gst";
 import { creditBatch, debitBatchByNumber, updateAvgCostOnInbound, updateAvgCostOnReversal, type BatchKind } from "../lib/batches";
 import { productBatchIdentity, blockedByInactiveProducts, INACTIVE_PRODUCT_CODE, isProductKind } from "../lib/productIdentity";
 import { writeStockLedger } from "../lib/stockLedger";
-import { assertStockLedgerRestatementOpen } from "../lib/dailyStockClosures";
 import { deductMaterialAt, creditMaterialAt, isMaterialKind } from "../lib/materialStock";
 import { resolveActingLocation, locationLabel, type ProdLocation } from "../lib/productionCosting";
 import { getUserDataScope, scopeLocationTypeWhere } from "../lib/dataScope";
@@ -1723,7 +1722,6 @@ router.patch("/purchases/:id", requireModuleAction("page:/production/purchase", 
     // metadata-only edit performs. Every row of the bill moves together;
     // reversal pairs cancel on any day.
     if (purchaseDate !== undefined && String(locked.purchase_date ?? '') !== String(purchaseDate)) {
-      await assertStockLedgerRestatementOpen(client, "purchase", Number(id), String(purchaseDate));
       await client.query(
         `UPDATE stock_ledger SET txn_date = $2::date WHERE doc_type = 'purchase' AND doc_id = $1`,
         [id, purchaseDate],
@@ -1870,7 +1868,6 @@ router.patch("/purchases/:id", requireModuleAction("page:/production/purchase", 
        vendorInvoiceDateNew !== undefined ? vendorInvoiceDateNew : lk.vendor_invoice_date],
     );
     if (purchaseDate !== undefined) {
-      await assertStockLedgerRestatementOpen(c2, "purchase", Number(id), String(purchaseDate));
       await c2.query(
         `UPDATE stock_ledger SET txn_date = $2::date WHERE doc_type = 'purchase' AND doc_id = $1`,
         [id, purchaseDate],

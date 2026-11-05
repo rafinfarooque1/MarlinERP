@@ -12,6 +12,13 @@ Every stock mutation writes one or more rows to `stock_ledger` — an append-onl
 - Writers pass `txnDate` for purchases/sales/production create+edit+delete; reversal rows are dated the document's OLD date, re-apply rows the NEW date, so pairs cancel in every period. Transfers/returns intentionally use insert time (that IS their business date). Sale cancellation is dated today (the cancellation is the event).
 - ONE sanctioned exception to append-only: a metadata-only date edit restates `txn_date` for ALL of the document's rows in one UPDATE (pairs move together). `created_at` is never rewritten; the edit is in the activity log.
 
+## Date locks
+Daily stock-close snapshots are reporting evidence and do not lock `txn_date`. Backdated writes and date restatements are governed by the owning document route's accounting-period month lock. Keep the daily snapshot capture/serialization for integrity reporting, but do not reintroduce closed-day write rejection.
+
+**Why:** The business uses manually controlled accounting-month locks as its write boundary; daily stock snapshots are not intended to prevent corrections within an open month.
+
+**How to apply:** When changing stock date validation, preserve the route-level month-lock checks and valuation-checkpoint replay safeguards while allowing dates within an open accounting month.
+
 ## Table (startup migration in index.ts)
 ```sql
 CREATE TABLE IF NOT EXISTS stock_ledger (

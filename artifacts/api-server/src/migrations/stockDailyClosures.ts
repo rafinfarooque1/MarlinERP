@@ -137,9 +137,6 @@ export async function addStockDailyClosures(pool: Pool): Promise<void> {
       DECLARE
         company_zone TEXT;
         company_today DATE;
-        baseline_day DATE;
-        baseline_zone TEXT;
-        last_closed_day DATE;
         movement_day DATE;
       BEGIN
         PERFORM pg_advisory_xact_lock(hashtext('${STOCK_DAILY_CLOSE_LOCK_KEY}'));
@@ -155,39 +152,6 @@ export async function addStockDailyClosures(pool: Pool): Promise<void> {
           company_today := (clock_timestamp() AT TIME ZONE company_zone)::date;
         END;
         movement_day := COALESCE(NEW.txn_date, company_today);
-        SELECT b.baseline_date, b.time_zone INTO baseline_day, baseline_zone
-          FROM stock_daily_close_baseline b
-         WHERE b.id = 1;
-        IF baseline_day IS NULL THEN
-          RAISE EXCEPTION USING
-            ERRCODE = 'P0001',
-            MESSAGE = 'STOCK_DAILY_BASELINE_MISSING: stock baseline is not established';
-        END IF;
-        IF company_zone <> baseline_zone THEN
-          RAISE EXCEPTION USING
-            ERRCODE = 'P0001',
-            MESSAGE = 'STOCK_DAILY_TIMEZONE_CHANGED: company timezone differs from the stock baseline';
-        END IF;
-        SELECT MAX(r.close_date) INTO last_closed_day
-          FROM stock_daily_close_runs r
-         WHERE r.completed_at IS NOT NULL;
-        IF company_today - 1 >= baseline_day
-           AND (last_closed_day IS NULL OR last_closed_day < company_today - 1)
-           AND movement_day <= company_today - 1 THEN
-          RAISE EXCEPTION USING
-            ERRCODE = 'P0001',
-            MESSAGE = 'STOCK_DAILY_CLOSE_REQUIRED: backdated stock movement falls in an unverified daily-close interval';
-        END IF;
-        IF movement_day < baseline_day THEN
-          RAISE EXCEPTION USING
-            ERRCODE = 'P0001',
-            MESSAGE = 'STOCK_DATE_BEFORE_BASELINE: stock movement predates the trusted baseline';
-        END IF;
-        IF last_closed_day IS NOT NULL AND movement_day <= last_closed_day THEN
-          RAISE EXCEPTION USING
-            ERRCODE = 'P0001',
-            MESSAGE = 'STOCK_DAILY_DATE_CLOSED: stock movement is dated on or before a closed date';
-        END IF;
         NEW.txn_date := movement_day;
         RETURN NEW;
       END;
@@ -213,7 +177,7 @@ export async function addStockDailyClosures(pool: Pool): Promise<void> {
     `);
 
     await client.query("COMMIT");
-    console.log(`[migration] ${MIGRATION_NAME}: future daily close tables and write guard ready`);
+    console.log(`[migration] ${MIGRATION_NAME}: daily stock snapshots ready; date-based write locks disabled`);
   } catch (error) {
     await client.query("ROLLBACK").catch(() => {});
     throw error;
