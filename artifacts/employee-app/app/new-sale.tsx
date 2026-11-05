@@ -80,7 +80,7 @@ export default function NewSaleScreen() {
   const colors = useColors();
   const queryClient = useQueryClient();
   const { location: globalLoc, locked } = useLocationContext();
-  const { ready, perm } = useErpPermissions();
+  const { ready, level, perm } = useErpPermissions();
   const salesPerm = perm(PAGE.sales);
 
   // ── Wizard state ───────────────────────────────────────────────────────────
@@ -220,8 +220,8 @@ export default function NewSaleScreen() {
   const lineProblems = (l: Line): string | null => {
     if (!isQtyString(l.quantity)) return 'Enter a quantity of at least 1.';
     if (!isMoneyString(l.unitPrice)) return 'Enter a valid rate (max 2 decimals).';
-    if (l.mrp > 0 && Number(l.unitPrice) < l.mrp) {
-      return `Rate can't go below the item rate ${formatMoney(l.mrp, { showPaise: true })} — use the discount instead.`;
+    if (level !== 1 && l.mrp > 0 && Number(l.unitPrice) < l.mrp) {
+      return `Rate is locked at ${formatMoney(l.mrp, { showPaise: true })}. Ask an Administrator to go lower.`;
     }
     if (l.unitDiscount !== '' && !isMoneyString(l.unitDiscount)) {
       return 'Enter a valid discount (max 2 decimals).';

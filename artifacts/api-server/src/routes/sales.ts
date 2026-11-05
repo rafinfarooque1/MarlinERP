@@ -36,6 +36,7 @@ import { resolveLocationGst, isInterStateSupply } from "../lib/gstTransfer";
 import { validateOtherCharges, validateSaleOtherCharges, parseStoredOtherCharges, otherChargesTotal, type OtherCharge } from "../lib/otherCharges";
 import { resolveReceiveIntoAccount, postSaleCollectionReceipt, type ReceiveIntoAccount } from "../lib/saleCollection";
 import { visibleLocationSql } from "../lib/warehouseVisibility";
+import { isLevelOneAdmin } from "../lib/adminGate";
 
 const router = Router();
 
@@ -340,11 +341,10 @@ export function buildSaleLines(
   return { ok: true, lineItems, billDiscount };
 }
 
-// ── MRP floor ─────────────────────────────────────────────────────────────────
-// A sale line may be priced AT or ABOVE the item's master MRP, never below —
-// price reductions must go through the discount fields so MRP, selling price
-// and discount stay separate figures in reports and margin analysis. Items
-// without a master MRP (0/unset) have no floor.
+// ── Locked Rate floor ─────────────────────────────────────────────────────────
+// Employees may not enter a sale line rate below the Item Master rate. A
+// level-1 Administrator may override the floor. Items without a master rate
+// (0/unset) have no floor.
 //
 // `savedFloors` (edit only) grandfathers lines saved before a later master-MRP
 // increase: the effective floor is min(master MRP, the line's previously saved
@@ -372,7 +372,9 @@ export async function checkMrpFloor(
   // compare against min(master, saved floor), no epsilon — stays in this one
   // function; only the message may differ per document type.
   messageFor?: (itemName: string, floor: number) => string,
+  allowBelowFloor = false,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (allowBelowFloor) return { ok: true };
   const itemIds = [...new Set(rawLineItems.map(li => Number(li.itemId)))]
     .filter(n => Number.isFinite(n) && n > 0);
   if (itemIds.length === 0) return { ok: true };
@@ -392,7 +394,7 @@ export async function checkMrpFloor(
         ok: false,
         error: messageFor
           ? messageFor(item.name, floor)
-          : `Rate cannot be lower than the Item Master rate. Use Discount if you want to reduce the selling price. (${item.name}: minimum allowed ₹${floor.toFixed(2)})`,
+          : `Rate is locked at the Item Master rate. Only an Administrator can go lower. (${item.name}: minimum allowed ₹${floor.toFixed(2)})`,
       };
     }
   }
@@ -898,7 +900,13 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
   // Line price must be AT or ABOVE the item's master MRP; reductions go
   // through the discount fields. Enforced here so a direct API call cannot
   // bypass the POS rule.
-  const mrpCheck = await checkMrpFloor(pgPool, rawLineItems);
+  const mrpCheck = await checkMrpFloor(
+    pgPool,
+    rawLineItems,
+    undefined,
+    undefined,
+    await isLevelOneAdmin((req as any).employee),
+  );
   if (!mrpCheck.ok) {
     res.status(400).json({ error: mrpCheck.error, code: 'MRP_BELOW_MASTER' });
     return;
@@ -1778,7 +1786,13 @@ router.put("/sales/:id", requireModuleAction("page:/sales/pos", "edit"), async (
       savedFloors.set(iid, prev === undefined ? p : Math.min(prev, p));
     }
   }
-  const mrpCheck = await checkMrpFloor(pgPool, rawLineItems, savedFloors);
+  const mrpCheck = await checkMrpFloor(
+    pgPool,
+    rawLineItems,
+    savedFloors,
+    undefined,
+    await isLevelOneAdmin((req as any).employee),
+  );
   if (!mrpCheck.ok) {
     res.status(400).json({ error: mrpCheck.error, code: 'MRP_BELOW_MASTER' });
     return;
