@@ -1,22 +1,24 @@
 ---
 name: Sale MRP floor
-description: Sale-line price must be >= item master MRP; grandfathering on edit; deliberate exemptions; fixture-pricing rule for tests.
+description: Item Master Rate and optional Locking Rate are separate; preserve the raw-rate MRP floor and compare the locking floor after discounts.
 ---
 
 # Sale Item Master Rate floor
 
-A POS sale line's entered Rate may equal or exceed the Item Master rate for
-employees; only a level-1 Administrator may enter a lower rate. The server
-enforces this on create and edit, and both web and employee-app forms mirror it.
-Quotations and sales imports keep their separate existing floor behavior.
+A POS line's entered Rate must continue to meet the Item Master Rate (MRP)
+floor. Separately, an optional Locking Rate is enforced against the final
+per-unit consideration after item, bill, and coupon discounts. Only a confirmed
+Level-1 Administrator may override the Locking Rate, and the sale audit records
+the overridden items and effective rates.
 
-**Why:** the user requested a locked Item Master rate for employee billing, with
-an Administrator override for pricing below it.
+**Why:** the user clarified that the original Locking Rate must be a separate,
+optional field and must not replace or overwrite the normal Item Master Rate.
 
 **How to apply:**
-- Keep the admin exception server-authoritative (level-1 hierarchy); client
-  validation is display behavior only. Items with mrp 0/unset have no floor.
-- Grandfathering (edit only): floor = min(master MRP, lowest STORED line price
+- Keep the normal MRP floor independent of Locking Rate. The Locking Rate is
+  optional (NULL means no restriction) and is checked after all applicable
+  discounts; server authorization is authoritative.
+- MRP grandfathering (edit only): floor = min(master MRP, lowest STORED line price
   for that item) — invoices saved before a later MRP rise stay editable but
   can't be reduced further. Floors come from stored lines, never the request.
 - The compare is STRICT with no epsilon: both sides parse decimal strings, so

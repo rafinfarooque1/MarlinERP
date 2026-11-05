@@ -36,6 +36,7 @@ export interface ItemOption {
   /** Unit of measure, rendered next to `available`. */
   uom?: string | null;
   mrp?: number | null;
+  lockingRate?: number | null;
   gstRate?: number | null;
   available?: number | null;
 }

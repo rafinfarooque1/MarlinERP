@@ -342,9 +342,9 @@ export function buildSaleLines(
 }
 
 // ── Locked Rate floor ─────────────────────────────────────────────────────────
-// Employees may not enter a sale line rate below the Item Master rate. A
-// level-1 Administrator may override the floor. Items without a master rate
-// (0/unset) have no floor.
+// The entered line rate must meet the normal Item Master Rate on every sale.
+// The separate optional Locking Rate is checked against the final discounted
+// consideration in checkLockingRate below.
 //
 // `savedFloors` (edit only) grandfathers lines saved before a later master-MRP
 // increase: the effective floor is min(master MRP, the line's previously saved
@@ -394,11 +394,72 @@ export async function checkMrpFloor(
         ok: false,
         error: messageFor
           ? messageFor(item.name, floor)
-          : `Rate is locked at the Item Master rate. Only an Administrator can go lower. (${item.name}: minimum allowed ₹${floor.toFixed(2)})`,
+        : `Rate must be at least the Item Master Rate. (${item.name}: minimum allowed ₹${floor.toFixed(2)})`,
       };
     }
   }
   return { ok: true };
+}
+
+/** Validate the final per-unit consideration after all pre-tax discounts and
+ *  the post-tax coupon have been allocated across the invoice. */
+export async function checkLockingRate(
+  q: { query: (sql: string, params?: any[]) => Promise<{ rows: any[] }> },
+  lines: any[],
+  couponDiscount: number,
+  isLevelOne: boolean,
+  overrideConfirmed: boolean,
+): Promise<{ ok: true; overrides: any[] } | { ok: false; code: string; error: string }> {
+  const ids = [...new Set(lines.map(li => Number(li.itemId)).filter(id => Number.isInteger(id) && id > 0))];
+  if (!ids.length) return { ok: true, overrides: [] };
+  const { rows } = await q.query(
+    `SELECT id, name, tax_rate, locking_rate FROM items WHERE id = ANY($1::int[])`,
+    [ids],
+  );
+  const items = new Map(rows.map((r: any) => [Number(r.id), r]));
+  const couponShares = allocateBillDiscount(
+    lines.map(li => Number(li.lineGross ?? (Number(li.lineSubtotal ?? 0) + Number(li.taxAmount ?? 0)))),
+    couponDiscount,
+  );
+  const overrides: any[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const li = lines[i];
+    const item: any = items.get(Number(li.itemId));
+    const floor = item?.locking_rate == null ? null : Number(item.locking_rate);
+    if (floor == null || floor <= 0) continue;
+    const qty = Number(li.quantity);
+    if (!Number.isFinite(qty) || qty <= 0) continue;
+    const preTaxTotal = Math.max(0, qty * Number(li.unitPrice) - Number(li.discount ?? 0));
+    const couponShare = couponShares[i] ?? 0;
+    const couponBase = li.priceMode === "exclusive"
+      ? couponShare / (1 + Number(item.tax_rate ?? li.taxRate ?? 0) / 100)
+      : couponShare;
+    const effectiveRate = Math.round(Math.max(0, preTaxTotal - couponBase) / qty * 100) / 100;
+    if (effectiveRate + 0.00001 >= floor) continue;
+    const detail = {
+      itemId: Number(li.itemId),
+      itemName: String(item.name ?? li.itemName ?? ""),
+      lockingRate: floor,
+      effectiveRate,
+      quantity: qty,
+    };
+    if (!isLevelOne) {
+      return {
+        ok: false,
+        code: "LOCKING_RATE_BELOW_MINIMUM",
+        error: `${detail.itemName || "Item"}: effective rate ₹${effectiveRate.toFixed(2)} is below its Locking Rate ₹${floor.toFixed(2)}.`,
+      };
+    }
+    overrides.push(detail);
+  }
+  if (overrides.length && !overrideConfirmed) {
+    return {
+      ok: false,
+      code: "LOCKING_RATE_OVERRIDE_CONFIRMATION_REQUIRED",
+      error: `Confirm Level-1 override below Locking Rate for ${overrides.map(x => x.itemName).join(", ")}.`,
+    };
+  }
+  return { ok: true, overrides };
 }
 
 // ── Item Prices ───────────────────────────────────────────────────────────────
@@ -905,7 +966,6 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
     rawLineItems,
     undefined,
     undefined,
-    await isLevelOneAdmin((req as any).employee),
   );
   if (!mrpCheck.ok) {
     res.status(400).json({ error: mrpCheck.error, code: 'MRP_BELOW_MASTER' });
@@ -936,6 +996,17 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
     return;
   }
   const discountTotal = Math.round(rawDiscountTotal * 100) / 100;
+  const lockingRateCheck = await checkLockingRate(
+    pgPool, lineItems, discountTotal,
+    await isLevelOneAdmin((req as any).employee),
+    rawBody.lockingRateOverrideConfirmed === true,
+  );
+  if (!lockingRateCheck.ok) {
+    res.status(lockingRateCheck.code === "LOCKING_RATE_OVERRIDE_CONFIRMATION_REQUIRED" ? 409 : 400)
+      .json({ error: lockingRateCheck.error, code: lockingRateCheck.code });
+    return;
+  }
+  const lockingRateOverrides = lockingRateCheck.overrides;
 
   // ── Other Charges (Packing & Transport, Freight, Hamali, Courier…) ────────
   // Money the customer owes ON TOP of the goods: folded into total_amount (the
@@ -1567,7 +1638,7 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
       action: "CREATE", module: "sales", entityType: "sale", entityId: row.id,
       user: (req as any).employee?.username,
       description: `New sale ${invoiceNumber} — ₹${totalAmount.toFixed(2)}`,
-      metadata: { after: { invoiceNumber, locationType, locationId, customerId: parsed.data.customerId, totalAmount, lineCount: lineItems.length } },
+       metadata: { after: { invoiceNumber, locationType, locationId, customerId: parsed.data.customerId, totalAmount, lineCount: lineItems.length, ...(lockingRateOverrides.length ? { lockingRateOverrides } : {}) } },
     });
     await txClient.query('COMMIT');
   } catch (txErr) {
@@ -1791,7 +1862,6 @@ router.put("/sales/:id", requireModuleAction("page:/sales/pos", "edit"), async (
     rawLineItems,
     savedFloors,
     undefined,
-    await isLevelOneAdmin((req as any).employee),
   );
   if (!mrpCheck.ok) {
     res.status(400).json({ error: mrpCheck.error, code: 'MRP_BELOW_MASTER' });
@@ -1818,6 +1888,17 @@ router.put("/sales/:id", requireModuleAction("page:/sales/pos", "edit"), async (
     return;
   }
   const discountTotal = Math.round(rawDiscountTotal * 100) / 100;
+  const lockingRateCheck = await checkLockingRate(
+    pgPool, lineItems, discountTotal,
+    await isLevelOneAdmin((req as any).employee),
+    rawBody.lockingRateOverrideConfirmed === true,
+  );
+  if (!lockingRateCheck.ok) {
+    res.status(lockingRateCheck.code === "LOCKING_RATE_OVERRIDE_CONFIRMATION_REQUIRED" ? 409 : 400)
+      .json({ error: lockingRateCheck.error, code: lockingRateCheck.code });
+    return;
+  }
+  const lockingRateOverrides = lockingRateCheck.overrides;
 
   // ── Other Charges on edit ─────────────────────────────────────────────────
   // A supplied list REPLACES the stored one (full-body PUT semantics, same as
@@ -2376,7 +2457,7 @@ router.put("/sales/:id", requireModuleAction("page:/sales/pos", "edit"), async (
       action: "UPDATE", module: "sales", entityType: "sale", entityId: id,
       user: (req as any).employee?.username,
       description: `Sale ${existingRaw.invoice_number} updated — ₹${totalAmount.toFixed(2)}`,
-      metadata: { before: { totalAmount: oldTotal }, after: { totalAmount, locationType: newLocationType, locationId: newLocationId } },
+      metadata: { before: { totalAmount: oldTotal }, after: { totalAmount, locationType: newLocationType, locationId: newLocationId, ...(lockingRateOverrides.length ? { lockingRateOverrides } : {}) } },
     });
     await editTx.query('COMMIT');
   } catch (txErr) {

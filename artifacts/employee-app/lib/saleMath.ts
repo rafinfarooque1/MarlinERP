@@ -36,6 +36,8 @@ export interface DraftLine {
   taxRate: number;
   /** Item-master MRP — the price floor (0 = no floor). */
   mrp: number;
+  /** Optional effective per-unit floor configured in the Item Master. */
+  lockingRate?: number | null;
   quantity: string;
   unitPrice: string;
   /** Per-unit ₹ discount — ₹10 on qty 10 means ₹100 off the line. */
@@ -52,6 +54,7 @@ export interface LineComputed {
   /** Taxable value of the line after all pre-tax discounts. */
   lineSubtotal: number;
   taxAmount: number;
+  effectiveUnitPrice: number;
 }
 
 export interface CartTotals {
@@ -151,7 +154,8 @@ export function computeCartTotals(lines: DraftLine[], billDiscountStr: string): 
     subtotal += g.lineSubtotal;
     taxTotal += g.taxAmount;
     grandTotal += g.lineGross;
-    perLine[p.lineIdx] = { basis: p.basis, ...g };
+    const qty = Number(lines[p.lineIdx]?.quantity) || 1;
+    perLine[p.lineIdx] = { basis: p.basis, ...g, effectiveUnitPrice: r2(adjusted / qty) };
   });
 
   return {

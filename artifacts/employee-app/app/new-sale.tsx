@@ -295,6 +295,7 @@ export default function NewSaleScreen() {
         unit: String(it.unit ?? ''),
         taxRate: Number(it.taxRate ?? 0),
         mrp: Number(it.mrp ?? 0),
+        lockingRate: it.lockingRate == null ? null : Number(it.lockingRate),
         quantity: '1',
         unitPrice: Number(it.mrp ?? 0) > 0 ? String(it.mrp) : '',
         unitDiscount: '',
@@ -405,6 +406,16 @@ export default function NewSaleScreen() {
             confirmText: 'Keep as advance',
             cancelText: 'Go back',
             onConfirm: () => setTimeout(() => submit({ ...extra, allowOverpayment: true }), 0),
+          });
+          return;
+        }
+        if (code === 'LOCKING_RATE_OVERRIDE_CONFIRMATION_REQUIRED') {
+          confirmDialog({
+            title: 'Below Locking Rate',
+            message: `${message}\n\nAuthorize this Level-1 Administrator override?`,
+            confirmText: 'Authorize override',
+            cancelText: 'Go back',
+            onConfirm: () => setTimeout(() => submit({ ...(extra as any), lockingRateOverrideConfirmed: true } as any), 0),
           });
           return;
         }
@@ -723,6 +734,13 @@ export default function NewSaleScreen() {
                     styles={styles}
                   />
                 </View>
+                {l.lockingRate != null && l.lockingRate > 0 && Number(l.unitPrice) > 0 && (
+                  <Text style={[styles.errorText, (computed?.effectiveUnitPrice ?? (Number(l.unitPrice) - Number(l.unitDiscount || 0))) < l.lockingRate
+                    ? { color: colors.destructive }
+                    : styles.mutedText]}>
+                    Locking Rate ₹{l.lockingRate.toFixed(2)} · effective rate ₹{(computed?.effectiveUnitPrice ?? (Number(l.unitPrice) - Number(l.unitDiscount || 0))).toFixed(2)}
+                  </Text>
+                )}
                 <View style={styles.rowBetween}>
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                     <Switch

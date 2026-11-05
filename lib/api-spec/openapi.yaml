@@ -2311,6 +2311,10 @@ components:
           type: ["string", "null"]
         productionStock:
           type: number
+        mrp:
+          type: number
+        lockingRate:
+          type: ["number", "null"]
         createdAt:
           type: string
 
@@ -2328,6 +2332,8 @@ components:
           type: string
         description:
           type: string
+        lockingRate:
+          type: ["number", "null"]
 
     ItemUpdate:
       type: object
@@ -2342,6 +2348,8 @@ components:
           type: string
         description:
           type: string
+        lockingRate:
+          type: ["number", "null"]
 
     # PURCHASE
     PurchaseLineItem:
@@ -3099,6 +3107,9 @@ components:
         billDiscount:
           type: number
           description: Pre-tax invoice-level discount, allocated across lines.
+        lockingRateOverrideConfirmed:
+          type: boolean
+          description: Explicit Level-1 Administrator confirmation for a below-locking-rate sale.
         otherCharges:
           type: array
           description: >-

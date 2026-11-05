@@ -134,7 +134,7 @@ function computeLineGst(
 
 // Shown whenever a typed sale-line MRP falls below the enforced floor. The
 // server rejects the same case with the same message.
-const MRP_FLOOR_MESSAGE = 'Rate is locked at the Item Master rate. Ask an Administrator to go lower.';
+const MRP_FLOOR_MESSAGE = 'Rate must be at least the Item Master Rate.';
 
 // Sales list responses are normally mapped to camelCase by the API, but some
 // historical/list-shaped responses can still expose the raw database keys.
@@ -1009,6 +1009,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
     uom: it.unit || null,
     available: stockMap.get(it.id) ?? 0,
     mrp: Number(it.mrp ?? 0),
+    lockingRate: it.lockingRate == null ? null : Number(it.lockingRate),
     gstRate: Number(it.taxRate ?? 0),
   });
   const availableOptions = useMemo(
@@ -1028,6 +1029,10 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
 
   // Price comes from item MRP (set in Item Master) — not outlet-specific
   const getPrice = (itemId: number) => Number((items.find(i => i.id === itemId) as any)?.mrp ?? 0);
+  const getLockingRate = (itemId: number) => {
+    const value = (items.find(i => i.id === itemId) as any)?.lockingRate;
+    return value == null ? null : Number(value);
+  };
   const getAvailableQty = (itemId: number) => stockMap.get(itemId) ?? 0;
 
   // ── Locked Rate floor ───────────────────────────────────────────────────────
@@ -1160,7 +1165,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   const computeCartTotals = () => {
     // Pass 1 — per-line ITEM discounts (₹/unit off the MRP) and each line's
     // pre-bill-discount value ("basis").
-    const prepared: Array<{ qty: number; price: number; taxRate: number; itemDisc: number; basis: number; taxable: boolean }> = [];
+    const prepared: Array<{ qty: number; price: number; taxRate: number; itemDisc: number; basis: number; taxable: boolean; lineIdx: number }> = [];
     let grossItemValue = 0, itemDiscountTotal = 0;
     fields.forEach((_, i) => {
       const itemId = form.watch(`lineItems.${i}.itemId`);
@@ -1173,7 +1178,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
       const itemDisc = Math.round(unitDisc * qty * 100) / 100;
       grossItemValue    += Math.round(qty * price * 100) / 100;
       itemDiscountTotal += itemDisc;
-      prepared.push({ qty, price, taxRate, itemDisc, basis: Math.max(0, Math.round((qty * price - itemDisc) * 100) / 100), taxable });
+      prepared.push({ qty, price, taxRate, itemDisc, basis: Math.max(0, Math.round((qty * price - itemDisc) * 100) / 100), taxable, lineIdx: i });
     });
 
     // Pass 2 — allocate the BILL discount paise-exactly across lines in
@@ -1210,10 +1215,12 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
     // (kg goods) an unrounded qty×price−disc base would keep sub-paisa
     // fractions and drift the preview off the persisted invoice.
     let grossTotal = 0, subtotal = 0, cgstTotal = 0, sgstTotal = 0, igstTotal = 0, taxTotal = 0;
+    const grossByPreparedLine: number[] = [];
     prepared.forEach((p, k) => {
       const adjusted = Math.round((p.basis - shares[k]) * 100) / 100;
       const gst = computeLineGst(1, adjusted, p.taxRate, isInterState, 0, p.taxable);
       grossTotal += gst.lineGross;            // FINAL line total, either mode
+      grossByPreparedLine[k] = gst.lineGross;
       subtotal   += gst.lineSubtotal;
       cgstTotal  += gst.cgst;
       sgstTotal  += gst.sgst;
@@ -1229,11 +1236,17 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
           ? Math.round(grandTotal * Number(appliedCoupon.discountValue) / 100 * 100) / 100
           : Math.min(Number(appliedCoupon.discountValue), grandTotal)
         : 0;
+    const lineEffectiveRates: (number | null)[] = fields.map(() => null);
+    prepared.forEach((p, k) => {
+      const couponShare = grossTotal > 0 ? discountAmount * (grossByPreparedLine[k] ?? 0) / grossTotal : 0;
+      const couponBase = p.taxable ? couponShare / (1 + p.taxRate / 100) : couponShare;
+      lineEffectiveRates[p.lineIdx] = Math.round(Math.max(0, p.basis - shares[k] - couponBase) / p.qty * 100) / 100;
+    });
     // Other Charges — flat post-tax amounts on top of the goods (no GST on
     // them), mirroring the server: total = goods + GST − coupon + charges.
     const otherTotal = Math.round(((form.watch('otherCharges') ?? []) as any[])
       .reduce((t, c) => t + (Number(c?.amount) || 0), 0) * 100) / 100;
-    return { grossItemValue, grossTotal, subtotal, cgstTotal, sgstTotal, igstTotal, taxTotal, itemDiscountTotal, basisSum, billDiscount, grandTotal, discountAmount, otherTotal, finalAmount: Math.round((grandTotal - discountAmount + otherTotal) * 100) / 100 };
+    return { grossItemValue, grossTotal, subtotal, cgstTotal, sgstTotal, igstTotal, taxTotal, itemDiscountTotal, basisSum, billDiscount, grandTotal, discountAmount, lineEffectiveRates, otherTotal, finalAmount: Math.round((grandTotal - discountAmount + otherTotal) * 100) / 100 };
   };
 
   const totals = computeCartTotals();
@@ -1248,7 +1261,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
     }
     // Locked Rate floor — catches an Enter-key submit that skipped the field's
     // blur reset. The server enforces the same hierarchy-aware rule.
-    for (let i = 0; !isAdmin && i < data.lineItems.length; i++) {
+    for (let i = 0; i < data.lineItems.length; i++) {
       const li = data.lineItems[i];
       const floor = getMrpFloor(li.itemId);
       if (floor > 0 && Number(li.unitPrice) < floor) {
@@ -1383,7 +1396,24 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
           setEditItem(null);
           form.reset(effectiveDefaultValues);
         },
-        onError: (e: any) => toast.error(e?.data?.error || e.message || 'Could not update sale'),
+        onError: (e: any) => {
+          if (e?.data?.code === 'LOCKING_RATE_OVERRIDE_CONFIRMATION_REQUIRED' && isAdmin
+              && window.confirm(`${e.data.error}\n\nAuthorize this Level-1 override?`)) {
+            const confirmedPayload = { ...payload, lockingRateOverrideConfirmed: true };
+            setTimeout(() => updateMutation.mutate({ saleId: editItem.id, data: confirmedPayload }, {
+              onSuccess: (updated: any) => {
+                toast.success('Sale updated with administrator override');
+                invalidateSalesData();
+                if (viewItem?.id === editItem.id) setViewItem({ ...viewItem, ...updated });
+                setIsOpen(false); setEditItem(null); form.reset(effectiveDefaultValues);
+              },
+              onError: (retryError: any) => toast.error(retryError?.data?.error || retryError.message || 'Could not update sale'),
+              onSettled: () => { submitLockRef.current = false; },
+            }), 0);
+            return;
+          }
+          toast.error(e?.data?.error || e.message || 'Could not update sale');
+        },
         onSettled: () => { submitLockRef.current = false; },
       });
     } else {
@@ -1421,6 +1451,11 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
         form.reset(effectiveDefaultValues);
       },
       onError: (e: any) => {
+        if (e?.data?.code === 'LOCKING_RATE_OVERRIDE_CONFIRMATION_REQUIRED' && isAdmin
+            && window.confirm(`${e.data.error}\n\nAuthorize this Level-1 override?`)) {
+          setTimeout(() => runCreate({ ...payload, lockingRateOverrideConfirmed: true }), 0);
+          return;
+        }
         if (e?.status === 409 && e?.data?.code === 'QUOTATION_ALREADY_CONVERTED') {
           toast.error(
             `${convertFrom?.quotationNumber ?? 'This quotation'} was already converted to ${e?.data?.convertedInvoiceNumber ?? 'a sale'} — a quotation can only become one invoice.`,
@@ -2436,9 +2471,9 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                               </div>
                             </div>
 
-                              {/* Employee floor = Item Master Rate (or, on an old
-                                  invoice, its saved price if the master rose).
-                                  Administrators may override the floor. */}
+                              {/* Entered rate remains subject to the normal
+                                  Item Master Rate; Locking Rate is checked
+                                  separately after all discounts. */}
                               <div className="space-y-1 min-w-0">
                                 <FormField control={form.control} name={`lineItems.${index}.unitPrice`} render={({ field: f }) => {
                                   const floor = getMrpFloor(itemId);
@@ -2449,7 +2484,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                                         <Input
                                           type="number"
                                           step="0.01"
-                                          min={!isAdmin && floor > 0 ? floor : 0}
+                                          min={floor > 0 ? floor : 0}
                                           className="h-9 text-xs text-right font-mono"
                                           data-testid={`input-line-mrp-${index}`}
                                           data-field={`line-mrp-${index}`}
@@ -2458,7 +2493,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                                           onBlur={e => {
                                             f.onBlur();
                                             const v = Number(e.target.value);
-                                            if (!isAdmin && floor > 0 && (!Number.isFinite(v) || v < floor)) {
+                                            if (floor > 0 && (!Number.isFinite(v) || v < floor)) {
                                               toast.error(MRP_FLOOR_MESSAGE);
                                               form.setValue(`lineItems.${index}.unitPrice`, floor);
                                             }
@@ -2471,6 +2506,13 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                                 {itemId > 0 && getPrice(itemId) <= 0 && (
                                     <p className="mt-1 text-[10px] text-amber-500">Set Rate in Item Master</p>
                                 )}
+                                {itemId > 0 && getLockingRate(itemId) != null && getLockingRate(itemId)! > 0
+                                  && unitPrice > 0
+                                  && Number(totals.lineEffectiveRates[index] ?? (unitPrice - unitDisc)) < getLockingRate(itemId)! && (
+                                    <p className="mt-1 text-[10px] text-destructive">
+                                      Effective rate ₹{Number(totals.lineEffectiveRates[index] ?? (unitPrice - unitDisc)).toFixed(2)} is below Locking Rate ₹{getLockingRate(itemId)!.toFixed(2)}
+                                    </p>
+                                  )}
                               </div>
 
                               {/* Item discount — ₹ off EVERY unit's item rate.
