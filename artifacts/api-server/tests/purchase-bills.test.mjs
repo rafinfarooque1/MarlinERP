@@ -565,11 +565,18 @@ console.log('\n[edit] Editing a bill');
   assert('An edit is refused once the stock has been used', blocked.status === 409, `status=${blocked.status}`);
   assert('...and says so in plain language', /already been used|already moved on|already been sold/i.test(String(blocked.data?.error ?? '')),
     String(blocked.data?.error).slice(0, 160));
+  const blockedDelete = await del(`/purchases/${consumed.data.id}`);
+  assert('A bill delete is also refused once its stock has been used',
+    blockedDelete.status === 409 && blockedDelete.data?.code === 'PURCHASE_STOCK_CONSUMED',
+    `status=${blockedDelete.status} code=${blockedDelete.data?.code}`);
+  const billAfterDeleteAttempt = Number((await sql(
+    `SELECT count(*)::int AS n FROM purchases WHERE id = $1`, [consumed.data.id])).rows[0]?.n ?? 0);
+  assert('A refused delete preserves the purchase bill', billAfterDeleteAttempt === 1, `rows=${billAfterDeleteAttempt}`);
   const lotAfter = Number((await sql(
     `SELECT quantity::float8 AS q FROM stock_batches WHERE item_id=$1 AND material_type='material'
       AND branch_type='warehouse' AND branch_id=$2 AND batch_number=$3`,
     [fixtures.materialId, WH_OK, consumedLot])).rows[0]?.q ?? 0);
-  assert('The refused edit invented no stock', r2(lotBefore) === r2(lotAfter), `${lotBefore} → ${lotAfter}`);
+  assert('Refused edit and delete attempts leave the lot unchanged', r2(lotBefore) === r2(lotAfter), `${lotBefore} → ${lotAfter}`);
   // Put the 8 back so the reconciliation section still balances stock to lots.
   await sql(`UPDATE stock_batches SET quantity = quantity + 8 WHERE item_id=$1 AND material_type='material'
               AND branch_type='warehouse' AND branch_id=$2 AND batch_number=$3`,

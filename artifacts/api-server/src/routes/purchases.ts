@@ -152,7 +152,7 @@ async function stockShortfall(
     if (onLoc + 1e-6 < need) {
       return mode === "reduce"
         ? `${name}: requested reduction is ${fmtQty(need)}, but this location is holding only ${fmtQty(onLoc)} — the remaining quantity has already been sold, transferred or consumed.`
-        : `${name}: this location is holding ${fmtQty(onLoc)}, less than the ${fmtQty(need)} on the bill — the stock has already moved on. Reverse those movements first, or record a purchase return instead of editing this line.`;
+        : `${name}: this location is holding ${fmtQty(onLoc)}, less than the ${fmtQty(need)} on the bill — the stock has already moved on. Reverse those movements first, or record a purchase return instead of editing or deleting this line.`;
     }
   }
   return null;
@@ -1982,6 +1982,23 @@ router.delete("/purchases/:id", requireModuleAction("page:/production/purchase",
     }
 
     const lineItems = (locked.line_items ?? []) as Array<{ materialType: string; materialId: number; quantity: number; batchNumber?: string | null; materialName?: string | null; unit?: string | null }>;
+    // A delete takes every bill line out of stock. Match the edit guard: the
+    // whole quantity must still exist in its lot and at this location. Flooring
+    // the subtraction would silently remove stock already sold, transferred,
+    // or consumed, while the ledger records the full reversal.
+    const deleteMaps = await buildNameMaps(client);
+    const stuck = await stockShortfall(
+      client,
+      lineItems.map(line => ({ line, need: Number(line.quantity ?? 0), mode: "rewrite" as const })),
+      loc,
+      id,
+      deleteMaps,
+    );
+    if (stuck) {
+      await client.query("ROLLBACK");
+      res.status(409).json({ error: stuck, code: "PURCHASE_STOCK_CONSUMED" }); return;
+    }
+
     // A historical reversal cannot be replayed once a newer dated checkpoint
     // exists for the same product/location. In that case the stock mutation is
     // still valid, but its audit/checkpoint event must be a current-date
@@ -2054,7 +2071,6 @@ router.delete("/purchases/:id", requireModuleAction("page:/production/purchase",
     );
     // Names/units resolved from the masters via the txn client — the stored
     // line JSON never carries materialName/unit (priceBill strips them).
-    const deleteMaps = await buildNameMaps(client);
     await writeStockLedger(client, lineItems.map(li => {
       const kind = (li.materialType ?? 'item') as keyof NameMaps;
       const master = deleteMaps[kind]?.get(Number(li.materialId));

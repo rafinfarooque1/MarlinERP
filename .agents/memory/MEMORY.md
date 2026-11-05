@@ -52,7 +52,7 @@
 - [Dashboard KPI sources & money flows](dashboard-kpi-sources.md) — never re-sum expense subtrees for a tile (capitalisation overlay disagrees with P&L); located tiles read the located posting slice; UI reads /dashboard/bi (NOT /summary, which stays today-anchored).
 - [Audit stamp fallbacks](audit-stamp-fallbacks.md) — `?? "system"` over a never-assigned request property records every row as system-generated and never fails; grep the middleware before writing created_by.
 - [Purchase edit line diff](purchase-edit-line-diff.md) — edits pair lines by kind:id:batch and touch only changed stock; aggregate debits per lot/product; settled floor (not a block) re-checked under the row lock.
-- [Purchase bill costing](purchase-bill-costing.md) — stock is valued at the TAXABLE value (net of GST+discount); floor-at-zero reversals invent stock, so refuse an edit once the goods moved; unwind avg cost with the qty.
+- [Purchase bill costing](purchase-bill-costing.md) — stock is valued at taxable value; floor-at-zero reversals invent stock, so edits/deletes must refuse once goods moved.
 - [Hiding a money figure](hiding-a-money-figure.md) — the figure always has siblings behind weaker guards; omit (never zero) the key; stripping a GET a client echoes back on approve zeroes cost.
 - [PDF Unicode fonts](pdf-unicode-fonts.md) — jsPDF's built-ins are WinAnsi so ₹ prints as `¹`; only an embedded TrueType fixes it, and jsPDF subsets it for you.
 - [Ledger-authoritative balances](ledger-authoritative-balances.md) — documents never produce a competing "current balance"; never clamp, absent ≠ zero, build the index once, re-read subtrees.
