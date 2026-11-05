@@ -12,6 +12,7 @@ import {
   usePartyAdvance, getPartyAdvanceQueryKey,
 } from '@workspace/api-client-react';
 import { usePermission } from '@/lib/usePermission';
+import { useIsAdmin } from '@/lib/useIsAdmin';
 import { formatDate } from '@/lib/date';
 import { isActiveProduct } from '@/lib/productStatus';
 import { useOutletsEnabled, useFeatureFlags } from '@/lib/useFeatureFlags';
@@ -133,7 +134,7 @@ function computeLineGst(
 
 // Shown whenever a typed sale-line MRP falls below the enforced floor. The
 // server rejects the same case with the same message.
-const MRP_FLOOR_MESSAGE = 'Rate cannot be lower than the Item Master rate. Use Discount if you want to reduce the selling price.';
+const MRP_FLOOR_MESSAGE = 'Rate is locked at the Item Master rate. Ask an Administrator to go lower.';
 
 // Sales list responses are normally mapped to camelCase by the API, but some
 // historical/list-shaped responses can still expose the raw database keys.
@@ -317,6 +318,7 @@ interface SalesProps {
 
 export default function Sales({ forceLocationType, forceLocationId, forceLocationName, permissionModule }: SalesProps = {}) {
   const perm = usePermission(permissionModule ?? 'page:/sales/pos');
+  const isAdmin = useIsAdmin();
   // Head Office as a selling location is offered only to HO/admin users —
   // branch staff sell from their own location (the server enforces this too).
   const { data: me } = useGetMe();
@@ -1028,10 +1030,10 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   const getPrice = (itemId: number) => Number((items.find(i => i.id === itemId) as any)?.mrp ?? 0);
   const getAvailableQty = (itemId: number) => stockMap.get(itemId) ?? 0;
 
-  // ── MRP floor ───────────────────────────────────────────────────────────────
-  // A sale line's price may EQUAL or EXCEED the Item Master MRP, never go
-  // below it — reductions go through the Discount field so reports keep MRP,
-  // selling price and discount separate. On EDIT, a line saved before a later
+  // ── Locked Rate floor ───────────────────────────────────────────────────────
+  // Employees cannot price below the Item Master rate. Administrators may
+  // override it; the server independently checks the hierarchy before allowing
+  // that override. On EDIT, a line saved before a later
   // master-MRP increase stays editable at its saved price (but may not be
   // reduced further): floor = min(master MRP, lowest saved price for the item).
   // The server enforces the same rule; this is the immediate-feedback copy.
@@ -1244,9 +1246,9 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
       focusField('customerId', scopeRef.current);
       return;
     }
-    // MRP floor — catches an Enter-key submit that skipped the field's blur
-    // reset. The server enforces the same rule authoritatively.
-    for (let i = 0; i < data.lineItems.length; i++) {
+    // Locked Rate floor — catches an Enter-key submit that skipped the field's
+    // blur reset. The server enforces the same hierarchy-aware rule.
+    for (let i = 0; !isAdmin && i < data.lineItems.length; i++) {
       const li = data.lineItems[i];
       const floor = getMrpFloor(li.itemId);
       if (floor > 0 && Number(li.unitPrice) < floor) {
@@ -2434,11 +2436,9 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                               </div>
                             </div>
 
-                              {/* Sale Rate — editable UPWARD only. Floor = Item Master
-                                  Rate (or, on an old invoice, the line's saved
-                                  price if the master rose since). Anything below
-                                  is rejected and snapped back; reductions go
-                                  through Discount. */}
+                              {/* Employee floor = Item Master Rate (or, on an old
+                                  invoice, its saved price if the master rose).
+                                  Administrators may override the floor. */}
                               <div className="space-y-1 min-w-0">
                                 <FormField control={form.control} name={`lineItems.${index}.unitPrice`} render={({ field: f }) => {
                                   const floor = getMrpFloor(itemId);
@@ -2449,7 +2449,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                                         <Input
                                           type="number"
                                           step="0.01"
-                                          min={floor > 0 ? floor : 0}
+                                          min={!isAdmin && floor > 0 ? floor : 0}
                                           className="h-9 text-xs text-right font-mono"
                                           data-testid={`input-line-mrp-${index}`}
                                           data-field={`line-mrp-${index}`}
@@ -2458,7 +2458,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                                           onBlur={e => {
                                             f.onBlur();
                                             const v = Number(e.target.value);
-                                            if (floor > 0 && (!Number.isFinite(v) || v < floor)) {
+                                            if (!isAdmin && floor > 0 && (!Number.isFinite(v) || v < floor)) {
                                               toast.error(MRP_FLOOR_MESSAGE);
                                               form.setValue(`lineItems.${index}.unitPrice`, floor);
                                             }
