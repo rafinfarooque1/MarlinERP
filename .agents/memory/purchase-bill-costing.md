@@ -18,20 +18,24 @@ amount — a ₹105 inclusive line at 5% was carried at ₹105 instead of ₹100
 one) must use the same basis. If a figure is going into stock, it is the taxable
 value; if it is going to the vendor, it is the gross.
 
-## Editing a bill is refused once its stock has been consumed
+## Editing or deleting a bill is refused once its stock has moved
 
-An edit reverses everything the bill added, then re-applies the new lines. Every
-reversal in this codebase floors at zero (`GREATEST(0, …)`, `debitBatchByNumber`).
+An edit reverses everything the bill added, then re-applies the new lines. A
+delete removes every bill line. Both operations must first prove, under the
+transaction's row locks, that the exact quantity being reversed remains in the
+bill's lot and at that location. Every reversal in this codebase floors at zero
+(`GREATEST(0, …)`, `debitBatchByNumber`).
 
 **Why:** a floor cannot express "8 of these are already gone". Buy 10, issue 8,
 re-save the bill unchanged, and the reversal removes only the 2 that are left
 while the re-apply puts all 10 back — the location silently ends up holding 10
-instead of 2. The transaction makes that atomic, which only means it commits the
-wrong number reliably.
+instead of 2. A delete without the same guard writes a full stock-ledger reversal
+even when its stock subtraction floors at zero, so inventory and gross profit
+can diverge from what actually remained.
 
 **How to apply:** check the lot AND the location balance under `FOR UPDATE`
-before writing anything, and return 409 telling the user to reverse the
-movements or raise a purchase return. Note `FOR UPDATE` is rejected on an
+before editing or deleting anything, and return 409 telling the user to reverse
+the movements or raise a purchase return. Note `FOR UPDATE` is rejected on an
 aggregate query — select the rows and sum them in JS.
 
 ## A reversed quantity must reverse its average cost too
