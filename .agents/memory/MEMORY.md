@@ -97,7 +97,7 @@
 - [Party advances & bill settlement](party-advances.md) — ASYMMETRIC: customer advance = credit balance on CUST- (netted, no CADV since Aug 2026 fold); vendor keeps VADV; delete-guard aggregate backstop is vendor-only.
 - [Data import framework](data-import-framework.md) — commits MUST reuse manual-creation libs; mapping-first name resolution (auto-create retired); file-order commits (avg cost); one-txn rollback.
 - [Legacy report import](legacy-report-import.md) — five old-software Excel reports auto-convert in the wizard; Amount is GST-inclusive; reused invoice/voucher numbers get /2 suffixes; day book = Journal/Contra only (real file: zero by design).
-- [Sale Item Master Rate floor](sale-mrp-floor.md) — employees cannot enter a POS rate below master; level-1 admins may override; quotes retain their own universal floor.
+- [Sale Rate and Locking Rate](sale-mrp-floor.md) — preserve normal MRP input floor; optional Locking Rate applies after discounts; only confirmed Level-1 override is audited.
 - [Bill-level control over per-line fields](bill-level-over-per-line.md) — one control fronting a per-row stored field must surface mixed legacy rows (warn + apply-on-pick), never let row 0 silently speak for the bill.
 - [Radix programmatic focus](radix-programmatic-focus.md) — Select opens on pointerdown, Popover on click; chain closes via onCloseAutoFocus+preventDefault, defer one tick for Escape; scope+verify auto-advance flags.
 - [Responsive design conventions](responsive-design.md) — desktop pixel-identical: touch bumps live in ui/ primitives (max-md:), md:hidden card lists beside hidden md:block tables; "entry grids scroll" superseded for POS/Quotation rows by transaction-workspace-layout.md.
