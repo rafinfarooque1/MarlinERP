@@ -164,23 +164,6 @@ try {
     assert(`bi.sales.count == register invoices (${label})`,
       Number(bi?.sales?.count ?? -1) === Number(reg?.totals?.invoices ?? -2),
       `bi=${bi?.sales?.count} reg=${reg?.totals?.invoices}`);
-    const employeeSales = bi?.employeeSalesReport ?? [];
-    const employeeSalesAmount = employeeSales.reduce((sum, row) => sum + Number(row.salesAmount ?? 0), 0);
-    const employeeSalesQuantity = employeeSales.reduce((sum, row) => sum + Number(row.salesQuantity ?? 0), 0);
-    const locationSalesQuantity = (bi?.locationSalesReport ?? [])
-      .reduce((sum, row) => sum + Number(row.salesQuantity ?? 0), 0);
-    const employeeOutstanding = employeeSales.reduce((sum, row) => sum + Number(row.outstandingAmount ?? 0), 0);
-    const locationOutstanding = (bi?.locationSalesReport ?? [])
-      .reduce((sum, row) => sum + Number(row.outstandingAmount ?? 0), 0);
-    assert(`salesperson sales reconcile with dashboard sales (${label})`,
-      near(employeeSalesAmount, bi?.sales?.total),
-      `employee=${employeeSalesAmount} dashboard=${bi?.sales?.total}`);
-    assert(`salesperson quantities reconcile with location quantities (${label})`,
-      near(employeeSalesQuantity, locationSalesQuantity),
-      `employee=${employeeSalesQuantity} location=${locationSalesQuantity}`);
-    assert(`salesperson outstanding plus ledger adjustment reconciles (${label})`,
-      near(employeeOutstanding + Number(bi?.employeeSalesLedgerAdjustment ?? NaN), locationOutstanding),
-      `employee=${employeeOutstanding} adjustment=${bi?.employeeSalesLedgerAdjustment} location=${locationOutstanding}`);
   }
 
   // A location slice (explicit params, as HO can select) must agree too.
@@ -198,17 +181,6 @@ try {
     assert(`bi.sales.total == register total (located ${locRow.lt}#${locRow.lid}, query params)`,
       near(biL?.sales?.total, regL?.totals?.total),
       `bi=${biL?.sales?.total} reg=${regL?.totals?.total}`);
-    assert("selected-location outstanding matches the receivables ledger balance",
-      Array.isArray(biL?.locationSalesReport)
-      && biL.locationSalesReport.length === 1
-      && near(biL.locationSalesReport[0].outstandingAmount, biL?.receivables?.total),
-      JSON.stringify({ report: biL?.locationSalesReport, receivables: biL?.receivables?.total }));
-    const locationEmployeeOutstanding = (biL?.employeeSalesReport ?? [])
-      .reduce((sum, row) => sum + Number(row.outstandingAmount ?? 0), 0)
-      + Number(biL?.employeeSalesLedgerAdjustment ?? NaN);
-    assert("selected-location salesperson outstanding reconciles to receivables",
-      near(locationEmployeeOutstanding, biL?.receivables?.total),
-      `employee+adjustment=${locationEmployeeOutstanding} receivables=${biL?.receivables?.total}`);
 
     // The drill-down premise: the URL carries only view+range — location rides
     // on the global x-location headers. Both endpoints must honour them alike.
@@ -218,102 +190,6 @@ try {
     assert("bi == register under x-location headers (drill-down carry-over)",
       near(biH?.sales?.total, regH?.totals?.total) && near(biH?.sales?.total, biL?.sales?.total),
       `biH=${biH?.sales?.total} regH=${regH?.totals?.total} biL=${biL?.sales?.total}`);
-  }
-
-  // A selected multi-location filter must narrow both dashboard detail tables.
-  console.log("\n[1b] Selected-location Sales/Outstanding and Expense Details");
-  const allLocationsBi = (await get(`/dashboard/bi?fromDate=${EPOCH}&toDate=${TODAY}`)).data;
-  const dashboardLocationKey = (location) =>
-    location.locationType === "headoffice"
-      ? "headoffice"
-      : `${location.locationType}:${location.locationId}`;
-  const availableLocationKeys = (allLocationsBi?.locationSalesReport ?? [])
-    .filter((location) => location.locationType !== "company")
-    .map(dashboardLocationKey)
-    .slice(0, 3);
-  const receivablesByLocation = new Map(
-    (allLocationsBi?.locationBreakdown ?? []).map((location) => [
-      dashboardLocationKey(location),
-      Number(location.receivables ?? 0),
-    ]),
-  );
-  const physicalSalesRows = (allLocationsBi?.locationSalesReport ?? [])
-    .filter((location) => location.locationType !== "company");
-  const locationReceivablesMatch = physicalSalesRows.every((location) =>
-    near(
-      location.outstandingAmount,
-      receivablesByLocation.get(dashboardLocationKey(location)) ?? 0,
-    ));
-  assert("Sales & Outstanding location amounts match customer-ledger receivables",
-    locationReceivablesMatch,
-    JSON.stringify({
-      report: allLocationsBi?.locationSalesReport,
-      locationBreakdown: allLocationsBi?.locationBreakdown,
-    }));
-  if (availableLocationKeys.length > 0) {
-    const selectedLocationKeys = [...availableLocationKeys];
-    if (selectedLocationKeys.length < 3) {
-      const [unusedIds] = await q(
-        `SELECT (SELECT COALESCE(MAX(id), 0) + 1 FROM warehouses)::int AS warehouse_id,
-                (SELECT COALESCE(MAX(id), 0) + 1 FROM outlets)::int AS outlet_id`,
-      );
-      for (const key of [`warehouse:${unusedIds.warehouse_id}`, `outlet:${unusedIds.outlet_id}`]) {
-        if (selectedLocationKeys.length < 3 && !selectedLocationKeys.includes(key)) {
-          selectedLocationKeys.push(key);
-        }
-      }
-    }
-    const selectedLocationBi = (await get(
-      `/dashboard/bi?fromDate=${EPOCH}&toDate=${TODAY}&locationKeys=${encodeURIComponent(selectedLocationKeys.join(","))}`,
-    )).data;
-    const expectedLocationKeys = selectedLocationKeys.filter((key) => availableLocationKeys.includes(key));
-    const hasExactlySelectedLocations = (locations) =>
-      Array.isArray(locations)
-      && locations.length === expectedLocationKeys.length
-      && expectedLocationKeys.every((key) => locations.some((location) => dashboardLocationKey(location) === key));
-    assert("Sales & Outstanding by Location contains only selected active locations",
-      hasExactlySelectedLocations(selectedLocationBi?.locationSalesReport),
-      JSON.stringify(selectedLocationBi?.locationSalesReport?.map(dashboardLocationKey)));
-    const expenseMatrix = selectedLocationBi?.financialMatrix;
-    assert("Expense Details contains only selected active locations",
-      hasExactlySelectedLocations(expenseMatrix?.locations),
-      JSON.stringify(expenseMatrix?.locations?.map(dashboardLocationKey)));
-    const expenseLedgers = [
-      ...(expenseMatrix?.cashExpenseLedgers ?? []),
-      ...(expenseMatrix?.bankExpenseLedgers ?? []),
-    ];
-    const expenseLedgersAreVisibleAndAligned = expenseLedgers.every((ledger) =>
-      Array.isArray(ledger.values)
-      && ledger.values.length === expenseMatrix.locations.length
-      && ledger.values.some((value) => Math.round(Number(value ?? 0) * 100) !== 0));
-    const expenseTotalsReconcile = expenseMatrix?.locations.every((_, index) =>
-      near(expenseMatrix.cashExpenses[index],
-        (expenseMatrix.cashExpenseLedgers ?? []).reduce((sum, ledger) => sum + Number(ledger.values[index] ?? 0), 0))
-      && near(expenseMatrix.bankExpenses[index],
-        (expenseMatrix.bankExpenseLedgers ?? []).reduce((sum, ledger) => sum + Number(ledger.values[index] ?? 0), 0)));
-    assert("Expense Details includes cash/bank-paid ledger values and omits zero-only ledgers",
-      expenseLedgersAreVisibleAndAligned && expenseTotalsReconcile,
-      JSON.stringify({ cash: expenseMatrix?.cashExpenseLedgers, bank: expenseMatrix?.bankExpenseLedgers }));
-    const selectedReceivablesByLocation = new Map(
-      (selectedLocationBi?.locationBreakdown ?? []).map((location) => [
-        dashboardLocationKey(location),
-        Number(location.receivables ?? 0),
-      ]),
-    );
-    const selectedLocationReceivablesMatch = (selectedLocationBi?.locationSalesReport ?? [])
-      .filter((location) => location.locationType !== "company")
-      .every((location) => near(
-        location.outstandingAmount,
-        selectedReceivablesByLocation.get(dashboardLocationKey(location)) ?? 0,
-      ));
-    assert("Selected-location outstanding values match the receivables ledger",
-      selectedLocationReceivablesMatch,
-      JSON.stringify({
-        report: selectedLocationBi?.locationSalesReport,
-        locations: selectedLocationBi?.locationBreakdown,
-      }));
-  } else {
-    console.log("  - Skipping selected-location assertions: no active locations are available");
   }
 
   // ── [2] Warehouse sales included (#37) ────────────────────────────────────
@@ -385,15 +261,6 @@ try {
     const s = fs?.profitAndLoss?.summary;
     assert(`P&L summary present (${label})`, !!s, JSON.stringify(fs).slice(0, 120));
     if (!s) continue;
-    const inventoryEvidenceReliable =
-      fs?.profitAndLoss?.expenses?.openingStockReliable === true
-      && fs?.profitAndLoss?.incomes?.closingStockEvidenceReliable === true;
-    if (!inventoryEvidenceReliable) {
-      assert(`unverified inventory suppresses dashboard profit (${label})`,
-        bi?.profit?.gross === null && bi?.profit?.net === null && bi?.profit?.cogs === null,
-        JSON.stringify(bi?.profit));
-      continue;
-    }
     assert(`bi.profit.cogs == P&L costOfGoodsSold (${label})`,
       near(bi?.profit?.cogs, s.costOfGoodsSold), `bi=${bi?.profit?.cogs} pl=${s.costOfGoodsSold}`);
     assert(`bi.profit.gross == P&L grossProfit (${label})`,

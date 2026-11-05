@@ -31,11 +31,9 @@ This is nastier than it sounds for three reasons:
 
 **How to apply:**
 - Grep pattern: `date[a-zA-Z_]*\s*(<>|!=|=)\s*''` across the server routes.
-- Do not assume an empty-string parameter guard makes a date cast safe:
-  `($1 = '' OR sale_date >= $1::date)` can still cast `''` and raise 22007
-  because SQL does not guarantee short-circuit evaluation. Pass absent dates as
-  NULL and use `($1::date IS NULL OR sale_date >= $1::date)`, or wrap the cast
-  in `NULLIF($1, '')`.
+- Distinguish the *column* case from the *parameter* case. `($1 = '' OR
+  sale_date >= $1::date)` is safe and common here — that tests a text
+  parameter for "no filter supplied", not the column. Do not "fix" those.
 - `col::date` on a column that is already `date` is a harmless no-op, so those
   casts can stay; only the string comparisons are fatal.
 - Verify by actually calling each affected endpoint. Type-checking cannot see

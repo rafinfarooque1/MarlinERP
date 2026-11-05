@@ -13,7 +13,6 @@ import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { TablePager, useClientPage } from '@/components/ui/table-pager';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
@@ -393,15 +392,13 @@ export default function Employees() {
     : e.employmentStatus === 'inactive' ? 'Inactive'
     : 'Resigned';
 
-  const matchingEmployees = employees.filter(e => {
+  const filtered = employees.filter(e => {
     const matchSearch = e.name.toLowerCase().includes(search.toLowerCase()) || e.username.toLowerCase().includes(search.toLowerCase());
+    const matchStatus = statusFilter === 'all' ? true : statusFilter === 'active' ? e.isActive : !e.isActive;
     const matchBranchType = branchTypeFilter === 'all' || (e as any).branchType === branchTypeFilter;
     const matchBranchLoc = branchLocId === 'all' || String((e as any).branchId) === branchLocId;
-    return matchSearch && matchBranchType && matchBranchLoc;
+    return matchSearch && matchStatus && matchBranchType && matchBranchLoc;
   });
-  const filtered = matchingEmployees.filter(e => (
-    statusFilter === 'all' || (statusFilter === 'active' ? e.isActive : !e.isActive)
-  ));
 
   const { sorted, sort } = useTableSort(filtered, {
     employee: (e: any) => e.name,
@@ -410,14 +407,11 @@ export default function Employees() {
     salary: (e: any) => Number(e.salary || 0),
     status: (e: any) => statusLabel(e),
   });
-  const { pageRows, pagerProps } = useClientPage(sorted);
 
-  const activeCount   = filtered.filter(e => e.isActive).length;
-  const inactiveCount = filtered.filter(e => !e.isActive).length;
-  const activeFilterCount = matchingEmployees.filter(e => e.isActive).length;
-  const inactiveFilterCount = matchingEmployees.filter(e => !e.isActive).length;
+  const activeCount   = employees.filter(e => e.isActive).length;
+  const inactiveCount = employees.filter(e => !e.isActive).length;
   const currentDays = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate();
-  const activeMonthlySalary = filtered.filter(e => e.isActive).reduce((sum, e) => {
+  const activeMonthlySalary = employees.filter(e => e.isActive).reduce((sum, e) => {
     const wage = (e as any).dailyWage;
     return sum + (wage == null ? Number((e as any).salary || 0) : Number(wage) * currentDays);
   }, 0);
@@ -458,7 +452,7 @@ export default function Employees() {
         />
 
         <SummaryCardGrid>
-          <SummaryCard label="Total Employees" value={String(filtered.length)} icon={Users} loading={isLoading} />
+          <SummaryCard label="Total Employees" value={String(employees.length)} icon={Users} loading={isLoading} />
           <SummaryCard label="Active" value={String(activeCount)} icon={UserCheck} tone="positive" loading={isLoading} />
           <SummaryCard label="Resigned / Left" value={String(inactiveCount)} icon={UserMinus} tone="warning" loading={isLoading} />
           <SummaryCard label="Active Monthly Basic" value={`₹${activeMonthlySalary.toLocaleString('en-IN')}`} icon={Wallet} tone="info" loading={isLoading} />
@@ -466,23 +460,18 @@ export default function Employees() {
 
         {/* Filters */}
         <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-center flex-wrap">
-          <div
-            role="group"
-            aria-label="Employee status"
-            className="flex items-center gap-1 p-1 bg-muted/30 rounded-lg border border-border"
-          >
+          <div className="flex items-center gap-1 p-1 bg-muted/30 rounded-lg border border-border">
             {(['all', 'active', 'inactive'] as StatusFilter[]).map(s => (
               <button
                 key={s}
-                onClick={() => { setStatusFilter(s); pagerProps.onPageChange(1); }}
-                aria-pressed={statusFilter === s}
+                onClick={() => setStatusFilter(s)}
                 className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${statusFilter === s ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
               >
-                {s === 'all' ? `All (${matchingEmployees.length})` : s === 'active' ? `Active (${activeFilterCount})` : `Resigned (${inactiveFilterCount})`}
+                {s === 'all' ? `All (${employees.length})` : s === 'active' ? `Active (${activeCount})` : `Resigned (${inactiveCount})`}
               </button>
             ))}
           </div>
-          <Select value={branchTypeFilter} onValueChange={v => { setBranchTypeFilter(v); setBranchLocId('all'); pagerProps.onPageChange(1); }}>
+          <Select value={branchTypeFilter} onValueChange={v => { setBranchTypeFilter(v); setBranchLocId('all'); }}>
             <SelectTrigger className="h-7 w-38 text-xs"><SelectValue placeholder="All Branches" /></SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All Branches</SelectItem>
@@ -492,7 +481,7 @@ export default function Employees() {
             </SelectContent>
           </Select>
           {branchTypeFilter === 'warehouse' && (
-            <Select value={branchLocId} onValueChange={v => { setBranchLocId(v); pagerProps.onPageChange(1); }}>
+            <Select value={branchLocId} onValueChange={setBranchLocId}>
               <SelectTrigger className="h-7 w-44 text-xs"><SelectValue placeholder="All Warehouses" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All Warehouses</SelectItem>
@@ -501,7 +490,7 @@ export default function Employees() {
             </Select>
           )}
           {branchTypeFilter === 'outlet' && (
-            <Select value={branchLocId} onValueChange={v => { setBranchLocId(v); pagerProps.onPageChange(1); }}>
+            <Select value={branchLocId} onValueChange={setBranchLocId}>
               <SelectTrigger className="h-7 w-44 text-xs"><SelectValue placeholder="All Outlets" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All Outlets</SelectItem>
@@ -514,7 +503,7 @@ export default function Employees() {
         <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
           <div className="p-4 border-b border-border flex items-center gap-2 bg-muted/20">
             <Search className="w-4 h-4 text-muted-foreground" />
-            <Input placeholder="Search name or username..." value={search} onChange={e => { setSearch(e.target.value); pagerProps.onPageChange(1); }} className="border-transparent bg-transparent focus-visible:ring-0 max-w-xs max-md:max-w-full" />
+            <Input placeholder="Search name or username..." value={search} onChange={e => setSearch(e.target.value)} className="border-transparent bg-transparent focus-visible:ring-0 max-w-xs max-md:max-w-full" />
           </div>
           <Table>
             <TableHeader>
@@ -534,7 +523,7 @@ export default function Employees() {
                 <TableRow><TableCell colSpan={6} className="p-0">
                   <EmptyState icon={Users} title="No employees found" hint={search ? 'No employees match your search or filters.' : 'Add your first employee to get started.'} compact />
                 </TableCell></TableRow>
-              ) : pageRows.map(emp => (
+              ) : sorted.map(emp => (
                 <TableRow key={emp.id} className={`hover:bg-muted/10 ${!emp.isActive ? 'opacity-60' : ''}`}>
                   <TableCell>
                     <div className="flex items-center gap-3">
@@ -602,7 +591,6 @@ export default function Employees() {
               ))}
             </TableBody>
           </Table>
-          <TablePager {...pagerProps} className="border-t border-border px-4" />
         </div>
       </div>
 

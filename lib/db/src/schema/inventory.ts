@@ -30,7 +30,6 @@ export const itemsTable = pgTable("items", {
   unit: text("unit").notNull(),
   description: text("description"),
   productionStock: numeric("production_stock", { precision: 10, scale: 3 }).notNull().default("0"),
-  lockingRate: numeric("locking_rate", { precision: 10, scale: 2 }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
 });

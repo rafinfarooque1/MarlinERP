@@ -12,7 +12,6 @@ import { isIsoDate } from "../lib/dateInput";
 import { getLocationFilter, getPostingLocationFilter } from "../lib/requestLocation";
 import { visibleLocationSql } from "../lib/warehouseVisibility";
 import { buildDashboardCashBankReport } from "../lib/dashboardCashBankReport";
-import { isLevelOneAdmin } from "../lib/adminGate";
 
 const router = Router();
 
@@ -464,99 +463,6 @@ router.get("/dashboard/sales-trend", requireModuleView("page:/"), async (req, re
     ORDER BY s.sale_date
   `, f.params);
   res.json(rows);
-});
-
-router.get("/dashboard/unpaid-sales-bills", requireModuleView("page:/"), async (req, res): Promise<void> => {
-  const { scope, viewLoc } = await dashboardScope(req);
-  const locationTypeExpr = "COALESCE(s.location_type, 'outlet')";
-  const locationIdExpr = "COALESCE(s.location_id, s.outlet_id)";
-  const conditions = [
-    "s.branch_transfer_id IS NULL",
-    "s.cancelled_at IS NULL",
-    visibleLocationSql(locationTypeExpr, locationIdExpr),
-  ];
-  const params: unknown[] = [];
-  pushLocationFilter(conditions, params, viewLoc, locationTypeExpr, locationIdExpr);
-  if (!scope.isHeadOffice) {
-    conditions.push(scopeLocWhere(scope, params, locationTypeExpr, locationIdExpr));
-  }
-
-  const rawLocationKeys = typeof req.query.locationKeys === "string"
-    ? req.query.locationKeys.trim()
-    : "";
-  if (rawLocationKeys === "none") {
-    res.json({ salespeople: [], rows: [] });
-    return;
-  }
-  if (rawLocationKeys) {
-    const keys = rawLocationKeys.split(",").map((key) => key.trim());
-    if (keys.some((key) => !/^(headoffice|(?:warehouse|outlet):[1-9]\d*)$/.test(key))) {
-      res.status(400).json({ error: "locationKeys must contain headoffice, warehouse:<id>, or outlet:<id>" });
-      return;
-    }
-    const locationConditions = keys.map((key) => {
-      if (key === "headoffice") return `${locationTypeExpr} = 'headoffice'`;
-      const [type, rawId] = key.split(":");
-      params.push(type);
-      const typeParam = params.length;
-      params.push(Number(rawId));
-      const idParam = params.length;
-      return `(${locationTypeExpr} = $${typeParam} AND ${locationIdExpr} = $${idParam})`;
-    });
-    conditions.push(`(${locationConditions.join(" OR ")})`);
-  }
-
-  const where = conditions.join(" AND ");
-  const [salespeopleResult, billsResult] = await Promise.all([
-    pool.query<any>(
-      `SELECT DISTINCT ON (s.salesperson_employee_id)
-              s.salesperson_employee_id,
-              CASE WHEN s.salesperson_employee_id IS NULL THEN 'Unassigned'
-                   ELSE COALESCE(NULLIF(TRIM(s.salesperson), ''), 'Unassigned') END AS salesperson_name
-         FROM sales s
-        WHERE ${where}
-        ORDER BY s.salesperson_employee_id NULLS LAST, s.sale_date DESC, s.id DESC`,
-      params,
-    ),
-    pool.query<any>(
-      `SELECT s.id AS sale_id,
-              s.salesperson_employee_id,
-              CASE WHEN s.salesperson_employee_id IS NULL THEN 'Unassigned'
-                   ELSE COALESCE(NULLIF(TRIM(s.salesperson), ''), 'Unassigned') END AS salesperson_name,
-              COALESCE(NULLIF(TRIM(c.name), ''), 'Walk-in') AS customer_name,
-              COALESCE(NULLIF(TRIM(s.invoice_number), ''), '#' || s.id::text) AS invoice_number,
-               COALESCE(w.name, o.name,
-                 CASE WHEN ${locationTypeExpr} = 'headoffice' THEN 'Head Office' ELSE 'Unknown' END
-               ) AS location_name,
-               s.total_amount::numeric AS bill_amount,
-              ${outstandingExpr("s")} AS unpaid_amount
-         FROM sales s
-         LEFT JOIN customers c ON c.id = s.customer_id
-          LEFT JOIN warehouses w ON ${locationTypeExpr} = 'warehouse' AND w.id = ${locationIdExpr}
-          LEFT JOIN outlets o ON ${locationTypeExpr} = 'outlet' AND o.id = ${locationIdExpr}
-        WHERE ${where}
-          AND ${outstandingExpr("s")} > 0.005
-        ORDER BY salesperson_name, customer_name, s.sale_date, s.id`,
-      params,
-    ),
-  ]);
-
-  res.json({
-    salespeople: salespeopleResult.rows.map((row: any) => ({
-      employeeId: row.salesperson_employee_id == null ? null : Number(row.salesperson_employee_id),
-      name: String(row.salesperson_name ?? "Unassigned"),
-    })),
-    rows: billsResult.rows.map((row: any) => ({
-      saleId: Number(row.sale_id),
-      salespersonEmployeeId: row.salesperson_employee_id == null ? null : Number(row.salesperson_employee_id),
-      salespersonName: String(row.salesperson_name ?? "Unassigned"),
-      customerName: String(row.customer_name ?? "Walk-in"),
-      invoiceNumber: String(row.invoice_number ?? `#${row.sale_id}`),
-      locationName: String(row.location_name ?? "Unknown"),
-      billAmount: Number(row.bill_amount ?? 0),
-      unpaidAmount: Number(row.unpaid_amount ?? 0),
-    })),
-  });
 });
 
 router.get("/dashboard/top-items", requireModuleView("page:/"), async (req, res): Promise<void> => {
@@ -1027,9 +933,8 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
     "delete",
   );
 
-  // Base location list for cross-location dashboard reports. LBAC is always
-  // applied here; the Sales & Outstanding and Expense Details sections narrow
-  // this list further when the dashboard has an explicit location selection.
+  // Cross-location financial matrix: span active locations in the caller's
+  // server-derived data scope, independent of the dashboard's display filter.
   const { rows: matrixLocationRows } = await pool.query(`
     SELECT location_type, location_id, name
       FROM (
@@ -1057,28 +962,10 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
     scope.isHeadOffice
       || (location.locationType === "warehouse" && scope.warehouseIds.includes(location.locationId))
       || (location.locationType === "outlet" && scope.outletIds.includes(location.locationId)));
-  const hasDashboardLocationSelection = isNoLocations
-    || requestedLocationKeys.length > 0
-    || typeof q.locationType === "string"
-    || Boolean(headerLoc);
-  const selectedDashboardLocationKeys = new Set(requestedLocationKeys);
-  const dashboardReportLocations = isNoLocations
-    ? []
-    : requestedLocationKeys.length > 0
-      ? matrixLocations.filter((location) =>
-          selectedDashboardLocationKeys.has(locationKey(location.locationType, location.locationId)))
-      : hasDashboardLocationSelection
-        ? effLocType
-          ? matrixLocations.filter((location) =>
-              location.locationType === effLocType
-              && (effLocType === "headoffice" || location.locationId === effLocId))
-          : []
-        : matrixLocations;
 
-  // The source queries are constrained to caller-authorized locations. The
-  // response below narrows their grouped rows to dashboardReportLocations.
-  // Sales follow the selected period; outstanding is the receivables ledger
-  // position as of the range end.
+  // This location table spans the caller's server-authorized locations, like
+  // the financial matrix, independent of the selected display location. Sales
+  // follow the dashboard's selected period; outstanding is an as-of position.
   const reportSalesConds = [
     "s.branch_transfer_id IS NULL",
     "s.cancelled_at IS NULL",
@@ -1115,50 +1002,33 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       GROUP BY 1, 2, 3`,
     reportSalesParams,
   );
-  const reportSalesBySalespersonP = (() => {
-    const params: unknown[] = [fromDate || "", toDate || ""];
-    const conditions = [
-      "s.branch_transfer_id IS NULL",
-      "s.cancelled_at IS NULL",
-      visibleLocationSql("COALESCE(s.location_type, 'outlet')", "COALESCE(s.location_id, s.outlet_id)"),
-      `s.sale_date::date <= COALESCE(NULLIF($2, '')::date, CURRENT_DATE)`,
-    ];
-    const allowedLocationKeys = dashboardReportLocations.map((location) =>
-      locationKey(location.locationType, location.locationId));
-    params.push(allowedLocationKeys);
-    conditions.push(
-      `CONCAT(COALESCE(s.location_type, 'outlet'), ':', COALESCE(s.location_id, s.outlet_id)) = ANY($3::text[])`,
-    );
-    if (!scope.isHeadOffice) conditions.push(scopeSalesWhere(scope, params));
-    const inPeriod = `($1 = '' OR s.sale_date::date >= $1::date)
-      AND ($2 = '' OR s.sale_date::date <= $2::date)`;
-    const asOf = toDate ? "$2" : "CURRENT_DATE";
-    return pool.query(
-      `SELECT s.salesperson_employee_id AS employee_id,
-              COALESCE(
-                (ARRAY_AGG(NULLIF(TRIM(s.salesperson), '') ORDER BY s.sale_date DESC, s.id DESC)
-                  FILTER (WHERE NULLIF(TRIM(s.salesperson), '') IS NOT NULL))[1],
-                'Unassigned'
-              ) AS name,
-              COALESCE(SUM(CASE WHEN ${inPeriod} THEN s.total_amount::numeric ELSE 0 END), 0)::float AS sales_amount,
-              COALESCE(SUM(CASE WHEN ${inPeriod} THEN line_totals.quantity ELSE 0 END), 0)::float AS sales_quantity,
-              COALESCE(SUM(CASE WHEN s.customer_id IS NOT NULL
-                                THEN ${outstandingAsOfExpr("s", asOf)} ELSE 0 END), 0)::float AS outstanding_amount
-         FROM sales s
-         LEFT JOIN LATERAL (
-           SELECT COALESCE(SUM((li->>'quantity')::numeric), 0) AS quantity
-             FROM jsonb_array_elements(COALESCE(s.line_items, '[]'::jsonb)) AS li
-         ) line_totals ON TRUE
-        WHERE ${conditions.join(" AND ")}
-         GROUP BY s.salesperson_employee_id
-       HAVING COALESCE(SUM(CASE WHEN ${inPeriod} THEN s.total_amount::numeric ELSE 0 END), 0) <> 0
-           OR COALESCE(SUM(CASE WHEN ${inPeriod} THEN line_totals.quantity ELSE 0 END), 0) <> 0
-           OR COALESCE(SUM(CASE WHEN s.customer_id IS NOT NULL
-                                THEN ${outstandingAsOfExpr("s", asOf)} ELSE 0 END), 0) <> 0
-        ORDER BY sales_amount DESC, name`,
-      params,
-    );
-  })();
+
+  const reportOutstandingConds = [
+    "s.branch_transfer_id IS NULL",
+    "s.cancelled_at IS NULL",
+    visibleLocationSql("COALESCE(s.location_type, 'outlet')", "COALESCE(s.location_id, s.outlet_id)"),
+  ];
+  const reportOutstandingParams: unknown[] = [];
+  let reportOutstandingExpr = outstandingExpr("s");
+  if (toDate) {
+    reportOutstandingParams.push(toDate);
+    const asOfParam = `$${reportOutstandingParams.length}`;
+    reportOutstandingExpr = outstandingAsOfExpr("s", asOfParam);
+    reportOutstandingConds.push(`s.sale_date::date <= ${asOfParam}::date`);
+  }
+  reportOutstandingConds.push(`${reportOutstandingExpr} > 0.009`);
+  if (!scope.isHeadOffice) {
+    reportOutstandingConds.push(scopeSalesWhere(scope, reportOutstandingParams));
+  }
+  const reportOutstandingByLocationP = pool.query(
+    `SELECT COALESCE(s.location_type, 'outlet') AS location_type,
+            COALESCE(s.location_id, s.outlet_id) AS location_id,
+            COALESCE(SUM(${reportOutstandingExpr}), 0)::float AS outstanding_amount
+       FROM sales s
+      WHERE ${reportOutstandingConds.join(" AND ")}
+      GROUP BY 1, 2`,
+    reportOutstandingParams,
+  );
 
   const matrixOpeningToDate = fromDate
     ? (() => {
@@ -1171,20 +1041,6 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
     cachedPostings(toDate ? { toDate } : {}),
     ledgerSubtreeLookup(),
   ]);
-  const expenseLedgerIds = new Set([
-    ...matrixSubtree("SYS-DIREXP"),
-    ...matrixSubtree("SYS-INDEXP"),
-  ]);
-  const filterPaidExpenseLedgers = (
-    breakdown: ReturnType<typeof rangeCashExpensesByLedger>,
-  ) => {
-    const ledgers = breakdown.ledgers.filter((ledger) =>
-      expenseLedgerIds.has(ledger.ledgerId) && money(ledger.amount) !== 0);
-    return {
-      total: money(ledgers.reduce((sum, ledger) => sum + ledger.amount, 0)),
-      ledgers,
-    };
-  };
   const cashBankReportP = buildDashboardCashBankReport({
     postings: matrixPostings as never[],
     fromDate: fromDate || null,
@@ -1194,7 +1050,7 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
     cashLedgerIds: matrixSubtree("STD-CASH"),
     bankLedgerIds: matrixSubtree("STD-BANK"),
   });
-  const matrixLocationFiguresP = Promise.all(dashboardReportLocations.map(async (location) => {
+  const matrixLocationFiguresP = Promise.all(matrixLocations.map(async (location) => {
     const postingLocation = location.locationType === "headoffice"
       ? ({ type: "headoffice", id: null } as const)
       : ({ type: location.locationType as "warehouse" | "outlet", id: location.locationId } as const);
@@ -1220,12 +1076,8 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
     };
     const cashReceiptBreakdown = rangeCashReceiptBreakdown(matrixPostings as never[], flowOptions);
     const bankReceiptBreakdown = rangeBankReceiptBreakdown(matrixPostings as never[], flowOptions);
-    const cashExpenseBreakdown = filterPaidExpenseLedgers(
-      rangeCashExpensesByLedger(matrixPostings as never[], flowOptions),
-    );
-    const bankExpenseBreakdown = filterPaidExpenseLedgers(
-      rangeBankExpensesByLedger(matrixPostings as never[], flowOptions),
-    );
+    const cashExpenseBreakdown = rangeCashExpensesByLedger(matrixPostings as never[], flowOptions);
+    const bankExpenseBreakdown = rangeBankExpensesByLedger(matrixPostings as never[], flowOptions);
     return {
       location,
       financials,
@@ -1242,17 +1094,13 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       reconciliationPending,
     };
   }));
-  const [matrixLocationFigures, reportSalesByLocation, reportSalesBySalesperson, cashBankReport] = await Promise.all([
+  const [matrixLocationFigures, reportSalesByLocation, reportOutstandingByLocation, cashBankReport] = await Promise.all([
     matrixLocationFiguresP,
     reportSalesByLocationP,
-    reportSalesBySalespersonP,
+    reportOutstandingByLocationP,
     cashBankReportP,
   ]);
 
-  const matrixFinancialsByLocation = new Map(matrixLocationFigures.map((figure) => [
-    locationKey(figure.location.locationType, figure.location.locationId),
-    figure.financials,
-  ]));
   const reportSalesByLocationMap = new Map<string, { salesAmount: number; salesQuantity: number }>();
   for (const row of reportSalesByLocation.rows) {
     reportSalesByLocationMap.set(locationKey(String(row.location_type), row.location_id), {
@@ -1260,20 +1108,29 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       salesQuantity: qty(row.sales_quantity),
     });
   }
-  const locationSalesReport = dashboardReportLocations.map((location) => {
+  const reportOutstandingByLocationMap = new Map<string, number>();
+  for (const row of reportOutstandingByLocation.rows) {
+    reportOutstandingByLocationMap.set(
+      locationKey(String(row.location_type), row.location_id),
+      money(row.outstanding_amount),
+    );
+  }
+  const locationSalesReport = matrixLocations.map((location) => {
     const key = locationKey(location.locationType, location.locationId);
     const sales = reportSalesByLocationMap.get(key);
     return {
       ...location,
       salesAmount: sales?.salesAmount ?? 0,
       salesQuantity: sales?.salesQuantity ?? 0,
-      outstandingAmount: money(matrixFinancialsByLocation.get(key)?.accountsReceivable ?? 0),
+      outstandingAmount: reportOutstandingByLocationMap.get(key) ?? 0,
     };
   });
 
-  // In an unfiltered all-location view, company-level openings and unlocated
-  // postings are a separate bucket. Keep it out of explicit location selections.
-  if (scope.isHeadOffice && !hasDashboardLocationSelection) {
+  // Company-level openings and unlocated postings are a separate posting
+  // bucket, not part of any branch slice. Only callers with company-wide data
+  // scope may see it; adding it as a matrix column makes the location slices
+  // plus this bucket reconcile to the consolidated cash/bank position.
+  if (scope.isHeadOffice) {
     const location = { locationType: "company", locationId: 0, name: "Unallocated" };
     const postingLocation = { type: "company", id: null } as const;
     const [financials, opening, reconciliationPending] = await Promise.all([
@@ -1298,14 +1155,10 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
     };
     const cashReceiptBreakdown = rangeCashReceiptBreakdown(matrixPostings as never[], flowOptions);
     const bankReceiptBreakdown = rangeBankReceiptBreakdown(matrixPostings as never[], flowOptions);
-    const cashExpenseBreakdown = filterPaidExpenseLedgers(
-      rangeCashExpensesByLedger(matrixPostings as never[], {
-        ...flowOptions,
-      }),
-    );
-    const bankExpenseBreakdown = filterPaidExpenseLedgers(
-      rangeBankExpensesByLedger(matrixPostings as never[], flowOptions),
-    );
+    const cashExpenseBreakdown = rangeCashExpensesByLedger(matrixPostings as never[], {
+      ...flowOptions,
+    });
+    const bankExpenseBreakdown = rangeBankExpensesByLedger(matrixPostings as never[], flowOptions);
     matrixLocationFigures.push({
       location,
       financials,
@@ -1321,153 +1174,11 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       bankExpenseLedgers: bankExpenseBreakdown.ledgers,
       reconciliationPending,
     });
-    matrixFinancialsByLocation.set(locationKey(location.locationType, location.locationId), financials);
-    const unallocatedReceivables = money(financials.accountsReceivable);
-    if (unallocatedReceivables !== 0) {
-      locationSalesReport.push({
-        ...location,
-        salesAmount: 0,
-        salesQuantity: 0,
-        outstandingAmount: unallocatedReceivables,
-      });
-    }
   }
-  const employeeSalesReport = reportSalesBySalesperson.rows.map((row: any) => ({
-    employeeId: row.employee_id == null ? null : Number(row.employee_id),
-    name: String(row.name ?? "Unassigned"),
-    salesAmount: money(row.sales_amount),
-    salesQuantity: qty(row.sales_quantity),
-    outstandingAmount: money(row.outstanding_amount),
-  }));
-  const invoiceOutstandingByEmployee = money(employeeSalesReport.reduce(
-    (sum: number, row: { outstandingAmount: number }) => sum + row.outstandingAmount, 0,
-  ));
-  const ledgerOutstandingInScope = money(locationSalesReport.reduce(
-    (sum: number, row: { outstandingAmount: number }) => sum + row.outstandingAmount, 0,
-  ));
-  const employeeSalesLedgerAdjustment = money(ledgerOutstandingInScope - invoiceOutstandingByEmployee);
-
-  // The combined daily sheet is returned only to level-1 Administrators.
-  // Its Due columns use the same location-sliced receivables ledger balance as
-  // the Balance Sheet, not invoice-only exposure.
-  const adminDailyReport = await (async () => {
-    if (!(await isLevelOneAdmin(emp))) return undefined;
-    const allowedKeys = dashboardReportLocations.map((location) =>
-      locationKey(location.locationType, location.locationId));
-    const openingDueByLocation = await Promise.all(matrixLocationFigures.map(async ({ location }) => {
-      const postingLocation = location.locationType === "headoffice"
-        ? ({ type: "headoffice", id: null } as const)
-        : location.locationType === "company"
-          ? ({ type: "company", id: null } as const)
-          : ({ type: location.locationType as "warehouse" | "outlet", id: location.locationId } as const);
-      const opening = matrixOpeningToDate
-        ? await companyBalances(cachedPostings, { toDate: matrixOpeningToDate, location: postingLocation })
-        : { accountsReceivable: 0 };
-      return { ...location, amount: money(opening.accountsReceivable) };
-    }));
-    const expenseLedgerIds = [...matrixSubtree("SYS-DIREXP"), ...matrixSubtree("SYS-INDEXP")];
-    const creditParams: unknown[] = [fromDate || null, toDate || null, allowedKeys];
-    const creditRange = `($1::date IS NULL OR s.sale_date >= $1::date)
-      AND ($2::date IS NULL OR s.sale_date <= $2::date)`;
-    const creditLocation = `CONCAT(COALESCE(s.location_type, 'outlet'), ':', COALESCE(s.location_id, s.outlet_id)) = ANY($3::text[])`;
-    const [receivedRows, creditSaleRows, expenseRows, locationExpenseRows] = await Promise.all([
-      pool.query(
-        `SELECT COALESCE(s.location_type, 'outlet') AS location_type,
-                COALESCE(s.location_id, s.outlet_id) AS location_id,
-                COALESCE(SUM(sp.amount::numeric), 0)::float AS amount
-           FROM sale_payments sp
-           JOIN sales s ON s.id = sp.sale_id
-          WHERE s.cancelled_at IS NULL AND s.branch_transfer_id IS NULL
-            AND s.payment_mode = 'credit'
-            AND sp.method <> 'advance'
-            AND ($1::date IS NULL OR sp.payment_date::date >= $1::date)
-            AND ($2::date IS NULL OR sp.payment_date::date <= $2::date)
-            AND ${creditLocation}
-          GROUP BY 1, 2`,
-        creditParams,
-      ),
-      pool.query(
-        `SELECT COALESCE(s.location_type, 'outlet') AS location_type,
-                COALESCE(s.location_id, s.outlet_id) AS location_id,
-                COALESCE(SUM(${outstandingAsOfExpr("s", toDate ? "$2" : "CURRENT_DATE")}), 0)::float AS amount
-           FROM sales s
-          WHERE s.cancelled_at IS NULL AND s.branch_transfer_id IS NULL
-            AND s.payment_mode = 'credit' AND ${creditRange} AND ${creditLocation}
-          GROUP BY 1, 2`,
-        creditParams,
-      ),
-      pool.query(
-        `SELECT e.id, e.expense_date AS date, COALESCE(e.description, '') AS narration,
-                e.amount::float AS amount,
-                COALESCE(e.location_type, 'headoffice') AS location_type,
-                COALESCE(e.location_id, 0) AS location_id,
-                COALESCE(w.name, o.name, 'Head Office') AS location_name
-           FROM expenses e
-           LEFT JOIN warehouses w ON e.location_type = 'warehouse' AND w.id = e.location_id
-           LEFT JOIN outlets o ON e.location_type = 'outlet' AND o.id = e.location_id
-          WHERE ($1::date IS NULL OR e.expense_date >= $1::date)
-            AND ($2::date IS NULL OR e.expense_date <= $2::date)
-            AND CONCAT(COALESCE(e.location_type, 'headoffice'), ':', COALESCE(e.location_id, 0)) = ANY($3::text[])
-          ORDER BY e.expense_date, e.id`,
-        creditParams,
-      ),
-      pool.query(
-        `SELECT p.id, p.payment_date AS date, COALESCE(p.narration, '') AS narration,
-                p.amount::float AS amount,
-                COALESCE(p.location_type, 'headoffice') AS location_type,
-                COALESCE(p.location_id, 0) AS location_id,
-                COALESCE(w.name, o.name, 'Head Office') AS location_name
-           FROM payments p
-           LEFT JOIN warehouses w ON p.location_type = 'warehouse' AND w.id = p.location_id
-           LEFT JOIN outlets o ON p.location_type = 'outlet' AND o.id = p.location_id
-          WHERE ($1::date IS NULL OR p.payment_date::date >= $1::date)
-            AND ($2::date IS NULL OR p.payment_date::date <= $2::date)
-            AND CONCAT(COALESCE(p.location_type, 'headoffice'), ':', COALESCE(p.location_id, 0)) = ANY($3::text[])
-            AND p.paid_to_ledger_id = ANY($4::int[])
-          ORDER BY p.payment_date, p.id`,
-        [...creditParams, expenseLedgerIds],
-      ),
-    ]);
-    const amountMap = (rows: any[]) => new Map(rows.map((row) => [
-      locationKey(String(row.location_type), Number(row.location_id)),
-      money(row.amount),
-    ]));
-    const receivedByLocation = amountMap(receivedRows.rows);
-    const creditSaleByLocation = amountMap(creditSaleRows.rows);
-    return {
-      openingDueByLocation,
-      creditReceivedByLocation: dashboardReportLocations.map((location) => ({
-        ...location,
-        amount: receivedByLocation.get(locationKey(location.locationType, location.locationId)) ?? 0,
-      })),
-      creditSaleByLocation: dashboardReportLocations.map((location) => ({
-        ...location,
-        amount: creditSaleByLocation.get(locationKey(location.locationType, location.locationId)) ?? 0,
-      })),
-        expenses: [
-        ...expenseRows.rows.map((row: any) => ({
-        id: Number(row.id),
-        source: "direct" as const,
-        date: asISODate(row.date),
-        narration: String(row.narration || "—"),
-        amount: money(row.amount),
-        locationType: String(row.location_type),
-        locationId: Number(row.location_id),
-        locationName: String(row.location_name),
-        })),
-        ...locationExpenseRows.rows.map((row: any) => ({
-          id: Number(row.id),
-          source: "payment" as const,
-          date: asISODate(row.date),
-          narration: String(row.narration || "—"),
-          amount: money(row.amount),
-          locationType: String(row.location_type),
-          locationId: Number(row.location_id),
-          locationName: String(row.location_name),
-        })),
-      ].sort((a, b) => a.date.localeCompare(b.date) || a.id - b.id),
-    };
-  })();
+  const matrixFinancialsByLocation = new Map(matrixLocationFigures.map((figure) => [
+    locationKey(figure.location.locationType, figure.location.locationId),
+    figure.financials,
+  ]));
 
   const matrixOpeningCash = matrixLocationFigures.map((figure) => figure.openingCash);
   const matrixCashReceiptBySale = matrixLocationFigures.map((figure) => figure.cashReceiptBySale);
@@ -1493,9 +1204,7 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
   const matrixExpenseDefinitions = new Map<number, { name: string; code: string | null }>();
   for (const { financials, cashExpenseLedgers, bankExpenseLedgers } of matrixLocationFigures) {
     for (const ledger of financials.expenses.ledgers) {
-      if (expenseLedgerIds.has(ledger.ledgerId)) {
-        matrixExpenseDefinitions.set(ledger.ledgerId, { name: ledger.name, code: ledger.code });
-      }
+      matrixExpenseDefinitions.set(ledger.ledgerId, { name: ledger.name, code: ledger.code });
     }
     for (const ledger of [...cashExpenseLedgers, ...bankExpenseLedgers]) {
       if (!matrixExpenseDefinitions.has(ledger.ledgerId)) {
@@ -1762,8 +1471,6 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
         // "Cost of Goods Sold" line for the same range and location.
         cogs: accounting ? accounting.profit.cogs : null,
         companyWide: !postingLoc,
-        reliable: accounting?.profit.reliable ?? false,
-        note: accounting?.profit.note ?? "Profit could not be established for this period.",
       },
     } : {}),
     // Bank only — physical cash stays in the separate `cash` figures, matching
@@ -1782,13 +1489,10 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
     todayMoney: moneyFlows,
     cashBankReport,
     financialMatrix,
-    ...(adminDailyReport ? { adminDailyReport } : {}),
     locationBreakdown: showDashboardProfit
       ? locationBreakdown
       : locationBreakdown.map(({ grossProfit: _grossProfit, netProfit: _netProfit, ...safe }) => safe),
     locationSalesReport,
-    employeeSalesReport,
-    employeeSalesLedgerAdjustment,
     topItems: topItemsRows.rows.map((r: any) => ({
       itemId: Number(r.item_id), name: r.name, qty: qty(r.qty), revenue: money(r.revenue),
     })),

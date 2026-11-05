@@ -1,8 +1,7 @@
 import { useState } from 'react';
 import {
   useGetGstSummaryScoped, useGetGstDocuments, useGetGstFilters,
-  getGetGstItemWiseSummaryQueryKey,
-  useGetGstItemWiseSummary, type GstDocumentRow, type GstItemWiseRow,
+  type GstDocumentRow,
 } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Input } from '@/components/ui/input';
@@ -21,11 +20,6 @@ import { PageHeader } from '@/components/app/page-header';
 import { SummaryCard, SummaryCardGrid } from '@/components/app/summary-card';
 import { EmptyState } from '@/components/app/empty-state';
 import { TableSkeleton } from '@/components/app/loading-skeletons';
-import { Checkbox } from '@/components/ui/checkbox';
-import {
-  GST_ITEMWISE_INWARD_PDF_COLUMNS, GST_ITEMWISE_OUTWARD_PDF_COLUMNS,
-  GstItemWiseTable, gstItemWiseCsvRow, gstItemWisePdfRow,
-} from './GstItemWiseReport';
 
 const fmt = (n: number) => `₹${Math.abs(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
@@ -157,14 +151,10 @@ export default function GstSummary() {
   const [fromDate, setFromDate] = useState(`${now.getFullYear()}-04-01`);
   const [toDate, setToDate] = useState(now.toISOString().split('T')[0]);
   const [scope, setScope] = useState<GstScope>({});
-  const [itemWise, setItemWise] = useState(false);
 
   const params = { fromDate, toDate, ...scope };
   const { data: gst, isLoading } = useGetGstSummaryScoped(params);
   const docs = useGetGstDocuments(params);
-  const itemWiseReport = useGetGstItemWiseSummary(params, {
-    query: { queryKey: getGetGstItemWiseSummaryQueryKey(params), enabled: itemWise },
-  });
   const filters = useGetGstFilters();
 
   const salesData = gst?.salesByRate ?? [];
@@ -172,8 +162,6 @@ export default function GstSummary() {
   const monthWise = gst?.monthWise ?? [];
   const outward = docs.data?.outward ?? [];
   const inward = docs.data?.inward ?? [];
-  const itemWiseOutward: GstItemWiseRow[] = itemWiseReport.data?.outward ?? [];
-  const itemWiseInward: GstItemWiseRow[] = itemWiseReport.data?.inward ?? [];
 
   const totalOutputTax = salesData.reduce((s, r) => s + Number(r.taxAmount || 0), 0);
   const totalInputTax = purchasesData.reduce((s, r) => s + Number(r.taxAmount || 0), 0);
@@ -207,13 +195,6 @@ export default function GstSummary() {
   const scopeText = gstScopeLabel(scope, filters.data?.gstins ?? []);
 
   const exportCsv = () => {
-    if (itemWise) {
-      downloadCSV(`gst-item-wise-${fromDate}-to-${toDate}.csv`, [
-        ...itemWiseOutward.map(r => ({ Section: 'Outward sales', ...gstItemWiseCsvRow(r, true) })),
-        ...itemWiseInward.map(r => ({ Section: 'Inward purchases', ...gstItemWiseCsvRow(r, false) })),
-      ]);
-      return;
-    }
     downloadCSV(`gst-summary-${fromDate}-to-${toDate}.csv`, [
       ...salesData.map(r => ({ Section: 'Output by rate', Detail: `${r.taxRate}%`, Taxable: r.taxableValue, CGST: r.cgst, SGST: r.sgst, IGST: r.igst, 'Total Tax': r.taxAmount })),
       ...purchasesData.map(r => ({ Section: 'Input by rate', Detail: `${r.taxRate}%`, Taxable: r.taxableValue, CGST: r.cgst, SGST: r.sgst, IGST: r.igst, 'Total Tax': r.taxAmount })),
@@ -223,27 +204,6 @@ export default function GstSummary() {
   };
 
   const buildDoc = (): ReportDoc => {
-    if (itemWise) {
-      return {
-        title: 'GST Item-wise Summary',
-        subtitle: `${formatDateOrDash(fromDate)} to ${formatDateOrDash(toDate)}`,
-        metaRows: [['Scope', scopeText]],
-        orientation: 'landscape',
-        sections: [
-          {
-            heading: 'Outward Sales (Item-wise)',
-            columns: GST_ITEMWISE_OUTWARD_PDF_COLUMNS,
-            rows: itemWiseOutward.map(r => gstItemWisePdfRow(r, true)),
-          },
-          {
-            heading: 'Inward Purchases (Item-wise)',
-            columns: GST_ITEMWISE_INWARD_PDF_COLUMNS,
-            rows: itemWiseInward.map(r => gstItemWisePdfRow(r, false)),
-          },
-        ],
-        filename: `gst-item-wise-${fromDate}-to-${toDate}`,
-      };
-    }
     const rateCols = [
       { label: 'Rate' }, { label: 'Taxable', align: 'right' as const },
       { label: 'CGST', align: 'right' as const }, { label: 'SGST', align: 'right' as const },
@@ -296,18 +256,9 @@ export default function GstSummary() {
       <div className="space-y-6">
         <PageHeader
           title="GST Summary"
-          description={itemWise
-            ? "Item-level outward sales and inward purchase GST details"
-            : "Output tax liability vs input tax credit, broken down by rate slab"}
+          description="Output tax liability vs input tax credit, broken down by rate slab"
           icon={Receipt}
-          actions={<ExportButtons
-            onCSV={exportCsv}
-            doc={buildDoc}
-            canDownload={perm.canDownload}
-            disabled={itemWise
-              ? itemWiseReport.isLoading
-              : isLoading || docs.isLoading}
-          />}
+          actions={<ExportButtons onCSV={exportCsv} doc={buildDoc} canDownload={perm.canDownload} disabled={isLoading || docs.isLoading} />}
         />
 
         {/* Filters */}
@@ -318,32 +269,7 @@ export default function GstSummary() {
           <Input type="date" value={toDate} onChange={e => setToDate(e.target.value)} className="w-36" />
         </div>
         <GstScopeFilter value={scope} onChange={setScope} />
-        <label htmlFor="gst-item-wise-toggle" className="inline-flex items-center gap-2 text-sm cursor-pointer">
-          <Checkbox
-            id="gst-item-wise-toggle"
-            checked={itemWise}
-            onCheckedChange={checked => setItemWise(checked === true)}
-          />
-          Item-wise report (sales and purchases)
-        </label>
 
-        {itemWise ? (
-          <div className="space-y-6">
-            <GstItemWiseTable
-              title="Outward Sales (Item-wise)"
-              rows={itemWiseOutward}
-              loading={itemWiseReport.isLoading}
-              outward
-            />
-            <GstItemWiseTable
-              title="Inward Purchases (Item-wise)"
-              rows={itemWiseInward}
-              loading={itemWiseReport.isLoading}
-              outward={false}
-            />
-          </div>
-        ) : (
-        <>
         {/* Summary Cards */}
         <SummaryCardGrid className="lg:grid-cols-3">
           <SummaryCard
@@ -524,8 +450,6 @@ export default function GstSummary() {
           rows={inward}
           loading={docs.isLoading}
         />
-        </>
-        )}
       </div>
     </AppLayout>
   );

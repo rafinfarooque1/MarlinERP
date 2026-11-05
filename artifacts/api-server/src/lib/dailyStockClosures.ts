@@ -86,7 +86,7 @@ async function readBaselineAndClosedThrough(db: Queryable): Promise<{
   );
   if (!state?.baseline_date) {
     throw domainError(
-      "The future-only stock baseline is not available; stock writes are paused until it is established.",
+      "The future-only stock baseline is not available; daily close evidence is paused until it is established.",
       "STOCK_DAILY_BASELINE_MISSING",
       503,
     );
@@ -122,7 +122,7 @@ export async function ensureDailyStockClosures(pool: Pool): Promise<{ closedDate
     const { baselineDate, baselineTimeZone, baselineLedgerId, closedThrough } = await readBaselineAndClosedThrough(client);
     if (timeZone !== baselineTimeZone) {
       throw domainError(
-        `The company timezone changed from ${baselineTimeZone} to ${timeZone} after the stock baseline. Daily closes and stock writes are paused until the baseline policy is reviewed.`,
+        `The company timezone changed from ${baselineTimeZone} to ${timeZone} after the stock baseline. Daily close evidence is paused until the baseline policy is reviewed.`,
         "STOCK_DAILY_TIMEZONE_CHANGED",
         503,
       );
@@ -252,20 +252,12 @@ export async function ensureDailyStockClosures(pool: Pool): Promise<{ closedDate
          INSERT INTO ${ENTRIES_TABLE}
            (close_date, material_type, ref_id, branch_type, branch_id, quantity)
          SELECT d.close_date, k.material_type, k.ref_id, k.branch_type, k.branch_id,
-                 (COALESCE(s.quantity, 0) - COALESCE(f.after_close_qty, 0))::numeric
+                COALESCE(s.quantity, 0)::numeric
            FROM due_dates d
            CROSS JOIN keys k
            LEFT JOIN current_stock s
              ON s.material_type = k.material_type AND s.ref_id = k.ref_id
-             AND s.branch_type = k.branch_type AND s.branch_id = k.branch_id
-            LEFT JOIN LATERAL (
-              SELECT COALESCE(SUM(m.qty_change::numeric), 0)::numeric AS after_close_qty
-                FROM stock_ledger m
-               WHERE m.id > $3::bigint
-                 AND m.material_type = k.material_type AND m.ref_id = k.ref_id
-                 AND m.branch_type = k.branch_type AND m.branch_id = k.branch_id
-                 AND COALESCE(m.txn_date, m.created_at::date) > d.close_date
-            ) f ON TRUE`,
+            AND s.branch_type = k.branch_type AND s.branch_id = k.branch_id`,
         [firstDueDate, throughDate, baselineLedgerId],
       );
       await client.query(
@@ -308,86 +300,23 @@ export async function ensureDailyStockClosures(pool: Pool): Promise<{ closedDate
 }
 
 /**
- * Every stock-ledger writer must call this with its transaction client before
- * committing. It serializes the movement against close capture and refuses
- * writes before the baseline, on closed dates, or while a due close is missing.
+ * Resolve business dates and serialize stock writes against daily snapshot
+ * capture. Daily snapshots are reporting evidence, not a write lock; accounting
+ * period locks are enforced by the owning document routes.
  */
-async function assertDateSetOpenLocked(
+export async function normalizeStockDates(
   db: Queryable,
   dates: Array<string | null | undefined>,
 ): Promise<{ timeZone: string; today: string; normalizedDates: string[] }> {
+  await lockCloseState(db);
   const timeZone = await companyTimeZone(db);
   const today = await companyToday(db, timeZone);
-  const { baselineDate, baselineTimeZone, closedThrough } = await readBaselineAndClosedThrough(db);
-  if (timeZone !== baselineTimeZone) {
-    throw domainError(
-      `The company timezone changed from ${baselineTimeZone} to ${timeZone} after the stock baseline. Daily closes and stock writes are paused until the baseline policy is reviewed.`,
-      "STOCK_DAILY_TIMEZONE_CHANGED",
-      503,
-    );
-  }
-  const dueThrough = addDays(today, -1);
-  const closePending = dueThrough >= baselineDate && (!closedThrough || closedThrough < dueThrough);
-
   const normalizedDates = dates.map((value) => {
     const date = value == null ? today : String(value);
     if (!isIsoDate(date)) throw new Error("Invalid stock business date");
-    if (date < baselineDate) {
-      throw domainError(
-        `Stock changes dated before the new baseline (${baselineDate}) are not supported. Use a current-date correction.`,
-        "STOCK_DATE_BEFORE_BASELINE",
-        409,
-      );
-    }
-    if (closedThrough && date <= closedThrough) {
-      throw domainError(
-        `Stock date ${date} is closed through ${closedThrough}. Backdated changes on closed dates are blocked; use a current-date correction.`,
-        "STOCK_DAILY_DATE_CLOSED",
-        409,
-      );
-    }
-    if (closePending && date <= dueThrough) {
-      throw domainError(
-        `Daily stock close is pending through ${dueThrough}; backdated changes in that unverified interval are blocked. Current-date corrections remain available.`,
-        "STOCK_DAILY_CLOSE_REQUIRED",
-        409,
-      );
-    }
     return date;
   });
   return { timeZone, today, normalizedDates };
-}
-
-export async function assertStockDatesOpen(
-  db: Queryable,
-  dates: Array<string | null | undefined>,
-): Promise<{ timeZone: string; today: string; normalizedDates: string[] }> {
-  await lockCloseState(db);
-  return assertDateSetOpenLocked(db, dates);
-}
-
-/**
- * A document-date edit rewrites existing ledger rows as well as assigning the
- * new date. Both sides must still be open; moving a closed movement forward
- * would otherwise rewrite history while appearing to be a current correction.
- */
-export async function assertStockLedgerRestatementOpen(
-  db: Queryable,
-  docType: string,
-  docId: number,
-  newDate: string,
-): Promise<void> {
-  await lockCloseState(db);
-  const { rows } = await db.query(
-    `SELECT DISTINCT txn_date::text AS txn_date
-       FROM stock_ledger
-      WHERE doc_type = $1 AND doc_id = $2`,
-    [docType, docId],
-  );
-  await assertDateSetOpenLocked(
-    db,
-    [newDate, ...rows.map((row: { txn_date: string | null }) => row.txn_date)],
-  );
 }
 
 let scheduler: NodeJS.Timeout | null = null;

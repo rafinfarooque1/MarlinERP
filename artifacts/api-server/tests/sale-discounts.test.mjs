@@ -17,18 +17,10 @@
  */
 
 import pg from 'pg';
-import bcrypt from 'bcryptjs';
 
 const BASE = process.env.API_URL || 'http://localhost:8080/api';
 const TAG = 'ZZTEST';
 const WH = 2; // Marlin Mangaluru Depot — same warehouse the other suites use
-const TEST_DATE = new Date().toISOString().slice(0, 10);
-const PROBE_USER = 'zztest_locking_rate_admin';
-const PROBE_PASS = 'ZzLockRate#1';
-const PROBE_MANAGER_USER = 'zztest_locking_rate_manager';
-const PROBE_MANAGER_PASS = 'ZzLockRate#2';
-let probeUserId = 0;
-let probeManagerToken = '';
 
 let authToken = '';
 let passed = 0, failed = 0;
@@ -91,9 +83,6 @@ const createdSales = [];
 let preLots = [], preEntries = [], preLotIds = [], preEntryIds = [];
 
 async function cleanup() {
-  if (createdSales.length) {
-    await sql(`DELETE FROM activity_log WHERE entity_type = 'locking_rate_override' AND entity_id = ANY($1::int[])`, [createdSales]);
-  }
   for (const id of createdSales.slice().reverse()) {
     await post(`/sales/${id}/cancel`, {}).catch(() => {});
     const row = await saleRow(id).catch(() => null);
@@ -117,53 +106,14 @@ async function cleanup() {
   await sql(`DELETE FROM account_ledgers WHERE name LIKE $1 AND code LIKE 'VEND-%'`, [`${TAG}%`]);
   await sql(`DELETE FROM vendors WHERE name LIKE $1`, [`${TAG}%`]);
 }
-async function cleanupProbeUser() {
-  await sql(`DELETE FROM login_lockouts WHERE username = $1`, [PROBE_USER]).catch(() => {});
-  await sql(`DELETE FROM login_attempts WHERE username = $1`, [PROBE_USER]).catch(() => {});
-  await sql(`DELETE FROM employees WHERE username = $1`, [PROBE_USER]).catch(() => {});
-  await sql(`DELETE FROM login_lockouts WHERE username = $1`, [PROBE_MANAGER_USER]).catch(() => {});
-  await sql(`DELETE FROM login_attempts WHERE username = $1`, [PROBE_MANAGER_USER]).catch(() => {});
-  await sql(`DELETE FROM employees WHERE username = $1`, [PROBE_MANAGER_USER]).catch(() => {});
-}
 
 // ───────────────────────────────────────────────────────────────────────────
 console.log('\n[0] Authentication and fixtures');
 
-const { rows: [rootAdmin] } = await sql(`SELECT hierarchy_id FROM employees WHERE username='admin'`);
-if (!rootAdmin) throw new Error('No admin row available to create the isolated test user');
-await cleanupProbeUser();
-await sql(
-  `INSERT INTO employees
-     (name, username, password_hash, hierarchy_id, branch_type, branch_id,
-      salary, join_date, is_active, must_change_password)
-   VALUES ($1,$2,$3,$4,'headoffice',0,0,CURRENT_DATE,true,false) RETURNING id`,
-  [`${TAG} Locking Rate Admin`, PROBE_USER, bcrypt.hashSync(PROBE_PASS, 10), rootAdmin.hierarchy_id],
-);
-probeUserId = (await sql(`SELECT id FROM employees WHERE username=$1`, [PROBE_USER])).rows[0].id;
-const loginRes = await post('/auth/login', { username: PROBE_USER, password: PROBE_PASS });
+const loginRes = await post('/auth/login', { username: process.env.TEST_USERNAME || 'admin', password: process.env.TEST_PASSWORD || 'marlin1458' });
 authToken = loginRes.data?.token ?? '';
 assert('Admin login returns a token', !!authToken, `status=${loginRes.status}`);
-if (!authToken) { console.error('FATAL: no token'); await cleanupProbeUser(); process.exit(1); }
-
-const managerHierarchy = (await sql(
-  `SELECT h.id
-     FROM hierarchies h
-     JOIN permissions p ON p.hierarchy_id = h.id
-    WHERE h.level <> 1 AND p.module = 'page:/sales/pos' AND p.can_add = true AND p.can_edit = true
-    ORDER BY h.level, h.id LIMIT 1`,
-)).rows[0];
-if (!managerHierarchy) throw new Error('No non-admin hierarchy with POS add permission is available for the authorization test');
-await sql(
-  `INSERT INTO employees
-     (name, username, password_hash, hierarchy_id, branch_type, branch_id,
-      salary, join_date, is_active, must_change_password)
-   VALUES ($1,$2,$3,$4,'warehouse',$5,0,CURRENT_DATE,true,false)`,
-  [`${TAG} Locking Rate Manager`, PROBE_MANAGER_USER, bcrypt.hashSync(PROBE_MANAGER_PASS, 10), managerHierarchy.id, WH],
-);
-const managerLogin = await post('/auth/login', { username: PROBE_MANAGER_USER, password: PROBE_MANAGER_PASS });
-probeManagerToken = managerLogin.data?.token ?? '';
-assert('Non-admin manager login returns a token', !!probeManagerToken, `status=${managerLogin.status}`);
-if (!probeManagerToken) { console.error('FATAL: no manager token'); await cleanupProbeUser(); process.exit(1); }
+if (!authToken) { console.error('FATAL: no token'); process.exit(1); }
 
 await cleanup(); // in case a previous run died mid-way
 const tbBefore = await snapshotTB();
@@ -201,7 +151,7 @@ preEntryIds = preEntries.map(r => r.id);
 
 for (const [materialId, quantity] of [[fixtures.itemA, 200], [fixtures.itemB, 100]]) {
   const res = await post('/purchases', {
-    vendorId: fixtures.vendorId, purchaseDate: TEST_DATE, vendorInvoiceDate: TEST_DATE,
+    vendorId: fixtures.vendorId, purchaseDate: '2026-07-30', vendorInvoiceDate: '2026-07-29',
     locationType: 'warehouse', locationId: WH,
     lineItems: [{ materialType: 'item', materialId, quantity, unitCost: 50, mfgDate: '2026-07-01', expiryDate: '2027-07-01' }],
   });
@@ -211,7 +161,7 @@ for (const [materialId, quantity] of [[fixtures.itemA, 200], [fixtures.itemB, 10
 
 const salePayload = (lineItems, extra = {}) => ({
   outletId: WH, locationType: 'warehouse', locationId: WH,
-  saleDate: TEST_DATE, paymentMode: 'cash', salespersonEmployeeId: probeUserId, lineItems, ...extra,
+  saleDate: '2026-07-31', paymentMode: 'cash', lineItems, ...extra,
 });
 async function createSale(lineItems, extra = {}) {
   const res = await post('/sales', salePayload(lineItems, extra));
@@ -219,61 +169,6 @@ async function createSale(lineItems, extra = {}) {
   return res;
 }
 const lines = (row) => (typeof row.line_items === 'string' ? JSON.parse(row.line_items) : row.line_items);
-
-console.log('\n[LR] Locking Rate: create/edit discounts and administrator override');
-{
-  await sql(`UPDATE items SET locking_rate = 80 WHERE id = $1`, [fixtures.itemA]);
-  const below = await createSale([{ itemId: fixtures.itemA, quantity: 1, unitPrice: 100, unitDiscount: 21 }]);
-  assert('Employee-style create below the effective floor is refused', below.status === 400 && below.data?.code === 'LOCKING_RATE_BELOW_FLOOR', JSON.stringify(below.data));
-
-  const unauthorizedOverride = await post('/sales', salePayload(
-    [{ itemId: fixtures.itemA, quantity: 1, unitPrice: 100, unitDiscount: 25 }],
-    { overrideLockingRate: true },
-  ), probeManagerToken);
-  assert('A non-admin manager direct API override is rejected',
-    unauthorizedOverride.status === 403, JSON.stringify(unauthorizedOverride.data));
-
-  const atFloor = await createSale([{ itemId: fixtures.itemA, quantity: 1, unitPrice: 100, unitDiscount: 20 }]);
-  assert('Normal sale exactly at the floor succeeds without an override',
-    atFloor.status === 201, JSON.stringify(atFloor.data).slice(0, 160));
-  if (atFloor.status === 201) {
-    const { rows: normalOverrideAudit } = await sql(
-      `SELECT id FROM activity_log WHERE entity_type='locking_rate_override' AND entity_id=$1`,
-      [atFloor.data.id]);
-    assert('Normal at-floor sale creates no override audit entry', normalOverrideAudit.length === 0);
-
-    const unauthorizedEditOverride = await put(`/sales/${atFloor.data.id}`, salePayload(
-      [{ itemId: fixtures.itemA, quantity: 1, unitPrice: 100, unitDiscount: 25 }],
-      { overrideLockingRate: true },
-    ), probeManagerToken);
-    assert('A non-admin manager direct API edit override is rejected',
-      unauthorizedEditOverride.status === 403, JSON.stringify(unauthorizedEditOverride.data));
-  }
-  if (atFloor.status === 201) {
-    const editBelow = await put(`/sales/${atFloor.data.id}`, salePayload(
-      [{ itemId: fixtures.itemA, quantity: 1, unitPrice: 100, unitDiscount: 21 }]));
-    assert('Sale edit below the floor is refused', editBelow.status === 400 && editBelow.data?.code === 'LOCKING_RATE_BELOW_FLOOR', JSON.stringify(editBelow.data));
-
-    const overrideEdit = await put(`/sales/${atFloor.data.id}`, salePayload(
-      [{ itemId: fixtures.itemA, quantity: 1, unitPrice: 100, unitDiscount: 25 }], { overrideLockingRate: true }));
-    assert('Explicit admin edit override succeeds', overrideEdit.status === 200, JSON.stringify(overrideEdit.data).slice(0, 160));
-    const { rows: [audit] } = await sql(
-      `SELECT "user", metadata FROM activity_log WHERE entity_type='locking_rate_override' AND entity_id=$1 ORDER BY id DESC LIMIT 1`,
-      [atFloor.data.id]);
-    const override = audit?.metadata?.overrides?.[0];
-    assert('Override audit stores admin, item, location, prices, discount and invoice',
-      !!audit?.user && !!audit?.metadata?.invoiceNumber && !!audit?.metadata?.locationType
-      && override?.itemId === fixtures.itemA && Number(override?.lockingRate) === 80
-      && Number(override?.originalPrice) === 100 && Number(override?.finalPrice) === 75
-      && Number(override?.discount) > 0, JSON.stringify(audit));
-  }
-
-  const createOverride = await createSale(
-    [{ itemId: fixtures.itemA, quantity: 1, unitPrice: 100, unitDiscount: 25 }],
-    { overrideLockingRate: true });
-  assert('Explicit admin create override succeeds', createOverride.status === 201, JSON.stringify(createOverride.data).slice(0, 160));
-  await sql(`UPDATE items SET locking_rate = NULL WHERE id = $1`, [fixtures.itemA]);
-}
 
 // ───────────────────────────────────────────────────────────────────────────
 console.log('\n[A] Per-unit item discount, inclusive: 10 × ₹100 MRP, ₹10/unit off → ₹900');
@@ -468,7 +363,6 @@ const tbFinal = await snapshotTB();
 assert('Trial balance matches the pre-test snapshot',
   tbFinal.totalDr === tbBefore.totalDr && tbFinal.totalCr === tbBefore.totalCr,
   `before ${tbBefore.totalDr}/${tbBefore.totalCr} after ${tbFinal.totalDr}/${tbFinal.totalCr}`);
-await cleanupProbeUser();
 
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failures.length) console.log('Failed:', failures.join(' | '));

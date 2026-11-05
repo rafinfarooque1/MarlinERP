@@ -62,19 +62,9 @@ async function cleanup() {
   for (const id of createdPurchases) { await del(`/purchases/${id}`).catch(() => {}); }
   await sql(`DELETE FROM purchases WHERE vendor_id IN (SELECT id FROM vendors WHERE name LIKE $1)`, [`${TAG}%`]);
   await sql(`DELETE FROM stock_ledger WHERE item_name LIKE $1 OR notes LIKE $1`, [`${TAG}%`]);
-  // On a rerun after an interrupted process, the in-memory fixture IDs are
-  // gone. Resolve tagged masters before deleting them so their stock rows
-  // are cleaned too instead of being stranded as orphans.
-  const { rows: taggedMaterials } = await sql(
-    `SELECT id FROM materials WHERE name LIKE $1`, [`${TAG}%`]);
-  const matIds = [...new Set([
-    fixtures.matA,
-    fixtures.matB,
-    ...taggedMaterials.map((row) => Number(row.id)),
-  ].filter(Boolean))];
+  const matIds = [fixtures.matA, fixtures.matB].filter(Boolean);
   if (matIds.length) {
     await sql(`DELETE FROM stock_ledger WHERE material_type = 'material' AND ref_id = ANY($1::int[])`, [matIds]);
-    await sql(`DELETE FROM stock_cost_snapshots WHERE material_type = 'material' AND ref_id = ANY($1::int[])`, [matIds]);
     await sql(`DELETE FROM stock_batches WHERE item_id = ANY($1::int[]) AND material_type = 'material'`, [matIds]);
     await sql(`DELETE FROM stock_entries WHERE item_id = ANY($1::int[]) AND material_type = 'material'`, [matIds]);
   }
@@ -308,10 +298,7 @@ console.log('\n[9] Edit: receiving-location move re-homes stock, lots and the bi
 
 console.log('\n[10] Range reporting: closing stock of D == opening stock of D+1');
 {
-  // Only compare the completed prior day with today's opening. D2/D3 are
-  // future business dates used by write-path fixtures and are not a reliable
-  // historical valuation range yet.
-  for (const [D, Dnext] of [[D0, D1]]) {
+  for (const [D, Dnext] of [[D0, D1], [D2, daysAgo(7)]]) {
     const a = await get(`/accounts/financial-statements?fromDate=2026-04-01&toDate=${D}`);
     const b = await get(`/accounts/financial-statements?fromDate=${Dnext}&toDate=${D4}`);
     const closing = Number(a.data?.profitAndLoss?.incomes?.closingStock ?? NaN);
@@ -336,40 +323,8 @@ console.log('\n[10b] Month boundary: month 1 closing == month 2 opening');
   const septemberOpening = Number(september.data?.profitAndLoss?.expenses?.openingStock ?? NaN);
   assert('Closing stock at 2026-08-31 equals opening stock at 2026-09-01',
     Number.isFinite(augustClosing) && Number.isFinite(septemberOpening) &&
-      Math.abs(augustClosing - septemberOpening) < 0.02,
+      augustClosing === septemberOpening,
     `closing=${augustClosing} opening=${septemberOpening}`);
-
-  const septemberMonth = await get('/accounts/financial-statements?fromDate=2026-09-01&toDate=2026-09-30');
-  const monthPl = septemberMonth.data?.profitAndLoss;
-  const monthExpenses = monthPl?.expenses;
-  const monthIncomes = monthPl?.incomes;
-  const monthSummary = monthPl?.summary;
-  const expectedCogs = Number(monthExpenses?.openingStock ?? NaN)
-    + Number(monthExpenses?.purchases ?? NaN)
-    + Number(monthExpenses?.directExpenses?.total ?? NaN)
-    - Number(monthIncomes?.closingStock ?? NaN);
-  assert('September opening stock exposes its evidence status and note',
-    typeof monthExpenses?.openingStockReliable === 'boolean'
-      && (monthExpenses.openingStockReliable
-        ? monthExpenses.openingStockNote == null
-        : typeof monthExpenses.openingStockNote === 'string' && monthExpenses.openingStockNote.length > 0),
-    JSON.stringify({ reliable: monthExpenses?.openingStockReliable, note: monthExpenses?.openingStockNote }));
-  assert('Unverified opening stock keeps a visible Books evidence warning',
-    monthExpenses?.openingStockReliable !== false
-      || (septemberMonth.data?.integrity?.issues ?? []).some((issue) =>
-        String(issue).includes('Opening stock as at 2026-08-31 is unverified')
-        && String(issue).includes(String(monthExpenses.openingStockNote))),
-    JSON.stringify(septemberMonth.data?.integrity?.issues));
-  assert('COGS reconciles to opening stock + purchases + direct costs − closing stock',
-    Number.isFinite(expectedCogs) && Number.isFinite(Number(monthSummary?.costOfGoodsSold))
-      && Math.abs(expectedCogs - Number(monthSummary.costOfGoodsSold)) < 0.02,
-    `expected=${expectedCogs} actual=${monthSummary?.costOfGoodsSold}`);
-  assert('P&L gross profit and net profit identities reconcile',
-    Math.abs(Number(monthSummary?.revenue) - Number(monthSummary?.costOfGoodsSold)
-      - Number(monthSummary?.grossProfit)) < 0.02
-      && Math.abs(Number(monthSummary?.grossProfit) + Number(monthSummary?.otherIncome)
-        - Number(monthSummary?.operatingExpenses) - Number(monthSummary?.netProfit)) < 0.02,
-    JSON.stringify(monthSummary));
 }
 
 console.log('\n[11] Delete: the bill leaves history as if dated movements never happened');

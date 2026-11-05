@@ -64,7 +64,6 @@ interface Row {
   months: number[];
   total: number;
   visible?: boolean;
-  valueText?: string;
   /** For 'banner' rows: true = profit (green), false = loss (red). */
   profitPositive?: boolean;
 }
@@ -297,7 +296,7 @@ export async function generateChartOfAccountsPdf(opts: CoaPdfOpts): Promise<void
       let cx = M + NAME_W;
       for (let i = 0; i < N; i++) {
         const v    = row.months[i] ?? 0;
-        const text = row.valueText ?? (v === 0 ? '—' : inr(Math.abs(v)));
+        const text = v === 0 ? '—' : inr(Math.abs(v));
         p.txt(text, cx + MONTH_W - 1.5, midY, {
           size: 6.5, color: v === 0 ? ZERO : inkColor, align: 'right',
         });
@@ -306,7 +305,7 @@ export async function generateChartOfAccountsPdf(opts: CoaPdfOpts): Promise<void
     }
 
     // Total cell (always rightmost)
-    const totalText = row.valueText ?? (row.total === 0 ? '—' : inr(Math.abs(row.total)));
+    const totalText = row.total === 0 ? '—' : inr(Math.abs(row.total));
     p.txt(totalText, M + CW - 1.5, midY, {
       bold: isBold, size: textSize, color: inkColor, align: 'right',
     });
@@ -320,8 +319,8 @@ export async function generateChartOfAccountsPdf(opts: CoaPdfOpts): Promise<void
   const add = (a: number[], b: number[]) => a.map((v, i) => v + (b[i] ?? 0));
   const neg = (a: number[])              => a.map(v => -v);
 
-  const rowAuto  = (name: string, mv: number[], total: number, valueText?: string): Row =>
-    ({ kind: 'auto', name, indent: 2, months: mv, total, valueText, visible: !showValuedOnly || valueText != null || hasDisplayedValue(total, mv) });
+  const rowAuto  = (name: string, mv: number[], total: number): Row =>
+    ({ kind: 'auto',  name, indent: 2, months: mv, total, visible: !showValuedOnly || hasDisplayedValue(total, mv) });
   const rowTotal = (name: string, total: number, months?: number[]): Row =>
     ({ kind: 'total', name, indent: 0, months: months ?? zeroArr(N), total });
   const rowSect  = (name: string): Row =>
@@ -355,7 +354,6 @@ export async function generateChartOfAccountsPdf(opts: CoaPdfOpts): Promise<void
       rowPanel('ASSETS'),
        ...groupRows(bs.assets.fixedAssets,   'grp:fixed',     series, N, isOpen, showValuedOnly),
        ...groupRows(bs.assets.currentAssets, 'grp:curassets', series, N, isOpen, showValuedOnly),
-      rowAuto('Closing Stock', sv('bsClosingStock'), bs.assets.closingStock),
       rowTotal('Total Assets', bs.assets.total, sv('assetsTotal')),
     ];
 
@@ -375,13 +373,9 @@ export async function generateChartOfAccountsPdf(opts: CoaPdfOpts): Promise<void
     const salesReturns    = inc.salesReturns    ?? 0;
     const grossSales      = inc.grossSales      ?? (inc.sales + salesReturns);
     const purchaseReturns = exp.purchaseReturns ?? 0;
-    const profitEvidenceReliable =
-      exp.openingStockReliable === true
-      && inc.closingStockReliable === true;
-    const grossProfit: number | null = (pl.summary?.grossProfit
+    const grossProfit: number = pl.summary?.grossProfit
       ?? ((inc.sales + inc.closingStock + inc.directIncomes.total + transferOut)
-         - (exp.openingStock + exp.purchases + transferIn + exp.directExpenses.total)));
-    const netProfit: number | null = pl.netProfit;
+         - (exp.openingStock + exp.purchases + transferIn + exp.directExpenses.total));
 
     // Per-month derived arrays — same arithmetic as StatementsView
     const mwSales      = sv('sales');
@@ -404,26 +398,10 @@ export async function generateChartOfAccountsPdf(opts: CoaPdfOpts): Promise<void
     );
     const tradingExpBase  = exp.openingStock + exp.purchases + transferIn + exp.directExpenses.total;
     const tradingIncBase  = inc.sales + inc.closingStock + inc.directIncomes.total + transferOut;
-    const tradingExpTotal = tradingExpBase + (grossProfit !== null && grossProfit > 0 ?  grossProfit : 0);
-    const tradingIncTotal = tradingIncBase + (grossProfit !== null && grossProfit < 0 ? -grossProfit : 0);
-    const plExpTotal      = exp.indirectExpenses.total + (grossProfit !== null && grossProfit < 0 ? -grossProfit : 0);
-    const plIncTotal      = inc.indirectIncomes.total  + (grossProfit !== null && grossProfit > 0 ?  grossProfit : 0);
-    const grossProfitBanner: Row[] = grossProfit === null ? [] : [{
-          kind: 'banner',
-          name: `${grossProfit >= 0 ? 'GROSS PROFIT' : 'GROSS LOSS'}${profitEvidenceReliable ? '' : ' (UNVERIFIED)'}`,
-          indent: 0,
-          months: mwGp.map(v => Math.abs(v)),
-          total: Math.abs(grossProfit),
-          profitPositive: grossProfit >= 0,
-        }];
-    const netProfitBanner: Row[] = netProfit === null ? [] : [{
-      kind: 'banner',
-      name: `${netProfit >= 0 ? 'NET PROFIT' : 'NET LOSS'}${profitEvidenceReliable ? '' : ' (UNVERIFIED)'}`,
-      indent: 0,
-      months: mwNp.map(v => Math.abs(v)),
-      total: Math.abs(netProfit),
-      profitPositive: netProfit >= 0,
-    }];
+    const tradingExpTotal = tradingExpBase + (grossProfit > 0 ?  grossProfit : 0);
+    const tradingIncTotal = tradingIncBase + (grossProfit < 0 ? -grossProfit : 0);
+    const plExpTotal      = exp.indirectExpenses.total + (grossProfit < 0 ? -grossProfit : 0);
+    const plIncTotal      = inc.indirectIncomes.total  + (grossProfit > 0 ?  grossProfit : 0);
 
     // groupRows respects isOpen — collapsed groups show only their header row
     const plRows: Row[] = [
@@ -432,12 +410,7 @@ export async function generateChartOfAccountsPdf(opts: CoaPdfOpts): Promise<void
 
       // ── Trading Account ──
       rowPanel('TRADING ACCOUNT — EXPENSE (DEBIT)'),
-      rowAuto(
-        exp.openingStockReliable ? 'Opening Stock' : 'Opening Stock (unverified)',
-        exp.openingStockReliable ? sv('openingStock') : zeroArr(N),
-        exp.openingStockReliable ? exp.openingStock : 0,
-        exp.openingStockReliable ? undefined : 'Unverified',
-      ),
+      rowAuto('Opening Stock', sv('openingStock'), exp.openingStock),
       ...(purchaseReturns !== 0
         ? [
             rowAuto('Purchase Account',       mwGrossPur,              purchasesForDisplay + purchaseReturns),
@@ -450,7 +423,7 @@ export async function generateChartOfAccountsPdf(opts: CoaPdfOpts): Promise<void
             ...(showTransferInLine ? [rowAuto('Purchase Stock Transfer In', mwTransferIn, transferIn)] : []),
           ]),
        ...groupRows(exp.directExpenses, 'grp:direxp', series, N, isOpen, showValuedOnly),
-      ...(grossProfit !== null && grossProfit > 0 ? [rowAuto('Gross Profit c/d', mwGpPos, grossProfit)] : []),
+      ...(grossProfit > 0 ? [rowAuto('Gross Profit c/d', mwGpPos, grossProfit)] : []),
       rowTotal('Total', tradingExpTotal),
       rowSpacer(),
 
@@ -466,44 +439,48 @@ export async function generateChartOfAccountsPdf(opts: CoaPdfOpts): Promise<void
         ...(showTransferOutLine ? [rowAuto('Stock Transfer Out', mwTransferOut, transferOut)] : []),
        ...(transferPnl
          ? [
-              rowAuto(
-                inc.closingStockReliable ? 'Closing Stock (on hand)' : 'Closing Stock (unverified)',
-                inc.closingStockEvidenceReliable ? sv('closingStockOnHand') : zeroArr(N),
-                inc.closingStockEvidenceReliable ? Number((inc as any).closingStockOnHand ?? inc.closingStock) : 0,
-                inc.closingStockEvidenceReliable ? undefined : 'Unverified',
-              ),
+             rowAuto('Closing Stock (on hand)', sv('closingStockOnHand'), Number((inc as any).closingStockOnHand ?? inc.closingStock)),
               ...(showClosingTransitLine
                 ? [rowAuto('Stock in Transit', sv('closingStockInTransit'), Number(inc.closingStockInTransit ?? 0))] : []),
            ]
-          : [rowAuto(
-              inc.closingStockReliable ? 'Closing Stock' : 'Closing Stock (unverified)',
-              inc.closingStockEvidenceReliable ? sv('closingStock') : zeroArr(N),
-              inc.closingStockEvidenceReliable ? inc.closingStock : 0,
-              inc.closingStockEvidenceReliable ? undefined : 'Unverified',
-            )]),
-      ...(grossProfit !== null && grossProfit < 0 ? [rowAuto('Gross Loss c/d', mwGpNeg, -grossProfit)] : []),
+         : [rowAuto('Closing Stock', sv('closingStock'), inc.closingStock)]),
+      ...(grossProfit < 0 ? [rowAuto('Gross Loss c/d', mwGpNeg, -grossProfit)] : []),
       rowTotal('Total', tradingIncTotal),
       rowSpacer(),
 
       // ── Gross Profit / Loss banner ──
-      ...grossProfitBanner,
+      {
+        kind: 'banner',
+        name: grossProfit >= 0 ? 'GROSS PROFIT' : 'GROSS LOSS',
+        indent: 0,
+        months: mwGp.map(v => Math.abs(v)),
+        total: Math.abs(grossProfit),
+        profitPositive: grossProfit >= 0,
+      },
       rowSpacer(),
 
       // ── P&L Account ──
       rowPanel('P&L ACCOUNT — EXPENSE (DEBIT)'),
-      ...(grossProfit !== null && grossProfit < 0 ? [rowAuto('Gross Loss b/d', mwGpNeg, -grossProfit)] : []),
+      ...(grossProfit < 0 ? [rowAuto('Gross Loss b/d', mwGpNeg, -grossProfit)] : []),
        ...groupRows(exp.indirectExpenses, 'grp:indexp', series, N, isOpen, showValuedOnly),
       rowTotal('Total', plExpTotal),
       rowSpacer(),
 
       rowPanel('P&L ACCOUNT — INCOME (CREDIT)'),
-      ...(grossProfit !== null && grossProfit >= 0 ? [rowAuto('Gross Profit b/d', mwGpPos, grossProfit)] : []),
+      ...(grossProfit >= 0 ? [rowAuto('Gross Profit b/d', mwGpPos, grossProfit)] : []),
        ...groupRows(inc.indirectIncomes, 'grp:indinc', series, N, isOpen, showValuedOnly),
       rowTotal('Total', plIncTotal),
       rowSpacer(),
 
       // ── Net Profit / Loss banner ──
-      ...netProfitBanner,
+      {
+        kind: 'banner',
+        name: pl.netProfit >= 0 ? 'NET PROFIT' : 'NET LOSS',
+        indent: 0,
+        months: mwNp.map(v => Math.abs(v)),
+        total: Math.abs(pl.netProfit),
+        profitPositive: pl.netProfit >= 0,
+      },
     ];
 
     renderRows(plRows, y);

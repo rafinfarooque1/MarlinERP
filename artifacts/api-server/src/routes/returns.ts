@@ -17,7 +17,6 @@ import { restoreBatches, consumeBatches, debitBatchByNumber, type BatchBreakdown
 import { logActivityInTransaction } from "../lib/audit";
 import { outletWritesBlocked, OUTLETS_DISABLED_MESSAGE, OUTLETS_DISABLED_CODE } from "../lib/featureFlags";
 import { writeStockLedger, batchResolveMeta } from "../lib/stockLedger";
-import { assertStockLedgerRestatementOpen } from "../lib/dailyStockClosures";
 import {
   outstandingExpr, creditAdjustmentsExpr, computePaymentPosition,
   outstandingAsOfExpr, creditAdjustmentsAsOfExpr, amountReceivedAsOfExpr,
@@ -1008,7 +1007,6 @@ router.patch("/sales-returns/:id", requireModuleAction("page:/returns", "edit"),
 
     // ── Stock ledger: business-date correction + delta movement rows ──────
     if (dateOnly(ret.return_date) !== returnDate) {
-      await assertStockLedgerRestatementOpen(client, "sales_return", Number(id), returnDate);
       await client.query(
         `UPDATE stock_ledger SET txn_date = $1 WHERE doc_type = 'sales_return' AND doc_id = $2`,
         [returnDate, id]
@@ -1760,7 +1758,6 @@ router.patch("/purchase-returns/:id", requireModuleAction("page:/returns", "edit
 
     // ── Stock ledger: business-date correction + delta movement rows ──────
     if (dateOnly(ret.return_date) !== returnDate) {
-      await assertStockLedgerRestatementOpen(client, "purchase_return", Number(id), returnDate);
       await client.query(
         `UPDATE stock_ledger SET txn_date = $1 WHERE doc_type = 'purchase_return' AND doc_id = $2`,
         [returnDate, id]

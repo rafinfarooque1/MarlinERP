@@ -11,9 +11,8 @@
 // Run from artifacts/api-server:  node tests/item-tracking.test.mjs
 import pg from "pg";
 import bcrypt from "bcryptjs";
-import crypto from "node:crypto";
 
-const BASE = process.env.API_URL || "http://localhost:8080/api";
+const BASE = "http://localhost:8080/api";
 const sql = new pg.Pool({ connectionString: process.env.DATABASE_URL });
 const q = async (t, p = []) => (await sql.query(t, p)).rows;
 const r3 = (n) => Math.round(Number(n) * 1000) / 1000;
@@ -25,7 +24,6 @@ const assert = (name, cond, extra = "") => {
 };
 
 const HO_USER = "zz_trk_probe_ho", WH_USER = "zz_trk_probe_wh", PASS = "Probe#Trk1";
-const LEGACY_INV = `ZZTRK-LEGACY-${process.pid}-${crypto.randomBytes(5).toString("hex")}`;
 
 async function provision(username, branchType, branchId) {
   await q(`DELETE FROM login_lockouts WHERE username=$1`, [username]);
@@ -78,18 +76,7 @@ try {
       (SELECT COALESCE(SUM((li->>'quantity')::numeric),0) FROM sales_returns sr, jsonb_array_elements(sr.line_items) li
         WHERE (li->>'itemId')::int=$1) AS sales_ret,
       (SELECT COALESCE(SUM(se.quantity),0) FROM stock_entries se
-        WHERE se.item_id=$1 AND se.material_type='item'
-          AND NOT (
-            (se.branch_type = 'warehouse' AND EXISTS (
-              SELECT 1 FROM warehouses disabled_wh
-               WHERE disabled_wh.id = se.branch_id AND disabled_wh.disabled_at IS NOT NULL
-            ))
-            OR (se.branch_type = 'outlet' AND EXISTS (
-              SELECT 1 FROM outlets disabled_outlet
-              JOIN warehouses disabled_parent ON disabled_parent.id = disabled_outlet.warehouse_id
-               WHERE disabled_outlet.id = se.branch_id AND disabled_parent.disabled_at IS NOT NULL
-            ))
-          )) AS current`, [ITEM]);
+        WHERE se.item_id=$1 AND se.material_type='item') AS current`, [ITEM]);
 
   if (!d?.summary?.truncated) {
     assert("purchasedQty matches SQL", r3(d.summary.purchasedQty) === r3(truth.purchased), `${d.summary.purchasedQty} vs ${truth.purchased}`);
@@ -111,6 +98,8 @@ try {
   console.log(`\n[1b] Legacy purchase line without materialType still counts`);
   // Old imports wrote purchase lines with no materialType key; the module's own
   // identity paths default absent → 'item', so tracking must too.
+  const LEGACY_INV = "ZZTRK-LEGACY-1";
+  await q(`DELETE FROM purchases WHERE invoice_number=$1`, [LEGACY_INV]);
   await q(`INSERT INTO purchases (purchase_date, invoice_number, party_name, line_items, total_amount)
            VALUES (CURRENT_DATE, $1, 'ZZ Legacy Vendor (fixture)',
                    jsonb_build_array(jsonb_build_object('materialId', $2::int, 'quantity', 1, 'costPerUnit', 1, 'taxableValue', 1)), 1)`,

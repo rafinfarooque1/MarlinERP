@@ -22,7 +22,6 @@ import { addExpensePaymentModes } from "./migrations/expensePaymentModes";
 import { addFixedAssets } from "./migrations/fixedAssets";
 import { addAssetModule } from "./migrations/assetModule";
 import { addInventoryValuation } from "./migrations/inventoryValuation";
-import { addHistoricalStockEvidence } from "./migrations/historicalStockEvidence";
 import { addAssetDepreciation } from "./migrations/assetDepreciation";
 import { correctVendorAllocations } from "./migrations/vendorAllocationCorrection";
 import { repairAssetPurchaseAccounting } from "./migrations/assetPurchaseAccountingRepair";
@@ -81,7 +80,6 @@ async function runMigrations() {
     ALTER TABLE raw_materials ADD COLUMN IF NOT EXISTS hsn_code text NOT NULL DEFAULT '';
     ALTER TABLE raw_materials ADD COLUMN IF NOT EXISTS tax_rate numeric(5,2) NOT NULL DEFAULT 0;
     ALTER TABLE items ADD COLUMN IF NOT EXISTS mrp numeric(10,2) NOT NULL DEFAULT 0;
-    ALTER TABLE items ADD COLUMN IF NOT EXISTS locking_rate numeric(10,2);
     ALTER TABLE items ADD COLUMN IF NOT EXISTS cost numeric(10,2) NOT NULL DEFAULT 0;
     ALTER TABLE materials ADD COLUMN IF NOT EXISTS cost numeric(10,2) NOT NULL DEFAULT 0;
     ALTER TABLE raw_materials ADD COLUMN IF NOT EXISTS cost numeric(10,2) NOT NULL DEFAULT 0;
@@ -4808,11 +4806,11 @@ await pool.query(`
   }
 }
 
-// Cash memberships describe location availability. Historical Bank/Online
-// memberships remain stored for compatibility but are ignored for availability.
-// Legacy UPI/Other rows are included in the multi-location allowlist because
-// the Online migration below converts them; only unknown account types should
-// be reported here.
+// Cash, Bank, and Online memberships describe availability and may be
+// multi-location. Do not canonicalize memberships at boot: choosing a member
+// changes future voucher availability. Legacy UPI/Other rows are included in
+// the multi-location allowlist because the Online migration below converts
+// them; only unknown account types should be reported here.
 try {
   const { rows } = await pool.query(`
     SELECT l.account_id, COUNT(*)::int AS memberships
@@ -4989,7 +4987,6 @@ await addFixedAssets(pool);
 await addAssetModule(pool);
 await repairAssetPurchaseAccounting(pool);
 await addInventoryValuation(pool);
-await addHistoricalStockEvidence(pool);
 await addAssetDepreciation(pool);
 await correctVendorAllocations(pool);
 
@@ -5134,9 +5131,9 @@ try {
   console.error("[migration] stock_master_guard_trigger FAILED (non-fatal):", (err as Error).message);
 }
 
-// Establish a future-only quantity baseline only after all startup stock
-// cleanup/backfills have completed. This is required for stock writes to be
-// safely enabled; a failure leaves the API unready rather than inventing data.
+// Establish future-only daily snapshot evidence only after startup stock
+// cleanup/backfills have completed. This baseline supports integrity reporting;
+// accounting-period locks, not daily snapshots, govern historical writes.
 try {
   await addStockDailyClosures(pool);
 } catch (err) {

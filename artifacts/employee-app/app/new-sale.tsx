@@ -235,7 +235,6 @@ export default function NewSaleScreen() {
   const stepValid = (): string | null => {
     if (step === 0) {
       if (!saleLoc) return 'Pick the selling location.';
-      if (!salesperson) return 'Select a salesman for this sale.';
       if (!/^\d{4}-\d{2}-\d{2}$/.test(saleDate)) return 'Pick the sale date.';
       return null;
     }
@@ -340,7 +339,7 @@ export default function NewSaleScreen() {
       locationId: loc.locationType === 'headoffice' ? 1 : loc.locationId,
       outletId: loc.locationType === 'outlet' ? loc.locationId : 1,
       ...(customer ? { customerId: customer.id } : {}),
-      salespersonEmployeeId: salesperson!.id,
+      ...(salesperson ? { salespersonEmployeeId: salesperson.id } : {}),
       saleDate,
       paymentMode: payMode === 'credit' ? 'credit' : 'cash',
       lineItems: lines.map(l => ({
@@ -368,11 +367,6 @@ export default function NewSaleScreen() {
 
   const submit = (extra?: Partial<CreateSalePayload>) => {
     if (submitLockRef.current) return;
-    if (!salesperson) {
-      setStep(0);
-      notify('Salesman required', 'Select a salesman before recording the sale.');
-      return;
-    }
     submitLockRef.current = true;
     setSubmitting(true);
     createSaleFull(buildPayload(extra))
@@ -546,9 +540,8 @@ export default function NewSaleScreen() {
     sublabel: [c.phone, (c.gstNumber ?? c.gst_number) ? 'GSTIN' : null].filter(Boolean).join(' · ') || undefined,
   }));
   const salespersonItems: PickerItem[] = ((salespeople as any[]) ?? [])
-    .filter(p => !saleLoc
-      || p.branchType === 'headoffice'
-      || (p.branchType === saleLoc.locationType && Number(p.branchId) === Number(saleLoc.locationId)))
+    .filter(p => p.branchType === 'headoffice'
+      || (p.branchType === saleLoc?.locationType && Number(p.branchId) === Number(saleLoc?.locationId)))
     .map(p => ({ key: String(p.id), label: String(p.name) }));
 
   const itemPickerItems: PickerItem[] = ((items as any[]) ?? [])
@@ -653,22 +646,13 @@ export default function NewSaleScreen() {
             Credit and partial payments need a registered customer.
           </Text>
 
-          <Text style={styles.fieldLabel}>Salesman *</Text>
+          <Text style={styles.fieldLabel}>Salesman <Text style={styles.mutedText}>(optional)</Text></Text>
           <Pressable onPress={() => setSalespersonPickerOpen(true)} style={({ pressed }) => [styles.selectBox, pressed && { opacity: 0.8 }]}>
             <Text style={salesperson ? styles.valueText : styles.placeholderText}>
-              {salesperson ? salesperson.name : salespeopleLoading ? 'Loading salespeople…' : 'Select salesman'}
+              {salesperson ? salesperson.name : 'Unassigned'}
             </Text>
             <Feather name="chevron-down" size={18} color={colors.mutedForeground} />
           </Pressable>
-          {!salespeopleLoading && salespersonItems.length === 0 ? (
-            <Text style={styles.mutedText}>
-              {saleLoc
-                ? 'No eligible salespeople are assigned to this location.'
-                : (salespeople as any[]).length > 0
-                  ? 'Choose a selling location first.'
-                  : 'No active salespeople are available.'}
-            </Text>
-          ) : null}
 
           <Text style={styles.fieldLabel}>Sale date</Text>
           <View style={styles.dateRow}>
@@ -953,7 +937,6 @@ export default function NewSaleScreen() {
             locationId: Number(id),
             name: pi.label,
           });
-          setSalesperson(null);
           setReceiveLedgerId(null);
           setLocPickerOpen(false);
         }}
@@ -989,6 +972,11 @@ export default function NewSaleScreen() {
         items={salespersonItems}
         loading={salespeopleLoading}
         selectedKey={salesperson ? String(salesperson.id) : null}
+        clearLabel="Unassigned"
+        onClear={() => {
+          setSalesperson(null);
+          setSalespersonPickerOpen(false);
+        }}
         onSelect={pi => {
           const p = ((salespeople as any[]) ?? []).find(x => String(x.id) === pi.key);
           if (p) setSalesperson({ id: Number(p.id), name: String(p.name) });

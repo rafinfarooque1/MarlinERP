@@ -29,8 +29,6 @@
 import { pool } from "@workspace/db";
 import { stockValuation, resolveProductNames, type ValuedItem } from "./valuation";
 import { activeInTransit } from "./reservations";
-import { historicalTransferReceiptConflicts, resolveHistoricalBatchCoverage } from "./historicalStockEvidenceRules";
-import { allocateReceived } from "./batches";
 
 /** A queryable database handle (pg pool or PoolClient), per lib/importVouchers.ts. */
 type Q = { query: Function };
@@ -39,192 +37,6 @@ import { filterPostingsByLocation, type PostingLocationFilter } from "./postingL
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
 const r3 = (n: number) => Math.round(n * 1000) / 1000;
-
-function asJsonArray(value: unknown): any[] {
-  if (Array.isArray(value)) return value;
-  if (typeof value !== "string") return [];
-  try {
-    const parsed = JSON.parse(value);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch { return []; }
-}
-
-async function historicalBatchCost(
-  q: Q,
-  key: { materialType: string; refId: number; branchType: string; branchId: number },
-  asOf: string,
-  expectedQuantity: number,
-  purchaseCostsByProduct: Map<string, Array<{ batchNumber: string; unitCost: unknown }>>,
-): Promise<{ ok: true; unitCost: number; value: number; batchNumber: string } | { ok: false; reason: string }> {
-  const { rows } = await q.query(
-    `SELECT sl.txn_type,
-            (CASE WHEN sl.doc_type = 'stock_transfer' AND sl.txn_type = 'transfer_in'
-                  THEN COALESCE(t.received_date::date, receipt_voucher.voucher_date::date,
-                                receipt_purchase.purchase_date::date, sl.created_at::date)
-                  ELSE COALESCE(sl.txn_date, sl.created_at::date) END)::text AS txn_date,
-            sl.doc_type,
-            sl.doc_id::int AS doc_id, sl.qty_change::numeric AS qty_change,
-            sl.unit_cost::numeric AS unit_cost,
-            to_jsonb(p)->'line_items' AS purchase_lines,
-            to_jsonb(s)->'line_items' AS sale_lines,
-            to_jsonb(sr)->'line_items' AS sales_return_lines,
-            to_jsonb(pr)->'line_items' AS purchase_return_lines,
-            to_jsonb(purchase_source)->'line_items' AS purchase_source_lines,
-            to_jsonb(sv)->'lines' AS verification_lines,
-            adjustment_batch.unit_cost::numeric AS adjustment_batch_cost,
-            to_jsonb(t)->'line_items' AS transfer_lines,
-            to_jsonb(t)->'received_line_items' AS received_lines
-       FROM stock_ledger sl
-       LEFT JOIN purchases p ON sl.doc_type = 'purchase' AND p.id = sl.doc_id
-       LEFT JOIN sales s ON sl.doc_type = 'sale' AND s.id = sl.doc_id
-        LEFT JOIN sales_returns sr ON sl.doc_type = 'sales_return' AND sr.id = sl.doc_id
-        LEFT JOIN purchase_returns pr ON sl.doc_type = 'purchase_return' AND pr.id = sl.doc_id
-        LEFT JOIN purchases purchase_source ON purchase_source.id = pr.purchase_id
-        LEFT JOIN stock_verifications sv ON sl.doc_type = 'stock_verification' AND sv.id = sl.doc_id
-        LEFT JOIN stock_batches adjustment_batch
-          ON sl.doc_type = 'stock_verification'
-         AND sl.txn_type = 'adjustment'
-         AND adjustment_batch.item_id = sl.ref_id
-         AND adjustment_batch.branch_type = sl.branch_type
-         AND adjustment_batch.branch_id = sl.branch_id
-         AND adjustment_batch.batch_number = 'ADJ-' || sl.doc_id::text
-         AND adjustment_batch.source = 'adjustment'
-         AND adjustment_batch.source_id = sl.doc_id
-       LEFT JOIN stock_transfers t ON sl.doc_type = 'stock_transfer' AND t.id = sl.doc_id
-        LEFT JOIN journal_vouchers receipt_voucher ON receipt_voucher.id = t.receive_voucher_id
-        LEFT JOIN purchases receipt_purchase
-          ON receipt_purchase.id = t.purchase_id AND receipt_purchase.branch_transfer_id = t.id
-      WHERE sl.material_type = $1 AND sl.ref_id = $2
-        AND sl.branch_type = $3 AND sl.branch_id = $4
-         AND (CASE WHEN sl.doc_type = 'stock_transfer' AND sl.txn_type = 'transfer_in'
-                   THEN COALESCE(t.received_date::date, receipt_voucher.voucher_date::date,
-                                 receipt_purchase.purchase_date::date, sl.created_at::date)
-                   ELSE COALESCE(sl.txn_date, sl.created_at::date) END) <= $5::date
-       ORDER BY CASE WHEN sl.doc_type = 'stock_transfer' AND sl.txn_type = 'transfer_in'
-                     THEN COALESCE(t.received_date::date, receipt_voucher.voucher_date::date,
-                                   receipt_purchase.purchase_date::date, sl.created_at::date)
-                     ELSE COALESCE(sl.txn_date, sl.created_at::date) END, sl.id`,
-    [key.materialType, key.refId, key.branchType, key.branchId, asOf],
-  );
-  const movements = rows.map((r: any) => ({
-    txnType: String(r.txn_type),
-    txnDate: r.txn_date == null ? null : String(r.txn_date).slice(0, 10),
-    docType: String(r.doc_type ?? ""),
-    docId: r.doc_id == null ? null : Number(r.doc_id),
-    qtyChange: r.qty_change,
-    unitCost: r.unit_cost,
-  }));
-  const allocations: Array<{
-    docType: string; docId: number; batchNumber: string; quantity: number; unitCost: number;
-    purchaseCost?: boolean; costEvidence?: boolean;
-  }> = [];
-  const seen = new Set<string>();
-  const matches = (line: any) =>
-    String(line?.materialType ?? "item") === key.materialType
-    && Number(line?.itemId ?? line?.materialId) === key.refId;
-  for (const row of rows as any[]) {
-    if (row.doc_id == null) continue;
-    const docType = String(row.doc_type ?? "");
-    const docId = Number(row.doc_id);
-    const sourceKey = `${docType}:${docId}:${row.txn_type === "transfer_in" ? "in" : row.txn_type === "transfer_out" ? "out" : "doc"}`;
-    if (seen.has(sourceKey)) continue;
-    seen.add(sourceKey);
-    let lines: any[] = [];
-    if (docType === "purchase") {
-      lines = asJsonArray(row.purchase_lines).filter(matches);
-      for (const line of lines) {
-        allocations.push({
-          docType, docId, batchNumber: String(line.batchNumber ?? ""),
-          quantity: Number(line.quantity), unitCost: Number(line.costPerUnit ?? line.unitCost),
-          purchaseCost: true,
-        });
-      }
-    } else if (docType === "sale") {
-      lines = asJsonArray(row.sale_lines).filter(matches);
-      for (const line of lines) for (const b of asJsonArray(line.batchBreakdown)) {
-        allocations.push({ docType, docId, batchNumber: String(b.batchNumber ?? ""), quantity: Number(b.quantity), unitCost: Number(b.unitCost) });
-      }
-    } else if (docType === "sales_return") {
-      // Returns persist the exact batch restoration chosen from the original
-      // sale. The return ledger row intentionally has no unit cost, so use
-      // that source-backed allocation rather than the mutable batch table.
-      lines = asJsonArray(row.sales_return_lines).filter(matches);
-      for (const line of lines) for (const b of asJsonArray(line.batchRestore)) {
-        allocations.push({ docType, docId, batchNumber: String(b.batchNumber ?? ""), quantity: Number(b.quantity), unitCost: Number(b.unitCost) });
-      }
-    } else if (docType === "purchase_return") {
-      const sourceLines = asJsonArray(row.purchase_source_lines);
-      lines = asJsonArray(row.purchase_return_lines).filter(matches);
-      for (const line of lines) {
-        const lineIndex = Number(line.lineIndex);
-        const source = Number.isInteger(lineIndex) && lineIndex >= 0 ? sourceLines[lineIndex] : undefined;
-        const returnCost = Number(line.unitCost);
-        const sourceCost = Number(source?.costPerUnit ?? source?.unitCost);
-        if (!source || !matches(source) || !String(source.batchNumber ?? "").trim()
-            || !Number.isFinite(returnCost) || returnCost <= 0
-            || !Number.isFinite(sourceCost) || sourceCost <= 0
-            || Math.abs(returnCost - sourceCost) > 0.0001) {
-          return { ok: false, reason: `purchase return ${docId} has no matching purchase-line batch cost` };
-        }
-        allocations.push({
-          docType, docId, batchNumber: String(source.batchNumber),
-          quantity: Number(line.quantity), unitCost: returnCost,
-        });
-      }
-    } else if (docType === "stock_verification") {
-      const verificationLines = asJsonArray(row.verification_lines).filter(matches);
-      const variance = Number(verificationLines[0]?.variance);
-      const unitCost = Number(row.unit_cost);
-      const batchCost = Number(row.adjustment_batch_cost);
-      if (row.txn_type !== "adjustment" || verificationLines.length !== 1
-          || !Number.isFinite(variance) || variance <= 0
-          || Math.abs(variance - Number(row.qty_change)) > 0.001
-          || !Number.isFinite(unitCost) || unitCost <= 0
-          || !Number.isFinite(batchCost) || Math.abs(unitCost - batchCost) > 0.0001) {
-        return { ok: false, reason: `stock verification ${docId} has no exact positive adjustment batch cost` };
-      }
-      allocations.push({
-        docType, docId, batchNumber: `ADJ-${docId}`,
-        quantity: variance, unitCost, costEvidence: true,
-      });
-    } else if (docType === "stock_transfer") {
-      const dispatchLines = asJsonArray(row.transfer_lines).filter(matches);
-      if (row.txn_type === "transfer_in") {
-        const receivedLines = asJsonArray(row.received_lines).filter(matches);
-        // Receipt rows persist the received quantity, while lot identity and
-        // cost remain on the dispatched line. The operational receipt path
-        // pairs these by transferLineId; older documents have no such id, so
-        // only a unique product line can be paired without guessing.
-        if (dispatchLines.length !== 1 || receivedLines.length !== 1) {
-          return { ok: false, reason: `transfer ${docId} has ambiguous dispatch/receipt lines for batch allocation` };
-        }
-        const receivedQty = Number(receivedLines[0].quantity);
-        const allocated = allocateReceived(asJsonArray(dispatchLines[0].batchBreakdown), receivedQty);
-        for (const b of allocated) {
-          allocations.push({ docType, docId, batchNumber: String(b.batchNumber ?? ""), quantity: Number(b.quantity), unitCost: Number(b.unitCost) });
-        }
-      } else {
-        for (const line of dispatchLines) for (const b of asJsonArray(line.batchBreakdown)) {
-          allocations.push({ docType, docId, batchNumber: String(b.batchNumber ?? ""), quantity: Number(b.quantity), unitCost: Number(b.unitCost) });
-        }
-      }
-    }
-  }
-  // A transfer can move a purchased batch to a location that has no local
-  // purchase row. Use the exact batch/product purchase evidence prefetched for
-  // this valuation, never mutable stock_batches quantities.
-  return resolveHistoricalBatchCoverage(
-    expectedQuantity,
-    movements,
-    allocations,
-    purchaseCostsByProduct.get(`${key.materialType}:${key.refId}`) ?? [],
-  );
-}
-
-/** Closing stock is both a P&L valuation input and an asset on the Balance Sheet. */
-export function balanceSheetAssetsTotal(fixedAssets: number, currentAssets: number, closingStock: number): number {
-  return r2(fixedAssets + currentAssets + closingStock);
-}
 // Shape AND calendar validity (rejects 2026-02-30) — these values reach real
 // DATE columns, where an impossible date raises 22007 instead of storing text.
 const isDate = (s: unknown): s is string => isIsoDate(s);
@@ -245,34 +57,6 @@ export function todayISO(): string {
   const d = new Date();
   const p = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-}
-
-export function dateISOInTimeZone(date: Date, timeZone: string): string {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone, year: "numeric", month: "2-digit", day: "2-digit",
-  }).formatToParts(date);
-  const part = (type: Intl.DateTimeFormatPartTypes) =>
-    parts.find((value) => value.type === type)?.value ?? "";
-  return `${part("year")}-${part("month")}-${part("day")}`;
-}
-
-/** Current business date in the company's configured timezone. */
-export async function companyTodayISO(q: Q = pool, now = new Date()): Promise<string> {
-  const { rows: [row] } = await q.query(
-    `SELECT general_settings FROM company_settings LIMIT 1`,
-  );
-  let settings = row?.general_settings as Record<string, unknown> | string | null | undefined;
-  if (typeof settings === "string") {
-    try { settings = JSON.parse(settings) as Record<string, unknown>; }
-    catch { settings = null; }
-  }
-  let timeZone = String(settings?.timeZone ?? "Asia/Kolkata").trim() || "Asia/Kolkata";
-  try {
-    new Intl.DateTimeFormat("en-CA", { timeZone }).format(now);
-  } catch {
-    timeZone = "Asia/Kolkata";
-  }
-  return dateISOInTimeZone(now, timeZone);
 }
 
 // ── Chart of accounts ──────────────────────────────────────────────────────
@@ -392,13 +176,12 @@ export interface StockAtDate {
   inTransit: number;
   items: ValuedItem[];
   /**
-   * false when quantity, valuation, or transfer ownership cannot be established
-   * from dated evidence. Unknown historical costs are omitted, never replaced
-   * with the current product-master cost.
+   * false when stock history cannot account for the movement between the
+   * requested date and today, so the figure is a best estimate rather than a
+   * fact. Surfaced on the statement instead of being hidden.
    */
   reliable: boolean;
   note: string | null;
-  evidenceSource?: string | null;
 }
 
 export interface StockTransferOpeningAdjustmentLine {
@@ -437,19 +220,15 @@ export async function stockTransferOpeningAdjustment(
   q: Q = pool,
 ): Promise<StockTransferOpeningAdjustment> {
   const params: unknown[] = [];
-  const movementDate = `CASE WHEN sl.doc_type = 'stock_transfer' AND sl.txn_type = 'transfer_in'
-    THEN COALESCE(transfer_doc.received_date::date, receipt_voucher.voucher_date::date,
-                  receipt_purchase.purchase_date::date, sl.created_at::date)
-    ELSE COALESCE(sl.txn_date, sl.created_at::date) END`;
   const conds = [`sl.txn_type IN ('transfer_out', 'transfer_in')`];
 
   if (fromDate) {
     params.push(fromDate);
-    conds.push(`${movementDate} >= $${params.length}::date`);
+    conds.push(`COALESCE(sl.txn_date, sl.created_at::date) >= $${params.length}::date`);
   }
   if (toDate) {
     params.push(toDate);
-    conds.push(`${movementDate} <= $${params.length}::date`);
+    conds.push(`COALESCE(sl.txn_date, sl.created_at::date) <= $${params.length}::date`);
   }
 
   if (scope) {
@@ -489,60 +268,15 @@ export async function stockTransferOpeningAdjustment(
        FROM stock_ledger sl
        LEFT JOIN stock_transfers transfer_doc
          ON sl.doc_type = 'stock_transfer' AND transfer_doc.id = sl.doc_id
-        LEFT JOIN journal_vouchers receipt_voucher ON receipt_voucher.id = transfer_doc.receive_voucher_id
-        LEFT JOIN purchases receipt_purchase
-          ON receipt_purchase.id = transfer_doc.purchase_id
-         AND receipt_purchase.branch_transfer_id = transfer_doc.id
        LEFT JOIN LATERAL (
          SELECT SUM(original.quantity::numeric) AS total_qty,
                 SUM(original.quantity::numeric)
-                   FILTER (WHERE original.quantity::numeric > 0
-                     AND COALESCE(
-                       CASE WHEN original.unit_cost::numeric > 0 THEN original.unit_cost::numeric END,
-                       purchase_batch.unit_cost
-                     ) > 0) AS known_qty,
-                 SUM(original.quantity::numeric * COALESCE(
-                       CASE WHEN original.unit_cost::numeric > 0 THEN original.unit_cost::numeric END,
-                       purchase_batch.unit_cost
-                     ))
-                   FILTER (WHERE original.quantity::numeric > 0
-                     AND COALESCE(
-                       CASE WHEN original.unit_cost::numeric > 0 THEN original.unit_cost::numeric END,
-                       purchase_batch.unit_cost
-                     ) > 0)
+                  FILTER (WHERE original.quantity::numeric > 0 AND original.unit_cost::numeric > 0) AS known_qty,
+                SUM(original.quantity::numeric * original.unit_cost::numeric)
+                  FILTER (WHERE original.quantity::numeric > 0 AND original.unit_cost::numeric > 0)
                   / NULLIF(SUM(original.quantity::numeric)
-                     FILTER (WHERE original.quantity::numeric > 0
-                       AND COALESCE(
-                         CASE WHEN original.unit_cost::numeric > 0 THEN original.unit_cost::numeric END,
-                         purchase_batch.unit_cost
-                       ) > 0), 0) AS unit_cost
+                    FILTER (WHERE original.quantity::numeric > 0 AND original.unit_cost::numeric > 0), 0) AS unit_cost
            FROM stock_reservations original
-            LEFT JOIN LATERAL (
-              SELECT source_batch.unit_cost::numeric AS unit_cost
-                FROM stock_batches source_batch
-               WHERE source_batch.id = original.batch_id
-                 AND source_batch.item_id = original.ref_id
-                 AND source_batch.material_type = original.material_type
-                 AND source_batch.branch_type = original.branch_type
-                 AND source_batch.branch_id = original.branch_id
-                 AND source_batch.source = 'purchase'
-                 AND source_batch.unit_cost::numeric > 0
-                 AND EXISTS (
-                   SELECT 1
-                     FROM stock_ledger purchase_ledger
-                    WHERE purchase_ledger.doc_type = 'purchase'
-                      AND purchase_ledger.txn_type = 'purchase'
-                      AND purchase_ledger.doc_id = source_batch.source_id
-                      AND purchase_ledger.material_type = original.material_type
-                      AND purchase_ledger.ref_id = original.ref_id
-                      AND purchase_ledger.branch_type = original.branch_type
-                      AND purchase_ledger.branch_id = original.branch_id
-                      AND purchase_ledger.qty_change::numeric > 0
-                      AND purchase_ledger.unit_cost::numeric > 0
-                      AND ABS(purchase_ledger.unit_cost::numeric - source_batch.unit_cost::numeric) < 0.005
-                 )
-               LIMIT 1
-            ) purchase_batch ON TRUE
           WHERE sl.doc_type = 'stock_transfer'
             AND original.doc_type = 'stock_transfer'
             AND original.doc_id = sl.doc_id
@@ -822,25 +556,6 @@ export function applyStockTransferOpeningAdjustment(
   };
 }
 
-export function calculatePnlTotals(input: {
-  sales: number;
-  directIncome: number;
-  openingStock: number;
-  purchases: number;
-  directExpenses: number;
-  closingStock: number;
-  otherIncome: number;
-  indirectExpenses: number;
-}) {
-  const revenue = r2(input.sales + input.directIncome);
-  const costOfGoodsSold = r2(
-    input.openingStock + input.purchases + input.directExpenses - input.closingStock,
-  );
-  const grossProfit = r2(revenue - costOfGoodsSold);
-  const netProfit = r2(grossProfit + input.otherIncome - input.indirectExpenses);
-  return { revenue, costOfGoodsSold, grossProfit, netProfit };
-}
-
 /** One branch's stock filter for the historic rewind and the current read. */
 export interface StockBranchScope {
   branchType: string;
@@ -940,12 +655,7 @@ async function inceptionDate(q: Q = pool): Promise<string | null> {
  * historical cost truth. Sender-owned in-transit stock is added from the
  * reservation lifecycle and its recorded receipt date.
  */
-export async function stockAsOf(
-  asOf: string | null | undefined,
-  scope?: StockBranchScope | null,
-  q: Q = pool,
-  options: { includeInTransit?: boolean } = {},
-): Promise<StockAtDate> {
+export async function stockAsOf(asOf: string | null | undefined, scope?: StockBranchScope | null, q: Q = pool): Promise<StockAtDate> {
   if (!isDate(asOf)) {
     return { total: 0, inTransit: 0, items: [], reliable: true, note: null };
   }
@@ -972,83 +682,6 @@ export async function stockAsOf(
     return sql;
   };
 
-  const { rows: [approvedEvidence] } = await q.query(
-    `SELECT id, source_document
-       FROM historical_stock_evidence
-      WHERE effective_date = $1::date AND status = 'approved'`,
-    [asOf],
-  );
-  if (approvedEvidence) {
-    const transitRows = options.includeInTransit === false ? [] : (await activeInTransit(q as any, { asOf }))
-      .filter((t) => !scope || (
-        scope.branchPairs?.length
-          ? scope.branchPairs.some((pair) => pair.type === t.branchType && Number(pair.id) === Number(t.branchId))
-          : scope.branchType === t.branchType && (scope.branchId == null || Number(scope.branchId) === Number(t.branchId))
-      ));
-    const lineParams: unknown[] = [Number(approvedEvidence.id)];
-    const lineWhere = branchWhere("l", lineParams).replace(/^ WHERE /, " AND ");
-    const { rows } = await q.query(
-      `SELECT l.material_type, l.ref_id, l.branch_type, l.branch_id,
-              l.quantity::numeric AS quantity, l.unit_cost::numeric AS unit_cost,
-              l.value::numeric AS value
-         FROM historical_stock_evidence_lines l
-        WHERE l.evidence_id = $1${lineWhere}`,
-      lineParams,
-    );
-    const names = await resolveProductNames(q as any, [
-      ...rows.map((r: any) => ({ materialType: r.material_type, refId: Number(r.ref_id) })),
-      ...transitRows.map((r) => ({ materialType: r.materialType, refId: r.refId })),
-    ]);
-    const items: ValuedItem[] = [];
-    let total = 0;
-    let inTransit = 0;
-    let unverifiedTransit = false;
-    for (const row of rows) {
-      const materialType = String(row.material_type) as ValuedItem["materialType"];
-      const refId = Number(row.ref_id);
-      const meta = names.get(`${materialType}:${refId}`);
-      if (!meta) continue;
-      const stock = Number(row.quantity);
-      if (stock <= 0) continue;
-      const value = r2(Number(row.value));
-      total = r2(total + value);
-      items.push({
-        id: refId, name: meta.name, unit: meta.unit, stock,
-        unitCost: Number(row.unit_cost), total: value, materialType,
-        typeLabel: materialType === "item" ? "Finished Good"
-          : materialType === "material" ? "Raw Material" : "Packing Material",
-      });
-    }
-    for (const transit of transitRows) {
-      const quantity = r3(Number(transit.quantity));
-      const unitCost = Number(transit.unitCost);
-      const meta = names.get(`${transit.materialType}:${transit.refId}`);
-      if (!(quantity > 0)) continue;
-      if (!meta || !Number.isFinite(unitCost) || unitCost <= 0) { unverifiedTransit = true; continue; }
-      const value = r2(quantity * unitCost);
-      total = r2(total + value);
-      inTransit = r2(inTransit + value);
-      const existing = items.find((item) => item.materialType === transit.materialType && item.id === transit.refId);
-      if (existing) {
-        existing.stock = r3(existing.stock + quantity);
-        existing.total = r2(existing.total + value);
-        existing.unitCost = existing.stock > 0 ? r2(existing.total / existing.stock) : unitCost;
-      } else {
-        items.push({
-          id: transit.refId, name: meta.name, unit: meta.unit, stock: quantity,
-          unitCost, total: value, materialType: transit.materialType,
-          typeLabel: transit.materialType === "item" ? "Finished Good"
-            : transit.materialType === "material" ? "Raw Material" : "Packing Material",
-        });
-      }
-    }
-    return {
-      total, inTransit, items, reliable: !unverifiedTransit,
-      note: unverifiedTransit ? "Approved on-hand evidence is present, but at least one in-transit line has no positive dispatch cost." : null,
-      evidenceSource: String(approvedEvidence.source_document),
-    };
-  }
-
   // Earliest movement ever recorded. On its own this does NOT mean the business
   // held nothing before it — `created_at` is when the row was written, not when
   // the goods moved, and the log was introduced after stock already existed. It
@@ -1071,20 +704,10 @@ export async function stockAsOf(
   const mvParams: unknown[] = [asOf];
   const mvWhere = branchWhere("sl", mvParams);
   const { rows: moves } = await q.query(
-    `SELECT sl.material_type, sl.ref_id::int AS ref_id,
-            sl.branch_type, sl.branch_id::int AS branch_id,
-             COALESCE(SUM(sl.qty_change::numeric) FILTER (WHERE
-               CASE WHEN sl.doc_type = 'stock_transfer' AND sl.txn_type = 'transfer_in'
-                    THEN COALESCE(t.received_date::date, receipt_voucher.voucher_date::date,
-                                  receipt_purchase.purchase_date::date, sl.created_at::date)
-                    ELSE COALESCE(sl.txn_date, sl.created_at::date) END > $1::date), 0) AS after_qty,
+    `SELECT material_type, ref_id::int AS ref_id, branch_type, branch_id::int AS branch_id,
+            COALESCE(SUM(qty_change::numeric) FILTER (WHERE COALESCE(txn_date, created_at::date) > $1::date), 0) AS after_qty,
             COALESCE(SUM(qty_change::numeric), 0) AS all_qty
-        FROM stock_ledger sl
-        LEFT JOIN stock_transfers t ON sl.doc_type = 'stock_transfer' AND t.id = sl.doc_id
-        LEFT JOIN journal_vouchers receipt_voucher ON receipt_voucher.id = t.receive_voucher_id
-        LEFT JOIN purchases receipt_purchase
-          ON receipt_purchase.id = t.purchase_id AND receipt_purchase.branch_transfer_id = t.id
-        ${mvWhere}
+       FROM stock_ledger sl${mvWhere}
       GROUP BY 1, 2, 3, 4`,
     mvParams,
   );
@@ -1120,9 +743,9 @@ export async function stockAsOf(
             scs.branch_id::int AS branch_id, scs.quantity::numeric AS quantity,
             scs.unit_cost::numeric AS unit_cost, scs.value::numeric AS value
        FROM stock_cost_snapshots scs
-       WHERE scs.as_of_date <= $1::date${snapshotWhere.replace(/^ WHERE /, " AND ")}
-       ORDER BY scs.material_type, scs.ref_id, scs.branch_type, scs.branch_id,
-                scs.as_of_date DESC, scs.id DESC`,
+      WHERE scs.as_of_date <= $1::date${snapshotWhere.replace(/^ WHERE /, " AND ")}
+      ORDER BY scs.material_type, scs.ref_id, scs.branch_type, scs.branch_id,
+               scs.as_of_date DESC, scs.id DESC`,
     snapshotParams,
   );
   const todayByKey = new Map<string, number>();
@@ -1131,13 +754,10 @@ export async function stockAsOf(
   }
   const snapshotByKey = new Map<string, { quantity: number; unitCost: number; value: number }>();
   for (const r of snapshots) {
-    const key = `${r.material_type}:${r.ref_id}:${r.branch_type}:${r.branch_id}`;
-    if (!snapshotByKey.has(key)) {
-      snapshotByKey.set(
-        key,
-        { quantity: Number(r.quantity), unitCost: Number(r.unit_cost), value: Number(r.value) },
-      );
-    }
+    snapshotByKey.set(
+      `${r.material_type}:${r.ref_id}:${r.branch_type}:${r.branch_id}`,
+      { quantity: Number(r.quantity), unitCost: Number(r.unit_cost), value: Number(r.value) },
+    );
   }
 
   // Every line either the quantity truth or the movement log knows about. The
@@ -1152,7 +772,7 @@ export async function stockAsOf(
   // A dispatched transfer remains owned by its sender until its recorded
   // receipt date. Reservation rows preserve the dispatch cost, so do not use a
   // mutable product-master cost when rebuilding this historical position.
-  const transitRows = options.includeInTransit === false ? [] : (await activeInTransit(q as any, { asOf }))
+  const transitRows = (await activeInTransit(q as any, { asOf }))
     .filter((t) => !scope || (
       scope.branchPairs?.length
         ? scope.branchPairs.some((pair) =>
@@ -1160,80 +780,14 @@ export async function stockAsOf(
         : scope.branchType === t.branchType
           && (scope.branchId == null || Number(scope.branchId) === Number(t.branchId))
     ));
-  const transferConflicts = (await historicalTransferReceiptConflicts(q as any, asOf))
-    .filter((t) => !scope || (
-      scope.branchPairs?.length
-        ? scope.branchPairs.some((pair) =>
-            pair.type === t.destination_type && Number(pair.id) === Number(t.destination_id))
-        : scope.branchType === t.destination_type
-          && (scope.branchId == null || Number(scope.branchId) === Number(t.destination_id))
-    ));
-  const unreceivedTransferQty = new Map<string, number>();
-  for (const row of transferConflicts) {
-    const key = `${row.material_type}:${row.ref_id}:${row.destination_type}:${row.destination_id}`;
-    unreceivedTransferQty.set(key, (unreceivedTransferQty.get(key) ?? 0) + Number(row.quantity));
-  }
 
-  // Historical on-hand costs come only from an exact-date persisted checkpoint.
-  // Transit rows use product lookup only for identity/display; their cost is
-  // taken from reservation history.
+  // Cost for on-hand rows comes from persisted checkpoints where available,
+  // then the same avg-cost-else-cost product-master fallback as stockValuation.
+  // Transit rows use this lookup only for product identity and display names.
   const meta = await resolveProductNames(q as any, [
     ...[...keys].map(parseKey),
     ...transitRows.map((t) => ({ materialType: t.materialType, refId: t.refId })),
   ]);
-
-  // Purchase-backed costs are independent of the location that currently
-  // holds a transferred batch. Load the exact product/batch source costs once
-  // per valuation rather than doing an additional query for every stock line.
-  const costProducts = [...new Map(
-    [...keys].map(parseKey).map((r) => [`${r.materialType}:${r.refId}`, r] as const),
-  ).values()];
-  const purchaseCostsByProduct = new Map<string, Array<{ batchNumber: string; unitCost: unknown }>>();
-  if (costProducts.length) {
-    const { rows: sourceCosts } = await q.query(
-      `/* historical purchase batch cost catalog */
-       WITH requested AS (
-         SELECT DISTINCT material_type, ref_id
-           FROM unnest($2::text[], $3::int[]) AS pair(material_type, ref_id)
-       )
-       SELECT DISTINCT requested.material_type, requested.ref_id,
-              li->>'batchNumber' AS batch_number,
-              COALESCE(NULLIF(li->>'costPerUnit', '')::numeric,
-                       NULLIF(li->>'unitCost', '')::numeric) AS unit_cost
-         FROM requested
-         JOIN purchases p ON p.cancelled_at IS NULL AND p.purchase_date <= $1::date
-         CROSS JOIN LATERAL jsonb_array_elements(COALESCE(p.line_items, '[]'::jsonb)) li
-        WHERE COALESCE(NULLIF(li->>'materialType', ''), 'item') = requested.material_type
-          AND COALESCE(NULLIF(li->>'itemId', '')::int,
-                       NULLIF(li->>'materialId', '')::int) = requested.ref_id
-          AND NULLIF(li->>'batchNumber', '') IS NOT NULL
-          AND COALESCE(NULLIF(li->>'costPerUnit', '')::numeric,
-                       NULLIF(li->>'unitCost', '')::numeric) > 0
-          AND COALESCE(NULLIF(li->>'quantity', '')::numeric, 0) > 0
-          AND EXISTS (
-            SELECT 1
-              FROM stock_ledger source
-             WHERE source.doc_type = 'purchase'
-               AND source.doc_id = p.id
-               AND source.txn_type = 'purchase'
-               AND source.material_type = requested.material_type
-               AND source.ref_id = requested.ref_id
-               AND source.qty_change > 0
-               AND source.unit_cost = COALESCE(
-                     NULLIF(li->>'costPerUnit', '')::numeric,
-                     NULLIF(li->>'unitCost', '')::numeric
-                   )
-               AND COALESCE(source.txn_date, source.created_at::date) <= $1::date
-          )`,
-      [asOf, costProducts.map((r) => r.materialType), costProducts.map((r) => r.refId)],
-    );
-    for (const row of sourceCosts) {
-      const key = `${row.material_type}:${row.ref_id}`;
-      const rows = purchaseCostsByProduct.get(key) ?? [];
-      rows.push({ batchNumber: String(row.batch_number), unitCost: row.unit_cost });
-      purchaseCostsByProduct.set(key, rows);
-    }
-  }
 
   const byProduct = new Map<string, ValuedItem>();
   let total = 0;
@@ -1242,7 +796,6 @@ export async function stockAsOf(
   let unvalued = 0;
   let noCostHistory = 0;
   let missingTransitCost = 0;
-  const batchFallbackFailures: string[] = [];
 
   for (const key of keys) {
     const todayQty = todayByKey.get(key) ?? 0;
@@ -1251,25 +804,10 @@ export async function stockAsOf(
     const explained = logged === undefined ? todayQty === 0 : Math.abs(logged - todayQty) <= 0.001;
     if (!explained) unreconciled += 1;
 
-    let snapshot = snapshotByKey.get(key);
-    const disputedTransferQty = unreceivedTransferQty.get(key) ?? 0;
-    if (disputedTransferQty > 0) {
-      // An old checkpoint may have been approved before transfer receipt
-      // contradictions were detected. Do not guess whether it included the
-      // destination posting; keep the sender-owned transit line separate.
-      noCostHistory += 1;
-      continue;
-    }
-    // A transfer-in posted by the cutoff is not on-hand when its sender
-    // reservation remains open past that cutoff. Keep the exact dispatched
-    // quantity in transit, and remove the contradictory inbound ledger entry
-    // from the destination rewind to avoid counting it twice.
-    const quantityBeforeTransferCorrection = snapshot
-      ? snapshot.quantity
-      : todayQty - (afterByKey.get(key) ?? 0);
-    const qty = Math.round(
-      (quantityBeforeTransferCorrection - disputedTransferQty) * 1000,
-    ) / 1000;
+    const snapshot = snapshotByKey.get(key);
+    const qty = snapshot
+      ? Math.round(snapshot.quantity * 1000) / 1000
+      : Math.round((todayQty - (afterByKey.get(key) ?? 0)) * 1000) / 1000;
     if (qty <= 0) continue;
 
     const { materialType, refId } = parseKey(key);
@@ -1278,28 +816,9 @@ export async function stockAsOf(
     // — must not be quietly valued at nothing.
     if (!info) { unvalued += 1; continue; }
 
-    if (!snapshot || !(snapshot.unitCost > 0) || !(snapshot.value > 0)) {
-      const batch = await historicalBatchCost(
-        q as Q,
-        { materialType, refId, branchType: key.split(":")[2], branchId: Number(key.split(":")[3]) },
-        asOf,
-        qty,
-        purchaseCostsByProduct,
-      );
-      if (!batch.ok) {
-        noCostHistory += 1;
-        batchFallbackFailures.push(`${info.name}: ${batch.reason}`);
-        continue;
-      }
-      snapshot = { quantity: qty, unitCost: batch.unitCost, value: batch.value };
-    }
-    const rewindQty = todayQty - (afterByKey.get(key) ?? 0);
-    if (Math.abs(snapshot.quantity - rewindQty) > 0.001) {
-      noCostHistory += 1;
-      continue;
-    }
-    const unitCost = snapshot.unitCost;
-    const value = r2(snapshot.value);
+    if (!snapshot) noCostHistory += 1;
+    const unitCost = snapshot?.unitCost ?? info.unitCost;
+    const value = snapshot ? r2(snapshot.value) : r2(qty * unitCost);
     total = r2(total + value);
     const pk = `${materialType}:${refId}`;
     const prev = byProduct.get(pk);
@@ -1379,15 +898,7 @@ export async function stockAsOf(
     reasons.push(`${unvalued} line${unvalued === 1 ? "" : "s"} held stock on that date but the product record no longer exists, so it could not be valued`);
   }
   if (noCostHistory > 0) {
-    reasons.push(
-      `${noCostHistory} product/location line${noCostHistory === 1 ? "" : "s"} has no positive, quantity-reconciled cost checkpoint or complete historical batch evidence on or before the requested date; current item costs were not substituted`,
-    );
-    if (batchFallbackFailures.length) {
-      reasons.push(`Historical batch fallback was not proven for: ${batchFallbackFailures.join("; ")}`);
-    }
-  }
-  if (transferConflicts.length > 0) {
-    reasons.push(`${transferConflicts.length} transfer-in line${transferConflicts.length === 1 ? "" : "s"} has a ledger date before its receipt/reservation evidence; excluded from destination on-hand and retained as transit where supported`);
+    reasons.push(`${noCostHistory} product/location line${noCostHistory === 1 ? "" : "s"} has no persisted cost checkpoint for that date`);
   }
   if (missingTransitCost > 0) {
     reasons.push(`${missingTransitCost} in-transit line${missingTransitCost === 1 ? "" : "s"} has no positive evidenced dispatch cost`);
@@ -1400,7 +911,7 @@ export async function stockAsOf(
     items: [...byProduct.values()].sort((a, b) => a.name.localeCompare(b.name)),
     reliable: complete,
     note: complete ? null
-      : `Stock ${reasons.join("; and ")}. Current ERP stock data is present, but those historical costs are not established. Only source-backed values are included; unknown historical costs were omitted rather than replaced with current item costs. The position on ${asOf} is not reliable.`,
+      : `Stock ${reasons.join("; and ")}. The position on ${asOf} is therefore derived rather than recorded and should not be relied on.`,
   };
 }
 
@@ -1480,13 +991,13 @@ export interface BooksOptions {
 export interface Books {
   period: { fromDate: string | null; toDate: string | null };
   profitAndLoss: {
-    /** Transfer postings are retained as memo data and excluded from P&L totals. */
+    /** True when this location slice includes internal transfer activity in P&L. */
     stockTransfersIncludedInPnl: boolean;
     expenses: {
       openingStock: number;
       /** Physical opening position before the period-scoped transfer adjustment. */
       openingStockPhysical: number;
-      /** Period stock-cost and transit-boundary adjustment for internal transfers. */
+      /** Transfer adjustment applied only when transfer ledgers are excluded from P&L. */
       openingStockTransferAdjustment: number;
       openingStockItems: ValuedItem[];
       openingStockReliable: boolean;
@@ -1517,8 +1028,6 @@ export interface Books {
       closingStockItems: ValuedItem[];
       /** Sender-owned transit included in closingStock; rendered separately in location statements. */
       closingStockInTransit: number;
-      /** Actual evidence completeness, distinct from the historical/derived presentation flag below. */
-      closingStockEvidenceReliable: boolean;
       /** false when the closing position is rewound from history rather than read. */
       closingStockReliable: boolean;
       closingStockNote: string | null;
@@ -1552,7 +1061,7 @@ export interface Books {
     assets: {
       fixedAssets: StatementGroup;
       currentAssets: StatementGroup;
-      /** Inventory valued at cost; included in both the P&L carry-forward and Balance Sheet assets. */
+      /** Compatibility fields; stock is P&L-only and excluded from the Balance Sheet. */
       closingStock: number;
       closingStockOnHand: number;
       closingStockInTransit: number;
@@ -1583,7 +1092,6 @@ export async function buildBooks(
   const toDate = isDate(opts.toDate) ? opts.toDate : null;
   const location = opts.location ?? null;
   const q = opts.q ?? pool;
-  const companyToday = await companyTodayISO(q);
 
   const chart = await loadChart(q);
   const allPostings = await buildDerivedPostings(toDate ? { toDate, q } : { q });
@@ -1698,12 +1206,9 @@ export async function buildBooks(
     location && location.type !== "company"
       ? { branchType: location.type, branchId: location.id, ...(location.identities?.length ? { branchPairs: location.identities } : {}) }
       : null;
-  // Transfer ledgers are memo/audit data, not operating income or COGS. Apply
-  // the dated stock-cost movement and transit-boundary adjustment to every
-  // stock-owning scope so internal relocations remain P&L-neutral even when
-  // the transfer-account amount differs from the authoritative stock value.
+  const includeLocationTransfersInPnl = !!location && location.type !== "company";
   const skipStock = location?.type === "company";
-  const historicalClose = toDate !== null && toDate < companyToday;
+  const historicalClose = toDate !== null && toDate < todayISO();
   const closing = skipStock ? emptyStock
       : historicalClose ? await stockAsOf(toDate, stockScope, q)
       : await closingStockAt(stockScope, q, { includeInTransit: true });
@@ -1718,16 +1223,18 @@ export async function buildBooks(
     && fromDate !== null
     && toDate !== null
     && fromDate === toDate
-    && toDate === companyToday
+    && toDate === todayISO()
     && !(await hasStockMovementInRange(fromDate, toDate, stockScope, q));
   const normalOpening = skipStock || sameDayNoStockMovement ? emptyStock
     : fromDate ? await stockAsOf(previousDay(fromDate), stockScope, q) : await stockAsOf(null, undefined, q);
-  const transferOpeningAdjustment = skipStock || sameDayNoStockMovement
+  const transferOpeningAdjustment = skipStock || sameDayNoStockMovement || includeLocationTransfersInPnl
     ? { total: 0, lines: [] }
     : await stockTransferOpeningAdjustment(fromDate, toDate, stockScope, q);
   const opening = sameDayNoStockMovement
     ? { ...closing, note: closing.note }
-    : applyStockTransferOpeningAdjustment(normalOpening, transferOpeningAdjustment);
+    : includeLocationTransfersInPnl
+      ? normalOpening
+      : applyStockTransferOpeningAdjustment(normalOpening, transferOpeningAdjustment);
 
   // ── Group builders ────────────────────────────────────────────────────────
 
@@ -1797,8 +1304,8 @@ export async function buildBooks(
   const transferInNames = new Set(["STD-TRF-IN", "TRANSFER-IN", "transfer-in"]);
   const transferOutNames = new Set(["STD-TRF-OUT", "TRANSFER-OUT", "transfer-out"]);
   // Transfer-In can be parented beneath Purchase Account or Direct Expenses.
-  // Expose both transfer balances separately for audit while removing them
-  // from their chart subtrees and operating P&L totals.
+  // Keep both transfer balances separate from their chart subtrees so the
+  // location P&L can present each as one explicit line without double-counting.
   const stockTransferIn = r2(
     nodeTotal(purchasesGroup, transferInNames) + nodeTotal(directExp, transferInNames),
   );
@@ -1807,26 +1314,25 @@ export async function buildBooks(
   const directExpensesForPnl = stripTransferNodes(directExp, transferInNames);
   const directIncomesForPnl = stripTransferNodes(directInc, transferOutNames);
 
-  // Transfer account postings remain separately exposed below for audit and
-  // reconciliation, but are excluded from operating totals at every scope.
+  // Branch statements show transfer-in as a purchase and transfer-out as
+  // income. Their physical movement is reflected by the location's opening and
+  // closing stock boundaries, so do not also apply the consolidated
+  // transfer-opening adjustment. Company/consolidated statements retain the
+  // neutral treatment: transfer ledgers stay outside operating totals and the
+  // boundary adjustment carries the movement exactly once.
+  const pnlTransferIn = includeLocationTransfersInPnl ? stockTransferIn : 0;
+  const pnlTransferOut = includeLocationTransfersInPnl ? stockTransferOut : 0;
   const totalExpenses = r2(
-    opening.total + purchasesForPnl.total + directExpensesForPnl.total + indirectExp.total,
+    opening.total + purchasesForPnl.total + pnlTransferIn + directExpensesForPnl.total + indirectExp.total,
   );
   const totalIncomes = r2(
-    salesGroup.total + closing.total + directIncomesForPnl.total + indirectInc.total,
+    salesGroup.total + closing.total + directIncomesForPnl.total + pnlTransferOut + indirectInc.total,
   );
-  const pnlTotals = calculatePnlTotals({
-    sales: salesGroup.total,
-    directIncome: directIncomesForPnl.total,
-    openingStock: opening.total,
-    purchases: purchasesForPnl.total,
-    directExpenses: directExpensesForPnl.total,
-    closingStock: closing.total,
-    otherIncome: indirectInc.total,
-    indirectExpenses: indirectExp.total,
-  });
-  const netProfit = pnlTotals.netProfit;
-  const { revenue, costOfGoodsSold: cogs, grossProfit } = pnlTotals;
+  const netProfit = r2(totalIncomes - totalExpenses);
+
+  const revenue = r2(salesGroup.total + directIncomesForPnl.total + pnlTransferOut);
+  const cogs = r2(opening.total + purchasesForPnl.total + pnlTransferIn + directExpensesForPnl.total - closing.total);
+  const grossProfit = r2(revenue - cogs);
   const pct = (part: number, whole: number) => (Math.abs(whole) < 0.005 ? 0 : r2((part / whole) * 100));
 
   // ── Balance sheet (cumulative to `toDate`) ───────────────────────────────
@@ -1842,9 +1348,8 @@ export async function buildBooks(
 
   // Retained earnings must be cumulative to match the cumulative ledger
   // balances, so it is recomputed over everything to date rather than reusing
-  // the period profit. Closing stock affects retained earnings through COGS
-  // and is also presented as an inventory asset; the capitalisation overlay
-  // is excluded from both sides.
+  // the period profit. Closing stock is the only inventory carried in — the
+  // capitalisation overlay is excluded from both sides.
   let cumulativeIncome = 0;
   let cumulativeExpense = 0;
   const unclassified: string[] = [];
@@ -1863,10 +1368,9 @@ export async function buildBooks(
   }
   const retainedEarnings = r2(cumulativeIncome + closing.total - cumulativeExpense);
 
-  // The stock adjustment increases retained earnings; the matching physical
-  // inventory must appear in Balance Sheet assets or the statement is short by
-  // exactly closing stock.
-  const assetsTotal = balanceSheetAssetsTotal(fixedGroup.total, curaGroup.total, closing.total);
+  // Stock is included in the P&L's COGS calculation, but is intentionally not
+  // presented as a Balance Sheet asset.
+  const assetsTotal = r2(fixedGroup.total + curaGroup.total);
   const liabilitiesTotal = r2(capitalGroup.total + loansGroup.total + curlGroup.total + retainedEarnings);
   const difference = r2(assetsTotal - liabilitiesTotal);
 
@@ -1914,7 +1418,7 @@ export async function buildBooks(
   }
   if (fromDate && !opening.reliable) {
     addIntegrityIssue(
-      `Opening stock as at ${previousDay(fromDate)} is unverified: ${opening.note ?? "the required historical quantity and cost evidence is unavailable."}`,
+      `Opening stock as at ${previousDay(fromDate)} cannot be established from stock movement history, so cost of goods sold and net profit are understated or overstated by the true opening position.`,
       "UNVERIFIED",
     );
   }
@@ -1945,10 +1449,11 @@ export async function buildBooks(
     }
   }
   if (Math.abs(difference) >= 0.01) {
-    addIntegrityIssue(
-      `Assets and liabilities differ by ₹${Math.abs(difference).toFixed(2)} after including closing stock in Balance Sheet assets.`,
-      "FAIL",
-    );
+    const unexplainedAfterStockExclusion = r2(difference + closing.total);
+    const gapDetail = Math.abs(unexplainedAfterStockExclusion) <= 0.01
+      ? `Assets and liabilities differ by ₹${Math.abs(difference).toFixed(2)} because closing stock of ₹${closing.total.toFixed(2)} is excluded from Balance Sheet assets but remains in P&L carry-forward.`
+      : `Assets and liabilities differ by ₹${Math.abs(difference).toFixed(2)}. After accounting for the intentionally excluded closing stock of ₹${closing.total.toFixed(2)}, an additional difference of ₹${Math.abs(unexplainedAfterStockExclusion).toFixed(2)} remains.`;
+    addIntegrityIssue(gapDetail, "FAIL");
   }
   const status: BooksIntegrity["status"] = hasIntegrityFailure || Math.abs(difference) >= 0.01
     ? "FAIL"
@@ -1957,7 +1462,7 @@ export async function buildBooks(
   return {
     period: { fromDate, toDate },
     profitAndLoss: {
-      stockTransfersIncludedInPnl: false,
+      stockTransfersIncludedInPnl: includeLocationTransfersInPnl,
       expenses: {
         openingStock: opening.total,
         openingStockPhysical: normalOpening.total,
@@ -1984,7 +1489,6 @@ export async function buildBooks(
         closingStockOnHand: r2(Math.max(0, closing.total - closing.inTransit)),
         closingStockItems: closing.items,
         closingStockInTransit: closing.inTransit,
-        closingStockEvidenceReliable: closing.reliable,
         closingStockReliable: closing.reliable && !historicalClose,
         closingStockNote: historicalClose
           ? [closing.note, HISTORICAL_CLOSE_NOTE].filter(Boolean).join(" ")
@@ -2018,9 +1522,9 @@ export async function buildBooks(
       assets: {
         fixedAssets: fixedGroup,
         currentAssets: curaGroup,
-        closingStock: closing.total,
-        closingStockOnHand: r2(Math.max(0, closing.total - closing.inTransit)),
-        closingStockInTransit: closing.inTransit,
+        closingStock: 0,
+        closingStockOnHand: 0,
+        closingStockInTransit: 0,
         total: assetsTotal,
       },
     },

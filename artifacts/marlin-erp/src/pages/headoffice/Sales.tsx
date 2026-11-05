@@ -7,14 +7,11 @@ import {
   useListItems, useListItemPrices, useListStock, useGetCompanySettings,
   useListCoupons,
   customFetch,
-  useGetSale, useGetSalePayments, useCreateSalePayment, useUpdateSale, useUpdateSaleShipFromAddress, useCancelSale,
+  useGetSale, useGetSalePayments, useCreateSalePayment, useUpdateSale, useUpdateSaleShipFromAddress,
   ensureInvoiceShareLink, absoluteShareUrl,
   usePartyAdvance, getPartyAdvanceQueryKey,
 } from '@workspace/api-client-react';
 import { usePermission } from '@/lib/usePermission';
-import { useIsAdmin } from '@/lib/useIsAdmin';
-import { canShowLockingRateOverride } from '@/lib/lockingRateOverride';
-import { effectiveSellingRate, getLockingRateIssue } from '@/lib/lockingRateValidation';
 import { formatDate } from '@/lib/date';
 import { isActiveProduct } from '@/lib/productStatus';
 import { useOutletsEnabled, useFeatureFlags } from '@/lib/useFeatureFlags';
@@ -37,7 +34,7 @@ import {
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { useDateRange, RangeBar, exportReportXlsx } from '@/pages/reports/shared';
+import { useDateRange, RangeBar } from '@/pages/reports/shared';
 import { useLocationContext } from '@/lib/locationContext';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem } from '@/components/ui/command';
@@ -58,7 +55,7 @@ import {
 } from '@/lib/invoiceShare';
 import {
   Plus, Search, Trash2, CreditCard, Calendar, Receipt,
-  Download, Eye, PackageOpen, FileDown, FileSpreadsheet, Loader2, AlertTriangle,
+  Download, Eye, PackageOpen, FileDown, AlertTriangle,
   UserPlus, Check, ChevronsUpDown, Banknote, IndianRupee, Pencil, Printer,
   History,
 } from 'lucide-react';
@@ -176,9 +173,6 @@ const saleStatusLabel = (sale: any): string | undefined => {
   return mode ? `Paid · ${mode}` : 'Paid';
 };
 
-const saleIsCancelled = (sale: any): boolean =>
-  Boolean(sale?.isCancelled || sale?.cancelledAt || sale?.cancelled_at || sale?.paymentStatus === 'cancelled');
-
 // ── Form Schema ─────────────────────────────────────────────────────────────────
 
 const saleLineSchema = z.object({
@@ -201,7 +195,7 @@ const saleLineSchema = z.object({
 /** One shared column template for the cart header strip and every ≥lg row —
  *  the Purchase master's table pattern. Below lg the cells wrap into labelled
  *  2/4-column grids instead; no horizontal scrolling at any width. */
-const SALE_GRID_LG = 'lg:grid-cols-[minmax(200px,1fr)_88px_72px_96px_88px_60px_104px_32px]';
+const SALE_GRID_LG = 'lg:grid-cols-[minmax(200px,1fr)_88px_72px_88px_96px_88px_60px_104px_32px]';
 
 /** Other Charges on the invoice — Packing & Transport, freight, hamali,
  *  courier… Flat post-tax amounts the customer owes on top of the goods
@@ -323,9 +317,6 @@ interface SalesProps {
 
 export default function Sales({ forceLocationType, forceLocationId, forceLocationName, permissionModule }: SalesProps = {}) {
   const perm = usePermission(permissionModule ?? 'page:/sales/pos');
-  const isAdmin = useIsAdmin();
-  const [overrideLockingRate, setOverrideLockingRate] = useState(false);
-  const [validatedLockingLines, setValidatedLockingLines] = useState<Set<string>>(() => new Set());
   // Head Office as a selling location is offered only to HO/admin users —
   // branch staff sell from their own location (the server enforces this too).
   const { data: me } = useGetMe();
@@ -357,7 +348,6 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   // until they narrow. Filtering happens server-side (from/to on /sales).
   const range = useDateRange('all');
   const [search, setSearch] = useState('');
-  const [itemWise, setItemWise] = useState(false);
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const PAGE_SIZE = 25;
 
@@ -424,18 +414,15 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
       ? customFetch(`/api/customers?locationType=${forceLocationType}&locationId=${forceLocationId}`)
       : customFetch('/api/customers'),
   });
-  const { data: salespeople = [], isLoading: salespeopleLoading } = useQuery<any[]>({
+  const { data: salespeople = [] } = useQuery<any[]>({
     queryKey: ['/api/sales/salespeople'],
     queryFn: () => customFetch('/api/sales/salespeople'),
   });
   const { data: items = [] } = useListItems();
   const { data: companySettings } = useGetCompanySettings();
   const [statusFilter, setStatusFilter] = useState<'all' | 'unpaid' | 'partially_paid' | 'paid'>('all');
-  const [isExportingExcel, setIsExportingExcel] = useState(false);
   const [isOpen, setIsOpen] = useState(false);
   const [viewItem, setViewItem] = useState<any>(null);
-  const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
-  const [cancelReason, setCancelReason] = useState('');
   const [shipFromEditSale, setShipFromEditSale] = useState<any>(null);
   const [shipFromAddressDraft, setShipFromAddressDraft] = useState('');
 
@@ -586,7 +573,6 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   const createMutation = useCreateSale();
   const updateMutation = useUpdateSale();
   const shipFromMutation = useUpdateSaleShipFromAddress();
-  const cancelSaleMutation = useCancelSale();
   const openShipFromAddressEditor = (sale: any) => {
     setShipFromAddressDraft(String(sale.shipFromAddress ?? ''));
     setShipFromEditSale(sale);
@@ -612,38 +598,8 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
     );
   };
 
-  const confirmCancelSale = async () => {
-    if (!viewItem || cancelSaleMutation.isPending) return;
-    const id = Number(viewItem.id);
-    const invoiceNumber = formatSalesInvoiceDisplayNumber(viewItem.invoiceNumber);
-    try {
-      await cancelSaleMutation.mutateAsync({
-        id,
-        data: { reason: cancelReason.trim() || undefined },
-      });
-      await Promise.all([
-        invalidateSalesData(),
-        queryClient.invalidateQueries({
-          predicate: query => {
-            const key = String(query.queryKey[0] ?? '');
-            return key.startsWith('/api/accounts')
-              || key.startsWith('/api/receipts')
-              || key.startsWith('/api/reports');
-          },
-        }),
-      ]);
-      setCancelDialogOpen(false);
-      setCancelReason('');
-      setViewItem(null);
-      toast.success(`${invoiceNumber} cancelled; stock was restored.`);
-    } catch (error: any) {
-      toast.error(error?.data?.error || error?.message || 'Could not cancel sale');
-    }
-  };
-
   // editItem holds the sale being edited; null means "create" mode
   const [editItem, setEditItem] = useState<any>(null);
-  useEffect(() => { if (isOpen) setOverrideLockingRate(false); }, [isOpen, editItem?.id]);
 
   // Convert-from-quotation: set when the Quotations page opened this form
   // prefilled. The id rides on the create payload so the server can stamp
@@ -1090,8 +1046,6 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
     return m;
   }, [editItem]);
   const getMrpFloor = (itemId: number) => {
-    const item = items.find(i => i.id === itemId) as any;
-    if (item?.lockingRate != null) return Number(item.lockingRate);
     const master = getPrice(itemId);
     const saved = savedPriceByItem.get(Number(itemId));
     return saved !== undefined ? Math.min(master, saved) : master;
@@ -1204,7 +1158,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   const computeCartTotals = () => {
     // Pass 1 — per-line ITEM discounts (₹/unit off the MRP) and each line's
     // pre-bill-discount value ("basis").
-    const prepared: Array<{ lineIndex: number; itemId: number; qty: number; price: number; taxRate: number; itemDisc: number; basis: number; taxable: boolean }> = [];
+    const prepared: Array<{ qty: number; price: number; taxRate: number; itemDisc: number; basis: number; taxable: boolean }> = [];
     let grossItemValue = 0, itemDiscountTotal = 0;
     fields.forEach((_, i) => {
       const itemId = form.watch(`lineItems.${i}.itemId`);
@@ -1217,7 +1171,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
       const itemDisc = Math.round(unitDisc * qty * 100) / 100;
       grossItemValue    += Math.round(qty * price * 100) / 100;
       itemDiscountTotal += itemDisc;
-      prepared.push({ lineIndex: i, itemId: Number(itemId), qty, price, taxRate, itemDisc, basis: Math.max(0, Math.round((qty * price - itemDisc) * 100) / 100), taxable });
+      prepared.push({ qty, price, taxRate, itemDisc, basis: Math.max(0, Math.round((qty * price - itemDisc) * 100) / 100), taxable });
     });
 
     // Pass 2 — allocate the BILL discount paise-exactly across lines in
@@ -1254,11 +1208,9 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
     // (kg goods) an unrounded qty×price−disc base would keep sub-paisa
     // fractions and drift the preview off the persisted invoice.
     let grossTotal = 0, subtotal = 0, cgstTotal = 0, sgstTotal = 0, igstTotal = 0, taxTotal = 0;
-    const lineTaxDetails: Array<{ lineSubtotal: number; lineGross: number }> = [];
     prepared.forEach((p, k) => {
       const adjusted = Math.round((p.basis - shares[k]) * 100) / 100;
       const gst = computeLineGst(1, adjusted, p.taxRate, isInterState, 0, p.taxable);
-      lineTaxDetails.push({ lineSubtotal: gst.lineSubtotal, lineGross: gst.lineGross });
       grossTotal += gst.lineGross;            // FINAL line total, either mode
       subtotal   += gst.lineSubtotal;
       cgstTotal  += gst.cgst;
@@ -1275,88 +1227,18 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
           ? Math.round(grandTotal * Number(appliedCoupon.discountValue) / 100 * 100) / 100
           : Math.min(Number(appliedCoupon.discountValue), grandTotal)
         : 0;
-    // Match the server's Locking Rate basis: per-unit item discount, the
-    // paise-exact bill-discount allocation, then each line's proportional
-    // post-tax coupon share (converted back to taxable basis for exclusive
-    // prices). These are diagnostics only; invoice totals above are unchanged.
-    const effectiveUnitRates = fields.map((_, i) => Number(form.watch(`lineItems.${i}.unitPrice`) ?? 0));
-    prepared.forEach((p, i) => {
-      const { lineSubtotal, lineGross } = lineTaxDetails[i] ?? { lineSubtotal: 0, lineGross: 0 };
-      const couponShare = grossTotal > 0 ? discountAmount * lineGross / grossTotal : 0;
-      const couponPriceAdjustment = p.taxable && lineGross > 0
-        ? couponShare * lineSubtotal / lineGross
-        : couponShare;
-      effectiveUnitRates[p.lineIndex] = effectiveSellingRate(
-        p.qty, p.price, p.itemDisc, shares[i], couponPriceAdjustment,
-      );
-    });
     // Other Charges — flat post-tax amounts on top of the goods (no GST on
     // them), mirroring the server: total = goods + GST − coupon + charges.
     const otherTotal = Math.round(((form.watch('otherCharges') ?? []) as any[])
       .reduce((t, c) => t + (Number(c?.amount) || 0), 0) * 100) / 100;
-    return { grossItemValue, grossTotal, subtotal, cgstTotal, sgstTotal, igstTotal, taxTotal, itemDiscountTotal, basisSum, billDiscount, grandTotal, discountAmount, otherTotal, effectiveUnitRates, finalAmount: Math.round((grandTotal - discountAmount + otherTotal) * 100) / 100 };
+    return { grossItemValue, grossTotal, subtotal, cgstTotal, sgstTotal, igstTotal, taxTotal, itemDiscountTotal, basisSum, billDiscount, grandTotal, discountAmount, otherTotal, finalAmount: Math.round((grandTotal - discountAmount + otherTotal) * 100) / 100 };
   };
 
   const totals = computeCartTotals();
-  const lockingRateIssueAt = (index: number) => {
-    const line = form.watch(`lineItems.${index}`);
-    const item = items.find(candidate => Number(candidate.id) === Number(line?.itemId)) as any;
-    if (!item || item.lockingRate == null) return null;
-    const floor = Number(item.lockingRate);
-    return getLockingRateIssue(
-      String(item.name ?? 'Item'),
-      floor,
-      Number(totals.effectiveUnitRates[index] ?? line?.unitPrice ?? 0),
-    );
-  };
-  const validateLockingLine = (id: string) => {
-    setValidatedLockingLines(previous => new Set(previous).add(id));
-  };
-  const clearLockingLineValidation = (id: string) => {
-    setValidatedLockingLines(previous => {
-      if (!previous.has(id)) return previous;
-      const next = new Set(previous);
-      next.delete(id);
-      return next;
-    });
-  };
-  const validateAllLockingLines = () => {
-    setValidatedLockingLines(new Set(fields.map(field => field.id)));
-  };
   // True when at least one item is selected
   const hasItems = fields.some((_, i) => (form.watch(`lineItems.${i}.itemId`) ?? 0) > 0);
-  const hasConfiguredLockingRate = (form.watch('lineItems') ?? []).some(line => {
-    const item = items.find(candidate => Number(candidate.id) === Number(line.itemId)) as any;
-    return item?.lockingRate != null;
-  });
-  const showLockingRateOverride = canShowLockingRateOverride(isAdmin, hasConfiguredLockingRate);
-  useEffect(() => {
-    if (!showLockingRateOverride) setOverrideLockingRate(false);
-  }, [showLockingRateOverride]);
-  useEffect(() => {
-    if (!isOpen) setValidatedLockingLines(new Set());
-  }, [isOpen]);
 
   const onSubmit = (data: FormValues) => {
-    const currentTotals = computeCartTotals();
-    const belowLockingRate = data.lineItems
-      .map((line, index) => {
-        const item = items.find(candidate => Number(candidate.id) === Number(line.itemId)) as any;
-        const effectiveRate = Number(currentTotals.effectiveUnitRates[index] ?? line.unitPrice ?? 0);
-        return { index, issue: getLockingRateIssue(String(item?.name ?? 'Item'), item?.lockingRate, effectiveRate) };
-      })
-      .filter(line => line.issue !== null);
-    if (belowLockingRate.length) validateAllLockingLines();
-    if (belowLockingRate.length && !overrideLockingRate) {
-      const first = belowLockingRate[0];
-      toast.error(`${first.issue!.itemName}: effective rate ${inr(first.issue!.effectiveRate)} is below its Locking Rate ${inr(first.issue!.lockingRate)}. An authorized Level-1 Admin override is required.`);
-      focusField(`line-mrp-${first.index}`, scopeRef.current);
-      return;
-    }
-    if (!editItem && (!Number.isInteger(Number(data.salespersonEmployeeId)) || Number(data.salespersonEmployeeId) <= 0)) {
-      form.setError('salespersonEmployeeId', { type: 'required', message: 'Select a salesman before recording the sale' });
-      return;
-    }
     if (data.paymentMode === 'credit' && !data.customerId) {
       toast.error('Credit sales need a registered customer — pick one or change the payment mode.');
       focusField('customerId', scopeRef.current);
@@ -1367,7 +1249,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
     for (let i = 0; i < data.lineItems.length; i++) {
       const li = data.lineItems[i];
       const floor = getMrpFloor(li.itemId);
-      if (!overrideLockingRate && floor > 0 && Number(li.unitPrice) < floor) {
+      if (floor > 0 && Number(li.unitPrice) < floor) {
         toast.error(MRP_FLOOR_MESSAGE);
         focusField(`line-mrp-${i}`, scopeRef.current);
         return;
@@ -1431,7 +1313,6 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
       // value spread from `data`, which is a percentage while the % toggle
       // is on and must never reach the server as-is.
       billDiscount,
-      ...(overrideLockingRate ? { overrideLockingRate: true } : {}),
       // Always sent: on edit the list REPLACES the stored charges, so removing
       // the last row genuinely clears them (absent would preserve).
       otherCharges: (data.otherCharges ?? [])
@@ -1756,7 +1637,6 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
     date: s => (s as any).saleDate,
     location: s => s.outletName,
     customer: s => s.customerName || 'Walk-in',
-    salesman: s => (s as any).salesperson ?? (s as any).salesperson_employee_id ?? '',
     status: s => (s as any).paymentStatus ?? 'paid',
     tax: s => Number((s as any).taxTotal) || null,
     discount: s => (s as any)._discountTotal || null,
@@ -1767,51 +1647,6 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   const itemsMap = new Map(items.map(i => [i.id, i]));
   const viewedCharges = saleOtherCharges(viewItem);
   const viewedChargesTotal = saleOtherChargesTotal(viewItem);
-  const exportSalesToExcel = async () => {
-    if (isExportingExcel) return;
-    setIsExportingExcel(true);
-    try {
-      const exportRows = (await fetchAllSales(salesListFilters))
-        .filter(s => statusFilter === 'all' || ((s as any).paymentStatus ?? 'paid') === statusFilter);
-      if (exportRows.length > 3000) {
-        toast.error('Excel export supports up to 3,000 sales. Narrow the filters or use CSV.');
-        return;
-      }
-      await exportReportXlsx({
-        title: 'Point of Sale',
-        filename: 'sales',
-        orientation: 'landscape',
-        sections: [{
-          columns: [
-            { label: 'Invoice' }, { label: 'Date' }, { label: 'Outlet' },
-            { label: 'Salesman' }, { label: 'Customer' }, { label: 'Payment' },
-            { label: 'Subtotal', align: 'right' }, { label: 'Tax', align: 'right' },
-            { label: 'Discount', align: 'right' }, { label: 'Charges', align: 'right' },
-            { label: 'Total', align: 'right' },
-          ],
-          rows: exportRows.map(s => [
-            formatSalesInvoiceDisplayNumber(s.invoiceNumber),
-            formatDate(s.saleDate),
-            s.outletName || '',
-            s.salesperson || '—',
-            s.customerName || 'Walk-in',
-            paymentModeLabel(s.paymentMode),
-            Number(s.subtotal ?? 0),
-            Number(s.taxTotal ?? 0),
-            Number((s as any).discountTotal ?? 0)
-              + (((s as any).lineItems as any[]) ?? []).reduce((sum: number, li: any) => sum + Number(li?.discount ?? 0), 0),
-            saleOtherChargesTotal(s),
-            Number(s.totalAmount ?? 0),
-          ]),
-        }],
-      });
-      toast.success('Excel file downloaded');
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Excel export failed');
-    } finally {
-      setIsExportingExcel(false);
-    }
-  };
 
   if (!perm.isLoading && !perm.canView) {
     return (
@@ -1835,28 +1670,19 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
           actions={
             <>
               {perm.canDownload && (
-                <>
-                  <Button variant="outline" size="sm" onClick={async () => downloadCSV('sales.csv', (await fetchAllSales(salesListFilters))
-                    .filter(s => statusFilter === 'all' || ((s as any).paymentStatus ?? 'paid') === statusFilter)
-                    .map(s => ({
-                    Invoice: formatSalesInvoiceDisplayNumber(s.invoiceNumber), Date: formatDate(s.saleDate), Outlet: s.outletName,
-                    Salesman: s.salesperson || '—',
-                    Customer: s.customerName || 'Walk-in', Payment: paymentModeLabel(s.paymentMode),
-                    Subtotal: s.subtotal, Tax: s.taxTotal,
-                    Discount: (Number((s as any).discountTotal ?? 0)
-                      + (((s as any).lineItems as any[]) ?? []).reduce((acc: number, li: any) => acc + Number(li?.discount ?? 0), 0)).toFixed(2),
-                    Charges: saleOtherChargesTotal(s).toFixed(2),
-                    Total: s.totalAmount,
-                  })))}>
-                    <Download className="w-4 h-4 mr-2" /> CSV
-                  </Button>
-                  <Button variant="outline" size="sm" onClick={exportSalesToExcel} disabled={isExportingExcel}>
-                    {isExportingExcel
-                      ? <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                      : <FileSpreadsheet className="w-4 h-4 mr-2" />}
-                    Excel
-                  </Button>
-                </>
+                <Button variant="outline" size="sm" onClick={async () => downloadCSV('sales.csv', (await fetchAllSales(salesListFilters))
+                  .filter(s => statusFilter === 'all' || ((s as any).paymentStatus ?? 'paid') === statusFilter)
+                  .map(s => ({
+                  Invoice: formatSalesInvoiceDisplayNumber(s.invoiceNumber), Date: formatDate(s.saleDate), Outlet: s.outletName,
+                  Customer: s.customerName || 'Walk-in', Payment: paymentModeLabel(s.paymentMode),
+                  Subtotal: s.subtotal, Tax: s.taxTotal,
+                  Discount: (Number((s as any).discountTotal ?? 0)
+                    + (((s as any).lineItems as any[]) ?? []).reduce((acc: number, li: any) => acc + Number(li?.discount ?? 0), 0)).toFixed(2),
+                  Charges: saleOtherChargesTotal(s).toFixed(2),
+                  Total: s.totalAmount,
+                })))}>
+                  <Download className="w-4 h-4 mr-2" /> Export
+                </Button>
               )}
               {perm.canAdd && (
                 <Button onClick={() => { form.reset(effectiveDefaultValues); setIsOpen(true); }}>
@@ -1939,7 +1765,6 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                 <SortableHead k="date" sort={sort}>Date</SortableHead>
                 <SortableHead k="location" sort={sort}>Location</SortableHead>
                 <SortableHead k="customer" sort={sort}>Customer</SortableHead>
-                <SortableHead k="salesman" sort={sort}>Salesman</SortableHead>
                 <SortableHead k="status" sort={sort}>Status</SortableHead>
                 <SortableHead k="tax" sort={sort} className="text-right">Tax</SortableHead>
                 <SortableHead k="discount" sort={sort} className="text-right">Discount</SortableHead>
@@ -1950,9 +1775,9 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
             </TableHeader>
             <TableBody>
               {isLoading ? (
-                <TableRow><TableCell colSpan={11} className="p-0"><TableSkeleton rows={6} cols={11} /></TableCell></TableRow>
+                <TableRow><TableCell colSpan={10} className="p-0"><TableSkeleton rows={6} cols={10} /></TableCell></TableRow>
               ) : filtered.length === 0 ? (
-                <TableRow><TableCell colSpan={11} className="p-0">
+                <TableRow><TableCell colSpan={10} className="p-0">
                   <EmptyState icon={Receipt} title="No sales recorded yet" hint="Record your first retail transaction to see it here." compact />
                 </TableCell></TableRow>
               ) : sorted.map(sale => (
@@ -1963,7 +1788,6 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                   </TableCell>
                   <TableCell className="text-sm">{sale.outletName}</TableCell>
                   <TableCell className="text-sm">{sale.customerName || 'Walk-in'}</TableCell>
-                  <TableCell className="text-sm">{(sale as any).salesperson || '—'}</TableCell>
                   <TableCell>
                      <StatusBadge
                        status={(sale as any).paymentStatus ?? 'paid'}
@@ -1996,7 +1820,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
                       <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(sale)} title="View"><Eye className="w-4 h-4" /></Button>
-                      {perm.canEdit && !saleIsCancelled(sale) && <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-amber-500" onClick={() => openEdit(sale)} title="Edit sale"><Pencil className="w-4 h-4" /></Button>}
+                      {perm.canEdit && <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-amber-500" onClick={() => openEdit(sale)} title="Edit sale"><Pencil className="w-4 h-4" /></Button>}
                       {perm.canDownload && <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-emerald-600" onClick={() => void handleDownloadPDF(sale)} title="Download PDF"><FileDown className="w-4 h-4" /></Button>}
                       {perm.canDownload && (
                         <Button
@@ -2049,7 +1873,6 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                       <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
                         <p className="text-muted-foreground">Location: <span className="text-foreground">{sale.outletName}</span></p>
                         <p className="text-muted-foreground">Customer: <span className="text-foreground">{sale.customerName || 'Walk-in'}</span></p>
-                        <p className="text-muted-foreground">Salesman: <span className="text-foreground">{(sale as any).salesperson || '—'}</span></p>
                         <p className="text-muted-foreground">Charges: <span className={cn('font-mono', saleOtherChargesTotal(sale) > 0 ? 'text-amber-600' : 'text-foreground')}>{inr(saleOtherChargesTotal(sale))}</span></p>
                       </div>
                       <div className="flex items-end justify-between gap-2 pt-1">
@@ -2061,7 +1884,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                         </div>
                         <div className="flex gap-1">
                           <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(sale)} title="View"><Eye className="w-4 h-4" /></Button>
-                          {perm.canEdit && !saleIsCancelled(sale) && <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-amber-500" onClick={() => openEdit(sale)} title="Edit sale"><Pencil className="w-4 h-4" /></Button>}
+                          {perm.canEdit && <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-amber-500" onClick={() => openEdit(sale)} title="Edit sale"><Pencil className="w-4 h-4" /></Button>}
                           {perm.canDownload && <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-emerald-600" onClick={() => void handleDownloadPDF(sale)} title="Download PDF"><FileDown className="w-4 h-4" /></Button>}
                           {perm.canDownload && (
                             <Button
@@ -2090,7 +1913,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                 Showing {Math.min(sales.length, totalSales)} of {totalSales} sales
                 {isFetching && !isFetchingNextPage ? ' · refreshing…' : ''}
               </span>
-              <div className="flex flex-wrap items-center justify-end gap-3">
+              <div className="flex items-center gap-3">
                 <span className="font-bold text-emerald-500">
                   Loaded total: {inr(filtered.reduce((s, r) => s + Number(r.totalAmount || 0), 0))}
                 </span>
@@ -2099,59 +1922,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                     {isFetchingNextPage ? 'Loading…' : 'Load More'}
                   </Button>
                 )}
-                <Button
-                  type="button"
-                  variant={itemWise ? 'default' : 'outline'}
-                  size="sm"
-                  className="h-7 px-3 text-xs"
-                  aria-pressed={itemWise}
-                  onClick={() => setItemWise(value => !value)}
-                  data-testid="button-item-wise-sales"
-                >
-                  {itemWise ? 'Hide item-wise' : 'Item-wise'}
-                </Button>
               </div>
-            </div>
-          )}
-          {itemWise && (
-            <div className="border-t border-border">
-              <div className="px-4 py-3">
-                <h3 className="text-sm font-semibold">Item-wise sales</h3>
-                <p className="text-xs text-muted-foreground">Items for the currently loaded sales and selected filters.</p>
-              </div>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Invoice</TableHead>
-                    <TableHead>Date</TableHead>
-                    <TableHead>Salesman</TableHead>
-                    <TableHead>Item</TableHead>
-                    <TableHead className="text-right">Quantity</TableHead>
-                    <TableHead className="text-right">Unit rate</TableHead>
-                    <TableHead className="text-right">Discount</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {filtered.flatMap(sale => ((sale as any).lineItems ?? []).map((line: any, index: number) => {
-                    const itemId = Number(line.itemId ?? line.item_id);
-                    const itemName = line.itemName ?? line.item_name ?? itemsMap.get(itemId)?.name ?? `Item #${itemId}`;
-                    return (
-                      <TableRow key={`${sale.id}:${index}`}>
-                        <TableCell className="font-mono">{formatSalesInvoiceDisplayNumber(sale.invoiceNumber)}</TableCell>
-                        <TableCell>{formatDate(sale.saleDate)}</TableCell>
-                        <TableCell>{(sale as any).salesperson || '—'}</TableCell>
-                        <TableCell>{itemName}</TableCell>
-                        <TableCell className="text-right">{line.quantity ?? line.qty ?? '—'}</TableCell>
-                        <TableCell className="text-right font-mono">{line.unitPrice != null ? inr(Number(line.unitPrice)) : '—'}</TableCell>
-                        <TableCell className="text-right font-mono">{Number(line.discount) > 0 ? inr(Number(line.discount)) : '—'}</TableCell>
-                      </TableRow>
-                    );
-                  }))}
-                  {!filtered.some(sale => ((sale as any).lineItems ?? []).length > 0) && (
-                    <TableRow><TableCell colSpan={7} className="py-8 text-center text-muted-foreground">No item details in the loaded sales.</TableCell></TableRow>
-                  )}
-                </TableBody>
-              </Table>
             </div>
           )}
         </div>
@@ -2208,22 +1979,8 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                     <Select
                       onValueChange={v => {
                         const [type, idStr] = v.split(':');
-                        const nextLocationId = Number(idStr);
-                        const nextLocationType = type as 'outlet' | 'warehouse' | 'headoffice';
-                        field.onChange(nextLocationId);
-                        form.setValue('locationType', nextLocationType);
-                        if (!editItem && !salespeopleLoading) {
-                          const selectedId = Number(form.getValues('salespersonEmployeeId') ?? 0);
-                          const stillEligible = (salespeople as any[]).some((p: any) =>
-                            Number(p.id) === selectedId
-                            && (p.branchType === 'headoffice'
-                              || (p.branchType === nextLocationType && Number(p.branchId) === nextLocationId))
-                          );
-                          if (selectedId > 0 && !stillEligible) {
-                            form.setValue('salespersonEmployeeId', undefined, { shouldDirty: true });
-                            form.clearErrors('salespersonEmployeeId');
-                          }
-                        }
+                        field.onChange(Number(idStr));
+                        form.setValue('locationType', type as 'outlet' | 'warehouse' | 'headoffice');
                         form.setValue('lineItems', [{ itemId: 0, quantity: 1, unitPrice: 0, unitDiscount: 0, taxable: customerHasGstin, taxableTouched: false }]);
                       }}
                       value={field.value && field.value > 0 ? `${form.watch('locationType')}:${field.value}` : ''}
@@ -2311,46 +2068,26 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                 <FormField control={form.control} name="salespersonEmployeeId" render={({ field }) => {
                   const locationType = form.watch('locationType');
                   const locationId = Number(form.watch('locationId') || 0);
-                  const eligible = locationId > 0
-                    ? (salespeople as any[]).filter((p: any) =>
-                        p.branchType === 'headoffice'
-                        || (p.branchType === locationType && Number(p.branchId) === locationId)
-                      )
-                    : salespeople as any[];
+                  const eligible = (salespeople as any[]).filter((p: any) =>
+                    p.branchType === 'headoffice'
+                    || (p.branchType === locationType && Number(p.branchId) === locationId)
+                  );
                   const selected = eligible.find((p: any) => Number(p.id) === Number(field.value));
                   return (
                     <FormItem>
-                      <FormLabel>
-                        Salesman {!editItem && <span className="text-destructive">*</span>}
-                      </FormLabel>
+                      <FormLabel>Salesman <span className="text-xs text-muted-foreground font-normal">(optional)</span></FormLabel>
                       <Select
-                        value={field.value ? String(field.value) : ''}
-                        onValueChange={v => {
-                          field.onChange(Number(v));
-                          form.clearErrors('salespersonEmployeeId');
-                        }}
+                        value={field.value ? String(field.value) : 'unassigned'}
+                        onValueChange={v => field.onChange(v === 'unassigned' ? undefined : Number(v))}
                       >
-                        <FormControl>
-                          <SelectTrigger>
-                            <SelectValue placeholder={salespeopleLoading
-                              ? 'Loading salespeople…'
-                              : eligible.length > 0 ? 'Select salesman' : 'No eligible salespeople'}
-                            />
-                          </SelectTrigger>
-                        </FormControl>
+                        <FormControl><SelectTrigger><SelectValue placeholder="Unassigned" /></SelectTrigger></FormControl>
                         <SelectContent>
-                          {eligible.length > 0 ? eligible.map((p: any) => (
+                          <SelectItem value="unassigned">Unassigned</SelectItem>
+                          {eligible.map((p: any) => (
                             <SelectItem key={p.id} value={String(p.id)}>{p.name}</SelectItem>
-                          )) : (
-                            <SelectItem value="__none" disabled>
-                              {locationId > 0 ? 'No eligible salespeople at this location' : 'Select a selling location first'}
-                            </SelectItem>
-                          )}
+                          ))}
                         </SelectContent>
                       </Select>
-                      {editItem && !field.value && (
-                        <p className="text-xs text-muted-foreground">This historical sale has no recorded salesman.</p>
-                      )}
                       {field.value && !selected && (
                         <p className="text-xs text-muted-foreground">Previously assigned: {field.value}</p>
                       )}
@@ -2601,6 +2338,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                       <span>Item</span>
                       <span>SKU</span>
                       <span className="text-right">Qty</span>
+                      <span className="text-right">Item Rate ₹</span>
                       <span className="text-right">Sale Rate ₹</span>
                       <span className="text-right">Disc/Unit ₹</span>
                       <span className="text-center">GST %</span>
@@ -2655,7 +2393,6 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                                         f.onChange(id);
                                         // Auto-fill from Item Master Rate — read-only in sale
                                         form.setValue(`lineItems.${index}.unitPrice`, getPrice(id));
-                                        validateLockingLine(field.id);
                                       }}
                                     /></FormControl>
                                   </div>
@@ -2689,6 +2426,14 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                               )} />
                               {itemId > 0 && <p className="text-[10px] text-muted-foreground text-right">max {maxQty}</p>}
                             </div>
+                            {/* Item Rate — display-only; the sale price floor. */}
+                            <div className="space-y-1 min-w-0">
+                              <CellLabel>Item Rate ₹</CellLabel>
+                              <div className="h-9 flex items-center justify-end text-xs font-mono">
+                                {(() => { const m = getMrpFloor(itemId); return m > 0 ? inr(m) : '—'; })()}
+                              </div>
+                            </div>
+
                               {/* Sale Rate — editable UPWARD only. Floor = Item Master
                                   Rate (or, on an old invoice, the line's saved
                                   price if the master rose since). Anything below
@@ -2699,7 +2444,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                                   const floor = getMrpFloor(itemId);
                                   return (
                                     <FormItem className="space-y-1">
-                                      <CellLabel>Sale Rate ₹</CellLabel>
+                                      <CellLabel>Rate ₹</CellLabel>
                                       <FormControl>
                                         <Input
                                           type="number"
@@ -2710,13 +2455,6 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                                           data-field={`line-mrp-${index}`}
                                           data-last-field={!discountsEnabled && index === fields.length - 1 ? '1' : undefined}
                                           {...f}
-                                          onChange={e => {
-                                            f.onChange(e);
-                                            clearLockingLineValidation(field.id);
-                                          }}
-                                          onKeyDown={e => {
-                                            if (e.key === 'Enter') validateLockingLine(field.id);
-                                          }}
                                           onBlur={e => {
                                             f.onBlur();
                                             const v = Number(e.target.value);
@@ -2724,7 +2462,6 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                                               toast.error(MRP_FLOOR_MESSAGE);
                                               form.setValue(`lineItems.${index}.unitPrice`, floor);
                                             }
-                                            validateLockingLine(field.id);
                                           }}
                                         />
                                       </FormControl>
@@ -2765,17 +2502,6 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                                         data-last-field={index === fields.length - 1 ? '1' : undefined}
                                         {...f}
                                         value={(f.value as any) ?? ''}
-                                        onChange={e => {
-                                          f.onChange(e);
-                                          clearLockingLineValidation(field.id);
-                                        }}
-                                        onKeyDown={e => {
-                                          if (e.key === 'Enter') validateLockingLine(field.id);
-                                        }}
-                                        onBlur={e => {
-                                          f.onBlur();
-                                          validateLockingLine(field.id);
-                                        }}
                                       />
                                     </FormControl>
                                     <FormMessage className="text-[10px]" />
@@ -2803,20 +2529,6 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                               </div>
                               <Button type="button" variant="ghost" size="icon" tabIndex={-1} className="hidden lg:inline-flex h-8 w-8 text-destructive justify-self-end" onClick={() => remove(index)} disabled={fields.length === 1}><Trash2 className="w-3.5 h-3.5" /></Button>
                             </div>
-                          {validatedLockingLines.has(field.id) && (() => {
-                            const issue = lockingRateIssueAt(index);
-                            return issue ? (
-                              <div
-                                role="alert"
-                                data-testid={`locking-rate-warning-${index}`}
-                                className="mx-2 mb-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-300"
-                              >
-                                <strong>{issue.itemName}</strong> is below its Locking Rate. Locking Rate: <strong>{inr(issue.lockingRate)}</strong>;
-                                effective selling rate after discounts: <strong>{inr(issue.effectiveRate)}</strong>;
-                                short by <strong>{inr(issue.difference)}</strong>. An authorized Level-1 Admin override is required to complete this sale.
-                              </div>
-                            ) : null;
-                          })()}
                             {/* Per-line GST breakdown + taxable toggle — the
                                 tinted sub-strip, like the master's batch strip. */}
                             <div data-kbd-row={index} className={TXN_SUBROW}>
@@ -2858,10 +2570,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                         );
                       })}
                     </div>
-                    <Button type="button" variant="outline" size="sm" className="mt-2" onClick={() => {
-                      validateAllLockingLines();
-                      append({ itemId: 0, quantity: 1, unitPrice: 0, unitDiscount: 0, taxable: customerHasGstin, taxableTouched: false });
-                    }}>
+                    <Button type="button" variant="outline" size="sm" className="mt-2" onClick={() => append({ itemId: 0, quantity: 1, unitPrice: 0, unitDiscount: 0, taxable: customerHasGstin, taxableTouched: false })}>
                       <Plus className="w-3 h-3 mr-1" /> Add Item
                     </Button>
                   </>
@@ -3102,12 +2811,6 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                     <span className="font-mono text-primary text-base truncate">{inr(totals.finalAmount)}</span>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
-                    {showLockingRateOverride && (
-                      <label className="flex items-center gap-2 text-xs text-muted-foreground max-w-[210px]">
-                        <Checkbox checked={overrideLockingRate} onCheckedChange={v => setOverrideLockingRate(v === true)} />
-                        Admin override of Locking Rate
-                      </label>
-                    )}
                     <DialogClose asChild><Button variant="outline" type="button">Cancel</Button></DialogClose>
                     <Button type="submit" disabled={(editItem ? updateMutation.isPending : createMutation.isPending) || !watchLocationId || (!editItem && availableItems.length === 0) || totals.finalAmount === 0}>
                       {editItem
@@ -3173,19 +2876,9 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                     <WhatsAppIcon className="w-3.5 h-3.5" /> WhatsApp
                   </Button>
                 )}
-                {perm.canEdit && viewItem && !saleIsCancelled(viewItem) && (
+                {perm.canEdit && viewItem && (
                   <Button variant="outline" size="sm" className="gap-1.5" onClick={() => { setViewItem(null); openEdit(viewItem); }}>
                     <Pencil className="w-3.5 h-3.5" /> Edit
-                  </Button>
-                )}
-                {perm.canDelete && viewItem && !saleIsCancelled(viewItem) && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="gap-1.5 border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
-                    onClick={() => { setCancelReason(''); setCancelDialogOpen(true); }}
-                  >
-                    <Trash2 className="w-3.5 h-3.5" /> Cancel bill
                   </Button>
                 )}
               </div>
@@ -3655,51 +3348,6 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
           )}
         </SheetContent>
       </Sheet>
-
-      <AlertDialog
-        open={cancelDialogOpen}
-        onOpenChange={open => {
-          if (cancelSaleMutation.isPending) return;
-          setCancelDialogOpen(open);
-          if (!open) setCancelReason('');
-        }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Cancel this sale bill?</AlertDialogTitle>
-            <AlertDialogDescription>
-              This keeps the invoice as a cancelled record, restores its stock, and removes its derived sales and GST postings.
-              It is recorded as a current-date cancellation, so it does not rewrite closed stock history.
-              Receipt-backed collections or existing sales returns must be handled first.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <div className="space-y-1.5">
-            <label htmlFor="sale-cancel-reason" className="text-sm font-medium">Reason (optional)</label>
-            <Textarea
-              id="sale-cancel-reason"
-              value={cancelReason}
-              onChange={event => setCancelReason(event.target.value)}
-              maxLength={500}
-              rows={3}
-              placeholder="Why is this invoice being cancelled?"
-              disabled={cancelSaleMutation.isPending}
-            />
-          </div>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={cancelSaleMutation.isPending}>Keep bill</AlertDialogCancel>
-            <AlertDialogAction
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              disabled={cancelSaleMutation.isPending}
-              onClick={event => {
-                event.preventDefault();
-                void confirmCancelSale();
-              }}
-            >
-              {cancelSaleMutation.isPending ? 'Cancelling…' : 'Cancel bill'}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
 
       <Dialog open={!!shipFromEditSale} onOpenChange={open => !open && setShipFromEditSale(null)}>
         <DialogContent className="sm:max-w-lg">

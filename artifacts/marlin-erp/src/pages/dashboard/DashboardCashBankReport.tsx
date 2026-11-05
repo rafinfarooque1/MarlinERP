@@ -6,14 +6,14 @@ import { EmptyState } from '@/components/app/empty-state';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
-import { fmtZeroAsBlank, periodLabel } from '@/pages/reports/shared';
-import { measureReportCaptureDimensions } from './report-capture-size';
+import { fmt, periodLabel } from '@/pages/reports/shared';
 
 function AccountTable({
   title,
   icon: Icon,
   rows,
   totals,
+  emptyText,
   testId,
   captureMode,
 }: {
@@ -21,6 +21,7 @@ function AccountTable({
   icon: typeof Landmark;
   rows: CashBankReportData['bank']['rows'];
   totals: CashBankReportData['bank']['totals'];
+  emptyText: string;
   testId: string;
   captureMode: boolean;
 }) {
@@ -30,36 +31,42 @@ function AccountTable({
         <Icon className="h-4 w-4 text-primary" />
         {title}
       </h3>
-      <div className={`${captureMode ? 'overflow-visible' : 'overflow-x-auto'} w-full max-w-full rounded-lg border border-border`}>
-        <table className="w-full border-collapse text-sm" data-testid={testId}>
+      <div className={`${captureMode ? 'overflow-visible' : 'overflow-x-auto'} rounded-lg border border-border`}>
+        <table className="w-full min-w-[760px] border-separate border-spacing-0 text-sm" data-testid={testId}>
           <caption className="sr-only">{title} account balances and period movements</caption>
           <thead>
             <tr className="bg-muted/40">
-              <th scope="col" className="border border-border px-2 py-1 text-left font-semibold">Account</th>
-              <th scope="col" className="border border-border px-2 py-1 text-right font-semibold">Opening</th>
-              <th scope="col" className="border border-border px-2 py-1 text-right font-semibold">Receipt</th>
-              <th scope="col" className="border border-border px-2 py-1 text-right font-semibold">Payment</th>
-              <th scope="col" className="border border-border px-2 py-1 text-right font-semibold">Closing Balance</th>
+              <th scope="col" className="min-w-[220px] border-b border-border px-3 py-2 text-left font-semibold">Account</th>
+              <th scope="col" className="min-w-[130px] border-b border-border px-3 py-2 text-right font-semibold">Opening</th>
+              <th scope="col" className="min-w-[130px] border-b border-border px-3 py-2 text-right font-semibold">Receipt</th>
+              <th scope="col" className="min-w-[130px] border-b border-border px-3 py-2 text-right font-semibold">Payment</th>
+              <th scope="col" className="min-w-[150px] border-b border-border px-3 py-2 text-right font-semibold">Closing Balance</th>
             </tr>
           </thead>
           <tbody>
-            {rows.map((row) => (
+            {rows.length === 0 ? (
+              <tr>
+                <td colSpan={5} className="border-b border-border px-3 py-5 text-center text-muted-foreground">
+                  {emptyText}
+                </td>
+              </tr>
+            ) : rows.map((row) => (
               <tr key={row.ledgerId} className="hover:bg-muted/20">
-                <th scope="row" className="border border-border bg-card px-2 py-1 text-left font-medium">{row.name}</th>
-                <td className="border border-border px-2 py-1 text-right font-mono tabular-nums">{fmtZeroAsBlank(row.opening)}</td>
-                <td className="border border-border px-2 py-1 text-right font-mono tabular-nums">{fmtZeroAsBlank(row.receipt)}</td>
-                <td className="border border-border px-2 py-1 text-right font-mono tabular-nums">{fmtZeroAsBlank(row.payment)}</td>
-                <td className="border border-border px-2 py-1 text-right font-mono tabular-nums">{fmtZeroAsBlank(row.closing)}</td>
+                <th scope="row" className="border-b border-border bg-card px-3 py-2 text-left font-medium">{row.name}</th>
+                <td className="border-b border-border px-3 py-2 text-right font-mono tabular-nums">{fmt(row.opening)}</td>
+                <td className="border-b border-border px-3 py-2 text-right font-mono tabular-nums">{fmt(row.receipt)}</td>
+                <td className="border-b border-border px-3 py-2 text-right font-mono tabular-nums">{fmt(row.payment)}</td>
+                <td className="border-b border-border px-3 py-2 text-right font-mono tabular-nums">{fmt(row.closing)}</td>
               </tr>
             ))}
           </tbody>
           <tfoot>
             <tr className="bg-primary/10 font-bold" data-testid={`${testId}-total`}>
-              <th scope="row" className="border border-border px-2 py-1 text-left">Total</th>
-              <td className="border border-border px-2 py-1 text-right font-mono tabular-nums">{fmtZeroAsBlank(totals.opening)}</td>
-              <td className="border border-border px-2 py-1 text-right font-mono tabular-nums">{fmtZeroAsBlank(totals.receipt)}</td>
-              <td className="border border-border px-2 py-1 text-right font-mono tabular-nums">{fmtZeroAsBlank(totals.payment)}</td>
-              <td className="border border-border px-2 py-1 text-right font-mono tabular-nums">{fmtZeroAsBlank(totals.closing)}</td>
+              <th scope="row" className="px-3 py-2 text-left">Total</th>
+              <td className="px-3 py-2 text-right font-mono tabular-nums">{fmt(totals.opening)}</td>
+              <td className="px-3 py-2 text-right font-mono tabular-nums">{fmt(totals.receipt)}</td>
+              <td className="px-3 py-2 text-right font-mono tabular-nums">{fmt(totals.payment)}</td>
+              <td className="px-3 py-2 text-right font-mono tabular-nums">{fmt(totals.closing)}</td>
             </tr>
           </tfoot>
         </table>
@@ -115,16 +122,34 @@ export function DashboardCashBankReport({
       const { toBlob } = await import('html-to-image');
       const tables = Array.from(element.querySelectorAll<HTMLTableElement>('table'));
       if (tables.length === 0) throw new Error('cash and bank tables not found');
-      const dimensions = measureReportCaptureDimensions(element);
+      const captureRect = element.getBoundingClientRect();
+      const tableRects = tables.map((table) => table.getBoundingClientRect());
+      const lastTable = tables[tables.length - 1];
+      const lastRow = lastTable.rows.item(lastTable.rows.length - 1);
+      const lastRowBottom = lastRow?.getBoundingClientRect().bottom ?? captureRect.bottom;
+      const width = Math.ceil(Math.max(
+        element.scrollWidth,
+        captureRect.width,
+        ...tables.flatMap((table, index) => [table.scrollWidth, tableRects[index]?.width ?? 0]),
+      ));
+      const height = Math.ceil(Math.max(
+        element.scrollHeight,
+        captureRect.height,
+        ...tables.flatMap((table, index) => [
+          table.scrollHeight,
+          tableRects[index] ? tableRects[index].bottom - captureRect.top : 0,
+        ]),
+        lastRowBottom - captureRect.top,
+      )) + 2;
       console.debug('[dashboard] cash and bank report share: capture bounds', {
         tables: tables.length,
-        width: dimensions.width,
-        height: dimensions.height,
+        width,
+        height,
       });
       const blob = await toBlob(element, {
         backgroundColor: '#ffffff',
-        width: dimensions.width,
-        height: dimensions.height,
+        width,
+        height,
         pixelRatio: 2,
         cacheBust: true,
         style: { overflow: 'visible' },
@@ -172,11 +197,7 @@ export function DashboardCashBankReport({
   return (
     <div className="relative">
       <div ref={captureRef} data-testid="dashboard-cash-bank-capture">
-        <Card
-          className="rounded-xl border border-border bg-card shadow-sm"
-          data-testid="dashboard-cash-bank-card"
-          data-report-card
-        >
+        <Card className="rounded-xl border border-border bg-card shadow-sm" data-testid="dashboard-cash-bank-card">
           <CardHeader className="flex flex-row items-start justify-between gap-3 pb-3">
             <div className="min-w-0">
               <CardTitle className="flex items-center gap-2 text-lg">
@@ -224,6 +245,7 @@ export function DashboardCashBankReport({
                   icon={Landmark}
                   rows={data.bank.rows}
                   totals={data.bank.totals}
+                  emptyText="No bank account activity in this period."
                   testId="table-dashboard-bank"
                   captureMode={preparingCapture}
                 />
@@ -232,6 +254,7 @@ export function DashboardCashBankReport({
                   icon={Wallet}
                   rows={data.cash.rows}
                   totals={data.cash.totals}
+                  emptyText="No cash account activity in this period."
                   testId="table-dashboard-cash"
                   captureMode={preparingCapture}
                 />

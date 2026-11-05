@@ -1,18 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  assertStockDatesOpen,
-  assertStockLedgerRestatementOpen,
-  ensureDailyStockClosures,
+  normalizeStockDates,
   rebaseStockDailyCloseAfterReset,
 } from "../src/lib/dailyStockClosures.ts";
 
 type FakeState = {
   today: string;
-  baselineDate: string;
-  baselineTimeZone?: string;
-  closedThrough: string | null;
-  oldDates?: Array<string | null>;
   timeZone?: string;
 };
 
@@ -25,19 +19,6 @@ function fakeDb(state: FakeState) {
       }
       if (sql.includes("AS company_today")) {
         return { rows: [{ company_today: state.today }] };
-      }
-      if (sql.includes("baseline_time_zone")) {
-        return {
-          rows: [{
-            baseline_date: state.baselineDate,
-            baseline_time_zone: state.baselineTimeZone ?? "Asia/Kolkata",
-            baseline_ledger_id: "41",
-            closed_through: state.closedThrough,
-          }],
-        };
-      }
-      if (sql.includes("SELECT DISTINCT txn_date::text")) {
-        return { rows: (state.oldDates ?? []).map(txn_date => ({ txn_date })) };
       }
       throw new Error(`Unexpected query in test: ${sql}`);
     },
@@ -72,77 +53,26 @@ function rebaseFakeDb(opts: { baselineExists?: boolean; rowCount?: number } = {}
   return db;
 }
 
-test("rejects stock dates before the future-only baseline", async () => {
-  await assert.rejects(
-    () => assertStockDatesOpen(fakeDb({
-      today: "2026-09-30",
-      baselineDate: "2026-09-29",
-      closedThrough: "2026-09-29",
-    }), ["2026-09-28"]),
-    (error: any) => error.code === "STOCK_DATE_BEFORE_BASELINE" && error.statusCode === 409,
-  );
-});
-
-test("rejects changes dated on a completed close", async () => {
-  await assert.rejects(
-    () => assertStockDatesOpen(fakeDb({
-      today: "2026-09-30",
-      baselineDate: "2026-09-29",
-      closedThrough: "2026-09-29",
-    }), ["2026-09-29"]),
-    (error: any) => error.code === "STOCK_DAILY_DATE_CLOSED" && error.statusCode === 409,
-  );
+test("allows historical dates regardless of the daily close or baseline", async () => {
+  const result = await normalizeStockDates(fakeDb({
+    today: "2026-09-30",
+  }), ["2020-01-01", "2026-09-29"]);
+  assert.deepEqual(result.normalizedDates, ["2020-01-01", "2026-09-29"]);
 });
 
 test("defaults an omitted date to the company-local current day", async () => {
-  const result = await assertStockDatesOpen(fakeDb({
+  const result = await normalizeStockDates(fakeDb({
     today: "2026-09-30",
-    baselineDate: "2026-09-29",
-    closedThrough: "2026-09-29",
   }), [null]);
   assert.deepEqual(result.normalizedDates, ["2026-09-30"]);
 });
 
-test("blocks backdated writes in a missing close interval but allows the current date", async () => {
-  await assert.rejects(
-    () => assertStockDatesOpen(fakeDb({
-      today: "2026-10-01",
-      baselineDate: "2026-09-29",
-      closedThrough: "2026-09-29",
-    }), ["2026-09-30"]),
-    (error: any) => error.code === "STOCK_DAILY_CLOSE_REQUIRED" && error.statusCode === 409,
-  );
-  const result = await assertStockDatesOpen(fakeDb({
-    today: "2026-10-01",
-    baselineDate: "2026-09-29",
-    closedThrough: "2026-09-29",
-  }), ["2026-10-01"]);
-  assert.deepEqual(result.normalizedDates, ["2026-10-01"]);
-});
-
-test("does not allow a date edit to move a closed movement forward", async () => {
-  await assert.rejects(
-    () => assertStockLedgerRestatementOpen(fakeDb({
-      today: "2026-09-30",
-      baselineDate: "2026-09-29",
-      closedThrough: "2026-09-29",
-      oldDates: ["2026-09-29"],
-    }), "purchase", 7, "2026-09-30"),
-    (error: any) => error.code === "STOCK_DAILY_DATE_CLOSED" && error.statusCode === 409,
-  );
-});
-
-test("blocks changes when the company timezone no longer matches the baseline", async () => {
-  await assert.rejects(
-    () => assertStockDatesOpen(fakeDb({
-      today: "2026-09-30",
-      baselineDate: "2026-09-29",
-      baselineTimeZone: "Asia/Kolkata",
-      timeZone: "UTC",
-      closedThrough: "2026-09-29",
-    }), ["2026-09-30"]),
-    (error: any) => error.code === "STOCK_DAILY_TIMEZONE_CHANGED" && error.statusCode === 503,
-  );
+test("keeps historical date normalization available if the company timezone changes", async () => {
+  const result = await normalizeStockDates(fakeDb({
+    today: "2026-09-30",
+    timeZone: "UTC",
+  }), ["2026-09-29"]);
+  assert.deepEqual(result.normalizedDates, ["2026-09-29"]);
 });
 
 test("reset rebases the preserved snapshot to current stock and company-local date", async () => {
@@ -192,40 +122,4 @@ test("factory reset can rebase while its session-level close lock is already hel
   assert.equal(result.baselineRows, 2);
   assert.equal(db.calls.some(({ sql }) => sql.includes("pg_advisory_xact_lock")), false,
     "the helper must not wait on a second session's lock while the reset owns the global lock");
-});
-
-test("a later business-date movement is reversed out of the earlier daily close", async () => {
-  const calls: Array<{ sql: string; params?: unknown[] }> = [];
-  const client = {
-    async query(sql: string, params?: unknown[]) {
-      calls.push({ sql, params });
-      if (sql.includes("SELECT general_settings")) return { rows: [{ general_settings: { timeZone: "Asia/Kolkata" } }] };
-      if (sql.includes("AS company_today")) return { rows: [{ company_today: "2026-10-02" }] };
-      if (sql.includes("baseline_time_zone")) {
-        return { rows: [{
-          baseline_date: "2026-10-01",
-          baseline_time_zone: "Asia/Kolkata",
-          baseline_ledger_id: "41",
-          closed_through: "2026-09-30",
-        }] };
-      }
-      if (sql.includes("AS last_movement_date")) return { rows: [{ last_movement_date: null }] };
-      if (sql.includes("AS mismatch_count")) return { rows: [{ mismatch_count: 0 }] };
-      if (sql.includes("AS count") && sql.includes("completed_at IS NULL")) return { rows: [{ count: 1 }] };
-      if (sql.includes("AS through_date") && sql.includes("completed_at IS NOT NULL")) {
-        return { rows: [{ count: 1, through_date: "2026-10-01" }] };
-      }
-      if (sql.includes("SELECT COUNT(*)::int FROM stock_daily_close_entries")) return { rows: [{ count: 0 }] };
-      return { rows: [] };
-    },
-    release() {},
-  };
-  const result = await ensureDailyStockClosures({ connect: async () => client } as any);
-  assert.equal(result.closedDates, 1);
-  assert.equal(result.throughDate, "2026-10-01");
-
-  const materialize = calls.find(({ sql }) => sql.includes("INSERT INTO stock_daily_close_entries"));
-  assert.ok(materialize, "the close entry query should execute");
-  assert.match(materialize!.sql, /COALESCE\(s\.quantity, 0\) - COALESCE\(f\.after_close_qty, 0\)/);
-  assert.match(materialize!.sql, /COALESCE\(m\.txn_date, m\.created_at::date\) > d\.close_date/);
 });

@@ -14,44 +14,18 @@ import bcrypt from 'bcryptjs';
 
 const BASE = process.env.API_URL || 'http://localhost:8080/api';
 const TAG = 'ZZTRFDATE';
+const D0 = '2026-08-19';
+const D1 = '2026-08-20';
+const D2 = '2026-08-21';
+const D3 = '2026-08-22';
 
 const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
 const sql = (query, params = []) => pool.query(query, params);
-const addDays = (isoDate, days) => {
-  const date = new Date(`${isoDate}T00:00:00.000Z`);
-  date.setUTCDate(date.getUTCDate() + days);
-  return date.toISOString().slice(0, 10);
-};
-const { rows: [stockDateState] } = await sql(
-  `SELECT b.baseline_date::text AS baseline_date,
-          COALESCE(NULLIF(cs.general_settings->>'timeZone', ''), b.time_zone, 'Asia/Kolkata') AS time_zone,
-          (clock_timestamp() AT TIME ZONE COALESCE(NULLIF(cs.general_settings->>'timeZone', ''), b.time_zone, 'Asia/Kolkata'))::date::text AS today,
-          (SELECT MAX(close_date)::text FROM stock_daily_close_runs WHERE completed_at IS NOT NULL) AS closed_through
-     FROM stock_daily_close_baseline b
-     LEFT JOIN company_settings cs ON true
-    WHERE b.id = 1
-    LIMIT 1`,
-);
-if (!stockDateState) throw new Error('Daily stock baseline is not available');
-const BASELINE_DATE = stockDateState.baseline_date;
-const TODAY = stockDateState.today;
-if (TODAY <= (stockDateState.closed_through ?? '') || TODAY < BASELINE_DATE) {
-  throw new Error(`No valid open stock date: baseline=${BASELINE_DATE}, closedThrough=${stockDateState.closed_through}, today=${TODAY}`);
-}
-// API-driven inventory writes and the opening fixture use today's currently
-// open business date. Statements start yesterday, before this isolated fixture
-// existed, so the opening quantity is reconstructed as zero.
-const D0 = addDays(TODAY, -1);
-const D1 = TODAY;
-const D2 = TODAY;
-const D3 = TODAY;
 const PROBE_USER = 'zztrfdate_admin';
 const PROBE_PASS = 'ZzTrfDate#1';
 
 let authToken = '';
 let materialId = 0;
-let vendorId = 0;
-let purchaseId = 0;
 let sourceId = 0;
 let destinationId = 0;
 const transferIds = [];
@@ -88,7 +62,6 @@ async function apiReq(method, path, body, headers = {}) {
 const get = (path, headers) => apiReq('GET', path, undefined, headers);
 const post = (path, body) => apiReq('POST', path, body);
 const patch = (path, body) => apiReq('PATCH', path, body);
-const del = (path) => apiReq('DELETE', path);
 
 async function locationQty(branchId) {
   const { rows: [row] } = await sql(
@@ -124,13 +97,6 @@ async function transferLedger(transferId) {
   return rows;
 }
 
-async function statement(from, to, locationId) {
-  const result = await get(
-    `/accounts/financial-statements?fromDate=${from}&toDate=${to}&locationType=warehouse&locationId=${locationId}`,
-  );
-  return result.data;
-}
-
 async function cleanup() {
   if (transferIds.length) {
     await sql(`DELETE FROM stock_reservations WHERE doc_type = 'stock_transfer' AND doc_id = ANY($1::int[])`, [transferIds]);
@@ -164,13 +130,6 @@ async function cleanup() {
     );
     await sql(`DELETE FROM stock_transfers WHERE id = ANY($1::int[])`, [transferIds]);
   }
-  if (purchaseId) {
-    const deleted = await del(`/purchases/${purchaseId}`);
-    if (deleted.status !== 204) {
-      throw new Error(`Could not reverse fixture opening purchase ${purchaseId}: status=${deleted.status} ${JSON.stringify(deleted.data)}`);
-    }
-    purchaseId = 0;
-  }
   if (materialId) {
     await sql(
       `DELETE FROM stock_ledger
@@ -189,10 +148,6 @@ async function cleanup() {
       [materialId, [sourceId, destinationId]],
     );
     await sql(`DELETE FROM materials WHERE id = $1`, [materialId]);
-  }
-  if (vendorId) {
-    await sql(`DELETE FROM account_ledgers WHERE code LIKE 'VEND-%' AND name LIKE $1`, [`${TAG}%`]);
-    await sql(`DELETE FROM vendors WHERE id = $1`, [vendorId]);
   }
   await sql(`DELETE FROM warehouses WHERE id = ANY($1::int[])`, [[sourceId, destinationId].filter(Boolean)]);
   await sql(`DELETE FROM login_lockouts WHERE username = $1`, [PROBE_USER]).catch(() => {});
@@ -235,11 +190,6 @@ try {
     [`${TAG} Destination`],
   );
   destinationId = Number(destination.rows[0].id);
-  const vendor = await sql(
-    `INSERT INTO vendors (name, state, gst_number) VALUES ($1, 'Karnataka', '29ZZTRFDATE1Z5') RETURNING id`,
-    [`${TAG} Vendor`],
-  );
-  vendorId = Number(vendor.rows[0].id);
   const material = await sql(
     `INSERT INTO materials
        (name, unit, hsn_code, tax_rate, cost, avg_cost, current_stock, item_code, status)
@@ -248,24 +198,41 @@ try {
     [`${TAG} Material`, `${TAG}-MAT`],
   );
   materialId = Number(material.rows[0].id);
-  // Create the source stock through the purchase endpoint. This gives the
-  // test a real, dated stock/accounting source rather than a synthetic opening
-  // movement on a closed historical day.
-  const openingPurchase = await post('/purchases', {
-    vendorId,
-    purchaseDate: TODAY,
-    vendorInvoiceDate: TODAY,
-    locationType: 'warehouse',
-    locationId: sourceId,
-    lineItems: [{
-      materialType: 'material', materialId, quantity: 12, unitCost: 100,
-      batchNumber: `${TAG}-LOT`, mfgDate: TODAY, expiryDate: addDays(TODAY, 180),
-    }],
-  });
-  purchaseId = Number(openingPurchase.data?.id ?? 0);
-  assert('Created dated source-stock purchase fixture',
-    (openingPurchase.status === 200 || openingPurchase.status === 201) && purchaseId > 0,
-    JSON.stringify(openingPurchase.data).slice(0, 300));
+  await sql(
+    `INSERT INTO stock_entries
+       (item_id, material_type, branch_type, branch_id, quantity, cost_price)
+     VALUES ($1, 'material', 'warehouse', $2, 12, 100)`,
+    [materialId, sourceId],
+  );
+  await sql(
+    `INSERT INTO stock_batches
+       (item_id, material_type, branch_type, branch_id, batch_number, quantity, unit_cost, source, source_id)
+     VALUES ($1, 'material', 'warehouse', $2, $3, 12, 100, 'test', NULL)`,
+    [materialId, sourceId, `${TAG}-LOT`],
+  );
+  // Give the historical stock reconstruction an explicit opening movement.
+  // The accounting assertions exercise the transfer adjustment, not the
+  // untracked-stock fallback.
+  await sql(
+    `INSERT INTO stock_ledger
+       (txn_type, material_type, ref_id, item_name, unit, branch_type, branch_id,
+        branch_name, qty_change, unit_cost, doc_type, doc_id, notes, txn_date)
+     VALUES ('opening_stock', 'material', $1, $2, 'KG', 'warehouse', $3,
+             $4, 12, 100, 'test_fixture', NULL, $5, $6::date)`,
+    [materialId, `${TAG} Material`, sourceId, `${TAG} Source`, `${TAG} opening`, '2026-08-18'],
+  );
+  // A raw opening movement provides quantity evidence only. Pair it with the
+  // authoritative dated cost checkpoint required for historical valuation;
+  // missing cost evidence must remain WARN rather than acquire today's master
+  // cost implicitly.
+  await sql(
+    `INSERT INTO stock_cost_snapshots
+       (as_of_date, material_type, ref_id, branch_type, branch_id,
+        quantity, unit_cost, value, source, source_id)
+     VALUES ('2026-08-18', 'material', $1, 'warehouse', $2,
+             12, 100, 1200, 'test_opening', NULL)`,
+    [materialId, sourceId],
+  );
   assert('Created isolated source and destination fixtures', sourceId > 0 && destinationId > 0 && materialId > 0);
 
   console.log('\n[1] Pending transfer deducts only the source');
@@ -391,39 +358,6 @@ try {
   assert('Second receipt is refused', duplicateReceive.status === 400, JSON.stringify(duplicateReceive.data));
   assert('Second receipt does not change destination stock', (await locationQty(destinationId)) === 4);
 
-  console.log('\n[2b] Historical P&L after one completed same-day transfer');
-  const sourceAfterFull = await statement(D0, D1, sourceId);
-  const destinationAfterFull = await statement(D0, D1, destinationId);
-  assert('Both locations report reliable opening stock with the dated transfer adjustment',
-    sourceAfterFull?.profitAndLoss?.expenses?.openingStockReliable === true &&
-    destinationAfterFull?.profitAndLoss?.expenses?.openingStockReliable === true &&
-    sourceAfterFull?.profitAndLoss?.stockTransfersIncludedInPnl === false &&
-    destinationAfterFull?.profitAndLoss?.stockTransfersIncludedInPnl === false &&
-    Number(sourceAfterFull?.profitAndLoss?.expenses?.openingStockTransferAdjustment) === -400 &&
-    Number(destinationAfterFull?.profitAndLoss?.expenses?.openingStockTransferAdjustment) === 400 &&
-    Number(sourceAfterFull?.profitAndLoss?.expenses?.openingStock) === -400 &&
-    Number(destinationAfterFull?.profitAndLoss?.expenses?.openingStock) === 400,
-    JSON.stringify({
-      source: sourceAfterFull?.profitAndLoss?.expenses,
-      destination: destinationAfterFull?.profitAndLoss?.expenses,
-    }));
-  assert('A fully received no-sales transfer is P&L-neutral at both locations',
-    Number(sourceAfterFull?.profitAndLoss?.incomes?.sales) === 0 &&
-    Number(destinationAfterFull?.profitAndLoss?.incomes?.sales) === 0 &&
-    Number(sourceAfterFull?.profitAndLoss?.incomes?.stockTransferOut) === 400 &&
-    Number(sourceAfterFull?.profitAndLoss?.incomes?.closingStockOnHand) === 800 &&
-    Number(sourceAfterFull?.profitAndLoss?.incomes?.closingStockInTransit) === 0 &&
-    Number(destinationAfterFull?.profitAndLoss?.expenses?.stockTransferIn) === 400 &&
-    Number(destinationAfterFull?.profitAndLoss?.incomes?.closingStockOnHand) === 400 &&
-    Number(sourceAfterFull?.profitAndLoss?.summary?.grossProfit) === 0 &&
-    Number(destinationAfterFull?.profitAndLoss?.summary?.grossProfit) === 0 &&
-    Number(sourceAfterFull?.profitAndLoss?.netProfit) === 0 &&
-    Number(destinationAfterFull?.profitAndLoss?.netProfit) === 0,
-    JSON.stringify({
-      source: sourceAfterFull?.profitAndLoss,
-      destination: destinationAfterFull?.profitAndLoss,
-    }));
-
   console.log('\n[3] Short receipt carries only actual quantity and preserves in-transit shortfall');
   const second = await post('/stock/transfers', {
     fromType: 'warehouse', fromId: sourceId,
@@ -464,23 +398,6 @@ try {
     [secondId],
   );
   assert('Historical destination closing includes both receipts', (await qtyAsOf(destinationId, D2)) === 5);
-  console.log('\n[3b] Historical P&L after the short receipt');
-  const sourceAfterShort = await statement(D0, D2, sourceId);
-  const destinationAfterShort = await statement(D0, D2, destinationId);
-  assert('Source P&L separates on-hand stock from sender-owned transit',
-    Number(sourceAfterShort?.profitAndLoss?.summary?.costOfGoodsSold) === 500 &&
-    Number(sourceAfterShort?.profitAndLoss?.incomes?.stockTransferOut) === 600 &&
-    Number(sourceAfterShort?.profitAndLoss?.incomes?.closingStockOnHand) === 600 &&
-    Number(sourceAfterShort?.profitAndLoss?.incomes?.closingStockInTransit) === 100 &&
-    Number(sourceAfterShort?.balanceSheet?.assets?.closingStock) === 700,
-    JSON.stringify(sourceAfterShort?.profitAndLoss));
-  assert('Destination P&L reflects only the five units received',
-    Number(destinationAfterShort?.profitAndLoss?.summary?.costOfGoodsSold) === 0 &&
-    Number(destinationAfterShort?.profitAndLoss?.expenses?.stockTransferIn) === 500 &&
-    Number(destinationAfterShort?.profitAndLoss?.incomes?.closingStockOnHand) === 500 &&
-    Number(destinationAfterShort?.balanceSheet?.assets?.closingStockInTransit) === 0 &&
-    Number(destinationAfterShort?.profitAndLoss?.netProfit) === 0,
-    JSON.stringify(destinationAfterShort?.profitAndLoss));
 
   console.log('\n[4] Rejection restores source and never credits destination');
   const third = await post('/stock/transfers', {
@@ -545,10 +462,83 @@ try {
   assert('On-hand source plus destination equals 11 units', Number(onHand.quantity) === 11);
   assert('On-hand plus active in-transit equals original 12 units', Number(onHand.quantity) + Number(inTransit.quantity) === 12);
 
-  // P&L snapshots are asserted at the completed-transfer and short-receipt
-  // stages above. All API movements use today's open date, so querying after
-  // the later rejection would aggregate the whole same-day sequence rather
-  // than reconstructing an intermediate business state.
+  console.log('\n[6] Location P&L shows transfer activity and separates on-hand closing stock from transit');
+  const statement = async (from, to, locationId) => {
+    const result = await get(
+      `/accounts/financial-statements?fromDate=${from}&toDate=${to}&locationType=warehouse&locationId=${locationId}`,
+    );
+    return result.data;
+  };
+  const sourceDay = await statement(D0, D1, sourceId);
+  const destinationDay = await statement(D0, D1, destinationId);
+  assert('Location P&L includes transfer activity without an opening-stock adjustment',
+    sourceDay?.profitAndLoss?.expenses?.openingStockReliable === true &&
+    destinationDay?.profitAndLoss?.expenses?.openingStockReliable === true &&
+    sourceDay?.profitAndLoss?.stockTransfersIncludedInPnl === true &&
+    destinationDay?.profitAndLoss?.stockTransfersIncludedInPnl === true &&
+    Number(sourceDay?.profitAndLoss?.expenses?.openingStockTransferAdjustment) === 0 &&
+    Number(destinationDay?.profitAndLoss?.expenses?.openingStockTransferAdjustment) === 0 &&
+    ![...(sourceDay?.integrity?.issues ?? []), ...(destinationDay?.integrity?.issues ?? [])]
+      .some((issue) => String(issue).includes('Opening stock as at')),
+    JSON.stringify({
+      source: sourceDay?.profitAndLoss?.expenses,
+      destination: destinationDay?.profitAndLoss?.expenses,
+      sourceIssues: sourceDay?.integrity?.issues,
+      destinationIssues: destinationDay?.integrity?.issues,
+    }));
+  assert('Source opening stays at its physical value; dispatch is shown as Transfer-Out',
+    Number(sourceDay?.profitAndLoss?.expenses?.openingStock) === 1200 &&
+    Number(sourceDay?.profitAndLoss?.incomes?.stockTransferOut) === 400,
+    JSON.stringify(sourceDay?.profitAndLoss?.expenses));
+  assert('Destination opening stays physical; receipt is shown as Purchase Stock Transfer In',
+    Number(destinationDay?.profitAndLoss?.expenses?.openingStock) === 0 &&
+    Number(destinationDay?.profitAndLoss?.expenses?.stockTransferIn) === 400,
+    JSON.stringify(destinationDay?.profitAndLoss?.expenses));
+  assert('Source closing stock shows on-hand after dispatch',
+    Number(sourceDay?.profitAndLoss?.incomes?.closingStockOnHand) === 800 &&
+    Number(sourceDay?.profitAndLoss?.incomes?.closingStock) === 800,
+    JSON.stringify(sourceDay?.profitAndLoss?.incomes));
+  assert('Destination closing stock includes received on-hand stock only',
+    Number(destinationDay?.profitAndLoss?.incomes?.closingStockOnHand) === 400 &&
+    Number(destinationDay?.profitAndLoss?.incomes?.closingStock) === 400,
+    JSON.stringify(destinationDay?.profitAndLoss?.incomes));
+  assert('Location Balance Sheets show the same on-hand and transit stock components',
+    Number(sourceDay?.balanceSheet?.assets?.closingStockOnHand) === 800 &&
+    Number(sourceDay?.balanceSheet?.assets?.closingStockInTransit) === 0 &&
+    Number(destinationDay?.balanceSheet?.assets?.closingStockOnHand) === 400 &&
+    Number(destinationDay?.balanceSheet?.assets?.closingStockInTransit) === 0,
+    JSON.stringify({
+      source: sourceDay?.balanceSheet?.assets,
+      destination: destinationDay?.balanceSheet?.assets,
+    }));
+  assert('Completed transfer balances in both location P&Ls',
+    Number(sourceDay?.profitAndLoss?.summary?.costOfGoodsSold) === 400 &&
+    Number(destinationDay?.profitAndLoss?.summary?.costOfGoodsSold) === 0 &&
+    Number(sourceDay?.profitAndLoss?.netProfit) === 0 &&
+    Number(destinationDay?.profitAndLoss?.netProfit) === 0,
+    JSON.stringify({ source: sourceDay?.profitAndLoss?.summary, destination: destinationDay?.profitAndLoss?.summary }));
+
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Calcutta' });
+  const currentSource = await statement(D0, today, sourceId);
+  const currentDestination = await statement(D0, today, destinationId);
+  assert('After a short receipt, source P&L shows the remaining dispatch and separate transit value',
+    Number(currentSource?.profitAndLoss?.summary?.costOfGoodsSold) === 500 &&
+    Number(currentSource?.profitAndLoss?.incomes?.stockTransferOut) === 600 &&
+    Number(currentSource?.profitAndLoss?.incomes?.closingStockOnHand) === 600 &&
+    Number(currentSource?.profitAndLoss?.incomes?.closingStockInTransit) === 100 &&
+    Number(currentSource?.balanceSheet?.assets?.closingStockOnHand) === 600 &&
+    Number(currentSource?.balanceSheet?.assets?.closingStockInTransit) === 100 &&
+    Number(currentSource?.balanceSheet?.assets?.closingStock) === 700 &&
+    Number(currentSource?.profitAndLoss?.netProfit) === 100,
+    JSON.stringify(currentSource?.profitAndLoss?.summary));
+  assert('Short receipt shows only the actual received value in destination P&L',
+    Number(currentDestination?.profitAndLoss?.summary?.costOfGoodsSold) === 0 &&
+    Number(currentDestination?.profitAndLoss?.expenses?.stockTransferIn) === 500 &&
+    Number(currentDestination?.profitAndLoss?.incomes?.closingStockOnHand) === 500 &&
+    Number(currentDestination?.balanceSheet?.assets?.closingStockOnHand) === 500 &&
+    Number(currentDestination?.balanceSheet?.assets?.closingStockInTransit) === 0 &&
+    Number(currentDestination?.profitAndLoss?.netProfit) === 0,
+    JSON.stringify(currentDestination?.profitAndLoss?.summary));
 
 } catch (error) {
   console.error(`\nFATAL: ${error instanceof Error ? error.stack : String(error)}`);

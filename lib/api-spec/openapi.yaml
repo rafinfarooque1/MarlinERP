@@ -123,37 +123,6 @@ paths:
               schema:
                 $ref: "#/components/schemas/DashboardSummary"
 
-  /dashboard/unpaid-sales-bills:
-    get:
-      operationId: getDashboardUnpaidSalesBills
-      tags: [dashboard]
-      summary: List unpaid sales bills grouped by salesperson
-      parameters:
-        - name: locationType
-          in: query
-          schema:
-            type: string
-            enum: [outlet, warehouse, headoffice]
-        - name: locationId
-          in: query
-          schema:
-            type: integer
-            minimum: 1
-        - name: locationKeys
-          in: query
-          description: Comma-separated location keys, or "none" for an empty scope.
-          schema:
-            type: string
-      responses:
-        "200":
-          description: Outstanding sales bills and salesperson choices
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/DashboardUnpaidSalesBills"
-        "400":
-          description: Invalid location filter
-
   /dashboard/stock-alerts:
     get:
       operationId: getStockAlerts
@@ -820,29 +789,6 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Sale"
-
-  /sales/{id}/cancel:
-    post:
-      operationId: cancelSale
-      tags: [sales]
-      summary: Cancel a sale and reverse its stock and derived accounting effects
-      parameters:
-        - { name: id, in: path, required: true, schema: { type: integer } }
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/CancelSaleInput"
-      responses:
-        "200":
-          description: Sale cancelled
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/CancelSaleResult"
-        "409":
-          description: The sale cannot be cancelled in its current state
 
   /sales/{id}/ship-from-address:
     patch:
@@ -1821,24 +1767,6 @@ paths:
               schema:
                 $ref: "#/components/schemas/GstSummary"
 
-  /gst/item-wise-summary:
-    get:
-      operationId: getGstItemWiseSummary
-      tags: [gst]
-      summary: GST invoice item details for a period
-      parameters:
-        - { name: fromDate, in: query, schema: { type: string } }
-        - { name: toDate, in: query, schema: { type: string } }
-        - { name: gstin, in: query, schema: { type: string } }
-        - { name: warehouseId, in: query, schema: { type: integer, minimum: 1 } }
-      responses:
-        "200":
-          description: Outward sales and inward purchase invoice lines
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/GstItemWiseSummary"
-
   # ── COMPANY SETTINGS ──────────────────────────────────────────────────────
   /company/settings:
     get:
@@ -2258,49 +2186,6 @@ components:
         cashBalance:
           type: number
 
-    DashboardUnpaidSalesBills:
-      type: object
-      required: [salespeople, rows]
-      properties:
-        salespeople:
-          type: array
-          items:
-            $ref: "#/components/schemas/DashboardSalespersonOption"
-        rows:
-          type: array
-          items:
-            $ref: "#/components/schemas/DashboardUnpaidSalesBill"
-
-    DashboardSalespersonOption:
-      type: object
-      required: [employeeId, name]
-      properties:
-        employeeId:
-          type: [integer, "null"]
-        name:
-          type: string
-
-    DashboardUnpaidSalesBill:
-      type: object
-      required: [saleId, salespersonEmployeeId, salespersonName, customerName, invoiceNumber, locationName, billAmount, unpaidAmount]
-      properties:
-        saleId:
-          type: integer
-        salespersonEmployeeId:
-          type: [integer, "null"]
-        salespersonName:
-          type: string
-        customerName:
-          type: string
-        invoiceNumber:
-          type: string
-        locationName:
-          type: string
-        billAmount:
-          type: number
-        unpaidAmount:
-          type: number
-
     StockAlert:
       type: object
       properties:
@@ -2426,10 +2311,6 @@ components:
           type: ["string", "null"]
         productionStock:
           type: number
-        mrp:
-          type: number
-        lockingRate:
-          type: ["number", "null"]
         createdAt:
           type: string
 
@@ -2447,10 +2328,6 @@ components:
           type: string
         description:
           type: string
-        mrp:
-          type: number
-        lockingRate:
-          type: ["number", "null"]
 
     ItemUpdate:
       type: object
@@ -2465,10 +2342,6 @@ components:
           type: string
         description:
           type: string
-        mrp:
-          type: number
-        lockingRate:
-          type: ["number", "null"]
 
     # PURCHASE
     PurchaseLineItem:
@@ -3189,30 +3062,6 @@ components:
             Saved source-address override. Send null or an empty string to
             return to the current address on the issuing or dispatching location.
 
-    CancelSaleInput:
-      type: object
-      properties:
-        reason:
-          type: string
-          maxLength: 500
-          description: Optional cancellation reason recorded in the activity trail.
-
-    CancelSaleResult:
-      type: object
-      required: [id, invoiceNumber, cancelled, reversedLines, totalAmount]
-      properties:
-        id:
-          type: integer
-        invoiceNumber:
-          type: string
-        cancelled:
-          type: boolean
-          enum: [true]
-        reversedLines:
-          type: integer
-        totalAmount:
-          type: number
-
     ShipFromAddressResponse:
       type: object
       required: [shipFromAddress]
@@ -3239,9 +3088,6 @@ components:
             $ref: "#/components/schemas/SaleLineItem"
         paymentMode:
           type: string
-        overrideLockingRate:
-          type: boolean
-          description: Explicit administrator request to sell below a configured locking rate; server verifies role.
         receivedInLedgerId:
           type: integer
           minimum: 1
@@ -4209,13 +4055,14 @@ components:
         locationType:
           type: string
           enum: [headoffice, warehouse, outlet]
-          description: Legacy location input for Cash accounts only. Bank and Online accounts are shared by all warehouses and outlets.
+          description: Legacy single-location input for older clients; prefer locations for new Cash, Bank, and Online accounts.
         locationId:
           type: integer
-          description: Required with locationType for legacy Cash account input.
+          description: Required with locationType when using legacy single-location input.
         locations:
           type: array
-          description: Cash accounts require one or more locations. Bank and Online accounts are global and must not be assigned.
+          minItems: 1
+          description: Cash, Bank, and Online accounts can be assigned to one or more locations.
           items:
             $ref: "#/components/schemas/CashBankLocation"
         openingBalance:
@@ -4336,63 +4183,6 @@ components:
               gstNumber: { type: string }
               salesTax: { type: number }
               purchaseTax: { type: number }
-
-    GstItemWiseSummary:
-      type: object
-      required: [outward, inward]
-      properties:
-        outward:
-          type: array
-          items:
-            $ref: "#/components/schemas/GstItemWiseRow"
-        inward:
-          type: array
-          items:
-            $ref: "#/components/schemas/GstItemWiseRow"
-
-    GstItemWiseRow:
-      type: object
-      required: [date, documentNumber, partyName, partyGstin, state, stateCode, itemName, hsnCode, quantity, unit, taxableAmount, cgst, sgst, igst, invoiceValue]
-      properties:
-        date:
-          type: string
-        documentNumber:
-          type: string
-        partyName:
-          type: string
-        partyGstin:
-          type: string
-        state:
-          type: string
-        stateCode:
-          type: string
-        itemName:
-          type: string
-        hsnCode:
-          type: string
-        quantity:
-          type: number
-        unit:
-          type: string
-        taxableAmount:
-          type: number
-        cgst:
-          type: number
-        sgst:
-          type: number
-        igst:
-          type: number
-        invoiceValue:
-          type: number
-        salesperson:
-          type: string
-          description: Salesperson name for outward sales rows; omitted for purchase rows.
-        amountReceived:
-          type: number
-          description: Invoice-level amount received, repeated for each outward item line.
-        balanceDue:
-          type: number
-          description: Invoice-level outstanding balance, repeated for each outward item line.
 
     # COMPANY
     CompanySettings:
@@ -4518,10 +4308,6 @@ components:
         - locationId
         - platformLedgerId
         - platformName
-        - clearingReceiptId
-        - clearingReceiptAmount
-        - clearingReceiptAdvanceAmount
-        - clearingReceiptPendingCount
       properties:
         key:
           type: string
@@ -4563,14 +4349,6 @@ components:
           type: ["integer", "null"]
         platformName:
           type: ["string", "null"]
-        clearingReceiptId:
-          type: ["integer", "null"]
-        clearingReceiptAmount:
-          type: ["number", "null"]
-        clearingReceiptAdvanceAmount:
-          type: ["number", "null"]
-        clearingReceiptPendingCount:
-          type: ["integer", "null"]
 
     ReconciliationQueueSettlementRequest:
       type: object
@@ -4583,6 +4361,7 @@ components:
           format: date
         processingCharge:
           type: number
+          minimum: 0
         items:
           type: array
           minItems: 1

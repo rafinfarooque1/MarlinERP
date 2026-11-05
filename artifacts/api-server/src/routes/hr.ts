@@ -43,55 +43,6 @@ import {
 
 const router = Router();
 
-// Attendance Download is a narrowly scoped exception for warehouse attendance
-// entry. It grants only check-in/check-out API access; edit rights remain
-// required for corrections, leave approvals, and employee administration.
-const requireAttendancePunchPermission = async (
-  req: any,
-  res: Response,
-  next: (error?: unknown) => void,
-) => {
-  try {
-    const hierarchyId = req.employee?.hierarchyId;
-    if (
-      await hasModuleAction(hierarchyId, "page:/hr/attendance", "add")
-      || await hasModuleAction(hierarchyId, "page:/hr/attendance", "download")
-    ) {
-      next();
-      return;
-    }
-    res.status(403).json({ error: "Attendance check-in/check-out permission required." });
-  } catch (error) {
-    next(error);
-  }
-};
-
-async function mayPunchAttendanceForEmployee(req: any, targetEmployeeId: number): Promise<boolean> {
-  const actor = req.employee as {
-    id?: number; branchType?: string; branchId?: number; hierarchyId?: number;
-  } | undefined;
-  if (!actor) return false;
-  if (actor.branchType === "headoffice") return true;
-  const hasAdd = await hasModuleAction(actor.hierarchyId, "page:/hr/attendance", "add");
-  const hasDownload = await hasModuleAction(actor.hierarchyId, "page:/hr/attendance", "download");
-  if (Number(actor.id) === targetEmployeeId) {
-    return hasAdd || (actor.branchType === "warehouse" && hasDownload);
-  }
-  if (
-    actor.branchType !== "warehouse"
-    || !actor.branchId
-    || !hasDownload
-  ) return false;
-  const { rows } = await pool.query(
-    `SELECT 1 FROM employees
-      WHERE id = $1 AND is_active = true
-        AND branch_type = 'warehouse' AND branch_id = $2
-      LIMIT 1`,
-    [targetEmployeeId, actor.branchId],
-  );
-  return rows.length > 0;
-}
-
 /**
  * Resolves which cash/bank ledger a salary payment or employee advance leaves
  * from. Salary payable and advance ledgers stay payroll-owned (they never
@@ -3443,14 +3394,8 @@ router.get("/hr/attendance", requireModuleView("page:/hr/attendance"), async (re
   let allEmployees = await db.select().from(employeesTable).where(eq(employeesTable.isActive, true));
   if (filterEmployeeId) allEmployees = allEmployees.filter((e) => e.id === filterEmployeeId);
 
-  // Warehouse employees with the Attendance Download action may operate the
-  // daily register for their own warehouse. Other non-HO employees remain
-  // self-scoped.
-  const canManageWarehouseDay = !!(
-    scopeEmp?.branchType === "warehouse"
-    && await hasModuleAction((req as any).employee?.hierarchyId, "page:/hr/attendance", "download")
-  );
-  if (scopeEmp && scopeEmp.branchType !== 'headoffice' && !canManageWarehouseDay) {
+  // Non-headoffice employees only see their own attendance row
+  if (scopeEmp && scopeEmp.branchType !== 'headoffice') {
     allEmployees = allEmployees.filter((e) => e.id === scopeEmp.id);
   }
 
@@ -3459,13 +3404,6 @@ router.get("/hr/attendance", requireModuleView("page:/hr/attendance"), async (re
     allEmployees = allEmployees.filter((e) =>
       e.branchType === attViewLoc.locationType &&
       (attViewLoc.locationType === 'headoffice' || Number(e.branchId) === attViewLoc.locationId));
-  }
-  // The location selector is presentation context, never authority. Keep a
-  // delegated warehouse operator pinned to their own warehouse even if a
-  // different location is requested in the header.
-  if (canManageWarehouseDay && scopeEmp?.branchType === "warehouse") {
-    allEmployees = allEmployees.filter((e) =>
-      e.branchType === "warehouse" && Number(e.branchId) === Number((req as any).employee?.branchId));
   }
 
   // Existing attendance rows for that date
@@ -3711,11 +3649,13 @@ router.get("/hr/leave-balance", requireModuleView("page:/hr/attendance"), async 
   });
 });
 
-router.post("/hr/attendance/check-in", requireAttendancePunchPermission, async (req, res): Promise<void> => {
+router.post("/hr/attendance/check-in", requireModuleAction("page:/hr/attendance", "add"), async (req, res): Promise<void> => {
   const parsed = CheckInBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
-  if (!(await mayPunchAttendanceForEmployee(req, parsed.data.employeeId))) {
-    res.status(403).json({ error: "You may only record attendance for employees in your warehouse." });
+  // Non-headoffice employees may only check in for themselves
+  const scopeEmpCI = (req as any).employee as { id: number; branchType: string } | undefined;
+  if (scopeEmpCI && scopeEmpCI.branchType !== 'headoffice' && parsed.data.employeeId !== scopeEmpCI.id) {
+    res.status(403).json({ error: "You can only check in for yourself." });
     return;
   }
   const today = await businessTodayStr();
@@ -3804,11 +3744,13 @@ router.post("/hr/attendance/check-in", requireAttendancePunchPermission, async (
   });
 });
 
-router.post("/hr/attendance/check-out", requireAttendancePunchPermission, async (req, res): Promise<void> => {
+router.post("/hr/attendance/check-out", requireModuleAction("page:/hr/attendance", "add"), async (req, res): Promise<void> => {
   const parsed = CheckOutBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
-  if (!(await mayPunchAttendanceForEmployee(req, parsed.data.employeeId))) {
-    res.status(403).json({ error: "You may only record attendance for employees in your warehouse." });
+  // Non-headoffice employees may only check out for themselves
+  const scopeEmpCO = (req as any).employee as { id: number; branchType: string } | undefined;
+  if (scopeEmpCO && scopeEmpCO.branchType !== 'headoffice' && parsed.data.employeeId !== scopeEmpCO.id) {
+    res.status(403).json({ error: "You can only check out for yourself." });
     return;
   }
   const today = await businessTodayStr();

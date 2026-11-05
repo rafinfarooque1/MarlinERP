@@ -32,11 +32,3 @@ description: Integrity checks must separate proven equality from unavailable evi
 **Why:** Excluding a valid ownership component from the diagnostic creates a deterministic false mismatch even when the P&L and Balance Sheet agree.
 
 **How to apply:** When changing stock valuation inclusion rules, update FI-06/FI-07 and the statement engine together; verify both on-hand and in-transit components.
-
-## Showing calculated profit with incomplete historical evidence
-
-**Rule:** P&L may display its calculated gross and net profit when historical inventory evidence is incomplete, but the figures and exports must be clearly labeled `UNVERIFIED`; do not change the underlying reliability flags or remove the evidence warning.
-
-**Why:** The business chose to see the computed figures while retaining an honest distinction between a usable calculation and a verified historical close.
-
-**How to apply:** Use the statement engine's figures, preserve the stock-evidence warning, and carry the unverified label through the on-screen statement and its PDF/CSV exports.

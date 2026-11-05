@@ -31,11 +31,10 @@ export interface GroupSummary {
 export interface FinancialStatements {
   filters: { warehouses: { id: number; name: string }[]; outlets: { id: number; name: string }[] };
   profitAndLoss: {
-    /** Transfer ledger amounts are memo data; stock-cost adjustment keeps P&L neutral. */
+    /** True when a location statement includes transfer-in/out in P&L activity. */
     stockTransfersIncludedInPnl?: boolean;
     expenses: {
       openingStock: number; openingStockItems: StockItem[];
-      openingStockReliable?: boolean; openingStockNote?: string | null;
       openingStockTransferAdjustment?: number;
       purchases: number;
       stockTransferIn?: number;
@@ -53,8 +52,7 @@ export interface FinancialStatements {
       /** The Sales group tree behind the single `sales` figure. */
       salesGroup?: GroupSummary;
       closingStock: number; closingStockOnHand?: number; closingStockItems: StockItem[];
-      closingStockInTransit?: number; closingStockEvidenceReliable?: boolean;
-      closingStockReliable?: boolean; closingStockNote?: string | null; stockTransferOut?: number;
+      closingStockInTransit?: number; stockTransferOut?: number;
       directIncomes: GroupSummary; indirectIncomes: GroupSummary; total: number;
     };
     /** Same engine figures the dashboard GP/NP tiles read — never recompute these. */
@@ -65,7 +63,6 @@ export interface FinancialStatements {
     liabilities: { capitalAccount: GroupSummary; loans: GroupSummary; currentLiabilities: GroupSummary; pandlCarryForward: number; difference: number; total: number };
     assets: {
       fixedAssets: GroupSummary; currentAssets: GroupSummary; closingStock: number;
-      /** Closing inventory included as a Balance Sheet asset. */
       closingStockOnHand?: number; closingStockInTransit?: number; total: number;
     };
   };

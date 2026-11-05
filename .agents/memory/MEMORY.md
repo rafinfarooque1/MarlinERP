@@ -17,7 +17,7 @@
 - [Sales settlement](sales-settlement.md) + [Sale discount model](sale-discount-model.md) — only 'credit' is credit-controlled, dues = total−paid; per-unit item + pre-tax bill (paise-exact) + post-tax coupon; legacy lines keep line-total semantics.
 - [Location authorization](rbac-branch-scoping.md) + [LBAC](lbac-implementation.md) + [global context](global-location-context.md) + [filters](global-filter-plumbing.md) + [selector lockdown](location-selector-lockdown.md) — page rights precede scope; display location is never authority.
 - [Sales location gate](location-context-gate.md) — /sales/* pages render blank (null) in fresh sessions until a location is picked at /sales; not a crash — navigate via the picker in tests.
-- [Stock Ledger](stock-ledger.md) — append-only audit table; txn_date = business date (backdating, Closing(D)=Opening(D+1)); write strategy varies by route; running balance via window fn.
+- [Stock Ledger](stock-ledger.md) — txn_date is the business date; daily snapshots are evidence, not a write lock; accounting month locks govern backdating.
 - [GST reconciliation](gst-recon-attribution.md) + [transfer classification](gst-transfer-classification.md) + [place of supply](gst-place-of-supply.md) + [party GST](party-gst-persistence.md) — reconcile by document/JV attribution; classify by GSTIN/state; persist validated identity.
 - [Unified sidebar architecture](unified-sidebar.md) — ONE nav for all users; Sales/Accounts switcher removed; getNavGroups() replaces getAccountsNavGroups()+getSalesNavItems(); getPermissionGroups() replaces getPermissionSegments().
 - [Payroll workflow](payroll-workflow.md) + [LOP policy](lop-leave-policy.md) — drafts refresh on GET; unresolved absences gate approval; working days use calendar days; pending leave pays zero.
@@ -30,7 +30,6 @@
 - [Verifying costing on live data](verifying-costing-on-live-data.md) — create+delete of a batch permanently lowers item avg cost; a balanced TB does NOT prove the test left no trace.
 - [Stock reservations](stock-reservations.md) — hold reduces available, in_transit does NOT (already deducted); lock the stock row inside the deducting txn; `hold` has no producer yet, keep it.
 - [Inventory valuation & ageing](inventory-valuation-ageing.md) — live valuation is shared by report/dashboard/current close; historical P&L has a distinct flagged rewind; movement class = last OUTBOUND only.
-- [Historical stock evidence](historical-stock-evidence.md) — approved historical checkpoints are separate from live stock; sender-owned transit remains sourced from reservation history.
 - [Salary accrual](salary-accrual-attendance.md) + [Employment status & LWD](employment-status-lwd.md) + [Statutory payroll](statutory-payroll.md) — approval re-checks attendance under the lock; LWD bounds accrual; rates snapshotted per run, corrections are reversals.
 - [Historical stock dating](historical-stock-dating.md) — stock_ledger.created_at is an INSERT time, not a business date; past-date stock is mostly not derivable; anchor "held nothing" on document dates.
 - [Zero-transfer integrity](zero-transfer-integrity.md) — no transfer movements means zero transfer adjustment; do not inherit unrelated historical checkpoint warnings.
@@ -111,7 +110,7 @@
 - [Cash/bank chart](cash-bank-chart-integration.md) + [location availability](cash-bank-multilocation.md) — CBA balances derive from ledgers; new roots must reach trees, vouchers, and ownership guards.
 - [Located import compare pack](import-compare-pack.md) — pack scopes via opt-in identity sets on owning filter types; wizard location is picked at TRIAL time and approval refuses any other location.
 - [Collections & voucher attribution](electronic-collection-routing.md) + [Receive Into](receive-into-collections.md) — sales route by ledger; vouchers keep Electronic Clearing postings and store platform IDs for reconciliation.
-- [Transfer adjustments](transfer-opening-adjustments.md) + [transfer accounting](transfer-accounting.md) — sender-owned transit stays out of destination books until received; invoice obligations remain dispatch-based.
+- [Transfer adjustments](transfer-opening-adjustments.md) + [transfer accounting](transfer-accounting.md) — location P&Ls show Transfer-Out/In; transit stays sender-owned and out of operating totals.
 - [Warehouse lifecycle](warehouse-lifecycle.md) — disabled writes are guarded; ordinary lists, reports, stock, GSTR-1/docs hide disabled history; consolidated books stay complete; deletion is atomic.
 - [Company holidays & weekly offs](holidays-weekly-offs.md) — stored rows outvote the calendar; untracked months never synthesise; `until` bounds balance views only; moved cutover fakes "accrual writes ₹0" suite failures.
 - [Expo Metro setup](expo-metro-pnpm.md) + [static build routing](expo-static-build.md) — watch root node_modules; bundles and assets resolve from workspace-relative paths.
@@ -143,7 +142,7 @@
 - [Route-guard audit CI](route-guard-audit.md) — audit-route-guards.ts fails CI on unguarded writes (exemptions stay exact) + check-permissions #6 pins App.tsx guard keys; a comment claiming a fix ≠ the fix.
 - [Mobile app distribution](mobile-app-distribution.md) — no app stores BY CHOICE: Android ships ONLY via the automated EAS pipeline → storage manifest (atomic swap + grace copy; upload UI/URL proxy REMOVED); raw .ipa always rejected.
 - [HR employee lifecycle](hr-employee-lifecycle.md) — app-created employees carry a pay_components row (delete removes it, history blocks with 400); leave cancel = status flip; POS cash sale payments are receipt-backed → system-delete the receipt before cancel.
-- [Bank Book reconciliation identity](bank-book-reconciliation.md) — exact posting identity; selected bank amounts now settle as one combined entry against Electronic Clearing, with fees to Processor Charges
+- [Bank Book reconciliation identity](bank-book-reconciliation.md) — status keys are exact posting ledger + derived entry id; one-step reconciliation is metadata-only and never posts accounting
 - [Bank matrix pending line](bank-matrix-pending.md) — pending means incoming bank sales/receipts awaiting destination; current and informational, never a closing-balance adjustment
 - [Salesman assignment](salesman-assignment.md) — store employee ID plus name snapshot; validate new assignments by activity/location and grandfather unchanged historical assignments
 - [Location-authoritative inventory costing](location-cost-checkpoints.md) — global product average changes must not revalue unchanged branch stock or create artificial Gross Profit
@@ -151,7 +150,4 @@
 - [Report cache 304 handling](report-cache-304.md) — report fetches must bypass 304 revalidation when the client cannot recover the cached response body
 - [Customer receipt ledger aggregation](receipt-ledger-aggregation.md) — allocation rows are settlement metadata; one receipt posts one customer credit for its full amount
 - [Sales report definitions](sales-report-definitions.md) — Sales Register includes invoice-level charges; By Item is explicitly merchandise-line-only
-- [Sales report fixture drift](sales-report-fixture-drift.md) — captured sales report fixtures can retain invoice totals while payment expectations change; isolate the changed measure before judging failures
 - [Customer disable visibility](customer-disable-visibility.md) — disabled customers remain in Customer management for reactivation and are excluded from all other customer lists and pickers
-- [Locking Rate price floor](locking-rate-policy.md) — configured floors include all discounts; only server-verified admins can override, and every exception is audited
-- [Stock movement test dates](stock-date-fixtures.md) — tests must respect baseline and close-through dates; future movements may not appear in reports

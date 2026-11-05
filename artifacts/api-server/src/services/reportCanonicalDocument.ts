@@ -86,13 +86,13 @@ export function canonicalDocument(request: CanonicalReportRequest, payload: any)
       const stockTransferIn = Number((e as any).stockTransferIn ?? 0);
       const stockTransferOut = Number((i as any).stockTransferOut ?? 0);
       const locationTransfers = Boolean(pl.stockTransfersIncludedInPnl);
-      const inTransit = Number(i.closingStockInTransit ?? 0);
-      const closingStockRows = Math.abs(inTransit) > 0.005
+      const closingStockRows = locationTransfers
         ? {
-            "Closing Stock (on hand)": i.closingStockOnHand ?? Math.max(0, Number(i.closingStock ?? 0) - inTransit),
-            "Stock in Transit": inTransit,
+            "Closing Stock (on hand)": i.closingStockOnHand ?? Math.max(0, Number(i.closingStock ?? 0) - Number(i.closingStockInTransit ?? 0)),
+            ...(Math.abs(Number(i.closingStockInTransit ?? 0)) > 0.005
+              ? { "Stock in Transit": i.closingStockInTransit } : {}),
           }
-        : { "Closing Stock": i.closingStock };
+        : { "Closing Stock": i.closingStock, "Closing Stock In Transit": i.closingStockInTransit };
       const transferRows = locationTransfers
         ? {
             "Purchase Stock Transfer In": stockTransferIn,
@@ -125,10 +125,11 @@ export function canonicalDocument(request: CanonicalReportRequest, payload: any)
           ["Sales (net of GST)", amount(i.sales)],
           ...(locationTransfers && Math.abs(stockTransferOut) > 0.005
             ? [["Stock Transfer Out", amount(stockTransferOut)]] : []),
-          ...(Math.abs(inTransit) > 0.005
+          ...(locationTransfers
             ? [
-                ["Closing Stock (on hand)", amount(i.closingStockOnHand ?? Math.max(0, Number(i.closingStock ?? 0) - inTransit))],
-                ["Stock in Transit", amount(inTransit)],
+                ["Closing Stock (on hand)", amount(i.closingStockOnHand ?? Math.max(0, Number(i.closingStock ?? 0) - Number(i.closingStockInTransit ?? 0)))],
+                ...(Math.abs(Number(i.closingStockInTransit ?? 0)) > 0.005
+                  ? [["Stock in Transit", amount(i.closingStockInTransit)]] : []),
               ]
             : [["Closing Stock", amount(i.closingStock)]]),
           ...groupRows(i.directIncomes), ...groupRows(i.indirectIncomes),

@@ -184,9 +184,6 @@ export interface ValuationProductTotal {
 }
 
 export interface StockValuation {
-  reliable: boolean;
-  note: string | null;
-  issues: Array<{ code: string; message: string }>;
   rows: ValuationRow[];
   locations: ValuationLocation[];
   byType: ValuationTypeTotal[];

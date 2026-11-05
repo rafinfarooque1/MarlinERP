@@ -19,7 +19,6 @@ import {
   MOVEMENT_CLASS_DAYS, type MovementClass,
 } from "../lib/inventoryAging";
 import { visibleLocationSql } from "../lib/warehouseVisibility";
-import { companyTodayISO } from "../lib/books";
 
 const router = Router();
 
@@ -326,23 +325,16 @@ router.get("/stock/expiry-report", requireModuleView("page:/headoffice/inventory
 });
 
 // ── Stock valuation (weighted-average, at cost) ───────────────────────────────
-// Current-date valuation delegates to the shared live valuation used by the
-// dashboard and P&L. Earlier dates use the historical rewind to resolve
-// checkpoint gaps, while keeping unsupported lines excluded and visible as
-// evidence issues. Finished goods, raw/packing materials, and sender-owned
-// in-transit stock are included where the requested cutoff permits them.
+// Delegates entirely to the one valuation function, so this report, the dashboard
+// tile and the P&L closing stock are literally the same number. It used to cover
+// finished goods only; raw and packing materials are stock the business owns and
+// are now included, as is stock dispatched but not yet received (valued as the
+// sender's until it lands, because it belongs to nobody else).
 router.get("/stock/valuation", requireModuleView("page:/headoffice/inventory-reports"), async (req, res): Promise<void> => {
   const { branchType, branchId, materialType, asOf } = req.query as Record<string, string | undefined>;
   if (asOf && !isIsoDate(asOf)) {
     res.status(400).json({ error: "asOf must be a valid YYYY-MM-DD date" }); return;
   }
-  const today = await companyTodayISO(pool);
-  if (asOf && asOf > today) {
-    res.status(400).json({ error: "asOf cannot be in the future" }); return;
-  }
-  // The date picker defaults to today. Treat that as the live position, not a
-  // historical checkpoint lookup; only dates before today use the rewind.
-  const historicalAsOf = asOf && asOf < today ? asOf : undefined;
   if (materialType && !BATCH_KINDS.includes(materialType as any)) {
     res.status(400).json({ error: `materialType must be one of: ${BATCH_KINDS.join(", ")}` }); return;
   }
@@ -355,14 +347,13 @@ router.get("/stock/valuation", requireModuleView("page:/headoffice/inventory-rep
       branchType: branchType || undefined,
       branchId: branchId != null && branchId !== "" ? Number(branchId) : undefined,
       materialType: (materialType as ProductKind | undefined) || undefined,
-      asOf: historicalAsOf,
-      includeInTransit: true,
+      asOf,
+      includeInTransit: !asOf,
       dataScope,
     }),
     buildBranchMaps(),
   ]);
 
-  const effectiveIssues = valuation.issues;
   const visibleRows = await retainVisibleValuationRows(valuation.rows);
   const rows = visibleRows.map((r) => ({
     // `itemId` is kept for callers that predate materials being included; refId is
@@ -422,31 +413,19 @@ router.get("/stock/valuation", requireModuleView("page:/headoffice/inventory-rep
     byProductMap.set(productKey, productSummary);
   }
 
-  const locationTotals = new Map<string, {
-    branchType: string; branchId: number; totalValue: number; onHandValue: number;
-    inTransitValue: number; itemCount: number; totalQuantity: number;
-  }>();
-  for (const row of visibleRows) {
-    const key = `${row.branchType}:${row.branchId}`;
-    const location = locationTotals.get(key) ?? {
-      branchType: row.branchType, branchId: Number(row.branchId), totalValue: 0,
-      onHandValue: 0, inTransitValue: 0, itemCount: 0, totalQuantity: 0,
-    };
-    location.totalValue = r2(location.totalValue + row.value);
-    if (row.inTransit) location.inTransitValue = r2(location.inTransitValue + row.value);
-    else location.onHandValue = r2(location.onHandValue + row.value);
-    location.totalQuantity = r3(location.totalQuantity + row.quantity);
-    location.itemCount += 1;
-    locationTotals.set(key, location);
-  }
-
   res.json({
-    reliable: effectiveIssues.length === 0,
-    note: effectiveIssues.length ? effectiveIssues.map((issue) => issue.message).join(" ") : null,
-    issues: effectiveIssues,
     rows,
-    locations: [...locationTotals.values()].sort((a, b) => b.totalValue - a.totalValue).map((l) => ({
-      ...l, branchName: branchName(l.branchType, l.branchId),
+    locations: valuation.byLocation.filter((l) =>
+      visibleRows.some((r) => r.branchType === l.branchType && Number(r.branchId) === Number(l.branchId)),
+    ).map((l) => ({
+      branchType: l.branchType,
+      branchId: l.branchId,
+      branchName: branchName(l.branchType, l.branchId),
+      totalValue: l.value,
+      onHandValue: l.onHandValue,
+      inTransitValue: l.inTransitValue,
+      itemCount: l.lines,
+      totalQuantity: l.quantity,
     })),
     byType: [...byTypeMap.values()].sort((a, b) => b.value - a.value),
     byProduct: [...byProductMap.values()].sort((a, b) => a.itemName.localeCompare(b.itemName)),

@@ -25,13 +25,6 @@ import { getLocationFilter } from "../lib/requestLocation";
 import { visibleLocationSql } from "../lib/warehouseVisibility";
 import { deductMaterialAt, creditMaterialAt, paiseConservativeBlendCost } from "../lib/materialStock";
 import { outletWritesBlocked, OUTLETS_DISABLED_MESSAGE, OUTLETS_DISABLED_CODE } from "../lib/featureFlags";
-import { isLevelOneAdmin } from "../lib/adminGate";
-import {
-  historicalEvidenceKey,
-  historicalTransferReceiptConflicts,
-  duplicateHistoricalEvidenceKeys,
-  missingHistoricalEvidenceKeys,
-} from "../lib/historicalStockEvidenceRules";
 import { productBatchIdentity, blockedByInactiveProducts, INACTIVE_PRODUCT_CODE, isProductKind } from "../lib/productIdentity";
 import {
   reservedSql, availabilityAt, insufficientStockMessage, reserveStock, releaseReservations,
@@ -39,192 +32,6 @@ import {
 } from "../lib/reservations";
 
 const router = Router();
-
-router.get("/stock/historical-evidence/:date", requireModuleView("page:/headoffice/inventory-reports"), async (req, res): Promise<void> => {
-  if (!(await isLevelOneAdmin(req.employee))) { res.status(403).json({ error: "Only an Administrator can view company-wide historical stock evidence." }); return; }
-  const date = String(req.params.date ?? "");
-  if (!isIsoDate(date)) { res.status(400).json({ error: "date must be YYYY-MM-DD" }); return; }
-  const { rows: [header] } = await pool.query(
-    `SELECT id,effective_date::text,source_document,notes,status,created_by,created_at,approved_by,approved_at
-       FROM historical_stock_evidence WHERE effective_date=$1::date`,
-    [date],
-  );
-  if (!header) { res.json({ evidence: null }); return; }
-  const { rows: lines } = await pool.query(
-    `SELECT l.material_type,l.ref_id,l.branch_type,l.branch_id,l.quantity::numeric,l.unit_cost::numeric,l.value::numeric,
-            COALESCE(i.name,m.name,r.name,'[missing product]') AS product_name
-       FROM historical_stock_evidence_lines l
-       LEFT JOIN items i ON l.material_type='item' AND i.id=l.ref_id
-       LEFT JOIN materials m ON l.material_type='material' AND m.id=l.ref_id
-       LEFT JOIN raw_materials r ON l.material_type='raw_material' AND r.id=l.ref_id
-      WHERE l.evidence_id=$1 ORDER BY l.branch_type,l.branch_id,l.material_type,product_name`,
-    [header.id],
-  );
-  res.json({ evidence: { ...header, lines } });
-});
-
-router.post("/stock/historical-evidence", requireModuleAction("page:/headoffice/inventory-reports", "add"), async (req, res): Promise<void> => {
-  if (!(await isLevelOneAdmin(req.employee))) { res.status(403).json({ error: "Only an Administrator can record historical stock evidence." }); return; }
-  const body = req.body ?? {};
-  const effectiveDate = String(body.effectiveDate ?? "");
-  const sourceDocument = String(body.sourceDocument ?? "").trim();
-  const rawLines = body.lines;
-  const localNow = new Date();
-  const today = `${localNow.getFullYear()}-${String(localNow.getMonth() + 1).padStart(2, "0")}-${String(localNow.getDate()).padStart(2, "0")}`;
-  if (!isIsoDate(effectiveDate) || effectiveDate > today) {
-    res.status(400).json({ error: "A valid past effective date is required." }); return;
-  }
-  if (!sourceDocument || sourceDocument.length > 500 || !Array.isArray(rawLines) || rawLines.length === 0) {
-    res.status(400).json({ error: "Source document and at least one evidence line are required." }); return;
-  }
-  const lines: Array<{ materialType: string; refId: number; branchType: string; branchId: number; quantity: number; unitCost: number; value: number }> = [];
-  for (const raw of rawLines) {
-    const materialType = String(raw?.materialType ?? "");
-    const refId = Number(raw?.refId);
-    const branchType = String(raw?.branchType ?? "");
-    const branchId = Number(raw?.branchId);
-    const quantity = Number(raw?.quantity);
-    const unitCost = Number(raw?.unitCost);
-    const key = historicalEvidenceKey({ materialType, refId, branchType, branchId });
-    if (!["item","material","raw_material"].includes(materialType)
-      || !Number.isInteger(refId) || refId <= 0
-      || !["headoffice","warehouse","outlet"].includes(branchType)
-      || !Number.isInteger(branchId) || branchId < 0
-      || !Number.isFinite(quantity) || quantity < 0
-      || !Number.isFinite(unitCost) || unitCost < 0
-      || (quantity > 0 && unitCost <= 0)) {
-      res.status(400).json({ error: "Evidence lines require unique product/location keys, non-negative quantities, and a positive cost for positive stock." }); return;
-    }
-    lines.push({ materialType, refId, branchType, branchId, quantity, unitCost, value: Math.round(quantity * unitCost * 10000) / 10000 });
-  }
-  if (duplicateHistoricalEvidenceKeys(lines).length) {
-    res.status(400).json({ error: "Evidence lines require unique product/location keys." }); return;
-  }
-  const knownProducts = await batchResolveMeta(pool, lines.map((l) => ({ materialType: l.materialType, refId: l.refId })));
-  if (knownProducts.size < new Set(lines.map((l) => `${l.materialType}:${l.refId}`)).size) {
-    res.status(400).json({ error: "Every product must exist in the matching inventory master." }); return;
-  }
-  const warehouses = [...new Set(lines.filter((l) => l.branchType === "warehouse").map((l) => l.branchId))];
-  const outlets = [...new Set(lines.filter((l) => l.branchType === "outlet").map((l) => l.branchId))];
-  if (lines.some((l) => l.branchType === "headoffice" && l.branchId !== 1)) {
-    res.status(400).json({ error: "Head Office evidence must use location id 1." }); return;
-  }
-  const [{ rows: warehouseRows }, { rows: outletRows }] = await Promise.all([
-    pool.query(`SELECT id FROM warehouses WHERE id=ANY($1::int[])`, [warehouses]),
-    pool.query(`SELECT id FROM outlets WHERE id=ANY($1::int[])`, [outlets]),
-  ]);
-  if (warehouseRows.length !== warehouses.length || outletRows.length !== outlets.length) {
-    res.status(400).json({ error: "Every evidence line must use an existing location." }); return;
-  }
-  const expected = await pool.query(
-    `WITH current_stock AS (
-       SELECT material_type,item_id::int ref_id,branch_type,branch_id::int branch_id,SUM(quantity::numeric) qty FROM stock_entries GROUP BY 1,2,3,4
-     ), ledger AS (
-       SELECT material_type,ref_id::int,branch_type,branch_id::int,SUM(qty_change::numeric) FILTER(WHERE txn_date>$1::date) after_qty
-         FROM stock_ledger GROUP BY 1,2,3,4
-     ), keys AS (
-       SELECT material_type,ref_id,branch_type,branch_id FROM current_stock
-       UNION SELECT material_type,ref_id,branch_type,branch_id FROM ledger
-     )
-     SELECT k.material_type,k.ref_id,k.branch_type,k.branch_id
-       FROM keys k LEFT JOIN current_stock c USING(material_type,ref_id,branch_type,branch_id)
-       LEFT JOIN ledger l USING(material_type,ref_id,branch_type,branch_id)
-      WHERE COALESCE(c.qty,0)-COALESCE(l.after_qty,0)>0.001`,
-    [effectiveDate],
-  );
-  const missing = missingHistoricalEvidenceKeys(
-    expected.rows.map((r: any) => ({ materialType: r.material_type, refId: Number(r.ref_id), branchType: r.branch_type, branchId: Number(r.branch_id) })),
-    lines.map((l) => ({ materialType: l.materialType, refId: l.refId, branchType: l.branchType, branchId: l.branchId })),
-  );
-  if (missing.length) {
-    res.status(400).json({ error: `The schedule is incomplete: ${missing.length} positive product/location line(s) from the stock evidence report are missing.` }); return;
-  }
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`historical-stock-evidence:${effectiveDate}`]);
-    const { rows: [header] } = await client.query(
-      `INSERT INTO historical_stock_evidence(effective_date,source_document,notes,created_by)
-       VALUES($1::date,$2,$3,$4) RETURNING id`,
-      [effectiveDate,sourceDocument,String(body.notes ?? "").slice(0,2000),req.employee!.username],
-    );
-    for (const line of lines) await client.query(
-      `INSERT INTO historical_stock_evidence_lines(evidence_id,material_type,ref_id,branch_type,branch_id,quantity,unit_cost,value)
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
-      [header.id,line.materialType,line.refId,line.branchType,line.branchId,line.quantity,line.unitCost,line.value],
-    );
-    await client.query("COMMIT");
-    res.status(201).json({ id: Number(header.id), effectiveDate, status: "draft", lineCount: lines.length });
-  } catch (error: any) {
-    await client.query("ROLLBACK").catch(() => {});
-    if (error?.code === "23505") { res.status(409).json({ error: "Evidence already exists for this effective date." }); return; }
-    throw error;
-  } finally { client.release(); }
-});
-
-router.patch("/stock/historical-evidence/:id/approve", requireModuleAction("page:/headoffice/inventory-reports", "edit"), async (req, res): Promise<void> => {
-  if (!(await isLevelOneAdmin(req.employee))) { res.status(403).json({ error: "Only an Administrator can approve historical stock evidence." }); return; }
-  const id = Number(req.params.id);
-  if (!Number.isInteger(id) || id <= 0) { res.status(400).json({ error: "Invalid evidence id." }); return; }
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    await client.query(`LOCK TABLE stock_entries IN SHARE MODE`);
-    await client.query(`LOCK TABLE stock_ledger IN SHARE MODE`);
-    const { rows: [draft] } = await client.query(
-      `SELECT id,effective_date::text FROM historical_stock_evidence WHERE id=$1 AND status='draft' FOR UPDATE`,
-      [id],
-    );
-    if (!draft) { await client.query("ROLLBACK"); res.status(409).json({ error: "Evidence is missing or is no longer a draft." }); return; }
-    const transferConflicts = await historicalTransferReceiptConflicts(client, draft.effective_date);
-    if (transferConflicts.length) {
-      await client.query("ROLLBACK");
-      res.status(409).json({
-        error: "A transfer-in is ledger-dated by the cutoff but lacks matching receipt evidence. Reconcile the transfer document before approving this checkpoint.",
-        transferConflicts,
-      });
-      return;
-    }
-    const { rows: [mismatch] } = await client.query(
-      `WITH evidence AS (
-         SELECT material_type,ref_id,branch_type,branch_id,quantity
-           FROM historical_stock_evidence_lines WHERE evidence_id=$1
-       ), current_stock AS (
-         SELECT material_type,item_id::int ref_id,branch_type,branch_id::int branch_id,SUM(quantity::numeric) qty
-           FROM stock_entries GROUP BY 1,2,3,4
-       ), moves AS (
-         SELECT material_type,ref_id::int,branch_type,branch_id::int,SUM(qty_change::numeric) qty
-           FROM stock_ledger WHERE COALESCE(txn_date,created_at::date)>$2::date GROUP BY 1,2,3,4
-       ), keys AS (
-         SELECT material_type,ref_id,branch_type,branch_id FROM evidence
-         UNION SELECT material_type,ref_id,branch_type,branch_id FROM current_stock
-         UNION SELECT material_type,ref_id,branch_type,branch_id FROM moves
-       )
-       SELECT COUNT(*)::int bad_lines
-         FROM keys k
-         LEFT JOIN evidence e USING(material_type,ref_id,branch_type,branch_id)
-         LEFT JOIN current_stock c USING(material_type,ref_id,branch_type,branch_id)
-         LEFT JOIN moves m USING(material_type,ref_id,branch_type,branch_id)
-        WHERE ABS(COALESCE(e.quantity,0)+COALESCE(m.qty,0)-COALESCE(c.qty,0))>0.001`,
-      [id,draft.effective_date],
-    );
-    if (Number(mismatch?.bad_lines ?? 0) > 0) {
-      await client.query("ROLLBACK");
-      res.status(409).json({ error: "The proposed checkpoint plus recorded movements does not reconcile to current stock. Resolve the conflict with source evidence before approval." });
-      return;
-    }
-    const { rows: [header] } = await client.query(
-      `UPDATE historical_stock_evidence SET status='approved',approved_by=$2,approved_at=now()
-        WHERE id=$1 AND status='draft' RETURNING id,effective_date::text,status`,
-      [id,req.employee!.username],
-    );
-    await client.query("COMMIT");
-    res.json(header);
-  } catch (error) {
-    await client.query("ROLLBACK").catch(() => {});
-    throw error;
-  } finally { client.release(); }
-});
 
 const r3 = (n: number) => Math.round(n * 1000) / 1000;
 const r2 = (n: number) => Math.round(n * 100) / 100;
@@ -1624,37 +1431,28 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction("page:/transfer
         });
       } else {
         const toLocGst = await resolveLocationGst(pool, row.to_type, Number(row.to_id));
-        const fromLocGst = await resolveLocationGst(pool, row.from_type, Number(row.from_id));
-        // Voucher-mode accounting follows what was actually received. Any
-        // shortfall remains sender-owned in transit and must not be expensed
-        // at the destination. Invoice-mode documents above intentionally stay
-        // at dispatched quantity because they represent the full tax invoice.
-        const receivedAccountingLines = await buildTransferInvoiceLines(
+           const fromLocGst = await resolveLocationGst(pool, row.from_type, Number(row.from_id));
+        const gstAmt = Number(row.gst_amount ?? 0);
+       const halfGst = Math.round(gstAmt / 2 * 100) / 100;
+       const storedGst: GstTotals = {
+          taxableValue: Number(row.transfer_value),
+         cgst:  row.tax_type === 'cgst_sgst' ? halfGst : 0,
+         sgst:  row.tax_type === 'cgst_sgst' ? Math.round((gstAmt - halfGst) * 100) / 100 : 0,
+          igst:  row.tax_type === 'igst'       ? gstAmt     : 0,
+          totalGst: gstAmt,
+          totalWithGst: Number(row.transfer_value) + gstAmt,
+        };
+        receiveVoucherId = await createReceiveVoucher({
           client,
-          linesToCredit
-            .filter((line: any) => Number(line.quantity) > 0)
-            .map((line: any) => ({
-              itemId: Number(line.itemId),
-              quantity: Number(line.quantity),
-              costPrice: Number(line.costPrice ?? 0),
-              materialType: line.materialType ?? 'item',
-            })),
+          challanNumber: row.challan_number,
+          transferDate: txnDate,
+          toLocation: toLocGst,
+           fromLocation: fromLocGst,
+          gst: storedGst,
           taxType,
-        );
-        const receivedTotals = totalsFromLines(receivedAccountingLines);
-        if (receivedTotals.totalWithGst > 0.004) {
-          receiveVoucherId = await createReceiveVoucher({
-            client,
-            challanNumber: row.challan_number,
-            transferDate: txnDate,
-            toLocation: toLocGst,
-            fromLocation: fromLocGst,
-            gst: receivedTotals,
-            taxType,
-            narration: `Inter-branch transfer ${row.challan_number} — received at ${toLocGst.name}`,
-            createdBy: approvedBy ?? null,
-          });
-        }
+          narration: `Inter-branch transfer ${row.challan_number} — received at ${toLocGst.name}`,
+          createdBy: approvedBy ?? null,
+        });
       }
     }
 
@@ -1725,7 +1523,7 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction("page:/transfer
           docId: id,
            txnDate: receiptDate,
         };
-      }), { allowTransferCheckpointReplay: true });
+      }));
     }
 
     await logActivityInTransaction(client, {

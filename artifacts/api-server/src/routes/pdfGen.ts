@@ -232,13 +232,11 @@ function validateReportBody(req: any, res: any, format: "PDF" | "Excel"): Report
 // view gate decided what data reached the client in the first place.
 const REPORT_EXPORT_PAGES = [
   "page:/reports/sales",
-  "page:/sales/pos",
   "page:/accounts/ledger",
   "page:/accounts/day-book",
   "page:/accounts/cash-book",
   "page:/accounts/bank-book",
   "page:/accounts/trial-balance",
-  "page:/outstanding",
 ];
 
 /**

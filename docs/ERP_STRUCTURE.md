@@ -1,6 +1,4 @@
-# Marlin Frozen Fruits ERP — Legacy Structure Snapshot
-
-> **Use the current guide instead:** [ERP_STRUCTURE_CURRENT.md](ERP_STRUCTURE_CURRENT.md) is the maintained structure document. This July 2026 snapshot is retained for historical detail and may describe retired or out-of-scope pages.
+# Marlin Frozen Fruits ERP — Official Structure Documentation
 
 > **Analysis date:** July 2026  
 > **Scope:** Describes the current implementation exactly as it exists. No modifications, redesigns, or recommendations.

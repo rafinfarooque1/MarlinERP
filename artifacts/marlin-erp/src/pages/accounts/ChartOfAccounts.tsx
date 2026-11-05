@@ -241,10 +241,10 @@ function LedgerLine({ node, depth, onCreated, expansion, onBankAdd, onDelete, on
       <div>
         {/* Sub-group header row — draggable + drop target */}
         <div
-          className={`flex items-center gap-1.5 py-2 pr-3 mx-2 my-0.5 rounded-lg group transition-colors
+          className={`flex items-center gap-1.5 py-1.5 pr-2 mx-2 my-0.5 rounded-md group transition-colors
             ${dropOver
-              ? 'bg-primary/10 ring-1 ring-primary/30'
-              : 'bg-muted/20 hover:bg-muted/35'}`}
+              ? 'bg-violet-500/15 ring-1 ring-violet-500/40'
+              : 'bg-muted/5 hover:bg-muted/10'}`}
           style={{ paddingLeft: pl }}
           draggable={allowDrag}
           onDragStart={allowDrag ? (e) => { e.stopPropagation(); e.dataTransfer.setData('text/plain', String(node.id)); e.dataTransfer.effectAllowed = 'move'; } : undefined}
@@ -265,7 +265,7 @@ function LedgerLine({ node, depth, onCreated, expansion, onBankAdd, onDelete, on
           ) : (
             <span className="w-3 shrink-0" />
           )}
-          <Folder className="w-3.5 h-3.5 text-primary/70 shrink-0" />
+          <Folder className="w-3.5 h-3.5 text-violet-400/80 shrink-0" />
 
           {renaming ? (
             <input autoFocus value={renameVal}
@@ -314,7 +314,7 @@ function LedgerLine({ node, depth, onCreated, expansion, onBankAdd, onDelete, on
       onDragStart={allowDrag ? (e) => { e.dataTransfer.setData('text/plain', String(node.id)); e.dataTransfer.effectAllowed = 'move'; } : undefined}
     >
       {/* Row */}
-      <div className="flex items-center gap-1.5 py-2 pr-3 group transition-colors hover:bg-muted/20 rounded-lg" style={{ paddingLeft: pl }}>
+      <div className="flex items-center gap-1.5 py-1.5 pr-2 group" style={{ paddingLeft: pl }}>
         {/* A ledger can parent sub-ledgers; only then does it get a toggle. */}
         {hasChildren ? (
           <button
@@ -413,8 +413,8 @@ function GroupBlock({ group, onCreated, expansion, onBankAdd, onDelete, onRename
     <div className="mb-3">
       {/* Group label row — toggle + drop target for drag-and-drop */}
       <div
-        className={`flex items-center gap-2 py-2.5 px-3 rounded-lg mx-2 transition-colors select-none
-          ${dropOver ? 'bg-primary/10 ring-1 ring-primary/30' : 'bg-muted/35'}`}
+        className={`flex items-center gap-2 py-2 px-3 rounded-md mx-2 transition-colors select-none
+          ${dropOver ? 'bg-blue-500/15 ring-1 ring-blue-500/30' : 'bg-muted/10'}`}
         onDragOver={canEdit ? (e) => { e.preventDefault(); setDropOver(true); } : undefined}
         onDragLeave={canEdit ? (e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDropOver(false); } : undefined}
         onDrop={canEdit ? (e) => { e.preventDefault(); setDropOver(false); const id = Number(e.dataTransfer.getData('text/plain')); if (id && groupId) onMove?.(id, groupId); } : undefined}
@@ -432,7 +432,7 @@ function GroupBlock({ group, onCreated, expansion, onBankAdd, onDelete, onRename
         ) : (
           <span className="w-3.5 shrink-0" />
         )}
-        <span className="flex-1 text-[11px] font-bold text-foreground/75 uppercase tracking-[0.12em]">{group.name}</span>
+        <span className="flex-1 text-xs font-bold text-foreground/70 uppercase tracking-wide">{group.name}</span>
         {dropOver
           ? <span className="text-[10px] text-blue-400 font-medium">Drop here</span>
           : <span className="text-xs font-mono font-semibold tabular-nums text-foreground/60">
@@ -456,48 +456,45 @@ function GroupBlock({ group, onCreated, expansion, onBankAdd, onDelete, onRename
 
       {open && <LedgerCreationRetiredNote depth={1} />}
 
-      <div className="border-b border-border/40 mx-2 mt-1" />
+      <div className="border-b border-border/20 mx-2 mt-1" />
     </div>
   );
 }
 
 /* ── auto row ────────────────────────────────────────────────────────────────── */
-function AutoRow({ label, amount, sub, accent, depth = 0, unverified = false }: {
-  label: string; amount: number; sub?: string; accent?: string; depth?: number; unverified?: boolean;
+function AutoRow({ label, amount, sub, accent, depth = 0 }: {
+  label: string; amount: number; sub?: string; accent?: string; depth?: number;
 }) {
   const { enabled: valuedOnly } = useValueFilter();
-  if (valuedOnly && !unverified && !hasDisplayedValue(amount)) return null;
+  if (valuedOnly && !hasDisplayedValue(amount)) return null;
   const pl = `${8 + depth * 16}px`;
   return (
     <div className={`flex items-center gap-2 py-1.5 ${accent ?? ''}`} style={{ paddingLeft: pl }}>
       <span className={`flex-1 text-xs ${accent ? 'font-medium' : 'text-muted-foreground italic'}`}>{label}</span>
       {sub && <span className="text-[10px] text-muted-foreground/50 italic">{sub}</span>}
-      <span className="text-[11px] font-mono tabular-nums text-muted-foreground pr-3">{unverified ? 'Unverified' : fmt(amount)}</span>
+      <span className="text-[11px] font-mono tabular-nums text-muted-foreground pr-3">{fmt(amount)}</span>
     </div>
   );
 }
 
 /* ── stock breakdown ────────────────────────────────────────────────────────── */
-function StockBlock({ label, items, total, unverified = false }: { label: string; items: StockItem[]; total: number; unverified?: boolean }) {
+function StockBlock({ label, items, total }: { label: string; items: StockItem[]; total: number }) {
   const [open, setOpen] = useState(false);
   const { enabled: valuedOnly } = useValueFilter();
-  if (valuedOnly && !unverified && !hasDisplayedValue(total) && !items.some(item => hasDisplayedValue(item.total))) return null;
+  if (valuedOnly && !hasDisplayedValue(total) && !items.some(item => hasDisplayedValue(item.total))) return null;
   return (
     <div className="mb-1">
       <button
-        onClick={() => { if (!unverified) setOpen(o => !o); }}
-        disabled={unverified}
+        onClick={() => setOpen(o => !o)}
         className="flex items-center gap-2 w-full py-2 px-2 hover:bg-muted/5 rounded transition-colors"
       >
         <Package className="w-3 h-3 text-muted-foreground/50 shrink-0" />
-        <span className="flex-1 text-xs font-semibold text-foreground/80 text-left">{unverified ? `${label} (unverified)` : label}</span>
-        {unverified
-          ? <span className="text-xs font-medium text-amber-600 dark:text-amber-300">Unverified</span>
-          : total > 0
+        <span className="flex-1 text-xs font-semibold text-foreground/80 text-left">{label}</span>
+        {total > 0
           ? <span className="text-xs font-mono tabular-nums text-foreground/70">{fmt(total)}</span>
           : <span className="text-xs text-muted-foreground/40 italic">₹0.00</span>
         }
-        {!unverified && items.length > 0 && (open ? <ChevronDown className="w-3 h-3 text-muted-foreground/50" /> : <ChevronRight className="w-3 h-3 text-muted-foreground/50" />)}
+        {items.length > 0 && (open ? <ChevronDown className="w-3 h-3 text-muted-foreground/50" /> : <ChevronRight className="w-3 h-3 text-muted-foreground/50" />)}
       </button>
 
       {open && items.length > 0 && (
@@ -526,12 +523,11 @@ function StockBlock({ label, items, total, unverified = false }: { label: string
 const Divider = () => <div className="border-t border-border/30 my-2 mx-2" />;
 
 /* ── section panel ───────────────────────────────────────────────────────────── */
-function Panel({ title, icon: Icon, total, hdrClass, borderClass, monthly, children, totalUnverified = false }: {
+function Panel({ title, icon: Icon, total, hdrClass, borderClass, monthly, children }: {
   title: string; icon: React.ElementType; total: number;
   hdrClass: string; borderClass: string;
   /** Month Wise mode — the body gains the column header row and scrolls horizontally. */
   monthly?: MonthlyView;
-  totalUnverified?: boolean;
   children: React.ReactNode;
 }) {
   return (
@@ -540,7 +536,7 @@ function Panel({ title, icon: Icon, total, hdrClass, borderClass, monthly, child
       <div className={`flex items-center gap-2 px-4 py-3 ${hdrClass}`}>
         <Icon className="w-4 h-4 shrink-0" />
         <span className="flex-1 text-sm font-bold uppercase tracking-widest">{title}</span>
-        <span className="text-sm font-mono font-bold tabular-nums">{totalUnverified ? 'Unverified' : fmt(total)}</span>
+        <span className="text-sm font-mono font-bold tabular-nums">{fmt(total)}</span>
       </div>
       {/* Body — ONE horizontal scroll region per panel; the account-name column
           is sticky inside it, so month columns scroll under the names. */}
@@ -564,9 +560,9 @@ function StatementToolbar({ expansion, expandableIds, onManage, statement }: {
   statement: string;
 }) {
   return (
-    <div className="mb-3 flex flex-wrap items-center gap-1.5 rounded-xl border border-border bg-card px-2 py-2 shadow-sm">
+    <div className="flex flex-wrap items-center gap-1 mb-3">
       <Button
-        variant="ghost" size="sm" className="h-8 gap-1.5 rounded-lg px-2.5 text-xs"
+        variant="ghost" size="sm" className="h-8 px-2 text-xs gap-1"
         onClick={() => expansion.expandAll(expandableIds)}
         disabled={expandableIds.length === 0}
         data-testid={`${statement}-expand-all`}
@@ -574,7 +570,7 @@ function StatementToolbar({ expansion, expandableIds, onManage, statement }: {
         <UnfoldVertical className="w-3.5 h-3.5" /> Expand All
       </Button>
       <Button
-        variant="ghost" size="sm" className="h-8 gap-1.5 rounded-lg px-2.5 text-xs"
+        variant="ghost" size="sm" className="h-8 px-2 text-xs gap-1"
         onClick={expansion.collapseAll}
         data-testid={`${statement}-collapse-all`}
       >
@@ -583,7 +579,7 @@ function StatementToolbar({ expansion, expandableIds, onManage, statement }: {
 
       {onManage && (
         <Button
-          variant="outline" size="sm" className="ml-auto h-8 gap-1.5 rounded-lg px-3 text-xs"
+          variant="outline" size="sm" className="h-8 px-2.5 text-xs gap-1.5 ml-auto"
           onClick={onManage}
           data-testid={`${statement}-manage-chart`}
         >
@@ -768,25 +764,21 @@ function MwGroupBlock({ group, seriesKey, monthly, expansion }: {
 }
 
 /** Auto/summary rows (Sales Account, Opening Stock, Reserves & Surplus, …). */
-function MwAutoRow({ label, values, total, monthly, accent, sub, unverified = false }: {
+function MwAutoRow({ label, values, total, monthly, accent, sub }: {
   label: string; values: number[]; total: number; monthly: MonthlyView;
-  accent?: string; sub?: string; unverified?: boolean;
+  accent?: string; sub?: string;
 }) {
   const { enabled: valuedOnly } = useValueFilter();
-  if (valuedOnly && !unverified && !hasDisplayedValue(total, values)) return null;
+  if (valuedOnly && !hasDisplayedValue(total, values)) return null;
   return (
     <div className="flex items-center w-max min-w-full">
       <div className={`${MW_NAME} flex items-center gap-2 py-1.5 pl-3 pr-2`}>
-        <span className={`flex-1 truncate text-xs ${accent ?? 'text-muted-foreground italic'}`}>{unverified ? `${label} (unverified)` : label}</span>
+        <span className={`flex-1 truncate text-xs ${accent ?? 'text-muted-foreground italic'}`}>{label}</span>
         {sub && <span className="text-[10px] text-muted-foreground/50 italic truncate max-w-[90px]">{sub}</span>}
       </div>
-      {unverified
-        ? monthly.months.map((month) => (
-            <span key={month.key} className="w-28 shrink-0 py-1.5 pr-2 text-right text-[10px] text-amber-600 dark:text-amber-300">Unverified</span>
-          ))
-        : <MwCells monthly={monthly} values={values} />}
+      <MwCells monthly={monthly} values={values} />
       <span className={`${MW_TOTAL} py-1.5 text-[11px] font-mono tabular-nums ${accent ?? 'text-muted-foreground'}`}>
-        {unverified ? 'Unverified' : total === 0 ? '—' : fmt(total)}
+        {total === 0 ? '—' : fmt(total)}
       </span>
     </div>
   );
@@ -863,21 +855,12 @@ function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, on
   const grossSales      = inc?.grossSales ?? ((inc?.sales ?? 0) + salesReturns);
   const purchaseReturns = exp?.purchaseReturns ?? 0;
   const transferPnl = !!pl?.stockTransfersIncludedInPnl;
-  const profitEvidenceReliable =
-    exp?.openingStockReliable === true
-    && inc?.closingStockReliable === true;
-  const profitEvidenceNote =
-    !profitEvidenceReliable
-      ? [exp?.openingStockNote, inc?.closingStockNote].filter(Boolean).join(" ")
-        || "Opening or closing stock evidence is incomplete for this period."
-      : null;
   const transferIn = transferPnl ? Number(exp?.stockTransferIn ?? 0) : 0;
   const transferOut = transferPnl ? Number(inc?.stockTransferOut ?? 0) : 0;
   const purchasesForDisplay = exp?.purchases ?? 0;
   const grossProfit     = pl ? (pl.summary?.grossProfit
     ?? ((inc ? inc.sales + inc.closingStock + inc.directIncomes.total + transferOut : 0)
       - (exp ? exp.openingStock + exp.purchases + transferIn + exp.directExpenses.total : 0))) : null;
-  const netProfit = pl ? pl.netProfit : null;
   // Each Trading side includes the GP c/d balancing row (debit when profit,
   // credit when loss), so the two panel headers always show the SAME total —
   // that is what makes it a balanced two-sided account.
@@ -917,38 +900,12 @@ function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, on
   const mwGpNeg = mwGp.map(v => (v < 0 ? -v : 0));
 
   if (isLoading) {
-    return (
-      <div className="rounded-xl border border-border bg-card p-5 sm:p-7" aria-live="polite">
-        <div className="mb-5 flex items-center gap-3">
-          <div className="h-9 w-9 animate-pulse rounded-lg bg-muted/70" />
-          <div className="space-y-2">
-            <div className="h-3 w-36 animate-pulse rounded bg-muted/70" />
-            <div className="h-2.5 w-52 animate-pulse rounded bg-muted/50" />
-          </div>
-        </div>
-        <div className="grid gap-4 lg:grid-cols-2">
-          {[0, 1].map(i => (
-            <div key={i} className="rounded-lg border border-border/70 p-4">
-              <div className="mb-4 h-9 animate-pulse rounded bg-muted/60" />
-              <div className="space-y-3">
-                {[0, 1, 2, 3, 4].map(row => (
-                  <div key={row} className="flex items-center justify-between gap-4">
-                    <div className="h-3 animate-pulse rounded bg-muted/50" style={{ width: `${42 + row * 8}%` }} />
-                    <div className="h-3 w-24 animate-pulse rounded bg-muted/50" />
-                  </div>
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-        <p className="mt-4 text-xs text-muted-foreground">Computing financial statements…</p>
-      </div>
-    );
+    return <div className="py-16 text-center text-muted-foreground text-sm animate-pulse">Computing financial statements…</div>;
   }
   if (isError) {
     return (
-      <div className="rounded-xl border border-red-500/25 bg-red-500/5 px-5 py-8 text-center space-y-2">
-        <p className="text-red-500 text-sm font-semibold">Failed to load financial statements</p>
+      <div className="py-10 text-center space-y-2">
+        <p className="text-red-400 text-sm font-medium">Failed to load financial statements</p>
         <p className="text-muted-foreground text-xs">{(error as any)?.message ?? 'Unknown error'}</p>
       </div>
     );
@@ -995,17 +952,17 @@ function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, on
               primary views, and the same ChartHierarchy editor opens over either
               of them via "Manage Chart of Accounts". */}
           <Tabs value={activeTab} onValueChange={v => onTabChange(v as 'balance_sheet' | 'profit_loss')}>
-            <TabsList className="grid h-auto w-full max-w-lg grid-cols-2 rounded-xl border border-border bg-muted/50 p-1">
-              <TabsTrigger value="balance_sheet" className="min-h-10 gap-2 rounded-lg text-xs data-[state=active]:bg-card data-[state=active]:text-foreground data-[state=active]:shadow-sm">
+            <TabsList className="grid w-full max-w-md grid-cols-2">
+              <TabsTrigger value="balance_sheet" className="gap-1.5 text-xs">
                 <Landmark className="w-3.5 h-3.5" /> Balance Sheet
               </TabsTrigger>
-              <TabsTrigger value="profit_loss" className="min-h-10 gap-2 rounded-lg text-xs data-[state=active]:bg-card data-[state=active]:text-foreground data-[state=active]:shadow-sm">
+              <TabsTrigger value="profit_loss" className="gap-1.5 text-xs">
                 <BarChart3 className="w-3.5 h-3.5" /> Profit &amp; Loss
               </TabsTrigger>
             </TabsList>
 
             {/* ══════════════════ BALANCE SHEET ══════════════════ */}
-            <TabsContent value="balance_sheet" className="mt-5">
+            <TabsContent value="balance_sheet" className="mt-4">
               <StatementToolbar
                 statement="balance-sheet"
                 expansion={bsExpansion}
@@ -1022,8 +979,8 @@ function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, on
                 <Panel
                   title="Liabilities" icon={TrendingDown}
                   total={bs?.liabilities.total ?? 0}
-                  hdrClass="bg-muted/35 text-red-600 dark:text-red-400 border-b border-border"
-                  borderClass="border-border border-l-2 border-l-red-500/40"
+                  hdrClass="bg-red-500/10 text-red-400 border-b border-red-500/15"
+                  borderClass="border-red-500/20"
                   monthly={monthly}
                 >
                   {bs && (monthly ? (
@@ -1074,23 +1031,20 @@ function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, on
                 <Panel
                   title="Assets" icon={TrendingUp}
                   total={bs?.assets.total ?? 0}
-                  totalUnverified={inc?.closingStockEvidenceReliable === false}
-                  hdrClass="bg-muted/35 text-emerald-700 dark:text-emerald-400 border-b border-border"
-                  borderClass="border-border border-l-2 border-l-emerald-500/40"
+                  hdrClass="bg-emerald-500/10 text-emerald-400 border-b border-emerald-500/15"
+                  borderClass="border-emerald-500/20"
                   monthly={monthly}
                 >
                   {bs && (monthly ? (
                     <>
                       <MwGroupBlock group={bs.assets.fixedAssets} seriesKey="grp:fixed" monthly={monthly} expansion={bsExpansion} />
                       <MwGroupBlock group={bs.assets.currentAssets} seriesKey="grp:curassets" monthly={monthly} expansion={bsExpansion} />
-                      <MwAutoRow label="Closing Stock" values={mwS('bsClosingStock')} total={bs.assets.closingStock} monthly={monthly} accent="text-foreground/80 font-semibold" unverified={inc?.closingStockEvidenceReliable === false} />
                     </>
                   ) : (
                     <>
                       <GroupBlock group={bs.assets.fixedAssets} onCreated={onCreated} expansion={bsExpansion} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={canAdd} canEdit={canEdit} canDelete={canDelete} />
 
                       <GroupBlock group={bs.assets.currentAssets} onCreated={onCreated} expansion={bsExpansion} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={canAdd} canEdit={canEdit} canDelete={canDelete} />
-                      <AutoRow label="Closing Stock" amount={bs.assets.closingStock} sub="valued inventory asset" accent="text-foreground/80 font-semibold" unverified={inc?.closingStockEvidenceReliable === false} />
                     </>
                   ))}
                 </Panel>
@@ -1103,24 +1057,18 @@ function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, on
                 Profit banner → Profit & Loss Account (GP b/d, Other Income,
                 Indirect Expenses) → Net Profit banner. GP/NP are the engine's
                 own summary figures — identical to the dashboard tiles. */}
-            <TabsContent value="profit_loss" className="mt-5">
+            <TabsContent value="profit_loss" className="mt-4">
               <StatementToolbar
                 statement="profit-loss"
                 expansion={plExpansion}
                 expandableIds={plExpandable}
                 onManage={onManage}
               />
-              {!profitEvidenceReliable && (
-                <p role="status" data-testid="coa-profit-unverified" className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-300">
-                  Calculated gross and net profit are shown as <strong>UNVERIFIED</strong> because the inventory evidence for this period is incomplete.
-                  {profitEvidenceNote ? ` ${profitEvidenceNote}` : ""}
-                </p>
-              )}
 
               {/* ── Trading Account ── */}
-              <div className="mb-3 mt-1 flex items-center gap-3">
-                <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-muted-foreground">Trading Account</span>
-                <div className="flex-1 border-t border-border/50" />
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">Trading Account</span>
+                <div className="flex-1 border-t border-border/30" />
               </div>
               <div className={`grid grid-cols-1 ${monthly ? '' : 'lg:grid-cols-2'} gap-4`}>
 
@@ -1128,9 +1076,8 @@ function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, on
                 <Panel
                   title="Expense (Debit)" icon={TrendingDown}
                   total={tradingExpTotal}
-                  totalUnverified={!profitEvidenceReliable}
-                  hdrClass="bg-muted/35 text-red-600 dark:text-red-400 border-b border-border"
-                  borderClass="border-border border-l-2 border-l-red-500/40"
+                  hdrClass="bg-red-500/10 text-red-400 border-b border-red-500/15"
+                  borderClass="border-red-500/20"
                   monthly={monthly}
                 >
                   {exp && (monthly ? (
@@ -1138,7 +1085,7 @@ function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, on
                       {/* P&L cells are month ACTIVITY — every row's months sum to
                           its Total. Opening/Closing stock per month are the
                           engine's own boundary valuations for that month. */}
-                      <MwAutoRow label="Opening Stock" values={mwS('openingStock')} total={exp.openingStock} monthly={monthly} accent="text-foreground/80 font-semibold" unverified={!exp.openingStockReliable} />
+                      <MwAutoRow label="Opening Stock" values={mwS('openingStock')} total={exp.openingStock} monthly={monthly} accent="text-foreground/80 font-semibold" />
                       {purchaseReturns !== 0 ? (
                         <>
                           <MwAutoRow label="Purchase Account" values={mwGrossPur} total={purchasesForDisplay + purchaseReturns} monthly={monthly} sub="auto" />
@@ -1168,7 +1115,6 @@ function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, on
                         label="Opening Stock"
                         items={exp.openingStockItems}
                         total={exp.openingStock}
-                        unverified={!exp.openingStockReliable}
                       />
 
                       {/* Purchase Account (auto) — gross + returns split shown only
@@ -1207,9 +1153,8 @@ function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, on
                 <Panel
                   title="Income (Credit)" icon={TrendingUp}
                   total={tradingIncTotal}
-                  totalUnverified={!profitEvidenceReliable}
-                  hdrClass="bg-muted/35 text-emerald-700 dark:text-emerald-400 border-b border-border"
-                  borderClass="border-border border-l-2 border-l-emerald-500/40"
+                  hdrClass="bg-emerald-500/10 text-emerald-400 border-b border-emerald-500/15"
+                  borderClass="border-emerald-500/20"
                   monthly={monthly}
                 >
                   {inc && (monthly ? (
@@ -1228,10 +1173,10 @@ function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, on
                        {showTransferOutLine && <MwAutoRow label="Stock Transfer Out" values={mwTransferOut} total={transferOut} monthly={monthly} />}
                        {transferPnl ? (
                          <>
-                             <MwAutoRow label="Closing Stock (on hand)" values={mwS('closingStockOnHand')} total={Number(inc.closingStockOnHand ?? inc.closingStock)} monthly={monthly} accent="text-foreground/80 font-semibold" unverified={inc.closingStockReliable === false} />
+                            <MwAutoRow label="Closing Stock (on hand)" values={mwS('closingStockOnHand')} total={Number(inc.closingStockOnHand ?? inc.closingStock)} monthly={monthly} accent="text-foreground/80 font-semibold" />
                             {showClosingTransitLine && <MwAutoRow label="Stock in Transit" values={mwS('closingStockInTransit')} total={Number(inc.closingStockInTransit ?? 0)} monthly={monthly} />}
                          </>
-                        ) : <MwAutoRow label="Closing Stock" values={mwS('closingStock')} total={inc.closingStock} monthly={monthly} accent="text-foreground/80 font-semibold" unverified={inc.closingStockReliable === false} />}
+                       ) : <MwAutoRow label="Closing Stock" values={mwS('closingStock')} total={inc.closingStock} monthly={monthly} accent="text-foreground/80 font-semibold" />}
                       {grossProfit !== null && grossProfit < 0 && (
                         <>
                           <Divider />
@@ -1262,11 +1207,11 @@ function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, on
                       {/* Closing Stock */}
                        {transferPnl ? (
                          <>
-                            <StockBlock label="Closing Stock (on hand)" items={inc.closingStockItems} total={Number(inc.closingStockOnHand ?? inc.closingStock)} unverified={inc.closingStockReliable === false} />
+                            <StockBlock label="Closing Stock (on hand)" items={inc.closingStockItems} total={Number(inc.closingStockOnHand ?? inc.closingStock)} />
                             {showClosingTransitLine && <AutoRow label="Stock in Transit" amount={Number(inc.closingStockInTransit ?? 0)} />}
                          </>
                        ) : (
-                          <StockBlock label="Closing Stock" items={inc.closingStockItems} total={inc.closingStock} unverified={inc.closingStockReliable === false} />
+                         <StockBlock label="Closing Stock" items={inc.closingStockItems} total={inc.closingStock} />
                        )}
 
                       {/* Balancing transfer — makes both Trading sides equal */}
@@ -1285,13 +1230,12 @@ function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, on
               {pl && grossProfit !== null && (
                 <div
                   data-testid="coa-gross-profit"
-                  className={`flex flex-wrap items-center gap-3 px-4 py-3.5 rounded-xl my-5 text-sm font-semibold shadow-sm
+                  className={`flex flex-wrap items-center gap-3 px-4 py-3 rounded-xl my-4 text-sm font-semibold
                   ${grossProfit >= 0
                     ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
                     : 'bg-red-500/10 text-red-400 border border-red-500/20'}`}>
                   {grossProfit >= 0 ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />}
                   <span>{grossProfit >= 0 ? 'Gross Profit' : 'Gross Loss'}</span>
-                  {!profitEvidenceReliable && <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-bold tracking-wide text-amber-700 dark:text-amber-300">UNVERIFIED</span>}
                   <span className="text-[10px] font-normal opacity-70">Net Sales − Cost of Goods Sold · carried down</span>
                   <span className="font-mono text-base ml-auto">{fmt(Math.abs(grossProfit))}</span>
                   {monthly && <MwBannerChips monthly={monthly} values={mwGp} testPrefix="mw-gp" />}
@@ -1299,9 +1243,9 @@ function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, on
               )}
 
               {/* ── Profit & Loss Account ── */}
-              <div className="mb-3 mt-5 flex items-center gap-3">
-                <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-muted-foreground">Profit &amp; Loss Account</span>
-                <div className="flex-1 border-t border-border/50" />
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">Profit &amp; Loss Account</span>
+                <div className="flex-1 border-t border-border/30" />
               </div>
               <div className={`grid grid-cols-1 ${monthly ? '' : 'lg:grid-cols-2'} gap-4`}>
 
@@ -1309,8 +1253,8 @@ function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, on
                 <Panel
                   title="Expense (Debit)" icon={TrendingDown}
                   total={plExpTotal}
-                  hdrClass="bg-muted/35 text-red-600 dark:text-red-400 border-b border-border"
-                  borderClass="border-border border-l-2 border-l-red-500/40"
+                  hdrClass="bg-red-500/10 text-red-400 border-b border-red-500/15"
+                  borderClass="border-red-500/20"
                   monthly={monthly}
                 >
                   {exp && (monthly ? (
@@ -1341,8 +1285,8 @@ function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, on
                 <Panel
                   title="Income (Credit)" icon={TrendingUp}
                   total={plIncTotal}
-                  hdrClass="bg-muted/35 text-emerald-700 dark:text-emerald-400 border-b border-border"
-                  borderClass="border-border border-l-2 border-l-emerald-500/40"
+                  hdrClass="bg-emerald-500/10 text-emerald-400 border-b border-emerald-500/15"
+                  borderClass="border-emerald-500/20"
                   monthly={monthly}
                 >
                   {inc && (monthly ? (
@@ -1371,18 +1315,17 @@ function StatementsView({ fs, isLoading, isError, error, onCreated, onDelete, on
               </div>
 
               {/* ── Net P&L banner — unchanged, closing the statement ── */}
-              {pl && netProfit !== null && (
+              {pl && (
                 <div
                   data-testid="coa-net-profit"
-                  className={`flex flex-wrap items-center gap-3 px-4 py-3.5 rounded-xl mt-5 text-sm font-semibold shadow-sm
-                  ${netProfit >= 0
+                  className={`flex flex-wrap items-center gap-3 px-4 py-3 rounded-xl mt-4 text-sm font-semibold
+                  ${pl.netProfit >= 0
                     ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
                     : 'bg-red-500/10 text-red-400 border border-red-500/20'}`}>
-                  {netProfit >= 0 ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />}
-                  <span>{netProfit >= 0 ? 'Net Profit' : 'Net Loss'}</span>
-                  {!profitEvidenceReliable && <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-bold tracking-wide text-amber-700 dark:text-amber-300">UNVERIFIED</span>}
+                  {pl.netProfit >= 0 ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />}
+                  <span>{pl.netProfit >= 0 ? 'Net Profit' : 'Net Loss'}</span>
                   <span className="text-[10px] font-normal opacity-70">Gross {grossProfit !== null && grossProfit < 0 ? 'Loss' : 'Profit'} + Other Income − Indirect Expenses</span>
-                  <span className="font-mono text-base ml-auto">{fmt(Math.abs(netProfit))}</span>
+                  <span className="font-mono text-base ml-auto">{fmt(Math.abs(pl.netProfit))}</span>
                   {monthly && <MwBannerChips monthly={monthly} values={mwS('np')} testPrefix="mw-np" />}
                 </div>
               )}
@@ -1581,10 +1524,7 @@ export default function ChartOfAccounts() {
         p.set('locationId', String(effLoc.locationId));
       }
       const qs = p.toString();
-      return customFetch(`/api/accounts/financial-statements${qs ? `?${qs}` : ''}`, {
-        method: 'GET',
-        cache: 'no-store',
-      });
+      return customFetch(`/api/accounts/financial-statements${qs ? `?${qs}` : ''}`, { method: 'GET' });
     },
     staleTime: 30_000,
   });
@@ -1603,10 +1543,7 @@ export default function ChartOfAccounts() {
         p.set('locationId', String(effLoc.locationId));
       }
       const qs = p.toString();
-      return customFetch(`/api/accounts/financial-statements/monthly${qs ? `?${qs}` : ''}`, {
-        method: 'GET',
-        cache: 'no-store',
-      });
+      return customFetch(`/api/accounts/financial-statements/monthly${qs ? `?${qs}` : ''}`, { method: 'GET' });
     },
     enabled: monthWise,
     staleTime: 30_000,
@@ -1649,93 +1586,80 @@ export default function ChartOfAccounts() {
         {/* ── Header ── */}
         <PageHeader
           title="Chart of Accounts"
-          description="Live Balance Sheet and Profit & Loss, organized by period and operating location."
+          description="Account hierarchy, Balance Sheet & Profit & Loss · All figures computed live from transactions"
           icon={Landmark}
         />
 
         {/* ── Filter bar ── */}
-        <div className="rounded-xl border border-border bg-card shadow-sm">
-          <div className="flex flex-col gap-3 p-3 sm:p-4">
-            <div className="flex flex-col gap-3 xl:flex-row xl:items-center">
-              <div className="flex min-w-0 flex-wrap items-center gap-3">
-                <div className="flex items-center gap-1 rounded-lg border border-border/70 bg-muted/30 p-1">
-                  <CalendarDays className="ml-1.5 h-4 w-4 shrink-0 text-primary/80" />
-                  {PERIODS.map(p => (
-                    <button key={p.value} onClick={() => setPeriod(p.value)}
-                      className={`rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors
-                        ${period === p.value ? 'bg-card text-foreground shadow-sm ring-1 ring-border/80' : 'text-muted-foreground hover:text-foreground'}`}>
-                      {p.label}
-                    </button>
-                  ))}
-                </div>
-                {period === 'custom' && (
-                  <div className="flex flex-wrap items-center gap-2">
-                    <label className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                      From
-                      <Input type="date" value={customFrom} onChange={e => setFrom(e.target.value)} className="h-9 w-36 text-xs" />
-                    </label>
-                    <label className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                      To
-                      <Input type="date" value={customTo} onChange={e => setTo(e.target.value)} className="h-9 w-36 text-xs" />
-                    </label>
-                  </div>
-                )}
-                {outlets.length > 0 && (
-                  <div className="flex items-center gap-2">
-                    <Store className="h-4 w-4 shrink-0 text-primary/80" />
-                    <Select value={outletId} onValueChange={setOutletId}>
-                      <SelectTrigger className="h-9 w-40 text-xs"><SelectValue placeholder="All Outlets" /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">All Outlets</SelectItem>
-                        {outlets.map(o => <SelectItem key={o.id} value={String(o.id)}>{o.name}</SelectItem>)}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                )}
-              </div>
-
-              <div className="flex flex-wrap items-center gap-2 xl:ml-auto">
-                {/* ONE toggle — ON adds month columns to the statements below, OFF
-                    returns the page to exactly its normal self. */}
-                <button
-                  onClick={() => setMonthWise(m => !m)}
-                  data-testid="coa-month-wise-toggle"
-                  aria-pressed={monthWise}
-                  className={`flex min-h-9 items-center gap-2 rounded-lg border px-3 text-xs font-semibold transition-colors
-                    ${monthWise
-                      ? 'border-primary bg-primary text-primary-foreground shadow-sm'
-                      : 'border-border bg-card text-muted-foreground hover:bg-muted/30 hover:text-foreground'}`}
-                >
-                  <BarChart3 className="h-4 w-4" /> Month Wise
-                </button>
-                <label
-                  className="flex min-h-9 items-center gap-2 rounded-lg px-2 text-xs font-medium text-muted-foreground hover:bg-muted/30 hover:text-foreground cursor-pointer"
-                  data-testid="coa-valued-accounts-filter"
-                >
-                  <Checkbox
-                    checked={showValuedOnly}
-                    onCheckedChange={value => setShowValuedOnly(value === true)}
-                    aria-label="Show Valued Accounts Only"
-                  />
-                  <span>Show valued only</span>
-                </label>
-
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-9 gap-2 px-3 text-xs"
-                  onClick={handleDownloadPdf}
-                  disabled={pdfBusy || isLoading || !fs}
-                  data-testid="coa-download-pdf"
-                >
-                  {pdfBusy
-                    ? <><Loader2 className="h-4 w-4 animate-spin" /> Generating…</>
-                    : <><FileDown className="h-4 w-4" /> Download PDF</>
-                  }
-                </Button>
-              </div>
-            </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-1 bg-muted/20 rounded-lg p-1">
+            <CalendarDays className="w-3.5 h-3.5 text-muted-foreground ml-1 shrink-0" />
+            {PERIODS.map(p => (
+              <button key={p.value} onClick={() => setPeriod(p.value)}
+                className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors
+                  ${period === p.value ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}>
+                {p.label}
+              </button>
+            ))}
           </div>
+          {/* ONE toggle — ON adds month columns to the statements below, OFF
+              returns the page to exactly its normal self. */}
+          <button
+            onClick={() => setMonthWise(m => !m)}
+            data-testid="coa-month-wise-toggle"
+            aria-pressed={monthWise}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors
+              ${monthWise
+                ? 'bg-primary text-primary-foreground border-primary shadow-sm'
+                : 'bg-muted/20 text-muted-foreground border-transparent hover:text-foreground'}`}
+          >
+            <BarChart3 className="w-3.5 h-3.5" /> Month Wise
+          </button>
+          <label
+            className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs font-medium text-muted-foreground hover:text-foreground cursor-pointer"
+            data-testid="coa-valued-accounts-filter"
+          >
+            <Checkbox
+              checked={showValuedOnly}
+              onCheckedChange={value => setShowValuedOnly(value === true)}
+              aria-label="Show Valued Accounts Only"
+            />
+            <span>Show Valued Accounts Only</span>
+          </label>
+          {period === 'custom' && (
+            <div className="flex items-center gap-1.5">
+              <Input type="date" value={customFrom} onChange={e => setFrom(e.target.value)} className="h-8 text-xs w-36" />
+              <span className="text-muted-foreground text-xs">to</span>
+              <Input type="date" value={customTo} onChange={e => setTo(e.target.value)} className="h-8 text-xs w-36" />
+            </div>
+          )}
+          {outlets.length > 0 && (
+            <div className="flex items-center gap-1.5">
+              <Store className="w-3.5 h-3.5 text-muted-foreground" />
+              <Select value={outletId} onValueChange={setOutletId}>
+                <SelectTrigger className="h-8 text-xs w-36"><SelectValue placeholder="All Outlets" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Outlets</SelectItem>
+                  {outlets.map(o => <SelectItem key={o.id} value={String(o.id)}>{o.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+
+          {/* ── Download PDF ── */}
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 px-3 text-xs gap-1.5 ml-auto"
+            onClick={handleDownloadPdf}
+            disabled={pdfBusy || isLoading || !fs}
+            data-testid="coa-download-pdf"
+          >
+            {pdfBusy
+              ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Generating…</>
+              : <><FileDown className="w-3.5 h-3.5" /> Download PDF</>
+            }
+          </Button>
         </div>
 
         {/* ── The statements — with month columns folded in when Month Wise is ON ── */}

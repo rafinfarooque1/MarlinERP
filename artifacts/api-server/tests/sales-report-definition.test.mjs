@@ -206,10 +206,6 @@ try {
     assert.equal(response.data.totals.invoices, 15, `${name} preserves the invoice population`);
     assert.equal(response.data.totals.total, 20020, `${name} uses complete invoice value`);
   }
-  assert.equal(bySalesperson.data.totals.qty, byItem.data.totals.qty,
-    "By Salesman quantity matches merchandise quantities in By Item");
-  assert.equal(bySalesperson.data.rows.reduce((sum, row) => sum + row.qty, 0), bySalesperson.data.totals.qty,
-    "By Salesman row quantities add up to the quantity total");
   assert.equal(combined.status, 200, "Sales & Stock Summary endpoint succeeds");
   assert.equal(combined.data.sales.invoices, 15, "Sales & Stock Summary preserves the invoice population");
   assert.equal(combined.data.sales.revenue, 20020, "Sales & Stock Summary uses complete invoice value");

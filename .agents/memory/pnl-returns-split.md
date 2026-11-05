@@ -8,10 +8,6 @@ The rule: any dashboard profit figure must be read off `buildBooks().profitAndLo
 **Why:** GP = revenue − COGS where revenue INCLUDES direct incomes and COGS nets opening/closing stock; any re-derivation (e.g. sales tile − purchases tile) disagrees with the P&L for every range with stock movement. Reading the P&L's own summary makes reconciliation a construction guarantee, not a test outcome.
 **How to apply:** `/dashboard/bi` exposes `profit {gross, net, companyWide}`, null exactly when the other accounting figures are null (non-HO scope without a posting location). Same pattern as the Expenses tile.
 
-Profit figures are only presentable when both period stock boundaries are evidenced. If opening or closing stock is unreliable, expose GP/NP/COGS as unavailable in dashboard and statement surfaces; do not present the partial arithmetic as profit or substitute a sales-based approximation.
-**Why:** inventory is part of COGS, so a mathematically calculated profit using incomplete stock values can show large GP with zero sales. Existing integrity warnings do not make that number safe to present as a fact.
-**How to apply:** gate profit presentation on opening-stock reliability and actual closing-evidence reliability (not the historical-view display flag, which is false for every rewind). Preserve the warning and require source-backed evidence to restore the figures.
-
 Scope subtlety when verifying: the dashboard treats an `x-location-type: headoffice` header as company-wide (`postingLoc` null), while financial-statements treats the same header as the HO slice. Compare company-wide with NO header, or slices with warehouse/outlet headers — a "mismatch" under an HO header is a test artifact, not a bug.
 
 ## Returns split (Sales / Less: Returns / Net Sales)

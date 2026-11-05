@@ -53,13 +53,7 @@ export interface CompanyFinancials {
    * figures is what guarantees the dashboard tiles always reconcile with the
    * Profit & Loss statement for the same period and location slice.
    */
-  profit: {
-    gross: number | null;
-    net: number | null;
-    cogs: number | null;
-    reliable: boolean;
-    note: string | null;
-  };
+  profit: { gross: number; net: number; cogs: number };
   /** Cumulative to `toDate` — a balance is a position, not a period flow. */
   bankBalance: number;
   cashBalance: number;
@@ -356,10 +350,8 @@ function rangeReceiptBreakdownForLedger(
 }
 
 /**
- * Paid Direct/Indirect Expense ledger detail, grouped by expense account.
- * This includes expenses entered in the Expenses module (`source: "expense"`)
- * and location-expense payments (`source: "payment"`). An entry qualifies only
- * when its paired posting credits a cash ledger.
+ * Expense-module payments made from cash, grouped by the expense account.
+ * An expense qualifies only when its paired posting credits a cash ledger.
  */
 export function rangeCashExpensesByLedger(
   postings: SourcePosting[],
@@ -382,19 +374,10 @@ function rangeExpensesByLedger(
 ): { total: number; ledgers: Array<{ ledgerId: number; amount: number }> } {
   const sliced = postingsInRange(postings, opts);
   const paymentIds = new Set(opts.subtree(paymentSubtreeCode));
-  const expenseIds = new Set([
-    ...opts.subtree("SYS-DIREXP"),
-    ...opts.subtree("SYS-INDEXP"),
-  ]);
-  const expenseSources = new Set(["expense", "payment"]);
   const paidExpenseEntries = new Set<string>();
 
   for (const posting of sliced) {
-    if (
-      expenseSources.has(posting.source)
-      && posting.credit > 0.004
-      && paymentIds.has(posting.ledgerId)
-    ) {
+    if (posting.source === "expense" && posting.credit > 0.004 && paymentIds.has(posting.ledgerId)) {
       paidExpenseEntries.add(posting.entryId);
     }
   }
@@ -402,10 +385,9 @@ function rangeExpensesByLedger(
   const amountByLedger = new Map<number, number>();
   for (const posting of sliced) {
     if (
-      expenseSources.has(posting.source)
+      posting.source === "expense"
       && posting.debit > 0.004
       && !paymentIds.has(posting.ledgerId)
-      && expenseIds.has(posting.ledgerId)
       && paidExpenseEntries.has(posting.entryId)
     ) {
       amountByLedger.set(
@@ -517,19 +499,6 @@ export async function companyFinancials(
   const salary = r2(findBalance(groups, "STD-SALARY-EXP") ?? 0);
   const rent = r2(findBalance(groups, "STD-GRP-RENT-EXP") ?? 0);
   const total = r2(direct + indirect);
-  const profitReliable =
-    books.profitAndLoss.expenses.openingStockReliable
-    && books.profitAndLoss.incomes.closingStockEvidenceReliable;
-  const profitNote = profitReliable
-    ? null
-    : [
-        !books.profitAndLoss.expenses.openingStockReliable
-          ? books.profitAndLoss.expenses.openingStockNote
-          : null,
-        !books.profitAndLoss.incomes.closingStockEvidenceReliable
-          ? books.profitAndLoss.incomes.closingStockNote
-          : null,
-      ].filter(Boolean).join(" ") || "Inventory evidence is incomplete for this period.";
 
   return {
     expenses: {
@@ -538,17 +507,12 @@ export async function companyFinancials(
       ledgers: expenseLedgers,
     },
     profit: {
-      // Inventory is part of COGS. If either stock boundary is not evidenced,
-      // the resulting profit is only a partial arithmetic result, not a figure
-      // that should be presented as established.
-      gross: profitReliable ? r2(books.profitAndLoss.summary.grossProfit) : null,
-      net: profitReliable ? r2(books.profitAndLoss.summary.netProfit) : null,
+      gross: r2(books.profitAndLoss.summary.grossProfit),
+      net: r2(books.profitAndLoss.summary.netProfit),
       // COGS off the same P&L summary (opening stock + purchases + direct
       // expenses − closing stock) — the dashboard tile must equal the
       // "Cost of Goods Sold" line on the statement, never a re-sum.
-      cogs: profitReliable ? r2(books.profitAndLoss.summary.costOfGoodsSold) : null,
-      reliable: profitReliable,
-      note: profitNote,
+      cogs: r2(books.profitAndLoss.summary.costOfGoodsSold),
     },
     ...controls,
   };

@@ -138,7 +138,6 @@ function accountLocations(row: any): Array<{ location_type: string; location_id:
 
 function matchesAccountLocation(row: any, location: { locationType: string; locationId: number } | null): boolean {
   if (!location) return true;
-  if (row.account_type === "bank" || row.account_type === "online") return true;
   return accountLocations(row).some((assigned) =>
     assigned.location_type === location.locationType
     && (location.locationType === "headoffice" || assigned.location_id === Number(location.locationId)),
@@ -324,9 +323,9 @@ router.get(
         { difference: books.balanceSheet.liabilities.difference },
       ),
       check(
-        "Balance Sheet includes closing stock",
-        Math.abs(books.balanceSheet.assets.closingStock - books.profitAndLoss.incomes.closingStock) <= 0.01,
-        `Balance Sheet closing-stock value ₹${books.balanceSheet.assets.closingStock.toFixed(2)}; P&L closing-stock value ₹${books.profitAndLoss.incomes.closingStock.toFixed(2)}.`,
+        "Balance Sheet excludes closing stock",
+        Math.abs(books.balanceSheet.assets.closingStock) <= 0.01,
+        `Balance Sheet closing-stock value ₹${books.balanceSheet.assets.closingStock.toFixed(2)}; expected ₹0 because stock is included in P&L only.`,
       ),
       check(
         "Inventory valuation = current closing stock",
@@ -1237,47 +1236,20 @@ router.get("/reconciliation/bank-batches/:id", requireModuleView("page:/accounts
 });
 
 // ── POST /reconciliation/bank-batches ────────────────────────────────────────
-// Combine selected bank transactions into one settlement receipt, post any
-// processing charge from Electronic Clearing, and retain exact source identities.
+// This is a metadata-only review batch. It deliberately does not create a
+// receipt, payment, journal voucher, customer-ledger leg, or bank posting.
 router.post("/reconciliation/bank-batches", requireModuleAction("page:/accounts/reconciliation", "add"), async (req, res): Promise<void> => {
   const body = (req.body ?? {}) as Record<string, any>;
-  const isBulk = Array.isArray(body.groups);
-  const rawGroups = isBulk
-    ? body.groups
-    : [{ bankAccountId: body.bankAccountId, transactions: body.transactions, processingCharge: body.processingCharge }];
-  const destinationBankAccountId = Number(body.destinationBankAccountId ?? body.bankAccountId);
+  const selected = Array.isArray(body.transactions) ? body.transactions : [];
+  const bankAccountId = Number(body.bankAccountId);
   const reconciliationDate = String(body.reconciliationDate ?? "");
-  const rawChargeText = body.processingCharge == null ? "" : String(body.processingCharge).trim();
-  const chargeText = rawChargeText === "" ? "0" : rawChargeText;
-  const processingCharge = Math.round(Number(chargeText) * 100) / 100;
-  if (!Array.isArray(rawGroups) || rawGroups.length === 0 || rawGroups.length > 100) {
-    res.status(400).json({ error: "Select bank transactions from 1 to 100 bank accounts." });
+  const chargeText = body.processingCharge == null ? "0" : String(body.processingCharge).trim();
+  if (selected.length === 0 || selected.length > 500) {
+    res.status(400).json({ error: "Select between 1 and 500 bank transactions." });
     return;
   }
-  const groups = rawGroups.map((group: any) => {
-    const selected = Array.isArray(group?.transactions) ? group.transactions : [];
-    return {
-      bankAccountId: Number(group?.bankAccountId),
-      selected,
-      identities: selected.map((item: any) => ({
-        entryId: String(item?.entryId ?? "").trim(),
-        ledgerId: Number(item?.ledgerId),
-        bankAccountId: Number(group?.bankAccountId),
-      })),
-      chosen: [] as any[],
-      grossAmount: 0,
-      netAmount: 0,
-    };
-  });
-  const totalSelected = groups.reduce((sum: number, group: any) => sum + group.selected.length, 0);
-  if (totalSelected === 0 || totalSelected > 500 || groups.some((group: any) => group.selected.length === 0)) {
-    res.status(400).json({ error: "Select between 1 and 500 bank transactions, with at least one per account." });
-    return;
-  }
-  const accountIds = [...new Set([...groups.map((group: any) => group.bankAccountId), destinationBankAccountId])];
-  if (groups.some((group: any) => !Number.isInteger(group.bankAccountId) || group.bankAccountId <= 0)
-    || !Number.isInteger(destinationBankAccountId) || destinationBankAccountId <= 0) {
-    res.status(400).json({ error: "Each bank account may appear only once and must be valid." });
+  if (!Number.isInteger(bankAccountId) || bankAccountId <= 0) {
+    res.status(400).json({ error: "bankAccountId is required." });
     return;
   }
   if (!isIsoDate(reconciliationDate)) {
@@ -1289,11 +1261,14 @@ router.post("/reconciliation/bank-batches", requireModuleAction("page:/accounts/
   // reviewed today or a future-dated statement is prepared in advance.
   const reconciliationYear = Number(reconciliationDate.slice(0, 4));
   if (!/^\d+(?:\.\d{1,2})?$/.test(chargeText)) {
-    res.status(400).json({ error: "Processing charge must be a non-negative amount with at most two decimals." });
+    res.status(400).json({ error: "processingCharge must be a non-negative amount with at most two decimals." });
     return;
   }
-  if (await respondIfMonthLocked(res, pool, [reconciliationDate], "bank reconciliation posting")) return;
-  const identities = groups.flatMap((group: any) => group.identities);
+  const processingCharge = Math.round(Number(chargeText) * 100) / 100;
+  const identities = selected.map((item: any) => ({
+    entryId: String(item?.entryId ?? "").trim(),
+    ledgerId: Number(item?.ledgerId),
+  }));
   if (identities.some((x: any) => !x.entryId || x.entryId.length > 200 || !Number.isInteger(x.ledgerId) || x.ledgerId <= 0)) {
     res.status(400).json({ error: "Every transaction must contain a valid entryId and ledgerId." });
     return;
@@ -1312,7 +1287,7 @@ router.post("/reconciliation/bank-batches", requireModuleAction("page:/accounts/
     const access = await bookAccessScope((req as any).employee ?? {});
     const requestedLocation = getLocationFilter(req);
     const requestedPostingLocation = getPostingLocationFilter(req);
-    const { rows: accountRows } = await client.query(
+    const { rows: [account] } = await client.query(
       `SELECT cba.id AS account_id, cba.ledger_id, cba.name, cba.account_type,
               COALESCE(cba.location_type, 'headoffice') AS location_type,
               COALESCE(cba.location_id, 0) AS location_id,
@@ -1329,25 +1304,16 @@ router.post("/reconciliation/bank-batches", requireModuleAction("page:/accounts/
          JOIN account_ledgers al ON al.id = cba.ledger_id
          LEFT JOIN warehouses w ON cba.location_type = 'warehouse' AND w.id = cba.location_id
          LEFT JOIN outlets o ON cba.location_type = 'outlet' AND o.id = cba.location_id
-        WHERE cba.id = ANY($1::int[]) AND cba.account_type <> 'cash'
+        WHERE cba.id = $1 AND cba.account_type <> 'cash'
           AND COALESCE(al.is_active, true)
-        ORDER BY cba.id
         FOR UPDATE OF cba`,
-      [accountIds],
+      [bankAccountId],
     );
-    const accountsById = new Map(accountRows.map((account: any) => [Number(account.account_id), account]));
-    if (accountRows.length !== accountIds.length || accountRows.some((account: any) =>
-      (access.ledgerIds && !access.ledgerIds.has(Number(account.ledger_id)))
-      || !matchesAccountLocation(account, requestedLocation))) {
+    if (!account
+      || (access.ledgerIds && !access.ledgerIds.has(Number(account.ledger_id)))
+       || !matchesAccountLocation(account, requestedLocation)) {
       await client.query("ROLLBACK");
       res.status(404).json({ error: "Bank account not found." });
-      return;
-    }
-    const destination = accountsById.get(destinationBankAccountId) as any;
-    if (!destination || !["bank", "online", "upi"].includes(String(destination.account_type))
-      || (access.ledgerIds && !access.ledgerIds.has(Number(destination.ledger_id)))) {
-      await client.query("ROLLBACK");
-      res.status(404).json({ error: "Choose an active bank account you are authorized to use." });
       return;
     }
 
@@ -1382,13 +1348,12 @@ router.post("/reconciliation/bank-batches", requireModuleAction("page:/accounts/
       }
     }
 
-    const chosenByIdentity = new Map<string, any>();
+    const chosen: any[] = [];
     for (const identity of identities) {
       const posting = byKey.get(`${identity.ledgerId}:${identity.entryId}`);
-      const account = accountsById.get(identity.bankAccountId) as any;
-      if (!account || !posting || identity.ledgerId !== Number(account.ledger_id) || posting.source === "opening_balance") {
+      if (!posting || identity.ledgerId !== Number(account.ledger_id) || posting.source === "opening_balance") {
         await client.query("ROLLBACK");
-        res.status(409).json({ error: `Transaction ${identity.entryId} is not eligible in its selected bank account.` });
+        res.status(409).json({ error: `Transaction ${identity.entryId} is not an eligible transaction in the selected bank account.` });
         return;
       }
       if (access.ledgerIds && !access.ledgerIds.has(identity.ledgerId)
@@ -1400,14 +1365,6 @@ router.post("/reconciliation/bank-batches", requireModuleAction("page:/accounts/
       if (requestedPostingLocation && !postingMatchesLocation(posting, requestedPostingLocation)) {
         await client.query("ROLLBACK");
         res.status(404).json({ error: "One or more transactions are outside the selected location." });
-        return;
-      }
-      if (posting.locationType && !matchesAccountLocation(destination, {
-        locationType: posting.locationType,
-        locationId: Number(posting.locationId ?? 0),
-      })) {
-        await client.query("ROLLBACK");
-        res.status(409).json({ error: "The destination bank account is not permitted for every selected transaction location." });
         return;
       }
       if (posting.locationType && !isLocationInScope(access.dataScope, posting.locationType, posting.locationId)
@@ -1427,23 +1384,15 @@ router.post("/reconciliation/bank-batches", requireModuleAction("page:/accounts/
         res.status(409).json({ error: `Transaction ${identity.entryId} is already reconciled.` });
         return;
       }
-      chosenByIdentity.set(`${identity.ledgerId}:${identity.entryId}`, posting);
+      chosen.push(posting);
     }
 
-    let grossAmount = 0;
-    for (const group of groups as any[]) {
-      group.chosen = group.identities.map((identity: any) =>
-        chosenByIdentity.get(`${identity.ledgerId}:${identity.entryId}`),
-      );
-      group.grossAmount = Math.round(group.chosen.reduce((sum: number, posting: any) =>
-        sum + Math.abs(Number(posting.debit) - Number(posting.credit)), 0) * 100) / 100;
-      grossAmount += group.grossAmount;
-    }
-    grossAmount = Math.round(grossAmount * 100) / 100;
+    const grossAmount = Math.round(chosen.reduce((sum, p) =>
+      sum + Math.abs(Number(p.debit) - Number(p.credit)), 0) * 100) / 100;
     const netAmount = Math.round((grossAmount - processingCharge) * 100) / 100;
-    if (processingCharge >= grossAmount || netAmount <= 0) {
+    if (processingCharge > grossAmount) {
       await client.query("ROLLBACK");
-      res.status(400).json({ error: "Processing charge must be less than the combined gross amount." });
+      res.status(400).json({ error: "processingCharge cannot exceed the selected gross amount." });
       return;
     }
 
@@ -1457,140 +1406,75 @@ router.post("/reconciliation/bank-batches", requireModuleAction("page:/accounts/
         WHERE batch_reference ~ ('^BANK-RECON-' || $1::text || '-\\d+$')`,
       [reconciliationYear],
     );
-    const batchReference = `BANK-RECON-${reconciliationYear}-${String(Number(maxRow.max_seq) + 1).padStart(4, "0")}`;
-    const { rows: [clearing] } = await client.query(
-      `SELECT id FROM account_ledgers WHERE code = 'STD-ELEC-CLR' FOR SHARE`,
-    );
-    const { rows: [chargesLedger] } = await client.query(
-      `SELECT id FROM account_ledgers WHERE code = 'STD-PROC-CHG' FOR SHARE`,
-    );
-    if (!clearing || (processingCharge > 0 && !chargesLedger)) {
-      await client.query("ROLLBACK");
-      res.status(500).json({ error: "Settlement clearing or processor-charge ledger is not configured." });
-      return;
-    }
-    const batchLocResult = await resolveMoneyVoucherLocation(
-      (req as any).employee,
-      undefined,
-      Number(destination.ledger_id),
-    );
-    if (!batchLocResult.ok) {
-      await client.query("ROLLBACK");
-      res.status(batchLocResult.status).json({ error: batchLocResult.error });
-      return;
-    }
-    const destinationLoc = batchLocResult.loc;
+    const sequence = Number(maxRow.max_seq) + 1;
+    const batchReference = `BANK-RECON-${reconciliationYear}-${String(sequence).padStart(4, "0")}`;
     const { rows: [batch] } = await client.query(
       `INSERT INTO bank_reconciliation_batches
          (batch_reference, reconciliation_date, bank_account_id, bank_ledger_id,
           location_type, location_id, gross_amount, processing_charge, net_amount,
-          accounting_impact, created_by, source_items)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'unified_reconciliation_settlement',$10,$11::jsonb)
+          accounting_impact, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'none',$10)
        RETURNING id`,
       [
-        batchReference, reconciliationDate, destinationBankAccountId, Number(destination.ledger_id),
-        destinationLoc.locationType, Number(destinationLoc.locationId), grossAmount, processingCharge,
+        batchReference, reconciliationDate, Number(account.account_id), Number(account.ledger_id),
+        account.location_type, Number(account.location_id), grossAmount, processingCharge,
         netAmount, (req as any).employee?.username ?? "system",
-        JSON.stringify(identities.map((identity: any) => ({
-          kind: "bank_transaction", ledgerId: identity.ledgerId, entryId: identity.entryId,
-        }))),
       ],
     );
-    const createdBy = (req as any).employee?.username ?? "system";
-    const receiptNumber = await nextVoucherNumber(client, "receipt", reconciliationDate);
-    const { rows: [receipt] } = await client.query(
-      `INSERT INTO receipts
-         (voucher_number, receipt_date, received_from_ledger_id, received_in_ledger_id,
-          amount, narration, source, location_type, location_id, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6,'settlement',$7,$8,$9)
-       RETURNING id`,
-      [receiptNumber, reconciliationDate, Number(clearing.id), Number(destination.ledger_id),
-       netAmount, `Combined reconciliation ${batchReference}`, destinationLoc.locationType,
-       destinationLoc.locationId, createdBy],
-    );
-    await client.query(
-      `INSERT INTO bank_reconciliation_batch_items
-         (batch_id, entry_id, ledger_id, source, transaction_date, debit, credit, amount)
-       VALUES ($1,$2,$3,'receipt',$4,$5,0,$5)`,
-      [batch.id, `receipt:${receipt.id}`, Number(destination.ledger_id), reconciliationDate, netAmount],
-    );
-    let chargePaymentId: number | null = null;
-    if (processingCharge > 0) {
-      const chargeNumber = await nextVoucherNumber(client, "payment", reconciliationDate);
-      const { rows: [chargePayment] } = await client.query(
-        `INSERT INTO payments
-           (voucher_number, payment_date, paid_from_ledger_id, paid_to_ledger_id,
-            amount, narration, source, location_type, location_id, created_by)
-         VALUES ($1,$2,$3,$4,$5,$6,'settlement',$7,$8,$9)
-         RETURNING id`,
-        [chargeNumber, reconciliationDate, Number(clearing.id), Number(chargesLedger.id),
-         processingCharge, `Processor charges for ${batchReference}`, destinationLoc.locationType,
-         destinationLoc.locationId, createdBy],
-      );
-      chargePaymentId = Number(chargePayment.id);
+    for (const posting of chosen) {
       await client.query(
         `INSERT INTO bank_reconciliation_batch_items
            (batch_id, entry_id, ledger_id, source, transaction_date, debit, credit, amount)
-         VALUES ($1,$2,$3,'payment',$4,$5,0,$5)`,
-        [batch.id, `payment:${chargePayment.id}`, Number(chargesLedger.id), reconciliationDate, processingCharge],
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [
+          batch.id, posting.entryId, Number(posting.ledgerId), posting.source, String(posting.date).slice(0, 10),
+          Number(posting.debit), Number(posting.credit),
+          Math.abs(Number(posting.debit) - Number(posting.credit)),
+        ],
       );
-      await logActivityInTransaction(client, {
-        action: "CREATE", module: "accounts", entityType: "payment_voucher",
-        entityId: Number(chargePayment.id), user: (req as any).employee?.username,
-        description: `Processor charges for ${batchReference} — ₹${processingCharge}`,
-        metadata: { source: "reconciliation", batchReference, amount: processingCharge, reconciliationDate },
-      });
+      await client.query(
+        `INSERT INTO bank_reconciliation_entries
+           (entry_id, ledger_id, source, transaction_date, debit, credit, voucher_number,
+             description, location_type, location_id, status, reconciled_at, reconciled_by,
+             unreconciled_at, unreconciled_by, reconciliation_reference)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'reconciled',now(),$11,NULL,NULL,$12)
+         ON CONFLICT (ledger_id, entry_id) DO UPDATE
+           SET source=EXCLUDED.source, transaction_date=EXCLUDED.transaction_date,
+               debit=EXCLUDED.debit, credit=EXCLUDED.credit,
+               voucher_number=EXCLUDED.voucher_number, description=EXCLUDED.description,
+               location_type=EXCLUDED.location_type, location_id=EXCLUDED.location_id,
+                status='reconciled', reconciled_at=now(), reconciled_by=EXCLUDED.reconciled_by,
+                unreconciled_at=NULL, unreconciled_by=NULL,
+                reconciliation_reference=EXCLUDED.reconciliation_reference`,
+        [
+          posting.entryId, Number(posting.ledgerId), posting.source, String(posting.date).slice(0, 10),
+          Number(posting.debit), Number(posting.credit), posting.voucherNumber ?? null,
+          posting.description ?? "", posting.locationType ?? null, posting.locationId ?? null,
+           (req as any).employee?.username ?? "system", batchReference,
+        ],
+      );
     }
-    for (const group of groups as any[]) {
-      for (const posting of group.chosen) {
-        await client.query(
-          `INSERT INTO bank_reconciliation_entries
-             (entry_id, ledger_id, source, transaction_date, debit, credit, voucher_number,
-              description, location_type, location_id, status, reconciled_at, reconciled_by,
-              unreconciled_at, unreconciled_by, reconciliation_reference)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'reconciled',now(),$11,NULL,NULL,$12)
-           ON CONFLICT (ledger_id, entry_id) DO UPDATE
-             SET status='reconciled', reconciled_at=now(), reconciled_by=EXCLUDED.reconciled_by,
-                 unreconciled_at=NULL, unreconciled_by=NULL,
-                 reconciliation_reference=EXCLUDED.reconciliation_reference`,
-          [posting.entryId, Number(posting.ledgerId), posting.source, String(posting.date).slice(0, 10),
-           Number(posting.debit), Number(posting.credit), posting.voucherNumber ?? null,
-           posting.description ?? "", posting.locationType ?? null, posting.locationId ?? null,
-           createdBy, batchReference],
-        );
-      }
-    }
-    await client.query(
-      `INSERT INTO bank_reconciliation_entries
-         (entry_id, ledger_id, source, transaction_date, debit, credit, voucher_number,
-          description, location_type, location_id, status, reconciled_at, reconciled_by,
-          reconciliation_reference)
-       VALUES ($1,$2,'receipt',$3,$4,0,$5,$6,$7,$8,'reconciled',now(),$9,$10)
-       ON CONFLICT (ledger_id, entry_id) DO UPDATE
-         SET status='reconciled', reconciled_at=now(), reconciled_by=EXCLUDED.reconciled_by,
-             reconciliation_reference=EXCLUDED.reconciliation_reference`,
-      [`receipt:${receipt.id}`, Number(destination.ledger_id), reconciliationDate, netAmount,
-       receiptNumber, `Combined reconciliation ${batchReference}`, destinationLoc.locationType,
-       destinationLoc.locationId, createdBy, batchReference],
-    );
     await logActivityInTransaction(client, {
-      action: "CREATE", module: "accounts", entityType: "receipt_voucher",
-      entityId: Number(receipt.id), user: (req as any).employee?.username,
-      description: `Combined bank entry ${receiptNumber} — ₹${netAmount}`,
-      metadata: { source: "reconciliation", batchReference, grossAmount, processingCharge, netAmount, destinationBankAccountId },
-    });
-    await logActivityInTransaction(client, {
-      action: "CREATE", module: "reconciliation", entityType: "bank_reconciliation_batch",
-      entityId: Number(batch.id), user: (req as any).employee?.username,
-      description: `Combined bank reconciliation ${batchReference}`,
-      metadata: { after: { batchReference, itemCount: totalSelected, grossAmount, processingCharge, netAmount, destinationBankAccountId, receiptId: Number(receipt.id), chargePaymentId, accountingImpact: "unified_reconciliation_settlement" } },
+      action: "CREATE",
+      module: "reconciliation",
+      entityType: "bank_reconciliation_batch",
+      entityId: batch.id,
+      description: `Bank reconciliation batch ${batchReference}`,
+      metadata: {
+        after: {
+          batchReference, bankAccountId: Number(account.account_id), bankLedgerId: Number(account.ledger_id),
+          itemCount: chosen.length, grossAmount, processingCharge, netAmount,
+          accountingImpact: "none",
+        },
+      },
+      user: (req as any).employee?.username,
     });
     await client.query("COMMIT");
     res.status(201).json({
       id: Number(batch.id), batchReference, reconciliationDate,
-      bankAccountId: destinationBankAccountId, bankLedgerId: Number(destination.ledger_id),
-      itemCount: totalSelected, grossAmount, processingCharge, netAmount,
-      accountingImpact: "unified_reconciliation_settlement", status: "active",
+      bankAccountId: Number(account.account_id), bankLedgerId: Number(account.ledger_id),
+      itemCount: chosen.length, grossAmount, processingCharge, netAmount,
+      accountingImpact: "none", status: "active",
     });
   } catch (err: any) {
     await client.query("ROLLBACK").catch(() => {});
@@ -2365,7 +2249,7 @@ router.post(
         q: client,
         ledgerId,
         dataScope: access.dataScope,
-        accessibleLedgerIds: access.ownedLedgerIds ? [...access.ownedLedgerIds] : undefined,
+        accessibleLedgerIds: access.ledgerIds ? [...access.ledgerIds] : undefined,
       });
       const entry = book?.entries.find((candidate: any) =>
         candidate.entryId === entryId && Number(candidate.ledgerId) === ledgerId,
@@ -2658,14 +2542,8 @@ router.get("/reconciliation/pending-queue", requireModuleView("page:/accounts/re
     saleConds.push(`sp.online_platform_ledger_id = $${saleParams.length}`);
   }
   const { rows: saleRows } = await pool.query(
-       `SELECT sp.id, sp.payment_date AS transaction_date, sp.method,
+    `SELECT sp.id, sp.payment_date AS transaction_date, sp.method,
             sp.amount::numeric AS amount, sp.reference_number, sp.notes AS narration,
-             sp.clearing_receipt_id,
-             pending_receipt.amount::numeric AS clearing_receipt_amount,
-             pending_receipt.advance_amount::numeric AS clearing_receipt_advance_amount,
-             (SELECT COUNT(*)::int FROM sale_payments pending_sp
-               WHERE pending_sp.clearing_receipt_id = sp.clearing_receipt_id
-                 AND pending_sp.reconciliation_status = 'pending') AS clearing_receipt_pending_count,
             sp.online_platform_ledger_id AS platform_ledger_id,
             platform.name AS platform_name,
             s.invoice_number, s.location_type, s.location_id::int AS location_id,
@@ -2814,10 +2692,6 @@ router.get("/reconciliation/pending-queue", requireModuleView("page:/accounts/re
       locationId: Number(r.location_id ?? 0),
       platformLedgerId: r.platform_ledger_id == null ? null : Number(r.platform_ledger_id),
       platformName: r.platform_name ?? null,
-      clearingReceiptId: r.clearing_receipt_id == null ? null : Number(r.clearing_receipt_id),
-      clearingReceiptAmount: r.clearing_receipt_amount == null ? null : Number(r.clearing_receipt_amount),
-      clearingReceiptAdvanceAmount: r.clearing_receipt_advance_amount == null ? null : Number(r.clearing_receipt_advance_amount),
-      clearingReceiptPendingCount: r.clearing_receipt_pending_count == null ? null : Number(r.clearing_receipt_pending_count),
     })),
     ...manualRows.map((r: any) => ({
       key: String(r.item_key),
@@ -2838,10 +2712,6 @@ router.get("/reconciliation/pending-queue", requireModuleView("page:/accounts/re
       locationId: Number(r.location_id ?? 0),
       platformLedgerId: r.platform_ledger_id == null ? null : Number(r.platform_ledger_id),
       platformName: r.platform_name ?? null,
-      clearingReceiptId: null,
-      clearingReceiptAmount: null,
-      clearingReceiptAdvanceAmount: null,
-      clearingReceiptPendingCount: null,
     })),
   ].sort((a: any, b: any) =>
     b.transactionDate.localeCompare(a.transactionDate) || a.key.localeCompare(b.key),
@@ -3150,9 +3020,9 @@ router.post("/reconciliation/settle-queue", requireModuleAction("page:/accounts/
   if (!isIsoDate(reconciliationDate)) {
     res.status(400).json({ error: "reconciliationDate must be a real YYYY-MM-DD date." }); return;
   }
-  if (!Number.isFinite(processingChargeInput)
+  if (!Number.isFinite(processingChargeInput) || processingChargeInput < 0
     || Math.abs(processingChargeInput * 100 - Math.round(processingChargeInput * 100)) > 1e-6) {
-    res.status(400).json({ error: "processingCharge must be an amount with no more than 2 decimal places." }); return;
+    res.status(400).json({ error: "processingCharge must be a non-negative amount with no more than 2 decimal places." }); return;
   }
   if (await respondIfMonthLocked(res, pool, [reconciliationDate], "bank reconciliation settlement")) return;
 
@@ -3216,7 +3086,6 @@ router.post("/reconciliation/settle-queue", requireModuleAction("page:/accounts/
     const manualPaymentIds = identities.filter(x => x.kind === "manual_voucher" && x.voucherKind === "payment").map(x => x.id);
     const manualReceiptIds = identities.filter(x => x.kind === "manual_voucher" && x.voucherKind === "receipt").map(x => x.id);
     const electronicModes = new Set(["upi", "bank", "card", "bank_transfer", "online", "swiggy", "zomato", "other_online"]);
-    const settlementReceiptCents = new Map<number, number>();
     let saleRows: any[] = [];
     if (saleIds.length) {
       const result = await client.query(
@@ -3263,24 +3132,16 @@ router.post("/reconciliation/settle-queue", requireModuleAction("page:/accounts/
             res.status(409).json({ error: "Select every pending allocation linked to the same clearing receipt." }); return;
           }
           const { rows: [receipt] } = await client.query(
-            `SELECT id, source, amount::numeric AS amount, advance_amount::numeric AS advance_amount,
-                    received_in_ledger_id
+            `SELECT id, amount::numeric AS amount, received_in_ledger_id
                FROM receipts WHERE id = $1 FOR UPDATE`,
             [receiptId],
           );
           const allocated = pendingForReceipt.reduce((sum: number, row: any) => sum + Math.round(Number(row.amount) * 100), 0);
-          const advanceCents = receipt?.source === "allocation"
-            ? Math.round(Number(receipt.advance_amount ?? 0) * 100)
-            : 0;
-          const receiptCents = receipt ? Math.round(Number(receipt.amount) * 100) : 0;
           if (!receipt || Number(receipt.received_in_ledger_id) !== Number(clearing.id)
-            || pendingForReceipt.length !== linkedPayments.length
-            || advanceCents < 0
-            || allocated + advanceCents !== receiptCents) {
+            || allocated !== Math.round(Number(receipt.amount) * 100)) {
             await client.query("ROLLBACK");
             res.status(409).json({ error: "A clearing receipt no longer matches its pending collection allocations." }); return;
           }
-          settlementReceiptCents.set(receiptId, receiptCents);
           const { rows: [alreadyReconciled] } = await client.query(
             `SELECT 1 FROM bank_reconciliation_entries
               WHERE ledger_id = $1 AND entry_id = $2 AND status = 'reconciled'`,
@@ -3421,26 +3282,11 @@ router.post("/reconciliation/settle-queue", requireModuleAction("page:/accounts/
       await client.query("ROLLBACK");
       res.status(400).json({ error: "Reconcile incoming receipts and outgoing payments in separate batches." }); return;
     }
-    const countedSaleReceiptIds = new Set<number>();
-    const saleGrossCents = saleRows.reduce((sum: number, row: any) => {
-      if (row.clearing_receipt_id == null) {
-        return sum + Math.abs(Math.round(Number(row.amount) * 100));
-      }
-      const receiptId = Number(row.clearing_receipt_id);
-      if (countedSaleReceiptIds.has(receiptId)) return sum;
-      countedSaleReceiptIds.add(receiptId);
-      return sum + (settlementReceiptCents.get(receiptId) ?? Math.abs(Math.round(Number(row.amount) * 100)));
-    }, 0);
-    const manualGrossCents = manualRows.reduce(
-      (sum: number, row: any) => sum + Math.abs(Math.round(Number(row.amount) * 100)),
-      0,
-    );
-    const grossCents = saleGrossCents + manualGrossCents;
+    const grossCents = allRows.reduce((sum, row) => sum + Math.abs(Math.round(Number(row.amount) * 100)), 0);
     const processingChargeCents = Math.round(processingChargeInput * 100);
-    if ((!isOutflow && processingChargeCents >= grossCents)
-      || (isOutflow && processingChargeCents <= -grossCents)) {
+    if (!isOutflow && processingChargeCents >= grossCents) {
       await client.query("ROLLBACK");
-      res.status(400).json({ error: "The processing charge or rebate cannot reduce the settlement amount to zero or below." }); return;
+      res.status(400).json({ error: "Processing charges must be less than the gross amount for an incoming batch." }); return;
     }
     const bankCents = isOutflow
       ? grossCents + processingChargeCents
@@ -3450,7 +3296,7 @@ router.post("/reconciliation/settle-queue", requireModuleAction("page:/accounts/
     const postingAmount = bankCents / 100;
     const netDirection = isOutflow ? "out" : "in";
     let processingChargeLedgerId: number | null = null;
-    if (processingChargeCents !== 0) {
+    if (processingChargeCents > 0) {
       const { rows: [chargeLedger] } = await client.query(
         `SELECT id FROM account_ledgers WHERE code = 'STD-PROC-CHG' AND COALESCE(is_active, true) FOR SHARE`,
       );
@@ -3488,23 +3334,15 @@ router.post("/reconciliation/settle-queue", requireModuleAction("page:/accounts/
     const settlementLines = isOutflow
       ? [
           { ledgerId: Number(clearing.id), debit: grossAmount, credit: 0 },
-          ...(processingCharge !== 0
-            ? [{
-                ledgerId: Number(processingChargeLedgerId),
-                debit: Math.max(processingCharge, 0),
-                credit: Math.max(-processingCharge, 0),
-              }]
+          ...(processingCharge > 0
+            ? [{ ledgerId: Number(processingChargeLedgerId), debit: processingCharge, credit: 0 }]
             : []),
           { ledgerId: Number(account.ledger_id), debit: 0, credit: postingAmount },
         ]
       : [
           { ledgerId: Number(account.ledger_id), debit: postingAmount, credit: 0 },
-          ...(processingCharge !== 0
-            ? [{
-                ledgerId: Number(processingChargeLedgerId),
-                debit: Math.max(processingCharge, 0),
-                credit: Math.max(-processingCharge, 0),
-              }]
+          ...(processingCharge > 0
+            ? [{ ledgerId: Number(processingChargeLedgerId), debit: processingCharge, credit: 0 }]
             : []),
           { ledgerId: Number(clearing.id), debit: 0, credit: grossAmount },
         ];

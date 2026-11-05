@@ -182,10 +182,6 @@ router.get("/reports/sales-by-salesperson", requireModuleView("page:/reports/sal
     `SELECT s.salesperson_employee_id AS salesperson_employee_id,
             COALESCE(NULLIF(TRIM(s.salesperson), ''), 'Unassigned') AS salesperson_name,
             COUNT(*)::int AS invoices,
-            COALESCE(SUM((
-              SELECT COALESCE(SUM(COALESCE((li->>'quantity')::numeric, 0)), 0)
-                FROM jsonb_array_elements(COALESCE(s.line_items, '[]'::jsonb)) AS li
-            )), 0) AS qty,
             COALESCE(SUM(s.subtotal::numeric), 0) AS subtotal,
             COALESCE(SUM(s.tax_total::numeric), 0) AS tax,
             COALESCE(SUM(s.total_amount::numeric), 0) AS total,
@@ -211,7 +207,6 @@ router.get("/reports/sales-by-salesperson", requireModuleView("page:/reports/sal
       salespersonEmployeeId: r.salesperson_employee_id != null ? Number(r.salesperson_employee_id) : null,
       salespersonName: r.salesperson_name,
       invoices: Number(r.invoices),
-      qty: r3(Number(r.qty)),
       subtotal: r2(Number(r.subtotal)),
       tax: r2(Number(r.tax)),
       total,
@@ -224,7 +219,6 @@ router.get("/reports/sales-by-salesperson", requireModuleView("page:/reports/sal
     totals: {
       salespeople: list.length,
       invoices: list.reduce((sum, r) => sum + r.invoices, 0),
-      qty: r3(list.reduce((sum, r) => sum + r.qty, 0)),
       subtotal: r2(list.reduce((sum, r) => sum + r.subtotal, 0)),
       tax: r2(list.reduce((sum, r) => sum + r.tax, 0)),
       total: r2(list.reduce((sum, r) => sum + r.total, 0)),

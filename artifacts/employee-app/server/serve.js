@@ -46,12 +46,7 @@ function getAppName() {
 }
 
 function serveManifest(platform, res) {
-  const manifestPath = resolveManifestPath(platform);
-  if (manifestPath === null) {
-    res.writeHead(404, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ error: `Manifest not found for platform: ${platform}` }));
-    return;
-  }
+  const manifestPath = path.join(STATIC_ROOT, platform, 'manifest.json');
 
   if (!fs.existsSync(manifestPath)) {
     res.writeHead(404, { 'content-type': 'application/json' });
@@ -70,81 +65,27 @@ function serveManifest(platform, res) {
   res.end(manifest);
 }
 
-function resolveManifestPath(platform) {
-  if (platform === 'ios') return path.join(STATIC_ROOT, 'ios', 'manifest.json');
-  if (platform === 'android') return path.join(STATIC_ROOT, 'android', 'manifest.json');
-  return null;
-}
-
 function serveLandingPage(req, res, landingPageTemplate, appName) {
-  const baseUrl = requestOrigin(req);
-  if (!baseUrl) {
-    res.writeHead(400);
-    res.end('Invalid request origin');
-    return;
-  }
-  const expsUrl = new URL(baseUrl).host;
+  const forwardedProto = req.headers['x-forwarded-proto'];
+  const protocol = forwardedProto || 'https';
+  const host = req.headers['x-forwarded-host'] || req.headers['host'];
+  const baseUrl = `${protocol}://${host}`;
+  const expsUrl = `${host}`;
 
   const html = landingPageTemplate
     .replace(/BASE_URL_PLACEHOLDER/g, baseUrl)
     .replace(/EXPS_URL_PLACEHOLDER/g, expsUrl)
-    .replace(/APP_NAME_PLACEHOLDER/g, escapeHtml(appName));
+    .replace(/APP_NAME_PLACEHOLDER/g, appName);
 
   res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
   res.end(html);
 }
 
-function requestOrigin(req) {
-  const firstHeaderValue = (value) => String(value ?? '').split(',')[0].trim();
-  const forwardedProtocol = firstHeaderValue(req.headers['x-forwarded-proto']).toLowerCase();
-  const protocol = forwardedProtocol || 'https';
-  const host = firstHeaderValue(req.headers['x-forwarded-host'] || req.headers.host);
-  if (!['http', 'https'].includes(protocol) || !host || /[\s,]/.test(host)) return null;
-
-  try {
-    const parsed = new URL(`${protocol}://${host}`);
-    if (parsed.username || parsed.password || parsed.pathname !== '/' || parsed.search || parsed.hash) return null;
-    return parsed.origin;
-  } catch {
-    return null;
-  }
-}
-
-function escapeHtml(value) {
-  return String(value).replace(/[&<>"']/g, (char) => ({
-    '&': '&amp;',
-    '<': '&lt;',
-    '>': '&gt;',
-    '"': '&quot;',
-    "'": '&#39;',
-  })[char]);
-}
-
-function resolveStaticFilePath(urlPath) {
-  let decodedPath;
-  try {
-    decodedPath = decodeURIComponent(urlPath);
-  } catch {
-    return null;
-  }
-  if (decodedPath.includes('\0')) return null;
-
-  const relativePath = decodedPath.replace(/^[/\\]+/, '');
-  const filePath = path.resolve(STATIC_ROOT, relativePath);
-  const pathFromRoot = path.relative(STATIC_ROOT, filePath);
-  if (
-    pathFromRoot === '..'
-    || pathFromRoot.startsWith(`..${path.sep}`)
-    || path.isAbsolute(pathFromRoot)
-  ) {
-    return null;
-  }
-  return filePath;
-}
-
 function serveStaticFile(urlPath, res) {
-  const filePath = resolveStaticFilePath(urlPath);
-  if (filePath === null) {
+  const safePath = path.normalize(urlPath).replace(/^(\.\.(\/|\\|$))+/, '');
+  const filePath = path.join(STATIC_ROOT, safePath);
+
+  if (!filePath.startsWith(STATIC_ROOT)) {
     res.writeHead(403);
     res.end('Forbidden');
     return;
@@ -167,14 +108,7 @@ const landingPageTemplate = fs.readFileSync(TEMPLATE_PATH, 'utf-8');
 const appName = getAppName();
 
 const server = http.createServer((req, res) => {
-  let url;
-  try {
-    url = new URL(req.url || '/', `http://${req.headers.host}`);
-  } catch {
-    res.writeHead(400);
-    res.end('Invalid request URL');
-    return;
-  }
+  const url = new URL(req.url || '/', `http://${req.headers.host}`);
   let pathname = url.pathname;
 
   if (basePath && pathname.startsWith(basePath)) {
@@ -196,10 +130,6 @@ const server = http.createServer((req, res) => {
 });
 
 const port = parseInt(process.env.PORT || '3000', 10);
-if (require.main === module) {
-  server.listen(port, '0.0.0.0', () => {
-    console.log(`Serving static Expo build on port ${port}`);
-  });
-}
-
-module.exports = { resolveStaticFilePath, resolveManifestPath, requestOrigin, escapeHtml };
+server.listen(port, '0.0.0.0', () => {
+  console.log(`Serving static Expo build on port ${port}`);
+});

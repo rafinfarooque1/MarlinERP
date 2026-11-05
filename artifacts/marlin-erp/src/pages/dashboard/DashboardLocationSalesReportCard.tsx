@@ -1,21 +1,15 @@
 import { useRef, useState } from 'react';
-import type { DashboardEmployeeSalesRow, DashboardLocationSalesRow } from '@workspace/api-client-react';
+import type { DashboardLocationSalesRow } from '@workspace/api-client-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Checkbox } from '@/components/ui/checkbox';
 import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/app/empty-state';
 import { Loader2, MapPin, Share2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { DashboardLocationSalesTable } from './DashboardLocationSalesTable';
-import { DashboardEmployeeSalesTable } from './DashboardEmployeeSalesTable';
-import { measureReportCaptureDimensions } from './report-capture-size';
 
 export function DashboardLocationSalesReportCard({
   rows,
-  employeeRows,
-  employeeLedgerAdjustment,
-  totalOutstanding,
   isLoading,
   isError,
   description,
@@ -23,9 +17,6 @@ export function DashboardLocationSalesReportCard({
   toDate,
 }: {
   rows?: DashboardLocationSalesRow[];
-  employeeRows?: DashboardEmployeeSalesRow[];
-  employeeLedgerAdjustment?: number;
-  totalOutstanding?: number;
   isLoading: boolean;
   isError: boolean;
   description: string;
@@ -35,7 +26,6 @@ export function DashboardLocationSalesReportCard({
   const captureRef = useRef<HTMLDivElement>(null);
   const [sharing, setSharing] = useState(false);
   const [preparingCapture, setPreparingCapture] = useState(false);
-  const [showEmployeeBreakdown, setShowEmployeeBreakdown] = useState(false);
 
   const shareReport = async () => {
     if (sharing) return;
@@ -69,18 +59,35 @@ export function DashboardLocationSalesReportCard({
       await document.fonts.ready;
       const { toBlob } = await import('html-to-image');
       const table = captureTarget.querySelector<HTMLTableElement>('table');
-      if (!table) throw new Error('sales report table not found');
-      const dimensions = measureReportCaptureDimensions(captureTarget);
+      if (!table) throw new Error('location sales table not found');
+
+      const captureRect = captureTarget.getBoundingClientRect();
+      const tableRect = table.getBoundingClientRect();
+      const lastRow = table.rows.item(table.rows.length - 1);
+      const lastRowBottom = lastRow?.getBoundingClientRect().bottom ?? captureRect.bottom;
+      const width = Math.ceil(Math.max(
+        captureTarget.scrollWidth,
+        captureRect.width,
+        table.scrollWidth,
+        tableRect.width,
+      ));
+      const height = Math.ceil(Math.max(
+        captureTarget.scrollHeight,
+        captureRect.height,
+        table.scrollHeight,
+        tableRect.bottom - captureRect.top,
+        lastRowBottom - captureRect.top,
+      )) + 2;
 
       console.debug('[dashboard] location report share: capture bounds', {
         rows: table.rows.length,
-        width: dimensions.width,
-        height: dimensions.height,
+        width,
+        height,
       });
       const blob = await toBlob(captureTarget, {
         backgroundColor: '#ffffff',
-        width: dimensions.width,
-        height: dimensions.height,
+        width,
+        height,
         pixelRatio: 2,
         cacheBust: true,
         style: { overflow: 'visible' },
@@ -131,10 +138,7 @@ export function DashboardLocationSalesReportCard({
   return (
     <div className="relative">
       <div ref={captureRef} data-testid="location-sales-share-capture">
-        <Card
-          className="border-card-border bg-card shadow-sm"
-          data-report-card
-        >
+        <Card className="border-card-border bg-card shadow-sm flex flex-col">
           <CardHeader className="flex-row items-start justify-between gap-4 space-y-0 pb-3">
             <div className="min-w-0 flex-1">
               <CardTitle className="text-lg flex items-center gap-2">
@@ -158,7 +162,7 @@ export function DashboardLocationSalesReportCard({
               {sharing ? 'Preparing…' : 'Share'}
             </Button>
           </CardHeader>
-          <CardContent>
+          <CardContent className="flex-1">
             {isLoading ? (
               <div className="space-y-2" aria-label="Loading location sales report">
                 {[0, 1, 2].map((row) => <Skeleton key={row} className="h-10" />)}
@@ -168,34 +172,7 @@ export function DashboardLocationSalesReportCard({
             ) : rows.length === 0 ? (
               <EmptyState icon={MapPin} title="No locations in scope" compact />
             ) : (
-              <div>
-                <DashboardLocationSalesTable
-                  rows={rows}
-                  totalOutstanding={totalOutstanding}
-                  captureMode={preparingCapture}
-                />
-                <label
-                  className="mt-4 flex w-fit cursor-pointer items-center gap-2 text-sm font-medium"
-                >
-                  <Checkbox
-                    checked={showEmployeeBreakdown}
-                    onCheckedChange={(checked) => setShowEmployeeBreakdown(checked === true)}
-                    aria-label="Show salesperson breakdown"
-                    data-testid="checkbox-salesperson-breakdown"
-                  />
-                  Show salesperson breakdown
-                </label>
-                {showEmployeeBreakdown && (
-                  <div className="mt-3">
-                    <DashboardEmployeeSalesTable
-                      rows={employeeRows ?? []}
-                      ledgerAdjustment={employeeLedgerAdjustment ?? 0}
-                      totalOutstanding={totalOutstanding}
-                      captureMode={preparingCapture}
-                    />
-                  </div>
-                )}
-              </div>
+              <DashboardLocationSalesTable rows={rows} captureMode={preparingCapture} />
             )}
           </CardContent>
         </Card>

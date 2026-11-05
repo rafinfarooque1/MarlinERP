@@ -548,12 +548,9 @@ export function useCreateBankReconciliationBatch() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (data: {
-      groups: {
-        bankAccountId: number;
-        transactions: { entryId: string; ledgerId: number }[];
-      }[];
+      bankAccountId: number;
+      transactions: { entryId: string; ledgerId: number }[];
       reconciliationDate: string;
-      destinationBankAccountId: number;
       processingCharge: string | number;
     }) =>
       customFetch<BankReconciliationBatch>("/api/reconciliation/bank-batches", {

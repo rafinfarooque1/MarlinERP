@@ -52,24 +52,6 @@ export interface DashboardLocationSalesRow {
   outstandingAmount: number;
 }
 
-export interface DashboardEmployeeSalesRow {
-  employeeId: number | null;
-  name: string;
-  salesAmount: number;
-  salesQuantity: number;
-  outstandingAmount: number;
-}
-
-export interface DashboardAdminDailyReport {
-  openingDueByLocation: Array<{ locationType: string; locationId: number; name: string; amount: number }>;
-  creditReceivedByLocation: Array<{ locationType: string; locationId: number; name: string; amount: number }>;
-  creditSaleByLocation: Array<{ locationType: string; locationId: number; name: string; amount: number }>;
-  expenses: Array<{
-    id: number; source: 'direct' | 'payment'; date: string; narration: string; amount: number;
-    locationType: string; locationId: number; locationName: string;
-  }>;
-}
-
 export interface DashboardBi {
   /**
    * False when this employee lacks the inventory-valuation right, in which
@@ -148,10 +130,7 @@ export interface DashboardBi {
    * The whole object is omitted unless the caller has Delete permission on the
    * dashboard; within it, fields are `null` when no honest figure is available.
    */
-  profit?: {
-    gross: number | null; net: number | null; cogs: number | null;
-    companyWide: boolean; reliable: boolean; note: string | null;
-  };
+  profit?: { gross: number | null; net: number | null; cogs: number | null; companyWide: boolean };
   /**
    * Money movement over the cash and bank ledger subtrees for the selected
    * range and location, from the SAME derived-posting stream as the balance
@@ -170,12 +149,6 @@ export interface DashboardBi {
   locationBreakdown: BiLocationMetric[];
   /** Period sales and as-of outstanding by active location in the caller's data scope. */
   locationSalesReport: DashboardLocationSalesRow[];
-  /** Period sales and invoice-based outstanding by snapshotted salesperson. */
-  employeeSalesReport: DashboardEmployeeSalesRow[];
-  /** Adjustment that reconciles employee invoice outstanding to location receivables-ledger outstanding. */
-  employeeSalesLedgerAdjustment: number;
-  /** Present only for level-1 Administrators; server enforces this boundary. */
-  adminDailyReport?: DashboardAdminDailyReport;
   topItems: BiTopItem[];
   topCustomers: BiTopCustomer[];
 }

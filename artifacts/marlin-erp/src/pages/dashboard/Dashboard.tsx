@@ -1,13 +1,10 @@
 import { useMemo, useRef, useState, useLayoutEffect } from 'react';
 import {
   useGetDashboardBi,
-  useGetDashboardUnpaidSalesBills,
   type DashboardBiFilters,
-  type GetDashboardUnpaidSalesBillsParams,
 } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { usePermission } from '@/lib/usePermission';
-import { useIsAdmin } from '@/lib/useIsAdmin';
 import { formatDateTime } from '@/lib/date';
 import { useLocationContext, locationFilterParams, locationKeysParams } from '@/lib/locationContext';
 import {
@@ -24,21 +21,19 @@ import {
   Landmark, Trophy, Users,
   Warehouse, Store, ArrowUpRight, ArrowDownRight, Wallet,
   Receipt, PieChart, BarChart3, Banknote, HandCoins,
-  LayoutDashboard, Share2, Loader2, Sheet, type LucideIcon,
+  LayoutDashboard, Share2, Loader2, type LucideIcon,
 } from 'lucide-react';
 import { useLocation } from 'wouter';
 import {
   fmt, num, fmtDate, periodLabel,
   useDateRange, RangeBar, SummaryCards, LocationBadge, TONE_CLS,
-  exportReportXlsx, type ReportDoc, type CardTone, type SummaryCard,
+  type CardTone, type SummaryCard,
 } from '@/pages/reports/shared';
 import { DashboardShareReport, type ShareKpi } from './DashboardShareReport';
 import { DashboardLocationBreakdown } from './DashboardLocationBreakdown';
 import { DashboardLocationSalesReportCard } from './DashboardLocationSalesReportCard';
 import { DashboardExpenseDetailsReport } from './DashboardExpenseDetailsReport';
 import { DashboardCashBankReport } from './DashboardCashBankReport';
-import { DashboardUnpaidSalesBillsReport } from './DashboardUnpaidSalesBillsReport';
-import { DashboardAdminDailyReport } from './DashboardAdminDailyReport';
 
 // ── Small helpers ───────────────────────────────────────────────────────────
 
@@ -198,21 +193,16 @@ function BarRow({ label, sub, value, max, color, valueLabel }: {
   );
 }
 
-function SectionCard({ title, icon, description, children, className, contentClassName }: {
-  title: string;
-  icon: React.ReactNode;
-  description?: string;
-  children: React.ReactNode;
-  className?: string;
-  contentClassName?: string;
+function SectionCard({ title, icon, description, children }: {
+  title: string; icon: React.ReactNode; description?: string; children: React.ReactNode;
 }) {
   return (
-    <Card className={`border-card-border bg-card shadow-sm flex flex-col ${className ?? ''}`}>
+    <Card className="border-card-border bg-card shadow-sm flex flex-col">
       <CardHeader className="pb-3">
         <CardTitle className="text-lg flex items-center gap-2">{icon}{title}</CardTitle>
         {description && <CardDescription>{description}</CardDescription>}
       </CardHeader>
-      <CardContent className={`flex-1 ${contentClassName ?? ''}`}>{children}</CardContent>
+      <CardContent className="flex-1">{children}</CardContent>
     </Card>
   );
 }
@@ -229,7 +219,6 @@ function Empty({ message }: { message: string }) {
 
 export default function Dashboard() {
   const dashPerm = usePermission('page:/');
-  const isAdmin = useIsAdmin();
   // The dashboard is the owner's daily console — it opens on Today. The
   // RangeBar keeps every other preset one tap away.
   const range = useDateRange('today');
@@ -251,24 +240,7 @@ export default function Dashboard() {
     return f;
   }, [range.from, range.to, locationState]);
 
-  const unpaidSalesBillFilters = useMemo<GetDashboardUnpaidSalesBillsParams>(() => {
-    const f: GetDashboardUnpaidSalesBillsParams = {};
-    const loc = locationFilterParams(locationState);
-    if (loc.locationType && loc.locationId) {
-      f.locationType = loc.locationType;
-      f.locationId = loc.locationId;
-    }
-    const keys = locationKeysParams(locationState);
-    if (keys) f.locationKeys = keys.join(',');
-    return f;
-  }, [locationState]);
-
   const { data: bi, isLoading, isError } = useGetDashboardBi(filters);
-  const {
-    data: unpaidSalesBills,
-    isLoading: unpaidSalesBillsLoading,
-    isError: unpaidSalesBillsError,
-  } = useGetDashboardUnpaidSalesBills(unpaidSalesBillFilters);
 
   const pLabel = periodLabel(range.from || undefined, range.to || undefined);
   const reportLocationLabel = locationState.locationKeys?.length
@@ -316,21 +288,16 @@ export default function Dashboard() {
   const showLocationBreakdown = reportMode === 'details' &&
     (!!bi?.scope.isAllLocations || (locationState.locationKeys?.length ?? 0) > 0);
   const locationBreakdown = bi?.locationBreakdown ?? [];
-  const selectedMetric = (metric: keyof typeof locationBreakdown[number]) => {
-    if (!locationState.locationKeys?.length) return null;
-    if (!locationBreakdown.length) return null;
-    if (locationBreakdown.some((row) => row[metric] == null)) return null;
-    return locationBreakdown.reduce((sum, row) => sum + Number(row[metric]), 0);
-  };
+  const selectedMetric = (metric: keyof typeof locationBreakdown[number]) =>
+    locationState.locationKeys?.length
+      ? locationBreakdown.reduce((sum, row) => sum + Number(row[metric] ?? 0), 0)
+      : null;
   const dashboardValue = (metric: keyof typeof locationBreakdown[number], fallback: number | null | undefined) =>
     selectedMetric(metric) ?? fallback;
   type BreakdownMetric = keyof Omit<typeof locationBreakdown[number], 'locationType' | 'locationId' | 'name'>;
   const locationLines = (metric: BreakdownMetric) =>
     showLocationBreakdown
-      ? locationBreakdown.map((l) => ({
-          label: l.name,
-          value: l[metric] == null ? '—' : fmt(l[metric] as number),
-        }))
+      ? locationBreakdown.map((l) => ({ label: l.name, value: fmt(l[metric] as number | null) }))
       : undefined;
   const locationHint = (metric: BreakdownMetric, fallback?: React.ReactNode): React.ReactNode =>
     showLocationBreakdown
@@ -364,7 +331,6 @@ export default function Dashboard() {
   // cropped page screenshot.
   const shareRef = useRef<HTMLDivElement>(null);
   const [sharing, setSharing] = useState(false);
-  const [exportingExcel, setExportingExcel] = useState(false);
   const shareDashboard = async () => {
     if (sharing) return;
     if (isLoading || !bi) {
@@ -542,14 +508,14 @@ export default function Dashboard() {
         label: 'GP',
         value: dashboardValue('grossProfit', pf?.gross) == null ? '—' : fmt(dashboardValue('grossProfit', pf?.gross)!),
         tone: pf?.gross == null ? 'default' as const : pf.gross >= 0 ? 'pos' as const : 'neg' as const,
-        hint: locationHint('grossProfit', pf?.note ?? 'Gross Profit · tap for P&L'),
+        hint: locationHint('grossProfit', 'Gross Profit · tap for P&L'),
         onClick: drill('pl-gross-profit'),
       },
       {
         label: 'NP',
         value: dashboardValue('netProfit', pf?.net) == null ? '—' : fmt(dashboardValue('netProfit', pf?.net)!),
         tone: pf?.net == null ? 'default' as const : pf.net >= 0 ? 'pos' as const : 'neg' as const,
-        hint: locationHint('netProfit', pf?.note ?? 'Net Profit · tap for P&L'),
+        hint: locationHint('netProfit', 'Net Profit · tap for P&L'),
         onClick: drill('pl-net-profit'),
       },
     ] : []),
@@ -588,31 +554,6 @@ export default function Dashboard() {
         : undefined,
     }];
   });
-  const exportDashboardExcel = async () => {
-    if (!dashPerm.canDownload || isLoading || !bi || exportingExcel) return;
-    const rows: (string | number)[][] = [];
-    for (const card of shareCards) {
-      rows.push([card.label, card.value, card.hint ?? '']);
-      for (const line of card.locationLines ?? []) rows.push(['', '', `${line.label}: ${line.value}`]);
-    }
-    const doc: ReportDoc = {
-      title: 'Business Dashboard',
-      subtitle: `${pLabel} · ${reportLocationLabel ?? 'All Locations'} · ${reportMode === 'details' ? 'Details' : 'Consolidated'}`,
-      sections: [{
-        columns: [{ label: 'Metric' }, { label: 'Value', align: 'right' }, { label: 'Location breakdown' }],
-        rows,
-      }],
-    };
-    setExportingExcel(true);
-    try {
-      await exportReportXlsx(doc);
-      toast.success('Dashboard Excel downloaded');
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Excel export failed');
-    } finally {
-      setExportingExcel(false);
-    }
-  };
 
   // Mobile-only card set: same figures, order and tones as summaryCards, but
   // with shorter labels, subtle icons, structured breakdown lines and one-line
@@ -721,7 +662,7 @@ export default function Dashboard() {
         value: dashboardValue('grossProfit', pf?.gross) == null ? '—' : fmt(dashboardValue('grossProfit', pf?.gross)!),
         tone: pf?.gross == null ? 'default' as const : pf.gross >= 0 ? 'pos' as const : 'neg' as const,
         lines: locationLines('grossProfit'),
-        desc: showLocationBreakdown ? undefined : pf?.note ?? 'Gross Profit',
+        desc: showLocationBreakdown ? undefined : 'Gross Profit',
         onClick: drill('pl-gross-profit'),
       },
       {
@@ -730,7 +671,7 @@ export default function Dashboard() {
         value: dashboardValue('netProfit', pf?.net) == null ? '—' : fmt(dashboardValue('netProfit', pf?.net)!),
         tone: pf?.net == null ? 'default' as const : pf.net >= 0 ? 'pos' as const : 'neg' as const,
         lines: locationLines('netProfit'),
-        desc: showLocationBreakdown ? undefined : pf?.note ?? 'Net Profit',
+        desc: showLocationBreakdown ? undefined : 'Net Profit',
         onClick: drill('pl-net-profit'),
         spanTwo: true,
       },
@@ -755,18 +696,6 @@ export default function Dashboard() {
                 {sharing ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Share2 className="w-4 h-4 mr-1.5" />}
                 Share
               </Button>
-              {dashPerm.canDownload && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => void exportDashboardExcel()}
-                  disabled={exportingExcel || isLoading || !bi}
-                  data-testid="button-export-dashboard-excel"
-                >
-                  {exportingExcel ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Sheet className="w-4 h-4 mr-1.5" />}
-                  Excel
-                </Button>
-              )}
               <div
                 role="group"
                 aria-label="Share report mode"
@@ -945,7 +874,7 @@ export default function Dashboard() {
         </div>
 
         {/* ── Top customers ──────────────────────────────────────────────── */}
-        <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-2">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
           <SectionCard
             title="Top Customers"
             icon={<Users className="w-5 h-5 text-chart-2" />}
@@ -972,16 +901,9 @@ export default function Dashboard() {
               </div>
             )}
           </SectionCard>
-          <div className="min-w-0">
+          <div className="lg:col-span-2">
             <DashboardLocationSalesReportCard
               rows={bi?.locationSalesReport}
-              employeeRows={bi?.employeeSalesReport}
-              employeeLedgerAdjustment={bi?.employeeSalesLedgerAdjustment}
-              totalOutstanding={
-                bi?.scope?.isAllLocations && typeof bi?.receivables?.total === 'number'
-                  ? bi.receivables.total
-                  : undefined
-              }
               isLoading={isLoading}
               isError={isError}
               description={`${pLabel} · outstanding as of ${range.to ? fmtDate(range.to) : 'today'}`}
@@ -991,46 +913,21 @@ export default function Dashboard() {
           </div>
         </div>
 
-        <div className="min-w-0">
-          <DashboardUnpaidSalesBillsReport
-            data={unpaidSalesBills}
-            isLoading={unpaidSalesBillsLoading}
-            isError={unpaidSalesBillsError}
-          />
-        </div>
+        <DashboardCashBankReport
+          data={bi?.cashBankReport}
+          isLoading={isLoading}
+          isError={isError}
+          fromDate={range.from || undefined}
+          toDate={range.to || undefined}
+        />
 
-        {isAdmin && (
-          <div className="min-w-0">
-            <DashboardAdminDailyReport
-              data={bi}
-              isLoading={isLoading}
-              isError={isError}
-              fromDate={range.from || undefined}
-              toDate={range.to || undefined}
-            />
-          </div>
-        )}
-
-        <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-2">
-          <div className="min-w-0">
-            <DashboardCashBankReport
-              data={bi?.cashBankReport}
-              isLoading={isLoading}
-              isError={isError}
-              fromDate={range.from || undefined}
-              toDate={range.to || undefined}
-            />
-          </div>
-          <div className="min-w-0">
-            <DashboardExpenseDetailsReport
-              data={bi?.financialMatrix}
-              isLoading={isLoading}
-              isError={isError}
-              fromDate={range.from || undefined}
-              toDate={range.to || undefined}
-            />
-          </div>
-        </div>
+        <DashboardExpenseDetailsReport
+          data={bi?.financialMatrix}
+          isLoading={isLoading}
+          isError={isError}
+          fromDate={range.from || undefined}
+          toDate={range.to || undefined}
+        />
 
       </div>
       {/* Off-screen KPI share report — exists only to be photographed by the

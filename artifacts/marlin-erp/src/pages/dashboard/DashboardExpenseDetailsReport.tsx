@@ -5,9 +5,8 @@ import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/app/empty-state';
 import { Loader2, Receipt, Share2 } from 'lucide-react';
-import { fmtZeroAsBlank, periodLabel } from '@/pages/reports/shared';
+import { fmt, periodLabel } from '@/pages/reports/shared';
 import { toast } from 'sonner';
-import { measureReportCaptureDimensions } from './report-capture-size';
 
 type ExpenseRow = {
   ledgerId: number;
@@ -92,17 +91,34 @@ export function DashboardExpenseDetailsReport({
       const { toBlob } = await import('html-to-image');
       const table = captureTarget.querySelector<HTMLTableElement>('table');
       if (!table) throw new Error('Expense Details table not found');
-      const dimensions = measureReportCaptureDimensions(captureTarget);
+
+      const captureRect = captureTarget.getBoundingClientRect();
+      const tableRect = table.getBoundingClientRect();
+      const lastRow = table.rows.item(table.rows.length - 1);
+      const lastRowBottom = lastRow?.getBoundingClientRect().bottom ?? captureRect.bottom;
+      const width = Math.ceil(Math.max(
+        captureTarget.scrollWidth,
+        captureRect.width,
+        table.scrollWidth,
+        tableRect.width,
+      ));
+      const height = Math.ceil(Math.max(
+        captureTarget.scrollHeight,
+        captureRect.height,
+        table.scrollHeight,
+        tableRect.bottom - captureRect.top,
+        lastRowBottom - captureRect.top,
+      )) + 2;
 
       console.debug('[dashboard] expense details share: capture bounds', {
         rows: table.rows.length,
-        width: dimensions.width,
-        height: dimensions.height,
+        width,
+        height,
       });
       const blob = await toBlob(captureTarget, {
         backgroundColor: '#ffffff',
-        width: dimensions.width,
-        height: dimensions.height,
+        width,
+        height,
         pixelRatio: 2,
         cacheBust: true,
         style: { overflow: 'visible' },
@@ -151,11 +167,7 @@ export function DashboardExpenseDetailsReport({
   return (
     <div className="relative">
       <div ref={captureRef} data-testid="dashboard-expense-details-capture">
-        <Card
-          className="rounded-xl border border-border bg-card shadow-sm"
-          data-testid="dashboard-expense-details-card"
-          data-report-card
-        >
+        <Card className="rounded-xl border border-border bg-card shadow-sm" data-testid="dashboard-expense-details-card">
           <CardHeader className="flex flex-row items-start justify-between gap-3 pb-3">
             <div className="min-w-0">
               <CardTitle className="flex items-center gap-2 text-lg">
@@ -192,16 +204,15 @@ export function DashboardExpenseDetailsReport({
                 compact
               />
             ) : (
-              <div>
-                <div className={`${preparingCapture ? 'overflow-visible' : 'overflow-x-auto'} w-full max-w-full rounded-lg border border-border`}>
-                  <table
-                    className="w-full border-collapse text-sm"
-                    data-testid="table-dashboard-expense-details"
-                  >
+              <div className={`${preparingCapture ? 'overflow-visible' : 'overflow-x-auto'} rounded-lg border border-border`}>
+                <table
+                  className="w-full min-w-max border-separate border-spacing-0 text-sm"
+                  data-testid="table-dashboard-expense-details"
+                >
                   <caption className="sr-only">Expense details · {periodText}</caption>
                   <thead>
                     <tr className="bg-muted/40">
-                      <th scope="col" className="border border-border px-2 py-1 text-left font-semibold">
+                      <th scope="col" className="min-w-[220px] border-b border-border px-3 py-2 text-left font-semibold">
                         Location
                       </th>
                       {data.locations.map((location) => (
@@ -209,22 +220,22 @@ export function DashboardExpenseDetailsReport({
                           key={`${location.locationType}:${location.locationId}`}
                           scope="colgroup"
                           colSpan={2}
-                          className="border border-border px-2 py-1 text-center font-semibold"
+                          className="min-w-[260px] border-b border-border px-3 py-2 text-center font-semibold"
                         >
                           {location.name}
                         </th>
                       ))}
                     </tr>
                     <tr className="bg-muted/30">
-                      <th scope="col" className="border border-border px-2 py-1 text-left font-medium text-muted-foreground">
+                      <th scope="col" className="border-b border-border px-3 py-2 text-left font-medium text-muted-foreground">
                         Bank/Cash
                       </th>
                       {data.locations.map((location) => (
                         <Fragment key={`${location.locationType}:${location.locationId}`}>
-                          <th scope="col" className="border border-border px-2 py-1 text-right font-medium">
+                          <th scope="col" className="min-w-[130px] border-b border-border px-3 py-2 text-right font-medium">
                             Bank
                           </th>
-                          <th scope="col" className="border border-border px-2 py-1 text-right font-medium">
+                          <th scope="col" className="min-w-[130px] border-b border-border px-3 py-2 text-right font-medium">
                             Cash
                           </th>
                         </Fragment>
@@ -232,41 +243,49 @@ export function DashboardExpenseDetailsReport({
                     </tr>
                   </thead>
                   <tbody>
-                    {expenseRows.map((row) => (
+                    {expenseRows.length === 0 ? (
+                      <tr>
+                        <td
+                          colSpan={data.locations.length * 2 + 1}
+                          className="border-b border-border px-3 py-4 text-center text-muted-foreground"
+                        >
+                          No expense details in this period.
+                        </td>
+                      </tr>
+                    ) : expenseRows.map((row) => (
                       <tr key={row.ledgerId} className="hover:bg-muted/20">
-                        <th scope="row" className="border border-border bg-card px-2 py-1 text-left font-medium">
+                        <th scope="row" className="min-w-[220px] border-b border-border bg-card px-3 py-2 text-left font-medium">
                           {row.name}
                         </th>
                         {data.locations.map((location, index) => (
                           <Fragment key={`${location.locationType}:${location.locationId}`}>
-                            <td className="border border-border px-2 py-1 text-right font-mono text-sm tabular-nums">
-                              {fmtZeroAsBlank(row.bank[index] ?? 0)}
+                            <td className="min-w-[130px] border-b border-border px-3 py-2 text-right font-mono text-sm tabular-nums">
+                              {fmt(row.bank[index] ?? 0)}
                             </td>
-                            <td className="border border-border px-2 py-1 text-right font-mono text-sm tabular-nums">
-                              {fmtZeroAsBlank(row.cash[index] ?? 0)}
+                            <td className="min-w-[130px] border-b border-border px-3 py-2 text-right font-mono text-sm tabular-nums">
+                              {fmt(row.cash[index] ?? 0)}
                             </td>
                           </Fragment>
                         ))}
                       </tr>
                     ))}
                     <tr className="bg-primary/10 font-bold" data-testid="row-dashboard-expense-details-total">
-                        <th scope="row" className="border border-border px-2 py-1 text-left">
+                      <th scope="row" className="min-w-[220px] border-b border-border px-3 py-2 text-left">
                         Total
                       </th>
                       {data.locations.map((location, index) => (
                         <Fragment key={`${location.locationType}:${location.locationId}`}>
-                            <td className="border border-border px-2 py-1 text-right font-mono text-sm tabular-nums">
-                            {fmtZeroAsBlank(data.bankExpenses[index] ?? 0)}
+                          <td className="min-w-[130px] border-b border-border px-3 py-2 text-right font-mono text-sm tabular-nums">
+                            {fmt(data.bankExpenses[index] ?? 0)}
                           </td>
-                            <td className="border border-border px-2 py-1 text-right font-mono text-sm tabular-nums">
-                            {fmtZeroAsBlank(data.cashExpenses[index] ?? 0)}
+                          <td className="min-w-[130px] border-b border-border px-3 py-2 text-right font-mono text-sm tabular-nums">
+                            {fmt(data.cashExpenses[index] ?? 0)}
                           </td>
                         </Fragment>
                       ))}
                     </tr>
                   </tbody>
-                  </table>
-                </div>
+                </table>
               </div>
             )}
           </CardContent>
