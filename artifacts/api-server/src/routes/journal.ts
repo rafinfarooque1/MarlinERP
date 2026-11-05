@@ -1080,6 +1080,58 @@ export interface Posting {
   locationId: number | null;
 }
 
+/**
+ * Allocation receipts can outlive the sale-payment rows' sale records (for
+ * example, when the allocated sale has been cancelled). The receipt still
+ * owns the bank movement and the customer credit; preserve the matching
+ * settlement leg so those receipt-level entries remain balanced.
+ */
+export function buildUnmatchedAllocationPostings(
+  payments: Array<{
+    sale_payment_id: number;
+    sale_id: number;
+    payment_date: string | Date;
+    method: string;
+    amount: number | string;
+    clearing_receipt_id: number | null;
+    receipt_vno: string | null;
+    receipt_narration?: string | null;
+    alloc_in: number | null;
+    alloc_from: number | null;
+    receipt_location_type?: string | null;
+    receipt_location_id?: number | null;
+  }>,
+  processedPaymentIds: ReadonlySet<number>,
+  clearingLedgerId: number,
+  defaultPartyLedgerId: number,
+): Posting[] {
+  return payments.flatMap((payment): Posting[] => {
+    const amount = Number(payment.amount);
+    if (
+      processedPaymentIds.has(Number(payment.sale_payment_id))
+      || payment.clearing_receipt_id == null
+      || payment.alloc_in == null
+      || !Number.isFinite(amount)
+      || amount <= 0.004
+    ) return [];
+    const rawDate = payment.payment_date;
+    return [{
+      entryId: `receipt:${payment.clearing_receipt_id}`,
+      date: rawDate instanceof Date ? toLocalISODate(rawDate) : String(rawDate).slice(0, 10),
+      ledgerId: payment.method === "advance"
+        ? Number(payment.alloc_from ?? defaultPartyLedgerId)
+        : clearingLedgerId,
+      debit: amount,
+      credit: 0,
+      source: "sale",
+      voucherNumber: payment.receipt_vno,
+      description: payment.receipt_narration || "Unmatched receipt allocation",
+      locationType: payment.receipt_location_type ?? "headoffice",
+      locationId: Number(payment.receipt_location_id ?? 0),
+    }];
+  });
+}
+
 // Location filtering over the posting stream lives in lib/postingLocation.ts
 // (shared with lib/books.ts). Re-exported here for the report routes.
 import {
@@ -1394,6 +1446,7 @@ export async function buildDerivedPostings(opts: { toDate?: string; q?: Q } = {}
              rc.narration AS receipt_narration,
              sp.clearing_receipt_id AS clearing_receipt_id,
             CASE WHEN rc.source = 'allocation' THEN rc.received_in_ledger_id END AS alloc_in,
+             CASE WHEN rc.source = 'allocation' THEN rc.received_from_ledger_id END AS alloc_from,
              CASE WHEN rc.source = 'sale'       THEN rc.received_in_ledger_id END AS sale_in,
              CASE WHEN rc.source = 'allocation' THEN rc.location_type END AS receipt_location_type,
              CASE WHEN rc.source = 'allocation' THEN rc.location_id END AS receipt_location_id
@@ -1431,6 +1484,7 @@ export async function buildDerivedPostings(opts: { toDate?: string; q?: Q } = {}
     locationType: string | null;
     locationId: number | null;
   }>();
+  const processedSalePaymentIds = new Set<number>();
   for (const r of allocRecs) {
     const amount = round2(Number(r.amount));
     if (amount <= 0.004) continue;
@@ -1541,6 +1595,7 @@ export async function buildDerivedPostings(opts: { toDate?: string; q?: Q } = {}
 
     let paidViaSp = 0;
     for (const p of spBySale.get(s.id) ?? []) {
+      processedSalePaymentIds.add(Number(p.sale_payment_id));
       const amt = Number(p.amount);
       paidViaSp += amt;
       // A bank movement is a source-row transaction, not the whole invoice.
@@ -1633,6 +1688,15 @@ export async function buildDerivedPostings(opts: { toDate?: string; q?: Q } = {}
 
     // The party ledger's net after the invoice debit and dated collection
     // credits is the outstanding balance (or a customer advance).
+  }
+
+  for (const posting of buildUnmatchedAllocationPostings(
+    salePays,
+    processedSalePaymentIds,
+    elecClr,
+    debtors,
+  )) {
+    push(posting);
   }
 
   for (const credit of allocationCustomerCredits.values()) {

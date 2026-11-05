@@ -1413,13 +1413,13 @@ export async function buildBooks(
   // contradiction. Keep the warning visible without calling unknown evidence a FAIL.
   if (historicalClose && !closing.reliable) {
     addIntegrityIssue(
-      `Closing stock as at ${toDate} cannot be established: stock movement history does not reach back that far, so cost of goods sold, net profit and P&L carry-forward are unreliable for this period. Run the statement to today for figures that can be trusted.`,
+      `Closing stock as at ${toDate} is unverified: ${closing.note ?? "historical inventory valuation evidence is incomplete"} Cost of goods sold, net profit and P&L carry-forward use this derived amount and should not be relied on as final.`,
       "UNVERIFIED",
     );
   }
   if (fromDate && !opening.reliable) {
     addIntegrityIssue(
-      `Opening stock as at ${previousDay(fromDate)} cannot be established from stock movement history, so cost of goods sold and net profit are understated or overstated by the true opening position.`,
+      `Opening stock as at ${previousDay(fromDate)} is unverified: ${opening.note ?? "historical inventory valuation evidence is incomplete"} Cost of goods sold and net profit use this derived amount and should not be relied on as final.`,
       "UNVERIFIED",
     );
   }
