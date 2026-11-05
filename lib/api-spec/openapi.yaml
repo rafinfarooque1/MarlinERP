@@ -1759,6 +1759,8 @@ paths:
       parameters:
         - { name: fromDate, in: query, schema: { type: string } }
         - { name: toDate, in: query, schema: { type: string } }
+        - { name: gstin, in: query, schema: { type: string } }
+        - { name: warehouseId, in: query, schema: { type: integer } }
       responses:
         "200":
           description: GST summary
@@ -4173,6 +4175,7 @@ components:
 
     GstSummary:
       type: object
+      required: [totalSales, totalTaxCollected, totalPurchases, totalTaxPaid, netGstLiability, monthWise, salesByRate, purchasesByRate, salesByItem, purchasesByItem, byWarehouse]
       properties:
         totalSales:
           type: number
@@ -4184,6 +4187,26 @@ components:
           type: number
         netGstLiability:
           type: number
+        monthWise:
+          type: array
+          items:
+            $ref: "#/components/schemas/GstSummaryMonthRow"
+        salesByRate:
+          type: array
+          items:
+            $ref: "#/components/schemas/GstSummaryRateRow"
+        purchasesByRate:
+          type: array
+          items:
+            $ref: "#/components/schemas/GstSummaryRateRow"
+        salesByItem:
+          type: array
+          items:
+            $ref: "#/components/schemas/GstSummaryItemRow"
+        purchasesByItem:
+          type: array
+          items:
+            $ref: "#/components/schemas/GstSummaryItemRow"
         byWarehouse:
           type: array
           items:
@@ -4194,6 +4217,46 @@ components:
               gstNumber: { type: string }
               salesTax: { type: number }
               purchaseTax: { type: number }
+
+    GstSummaryMonthRow:
+      type: object
+      required: [month, outputTaxable, outputTax, inputTaxable, inputTax, netGst]
+      properties:
+        month: { type: string }
+        outputTaxable: { type: number }
+        outputTax: { type: number }
+        inputTaxable: { type: number }
+        inputTax: { type: number }
+        netGst: { type: number }
+
+    GstSummaryRateRow:
+      type: object
+      required: [taxRate, taxableValue, cgst, sgst, igst, taxAmount]
+      properties:
+        taxRate: { type: number }
+        taxableValue: { type: number }
+        cgst: { type: number }
+        sgst: { type: number }
+        igst: { type: number }
+        taxAmount: { type: number }
+        estimated: { type: boolean }
+
+    GstSummaryItemRow:
+      type: object
+      required: [itemType, itemTypeLabel, itemName, unit, taxRate, quantity, taxableValue, cgst, sgst, igst, taxAmount]
+      properties:
+        itemId: { type: ["integer", "null"] }
+        itemType: { type: string }
+        itemTypeLabel: { type: string }
+        itemName: { type: string }
+        unit: { type: string }
+        taxRate: { type: number }
+        quantity: { type: number }
+        taxableValue: { type: number }
+        cgst: { type: number }
+        sgst: { type: number }
+        igst: { type: number }
+        taxAmount: { type: number }
 
     # COMPANY
     CompanySettings:

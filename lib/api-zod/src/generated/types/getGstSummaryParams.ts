@@ -9,4 +9,6 @@
 export type GetGstSummaryParams = {
 fromDate?: string;
 toDate?: string;
+gstin?: string;
+warehouseId?: number;
 };

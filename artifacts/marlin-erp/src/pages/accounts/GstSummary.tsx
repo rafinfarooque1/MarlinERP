@@ -1,11 +1,12 @@
 import { useState } from 'react';
 import {
   useGetGstSummaryScoped, useGetGstDocuments, useGetGstFilters,
-  type GstDocumentRow,
+  type GstDocumentRow, type GstSummaryItemRow,
 } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Input } from '@/components/ui/input';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Table, TableBody, TableCell, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { Receipt, TrendingUp, TrendingDown, Info, ShieldOff, FileText } from 'lucide-react';
 import { downloadCSV } from '@/lib/download';
@@ -22,6 +23,7 @@ import { EmptyState } from '@/components/app/empty-state';
 import { TableSkeleton } from '@/components/app/loading-skeletons';
 
 const fmt = (n: number) => `₹${Math.abs(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const fmtQty = (n: number) => Math.abs(n).toLocaleString('en-IN', { maximumFractionDigits: 3 });
 
 export function PaymentStatusBadge({ status }: { status: string }) {
   if (status === 'na') return <span className="text-xs text-muted-foreground">—</span>;
@@ -145,12 +147,114 @@ export const docPdfRow = (r: GstDocumentRow, outward = false): (string | number)
   r.taxableValue, r.taxAmount, r.invoiceValue, payStatusLabel(r.paymentStatus), r.paymentModes,
 ];
 
+type GstItemWiseRow = GstSummaryItemRow & { transactionType: 'Sales' | 'Purchases' };
+
+function GstItemsTable({ rows, loading }: { rows: GstItemWiseRow[]; loading: boolean }) {
+  const { sorted, sort } = useTableSort(rows, {
+    transaction: r => r.transactionType,
+    item: r => r.itemName,
+    rate: r => Number(r.taxRate),
+    quantity: r => Number(r.quantity),
+    taxable: r => Number(r.taxableValue),
+    cgst: r => Number(r.cgst),
+    sgst: r => Number(r.sgst),
+    igst: r => Number(r.igst),
+    tax: r => Number(r.taxAmount),
+  });
+  const sideRows = (side: GstItemWiseRow['transactionType']) => rows.filter((row) => row.transactionType === side);
+  const total = (
+    subset: GstItemWiseRow[],
+    key: keyof Pick<GstSummaryItemRow, 'quantity' | 'taxableValue' | 'cgst' | 'sgst' | 'igst' | 'taxAmount'>,
+  ) => subset.reduce((sum, row) => sum + Number(row[key] ?? 0), 0);
+
+  return (
+    <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
+      <div className="p-4 border-b border-border bg-muted/20">
+        <h3 className="font-semibold flex items-center gap-2">
+          <Receipt className="w-4 h-4 text-primary" /> Item-wise GST Breakdown
+        </h3>
+      </div>
+      <div className="overflow-x-auto">
+        {loading ? (
+          <TableSkeleton rows={4} cols={9} />
+        ) : rows.length === 0 ? (
+          <EmptyState icon={Receipt} title="No item-wise GST in this period" compact />
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow className="bg-muted/10">
+                <SortableHead k="transaction" sort={sort}>Transaction</SortableHead>
+                <SortableHead k="item" sort={sort}>Item</SortableHead>
+                <SortableHead k="rate" sort={sort}>Rate</SortableHead>
+                <SortableHead k="quantity" sort={sort} className="text-right">Qty</SortableHead>
+                <SortableHead k="taxable" sort={sort} className="text-right">Taxable</SortableHead>
+                <SortableHead k="cgst" sort={sort} className="text-right">CGST</SortableHead>
+                <SortableHead k="sgst" sort={sort} className="text-right">SGST</SortableHead>
+                <SortableHead k="igst" sort={sort} className="text-right">IGST</SortableHead>
+                <SortableHead k="tax" sort={sort} className="text-right">Total Tax</SortableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {sorted.map((row) => (
+                <TableRow key={`${row.transactionType}:${row.itemType}:${row.itemId ?? row.itemName}:${row.taxRate}`} className="hover:bg-muted/10">
+                  <TableCell>
+                    <Badge
+                      variant="outline"
+                      className={row.transactionType === 'Sales'
+                        ? 'border-emerald-500/30 text-emerald-600'
+                        : 'border-primary/30 text-primary'}
+                    >
+                      {row.transactionType}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="min-w-44">
+                    <div className="font-medium text-xs">{row.itemName}</div>
+                    <div className="text-[10px] text-muted-foreground">
+                      {row.itemTypeLabel}{row.unit ? ` · ${row.unit}` : ''}
+                    </div>
+                  </TableCell>
+                  <TableCell><Badge variant="secondary">{row.taxRate}%</Badge></TableCell>
+                  <TableCell className="text-right font-mono text-xs whitespace-nowrap">{fmtQty(Number(row.quantity))}</TableCell>
+                  <TableCell className="text-right font-mono text-xs whitespace-nowrap">{fmt(Number(row.taxableValue))}</TableCell>
+                  <TableCell className="text-right font-mono text-xs whitespace-nowrap">{fmt(Number(row.cgst))}</TableCell>
+                  <TableCell className="text-right font-mono text-xs whitespace-nowrap">{fmt(Number(row.sgst))}</TableCell>
+                  <TableCell className="text-right font-mono text-xs whitespace-nowrap">{fmt(Number(row.igst))}</TableCell>
+                  <TableCell className={`text-right font-mono font-bold text-xs whitespace-nowrap ${row.transactionType === 'Sales' ? 'text-emerald-500' : 'text-primary'}`}>
+                    {fmt(Number(row.taxAmount))}
+                  </TableCell>
+                </TableRow>
+              ))}
+              {(['Sales', 'Purchases'] as const).map((side) => {
+                const subset = sideRows(side);
+                if (subset.length === 0) return null;
+                const tone = side === 'Sales' ? 'text-emerald-500' : 'text-primary';
+                return (
+                  <TableRow key={`${side}-total`} className="bg-muted/10 font-bold border-t-2">
+                    <TableCell colSpan={3} className="text-xs uppercase tracking-wider">{side} total</TableCell>
+                    <TableCell className="text-right font-mono text-xs">{fmtQty(total(subset, 'quantity'))}</TableCell>
+                    <TableCell className="text-right font-mono text-xs">{fmt(total(subset, 'taxableValue'))}</TableCell>
+                    <TableCell className="text-right font-mono text-xs">{fmt(total(subset, 'cgst'))}</TableCell>
+                    <TableCell className="text-right font-mono text-xs">{fmt(total(subset, 'sgst'))}</TableCell>
+                    <TableCell className="text-right font-mono text-xs">{fmt(total(subset, 'igst'))}</TableCell>
+                    <TableCell className={`text-right font-mono text-xs ${tone}`}>{fmt(total(subset, 'taxAmount'))}</TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function GstSummary() {
   const perm = usePermission('page:/accounts/gst');
   const now = new Date();
   const [fromDate, setFromDate] = useState(`${now.getFullYear()}-04-01`);
   const [toDate, setToDate] = useState(now.toISOString().split('T')[0]);
   const [scope, setScope] = useState<GstScope>({});
+  const [itemWise, setItemWise] = useState(false);
 
   const params = { fromDate, toDate, ...scope };
   const { data: gst, isLoading } = useGetGstSummaryScoped(params);
@@ -159,6 +263,12 @@ export default function GstSummary() {
 
   const salesData = gst?.salesByRate ?? [];
   const purchasesData = gst?.purchasesByRate ?? [];
+  const salesItems = gst?.salesByItem ?? [];
+  const purchaseItems = gst?.purchasesByItem ?? [];
+  const itemWiseRows: GstItemWiseRow[] = [
+    ...salesItems.map((row) => ({ ...row, transactionType: 'Sales' as const })),
+    ...purchaseItems.map((row) => ({ ...row, transactionType: 'Purchases' as const })),
+  ];
   const monthWise = gst?.monthWise ?? [];
   const outward = docs.data?.outward ?? [];
   const inward = docs.data?.inward ?? [];
@@ -195,11 +305,33 @@ export default function GstSummary() {
   const scopeText = gstScopeLabel(scope, filters.data?.gstins ?? []);
 
   const exportCsv = () => {
+    const csvRow = (values: Record<string, unknown>) => ({
+      Section: '', Detail: '', Transaction: '', Item: '', Type: '', Rate: '', Quantity: '', Unit: '',
+      Date: '', 'Document No': '', Party: '', 'GST No.': '', Warehouse: '',
+      Taxable: '', CGST: '', SGST: '', IGST: '', 'Total Tax': '', Total: '',
+      'Payment Status': '', 'Payment Mode': '',
+      ...values,
+    });
+    const selectedDetails = itemWise
+      ? itemWiseRows.map((row) => csvRow({
+          Section: 'Item-wise', Transaction: row.transactionType, Item: row.itemName,
+          Type: row.itemTypeLabel, Rate: `${row.taxRate}%`, Quantity: row.quantity, Unit: row.unit,
+          Taxable: row.taxableValue, CGST: row.cgst, SGST: row.sgst, IGST: row.igst, 'Total Tax': row.taxAmount,
+        }))
+      : [
+          ...outward.map((row) => csvRow({ Section: 'Outward documents', ...docExportRow(row, true) })),
+          ...inward.map((row) => csvRow({ Section: 'Inward documents', ...docExportRow(row) })),
+        ];
     downloadCSV(`gst-summary-${fromDate}-to-${toDate}.csv`, [
-      ...salesData.map(r => ({ Section: 'Output by rate', Detail: `${r.taxRate}%`, Taxable: r.taxableValue, CGST: r.cgst, SGST: r.sgst, IGST: r.igst, 'Total Tax': r.taxAmount })),
-      ...purchasesData.map(r => ({ Section: 'Input by rate', Detail: `${r.taxRate}%`, Taxable: r.taxableValue, CGST: r.cgst, SGST: r.sgst, IGST: r.igst, 'Total Tax': r.taxAmount })),
-      ...outward.map(r => ({ Section: 'Outward documents', Detail: '', ...docExportRow(r, true) })),
-      ...inward.map(r => ({ Section: 'Inward documents', Detail: '', ...docExportRow(r) })),
+      ...salesData.map(r => csvRow({
+        Section: 'Output by rate', Detail: `${r.taxRate}%`, Rate: `${r.taxRate}%`,
+        Taxable: r.taxableValue, CGST: r.cgst, SGST: r.sgst, IGST: r.igst, 'Total Tax': r.taxAmount,
+      })),
+      ...purchasesData.map(r => csvRow({
+        Section: 'Input by rate', Detail: `${r.taxRate}%`, Rate: `${r.taxRate}%`,
+        Taxable: r.taxableValue, CGST: r.cgst, SGST: r.sgst, IGST: r.igst, 'Total Tax': r.taxAmount,
+      })),
+      ...selectedDetails,
     ]);
   };
 
@@ -211,16 +343,33 @@ export default function GstSummary() {
     ];
     const rateRow = (r: { taxRate: number; taxableValue: number; cgst: number; sgst: number; igst: number; taxAmount: number }) =>
       [`${r.taxRate}%`, r.taxableValue, r.cgst, r.sgst, r.igst, r.taxAmount];
+    const itemCols = [
+      { label: 'Transaction' }, { label: 'Item', width: 2 }, { label: 'Rate' }, { label: 'Qty', align: 'right' as const },
+      { label: 'Taxable', align: 'right' as const }, { label: 'CGST', align: 'right' as const },
+      { label: 'SGST', align: 'right' as const }, { label: 'IGST', align: 'right' as const },
+      { label: 'Total Tax', align: 'right' as const },
+    ];
+    const itemRow = (r: GstItemWiseRow) => [
+      r.transactionType, `${r.itemName} (${r.itemTypeLabel}${r.unit ? ` · ${r.unit}` : ''})`,
+      `${r.taxRate}%`, fmtQty(Number(r.quantity)), r.taxableValue, r.cgst, r.sgst, r.igst, r.taxAmount,
+    ];
     const sections: PdfSection[] = [
       { heading: 'Output Tax by Rate (Sales)', columns: rateCols, rows: salesData.map(rateRow) },
       { heading: 'Input Tax Credit by Rate (Purchases)', columns: rateCols, rows: purchasesData.map(rateRow) },
+      ...(itemWise
+        ? [{ heading: 'Item-wise GST Breakdown', columns: itemCols, rows: itemWiseRows.map(itemRow) }]
+        : []),
       {
         heading: 'Month-wise Breakdown',
         columns: [{ label: 'Month' }, { label: 'Output Taxable', align: 'right' as const }, { label: 'Output Tax', align: 'right' as const }, { label: 'Input Taxable', align: 'right' as const }, { label: 'Input Tax', align: 'right' as const }, { label: 'Net GST', align: 'right' as const }],
         rows: monthWise.map(m => [m.month, m.outputTaxable, m.outputTax, m.inputTaxable, m.inputTax, m.netGst]),
       },
-      { heading: 'Outward Documents (Sales)', columns: DOC_PDF_COLUMNS, rows: outward.map(r => docPdfRow(r, true)) },
-      { heading: 'Inward Documents (Purchases)', columns: DOC_PDF_COLUMNS, rows: inward.map(r => docPdfRow(r)) },
+      ...(!itemWise
+        ? [
+            { heading: 'Outward Documents (Sales)', columns: DOC_PDF_COLUMNS, rows: outward.map(r => docPdfRow(r, true)) },
+            { heading: 'Inward Documents (Purchases)', columns: DOC_PDF_COLUMNS, rows: inward.map(r => docPdfRow(r)) },
+          ]
+        : []),
     ];
     return {
       title: 'GST Summary',
@@ -256,9 +405,9 @@ export default function GstSummary() {
       <div className="space-y-6">
         <PageHeader
           title="GST Summary"
-          description="Output tax liability vs input tax credit, broken down by rate slab"
+          description="Output tax liability vs input tax credit, broken down by rate slab and item"
           icon={Receipt}
-          actions={<ExportButtons onCSV={exportCsv} doc={buildDoc} canDownload={perm.canDownload} disabled={isLoading || docs.isLoading} />}
+          actions={<ExportButtons onCSV={exportCsv} doc={buildDoc} canDownload={perm.canDownload} disabled={isLoading || (!itemWise && docs.isLoading)} />}
         />
 
         {/* Filters */}
@@ -269,6 +418,19 @@ export default function GstSummary() {
           <Input type="date" value={toDate} onChange={e => setToDate(e.target.value)} className="w-36" />
         </div>
         <GstScopeFilter value={scope} onChange={setScope} />
+        <div className="flex items-start gap-2">
+          <Checkbox
+            id="gst-item-wise"
+            checked={itemWise}
+            onCheckedChange={(checked) => setItemWise(checked === true)}
+          />
+          <div className="grid gap-0.5">
+            <label htmlFor="gst-item-wise" className="text-sm font-medium leading-none cursor-pointer">
+              Item-wise
+            </label>
+            <span className="text-xs text-muted-foreground">Checked: one combined item table. Unchecked: bill-wise registers.</span>
+          </div>
+        </div>
 
         {/* Summary Cards */}
         <SummaryCardGrid className="lg:grid-cols-3">
@@ -396,6 +558,8 @@ export default function GstSummary() {
           </div>
         </div>
 
+        {itemWise && <GstItemsTable rows={itemWiseRows} loading={isLoading} />}
+
         {/* Month-wise Breakdown */}
         <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
           <div className="p-4 border-b border-border bg-muted/20">
@@ -437,19 +601,22 @@ export default function GstSummary() {
           )}
         </div>
 
-        {/* Document registers */}
-        <GstDocumentsTable
-          title="Outward Documents (Sales)"
-          icon={<FileText className="w-4 h-4 text-emerald-500" />}
-          rows={outward}
-          loading={docs.isLoading}
-        />
-        <GstDocumentsTable
-          title="Inward Documents (Purchases)"
-          icon={<FileText className="w-4 h-4 text-primary" />}
-          rows={inward}
-          loading={docs.isLoading}
-        />
+        {!itemWise && (
+          <>
+            <GstDocumentsTable
+              title="Outward Documents (Sales)"
+              icon={<FileText className="w-4 h-4 text-emerald-500" />}
+              rows={outward}
+              loading={docs.isLoading}
+            />
+            <GstDocumentsTable
+              title="Inward Documents (Purchases)"
+              icon={<FileText className="w-4 h-4 text-primary" />}
+              rows={inward}
+              loading={docs.isLoading}
+            />
+          </>
+        )}
       </div>
     </AppLayout>
   );

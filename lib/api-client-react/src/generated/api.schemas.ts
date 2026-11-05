@@ -1687,13 +1687,53 @@ export type GstSummaryByWarehouseItem = {
   purchaseTax?: number;
 };
 
+export interface GstSummaryMonthRow {
+  month: string;
+  outputTaxable: number;
+  outputTax: number;
+  inputTaxable: number;
+  inputTax: number;
+  netGst: number;
+}
+
+export interface GstSummaryRateRow {
+  taxRate: number;
+  taxableValue: number;
+  cgst: number;
+  sgst: number;
+  igst: number;
+  taxAmount: number;
+  estimated?: boolean;
+}
+
+export interface GstSummaryItemRow {
+  /** @nullable */
+  itemId?: number | null;
+  itemType: string;
+  itemTypeLabel: string;
+  itemName: string;
+  unit: string;
+  taxRate: number;
+  quantity: number;
+  taxableValue: number;
+  cgst: number;
+  sgst: number;
+  igst: number;
+  taxAmount: number;
+}
+
 export interface GstSummary {
-  totalSales?: number;
-  totalTaxCollected?: number;
-  totalPurchases?: number;
-  totalTaxPaid?: number;
-  netGstLiability?: number;
-  byWarehouse?: GstSummaryByWarehouseItem[];
+  totalSales: number;
+  totalTaxCollected: number;
+  totalPurchases: number;
+  totalTaxPaid: number;
+  netGstLiability: number;
+  monthWise: GstSummaryMonthRow[];
+  salesByRate: GstSummaryRateRow[];
+  purchasesByRate: GstSummaryRateRow[];
+  salesByItem: GstSummaryItemRow[];
+  purchasesByItem: GstSummaryItemRow[];
+  byWarehouse: GstSummaryByWarehouseItem[];
 }
 
 export interface CompanySettings {
@@ -2270,6 +2310,8 @@ export type DeleteCashBankAccount200 = {
 export type GetGstSummaryParams = {
 fromDate?: string;
 toDate?: string;
+gstin?: string;
+warehouseId?: number;
 };
 
 export type ListReconciliationPendingQueueParams = {

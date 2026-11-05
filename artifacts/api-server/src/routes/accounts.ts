@@ -5290,7 +5290,13 @@ router.get("/gst/summary", requireModuleView(["page:/accounts/gst", "page:/accou
     const { rows: pw } = await pool.query(`SELECT warehouse_id FROM outlets WHERE id = $1`, [Number(gstSumEmp.branchId)]);
     const wid = Number(pw[0]?.warehouse_id);
     if (Number.isFinite(wid) && wid > 0) pinnedWh = wid;
-    else { res.json({ salesByRate: [], purchasesByRate: [], totals: {} }); return; }
+    else {
+      res.json({
+        totalSales: 0, totalTaxCollected: 0, totalPurchases: 0, totalTaxPaid: 0, netGstLiability: 0,
+        monthWise: [], salesByRate: [], purchasesByRate: [], salesByItem: [], purchasesByItem: [], byWarehouse: [],
+      });
+      return;
+    }
   }
 
   // Optional GSTIN / warehouse scoping. Resolved to document-id sets via raw
@@ -5392,6 +5398,159 @@ router.get("/gst/summary", requireModuleView(["page:/accounts/gst", "page:/accou
     }
   }
 
+  type GstItemAggregate = {
+    itemId: number | null;
+    itemType: string;
+    itemTypeLabel: string;
+    itemName: string;
+    unit: string;
+    taxRate: number;
+    quantity: number;
+    taxableValue: number;
+    cgst: number;
+    sgst: number;
+    igst: number;
+    taxAmount: number;
+  };
+  const salesItemIds = new Set<number>();
+  const purchaseIdsByType: Record<string, Set<number>> = {
+    material: new Set(), raw_material: new Set(), item: new Set(),
+  };
+  for (const sale of allSales) {
+    for (const li of ((sale.lineItems ?? []) as any[])) {
+      const id = Number(li?.itemId);
+      if (Number.isSafeInteger(id) && id > 0) salesItemIds.add(id);
+    }
+  }
+  for (const purchase of allPurchases) {
+    for (const li of ((purchase.lineItems ?? []) as any[])) {
+      const kind = String(li?.materialType ?? "material");
+      const id = Number(li?.materialId);
+      if (Number.isSafeInteger(id) && id > 0) {
+        (purchaseIdsByType[kind] ??= new Set()).add(id);
+      }
+    }
+  }
+
+  const itemIds = new Set([...salesItemIds, ...purchaseIdsByType.item]);
+  const loadItemMasters = async (table: string, ids: Set<number>) => {
+    if (ids.size === 0) return new Map<number, { name: string; unit: string }>();
+    const { rows } = await pool.query<any>(
+      `SELECT id, name, COALESCE(unit, '') AS unit FROM ${table} WHERE id = ANY($1::int[])`,
+      [[...ids]],
+    );
+    return new Map<number, { name: string; unit: string }>(
+      rows.map((row: any) => [Number(row.id), { name: String(row.name), unit: String(row.unit) }]),
+    );
+  };
+  const [itemMasters, materialMasters, packingMasters] = await Promise.all([
+    loadItemMasters("items", itemIds),
+    loadItemMasters("materials", purchaseIdsByType.material),
+    loadItemMasters("raw_materials", purchaseIdsByType.raw_material),
+  ]);
+  const purchaseMasterByType: Record<string, Map<number, { name: string; unit: string }>> = {
+    item: itemMasters,
+    material: materialMasters,
+    raw_material: packingMasters,
+  };
+  const purchaseTypeLabel: Record<string, string> = {
+    item: "Item",
+    material: "Raw Material",
+    raw_material: "Packing Material",
+  };
+  const addItemLine = (
+    target: Map<string, GstItemAggregate>,
+    key: string,
+    identity: Pick<GstItemAggregate, "itemId" | "itemType" | "itemTypeLabel" | "itemName" | "unit" | "taxRate">,
+    line: { quantity: number; taxableValue: number; cgst: number; sgst: number; igst: number; taxAmount: number },
+  ) => {
+    const row = target.get(key) ?? {
+      ...identity, quantity: 0, taxableValue: 0, cgst: 0, sgst: 0, igst: 0, taxAmount: 0,
+    };
+    row.quantity += line.quantity;
+    row.taxableValue += line.taxableValue;
+    row.cgst += line.cgst;
+    row.sgst += line.sgst;
+    row.igst += line.igst;
+    row.taxAmount += line.taxAmount;
+    target.set(key, row);
+  };
+  const identityKey = (id: number | null, name: string) =>
+    id == null ? `name:${name.trim().toLowerCase()}` : `id:${id}`;
+  const salesItemsByKey = new Map<string, GstItemAggregate>();
+  for (const sale of allSales) {
+    for (const li of ((sale.lineItems ?? []) as any[])) {
+      const idValue = Number(li?.itemId);
+      const itemId = Number.isSafeInteger(idValue) && idValue > 0 ? idValue : null;
+      const master = itemId == null ? undefined : itemMasters.get(itemId);
+      const fallbackName = String(li?.itemName ?? "").trim();
+      const itemName = master?.name ?? (fallbackName || (itemId == null ? "Unidentified item" : `Item #${itemId}`));
+      const unit = master?.unit ?? String(li?.unit ?? "");
+      const taxRate = Number(li?.taxRate ?? 0);
+      const quantity = Number(li?.quantity ?? 0);
+      const heads = lineTaxHeads(li);
+      const identity = { itemId, itemType: "item", itemTypeLabel: "Item", itemName, unit, taxRate };
+      addItemLine(
+        salesItemsByKey,
+        `${identityKey(itemId, itemName)}:${taxRate}`,
+        identity,
+        {
+          quantity,
+          taxableValue: Number(li?.lineSubtotal ?? (quantity * Number(li?.unitPrice ?? 0) - Number(li?.discount ?? 0))),
+          cgst: heads.cgst,
+          sgst: heads.sgst,
+          igst: heads.igst,
+          taxAmount: Number(li?.taxAmount ?? 0),
+        },
+      );
+    }
+  }
+  const purchaseItemsByKey = new Map<string, GstItemAggregate>();
+  for (const purchase of allPurchases) {
+    for (const li of ((purchase.lineItems ?? []) as any[])) {
+      const itemType = String(li?.materialType ?? "material");
+      const idValue = Number(li?.materialId);
+      const itemId = Number.isSafeInteger(idValue) && idValue > 0 ? idValue : null;
+      const master = itemId == null ? undefined : purchaseMasterByType[itemType]?.get(itemId);
+      const fallbackName = String(li?.materialName ?? li?.itemName ?? "").trim();
+      const itemName = master?.name ?? (fallbackName || (itemId == null ? "Unidentified item" : `Item #${itemId}`));
+      const unit = master?.unit ?? String(li?.unit ?? "");
+      const taxRate = Number(li?.gstRate ?? 0);
+      const heads = lineTaxHeads(li);
+      const identity = {
+        itemId, itemType, itemTypeLabel: purchaseTypeLabel[itemType] ?? itemType,
+        itemName, unit, taxRate,
+      };
+      addItemLine(
+        purchaseItemsByKey,
+        `${itemType}:${identityKey(itemId, itemName)}:${taxRate}`,
+        identity,
+        {
+          quantity: Number(li?.quantity ?? 0),
+          taxableValue: Number(li?.taxableValue ?? 0),
+          cgst: heads.cgst,
+          sgst: heads.sgst,
+          igst: heads.igst,
+          taxAmount: Number(li?.taxAmount ?? 0),
+        },
+      );
+    }
+  }
+  const finalizeItemRows = (items: Map<string, GstItemAggregate>) =>
+    [...items.values()]
+      .sort((a, b) => b.taxableValue - a.taxableValue || a.itemName.localeCompare(b.itemName) || a.taxRate - b.taxRate)
+      .map((row) => ({
+        ...row,
+        quantity: Math.round(row.quantity * 1000) / 1000,
+        taxableValue: Math.round(row.taxableValue * 100) / 100,
+        cgst: Math.round(row.cgst * 100) / 100,
+        sgst: Math.round(row.sgst * 100) / 100,
+        igst: Math.round(row.igst * 100) / 100,
+        taxAmount: Math.round(row.taxAmount * 100) / 100,
+      }));
+  const salesByItem = finalizeItemRows(salesItemsByKey);
+  const purchasesByItem = finalizeItemRows(purchaseItemsByKey);
+
   const totalSales = allSales.reduce((s, r) => s + Number(r.totalAmount), 0);
   const totalTaxCollected = allSales.reduce((s, r) => s + docTax((r.lineItems ?? []) as any[], Number(r.taxTotal ?? 0)), 0);
   const totalPurchases = allPurchases.reduce((s, p) => s + Number(p.totalAmount), 0);
@@ -5433,6 +5592,7 @@ router.get("/gst/summary", requireModuleView(["page:/accounts/gst", "page:/accou
     totalSales, totalTaxCollected, totalPurchases, totalTaxPaid, netGstLiability, monthWise,
     salesByRate: Array.from(salesByRate.entries()).sort((a, b) => a[0] - b[0]).map(([taxRate, d]) => ({ taxRate, ...d })),
     purchasesByRate: Array.from(purchasesByRate.entries()).sort((a, b) => a[0] - b[0]).map(([taxRate, d]) => ({ taxRate, ...d, estimated: false })),
+    salesByItem, purchasesByItem,
     byWarehouse: warehouses.map(w => ({ warehouseId: w.id, warehouseName: w.name, gstNumber: w.gstNumber, salesTax: 0, purchaseTax: 0 })),
   });
 });

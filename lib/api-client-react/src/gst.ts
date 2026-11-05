@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { customFetch } from './custom-fetch';
+import type { GstSummary } from './generated/api.schemas';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -251,27 +252,6 @@ export interface GstDocumentsResponse {
   };
 }
 
-export interface GstSummaryRateRow {
-  taxRate: number;
-  taxableValue: number;
-  cgst: number;
-  sgst: number;
-  igst: number;
-  taxAmount: number;
-  estimated?: boolean;
-}
-
-export interface GstSummaryResponse {
-  totalSales: number;
-  totalTaxCollected: number;
-  totalPurchases: number;
-  totalTaxPaid: number;
-  netGstLiability: number;
-  monthWise: Array<{ month: string; outputTaxable: number; outputTax: number; inputTaxable: number; inputTax: number; netGst: number }>;
-  salesByRate: GstSummaryRateRow[];
-  purchasesByRate: GstSummaryRateRow[];
-}
-
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 const scopeQs = (p: GstScopeParams): string => {
@@ -353,7 +333,7 @@ export function useGetGstSummaryScoped(params: GstScopeParams = {}) {
   return useQuery({
     queryKey: getGstSummaryScopedQueryKey(params),
     queryFn: ({ signal }) =>
-      customFetch<GstSummaryResponse>(`/api/gst/summary${scopeQs(params)}`, { signal }),
+      customFetch<GstSummary>(`/api/gst/summary${scopeQs(params)}`, { signal }),
   });
 }
 

@@ -2907,22 +2907,78 @@ export const CreateExpenseResponse = zod.object({
  */
 export const GetGstSummaryQueryParams = zod.object({
   "fromDate": zod.coerce.string().optional(),
-  "toDate": zod.coerce.string().optional()
+  "toDate": zod.coerce.string().optional(),
+  "gstin": zod.coerce.string().optional(),
+  "warehouseId": zod.coerce.number().optional()
 })
 
 export const GetGstSummaryResponse = zod.object({
-  "totalSales": zod.number().optional(),
-  "totalTaxCollected": zod.number().optional(),
-  "totalPurchases": zod.number().optional(),
-  "totalTaxPaid": zod.number().optional(),
-  "netGstLiability": zod.number().optional(),
+  "totalSales": zod.number(),
+  "totalTaxCollected": zod.number(),
+  "totalPurchases": zod.number(),
+  "totalTaxPaid": zod.number(),
+  "netGstLiability": zod.number(),
+  "monthWise": zod.array(zod.object({
+  "month": zod.string(),
+  "outputTaxable": zod.number(),
+  "outputTax": zod.number(),
+  "inputTaxable": zod.number(),
+  "inputTax": zod.number(),
+  "netGst": zod.number()
+})),
+  "salesByRate": zod.array(zod.object({
+  "taxRate": zod.number(),
+  "taxableValue": zod.number(),
+  "cgst": zod.number(),
+  "sgst": zod.number(),
+  "igst": zod.number(),
+  "taxAmount": zod.number(),
+  "estimated": zod.boolean().optional()
+})),
+  "purchasesByRate": zod.array(zod.object({
+  "taxRate": zod.number(),
+  "taxableValue": zod.number(),
+  "cgst": zod.number(),
+  "sgst": zod.number(),
+  "igst": zod.number(),
+  "taxAmount": zod.number(),
+  "estimated": zod.boolean().optional()
+})),
+  "salesByItem": zod.array(zod.object({
+  "itemId": zod.number().nullish(),
+  "itemType": zod.string(),
+  "itemTypeLabel": zod.string(),
+  "itemName": zod.string(),
+  "unit": zod.string(),
+  "taxRate": zod.number(),
+  "quantity": zod.number(),
+  "taxableValue": zod.number(),
+  "cgst": zod.number(),
+  "sgst": zod.number(),
+  "igst": zod.number(),
+  "taxAmount": zod.number()
+})),
+  "purchasesByItem": zod.array(zod.object({
+  "itemId": zod.number().nullish(),
+  "itemType": zod.string(),
+  "itemTypeLabel": zod.string(),
+  "itemName": zod.string(),
+  "unit": zod.string(),
+  "taxRate": zod.number(),
+  "quantity": zod.number(),
+  "taxableValue": zod.number(),
+  "cgst": zod.number(),
+  "sgst": zod.number(),
+  "igst": zod.number(),
+  "taxAmount": zod.number()
+})),
   "byWarehouse": zod.array(zod.object({
   "warehouseId": zod.number().optional(),
   "warehouseName": zod.string().optional(),
   "gstNumber": zod.string().optional(),
   "salesTax": zod.number().optional(),
   "purchaseTax": zod.number().optional()
-})).optional()
+}))
 })
 
 
