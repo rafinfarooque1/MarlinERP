@@ -182,12 +182,22 @@ router.get("/reports/sales-by-salesperson", requireModuleView("page:/reports/sal
     `SELECT s.salesperson_employee_id AS salesperson_employee_id,
             COALESCE(NULLIF(TRIM(s.salesperson), ''), 'Unassigned') AS salesperson_name,
             COUNT(*)::int AS invoices,
+            COALESCE(SUM(line_qty.quantity), 0) AS quantity,
+            COALESCE(SUM(line_qty.item_total), 0) AS item_total,
             COALESCE(SUM(s.subtotal::numeric), 0) AS subtotal,
             COALESCE(SUM(s.tax_total::numeric), 0) AS tax,
             COALESCE(SUM(s.total_amount::numeric), 0) AS total,
             COALESCE(SUM(s.amount_paid::numeric), 0) AS paid,
             COALESCE(SUM(${creditAdjustmentsExpr("s")}), 0) AS credit_adjustments
        FROM sales s
+        LEFT JOIN LATERAL (
+          SELECT COALESCE(SUM(COALESCE((li->>'quantity')::numeric, 0)), 0) AS quantity,
+                 COALESCE(SUM(COALESCE(
+                   (li->>'lineTotal')::numeric,
+                   COALESCE((li->>'lineSubtotal')::numeric, 0) + COALESCE((li->>'taxAmount')::numeric, 0)
+                 )), 0) AS item_total
+            FROM jsonb_array_elements(COALESCE(s.line_items, '[]'::jsonb)) AS li
+        ) line_qty ON TRUE
       WHERE s.branch_transfer_id IS NULL AND s.cancelled_at IS NULL
         AND ${visibleLocationSql("COALESCE(s.location_type,'outlet')", "COALESCE(s.location_id,s.outlet_id)")}
         AND ($1 = '' OR s.sale_date >= $1::date)
@@ -203,10 +213,14 @@ router.get("/reports/sales-by-salesperson", requireModuleView("page:/reports/sal
     const total = r2(Number(r.total));
     const paid = r2(Number(r.paid));
     const creditAdjustments = r2(Number(r.credit_adjustments));
+    const quantity = Number(r.quantity);
+    const itemTotal = Number(r.item_total);
     return {
       salespersonEmployeeId: r.salesperson_employee_id != null ? Number(r.salesperson_employee_id) : null,
       salespersonName: r.salesperson_name,
       invoices: Number(r.invoices),
+      quantity: r3(Number(r.quantity)),
+      averagePerKg: quantity > 0 ? r2(itemTotal / quantity) : null,
       subtotal: r2(Number(r.subtotal)),
       tax: r2(Number(r.tax)),
       total,
@@ -219,6 +233,12 @@ router.get("/reports/sales-by-salesperson", requireModuleView("page:/reports/sal
     totals: {
       salespeople: list.length,
       invoices: list.reduce((sum, r) => sum + r.invoices, 0),
+      quantity: r3(list.reduce((sum, r) => sum + r.quantity, 0)),
+      averagePerKg: (() => {
+        const quantity = rows.reduce((sum: number, row: any) => sum + Number(row.quantity), 0);
+        const itemTotal = rows.reduce((sum: number, row: any) => sum + Number(row.item_total), 0);
+        return quantity > 0 ? r2(itemTotal / quantity) : null;
+      })(),
       subtotal: r2(list.reduce((sum, r) => sum + r.subtotal, 0)),
       tax: r2(list.reduce((sum, r) => sum + r.tax, 0)),
       total: r2(list.reduce((sum, r) => sum + r.total, 0)),

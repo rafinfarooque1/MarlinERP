@@ -52,6 +52,14 @@ export interface DashboardLocationSalesRow {
   outstandingAmount: number;
 }
 
+export interface DashboardSalespersonSalesRow {
+  salespersonEmployeeId: number | null;
+  name: string;
+  salesAmount: number;
+  salesQuantity: number;
+  outstandingAmount: number;
+}
+
 export interface DashboardBi {
   /**
    * False when this employee lacks the inventory-valuation right, in which
@@ -147,8 +155,10 @@ export interface DashboardBi {
   financialMatrix: DashboardFinancialMatrix;
   /** Populated only for an explicit All Locations view. */
   locationBreakdown: BiLocationMetric[];
-  /** Period sales and as-of outstanding by active location in the caller's data scope. */
+  /** Period sales and as-of outstanding by active location in the selected caller scope. */
   locationSalesReport: DashboardLocationSalesRow[];
+  /** Period sales and as-of outstanding by salesperson in the selected location scope. */
+  salespersonSalesReport: DashboardSalespersonSalesRow[];
   topItems: BiTopItem[];
   topCustomers: BiTopCustomer[];
 }

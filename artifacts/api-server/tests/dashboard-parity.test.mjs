@@ -232,6 +232,50 @@ try {
       return near(row.salesAmount, source?.total ?? 0);
     }),
     JSON.stringify({ report: locationSalesReport, source: biAll?.sales?.byLocation }));
+  const salespersonSalesReport = biAll?.salespersonSalesReport;
+  assert("salesperson report returns finite amount, quantity and outstanding values",
+    Array.isArray(salespersonSalesReport) && salespersonSalesReport.every((row) =>
+      typeof row.name === "string"
+      && Number.isFinite(Number(row.salesAmount))
+      && Number.isFinite(Number(row.salesQuantity))
+      && Number.isFinite(Number(row.outstandingAmount))),
+    JSON.stringify(salespersonSalesReport));
+  assert("salesperson totals reconcile with the all-location report",
+    Array.isArray(salespersonSalesReport)
+      && near(salespersonSalesReport.reduce((sum, row) => sum + Number(row.salesAmount), 0),
+        locationSalesReport.reduce((sum, row) => sum + Number(row.salesAmount), 0))
+      && near(salespersonSalesReport.reduce((sum, row) => sum + Number(row.salesQuantity), 0),
+        locationSalesReport.reduce((sum, row) => sum + Number(row.salesQuantity), 0))
+      && near(salespersonSalesReport.reduce((sum, row) => sum + Number(row.outstandingAmount), 0),
+        locationSalesReport.reduce((sum, row) => sum + Number(row.outstandingAmount), 0)),
+    JSON.stringify({ salespersonSalesReport, locationSalesReport }));
+  const visibleLocation = locationSalesReport.find((row) => row.locationType !== "headoffice")
+    ?? locationSalesReport[0];
+  if (visibleLocation) {
+    const selectedHeaders = {
+      "x-location-type": visibleLocation.locationType,
+      ...(visibleLocation.locationType === "headoffice"
+        ? {}
+        : { "x-location-id": String(visibleLocation.locationId) }),
+    };
+    const selectedReport = (await get(`/dashboard/bi?fromDate=${EPOCH}&toDate=${TODAY}`, selectedHeaders)).data;
+    assert("location and salesperson reports follow the global location header",
+      Array.isArray(selectedReport?.locationSalesReport)
+        && selectedReport.locationSalesReport.length > 0
+        && selectedReport.locationSalesReport.every((row) =>
+          row.locationType === visibleLocation.locationType
+          && (visibleLocation.locationType === "headoffice"
+            || Number(row.locationId) === Number(visibleLocation.locationId)))
+        && Array.isArray(selectedReport?.salespersonSalesReport)
+        && near(
+          selectedReport.salespersonSalesReport.reduce((sum, row) => sum + Number(row.salesAmount), 0),
+          selectedReport.locationSalesReport.reduce((sum, row) => sum + Number(row.salesAmount), 0),
+        ),
+      JSON.stringify({
+        locationSalesReport: selectedReport?.locationSalesReport,
+        salespersonSalesReport: selectedReport?.salespersonSalesReport,
+      }));
+  }
   const breakdownFields = [
     "sales", "purchases", "inventoryValue", "expense", "payables", "receivables",
     "payments", "receipts", "cash", "bank", "grossProfit", "netProfit",
