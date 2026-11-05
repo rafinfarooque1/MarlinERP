@@ -1061,7 +1061,7 @@ export interface Books {
     assets: {
       fixedAssets: StatementGroup;
       currentAssets: StatementGroup;
-      /** Compatibility fields; stock is P&L-only and excluded from the Balance Sheet. */
+      /** The same owned inventory valuation included in P&L carry-forward. */
       closingStock: number;
       closingStockOnHand: number;
       closingStockInTransit: number;
@@ -1368,9 +1368,10 @@ export async function buildBooks(
   }
   const retainedEarnings = r2(cumulativeIncome + closing.total - cumulativeExpense);
 
-  // Stock is included in the P&L's COGS calculation, but is intentionally not
-  // presented as a Balance Sheet asset.
-  const assetsTotal = r2(fixedGroup.total + curaGroup.total);
+  // The periodic closing-stock adjustment increases retained earnings above.
+  // Carry the SAME valuation as an asset, once, including sender-owned transit.
+  // Never use the statement difference as an inventory or balancing figure.
+  const assetsTotal = r2(fixedGroup.total + curaGroup.total + closing.total);
   const liabilitiesTotal = r2(capitalGroup.total + loansGroup.total + curlGroup.total + retainedEarnings);
   const difference = r2(assetsTotal - liabilitiesTotal);
 
@@ -1449,11 +1450,10 @@ export async function buildBooks(
     }
   }
   if (Math.abs(difference) >= 0.01) {
-    const unexplainedAfterStockExclusion = r2(difference + closing.total);
-    const gapDetail = Math.abs(unexplainedAfterStockExclusion) <= 0.01
-      ? `Assets and liabilities differ by ₹${Math.abs(difference).toFixed(2)} because closing stock of ₹${closing.total.toFixed(2)} is excluded from Balance Sheet assets but remains in P&L carry-forward.`
-      : `Assets and liabilities differ by ₹${Math.abs(difference).toFixed(2)}. After accounting for the intentionally excluded closing stock of ₹${closing.total.toFixed(2)}, an additional difference of ₹${Math.abs(unexplainedAfterStockExclusion).toFixed(2)} remains.`;
-    addIntegrityIssue(gapDetail, "FAIL");
+    addIntegrityIssue(
+      `Assets and liabilities differ by ₹${Math.abs(difference).toFixed(2)} after including closing stock of ₹${closing.total.toFixed(2)} in both assets and P&L carry-forward. Investigate the underlying postings and account classifications; this is not a balancing figure.`,
+      "FAIL",
+    );
   }
   const status: BooksIntegrity["status"] = hasIntegrityFailure || Math.abs(difference) >= 0.01
     ? "FAIL"
@@ -1522,9 +1522,9 @@ export async function buildBooks(
       assets: {
         fixedAssets: fixedGroup,
         currentAssets: curaGroup,
-        closingStock: 0,
-        closingStockOnHand: 0,
-        closingStockInTransit: 0,
+        closingStock: closing.total,
+        closingStockOnHand: r2(Math.max(0, closing.total - closing.inTransit)),
+        closingStockInTransit: closing.inTransit,
         total: assetsTotal,
       },
     },

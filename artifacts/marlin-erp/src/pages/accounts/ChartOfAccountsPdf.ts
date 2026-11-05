@@ -353,6 +353,7 @@ export async function generateChartOfAccountsPdf(opts: CoaPdfOpts): Promise<void
       rowSpacer(),
       rowPanel('ASSETS'),
        ...groupRows(bs.assets.fixedAssets,   'grp:fixed',     series, N, isOpen, showValuedOnly),
+      rowAuto('Closing Stock', sv('bsClosingStock'), bs.assets.closingStock),
        ...groupRows(bs.assets.currentAssets, 'grp:curassets', series, N, isOpen, showValuedOnly),
       rowTotal('Total Assets', bs.assets.total, sv('assetsTotal')),
     ];
