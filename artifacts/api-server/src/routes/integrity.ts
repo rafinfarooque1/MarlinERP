@@ -220,11 +220,15 @@ router.get(
       explanation: valuation.reliable ? "P&L closing stock is compared with the dated valuation service." : valuation.note ?? "Historical valuation evidence is incomplete.",
     }));
     const bsStockValue = r2(books.balanceSheet.assets.closingStock);
-    const stockBsStatus: Status = close(bsStockValue, 0) ? "PASS" : "FAIL";
-    checks.push(check("FI-07", "Balance Sheet excludes stock", stockBsStatus, {
-      actual: bsStockValue, expected: 0, difference: bsStockValue, date: toDate, location: locJson,
-      source: "buildBooks.balanceSheet",
-      explanation: "Closing stock is reconciled to inventory valuation in the P&L and is intentionally excluded from Balance Sheet assets.",
+    const stockBsStatus: Status = !valuation.reliable
+      ? "UNVERIFIED"
+      : close(bsStockValue, stockValue) ? "PASS" : "FAIL";
+    checks.push(check("FI-07", "Balance Sheet closing stock = inventory valuation", stockBsStatus, {
+      actual: bsStockValue, expected: stockValue, difference: r2(bsStockValue - stockValue), date: toDate, location: locJson,
+      source: "buildBooks + stockValuation(asOf, includeInTransit)",
+      explanation: valuation.reliable
+        ? "Balance Sheet inventory includes the same on-hand and sender-owned in-transit valuation as P&L closing stock."
+        : valuation.note ?? "Historical valuation evidence is incomplete.",
     }));
 
     const { rows: [closeState] } = await pool.query(

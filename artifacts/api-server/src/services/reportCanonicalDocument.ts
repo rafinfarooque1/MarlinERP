@@ -79,7 +79,9 @@ export function canonicalDocument(request: CanonicalReportRequest, payload: any)
         ...groupRows(b.liabilities.loans), ...groupRows(b.liabilities.currentLiabilities),
       ], b.liabilities.total);
       statement("Assets", [
-        ...groupRows(b.assets.fixedAssets), ...groupRows(b.assets.currentAssets),
+        ...groupRows(b.assets.fixedAssets),
+        ["Closing Stock", amount(b.assets.closingStock)],
+        ...groupRows(b.assets.currentAssets),
       ], b.assets.total);
     } else {
       // Read the canonical summary, not an independent export COGS/GP/NP formula.

@@ -10,18 +10,20 @@ P&L recognition stays separate from the inter-branch payable.
 
 Location statements include Transfer-Out as income and Transfer-In as purchase
 expense; consolidated statements remain neutral. Do not apply the transfer
-opening-stock adjustment to a location P&L. The P&L includes on-hand and
-sender-owned in-transit stock in its closing-stock calculation; Balance Sheet
-asset totals exclude that calculated stock value. Dispatch reduces sender
-on-hand; transit remains owned by the sender until receipt.
+opening-stock adjustment to a location P&L. Both the P&L and Balance Sheet
+include on-hand and sender-owned in-transit stock. The Balance Sheet presents
+one combined "Closing Stock" asset line. Dispatch reduces sender on-hand;
+transit remains owned by the sender until receipt.
 
-**Why:** the user explicitly chose to keep stock calculation in the P&L only
-and confirmed excluding it from all Balance Sheet totals after being warned
-that the statements may no longer balance.
+**Why:** On 2026-11-05 the user chose "Restore stock (recommended)" to resolve
+the balance-sheet integrity warning. This supersedes the earlier choice to
+exclude stock: retaining it in profit but not assets makes the statement
+unequal by exactly the inventory value.
 
-**How to apply:** Keep stock in P&L and COGS; omit it from Balance Sheet asset
-rows and totals, and do not add a compensating balance to hide the resulting
-difference.
+**How to apply:** Include the same closing valuation once in assets and in
+P&L carry-forward across screens, monthly views, and exports. Keep P&L
+calculations unchanged; never suppress genuine differences or introduce a
+balancing plug.
 
 There is one payable ledger per undirected location pair. The balanced dispatch
 and receipt legs split between that pair ledger and shared clearing so a

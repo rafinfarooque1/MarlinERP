@@ -72,7 +72,7 @@ interface FinancialStatements {
   };
   balanceSheet: {
     liabilities: { capitalAccount: GroupSummary; loans: GroupSummary; currentLiabilities: GroupSummary; pandlCarryForward: number; difference: number; total: number };
-    assets: { fixedAssets: GroupSummary; currentAssets: GroupSummary; total: number };
+    assets: { fixedAssets: GroupSummary; currentAssets: GroupSummary; closingStock: number; total: number };
   };
   integrity: { status?: "PASS" | "UNVERIFIED" | "FAIL"; balanced: boolean; difference: number; issues: string[] };
 }
@@ -669,6 +669,7 @@ function BalanceSheetReport({ range, loc, canDownload }: { range: RangeState; lo
   ] : [];
   const assetLines: Line[] = bs ? [
     ...groupLines(bs.assets.fixedAssets),
+    { name: 'Closing Stock', amount: bs.assets.closingStock, depth: 0, key: 'bs:closingStock', parentKey: null },
     ...groupLines(bs.assets.currentAssets),
   ] : [];
 

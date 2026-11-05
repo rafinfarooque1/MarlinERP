@@ -110,7 +110,7 @@
 - [Cash/bank chart](cash-bank-chart-integration.md) + [location availability](cash-bank-multilocation.md) — CBA balances derive from ledgers; new roots must reach trees, vouchers, and ownership guards.
 - [Located import compare pack](import-compare-pack.md) — pack scopes via opt-in identity sets on owning filter types; wizard location is picked at TRIAL time and approval refuses any other location.
 - [Collections & voucher attribution](electronic-collection-routing.md) + [Receive Into](receive-into-collections.md) — sales route by ledger; vouchers keep Electronic Clearing postings and store platform IDs for reconciliation.
-- [Transfer adjustments](transfer-opening-adjustments.md) + [transfer accounting](transfer-accounting.md) — location P&Ls show Transfer-Out/In; transit stays sender-owned and out of operating totals.
+- [Transfer adjustments](transfer-opening-adjustments.md) + [transfer accounting](transfer-accounting.md) — closing stock belongs in BOTH P&L and BS; transit stays sender-owned; location P&Ls show transfers.
 - [Warehouse lifecycle](warehouse-lifecycle.md) — disabled writes are guarded; ordinary lists, reports, stock, GSTR-1/docs hide disabled history; consolidated books stay complete; deletion is atomic.
 - [Company holidays & weekly offs](holidays-weekly-offs.md) — stored rows outvote the calendar; untracked months never synthesise; `until` bounds balance views only; moved cutover fakes "accrual writes ₹0" suite failures.
 - [Expo Metro setup](expo-metro-pnpm.md) + [static build routing](expo-static-build.md) — watch root node_modules; bundles and assets resolve from workspace-relative paths.
