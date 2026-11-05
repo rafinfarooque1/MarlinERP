@@ -36,6 +36,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useDateRange, RangeBar } from '@/pages/reports/shared';
+import { exportReportXlsx, type ReportDoc } from '@/pages/reports/shared';
 import { useLocationContext } from '@/lib/locationContext';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem } from '@/components/ui/command';
@@ -56,7 +57,7 @@ import {
 } from '@/lib/invoiceShare';
 import {
   Plus, Search, Trash2, CreditCard, Calendar, Receipt,
-  Download, Eye, PackageOpen, FileDown, AlertTriangle,
+  Download, Eye, PackageOpen, FileDown, FileSpreadsheet, AlertTriangle,
   UserPlus, Check, ChevronsUpDown, Banknote, IndianRupee, Pencil, Printer,
   History,
 } from 'lucide-react';
@@ -156,6 +157,75 @@ const saleOtherChargesTotal = (sale: any): number => {
     0,
   ) * 100) / 100;
 };
+
+const saleDiscountTotal = (sale: any): number =>
+  Number(sale?.discountTotal ?? sale?.discount_total ?? 0)
+  + (Array.isArray(sale?.lineItems ?? sale?.line_items)
+    ? (sale.lineItems ?? sale.line_items).reduce(
+      (sum: number, item: any) => sum + (Number(item?.discount) || 0),
+      0,
+    )
+    : 0);
+
+interface SaleItemReportRow {
+  rowId: string;
+  sale: any;
+  itemName: string;
+  unit: string;
+  quantity: number;
+  unitPrice: number;
+  discount: number;
+  taxable: number;
+  tax: number;
+  total: number;
+}
+
+const finiteNumber = (value: unknown, fallback = 0): number => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+const buildSaleItemReportRows = (
+  sales: readonly any[],
+  itemsById: Map<number, any>,
+): SaleItemReportRow[] => sales.flatMap(sale => {
+  const lines = sale?.lineItems ?? sale?.line_items;
+  if (!Array.isArray(lines)) return [];
+  return lines.map((line: any, lineIndex: number) => {
+    const itemId = Number(line?.itemId ?? line?.item_id);
+    const itemInfo = itemsById.get(itemId);
+    const quantity = finiteNumber(line?.quantity);
+    const unitPrice = finiteNumber(line?.unitPrice ?? line?.unit_price);
+    const discount = finiteNumber(line?.discount);
+    const tax = finiteNumber(line?.taxAmount ?? line?.tax_amount);
+    const priceMode = line?.priceMode ?? line?.price_mode;
+    const grossBeforeTax = Math.max(0, quantity * unitPrice - discount);
+    const storedTaxable = line?.lineSubtotal ?? line?.line_subtotal;
+    const taxable = storedTaxable != null
+      ? finiteNumber(storedTaxable)
+      : priceMode === 'exclusive'
+        ? grossBeforeTax
+        : Math.max(0, grossBeforeTax - tax);
+    const storedTotal = line?.lineTotal ?? line?.line_total;
+    const total = storedTotal != null
+      ? finiteNumber(storedTotal)
+      : Math.round((taxable + tax) * 100) / 100;
+    return {
+      rowId: `${sale.id}:${lineIndex}`,
+      sale,
+      itemName: String(
+        line?.itemName ?? line?.item_name ?? itemInfo?.name ?? `Item #${itemId || '?'}`,
+      ),
+      unit: String(line?.unit ?? itemInfo?.unit ?? ''),
+      quantity,
+      unitPrice,
+      discount,
+      taxable,
+      tax,
+      total,
+    };
+  });
+});
 
 const saleStatusLabel = (sale: any): string | undefined => {
   const status = sale?.paymentStatus ?? 'paid';
@@ -351,6 +421,8 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   const range = useDateRange('all');
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [isExportingExcel, setIsExportingExcel] = useState(false);
+  const [itemWiseView, setItemWiseView] = useState(false);
   const PAGE_SIZE = 25;
 
   // Debounce the search box — invoice/customer search runs server-side
@@ -1662,11 +1734,18 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
       .filter(s => statusFilter === 'all' || ((s as any).paymentStatus ?? 'paid') === statusFilter)
       .map(s => ({
         ...s,
-        _discountTotal: Number((s as any).discountTotal ?? 0)
-          + (((s as any).lineItems as any[]) ?? []).reduce((acc: number, li: any) => acc + Number(li?.discount ?? 0), 0),
+        _discountTotal: saleDiscountTotal(s),
         _otherChargesTotal: saleOtherChargesTotal(s),
       })),
     [sales, statusFilter],
+  );
+  const itemsMap = useMemo(
+    () => new Map(items.map(item => [Number(item.id), item])),
+    [items],
+  );
+  const itemWiseRows = useMemo(
+    () => buildSaleItemReportRows(filtered, itemsMap),
+    [filtered, itemsMap],
   );
 
   const { sorted, sort } = useTableSort(filtered, {
@@ -1674,14 +1753,192 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
     date: s => (s as any).saleDate,
     location: s => s.outletName,
     customer: s => s.customerName || 'Walk-in',
+    salesperson: s => s.salesperson || 'Unassigned',
     status: s => (s as any).paymentStatus ?? 'paid',
     tax: s => Number((s as any).taxTotal) || null,
     discount: s => (s as any)._discountTotal || null,
     charges: s => (s as any)._otherChargesTotal,
     total: s => Number((s as any).totalAmount) || null,
   });
+  const { sorted: sortedItemRows, sort: itemSort } = useTableSort(itemWiseRows, {
+    invoice: row => row.sale.invoiceNumber,
+    date: row => row.sale.saleDate,
+    location: row => row.sale.outletName,
+    customer: row => row.sale.customerName || 'Walk-in',
+    salesperson: row => row.sale.salesperson || 'Unassigned',
+    item: row => row.itemName,
+    quantity: row => row.quantity,
+    rate: row => row.unitPrice,
+    discount: row => row.discount,
+    taxable: row => row.taxable,
+    tax: row => row.tax,
+    total: row => row.total,
+    status: row => row.sale.paymentStatus ?? 'paid',
+  });
 
-  const itemsMap = new Map(items.map(i => [i.id, i]));
+  const handleExportCsv = async () => {
+    try {
+      const allRows = await fetchAllSales(salesListFilters);
+      const exportRows = allRows.filter(s =>
+        statusFilter === 'all' || ((s as any).paymentStatus ?? 'paid') === statusFilter,
+      );
+      if (itemWiseView) {
+        downloadCSV('sales-item-wise.csv', buildSaleItemReportRows(exportRows, itemsMap).map(row => ({
+          Invoice: formatSalesInvoiceDisplayNumber(row.sale.invoiceNumber),
+          Date: formatDate(row.sale.saleDate),
+          Location: row.sale.outletName || '',
+          Customer: row.sale.customerName || 'Walk-in',
+          Salesperson: row.sale.salesperson || 'Unassigned',
+          Item: row.itemName,
+          Unit: row.unit,
+          Quantity: row.quantity,
+          Rate: row.unitPrice,
+          Discount: row.discount.toFixed(2),
+          Taxable: row.taxable.toFixed(2),
+          Tax: row.tax.toFixed(2),
+          'Item Total': row.total.toFixed(2),
+          Status: String(row.sale.paymentStatus ?? 'paid').replace('_', ' '),
+        })));
+      } else {
+        downloadCSV('sales.csv', exportRows.map(s => ({
+          Invoice: formatSalesInvoiceDisplayNumber(s.invoiceNumber), Date: formatDate(s.saleDate), Outlet: s.outletName,
+          Customer: s.customerName || 'Walk-in', Salesperson: s.salesperson || 'Unassigned', Payment: paymentModeLabel(s.paymentMode),
+          Subtotal: s.subtotal, Tax: s.taxTotal,
+          Discount: saleDiscountTotal(s).toFixed(2),
+          Charges: saleOtherChargesTotal(s).toFixed(2),
+          Total: s.totalAmount,
+        })));
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'CSV export failed');
+    }
+  };
+
+  const handleExportExcel = async () => {
+    if (isExportingExcel) return;
+    setIsExportingExcel(true);
+    try {
+      const allRows = await fetchAllSales(salesListFilters);
+      const exportRows = allRows.filter(s =>
+        statusFilter === 'all' || ((s as any).paymentStatus ?? 'paid') === statusFilter,
+      );
+      const dateRange = range.from || range.to
+        ? `${range.from || 'Start'} to ${range.to || 'Today'}`
+        : 'All dates';
+      const subtitle = `${dateRange} · ${statusFilter === 'all' ? 'All payment statuses' : statusFilter.replace('_', ' ')}`;
+      let doc: ReportDoc;
+      if (itemWiseView) {
+        const rows = buildSaleItemReportRows(exportRows, itemsMap);
+        const quantityTotal = rows.reduce((sum, row) => sum + row.quantity, 0);
+        const discountTotal = rows.reduce((sum, row) => sum + row.discount, 0);
+        const taxableTotal = rows.reduce((sum, row) => sum + row.taxable, 0);
+        const taxTotal = rows.reduce((sum, row) => sum + row.tax, 0);
+        const itemTotal = rows.reduce((sum, row) => sum + row.total, 0);
+        doc = {
+          title: 'Point of Sale Item-wise Report',
+          filename: 'point-of-sale-item-wise',
+          subtitle,
+          orientation: 'landscape',
+          footerNote: 'Item totals exclude invoice-level charges and post-tax coupon discounts that are not attributable to individual items.',
+          sections: [{
+            heading: 'Item-wise Sales',
+            columns: [
+              { label: 'Invoice' },
+              { label: 'Date' },
+              { label: 'Location' },
+              { label: 'Customer' },
+              { label: 'Salesperson' },
+              { label: 'Item' },
+              { label: 'Unit' },
+              { label: 'Quantity', align: 'right' },
+              { label: 'Rate', align: 'right' },
+              { label: 'Discount', align: 'right' },
+              { label: 'Taxable', align: 'right' },
+              { label: 'Tax', align: 'right' },
+              { label: 'Item Total', align: 'right' },
+              { label: 'Status' },
+            ],
+            rows: rows.map(row => [
+              formatSalesInvoiceDisplayNumber(row.sale.invoiceNumber),
+              String(row.sale.saleDate ?? '').slice(0, 10),
+              row.sale.outletName || '',
+              row.sale.customerName || 'Walk-in',
+              row.sale.salesperson || 'Unassigned',
+              row.itemName,
+              row.unit,
+              row.quantity,
+              row.unitPrice,
+              row.discount,
+              row.taxable,
+              row.tax,
+              row.total,
+              String(row.sale.paymentStatus ?? 'paid').replace('_', ' '),
+            ]),
+            totalsRow: [
+              'TOTAL', '', '', '', '', '', '', quantityTotal, '',
+              discountTotal, taxableTotal, taxTotal, itemTotal, '',
+            ],
+          }],
+        };
+      } else {
+        const discountTotal = exportRows.reduce((sum, sale) => sum + saleDiscountTotal(sale), 0);
+        const taxTotal = exportRows.reduce((sum, sale) => sum + Number(sale.taxTotal ?? 0), 0);
+        const subtotalTotal = exportRows.reduce((sum, sale) => sum + Number(sale.subtotal ?? 0), 0);
+        const chargesTotal = exportRows.reduce((sum, sale) => sum + saleOtherChargesTotal(sale), 0);
+        const salesTotal = exportRows.reduce((sum, sale) => sum + Number(sale.totalAmount ?? 0), 0);
+        const balanceDueTotal = exportRows.reduce((sum, sale) => sum + Number((sale as any).balanceDue ?? 0), 0);
+        doc = {
+          title: 'Point of Sale Sales',
+          filename: 'point-of-sale-sales',
+          subtitle,
+          orientation: 'landscape',
+          sections: [{
+            heading: 'Sales Register',
+            columns: [
+              { label: 'Invoice' },
+              { label: 'Date' },
+              { label: 'Location' },
+              { label: 'Customer' },
+              { label: 'Salesperson' },
+              { label: 'Status' },
+              { label: 'Payment' },
+              { label: 'Subtotal', align: 'right' },
+              { label: 'Tax', align: 'right' },
+              { label: 'Discount', align: 'right' },
+              { label: 'Charges', align: 'right' },
+              { label: 'Total', align: 'right' },
+              { label: 'Balance Due', align: 'right' },
+            ],
+            rows: exportRows.map(sale => [
+              formatSalesInvoiceDisplayNumber(sale.invoiceNumber),
+              String(sale.saleDate ?? '').slice(0, 10),
+              sale.outletName || '',
+              sale.customerName || 'Walk-in',
+              sale.salesperson || 'Unassigned',
+              String((sale as any).paymentStatus ?? 'paid').replace('_', ' '),
+              paymentModeLabel(sale.paymentMode) || '',
+              Number(sale.subtotal ?? 0),
+              Number(sale.taxTotal ?? 0),
+              saleDiscountTotal(sale),
+              saleOtherChargesTotal(sale),
+              Number(sale.totalAmount ?? 0),
+              Number((sale as any).balanceDue ?? 0),
+            ]),
+            totalsRow: [
+              'TOTAL', '', '', '', '', '', '',
+              subtotalTotal, taxTotal, discountTotal, chargesTotal, salesTotal, balanceDueTotal,
+            ],
+          }],
+        };
+      }
+      await exportReportXlsx(doc);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Excel export failed');
+    } finally {
+      setIsExportingExcel(false);
+    }
+  };
+
   const viewedCharges = saleOtherCharges(viewItem);
   const viewedChargesTotal = saleOtherChargesTotal(viewItem);
 
@@ -1707,18 +1964,20 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
           actions={
             <>
               {perm.canDownload && (
-                <Button variant="outline" size="sm" onClick={async () => downloadCSV('sales.csv', (await fetchAllSales(salesListFilters))
-                  .filter(s => statusFilter === 'all' || ((s as any).paymentStatus ?? 'paid') === statusFilter)
-                  .map(s => ({
-                  Invoice: formatSalesInvoiceDisplayNumber(s.invoiceNumber), Date: formatDate(s.saleDate), Outlet: s.outletName,
-                  Customer: s.customerName || 'Walk-in', Payment: paymentModeLabel(s.paymentMode),
-                  Subtotal: s.subtotal, Tax: s.taxTotal,
-                  Discount: (Number((s as any).discountTotal ?? 0)
-                    + (((s as any).lineItems as any[]) ?? []).reduce((acc: number, li: any) => acc + Number(li?.discount ?? 0), 0)).toFixed(2),
-                  Charges: saleOtherChargesTotal(s).toFixed(2),
-                  Total: s.totalAmount,
-                })))}>
-                  <Download className="w-4 h-4 mr-2" /> Export
+                <Button variant="outline" size="sm" data-testid="button-export-sales-csv" onClick={() => void handleExportCsv()}>
+                  <Download className="w-4 h-4 mr-2" /> CSV
+                </Button>
+              )}
+              {perm.canDownload && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  data-testid="button-export-sales-excel"
+                  disabled={isExportingExcel}
+                  onClick={() => void handleExportExcel()}
+                >
+                  <FileSpreadsheet className="w-4 h-4 mr-2" />
+                  {isExportingExcel ? 'Preparing…' : 'Excel'}
                 </Button>
               )}
               {perm.canAdd && (
@@ -1733,22 +1992,28 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
         {/* Summary cards — derived from the already-loaded sales rows only. */}
         <SummaryCardGrid>
           <SummaryCard
-            label="Loaded Sales"
-            value={filtered.length.toLocaleString('en-IN')}
-            sub={totalSales > filtered.length ? `of ${totalSales.toLocaleString('en-IN')} total` : undefined}
+            label={itemWiseView ? 'Item Lines' : 'Loaded Sales'}
+            value={itemWiseView ? itemWiseRows.length.toLocaleString('en-IN') : filtered.length.toLocaleString('en-IN')}
+            sub={itemWiseView
+              ? `${filtered.length.toLocaleString('en-IN')} loaded invoices`
+              : totalSales > filtered.length ? `of ${totalSales.toLocaleString('en-IN')} total` : undefined}
             icon={Receipt}
             loading={isLoading}
           />
           <SummaryCard
-            label="Loaded Total"
-            value={`${inr(filtered.reduce((s, r) => s + Number(r.totalAmount || 0), 0))}`}
+            label={itemWiseView ? 'Item Total' : 'Loaded Total'}
+            value={`${inr(itemWiseView
+              ? itemWiseRows.reduce((sum, row) => sum + row.total, 0)
+              : filtered.reduce((sum, row) => sum + Number(row.totalAmount || 0), 0))}`}
             icon={IndianRupee}
             tone="positive"
             loading={isLoading}
           />
           <SummaryCard
-            label="Tax Collected"
-            value={`${inr(filtered.reduce((s, r) => s + Number((r as any).taxTotal || 0), 0))}`}
+            label={itemWiseView ? 'Item Tax' : 'Tax Collected'}
+            value={`${inr(itemWiseView
+              ? itemWiseRows.reduce((sum, row) => sum + row.tax, 0)
+              : filtered.reduce((sum, row) => sum + Number((row as any).taxTotal || 0), 0))}`}
             icon={FileDown}
             tone="info"
             loading={isLoading}
@@ -1794,7 +2059,86 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                 {label}
               </button>
             ))}
+            <div className="ml-auto flex items-center gap-2">
+              <Checkbox
+                id="pos-item-wise-report"
+                data-testid="checkbox-item-wise-report"
+                checked={itemWiseView}
+                onCheckedChange={checked => setItemWiseView(checked === true)}
+              />
+              <label htmlFor="pos-item-wise-report" className="cursor-pointer text-xs font-medium">
+                Show item-wise report
+              </label>
+            </div>
+            {itemWiseView && (
+              <p className="w-full text-xs text-muted-foreground" data-testid="text-item-wise-report-note">
+                Item totals exclude invoice-level charges and post-tax coupon discounts that cannot be assigned to individual items.
+              </p>
+            )}
           </div>
+          {itemWiseView ? (
+            <Table className="hidden md:table">
+              <TableHeader>
+                <TableRow className="bg-muted/10">
+                  <SortableHead k="invoice" sort={itemSort}>Invoice</SortableHead>
+                  <SortableHead k="date" sort={itemSort}>Date</SortableHead>
+                  <SortableHead k="location" sort={itemSort}>Location</SortableHead>
+                  <SortableHead k="customer" sort={itemSort}>Customer</SortableHead>
+                  <SortableHead k="salesperson" sort={itemSort}>Salesperson</SortableHead>
+                  <SortableHead k="item" sort={itemSort}>Item</SortableHead>
+                  <TableHead>Unit</TableHead>
+                  <SortableHead k="quantity" sort={itemSort} className="text-right">Qty</SortableHead>
+                  <SortableHead k="rate" sort={itemSort} className="text-right">Rate</SortableHead>
+                  <SortableHead k="discount" sort={itemSort} className="text-right">Discount</SortableHead>
+                  <SortableHead k="taxable" sort={itemSort} className="text-right">Taxable</SortableHead>
+                  <SortableHead k="tax" sort={itemSort} className="text-right">Tax</SortableHead>
+                  <SortableHead k="total" sort={itemSort} className="text-right">Item Total</SortableHead>
+                  <SortableHead k="status" sort={itemSort}>Status</SortableHead>
+                  <TableHead />
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {isLoading ? (
+                  <TableRow><TableCell colSpan={15} className="p-0"><TableSkeleton rows={6} cols={15} /></TableCell></TableRow>
+                ) : itemWiseRows.length === 0 ? (
+                  <TableRow><TableCell colSpan={15} className="p-0">
+                    <EmptyState icon={PackageOpen} title="No item details found" hint="The filtered sales do not contain item lines." compact />
+                  </TableCell></TableRow>
+                ) : sortedItemRows.map(row => (
+                  <TableRow key={row.rowId} data-testid={`row-item-sale-${row.rowId}`} className="hover:bg-muted/10">
+                    <TableCell className="font-mono text-primary font-bold">{formatSalesInvoiceDisplayNumber(row.sale.invoiceNumber)}</TableCell>
+                    <TableCell className="text-sm text-muted-foreground">
+                      <div className="flex items-center gap-1"><Calendar className="w-3 h-3" />{formatDate(row.sale.saleDate)}</div>
+                    </TableCell>
+                    <TableCell className="text-sm">{row.sale.outletName}</TableCell>
+                    <TableCell className="text-sm">{row.sale.customerName || 'Walk-in'}</TableCell>
+                    <TableCell className="text-sm">{row.sale.salesperson || 'Unassigned'}</TableCell>
+                    <TableCell className="text-sm font-medium">{row.itemName}</TableCell>
+                    <TableCell className="text-xs text-muted-foreground">{row.unit || '—'}</TableCell>
+                    <TableCell className="text-right font-mono">{row.quantity}</TableCell>
+                    <TableCell className="text-right font-mono">{inr(row.unitPrice)}</TableCell>
+                    <TableCell className="text-right font-mono">{row.discount > 0 ? inr(row.discount) : '—'}</TableCell>
+                    <TableCell className="text-right font-mono">{inr(row.taxable)}</TableCell>
+                    <TableCell className="text-right font-mono">{inr(row.tax)}</TableCell>
+                    <TableCell className="text-right font-mono font-bold text-emerald-600">{inr(row.total)}</TableCell>
+                    <TableCell>
+                      <StatusBadge
+                        status={row.sale.paymentStatus ?? 'paid'}
+                        label={saleStatusLabel(row.sale)}
+                      />
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <div className="flex justify-end gap-1">
+                        <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" data-testid={`button-view-item-sale-${row.rowId}`} onClick={() => setViewItem(row.sale)} title="View invoice"><Eye className="w-4 h-4" /></Button>
+                        {perm.canEdit && <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-amber-500" onClick={() => openEdit(row.sale)} title="Edit sale"><Pencil className="w-4 h-4" /></Button>}
+                        {perm.canDownload && <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-emerald-600" onClick={() => void handleDownloadPDF(row.sale)} title="Download PDF"><FileDown className="w-4 h-4" /></Button>}
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          ) : (
           <Table className="hidden md:table">
             <TableHeader>
               <TableRow className="bg-muted/10">
@@ -1802,6 +2146,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                 <SortableHead k="date" sort={sort}>Date</SortableHead>
                 <SortableHead k="location" sort={sort}>Location</SortableHead>
                 <SortableHead k="customer" sort={sort}>Customer</SortableHead>
+                <SortableHead k="salesperson" sort={sort} data-testid="head-salesperson">Salesperson</SortableHead>
                 <SortableHead k="status" sort={sort}>Status</SortableHead>
                 <SortableHead k="tax" sort={sort} className="text-right">Tax</SortableHead>
                 <SortableHead k="discount" sort={sort} className="text-right">Discount</SortableHead>
@@ -1812,9 +2157,9 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
             </TableHeader>
             <TableBody>
               {isLoading ? (
-                <TableRow><TableCell colSpan={10} className="p-0"><TableSkeleton rows={6} cols={10} /></TableCell></TableRow>
+                <TableRow><TableCell colSpan={11} className="p-0"><TableSkeleton rows={6} cols={11} /></TableCell></TableRow>
               ) : filtered.length === 0 ? (
-                <TableRow><TableCell colSpan={10} className="p-0">
+                <TableRow><TableCell colSpan={11} className="p-0">
                   <EmptyState icon={Receipt} title="No sales recorded yet" hint="Record your first retail transaction to see it here." compact />
                 </TableCell></TableRow>
               ) : sorted.map(sale => (
@@ -1825,6 +2170,9 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                   </TableCell>
                   <TableCell className="text-sm">{sale.outletName}</TableCell>
                   <TableCell className="text-sm">{sale.customerName || 'Walk-in'}</TableCell>
+                  <TableCell className="text-sm" data-testid={`text-salesperson-${sale.id}`}>
+                    {sale.salesperson || 'Unassigned'}
+                  </TableCell>
                   <TableCell>
                      <StatusBadge
                        status={(sale as any).paymentStatus ?? 'paid'}
@@ -1836,8 +2184,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                   </TableCell>
                   <TableCell className="text-right font-mono text-xs">
                     {(() => {
-                      const d = Number((sale as any).discountTotal ?? 0)
-                        + (((sale as any).lineItems as any[]) ?? []).reduce((s: number, li: any) => s + Number(li?.discount ?? 0), 0);
+                      const d = saleDiscountTotal(sale);
                       return d > 0
                         ? <span className="text-amber-600">{inr(d)}</span>
                         : <span className="text-muted-foreground">—</span>;
@@ -1878,9 +2225,55 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
               ))}
             </TableBody>
           </Table>
+          )}
           {/* Mobile card list — mirrors the desktop table above */}
           <div className="md:hidden">
-            {isLoading ? (
+            {itemWiseView ? (
+              isLoading ? (
+                <div className="space-y-2 p-3">
+                  {[...Array(4)].map((_, i) => <div key={i} className="h-28 bg-muted/30 rounded-lg animate-pulse" />)}
+                </div>
+              ) : itemWiseRows.length === 0 ? (
+                <EmptyState icon={PackageOpen} title="No item details found" hint="The filtered sales do not contain item lines." compact />
+              ) : (
+                <div className="space-y-2 p-3">
+                  {sortedItemRows.map(row => (
+                    <div key={row.rowId} data-testid={`card-item-sale-${row.rowId}`} className="border border-border rounded-lg p-3 space-y-2">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="font-medium break-words">{row.itemName}</p>
+                          <p className="font-mono text-primary text-xs">{formatSalesInvoiceDisplayNumber(row.sale.invoiceNumber)}</p>
+                          <p className="text-xs text-muted-foreground">{formatDate(row.sale.saleDate)} · {row.sale.outletName}</p>
+                        </div>
+                        <StatusBadge
+                          status={row.sale.paymentStatus ?? 'paid'}
+                          label={saleStatusLabel(row.sale)}
+                        />
+                      </div>
+                      <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
+                        <p className="text-muted-foreground">Customer: <span className="text-foreground">{row.sale.customerName || 'Walk-in'}</span></p>
+                        <p className="text-muted-foreground">Salesperson: <span className="text-foreground">{row.sale.salesperson || 'Unassigned'}</span></p>
+                        <p className="text-muted-foreground">Quantity: <span className="text-foreground font-mono">{row.quantity} {row.unit}</span></p>
+                        <p className="text-muted-foreground">Rate: <span className="text-foreground font-mono">{inr(row.unitPrice)}</span></p>
+                        <p className="text-muted-foreground">Discount: <span className="text-foreground font-mono">{inr(row.discount)}</span></p>
+                        <p className="text-muted-foreground">Tax: <span className="text-foreground font-mono">{inr(row.tax)}</span></p>
+                      </div>
+                      <div className="flex items-end justify-between gap-2 border-t border-border pt-2">
+                        <div>
+                          <p className="text-xs text-muted-foreground">Item total · excl. bill charges</p>
+                          <p className="font-mono font-bold text-emerald-600">{inr(row.total)}</p>
+                        </div>
+                        <div className="flex gap-1">
+                          <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" data-testid={`button-view-item-sale-${row.rowId}`} onClick={() => setViewItem(row.sale)} title="View invoice"><Eye className="w-4 h-4" /></Button>
+                          {perm.canEdit && <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-amber-500" onClick={() => openEdit(row.sale)} title="Edit sale"><Pencil className="w-4 h-4" /></Button>}
+                          {perm.canDownload && <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-emerald-600" onClick={() => void handleDownloadPDF(row.sale)} title="Download PDF"><FileDown className="w-4 h-4" /></Button>}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )
+            ) : isLoading ? (
               <div className="space-y-2 p-3">
                 {[...Array(4)].map((_, i) => <div key={i} className="h-24 bg-muted/30 rounded-lg animate-pulse" />)}
               </div>
@@ -1910,6 +2303,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                       <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
                         <p className="text-muted-foreground">Location: <span className="text-foreground">{sale.outletName}</span></p>
                         <p className="text-muted-foreground">Customer: <span className="text-foreground">{sale.customerName || 'Walk-in'}</span></p>
+                        <p className="text-muted-foreground">Salesperson: <span className="text-foreground">{sale.salesperson || 'Unassigned'}</span></p>
                         <p className="text-muted-foreground">Charges: <span className={cn('font-mono', saleOtherChargesTotal(sale) > 0 ? 'text-amber-600' : 'text-foreground')}>{inr(saleOtherChargesTotal(sale))}</span></p>
                       </div>
                       <div className="flex items-end justify-between gap-2 pt-1">
@@ -1947,12 +2341,16 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
           {totalSales > 0 && (
             <div ref={loadMoreRef} className="p-3 border-t border-border flex flex-wrap items-center justify-between gap-3 text-sm">
               <span className="text-muted-foreground">
-                Showing {Math.min(sales.length, totalSales)} of {totalSales} sales
+                {itemWiseView
+                  ? `Showing ${itemWiseRows.length.toLocaleString('en-IN')} item rows from ${Math.min(sales.length, totalSales).toLocaleString('en-IN')} of ${totalSales.toLocaleString('en-IN')} sales`
+                  : `Showing ${Math.min(sales.length, totalSales)} of ${totalSales} sales`}
                 {isFetching && !isFetchingNextPage ? ' · refreshing…' : ''}
               </span>
               <div className="flex items-center gap-3">
                 <span className="font-bold text-emerald-500">
-                  Loaded total: {inr(filtered.reduce((s, r) => s + Number(r.totalAmount || 0), 0))}
+                  {itemWiseView
+                    ? `Loaded item total: ${inr(itemWiseRows.reduce((sum, row) => sum + row.total, 0))}`
+                    : `Loaded total: ${inr(filtered.reduce((sum, row) => sum + Number(row.totalAmount || 0), 0))}`}
                 </span>
                 {hasNextPage && (
                   <Button variant="outline" size="sm" className="h-7 px-3 text-xs" disabled={isFetchingNextPage} onClick={() => void fetchNextPage()}>
