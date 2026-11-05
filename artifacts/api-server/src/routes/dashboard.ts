@@ -963,9 +963,27 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       || (location.locationType === "warehouse" && scope.warehouseIds.includes(location.locationId))
       || (location.locationType === "outlet" && scope.outletIds.includes(location.locationId)));
 
+  // This report follows the shared location selector, while the financial
+  // matrix above intentionally remains cross-location. Keys are view filters;
+  // the report queries below still apply visibility and employee scope.
+  const reportLocationIsSelected = (locationType: string, locationId: unknown): boolean => {
+    if (isNoLocations) return false;
+    const key = locationKey(locationType, locationId);
+    if (requestedLocationKeys.length > 0) {
+      return requestedLocationKeys.some((selected) =>
+        selected === key || selected === locationType);
+    }
+    if (effLocType === "headoffice") return locationType === "headoffice";
+    if (effLocType && effLocId != null) {
+      return locationType === effLocType
+        && (effLocType === "headoffice" || Number(locationId) === effLocId);
+    }
+    return true;
+  };
+
   // This location table spans the caller's server-authorized locations, like
-  // the financial matrix, independent of the selected display location. Sales
-  // follow the dashboard's selected period; outstanding is an as-of position.
+  // the financial matrix. Its result is narrowed to the selected display
+  // location below. Sales follow the selected period; outstanding is as-of.
   const reportSalesConds = [
     "s.branch_transfer_id IS NULL",
     "s.cancelled_at IS NULL",
@@ -1002,6 +1020,22 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       GROUP BY 1, 2, 3`,
     reportSalesParams,
   );
+  const reportSalesBySalespersonP = pool.query(
+    `SELECT s.salesperson_employee_id,
+            COALESCE(NULLIF(BTRIM(s.salesperson), ''), 'Unassigned') AS salesperson,
+            COALESCE(s.location_type, 'outlet') AS location_type,
+            COALESCE(s.location_id, s.outlet_id) AS location_id,
+            COALESCE(SUM(s.total_amount::numeric), 0)::float AS sales_amount,
+            COALESCE(SUM(line_totals.quantity), 0)::float AS sales_quantity
+       FROM sales s
+       LEFT JOIN LATERAL (
+         SELECT COALESCE(SUM((li->>'quantity')::numeric), 0) AS quantity
+           FROM jsonb_array_elements(COALESCE(s.line_items, '[]'::jsonb)) AS li
+       ) line_totals ON TRUE
+      WHERE ${reportSalesConds.join(" AND ")}
+      GROUP BY 1, 2, 3, 4`,
+    reportSalesParams,
+  );
 
   const reportOutstandingConds = [
     "s.branch_transfer_id IS NULL",
@@ -1027,6 +1061,17 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
        FROM sales s
       WHERE ${reportOutstandingConds.join(" AND ")}
       GROUP BY 1, 2`,
+    reportOutstandingParams,
+  );
+  const reportOutstandingBySalespersonP = pool.query(
+    `SELECT s.salesperson_employee_id,
+            COALESCE(NULLIF(BTRIM(s.salesperson), ''), 'Unassigned') AS salesperson,
+            COALESCE(s.location_type, 'outlet') AS location_type,
+            COALESCE(s.location_id, s.outlet_id) AS location_id,
+            COALESCE(SUM(${reportOutstandingExpr}), 0)::float AS outstanding_amount
+       FROM sales s
+      WHERE ${reportOutstandingConds.join(" AND ")}
+      GROUP BY 1, 2, 3, 4`,
     reportOutstandingParams,
   );
 
@@ -1094,10 +1139,19 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       reconciliationPending,
     };
   }));
-  const [matrixLocationFigures, reportSalesByLocation, reportOutstandingByLocation, cashBankReport] = await Promise.all([
+  const [
+    matrixLocationFigures,
+    reportSalesByLocation,
+    reportOutstandingByLocation,
+    reportSalesBySalesperson,
+    reportOutstandingBySalesperson,
+    cashBankReport,
+  ] = await Promise.all([
     matrixLocationFiguresP,
     reportSalesByLocationP,
     reportOutstandingByLocationP,
+    reportSalesBySalespersonP,
+    reportOutstandingBySalespersonP,
     cashBankReportP,
   ]);
 
@@ -1115,7 +1169,9 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       money(row.outstanding_amount),
     );
   }
-  const locationSalesReport = matrixLocations.map((location) => {
+  const locationSalesReport = matrixLocations
+    .filter((location) => reportLocationIsSelected(location.locationType, location.locationId))
+    .map((location) => {
     const key = locationKey(location.locationType, location.locationId);
     const sales = reportSalesByLocationMap.get(key);
     return {
@@ -1125,6 +1181,56 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       outstandingAmount: reportOutstandingByLocationMap.get(key) ?? 0,
     };
   });
+  const salespersonReportMap = new Map<string, {
+    salespersonEmployeeId: number | null;
+    name: string;
+    salesAmount: number;
+    salesQuantity: number;
+    outstandingAmount: number;
+  }>();
+  const salespersonReportKey = (employeeId: unknown, name: unknown): string => {
+    if (employeeId != null && Number.isSafeInteger(Number(employeeId)) && Number(employeeId) > 0) {
+      return `employee:${Number(employeeId)}`;
+    }
+    return `name:${String(name ?? "Unassigned").trim().toLocaleLowerCase() || "unassigned"}`;
+  };
+  for (const row of reportSalesBySalesperson.rows) {
+    if (!reportLocationIsSelected(String(row.location_type), row.location_id)) continue;
+    const name = String(row.salesperson ?? "Unassigned");
+    const key = salespersonReportKey(row.salesperson_employee_id, name);
+    const existing = salespersonReportMap.get(key) ?? {
+      salespersonEmployeeId: row.salesperson_employee_id == null ? null : Number(row.salesperson_employee_id),
+      name,
+      salesAmount: 0,
+      salesQuantity: 0,
+      outstandingAmount: 0,
+    };
+    existing.salesAmount += money(row.sales_amount);
+    existing.salesQuantity += qty(row.sales_quantity);
+    salespersonReportMap.set(key, existing);
+  }
+  for (const row of reportOutstandingBySalesperson.rows) {
+    if (!reportLocationIsSelected(String(row.location_type), row.location_id)) continue;
+    const name = String(row.salesperson ?? "Unassigned");
+    const key = salespersonReportKey(row.salesperson_employee_id, name);
+    const existing = salespersonReportMap.get(key) ?? {
+      salespersonEmployeeId: row.salesperson_employee_id == null ? null : Number(row.salesperson_employee_id),
+      name,
+      salesAmount: 0,
+      salesQuantity: 0,
+      outstandingAmount: 0,
+    };
+    existing.outstandingAmount += money(row.outstanding_amount);
+    salespersonReportMap.set(key, existing);
+  }
+  const salespersonSalesReport = [...salespersonReportMap.values()]
+    .map((row) => ({
+      ...row,
+      salesAmount: money(row.salesAmount),
+      salesQuantity: qty(row.salesQuantity),
+      outstandingAmount: money(row.outstandingAmount),
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
 
   // Company-level openings and unlocated postings are a separate posting
   // bucket, not part of any branch slice. Only callers with company-wide data
@@ -1493,6 +1599,7 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       ? locationBreakdown
       : locationBreakdown.map(({ grossProfit: _grossProfit, netProfit: _netProfit, ...safe }) => safe),
     locationSalesReport,
+    salespersonSalesReport,
     topItems: topItemsRows.rows.map((r: any) => ({
       itemId: Number(r.item_id), name: r.name, qty: qty(r.qty), revenue: money(r.revenue),
     })),

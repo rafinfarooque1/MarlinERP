@@ -904,9 +904,10 @@ export default function Dashboard() {
           <div className="lg:col-span-2">
             <DashboardLocationSalesReportCard
               rows={bi?.locationSalesReport}
+              salespersonRows={bi?.salespersonSalesReport}
               isLoading={isLoading}
               isError={isError}
-              description={`${pLabel} · outstanding as of ${range.to ? fmtDate(range.to) : 'today'}`}
+              description={`${pLabel} · ${reportLocationLabel ?? 'All locations'} · outstanding as of ${range.to ? fmtDate(range.to) : 'today'}`}
               fromDate={range.from || undefined}
               toDate={range.to || undefined}
             />

@@ -1,15 +1,23 @@
 import { useRef, useState } from 'react';
-import type { DashboardLocationSalesRow } from '@workspace/api-client-react';
+import type {
+  DashboardLocationSalesRow,
+  DashboardSalespersonSalesRow,
+} from '@workspace/api-client-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/app/empty-state';
-import { Loader2, MapPin, Share2 } from 'lucide-react';
+import { Loader2, MapPin, Share2, Users } from 'lucide-react';
 import { toast } from 'sonner';
-import { DashboardLocationSalesTable } from './DashboardLocationSalesTable';
+import {
+  DashboardLocationSalesTable,
+  DashboardSalespersonSalesTable,
+} from './DashboardLocationSalesTable';
 
 export function DashboardLocationSalesReportCard({
   rows,
+  salespersonRows,
   isLoading,
   isError,
   description,
@@ -17,6 +25,7 @@ export function DashboardLocationSalesReportCard({
   toDate,
 }: {
   rows?: DashboardLocationSalesRow[];
+  salespersonRows?: DashboardSalespersonSalesRow[];
   isLoading: boolean;
   isError: boolean;
   description: string;
@@ -26,6 +35,11 @@ export function DashboardLocationSalesReportCard({
   const captureRef = useRef<HTMLDivElement>(null);
   const [sharing, setSharing] = useState(false);
   const [preparingCapture, setPreparingCapture] = useState(false);
+  const [salespersonWise, setSalespersonWise] = useState(false);
+  const reportRows = salespersonWise ? salespersonRows : rows;
+  const reportName = salespersonWise ? 'Sales & Outstanding by Salesperson' : 'Sales & Outstanding by Location';
+  const groupingName = salespersonWise ? 'salesperson' : 'location';
+  const groupingNoun = salespersonWise ? 'salespeople' : 'locations';
 
   const shareReport = async () => {
     if (sharing) return;
@@ -33,12 +47,12 @@ export function DashboardLocationSalesReportCard({
       toast.info('Location report is still loading — try again in a moment');
       return;
     }
-    if (isError || !Array.isArray(rows)) {
-      toast.error('Location report is unavailable');
+    if (isError || !Array.isArray(reportRows)) {
+      toast.error('Sales report is unavailable');
       return;
     }
-    if (rows.length === 0) {
-      toast.info('There are no locations to share for this report');
+    if (reportRows.length === 0) {
+      toast.info(`There are no ${groupingNoun} to share for this report`);
       return;
     }
 
@@ -59,7 +73,7 @@ export function DashboardLocationSalesReportCard({
       await document.fonts.ready;
       const { toBlob } = await import('html-to-image');
       const table = captureTarget.querySelector<HTMLTableElement>('table');
-      if (!table) throw new Error('location sales table not found');
+      if (!table) throw new Error('sales report table not found');
 
       const captureRect = captureTarget.getBoundingClientRect();
       const tableRect = table.getBoundingClientRect();
@@ -100,7 +114,7 @@ export function DashboardLocationSalesReportCard({
         : toDate
           ? `all-time-through-${toDate}`
           : 'all-time';
-      const file = new File([blob], `sales-outstanding-by-location-${dateSlug}.png`, {
+      const file = new File([blob], `sales-outstanding-by-${groupingName}-${dateSlug}.png`, {
         type: 'image/png',
       });
       const canShareFile = typeof navigator.share === 'function'
@@ -108,7 +122,7 @@ export function DashboardLocationSalesReportCard({
         && navigator.canShare({ files: [file] });
       if (canShareFile) {
         try {
-          await navigator.share({ files: [file], title: 'Sales & Outstanding by Location' });
+          await navigator.share({ files: [file], title: reportName });
           return;
         } catch (shareError: any) {
           if (shareError?.name === 'AbortError') return;
@@ -125,7 +139,7 @@ export function DashboardLocationSalesReportCard({
       link.download = file.name;
       link.click();
       window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-      toast.success('Location report image downloaded');
+      toast.success('Sales report image downloaded');
     } catch (error) {
       console.error('[dashboard] location report share failed', error);
       toast.error('Could not create the location report image');
@@ -139,40 +153,61 @@ export function DashboardLocationSalesReportCard({
     <div className="relative">
       <div ref={captureRef} data-testid="location-sales-share-capture">
         <Card className="border-card-border bg-card shadow-sm flex flex-col">
-          <CardHeader className="flex-row items-start justify-between gap-4 space-y-0 pb-3">
+          <CardHeader className="flex-row flex-wrap items-start justify-between gap-4 space-y-0 pb-3">
             <div className="min-w-0 flex-1">
               <CardTitle className="text-lg flex items-center gap-2">
-                <MapPin className="h-5 w-5 text-primary" />
-                Sales &amp; Outstanding by Location
+                {salespersonWise
+                  ? <Users className="h-5 w-5 text-primary" />
+                  : <MapPin className="h-5 w-5 text-primary" />}
+                {reportName}
               </CardTitle>
               <CardDescription className="mt-1.5">{description}</CardDescription>
             </div>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="shrink-0 gap-2"
-              onClick={shareReport}
-              disabled={sharing}
-              aria-label={sharing ? 'Preparing location report image' : 'Share location report'}
-              data-testid="button-share-location-sales"
-              data-capture-exclude="true"
-            >
-              {sharing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Share2 className="h-4 w-4" />}
-              {sharing ? 'Preparing…' : 'Share'}
-            </Button>
+            <div className="flex shrink-0 flex-wrap items-center justify-end gap-3" data-capture-exclude="true">
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  id="dashboard-salesperson-wise"
+                  checked={salespersonWise}
+                  onCheckedChange={(checked) => setSalespersonWise(checked === true)}
+                  data-testid="checkbox-dashboard-salesperson-wise"
+                  aria-label="Show salesperson-wise sales"
+                />
+                <label htmlFor="dashboard-salesperson-wise" className="cursor-pointer whitespace-nowrap text-sm">
+                  Salesperson-wise
+                </label>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="gap-2"
+                onClick={shareReport}
+                disabled={sharing}
+                aria-label={sharing ? 'Preparing sales report image' : 'Share sales report'}
+                data-testid="button-share-location-sales"
+              >
+                {sharing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Share2 className="h-4 w-4" />}
+                {sharing ? 'Preparing…' : 'Share'}
+              </Button>
+            </div>
           </CardHeader>
           <CardContent className="flex-1">
             {isLoading ? (
-              <div className="space-y-2" aria-label="Loading location sales report">
+              <div className="space-y-2" aria-label={`Loading ${groupingName} sales report`}>
                 {[0, 1, 2].map((row) => <Skeleton key={row} className="h-10" />)}
               </div>
-            ) : isError || !Array.isArray(rows) ? (
-              <EmptyState icon={MapPin} title="Location report unavailable" compact />
-            ) : rows.length === 0 ? (
-              <EmptyState icon={MapPin} title="No locations in scope" compact />
+            ) : isError || !Array.isArray(reportRows) ? (
+              <EmptyState icon={salespersonWise ? Users : MapPin} title="Sales report unavailable" compact />
+            ) : reportRows.length === 0 ? (
+              <EmptyState
+                icon={salespersonWise ? Users : MapPin}
+                title={salespersonWise ? 'No salesperson sales in scope' : 'No locations in scope'}
+                compact
+              />
+            ) : salespersonWise ? (
+              <DashboardSalespersonSalesTable rows={salespersonRows ?? []} captureMode={preparingCapture} />
             ) : (
-              <DashboardLocationSalesTable rows={rows} captureMode={preparingCapture} />
+              <DashboardLocationSalesTable rows={rows ?? []} captureMode={preparingCapture} />
             )}
           </CardContent>
         </Card>
