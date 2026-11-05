@@ -1326,6 +1326,20 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   const hasItems = fields.some((_, i) => (form.watch(`lineItems.${i}.itemId`) ?? 0) > 0);
 
   const onSubmit = (data: FormValues) => {
+    const selectedSalesperson = (salespeople as any[]).find((person: any) =>
+      Number(person.id) === Number(data.salespersonEmployeeId)
+      && (
+        person.branchType === 'headoffice'
+        || (person.branchType === data.locationType && Number(person.branchId) === Number(data.locationId))
+      ),
+    );
+    if (!editItem && !selectedSalesperson) {
+      const message = 'Select an active salesman assigned to this selling location.';
+      form.setError('salespersonEmployeeId', { type: 'manual', message });
+      toast.error(message);
+      focusField('salespersonEmployeeId', scopeRef.current);
+      return;
+    }
     if (data.paymentMode === 'credit' && !data.customerId) {
       toast.error('Credit sales need a registered customer — pick one or change the payment mode.');
       focusField('customerId', scopeRef.current);
@@ -2510,14 +2524,16 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                   const selected = eligible.find((p: any) => Number(p.id) === Number(field.value));
                   return (
                     <FormItem>
-                      <FormLabel>Salesman <span className="text-xs text-muted-foreground font-normal">(optional)</span></FormLabel>
+                      <FormLabel>Salesman {!editItem && <span className="text-destructive">*</span>}</FormLabel>
                       <Select
-                        value={field.value ? String(field.value) : 'unassigned'}
-                        onValueChange={v => field.onChange(v === 'unassigned' ? undefined : Number(v))}
+                        value={field.value ? String(field.value) : undefined}
+                        onValueChange={v => {
+                          form.clearErrors('salespersonEmployeeId');
+                          field.onChange(Number(v));
+                        }}
                       >
-                        <FormControl><SelectTrigger><SelectValue placeholder="Unassigned" /></SelectTrigger></FormControl>
+                        <FormControl><SelectTrigger data-testid="select-salesperson"><SelectValue placeholder="Select salesman" /></SelectTrigger></FormControl>
                         <SelectContent>
-                          <SelectItem value="unassigned">Unassigned</SelectItem>
                           {eligible.map((p: any) => (
                             <SelectItem key={p.id} value={String(p.id)}>{p.name}</SelectItem>
                           ))}

@@ -10,6 +10,7 @@ import {
 } from "../lib/gstinScope";
 import { purchaseSettlementIndex, settlementModeSummary } from "../lib/vendorBillSettlement";
 import { loadPaymentPositions } from "../lib/salePaymentPosition";
+import { stateCodeFromState } from "../lib/gstTransfer";
 import { paymentModeLabel } from "../lib/paymentModes";
 import { getLocationFilter } from "../lib/requestLocation";
 import { visibleLocationSql } from "../lib/warehouseVisibility";
@@ -391,8 +392,18 @@ function makeGstNoteRows(
  */
 async function salePaymentSummaries(
   sales: Array<{ id: number; payment_mode?: string | null; branch_transfer_id?: number | null }>,
-): Promise<Map<number, { paymentStatus: string; paymentModes: string }>> {
-  const out = new Map<number, { paymentStatus: string; paymentModes: string }>();
+): Promise<Map<number, {
+  paymentStatus: string;
+  paymentModes: string;
+  amountSettled: number | null;
+  balanceDue: number | null;
+}>> {
+  const out = new Map<number, {
+    paymentStatus: string;
+    paymentModes: string;
+    amountSettled: number | null;
+    balanceDue: number | null;
+  }>();
   const ids = sales.map(s => Number(s.id));
   if (!ids.length) return out;
   const positions = await loadPaymentPositions(pool, ids);
@@ -417,7 +428,7 @@ async function salePaymentSummaries(
     // A branch-transfer invoice settles through inter-branch ledgers, not a
     // customer receipt — a payment status would be a fiction.
     if (s.branch_transfer_id != null) {
-      out.set(id, { paymentStatus: "na", paymentModes: "Branch Transfer" });
+      out.set(id, { paymentStatus: "na", paymentModes: "Branch Transfer", amountSettled: null, balanceDue: null });
       continue;
     }
     const pos = positions.get(id);
@@ -431,7 +442,12 @@ async function salePaymentSummaries(
     if (status === "paid") summary = modes.length ? modes.join(" + ") : "Paid";
     else if (status === "partially_paid") summary = [...modes, "Credit"].join(" + ");
     else summary = "Credit";
-    out.set(id, { paymentStatus: status, paymentModes: summary });
+    out.set(id, {
+      paymentStatus: status,
+      paymentModes: summary,
+      amountSettled: pos?.amountReceived ?? null,
+      balanceDue: pos?.outstanding ?? null,
+    });
   }
   return out;
 }
@@ -1138,6 +1154,8 @@ router.get("/gst/documents", requireModuleView(["page:/accounts/gst", "page:/acc
   const { fromDate, toDate } = parseRange(req);
   const scope = await parseGstScope(req);
   const locNames = await locationNameIndex();
+  const includeItemDetails = req.query.includeItemDetails === "true";
+  const hsnMasters = includeItemDetails ? await materialHsnMap() : new Map<string, { hsn: string; unit: string; name: string }>();
 
   const docHeads = (lines: any[], taxableKey: "lineSubtotal" | "taxableValue") => {
     let taxable = 0, cgst = 0, sgst = 0, igst = 0, taxAmount = 0;
@@ -1149,12 +1167,45 @@ router.get("/gst/documents", requireModuleView(["page:/accounts/gst", "page:/acc
     }
     return { taxableValue: round2(taxable), cgst: round2(cgst), sgst: round2(sgst), igst: round2(igst), taxAmount: round2(taxAmount) };
   };
+  const makeItemLines = (lines: any[], side: "sale" | "purchase") => lines.map((raw, lineIndex) => {
+    const li = raw ?? {};
+    const itemType = side === "sale" ? "item" : String(li.materialType ?? "material");
+    const rawId = Number(side === "sale" ? li.itemId : li.materialId);
+    const itemId = Number.isSafeInteger(rawId) && rawId > 0 ? rawId : null;
+    const master = itemId == null ? undefined : hsnMasters.get(`${itemType}:${itemId}`);
+    const quantity = Number(li.quantity ?? 0);
+    const heads = lineTaxHeads(li);
+    const itemName = String(
+      li.itemName ?? li.materialName ?? master?.name ?? (itemId == null ? "Unidentified item" : `Item #${itemId}`),
+    );
+    const taxableValue = side === "sale"
+      ? Number(li.lineSubtotal ?? (quantity * Number(li.unitPrice ?? 0) - Number(li.discount ?? 0)))
+      : Number(li.taxableValue ?? 0);
+    return {
+      lineIndex,
+      itemId,
+      itemType,
+      itemTypeLabel: side === "sale"
+        ? "Item"
+        : ({ item: "Item", material: "Raw Material", raw_material: "Packing Material" } as Record<string, string>)[itemType] ?? itemType,
+      itemName,
+      hsnCode: String(li.hsnCode ?? "").trim() || master?.hsn || "",
+      unit: String(li.unit ?? "").trim() || master?.unit || "",
+      taxRate: Number(side === "sale" ? li.taxRate ?? 0 : li.gstRate ?? 0),
+      quantity: Math.round(quantity * 1000) / 1000,
+      taxableValue: round2(taxableValue),
+      cgst: round2(heads.cgst),
+      sgst: round2(heads.sgst),
+      igst: round2(heads.igst),
+      taxAmount: round2(Number(li.taxAmount ?? heads.cgst + heads.sgst + heads.igst)),
+    };
+  });
 
   // Outward: sales (branch-transfer tax invoices stay — they carry real output GST)
   const sp: any[] = [];
   const { rows: sales } = await pool.query(
     `SELECT id, invoice_number, sale_date, total_amount, customer_id, line_items,
-            branch_transfer_id, party_name, party_gstin, payment_mode,
+            branch_transfer_id, party_name, party_gstin, party_state, salesperson, payment_mode,
             COALESCE(location_type, 'outlet') AS loc_type,
             COALESCE(location_id, outlet_id, 0) AS loc_id
      FROM sales s
@@ -1163,25 +1214,34 @@ router.get("/gst/documents", requireModuleView(["page:/accounts/gst", "page:/acc
        ${rangeFilter("sale_date", fromDate, toDate, sp)}${scope ? salesScopeCond("s", scope, sp) : ""}
      ORDER BY sale_date, id`, sp
   );
-  const { rows: customers } = await pool.query(`SELECT id, name, gst_number FROM customers`);
+  const { rows: customers } = await pool.query(`SELECT id, name, gst_number, state FROM customers`);
   const custMap = new Map(customers.map((c: any) => [c.id, c]));
   const paySummaries = await salePaymentSummaries(sales as any[]);
 
   const outward = sales.map((s: any) => {
     const cust: any = s.customer_id ? custMap.get(s.customer_id) : undefined;
     const pay = paySummaries.get(Number(s.id));
+    const partyGstin = String(s.party_gstin || cust?.gst_number || "").trim();
+    const state = String(s.party_state || cust?.state || "").trim();
     return {
       docType: "sale",
+      documentId: Number(s.id),
       documentNumber: s.invoice_number,
       date: iso(s.sale_date),
       partyName: String(s.party_name || cust?.name || "Walk-in"),
-      partyGstin: String(s.party_gstin || cust?.gst_number || "").trim(),
+      partyGstin,
+      state,
+      stateCode: /^\d{2}$/.test(partyGstin.slice(0, 2)) ? partyGstin.slice(0, 2) : stateCodeFromState(state),
+      salesperson: s.salesperson ? String(s.salesperson) : null,
       warehouseName: locNames.name(s.loc_type, s.loc_id),
       isBranchTransfer: s.branch_transfer_id != null,
       ...docHeads((s.line_items ?? []) as any[], "lineSubtotal"),
       invoiceValue: round2(Number(s.total_amount)),
+      amountSettled: pay?.amountSettled ?? null,
+      balanceDue: pay?.balanceDue ?? null,
       paymentStatus: pay?.paymentStatus ?? "unpaid",
       paymentModes: pay?.paymentModes ?? "Credit",
+      ...(includeItemDetails ? { itemLines: makeItemLines((s.line_items ?? []) as any[], "sale") } : {}),
     };
   });
 
@@ -1189,10 +1249,10 @@ router.get("/gst/documents", requireModuleView(["page:/accounts/gst", "page:/acc
   const pp: any[] = [];
   const { rows: purchases } = await pool.query(
     `SELECT p.id, p.invoice_number, p.purchase_date, p.total_amount, p.vendor_id, p.line_items,
-            p.branch_transfer_id, p.party_name, p.party_gstin,
+            p.branch_transfer_id, p.party_name, p.party_gstin, p.party_state,
             COALESCE(p.location_type, p.branch_type, 'headoffice') AS loc_type,
             COALESCE(p.location_id, p.branch_id, 0) AS loc_id,
-            v.name AS vendor_name, v.gst_number AS vendor_gstin
+            v.name AS vendor_name, v.gst_number AS vendor_gstin, v.state AS vendor_state
      FROM purchases p LEFT JOIN vendors v ON v.id = p.vendor_id
      WHERE p.cancelled_at IS NULL
        AND ${visibleLocationSql("COALESCE(p.location_type, p.branch_type, 'headoffice')", "COALESCE(p.location_id, p.branch_id, 0)")}
@@ -1212,18 +1272,27 @@ router.get("/gst/documents", requireModuleView(["page:/accounts/gst", "page:/acc
   const inward = purchases.map((p: any) => {
     const st = settlement.get(Number(p.id));
     const isBt = p.branch_transfer_id != null;
+    const partyGstin = String(p.party_gstin || p.vendor_gstin || "").trim();
+    const state = String(p.party_state || p.vendor_state || "").trim();
     return {
       docType: "purchase",
+      documentId: Number(p.id),
       documentNumber: p.invoice_number ?? "",
       date: iso(p.purchase_date),
       partyName: String(p.party_name || p.vendor_name || ""),
-      partyGstin: String(p.party_gstin || p.vendor_gstin || "").trim(),
+      partyGstin,
+      state,
+      stateCode: /^\d{2}$/.test(partyGstin.slice(0, 2)) ? partyGstin.slice(0, 2) : stateCodeFromState(state),
+      salesperson: null,
       warehouseName: locNames.name(p.loc_type, p.loc_id),
       isBranchTransfer: isBt,
       ...docHeads((p.line_items ?? []) as any[], "taxableValue"),
       invoiceValue: round2(Number(p.total_amount)),
+      amountSettled: isBt ? null : (st?.paid ?? 0),
+      balanceDue: isBt ? null : (st?.due ?? null),
       paymentStatus: isBt ? "na" : (st?.status ?? "unpaid"),
       paymentModes: isBt ? "Branch Transfer" : (st ? settlementModeSummary(st) : "Credit"),
+      ...(includeItemDetails ? { itemLines: makeItemLines((p.line_items ?? []) as any[], "purchase") } : {}),
     };
   });
 

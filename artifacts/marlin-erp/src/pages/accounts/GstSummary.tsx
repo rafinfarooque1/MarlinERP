@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import {
   useGetGstSummaryScoped, useGetGstDocuments, useGetGstFilters,
-  type GstDocumentRow, type GstSummaryItemRow,
+  type GstDocumentItemLine, type GstDocumentRow,
 } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Input } from '@/components/ui/input';
@@ -147,24 +147,41 @@ export const docPdfRow = (r: GstDocumentRow, outward = false): (string | number)
   r.taxableValue, r.taxAmount, r.invoiceValue, payStatusLabel(r.paymentStatus), r.paymentModes,
 ];
 
-type GstItemWiseRow = GstSummaryItemRow & { transactionType: 'Sales' | 'Purchases' };
+const displayGstDocumentNumber = (docType: GstDocumentRow['docType'], number: string) =>
+  docType === 'sale'
+    ? formatSalesInvoiceDisplayNumber(number || '—')
+    : number || '—';
+
+type GstItemWiseRow = GstDocumentRow & GstDocumentItemLine & {
+  transactionType: 'Sales' | 'Purchases';
+};
 
 function GstItemsTable({ rows, loading }: { rows: GstItemWiseRow[]; loading: boolean }) {
   const { sorted, sort } = useTableSort(rows, {
     transaction: r => r.transactionType,
+    date: r => r.date,
+    invoice: r => r.documentNumber,
+    party: r => r.partyName,
+    salesperson: r => r.salesperson,
+    gst: r => r.partyGstin,
+    state: r => r.state,
+    stateCode: r => r.stateCode,
     item: r => r.itemName,
-    rate: r => Number(r.taxRate),
+    hsn: r => r.hsnCode,
     quantity: r => Number(r.quantity),
     taxable: r => Number(r.taxableValue),
     cgst: r => Number(r.cgst),
     sgst: r => Number(r.sgst),
     igst: r => Number(r.igst),
     tax: r => Number(r.taxAmount),
+    invoiceValue: r => Number(r.invoiceValue),
+    amountSettled: r => Number(r.amountSettled ?? 0),
+    balanceDue: r => Number(r.balanceDue ?? 0),
   });
   const sideRows = (side: GstItemWiseRow['transactionType']) => rows.filter((row) => row.transactionType === side);
   const total = (
     subset: GstItemWiseRow[],
-    key: keyof Pick<GstSummaryItemRow, 'quantity' | 'taxableValue' | 'cgst' | 'sgst' | 'igst' | 'taxAmount'>,
+    key: keyof Pick<GstDocumentItemLine, 'quantity' | 'taxableValue' | 'cgst' | 'sgst' | 'igst' | 'taxAmount'>,
   ) => subset.reduce((sum, row) => sum + Number(row[key] ?? 0), 0);
 
   return (
@@ -176,27 +193,37 @@ function GstItemsTable({ rows, loading }: { rows: GstItemWiseRow[]; loading: boo
       </div>
       <div className="overflow-x-auto">
         {loading ? (
-          <TableSkeleton rows={4} cols={9} />
+          <TableSkeleton rows={4} cols={19} />
         ) : rows.length === 0 ? (
           <EmptyState icon={Receipt} title="No item-wise GST in this period" compact />
         ) : (
-          <Table>
+           <Table className="min-w-[1800px]">
             <TableHeader>
               <TableRow className="bg-muted/10">
                 <SortableHead k="transaction" sort={sort}>Transaction</SortableHead>
+                 <SortableHead k="date" sort={sort}>Date</SortableHead>
+                 <SortableHead k="invoice" sort={sort}>Invoice No.</SortableHead>
+                 <SortableHead k="party" sort={sort}>Party</SortableHead>
+                 <SortableHead k="salesperson" sort={sort}>Salesperson</SortableHead>
+                 <SortableHead k="gst" sort={sort}>GST No.</SortableHead>
+                 <SortableHead k="state" sort={sort}>State</SortableHead>
+                 <SortableHead k="stateCode" sort={sort}>State Code</SortableHead>
                 <SortableHead k="item" sort={sort}>Item</SortableHead>
-                <SortableHead k="rate" sort={sort}>Rate</SortableHead>
-                <SortableHead k="quantity" sort={sort} className="text-right">Qty</SortableHead>
-                <SortableHead k="taxable" sort={sort} className="text-right">Taxable</SortableHead>
+                 <SortableHead k="hsn" sort={sort}>HSN</SortableHead>
+                 <SortableHead k="quantity" sort={sort} className="text-right">Qty / Unit</SortableHead>
+                 <SortableHead k="taxable" sort={sort} className="text-right">Taxable Amount</SortableHead>
                 <SortableHead k="cgst" sort={sort} className="text-right">CGST</SortableHead>
                 <SortableHead k="sgst" sort={sort} className="text-right">SGST</SortableHead>
                 <SortableHead k="igst" sort={sort} className="text-right">IGST</SortableHead>
                 <SortableHead k="tax" sort={sort} className="text-right">Total Tax</SortableHead>
+                  <SortableHead k="invoiceValue" sort={sort} className="text-right">Invoice Total</SortableHead>
+                 <SortableHead k="amountSettled" sort={sort} className="text-right">Amount Received / Paid</SortableHead>
+                 <SortableHead k="balanceDue" sort={sort} className="text-right">Balance Due</SortableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {sorted.map((row) => (
-                <TableRow key={`${row.transactionType}:${row.itemType}:${row.itemId ?? row.itemName}:${row.taxRate}`} className="hover:bg-muted/10">
+                 <TableRow key={`${row.transactionType}:${row.documentId}:${row.lineIndex}`} className="hover:bg-muted/10">
                   <TableCell>
                     <Badge
                       variant="outline"
@@ -207,14 +234,25 @@ function GstItemsTable({ rows, loading }: { rows: GstItemWiseRow[]; loading: boo
                       {row.transactionType}
                     </Badge>
                   </TableCell>
+                   <TableCell className="text-xs whitespace-nowrap">{formatDateOrDash(row.date)}</TableCell>
+                   <TableCell className="font-mono text-xs whitespace-nowrap">
+                     {displayGstDocumentNumber(row.docType, row.documentNumber)}
+                   </TableCell>
+                   <TableCell className="text-xs whitespace-nowrap">{row.partyName || '—'}</TableCell>
+                   <TableCell className="text-xs whitespace-nowrap">{row.salesperson || '—'}</TableCell>
+                   <TableCell className="font-mono text-xs whitespace-nowrap">{row.partyGstin || '—'}</TableCell>
+                   <TableCell className="text-xs whitespace-nowrap">{row.state || '—'}</TableCell>
+                   <TableCell className="font-mono text-xs whitespace-nowrap">{row.stateCode || '—'}</TableCell>
                   <TableCell className="min-w-44">
                     <div className="font-medium text-xs">{row.itemName}</div>
                     <div className="text-[10px] text-muted-foreground">
-                      {row.itemTypeLabel}{row.unit ? ` · ${row.unit}` : ''}
+                       {row.itemTypeLabel} · {row.taxRate}%
                     </div>
                   </TableCell>
-                  <TableCell><Badge variant="secondary">{row.taxRate}%</Badge></TableCell>
-                  <TableCell className="text-right font-mono text-xs whitespace-nowrap">{fmtQty(Number(row.quantity))}</TableCell>
+                   <TableCell className="font-mono text-xs whitespace-nowrap">{row.hsnCode || '—'}</TableCell>
+                   <TableCell className="text-right font-mono text-xs whitespace-nowrap">
+                     {fmtQty(Number(row.quantity))}{row.unit ? ` ${row.unit}` : ''}
+                   </TableCell>
                   <TableCell className="text-right font-mono text-xs whitespace-nowrap">{fmt(Number(row.taxableValue))}</TableCell>
                   <TableCell className="text-right font-mono text-xs whitespace-nowrap">{fmt(Number(row.cgst))}</TableCell>
                   <TableCell className="text-right font-mono text-xs whitespace-nowrap">{fmt(Number(row.sgst))}</TableCell>
@@ -222,6 +260,13 @@ function GstItemsTable({ rows, loading }: { rows: GstItemWiseRow[]; loading: boo
                   <TableCell className={`text-right font-mono font-bold text-xs whitespace-nowrap ${row.transactionType === 'Sales' ? 'text-emerald-500' : 'text-primary'}`}>
                     {fmt(Number(row.taxAmount))}
                   </TableCell>
+                   <TableCell className="text-right font-mono text-xs whitespace-nowrap">{fmt(Number(row.invoiceValue))}</TableCell>
+                   <TableCell className="text-right font-mono text-xs whitespace-nowrap">
+                     {row.amountSettled == null ? '—' : fmt(Number(row.amountSettled))}
+                   </TableCell>
+                   <TableCell className="text-right font-mono text-xs whitespace-nowrap">
+                     {row.balanceDue == null ? '—' : fmt(Number(row.balanceDue))}
+                   </TableCell>
                 </TableRow>
               ))}
               {(['Sales', 'Purchases'] as const).map((side) => {
@@ -230,13 +275,14 @@ function GstItemsTable({ rows, loading }: { rows: GstItemWiseRow[]; loading: boo
                 const tone = side === 'Sales' ? 'text-emerald-500' : 'text-primary';
                 return (
                   <TableRow key={`${side}-total`} className="bg-muted/10 font-bold border-t-2">
-                    <TableCell colSpan={3} className="text-xs uppercase tracking-wider">{side} total</TableCell>
-                    <TableCell className="text-right font-mono text-xs">{fmtQty(total(subset, 'quantity'))}</TableCell>
+                     <TableCell colSpan={10} className="text-xs uppercase tracking-wider">{side} total</TableCell>
+                     <TableCell className="text-right font-mono text-xs">{fmtQty(total(subset, 'quantity'))}</TableCell>
                     <TableCell className="text-right font-mono text-xs">{fmt(total(subset, 'taxableValue'))}</TableCell>
                     <TableCell className="text-right font-mono text-xs">{fmt(total(subset, 'cgst'))}</TableCell>
                     <TableCell className="text-right font-mono text-xs">{fmt(total(subset, 'sgst'))}</TableCell>
                     <TableCell className="text-right font-mono text-xs">{fmt(total(subset, 'igst'))}</TableCell>
                     <TableCell className={`text-right font-mono text-xs ${tone}`}>{fmt(total(subset, 'taxAmount'))}</TableCell>
+                     <TableCell colSpan={3} />
                   </TableRow>
                 );
               })}
@@ -258,20 +304,22 @@ export default function GstSummary() {
 
   const params = { fromDate, toDate, ...scope };
   const { data: gst, isLoading } = useGetGstSummaryScoped(params);
-  const docs = useGetGstDocuments(params);
+  const docs = useGetGstDocuments({ ...params, includeItemDetails: itemWise });
   const filters = useGetGstFilters();
 
   const salesData = gst?.salesByRate ?? [];
   const purchasesData = gst?.purchasesByRate ?? [];
-  const salesItems = gst?.salesByItem ?? [];
-  const purchaseItems = gst?.purchasesByItem ?? [];
-  const itemWiseRows: GstItemWiseRow[] = [
-    ...salesItems.map((row) => ({ ...row, transactionType: 'Sales' as const })),
-    ...purchaseItems.map((row) => ({ ...row, transactionType: 'Purchases' as const })),
-  ];
   const monthWise = gst?.monthWise ?? [];
   const outward = docs.data?.outward ?? [];
   const inward = docs.data?.inward ?? [];
+  const itemWiseRows: GstItemWiseRow[] = [
+    ...outward.flatMap(({ itemLines, ...doc }) =>
+      (itemLines ?? []).map((line) => ({ ...doc, ...line, transactionType: 'Sales' as const })),
+    ),
+    ...inward.flatMap(({ itemLines, ...doc }) =>
+      (itemLines ?? []).map((line) => ({ ...doc, ...line, transactionType: 'Purchases' as const })),
+    ),
+  ];
 
   const totalOutputTax = salesData.reduce((s, r) => s + Number(r.taxAmount || 0), 0);
   const totalInputTax = purchasesData.reduce((s, r) => s + Number(r.taxAmount || 0), 0);
@@ -307,16 +355,38 @@ export default function GstSummary() {
   const exportCsv = () => {
     const csvRow = (values: Record<string, unknown>) => ({
       Section: '', Detail: '', Transaction: '', Item: '', Type: '', Rate: '', Quantity: '', Unit: '',
-      Date: '', 'Document No': '', Party: '', 'GST No.': '', Warehouse: '',
+      Date: '', 'Document No': '', Party: '', Salesperson: '', 'GST No.': '', State: '', 'State Code': '',
+      HSN: '', Warehouse: '',
       Taxable: '', CGST: '', SGST: '', IGST: '', 'Total Tax': '', Total: '',
+      'Invoice Total': '', 'Amount Received / Paid': '', 'Balance Due': '',
       'Payment Status': '', 'Payment Mode': '',
       ...values,
     });
     const selectedDetails = itemWise
       ? itemWiseRows.map((row) => csvRow({
-          Section: 'Item-wise', Transaction: row.transactionType, Item: row.itemName,
-          Type: row.itemTypeLabel, Rate: `${row.taxRate}%`, Quantity: row.quantity, Unit: row.unit,
-          Taxable: row.taxableValue, CGST: row.cgst, SGST: row.sgst, IGST: row.igst, 'Total Tax': row.taxAmount,
+          Section: 'Item-wise',
+          Transaction: row.transactionType,
+          Date: formatDateOrDash(row.date),
+          'Document No': displayGstDocumentNumber(row.docType, row.documentNumber),
+          Party: row.partyName || '—',
+          Salesperson: row.salesperson || '—',
+          'GST No.': row.partyGstin || '—',
+          State: row.state || '—',
+          'State Code': row.stateCode || '—',
+          Item: row.itemName,
+          Type: row.itemTypeLabel,
+          HSN: row.hsnCode || '—',
+          Rate: `${row.taxRate}%`,
+          Quantity: row.quantity,
+          Unit: row.unit,
+          Taxable: row.taxableValue,
+          CGST: row.cgst,
+          SGST: row.sgst,
+          IGST: row.igst,
+          'Total Tax': row.taxAmount,
+          'Invoice Total': row.invoiceValue,
+          'Amount Received / Paid': row.amountSettled,
+          'Balance Due': row.balanceDue,
         }))
       : [
           ...outward.map((row) => csvRow({ Section: 'Outward documents', ...docExportRow(row, true) })),
@@ -344,14 +414,21 @@ export default function GstSummary() {
     const rateRow = (r: { taxRate: number; taxableValue: number; cgst: number; sgst: number; igst: number; taxAmount: number }) =>
       [`${r.taxRate}%`, r.taxableValue, r.cgst, r.sgst, r.igst, r.taxAmount];
     const itemCols = [
-      { label: 'Transaction' }, { label: 'Item', width: 2 }, { label: 'Rate' }, { label: 'Qty', align: 'right' as const },
+      { label: 'Transaction' }, { label: 'Date' }, { label: 'Invoice No.' }, { label: 'Party', width: 1.5 },
+      { label: 'Salesperson' }, { label: 'GST No.' }, { label: 'State' }, { label: 'State Code' },
+      { label: 'Item', width: 2 }, { label: 'HSN' }, { label: 'Qty / Unit', align: 'right' as const },
       { label: 'Taxable', align: 'right' as const }, { label: 'CGST', align: 'right' as const },
       { label: 'SGST', align: 'right' as const }, { label: 'IGST', align: 'right' as const },
-      { label: 'Total Tax', align: 'right' as const },
+      { label: 'Total Tax', align: 'right' as const }, { label: 'Invoice Total', align: 'right' as const },
+      { label: 'Received / Paid', align: 'right' as const }, { label: 'Balance Due', align: 'right' as const },
     ];
     const itemRow = (r: GstItemWiseRow) => [
-      r.transactionType, `${r.itemName} (${r.itemTypeLabel}${r.unit ? ` · ${r.unit}` : ''})`,
-      `${r.taxRate}%`, fmtQty(Number(r.quantity)), r.taxableValue, r.cgst, r.sgst, r.igst, r.taxAmount,
+      r.transactionType, formatDateOrDash(r.date), displayGstDocumentNumber(r.docType, r.documentNumber),
+      r.partyName || '—', r.salesperson || '—', r.partyGstin || '—', r.state || '—', r.stateCode || '—',
+      `${r.itemName} (${r.itemTypeLabel}, ${r.taxRate}%)`, r.hsnCode || '—',
+      `${fmtQty(Number(r.quantity))}${r.unit ? ` ${r.unit}` : ''}`,
+      r.taxableValue, r.cgst, r.sgst, r.igst, r.taxAmount, r.invoiceValue,
+      r.amountSettled ?? '—', r.balanceDue ?? '—',
     ];
     const sections: PdfSection[] = [
       { heading: 'Output Tax by Rate (Sales)', columns: rateCols, rows: salesData.map(rateRow) },
@@ -407,7 +484,7 @@ export default function GstSummary() {
           title="GST Summary"
           description="Output tax liability vs input tax credit, broken down by rate slab and item"
           icon={Receipt}
-          actions={<ExportButtons onCSV={exportCsv} doc={buildDoc} canDownload={perm.canDownload} disabled={isLoading || (!itemWise && docs.isLoading)} />}
+          actions={<ExportButtons onCSV={exportCsv} doc={buildDoc} canDownload={perm.canDownload} disabled={isLoading || docs.isLoading} />}
         />
 
         {/* Filters */}
@@ -428,7 +505,7 @@ export default function GstSummary() {
             <label htmlFor="gst-item-wise" className="text-sm font-medium leading-none cursor-pointer">
               Item-wise
             </label>
-            <span className="text-xs text-muted-foreground">Checked: one combined item table. Unchecked: bill-wise registers.</span>
+            <span className="text-xs text-muted-foreground">Checked: invoice-level item lines with party and payment details. Unchecked: bill-wise registers.</span>
           </div>
         </div>
 
@@ -558,7 +635,7 @@ export default function GstSummary() {
           </div>
         </div>
 
-        {itemWise && <GstItemsTable rows={itemWiseRows} loading={isLoading} />}
+        {itemWise && <GstItemsTable rows={itemWiseRows} loading={docs.isLoading} />}
 
         {/* Month-wise Breakdown */}
         <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
