@@ -66,6 +66,37 @@ function assertItemTotalsMatchRateRows(items, rateRows, label) {
 assertItemTotalsMatchRateRows(body.salesByItem, body.salesByRate, "sales");
 assertItemTotalsMatchRateRows(body.purchasesByItem, body.purchasesByRate, "purchases");
 
+const detailQuery = new URLSearchParams({
+  fromDate: "1900-01-01",
+  toDate: "2099-12-31",
+  includeItemDetails: "true",
+});
+const detailResponse = await fetch(`${BASE}/gst/documents?${detailQuery}`, {
+  headers: { Authorization: `Bearer ${loginData.token}` },
+});
+assert.equal(detailResponse.status, 200, "GST document item details endpoint succeeds");
+const detailBody = await detailResponse.json();
+for (const [label, documents] of [
+  ["sales", detailBody.outward],
+  ["purchases", detailBody.inward],
+]) {
+  assert.ok(Array.isArray(documents), `${label} GST documents are present`);
+  assert.ok(documents.every((document) =>
+    Number.isFinite(Number(document.documentId)) &&
+    typeof document.state === "string" &&
+    typeof document.stateCode === "string" &&
+    Array.isArray(document.itemLines) &&
+    (document.amountSettled == null || Number.isFinite(Number(document.amountSettled))) &&
+    (document.balanceDue == null || Number.isFinite(Number(document.balanceDue))) &&
+    document.itemLines.every((line) =>
+      typeof line.itemName === "string" &&
+      typeof line.hsnCode === "string" &&
+      ["quantity", "taxableValue", "cgst", "sgst", "igst", "taxAmount"].every((key) =>
+        Number.isFinite(Number(line[key]))),
+    )),
+  `${label} invoice item details include report columns and numeric GST values`);
+}
+
 console.log(
   `GST item-wise summary verified: ${body.salesByItem.length} sales rows, ` +
   `${body.purchasesByItem.length} purchase rows.`,

@@ -236,6 +236,14 @@ export default function NewSaleScreen() {
     if (step === 0) {
       if (!saleLoc) return 'Pick the selling location.';
       if (!/^\d{4}-\d{2}-\d{2}$/.test(saleDate)) return 'Pick the sale date.';
+      if (salespeopleLoading) return 'Wait for the salesman list to load.';
+      if (!salesperson) return 'Select a salesman before continuing.';
+      const selectedIsEligible = ((salespeople as any[]) ?? []).some(p =>
+        Number(p.id) === salesperson.id
+        && (p.branchType === 'headoffice'
+          || (p.branchType === saleLoc.locationType && Number(p.branchId) === Number(saleLoc.locationId))),
+      );
+      if (!selectedIsEligible) return 'Select an active salesman assigned to this location.';
       return null;
     }
     if (step === 1) {
@@ -657,13 +665,20 @@ export default function NewSaleScreen() {
             Credit and partial payments need a registered customer.
           </Text>
 
-          <Text style={styles.fieldLabel}>Salesman <Text style={styles.mutedText}>(optional)</Text></Text>
-          <Pressable onPress={() => setSalespersonPickerOpen(true)} style={({ pressed }) => [styles.selectBox, pressed && { opacity: 0.8 }]}>
+          <Text style={styles.fieldLabel}>Salesman *</Text>
+          <Pressable
+            testID="salesman-picker"
+            onPress={() => setSalespersonPickerOpen(true)}
+            style={({ pressed }) => [styles.selectBox, pressed && { opacity: 0.8 }]}
+          >
             <Text style={salesperson ? styles.valueText : styles.placeholderText}>
-              {salesperson ? salesperson.name : 'Unassigned'}
+              {salesperson ? salesperson.name : 'Select salesman'}
             </Text>
             <Feather name="chevron-down" size={18} color={colors.mutedForeground} />
           </Pressable>
+          {!salespeopleLoading && salespersonItems.length === 0 ? (
+            <Text style={styles.mutedText}>No active salesmen are assigned to this location. Ask an administrator for help.</Text>
+          ) : null}
 
           <Text style={styles.fieldLabel}>Sale date</Text>
           <View style={styles.dateRow}>
@@ -990,11 +1005,6 @@ export default function NewSaleScreen() {
         items={salespersonItems}
         loading={salespeopleLoading}
         selectedKey={salesperson ? String(salesperson.id) : null}
-        clearLabel="Unassigned"
-        onClear={() => {
-          setSalesperson(null);
-          setSalespersonPickerOpen(false);
-        }}
         onSelect={pi => {
           const p = ((salespeople as any[]) ?? []).find(x => String(x.id) === pi.key);
           if (p) setSalesperson({ id: Number(p.id), name: String(p.name) });

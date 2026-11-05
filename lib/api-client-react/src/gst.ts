@@ -213,6 +213,8 @@ export interface GstScopeParams {
   gstin?: string;
   /** Narrow further to one warehouse (and its outlets) under that GSTIN. */
   warehouseId?: number;
+  /** Return invoice item lines for the GST Summary item-wise table. */
+  includeItemDetails?: boolean;
 }
 
 export interface GstinGroup {
@@ -227,10 +229,14 @@ export interface GstFiltersResponse {
 
 export interface GstDocumentRow {
   docType: 'sale' | 'purchase';
+  documentId: number;
   documentNumber: string;
   date: string;
   partyName: string;
   partyGstin: string;
+  state: string;
+  stateCode: string;
+  salesperson: string | null;
   warehouseName: string;
   isBranchTransfer: boolean;
   taxableValue: number;
@@ -239,8 +245,28 @@ export interface GstDocumentRow {
   igst: number;
   taxAmount: number;
   invoiceValue: number;
+  amountSettled: number | null;
+  balanceDue: number | null;
   paymentStatus: string;
   paymentModes: string;
+  itemLines?: GstDocumentItemLine[];
+}
+
+export interface GstDocumentItemLine {
+  lineIndex: number;
+  itemId: number | null;
+  itemType: string;
+  itemTypeLabel: string;
+  itemName: string;
+  hsnCode: string;
+  unit: string;
+  taxRate: number;
+  quantity: number;
+  taxableValue: number;
+  cgst: number;
+  sgst: number;
+  igst: number;
+  taxAmount: number;
 }
 
 export interface GstDocumentsResponse {
@@ -260,6 +286,7 @@ const scopeQs = (p: GstScopeParams): string => {
   if (p.toDate) q.set('toDate', p.toDate);
   if (p.gstin) q.set('gstin', p.gstin);
   if (p.warehouseId) q.set('warehouseId', String(p.warehouseId));
+  if (p.includeItemDetails) q.set('includeItemDetails', 'true');
   const s = q.toString();
   return s ? `?${s}` : '';
 };
@@ -279,7 +306,7 @@ export const getGstReconciliationQueryKey = (fromDate?: string, toDate?: string)
   ['/api/gst/reconciliation', fromDate ?? '', toDate ?? ''] as const;
 export const getGstFiltersQueryKey = () => ['/api/gst/filters'] as const;
 export const getGstDocumentsQueryKey = (p: GstScopeParams = {}) =>
-  ['/api/gst/documents', ...scopeKey(p)] as const;
+  ['/api/gst/documents', ...scopeKey(p), p.includeItemDetails ? 1 : 0] as const;
 export const getGstSummaryScopedQueryKey = (p: GstScopeParams = {}) =>
   ['/api/gst/summary', ...scopeKey(p)] as const;
 
