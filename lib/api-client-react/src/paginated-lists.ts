@@ -30,6 +30,8 @@ export interface PaginatedSalesParams {
   q?: string;
   from?: string;
   to?: string;
+  /** Employee ID, or "unassigned" for sales with no salesperson. */
+  salespersonEmployeeId?: number | 'unassigned';
   /** 'headoffice' needs no locationId — the server matches on type alone. */
   locationType?: 'warehouse' | 'outlet' | 'headoffice';
   locationId?: number;
@@ -145,6 +147,9 @@ export function usePaginatedSales(params?: PaginatedSalesParams) {
   if (params?.q) qs.set('q', params.q);
   if (params?.from) qs.set('from', params.from);
   if (params?.to) qs.set('to', params.to);
+  if (params?.salespersonEmployeeId != null) {
+    qs.set('salespersonEmployeeId', String(params.salespersonEmployeeId));
+  }
   if (params?.locationType === 'headoffice') {
     // Head Office is singular — the server matches on type alone.
     qs.set('locationType', 'headoffice');
