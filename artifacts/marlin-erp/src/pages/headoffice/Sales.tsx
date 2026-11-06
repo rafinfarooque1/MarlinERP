@@ -386,6 +386,61 @@ interface SalesProps {
   forceChildOutletIds?: number[];
 }
 
+type SalesFilterStatus = 'all' | 'unpaid' | 'partially_paid' | 'paid' | 'cancelled';
+type SalesFilterSalesperson = 'all' | 'unassigned' | number;
+type SalesFilterLocation = 'all' | 'headoffice' | `warehouse:${number}` | `outlet:${number}`;
+
+interface SalesTableFilters {
+  invoice: string;
+  customer: string;
+  salesperson: SalesFilterSalesperson;
+  location: SalesFilterLocation;
+  paymentStatus: SalesFilterStatus;
+  amountMin: string;
+  amountMax: string;
+  taxMin: string;
+  taxMax: string;
+  discountMin: string;
+  discountMax: string;
+  chargesMin: string;
+  chargesMax: string;
+  totalMin: string;
+  totalMax: string;
+}
+
+type SalesTableFilterDraft = SalesTableFilters & { dateFrom: string; dateTo: string };
+
+const EMPTY_SALES_TABLE_FILTERS: SalesTableFilters = {
+  invoice: '',
+  customer: '',
+  salesperson: 'all',
+  location: 'all',
+  paymentStatus: 'all',
+  amountMin: '',
+  amountMax: '',
+  taxMin: '',
+  taxMax: '',
+  discountMin: '',
+  discountMax: '',
+  chargesMin: '',
+  chargesMax: '',
+  totalMin: '',
+  totalMax: '',
+};
+
+const parseSalesFilterLocation = (value: SalesFilterLocation) => {
+  if (value === 'all') return {};
+  if (value === 'headoffice') return { filterLocationType: 'headoffice' as const };
+  const [type, rawId] = value.split(':');
+  if ((type === 'warehouse' || type === 'outlet') && Number(rawId) > 0) {
+    return { filterLocationType: type, filterLocationId: Number(rawId) };
+  }
+  return {};
+};
+
+const optionalFilterNumber = (value: string): number | undefined =>
+  value.trim() === '' ? undefined : Number(value);
+
 export default function Sales({ forceLocationType, forceLocationId, forceLocationName, permissionModule }: SalesProps = {}) {
   const perm = usePermission(permissionModule ?? 'page:/sales/pos');
   const isAdmin = useIsAdmin();
@@ -421,7 +476,13 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   const range = useDateRange('all');
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
-  const [salespersonFilter, setSalespersonFilter] = useState<'all' | 'unassigned' | number>('all');
+  const [tableFilters, setTableFilters] = useState<SalesTableFilters>(EMPTY_SALES_TABLE_FILTERS);
+  const [filterDraft, setFilterDraft] = useState<SalesTableFilterDraft>({
+    ...EMPTY_SALES_TABLE_FILTERS,
+    dateFrom: '',
+    dateTo: '',
+  });
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [isExportingExcel, setIsExportingExcel] = useState(false);
   const [itemWiseView, setItemWiseView] = useState(false);
   const PAGE_SIZE = 25;
@@ -442,9 +503,23 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   // fetch, so the two can never disagree on what "the filtered dataset" means.
   const salesListFilters = {
     q: debouncedSearch || undefined,
+    invoice: tableFilters.invoice.trim() || undefined,
+    customer: tableFilters.customer.trim() || undefined,
     from: range.from || undefined,
     to: range.to || undefined,
-    salespersonEmployeeId: salespersonFilter === 'all' ? undefined : salespersonFilter,
+    salespersonEmployeeId: tableFilters.salesperson === 'all' ? undefined : tableFilters.salesperson,
+    paymentStatus: tableFilters.paymentStatus === 'all' ? undefined : tableFilters.paymentStatus,
+    amountMin: optionalFilterNumber(tableFilters.amountMin),
+    amountMax: optionalFilterNumber(tableFilters.amountMax),
+    taxMin: optionalFilterNumber(tableFilters.taxMin),
+    taxMax: optionalFilterNumber(tableFilters.taxMax),
+    discountMin: optionalFilterNumber(tableFilters.discountMin),
+    discountMax: optionalFilterNumber(tableFilters.discountMax),
+    chargesMin: optionalFilterNumber(tableFilters.chargesMin),
+    chargesMax: optionalFilterNumber(tableFilters.chargesMax),
+    totalMin: optionalFilterNumber(tableFilters.totalMin),
+    totalMax: optionalFilterNumber(tableFilters.totalMax),
+    ...parseSalesFilterLocation(tableFilters.location),
     ...(forceLocationType === 'headoffice'
       ? { locationType: 'headoffice' as const }
       : forceLocationType === 'warehouse' && forceLocationId
@@ -496,7 +571,6 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   });
   const { data: items = [] } = useListItems();
   const { data: companySettings } = useGetCompanySettings();
-  const [statusFilter, setStatusFilter] = useState<'all' | 'unpaid' | 'partially_paid' | 'paid'>('all');
   const [isOpen, setIsOpen] = useState(false);
   const [viewItem, setViewItem] = useState<any>(null);
   const [shipFromEditSale, setShipFromEditSale] = useState<any>(null);
@@ -1747,16 +1821,24 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   // Merge the computed discount total into each row so sorting can key on it.
   const filtered = useMemo(
     () => sales
-      .filter(s => statusFilter === 'all' || ((s as any).paymentStatus ?? 'paid') === statusFilter)
+      .filter(s => tableFilters.paymentStatus === 'all' || ((s as any).paymentStatus ?? 'paid') === tableFilters.paymentStatus)
       .map(s => ({
         ...s,
         _discountTotal: saleDiscountTotal(s),
         _otherChargesTotal: saleOtherChargesTotal(s),
       })),
-    [sales, statusFilter],
+    [sales, tableFilters.paymentStatus],
   );
-  const hasSalesFilters = salespersonFilter !== 'all'
-    || statusFilter !== 'all'
+  const hasSalesFilters = tableFilters.invoice.trim() !== ''
+    || tableFilters.customer.trim() !== ''
+    || tableFilters.salesperson !== 'all'
+    || tableFilters.location !== 'all'
+    || tableFilters.paymentStatus !== 'all'
+    || [
+      tableFilters.amountMin, tableFilters.amountMax, tableFilters.taxMin, tableFilters.taxMax,
+      tableFilters.discountMin, tableFilters.discountMax, tableFilters.chargesMin,
+      tableFilters.chargesMax, tableFilters.totalMin, tableFilters.totalMax,
+    ].some(value => value !== '')
     || Boolean(debouncedSearch)
     || Boolean(range.from || range.to)
     || Boolean(forceLocationType || locFilterType);
@@ -1764,6 +1846,109 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   const salesEmptyHint = hasSalesFilters
     ? 'Try changing or clearing the selected filters.'
     : 'Record your first retail transaction to see it here.';
+  const activeFilterCount = [
+    tableFilters.invoice,
+    tableFilters.customer,
+    tableFilters.salesperson !== 'all',
+    tableFilters.location !== 'all',
+    tableFilters.paymentStatus !== 'all',
+    tableFilters.amountMin,
+    tableFilters.amountMax,
+    tableFilters.taxMin,
+    tableFilters.taxMax,
+    tableFilters.discountMin,
+    tableFilters.discountMax,
+    tableFilters.chargesMin,
+    tableFilters.chargesMax,
+    tableFilters.totalMin,
+    tableFilters.totalMax,
+    range.from,
+    range.to,
+    debouncedSearch,
+  ].filter(Boolean).length;
+
+  const applyTableFilters = () => {
+    const numberRanges = [
+      ['Amount', filterDraft.amountMin, filterDraft.amountMax],
+      ['Tax', filterDraft.taxMin, filterDraft.taxMax],
+      ['Discount', filterDraft.discountMin, filterDraft.discountMax],
+      ['Charges', filterDraft.chargesMin, filterDraft.chargesMax],
+      ['Total', filterDraft.totalMin, filterDraft.totalMax],
+    ] as const;
+    for (const [label, rawMin, rawMax] of numberRanges) {
+      const min = optionalFilterNumber(rawMin);
+      const max = optionalFilterNumber(rawMax);
+      if ((rawMin.trim() && (!Number.isFinite(min) || Number(min) < 0))
+        || (rawMax.trim() && (!Number.isFinite(max) || Number(max) < 0))) {
+        toast.error(`${label} filters must be non-negative numbers.`);
+        return;
+      }
+      if (min != null && max != null && min > max) {
+        toast.error(`${label} minimum cannot be greater than its maximum.`);
+        return;
+      }
+    }
+    if (filterDraft.dateFrom && filterDraft.dateTo && filterDraft.dateFrom > filterDraft.dateTo) {
+      toast.error('Start date cannot be after end date.');
+      return;
+    }
+
+    const { dateFrom, dateTo, ...nextFilters } = filterDraft;
+    setTableFilters(nextFilters);
+    if (dateFrom || dateTo) {
+      range.setPreset('custom');
+      range.setFrom(dateFrom);
+      range.setTo(dateTo);
+    } else {
+      range.setPreset('all');
+      range.setFrom('');
+      range.setTo('');
+    }
+    setFiltersOpen(false);
+  };
+
+  const clearTableFilters = () => {
+    setTableFilters(EMPTY_SALES_TABLE_FILTERS);
+    setFilterDraft({ ...EMPTY_SALES_TABLE_FILTERS, dateFrom: '', dateTo: '' });
+    setSearch('');
+    setDebouncedSearch('');
+    range.setPreset('all');
+    range.setFrom('');
+    range.setTo('');
+  };
+
+  const renderFilterRange = (
+    label: string,
+    minKey: 'amountMin' | 'taxMin' | 'discountMin' | 'chargesMin' | 'totalMin',
+    maxKey: 'amountMax' | 'taxMax' | 'discountMax' | 'chargesMax' | 'totalMax',
+  ) => (
+    <div className="space-y-1.5">
+      <p className="text-xs font-medium">{label}</p>
+      <div className="grid grid-cols-2 gap-2">
+        <Input
+          type="number"
+          min="0"
+          step="0.01"
+          value={filterDraft[minKey]}
+          onChange={e => setFilterDraft(current => ({ ...current, [minKey]: e.target.value }))}
+          placeholder="Min"
+          aria-label={`${label} minimum`}
+          data-testid={`input-filter-${minKey}`}
+        />
+        <Input
+          type="number"
+          min="0"
+          step="0.01"
+          value={filterDraft[maxKey]}
+          onChange={e => setFilterDraft(current => ({ ...current, [maxKey]: e.target.value }))}
+          placeholder="Max"
+          aria-label={`${label} maximum`}
+          data-testid={`input-filter-${maxKey}`}
+        />
+      </div>
+    </div>
+  );
+
   const itemsMap = useMemo(
     () => new Map(items.map(item => [Number(item.id), item])),
     [items],
@@ -1805,7 +1990,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
     try {
       const allRows = await fetchAllSales(salesListFilters);
       const exportRows = allRows.filter(s =>
-        statusFilter === 'all' || ((s as any).paymentStatus ?? 'paid') === statusFilter,
+        tableFilters.paymentStatus === 'all' || ((s as any).paymentStatus ?? 'paid') === tableFilters.paymentStatus,
       );
       if (itemWiseView) {
         downloadCSV('sales-item-wise.csv', buildSaleItemReportRows(exportRows, itemsMap).map(row => ({
@@ -1845,17 +2030,20 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
     try {
       const allRows = await fetchAllSales(salesListFilters);
       const exportRows = allRows.filter(s =>
-        statusFilter === 'all' || ((s as any).paymentStatus ?? 'paid') === statusFilter,
+        tableFilters.paymentStatus === 'all' || ((s as any).paymentStatus ?? 'paid') === tableFilters.paymentStatus,
       );
       const dateRange = range.from || range.to
         ? `${range.from || 'Start'} to ${range.to || 'Today'}`
         : 'All dates';
-      const salespersonLabel = salespersonFilter === 'all'
+      const salespersonLabel = tableFilters.salesperson === 'all'
         ? 'All salespeople'
-        : salespersonFilter === 'unassigned'
+        : tableFilters.salesperson === 'unassigned'
           ? 'Unassigned'
-          : (salespeople as any[]).find((person: any) => Number(person.id) === salespersonFilter)?.name ?? 'Selected salesperson';
-      const subtitle = `${dateRange} · ${statusFilter === 'all' ? 'All payment statuses' : statusFilter.replace('_', ' ')} · ${salespersonLabel}`;
+          : (salespeople as any[]).find((person: any) => Number(person.id) === tableFilters.salesperson)?.name ?? 'Selected salesperson';
+      const statusLabel = tableFilters.paymentStatus === 'all'
+        ? 'All payment statuses'
+        : tableFilters.paymentStatus.replace('_', ' ');
+      const subtitle = `${dateRange} · ${statusLabel} · ${salespersonLabel}`;
       let doc: ReportDoc;
       if (itemWiseView) {
         const rows = buildSaleItemReportRows(exportRows, itemsMap);
@@ -2078,10 +2266,10 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
             ] as const).map(({ key, label }) => (
               <button
                 key={key}
-                onClick={() => setStatusFilter(key)}
+                onClick={() => setTableFilters(current => ({ ...current, paymentStatus: key }))}
                 className={cn(
                   'px-3 py-1 rounded-full text-xs font-medium border transition-colors',
-                  statusFilter === key
+                  tableFilters.paymentStatus === key
                     ? 'bg-primary text-primary-foreground border-primary'
                     : 'bg-transparent text-muted-foreground border-border hover:border-primary/50 hover:text-foreground'
                 )}
@@ -2089,31 +2277,159 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                 {label}
               </button>
             ))}
-            <div className="flex items-center gap-2 max-sm:w-full">
-              <span className="text-xs text-muted-foreground whitespace-nowrap">Salesperson</span>
-              <Select
-                value={String(salespersonFilter)}
-                onValueChange={value => setSalespersonFilter(
-                  value === 'all' || value === 'unassigned' ? value : Number(value),
-                )}
-              >
-                <SelectTrigger
-                  className="w-48 max-sm:flex-1"
-                  aria-label="Filter sales by salesperson"
-                  data-testid="select-salesperson-filter"
+            <Popover
+              open={filtersOpen}
+              onOpenChange={open => {
+                setFiltersOpen(open);
+                if (open) {
+                  setFilterDraft({ ...tableFilters, dateFrom: range.from, dateTo: range.to });
+                }
+              }}
+            >
+              <PopoverTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="gap-2"
+                  aria-label="Open POS table filters"
+                  data-testid="button-pos-table-filters"
                 >
-                  <Filter className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
-                  <SelectValue placeholder="All salespeople" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All salespeople</SelectItem>
-                  <SelectItem value="unassigned">Unassigned</SelectItem>
-                  {(salespeople as any[]).map((person: any) => (
-                    <SelectItem key={person.id} value={String(person.id)}>{person.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+                  <Filter className="h-4 w-4" />
+                  Filters
+                  {activeFilterCount > 0 && (
+                    <Badge variant="secondary" className="ml-1 h-5 min-w-5 justify-center px-1">
+                      {activeFilterCount}
+                    </Badge>
+                  )}
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent align="end" className="w-[min(640px,calc(100vw-2rem))] max-h-[78vh] overflow-y-auto p-4">
+                <div className="space-y-4">
+                  <div>
+                    <h3 className="font-semibold text-sm">Filter POS sales</h3>
+                    <p className="text-xs text-muted-foreground mt-1">Combine filters across invoice, customer, amounts, and status.</p>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <label className="space-y-1.5 text-xs font-medium">
+                      Invoice
+                      <Input
+                        value={filterDraft.invoice}
+                        onChange={e => setFilterDraft(current => ({ ...current, invoice: e.target.value }))}
+                        placeholder="Invoice number"
+                        data-testid="input-filter-invoice"
+                      />
+                    </label>
+                    <label className="space-y-1.5 text-xs font-medium">
+                      Customer
+                      <Input
+                        value={filterDraft.customer}
+                        onChange={e => setFilterDraft(current => ({ ...current, customer: e.target.value }))}
+                        placeholder="Customer name or phone"
+                        data-testid="input-filter-customer"
+                      />
+                    </label>
+                    <label className="space-y-1.5 text-xs font-medium">
+                      Salesperson
+                      <Select
+                        value={String(filterDraft.salesperson)}
+                        onValueChange={value => setFilterDraft(current => ({
+                          ...current,
+                          salesperson: value === 'all' || value === 'unassigned' ? value : Number(value),
+                        }))}
+                      >
+                        <SelectTrigger aria-label="Filter by salesperson" data-testid="select-filter-salesperson">
+                          <SelectValue placeholder="All salespeople" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All salespeople</SelectItem>
+                          <SelectItem value="unassigned">Unassigned</SelectItem>
+                          {(salespeople as any[]).map((person: any) => (
+                            <SelectItem key={person.id} value={String(person.id)}>{person.name}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </label>
+                    <label className="space-y-1.5 text-xs font-medium">
+                      Location
+                      <Select
+                        value={filterDraft.location}
+                        onValueChange={value => setFilterDraft(current => ({ ...current, location: value as SalesFilterLocation }))}
+                      >
+                        <SelectTrigger aria-label="Filter by location" data-testid="select-filter-location">
+                          <SelectValue placeholder="All locations" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All locations</SelectItem>
+                          {isHOUser && <SelectItem value="headoffice">Head Office</SelectItem>}
+                          {(warehouses as any[]).map((warehouse: any) => (
+                            <SelectItem key={`warehouse-${warehouse.id}`} value={`warehouse:${warehouse.id}`}>
+                              Warehouse · {warehouse.name}
+                            </SelectItem>
+                          ))}
+                          {(outlets as any[]).map((outlet: any) => (
+                            <SelectItem key={`outlet-${outlet.id}`} value={`outlet:${outlet.id}`}>
+                              Outlet · {outlet.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </label>
+                    <label className="space-y-1.5 text-xs font-medium">
+                      Start date
+                      <Input
+                        type="date"
+                        value={filterDraft.dateFrom}
+                        onChange={e => setFilterDraft(current => ({ ...current, dateFrom: e.target.value }))}
+                        data-testid="input-filter-date-from"
+                      />
+                    </label>
+                    <label className="space-y-1.5 text-xs font-medium">
+                      End date
+                      <Input
+                        type="date"
+                        value={filterDraft.dateTo}
+                        onChange={e => setFilterDraft(current => ({ ...current, dateTo: e.target.value }))}
+                        data-testid="input-filter-date-to"
+                      />
+                    </label>
+                    <label className="space-y-1.5 text-xs font-medium">
+                      Payment status
+                      <Select
+                        value={filterDraft.paymentStatus}
+                        onValueChange={value => setFilterDraft(current => ({
+                          ...current,
+                          paymentStatus: value as SalesFilterStatus,
+                        }))}
+                      >
+                        <SelectTrigger aria-label="Filter by payment status" data-testid="select-filter-status">
+                          <SelectValue placeholder="All statuses" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All statuses</SelectItem>
+                          <SelectItem value="unpaid">Unpaid</SelectItem>
+                          <SelectItem value="partially_paid">Partial</SelectItem>
+                          <SelectItem value="paid">Paid</SelectItem>
+                          <SelectItem value="cancelled">Cancelled</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </label>
+                    {renderFilterRange('Amount / Subtotal', 'amountMin', 'amountMax')}
+                    {renderFilterRange('Tax', 'taxMin', 'taxMax')}
+                    {renderFilterRange('Discount', 'discountMin', 'discountMax')}
+                    {renderFilterRange('Charges', 'chargesMin', 'chargesMax')}
+                    {renderFilterRange('Total', 'totalMin', 'totalMax')}
+                  </div>
+                  <div className="flex justify-between gap-2 border-t border-border pt-3">
+                    <Button type="button" variant="ghost" size="sm" onClick={clearTableFilters} data-testid="button-clear-pos-filters">
+                      Clear all
+                    </Button>
+                    <Button type="button" size="sm" onClick={applyTableFilters} data-testid="button-apply-pos-filters">
+                      Apply filters
+                    </Button>
+                  </div>
+                </div>
+              </PopoverContent>
+            </Popover>
             <div className="ml-auto flex items-center gap-2">
               <Checkbox
                 id="pos-item-wise-report"
