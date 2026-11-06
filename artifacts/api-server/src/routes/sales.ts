@@ -27,7 +27,7 @@ import { availabilityAt, insufficientStockMessage } from "../lib/reservations";
 import { isIsoDate } from "../lib/dateInput";
 import { respondIfMonthLocked, isMonthLocked, ymOfDate, monthLockedBody } from "../lib/periodLock";
 import {
-  loadPaymentPosition, loadPaymentPositions, computePaymentPosition,
+  loadPaymentPosition, loadPaymentPositions, computePaymentPosition, creditAdjustmentsExpr, MONEY_EPSILON,
   loadInvoicePaymentSettings, buildUpiRequest,
 } from "../lib/salePaymentPosition";
 import { advanceAvailable, takeAdvanceLock, attributeAdvanceConsumption, releaseAdvanceConsumption } from "../lib/advanceLedgers";
@@ -583,8 +583,8 @@ router.post("/item-prices", requireModuleAction("page:/headoffice/item-price", "
 // GET /sales — optionally server-paginated (Phase 7).
 // Without `page`/`limit` params the legacy full-array response is returned
 // (backward compatible). With them: envelope { total, page, limit, rows }.
-// Filters (usable in both modes): q (invoice/customer name/phone), from/to
-// (YYYY-MM-DD), salespersonEmployeeId, locationType+locationId, warehouseScope=<warehouseId>
+// Filters (usable in both modes): q, invoice, customer, from/to (YYYY-MM-DD),
+// salesperson, local filter location, payment status, and amount ranges.
 // (warehouse itself + its child outlets — replaces client-side filtering),
 // legacy outletId.
 // Serves HO Sales/Payments (POS), Returns and the Sales Dashboard.
@@ -612,6 +612,25 @@ router.get("/sales", requireModuleView(["page:/sales/pos", "page:/returns", "pag
     // still find the bill.
     conds.push(`(s.invoice_number ILIKE $${params.length} OR s.legacy_invoice_number ILIKE $${params.length} OR c.name ILIKE $${params.length} OR c.phone ILIKE $${params.length})`);
   }
+  for (const [key, label, sqlColumn] of [
+    ["invoice", "invoice", "(s.invoice_number ILIKE $PLACEHOLDER OR s.legacy_invoice_number ILIKE $PLACEHOLDER)"],
+    ["customer", "customer", "(c.name ILIKE $PLACEHOLDER OR c.phone ILIKE $PLACEHOLDER)"],
+  ] as const) {
+    const raw = req.query[key];
+    if (raw === undefined) continue;
+    if (typeof raw !== "string") {
+      res.status(400).json({ error: `${label} filter must be text` });
+      return;
+    }
+    const value = raw.trim();
+    if (!value) continue;
+    if (value.length > 200) {
+      res.status(400).json({ error: `${label} filter is too long` });
+      return;
+    }
+    params.push(`%${value}%`);
+    conds.push(sqlColumn.replaceAll("$PLACEHOLDER", `$${params.length}`));
+  }
   if (from) { params.push(from); conds.push(`s.sale_date >= $${params.length}::date`); }
   if (to)   { params.push(to);   conds.push(`s.sale_date <= $${params.length}::date`); }
   if (req.query.salespersonEmployeeId !== undefined) {
@@ -631,6 +650,99 @@ router.get("/sales", requireModuleView(["page:/sales/pos", "page:/returns", "pag
       params.push(employeeId);
       conds.push(`s.salesperson_employee_id = $${params.length}`);
     }
+  }
+  if (req.query.filterLocationType !== undefined) {
+    const filterLocationType = req.query.filterLocationType;
+    if (typeof filterLocationType !== "string" || !["headoffice", "warehouse", "outlet"].includes(filterLocationType)) {
+      res.status(400).json({ error: "filterLocationType must be headoffice, warehouse, or outlet" });
+      return;
+    }
+    if (filterLocationType === "headoffice") {
+      conds.push(`COALESCE(s.location_type, 'outlet') = 'headoffice'`);
+    } else {
+      const rawLocationId = req.query.filterLocationId;
+      const filterLocationId = typeof rawLocationId === "string" ? Number(rawLocationId) : NaN;
+      if (!Number.isSafeInteger(filterLocationId) || filterLocationId <= 0) {
+        res.status(400).json({ error: "filterLocationId must be a positive location id" });
+        return;
+      }
+      params.push(filterLocationType);
+      conds.push(`COALESCE(s.location_type, 'outlet') = $${params.length}`);
+      params.push(filterLocationId);
+      conds.push(`COALESCE(s.location_id, s.outlet_id) = $${params.length}`);
+    }
+  } else if (req.query.filterLocationId !== undefined) {
+    res.status(400).json({ error: "filterLocationType is required with filterLocationId" });
+    return;
+  }
+  if (req.query.paymentStatus !== undefined) {
+    const paymentStatus = req.query.paymentStatus;
+    if (typeof paymentStatus !== "string" || !["paid", "unpaid", "partially_paid", "cancelled"].includes(paymentStatus)) {
+      res.status(400).json({ error: "paymentStatus is invalid" });
+      return;
+    }
+    const invoiceTotalExpr = `ROUND(COALESCE(s.total_amount, 0)::numeric, 2)`;
+    const receivedExpr = `ROUND(COALESCE(s.amount_paid, 0)::numeric, 2)`;
+    const creditExpr = `ROUND(COALESCE(${creditAdjustmentsExpr("s")}, 0)::numeric, 2)`;
+    const amountDueExpr = `ROUND(${invoiceTotalExpr} - ${creditExpr}, 2)`;
+    const outstandingExpr = `ROUND(${amountDueExpr} - ${receivedExpr}, 2)`;
+    const statusExpr = `(CASE
+      WHEN s.cancelled_at IS NOT NULL THEN 'cancelled'
+      WHEN ${outstandingExpr} <= ${MONEY_EPSILON} THEN 'paid'
+      WHEN ${outstandingExpr} >= ${invoiceTotalExpr} - ${MONEY_EPSILON} THEN 'unpaid'
+      ELSE 'partially_paid'
+    END)`;
+    params.push(paymentStatus);
+    conds.push(`${statusExpr} = $${params.length}`);
+  }
+
+  const safeJsonArray = (column: string) =>
+    `CASE WHEN jsonb_typeof(COALESCE(${column}, '[]'::jsonb)) = 'array' THEN COALESCE(${column}, '[]'::jsonb) ELSE '[]'::jsonb END`;
+  const discountExpr = `(COALESCE(s.discount_total, 0)::numeric + COALESCE((
+    SELECT SUM(CASE
+      WHEN BTRIM(COALESCE(li->>'discount', '')) ~ '^-?[0-9]+([.][0-9]+)?$' THEN (li->>'discount')::numeric
+      ELSE 0
+    END)
+    FROM jsonb_array_elements(${safeJsonArray("s.line_items")}) AS li
+  ), 0))`;
+  const chargesExpr = `ROUND(COALESCE((
+    SELECT SUM(CASE
+      WHEN BTRIM(COALESCE(charge->>'ledgerId', '')) ~ '^[0-9]+([.][0-9]+)?$'
+        AND BTRIM(COALESCE(charge->>'amount', '')) ~ '^-?[0-9]+([.][0-9]+)?$'
+      THEN CASE
+        WHEN (charge->>'ledgerId')::numeric > 0
+          AND (charge->>'ledgerId')::numeric = TRUNC((charge->>'ledgerId')::numeric)
+          AND ROUND((charge->>'amount')::numeric, 2) > 0.004
+        THEN ROUND((charge->>'amount')::numeric, 2)
+        ELSE 0
+      END
+      ELSE 0
+    END)
+    FROM jsonb_array_elements(${safeJsonArray("s.other_charges")}) AS charge
+  ), 0), 2)`;
+  const rangeExpressions = {
+    amount: "COALESCE(s.subtotal, 0)::numeric",
+    tax: "COALESCE(s.tax_total, 0)::numeric",
+    discount: discountExpr,
+    charges: chargesExpr,
+    total: "COALESCE(s.total_amount, 0)::numeric",
+  } as const;
+  for (const [filterKey, expression, operator] of [
+    ["amountMin", rangeExpressions.amount, ">="], ["amountMax", rangeExpressions.amount, "<="],
+    ["taxMin", rangeExpressions.tax, ">="], ["taxMax", rangeExpressions.tax, "<="],
+    ["discountMin", rangeExpressions.discount, ">="], ["discountMax", rangeExpressions.discount, "<="],
+    ["chargesMin", rangeExpressions.charges, ">="], ["chargesMax", rangeExpressions.charges, "<="],
+    ["totalMin", rangeExpressions.total, ">="], ["totalMax", rangeExpressions.total, "<="],
+  ] as const) {
+    const raw = req.query[filterKey];
+    if (raw === undefined || raw === "") continue;
+    const value = typeof raw === "string" ? Number(raw) : NaN;
+    if (!Number.isFinite(value) || value < 0) {
+      res.status(400).json({ error: `${filterKey} must be a non-negative number` });
+      return;
+    }
+    params.push(value);
+    conds.push(`${expression} ${operator} $${params.length}::numeric`);
   }
 
   const viewLoc = getLocationFilter(req);

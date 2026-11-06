@@ -28,10 +28,25 @@ export interface PaginatedSalesParams {
   page?: number;
   limit?: number;
   q?: string;
+  invoice?: string;
+  customer?: string;
   from?: string;
   to?: string;
   /** Employee ID, or "unassigned" for sales with no salesperson. */
   salespersonEmployeeId?: number | 'unassigned';
+  filterLocationType?: 'warehouse' | 'outlet' | 'headoffice';
+  filterLocationId?: number;
+  paymentStatus?: 'paid' | 'unpaid' | 'partially_paid' | 'cancelled';
+  amountMin?: number;
+  amountMax?: number;
+  taxMin?: number;
+  taxMax?: number;
+  discountMin?: number;
+  discountMax?: number;
+  chargesMin?: number;
+  chargesMax?: number;
+  totalMin?: number;
+  totalMax?: number;
   /** 'headoffice' needs no locationId — the server matches on type alone. */
   locationType?: 'warehouse' | 'outlet' | 'headoffice';
   locationId?: number;
@@ -145,10 +160,22 @@ export function usePaginatedSales(params?: PaginatedSalesParams) {
   qs.set('page', String(params?.page ?? 1));
   qs.set('limit', String(params?.limit ?? 25));
   if (params?.q) qs.set('q', params.q);
+  if (params?.invoice) qs.set('invoice', params.invoice);
+  if (params?.customer) qs.set('customer', params.customer);
   if (params?.from) qs.set('from', params.from);
   if (params?.to) qs.set('to', params.to);
   if (params?.salespersonEmployeeId != null) {
     qs.set('salespersonEmployeeId', String(params.salespersonEmployeeId));
+  }
+  if (params?.filterLocationType) qs.set('filterLocationType', params.filterLocationType);
+  if (params?.filterLocationId) qs.set('filterLocationId', String(params.filterLocationId));
+  if (params?.paymentStatus) qs.set('paymentStatus', params.paymentStatus);
+  for (const field of [
+    'amountMin', 'amountMax', 'taxMin', 'taxMax', 'discountMin', 'discountMax',
+    'chargesMin', 'chargesMax', 'totalMin', 'totalMax',
+  ] as const) {
+    const value = params?.[field];
+    if (value != null) qs.set(field, String(value));
   }
   if (params?.locationType === 'headoffice') {
     // Head Office is singular — the server matches on type alone.
@@ -174,8 +201,23 @@ function salesFilterQuery(params?: Omit<PaginatedSalesParams, 'page'>): URLSearc
   const qs = new URLSearchParams();
   qs.set('limit', String(params?.limit ?? 25));
   if (params?.q) qs.set('q', params.q);
+  if (params?.invoice) qs.set('invoice', params.invoice);
+  if (params?.customer) qs.set('customer', params.customer);
   if (params?.from) qs.set('from', params.from);
   if (params?.to) qs.set('to', params.to);
+  if (params?.salespersonEmployeeId != null) {
+    qs.set('salespersonEmployeeId', String(params.salespersonEmployeeId));
+  }
+  if (params?.filterLocationType) qs.set('filterLocationType', params.filterLocationType);
+  if (params?.filterLocationId) qs.set('filterLocationId', String(params.filterLocationId));
+  if (params?.paymentStatus) qs.set('paymentStatus', params.paymentStatus);
+  for (const field of [
+    'amountMin', 'amountMax', 'taxMin', 'taxMax', 'discountMin', 'discountMax',
+    'chargesMin', 'chargesMax', 'totalMin', 'totalMax',
+  ] as const) {
+    const value = params?.[field];
+    if (value != null) qs.set(field, String(value));
+  }
   if (params?.locationType === 'headoffice') {
     // Head Office is singular — the server matches on type alone.
     qs.set('locationType', 'headoffice');
