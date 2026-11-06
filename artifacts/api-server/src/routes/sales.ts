@@ -584,7 +584,7 @@ router.post("/item-prices", requireModuleAction("page:/headoffice/item-price", "
 // Without `page`/`limit` params the legacy full-array response is returned
 // (backward compatible). With them: envelope { total, page, limit, rows }.
 // Filters (usable in both modes): q (invoice/customer name/phone), from/to
-// (YYYY-MM-DD), locationType+locationId, warehouseScope=<warehouseId>
+// (YYYY-MM-DD), salespersonEmployeeId, locationType+locationId, warehouseScope=<warehouseId>
 // (warehouse itself + its child outlets — replaces client-side filtering),
 // legacy outletId.
 // Serves HO Sales/Payments (POS), Returns and the Sales Dashboard.
@@ -614,6 +614,24 @@ router.get("/sales", requireModuleView(["page:/sales/pos", "page:/returns", "pag
   }
   if (from) { params.push(from); conds.push(`s.sale_date >= $${params.length}::date`); }
   if (to)   { params.push(to);   conds.push(`s.sale_date <= $${params.length}::date`); }
+  if (req.query.salespersonEmployeeId !== undefined) {
+    const salespersonFilter = req.query.salespersonEmployeeId;
+    if (typeof salespersonFilter !== 'string') {
+      res.status(400).json({ error: "salespersonEmployeeId must be an employee id or 'unassigned'" });
+      return;
+    }
+    if (salespersonFilter === 'unassigned') {
+      conds.push(`s.salesperson_employee_id IS NULL AND NULLIF(BTRIM(COALESCE(s.salesperson, '')), '') IS NULL`);
+    } else {
+      const employeeId = Number(salespersonFilter);
+      if (!Number.isSafeInteger(employeeId) || employeeId <= 0) {
+        res.status(400).json({ error: "salespersonEmployeeId must be a positive employee id or 'unassigned'" });
+        return;
+      }
+      params.push(employeeId);
+      conds.push(`s.salesperson_employee_id = $${params.length}`);
+    }
+  }
 
   const viewLoc = getLocationFilter(req);
   if (viewLoc && (viewLoc.locationType === 'warehouse' || viewLoc.locationType === 'outlet')) {

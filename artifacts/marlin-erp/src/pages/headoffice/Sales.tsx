@@ -56,7 +56,7 @@ import {
   normaliseWhatsAppNumber, composeInvoiceMessage, activeInvoiceShareChannel,
 } from '@/lib/invoiceShare';
 import {
-  Plus, Search, Trash2, CreditCard, Calendar, Receipt,
+  Plus, Search, Trash2, CreditCard, Calendar, Receipt, Filter,
   Download, Eye, PackageOpen, FileDown, FileSpreadsheet, AlertTriangle,
   UserPlus, Check, ChevronsUpDown, Banknote, IndianRupee, Pencil, Printer,
   History,
@@ -421,6 +421,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   const range = useDateRange('all');
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [salespersonFilter, setSalespersonFilter] = useState<'all' | 'unassigned' | number>('all');
   const [isExportingExcel, setIsExportingExcel] = useState(false);
   const [itemWiseView, setItemWiseView] = useState(false);
   const PAGE_SIZE = 25;
@@ -432,8 +433,8 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   }, [search]);
 
   // Infinite (load-more) list, fetched in server-side batches of PAGE_SIZE.
-  // Changing any filter (search, dates, location) changes the query key, which
-  // resets the accumulation to the first batch automatically. A forced
+  // Changing any filter (search, dates, location, salesperson) changes the
+  // query key, which resets the accumulation to the first batch automatically. A forced
   // warehouse passes warehouseScope so the server returns the warehouse plus
   // its child outlets (replaces the old client-side forceChildOutletIds
   // filtering).
@@ -443,6 +444,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
     q: debouncedSearch || undefined,
     from: range.from || undefined,
     to: range.to || undefined,
+    salespersonEmployeeId: salespersonFilter === 'all' ? undefined : salespersonFilter,
     ...(forceLocationType === 'headoffice'
       ? { locationType: 'headoffice' as const }
       : forceLocationType === 'warehouse' && forceLocationId
@@ -1753,6 +1755,15 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
       })),
     [sales, statusFilter],
   );
+  const hasSalesFilters = salespersonFilter !== 'all'
+    || statusFilter !== 'all'
+    || Boolean(debouncedSearch)
+    || Boolean(range.from || range.to)
+    || Boolean(forceLocationType || locFilterType);
+  const salesEmptyTitle = hasSalesFilters ? 'No sales match these filters' : 'No sales recorded yet';
+  const salesEmptyHint = hasSalesFilters
+    ? 'Try changing or clearing the selected filters.'
+    : 'Record your first retail transaction to see it here.';
   const itemsMap = useMemo(
     () => new Map(items.map(item => [Number(item.id), item])),
     [items],
@@ -1839,7 +1850,12 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
       const dateRange = range.from || range.to
         ? `${range.from || 'Start'} to ${range.to || 'Today'}`
         : 'All dates';
-      const subtitle = `${dateRange} · ${statusFilter === 'all' ? 'All payment statuses' : statusFilter.replace('_', ' ')}`;
+      const salespersonLabel = salespersonFilter === 'all'
+        ? 'All salespeople'
+        : salespersonFilter === 'unassigned'
+          ? 'Unassigned'
+          : (salespeople as any[]).find((person: any) => Number(person.id) === salespersonFilter)?.name ?? 'Selected salesperson';
+      const subtitle = `${dateRange} · ${statusFilter === 'all' ? 'All payment statuses' : statusFilter.replace('_', ' ')} · ${salespersonLabel}`;
       let doc: ReportDoc;
       if (itemWiseView) {
         const rows = buildSaleItemReportRows(exportRows, itemsMap);
@@ -2073,6 +2089,31 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                 {label}
               </button>
             ))}
+            <div className="flex items-center gap-2 max-sm:w-full">
+              <span className="text-xs text-muted-foreground whitespace-nowrap">Salesperson</span>
+              <Select
+                value={String(salespersonFilter)}
+                onValueChange={value => setSalespersonFilter(
+                  value === 'all' || value === 'unassigned' ? value : Number(value),
+                )}
+              >
+                <SelectTrigger
+                  className="w-48 max-sm:flex-1"
+                  aria-label="Filter sales by salesperson"
+                  data-testid="select-salesperson-filter"
+                >
+                  <Filter className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+                  <SelectValue placeholder="All salespeople" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All salespeople</SelectItem>
+                  <SelectItem value="unassigned">Unassigned</SelectItem>
+                  {(salespeople as any[]).map((person: any) => (
+                    <SelectItem key={person.id} value={String(person.id)}>{person.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
             <div className="ml-auto flex items-center gap-2">
               <Checkbox
                 id="pos-item-wise-report"
@@ -2174,7 +2215,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                 <TableRow><TableCell colSpan={11} className="p-0"><TableSkeleton rows={6} cols={11} /></TableCell></TableRow>
               ) : filtered.length === 0 ? (
                 <TableRow><TableCell colSpan={11} className="p-0">
-                  <EmptyState icon={Receipt} title="No sales recorded yet" hint="Record your first retail transaction to see it here." compact />
+                  <EmptyState icon={Receipt} title={salesEmptyTitle} hint={salesEmptyHint} compact />
                 </TableCell></TableRow>
               ) : sorted.map(sale => (
                 <TableRow key={sale.id} className="hover:bg-muted/10">
@@ -2292,7 +2333,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                 {[...Array(4)].map((_, i) => <div key={i} className="h-24 bg-muted/30 rounded-lg animate-pulse" />)}
               </div>
             ) : filtered.length === 0 ? (
-              <EmptyState icon={Receipt} title="No sales recorded yet" hint="Record your first retail transaction to see it here." compact />
+              <EmptyState icon={Receipt} title={salesEmptyTitle} hint={salesEmptyHint} compact />
             ) : (
               <div className="space-y-2 p-3">
                 {sorted.map(sale => {
